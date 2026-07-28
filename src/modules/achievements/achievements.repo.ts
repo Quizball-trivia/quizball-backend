@@ -14,8 +14,11 @@ interface AchievementMetricsRow {
 }
 
 export const achievementsRepo = {
-  async listForUser(userId: string): Promise<UserAchievementRow[]> {
-    return sql<UserAchievementRow[]>`
+  async listForUser(
+    userId: string,
+    executor: typeof sql = sql
+  ): Promise<UserAchievementRow[]> {
+    return executor<UserAchievementRow[]>`
       SELECT *
       FROM user_achievements
       WHERE user_id = ${userId}
@@ -46,8 +49,8 @@ export const achievementsRepo = {
     unlockedAt: string | null;
     sourceMatchId: string | null;
     occurredAt?: Date;
-  }): Promise<UserAchievementRow> {
-    const [row] = await sql<UserAchievementRow[]>`
+  }, executor: typeof sql = sql): Promise<UserAchievementRow> {
+    const [row] = await executor<UserAchievementRow[]>`
       INSERT INTO user_achievements (
         user_id,
         achievement_id,
@@ -78,8 +81,11 @@ export const achievementsRepo = {
     return row;
   },
 
-  async getMetricsForUser(userId: string): Promise<UserAchievementMetrics> {
-    const [row] = await sql<AchievementMetricsRow[]>`
+  async getMetricsForUser(
+    userId: string,
+    executor: typeof sql = sql
+  ): Promise<UserAchievementMetrics> {
+    const [row] = await executor<AchievementMetricsRow[]>`
       WITH user_matches AS (
         SELECT
           m.id,

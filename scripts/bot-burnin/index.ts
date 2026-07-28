@@ -21,7 +21,7 @@
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
 import { parseBotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
@@ -30,18 +30,15 @@ import {
   loadHumanTop10Rp,
   loadActiveCategoryIds,
   findNonPristineBots,
-  claimRun,
-  heartbeatRun,
-  markRunComplete,
+  lockBurnIn,
+  assertNotBurnedIn,
+  insertBurnInMarker,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
-import { snapshotProfiles, writeSnapshotExclusive, readSnapshot } from './snapshot.js';
-import { writeFixture, type RunOwner } from './writer.js';
-import { ReceiptWriter, parseReceipt } from './receipt.js';
+import { writeFixtureInTx } from './writer.js';
 import { assertDbTarget } from './target-guard.js';
-import type { BurnInSnapshot } from './types.js';
 
 const DEFAULT_SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
@@ -54,14 +51,12 @@ interface Args {
   target: number;
   marginRp: number;
   execute: boolean;
-  snapshotOut: string | null;
-  receiptOut: string | null;
   limit: number | null;
   seasonStart: Date;
   /**
    * The end of the backfill window — the scheduler's timeline horizon. For
-   * --execute it is a REQUIRED explicit arg (no wall-clock default) so the
-   * manifest hash H is stable across resume. Dry-run defaults to now().
+   * --execute it is a REQUIRED explicit arg (no wall-clock default) so the run
+   * is fully determined by its immutable inputs. Dry-run defaults to now().
    */
   seasonEnd: Date;
 }
@@ -99,8 +94,6 @@ function parseArgs(argv: string[]): Args {
     target: num(get('--target')) ?? DEFAULT_TARGET,
     marginRp: num(get('--margin-rp')) ?? DEFAULT_MARGIN,
     execute,
-    snapshotOut: get('--snapshot-out') ?? null,
-    receiptOut: get('--receipt-out') ?? null,
     limit: num(get('--limit')) ?? null,
     seasonStart: parseDate(get('--season-start'), '--season-start') ?? DEFAULT_SEASON_START,
     seasonEnd: seasonEndArg ?? new Date(),
@@ -119,9 +112,6 @@ async function main(): Promise<void> {
 
   const args = parseArgs(argv);
 
-  if (args.execute && !args.snapshotOut) {
-    throw new Error('--execute requires --snapshot-out <file> (write-once pre-run snapshot for rollback).');
-  }
   // --limit is DRY-RUN ONLY: a partial burn plus a global one-time marker is
   // incoherent (the marker would claim a full burn while only a subset ran).
   if (args.execute && args.limit != null) {
@@ -187,91 +177,45 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ── Execute preconditions (config-only, pre-lock) ──────────────────────────
+  // ── Execute preconditions (config-only) ────────────────────────────────────
   if (!report.ceilingRespected) {
+    // Defensive: planning enforces the ceiling by construction, so this should
+    // never fire. If it does, the plan is buggy — abort before any write.
     throw new Error('ABORT: simulated distribution violates the hard ceiling. No writes performed.');
   }
   if (persistentBotsFlagOn()) {
     throw new Error('ABORT: PERSISTENT_BOTS flag is ON — burn-in must run before selection activates.');
   }
 
-  const snapshotPath = resolve(args.snapshotOut!);
-  const receiptPath = resolve(args.receiptOut ?? args.snapshotOut!.replace(/\.json$/, '') + '.receipt.jsonl');
+  // ── EXECUTE: plan-all-then-write in ONE transaction ────────────────────────
+  // Burn-in is NOT resumable. The complete plan (computed above, purely from H's
+  // immutable inputs) is written inside a single transaction that also takes the
+  // xact advisory lock, re-asserts the one-time marker and the pristine gate,
+  // and inserts the 'complete' marker. If ANYTHING throws, the WHOLE transaction
+  // rolls back — every fixture, the marker, all of it — leaving the DB exactly
+  // as it was. Rerun = start over from a clean DB. No snapshot, no receipt, no
+  // resume, no ownership token, no rollback-drift detection.
+  const rosterIds = roster.map((b) => b.userId);
+  await sql.begin(async (tx) => {
+    await lockBurnIn(tx); // serialize vs concurrent runs; auto-released on commit/rollback
+    await assertNotBurnedIn(tx); // one-time guard (throws if a marker exists)
 
-  // ── Single run-identity model, pooler-safe fail-closed lock (P1-3) ─────────
-  // claimRun atomically applies the decision table under an xact advisory lock
-  // and writes a durable LOCK-ROW (the marker, carrying our owner token +
-  // heartbeat). Every fixture write re-checks that token fail-closed, so a lost
-  // lock (takeover/rollback) stops further writes rather than racing on.
-  const decision = await claimRun(manifestHash, args.seed);
-  if (decision.kind === 'refuse') {
-    throw new Error(`ABORT: ${decision.reason}`);
-  }
-  const isResume = decision.kind === 'resume';
-  const owner: RunOwner = { manifestHash, ownerToken: decision.ownerToken };
-
-  let snapshot: BurnInSnapshot;
-  if (isResume) {
-    // RESUME: the receipt is the source of truth — the pristine gate is
-    // DELIBERATELY SKIPPED (a half-done run is not pristine). Same H proves the
-    // plan is identical (P1-1: H excludes mutable state + wall clock).
-    if (!existsSync(snapshotPath)) throw new Error(`ABORT: resume marker present but snapshot ${snapshotPath} is missing.`);
-    snapshot = readSnapshot(snapshotPath);
-    if (snapshot.manifestHash !== manifestHash) throw new Error(`ABORT: snapshot manifest ${snapshot.manifestHash} != ${manifestHash}.`);
-    if (!existsSync(receiptPath)) throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing.`);
-    const parsed = parseReceipt(receiptPath);
-    if (parsed.header.manifestHash !== manifestHash) throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
-    process.stdout.write(`\nRESUME (same H ${manifestHash}): pristine gate SKIPPED, reconciling from snapshot+receipt.\n`);
-  } else {
-    // FRESH: run the FULL pristine gate, then write-once snapshot.
-    const violations = await findNonPristineBots(roster.map((b) => b.userId));
+    // Pristine gate INSIDE the tx (serialized vs selection/reservations).
+    const violations = await findNonPristineBots(tx, rosterIds);
     if (violations.length > 0) {
       const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
       throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
     }
-    if (existsSync(receiptPath)) throw new Error(`ABORT: fresh run but receipt ${receiptPath} exists — inconsistent, refusing.`);
-    snapshot = await snapshotProfiles(roster, { manifestHash, seed: args.seed, env, ceilingRp, humanTop10Rp, marginRp: args.marginRp });
-    writeSnapshotExclusive(snapshotPath, snapshot); // 'wx' — refuses if present
-    process.stdout.write(`\nFRESH run: pristine gate passed; snapshot written (write-once): ${snapshotPath}\n`);
-  }
 
-  const receipt = new ReceiptWriter(receiptPath, isResume);
-  if (!isResume) {
-    receipt.writeHeader({
-      kind: 'header', createdAt: new Date().toISOString(), manifestHash,
-      seed: args.seed, env, rosterUserIds: roster.map((b) => b.userId),
-    });
-  }
-  let written = 0;
-  try {
     for (const fixture of schedule.fixtures) {
-      // Durably record the PLANNED line BEFORE any DB write (finding 3).
-      const line = {
-        ordinal: fixture.ordinal, key: fixture.key, matchId: fixture.matchId,
-        botAUserId: fixture.botAUserId, botBUserId: fixture.botBUserId,
-        winnerUserId: fixture.winnerUserId,
-        startedAt: fixture.startedAt.toISOString(), endedAt: fixture.endedAt.toISOString(),
-      };
-      receipt.writePlanned(line);
-      await writeFixture(fixture, owner, ceilingRp);
-      receipt.writeWritten(line);
-      written++;
-      if (written % 25 === 0) {
-        await heartbeatRun(manifestHash, owner.ownerToken); // keep the lock alive
-      }
-      if (written % 100 === 0) {
-        process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
-      }
+      await writeFixtureInTx(tx, fixture);
     }
-  } finally {
-    receipt.close();
-  }
 
-  // Flip the marker to 'complete' (verifies our ownership under the xact lock).
-  await markRunComplete(manifestHash, owner.ownerToken, schedule.fixtures.length);
+    await insertBurnInMarker(tx, manifestHash, args.seed, schedule.fixtures.length, ceilingRp);
+  });
 
   process.stdout.write(
-    `\nEXECUTE complete: ${written} fixtures written.\nReceipt: ${receiptPath}\nSnapshot: ${snapshotPath}\n`,
+    `\nEXECUTE complete: ${schedule.fixtures.length} fixtures written in one transaction (manifest ${manifestHash}).\n`,
   );
   await sql.end();
 }

@@ -113,145 +113,60 @@ export async function loadActiveCategoryIds(): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-// Constant key for the pg_advisory_XACT_lock that serializes the claim/decision
-// transaction. Transaction-mode Supavisor (the pooler burn-in connects through)
-// does NOT support SESSION advisory locks, so we use an XACT lock — held only
-// for the duration of the claim tx — plus a durable LOCK-ROW (the marker itself,
-// carrying an owner token + heartbeat) that every fixture write re-checks
-// fail-closed. P1-3.
+// pg_advisory_XACT_lock key — held for the DURATION of the single execute (or
+// rollback) transaction, so two concurrent runs serialize and a crash releases
+// the lock automatically on rollback/disconnect. Transaction-mode Supavisor
+// (the pooler) supports xact advisory locks. No session lock, no ownership
+// token, no heartbeat — burn-in is NOT resumable, so there is nothing to own
+// across a restart.
 const BURN_IN_ADVISORY_LOCK_KEY = 728_150_100; // mirrors the migration date
-// A run whose heartbeat is older than this is considered dead and may be taken
-// over by a resume of the SAME manifest.
-const HEARTBEAT_STALE_MS = 60_000;
 
-/** Run-marker (= durable lock row) stored in bot_model_params.params. */
+/** One-time marker row stored in bot_model_params.params. */
 export interface RunMarker {
   kind: 'burnin-marker';
   manifestHash: string;
-  status: 'running' | 'complete';
-  /** Random per-process token; every fixture write re-checks it (fail-closed). */
-  ownerToken: string;
+  status: 'complete';
   seed: number;
-  fixtureCount?: number;
-  startedAt: string;
-  heartbeatAt: string;
-  completedAt?: string;
+  fixtureCount: number;
+  /** The live-derived ceiling the run used — so rollback recomputes the SAME plan. */
+  ceilingRp: number;
+  completedAt: string;
 }
 
-export class LockLostError extends Error {}
-
-export type RunDecision =
-  | { kind: 'fresh'; ownerToken: string }
-  | { kind: 'resume'; ownerToken: string; marker: RunMarker }
-  | { kind: 'refuse'; reason: string };
-
-function newOwnerToken(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+/** Take the xact advisory lock for the current transaction (pooler-safe). */
+export async function lockBurnIn(tx: TransactionSql): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
 }
 
-/**
- * Atomically claim the run under an xact advisory lock (pooler-safe). Applies
- * the decision table and, on fresh/resume, writes the marker with OUR owner
- * token so subsequent writes can re-verify ownership. Serialized against every
- * other --execute/rollback because they all take the same xact lock.
- *   - no marker                          → fresh (insert 'running' + our token)
- *   - 'complete'                         → refuse
- *   - 'running' + different H            → refuse
- *   - 'running' + same H + fresh HB      → refuse (another live process owns it)
- *   - 'running' + same H + STALE HB      → resume (take over the token)
- */
-export async function claimRun(manifestHash: string, seed: number): Promise<RunDecision> {
-  return sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
-    const rows = await tx<{ params: RunMarker }[]>`
-      SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
-    `;
-    if (rows.length === 0) {
-      const ownerToken = newOwnerToken();
-      const marker: RunMarker = {
-        kind: 'burnin-marker', manifestHash, status: 'running', ownerToken, seed,
-        startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(),
-      };
-      await tx`
-        INSERT INTO bot_model_params (params, active, note)
-        VALUES (${sql.json(marker as unknown as Record<string, unknown>)}, false, ${BURN_IN_MARKER_NOTE})
-      `;
-      return { kind: 'fresh', ownerToken };
-    }
-    const marker = rows[0].params;
-    if (marker.manifestHash !== manifestHash) {
-      return { kind: 'refuse', reason: `a DIFFERENT burn-in run (manifest ${marker.manifestHash}, status ${marker.status}) exists — refusing` };
-    }
-    if (marker.status === 'complete') {
-      return { kind: 'refuse', reason: `this run (manifest ${manifestHash}) is already COMPLETE — refusing` };
-    }
-    // status 'running' + same H: only a STALE heartbeat may be taken over.
-    const ageMs = Date.now() - new Date(marker.heartbeatAt).getTime();
-    if (ageMs < HEARTBEAT_STALE_MS) {
-      return { kind: 'refuse', reason: `another live process owns this run (heartbeat ${Math.round(ageMs / 1000)}s ago) — refusing` };
-    }
-    const ownerToken = newOwnerToken();
-    await tx`
-      UPDATE bot_model_params
-      SET params = params || ${sql.json({ ownerToken, heartbeatAt: new Date().toISOString() })}
-      WHERE note = ${BURN_IN_MARKER_NOTE}
-    `;
-    return { kind: 'resume', ownerToken, marker: { ...marker, ownerToken } };
-  }) as Promise<RunDecision>;
-}
-
-/**
- * Fail-closed ownership assertion, called before/around every fixture write. If
- * the marker row is gone, no longer 'running', or owned by a DIFFERENT token,
- * the lock was lost (a takeover/rollback happened) → abort. Throws LockLostError.
- */
-export async function assertRunOwned(tx: TransactionSql, manifestHash: string, ownerToken: string): Promise<void> {
+/** Refuse (throw) if a burn-in marker already exists. Call under the lock. */
+export async function assertNotBurnedIn(tx: TransactionSql): Promise<void> {
   const rows = await tx<{ params: RunMarker }[]>`
     SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
   `;
-  const m = rows[0]?.params;
-  if (!m || m.status !== 'running' || m.manifestHash !== manifestHash || m.ownerToken !== ownerToken) {
-    throw new LockLostError(`burn-in lock lost (owner ${m?.ownerToken ?? 'none'} != ${ownerToken}) — aborting fail-closed`);
+  if (rows.length > 0) {
+    const m = rows[0].params;
+    throw new Error(`ABORT: this environment is already burned in (manifest ${m.manifestHash}, ${m.completedAt}) — refusing.`);
   }
 }
 
-/** Bump the heartbeat for our owned run (called periodically during the loop). */
-export async function heartbeatRun(manifestHash: string, ownerToken: string): Promise<void> {
-  await sql`
-    UPDATE bot_model_params
-    SET params = params || ${sql.json({ heartbeatAt: new Date().toISOString() })}
-    WHERE note = ${BURN_IN_MARKER_NOTE}
-      AND params->>'manifestHash' = ${manifestHash}
-      AND params->>'ownerToken' = ${ownerToken}
+/** Insert the one-time 'complete' marker (same tx as the writes). */
+export async function insertBurnInMarker(tx: TransactionSql, manifestHash: string, seed: number, fixtureCount: number, ceilingRp: number): Promise<void> {
+  const marker: RunMarker = {
+    kind: 'burnin-marker', manifestHash, status: 'complete', seed, fixtureCount, ceilingRp,
+    completedAt: new Date().toISOString(),
+  };
+  await tx`
+    INSERT INTO bot_model_params (params, active, note)
+    VALUES (${sql.json(marker as unknown as Record<string, unknown>)}, false, ${BURN_IN_MARKER_NOTE})
   `;
 }
 
-/** Flip the marker to 'complete' (verifies ownership under the xact lock). */
-export async function markRunComplete(manifestHash: string, ownerToken: string, fixtureCount: number): Promise<void> {
-  await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
-    await assertRunOwned(tx, manifestHash, ownerToken);
-    await tx`
-      UPDATE bot_model_params
-      SET params = params || ${sql.json({ status: 'complete', fixtureCount, completedAt: new Date().toISOString() })}
-      WHERE note = ${BURN_IN_MARKER_NOTE} AND params->>'manifestHash' = ${manifestHash}
-    `;
-  });
-}
-
-/**
- * Acquire the lock for ROLLBACK: takes the xact lock and returns whether a
- * marker for THIS manifest exists (rollback proceeds under the same serialized
- * guard as execute). Rollback deletes the marker itself in its own tx.
- */
-export async function withRollbackLock<T>(fn: () => Promise<T>): Promise<T> {
-  // Serialize rollback against any concurrent execute via the same xact lock.
-  // The lock is released when this claim tx commits; the rollback tx then runs
-  // its own FOR UPDATE validation, which is the authoritative concurrency guard.
-  await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
-  });
-  return fn();
+/** Read the burn-in marker (rollback recomputes the plan with its stored ceilingRp). */
+export async function readBurnInMarker(): Promise<RunMarker | null> {
+  const rows = await sql<{ params: RunMarker }[]>`
+    SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
+  `;
+  return rows[0]?.params ?? null;
 }
 
 export interface PristineViolation {
@@ -275,9 +190,9 @@ export interface PristineViolation {
  *   - no synthetic_bot_reservation; no live (waiting/active) lobby membership
  * Any violation lists the offending reasons. MUST be called under the run lock.
  */
-export async function findNonPristineBots(userIds: string[]): Promise<PristineViolation[]> {
+export async function findNonPristineBots(tx: TransactionSql, userIds: string[]): Promise<PristineViolation[]> {
   if (userIds.length === 0) return [];
-  const rows = await sql<
+  const rows = await tx<
     Array<{
       user_id: string;
       nickname: string;

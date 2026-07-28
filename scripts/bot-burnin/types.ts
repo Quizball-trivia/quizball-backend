@@ -7,8 +7,6 @@
  * through the REAL Season-2026 RP formula, capped below the live human top-10.
  */
 
-import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
-
 /** A roster bot as the engine needs it (users + ranked_profiles + synthetic). */
 export interface BurnInBot {
   userId: string;
@@ -84,107 +82,6 @@ export interface FixtureScore {
   penaltyGoals: number;
   totalPoints: number;
   correctAnswers: number;
-}
-
-/** A pre-run snapshot of one bot's mutable profile state, for rollback. */
-export interface ProfileSnapshotRow {
-  userId: string;
-  rp: number;
-  tier: string;
-  placementStatus: string;
-  placementPlayed: number;
-  placementWins: number;
-  placementSeedRp: number | null;
-  placementPerfSum: number;
-  placementPointsForSum: number;
-  placementPointsAgainstSum: number;
-  currentWinStreak: number;
-  lastRankedMatchAt: string | null;
-  /** ranked_profiles.updated_at pre-run — used to detect post-snapshot writes. */
-  profileUpdatedAt: string | null;
-  /** users.total_xp before the run (XP is additive; rollback restores it). */
-  totalXp: number;
-  /** Present only if a ranked_profiles row already existed pre-run. */
-  profileExisted: boolean;
-  /** user_mode_match_stats(mode='ranked') pre-run — captured for full restore. */
-  rankedStats: {
-    existed: boolean;
-    gamesPlayed: number;
-    wins: number;
-    losses: number;
-    draws: number;
-    lastMatchAt: string | null;
-  };
-  /** user_achievements pre-run — captured for full restore (finding 10). */
-  achievements: Array<{
-    achievementId: string;
-    progress: number;
-    unlockedAt: string | null;
-    sourceMatchId: string | null;
-    createdAt: string;
-    updatedAt: string;
-  }>;
-}
-
-export interface BurnInSnapshot {
-  createdAt: string;
-  /** The run this snapshot belongs to — mutual-consistency check on rollback. */
-  manifestHash: string;
-  seed: number;
-  env: string;
-  ceilingRp: number;
-  humanTop10Rp: number | null;
-  marginRp: number;
-  profiles: ProfileSnapshotRow[];
-  /** SHA-256 over the snapshot body (all fields except this one). */
-  integrityHash?: string;
-}
-
-/**
- * The receipt is now an append-only JSONL file: a single HEADER line followed
- * by one PLANNED line per fixture written durably BEFORE its DB writes, then a
- * matching WRITTEN line after. On resume the header identifies the run and the
- * PLANNED lines enumerate every fixture that may have touched the DB (zero
- * unrecorded fixtures possible).
- */
-export type ReceiptLine = ReceiptHeaderLine | ReceiptFixtureLine;
-
-export interface ReceiptHeaderLine {
-  kind: 'header';
-  createdAt: string;
-  manifestHash: string;
-  seed: number;
-  env: string;
-  /** All roster bot user ids — rollback verifies matches touch ONLY these. */
-  rosterUserIds: string[];
-}
-
-export interface ReceiptFixtureLine {
-  kind: 'planned' | 'written';
-  ordinal: number;
-  key: string;
-  matchId: string;
-  botAUserId: string;
-  botBUserId: string;
-  winnerUserId: string;
-  startedAt: string;
-  endedAt: string;
-}
-
-export interface BurnInConfig {
-  seed: number;
-  params: BotModelParams;
-  seasonStart: Date;
-  runDate: Date;
-  /** Population median target fixtures/bot (scaled per-bot by feasibility). */
-  targetMatches: number;
-  /** Hard-ceiling margin below the human #10 RP. */
-  ceilingMarginRp: number;
-  execute: boolean;
-  snapshotOut: string | null;
-  receiptOut: string | null;
-  /** Cap the roster for a small dry-run (e.g. a 20-bot fixture preview). */
-  limit: number | null;
 }
 
 /** Aggregated dry-run report figures. */

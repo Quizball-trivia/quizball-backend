@@ -24,6 +24,16 @@ export function randomIntBetween(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// NOTE (pre-existing race, tracked separately — concurrency-hardening backlog):
+// this predicate is mode==='ranked' only, so the locked leave/disconnect path
+// (releaseRankedAiLobbyMemberSafely) applies to ALL ranked lobbies, but the
+// activation-race member-removal protection is only meaningful where a persistent
+// -bot reservation exists. For EPHEMERAL-AI ranked lobbies and HUMAN-vs-HUMAN
+// ranked lobbies, the pre-existing stale-disconnect-during-activation race (a
+// disconnect handler removing a member concurrently with draft activation) still
+// exists on staging today, independent of persistent bots — it is NOT introduced
+// by this PR and is deliberately out of scope here (fixing it would be scope creep
+// into ephemeral/HvH lobby concurrency). Tracked separately.
 export function isRankedAiLobby(lobby: { mode: string }): boolean {
   return lobby.mode === 'ranked';
 }
@@ -55,8 +65,14 @@ export async function releaseRankedAiLobbyMemberSafely(lobbyId: string, leavingU
   // human-vs-human.
   const result = await reservationService.abortLobby(lobbyId, 'auto_leave_lobby');
   if (!result.aborted) {
-    logger.info({ lobbyId, leavingUserId }, 'releaseRankedAiLobbyMemberSafely: draft committed/active — leaving both members live');
+    // Draft committed / active → the lobby is LIVE. Do NOT delete the AI lobby
+    // Redis key: it is being (or has been) handed off to the match key
+    // (rankedAiLobbyKey → rankedAiMatchKey at beginMatchForLobby). Deleting it
+    // here would race that handoff and drop a live match's AI marker (Sol P2).
+    logger.info({ lobbyId, leavingUserId }, 'releaseRankedAiLobbyMemberSafely: draft committed/active — leaving both members + Redis key live');
+    return;
   }
+  // Only when the lobby was actually torn down is the pre-match AI lobby key stale.
   const redis = getRedisClient();
   if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
 }

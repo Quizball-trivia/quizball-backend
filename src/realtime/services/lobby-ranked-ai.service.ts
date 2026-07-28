@@ -82,6 +82,15 @@ async function getSupersedingSessionState(
   };
 }
 
+// NOTE (pre-existing race, tracked separately — concurrency-hardening backlog):
+// this EPHEMERAL-only superseded cleanup does an UNLOCKED member removal + Redis
+// key delete (check-then-act on status). It races draft activation the same way
+// the staging code always has (this exact unlocked shape exists on origin/staging
+// today for ephemeral/HvH ranked lobbies). It is NOT introduced by this PR — the
+// PERSISTENT-bot superseded path is routed through the advisory-locked
+// compensateAbortLobby instead; only the ephemeral path (no reservation, nothing
+// to double-book) still uses this. Deliberately out of scope for this persistent
+// -bot PR; tracked separately.
 async function cleanupSupersededRankedAiLobby(params: {
   lobbiesRepoRef: RankedAiLobbiesRepo;
   lobbyId: string;

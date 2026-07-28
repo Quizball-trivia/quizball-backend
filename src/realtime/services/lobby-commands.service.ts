@@ -854,11 +854,14 @@ export async function leaveLobby(
           return;
         }
 
-        await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          // Resolve the bot from the DB (not Redis), remove it, confirm removal,
-          // THEN release — never orphan the bot in the lobby if Redis is down.
-          await releaseRankedAiLobbyMemberSafely(lobbyId);
+          // Ranked-AI: human removal + bot release + teardown ALL inside the
+          // per-lobby advisory lock (status-gated). If a draft activated first,
+          // this NO-OPS and the human stays — the in-match machinery handles the
+          // drop during an active match (Sol P1).
+          await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
+        } else {
+          await lobbiesRepo.removeMember(lobbyId, userId);
         }
 
         await removeUserFromLobbySockets(io, lobbyId, userId);

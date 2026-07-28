@@ -42,16 +42,20 @@ export async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string
  * for the reconciliation sweeper — never release while the bot is still a member
  * (it could be acquired elsewhere while still sitting in the old lobby).
  */
-export async function releaseRankedAiLobbyMemberSafely(lobbyId: string): Promise<void> {
-  // Atomic, advisory-lock-guarded abort: under the SAME lock the draft activation
-  // takes, re-read status and — only if still 'waiting'/gone — remove ALL members
-  // (incl. the bot, resolved DB-side inside the tx — no Redis dependency) AND free
-  // the (lobby-keyed) reservation AND delete the lobby, in ONE transaction. If a
-  // concurrent reconnect advanced the lobby waiting→active, this no-ops entirely
-  // (the bot is never removed from a LIVE draft and the reservation is kept).
+export async function releaseRankedAiLobbyMemberSafely(lobbyId: string, leavingUserId?: string): Promise<void> {
+  // Atomic, advisory-lock-guarded abort: under the SAME lock draft activation
+  // takes, re-read state and — only if the lobby is still 'waiting'/gone AND the
+  // reservation is uncommitted AND there is no active match — remove ALL members
+  // (incl. the leaving HUMAN and the bot, resolved DB-side inside the tx — no
+  // Redis dependency) AND free the reservation AND delete the lobby, in ONE
+  // transaction. The human member removal is thus INSIDE the total-order envelope
+  // (Sol P1): if a draft activated first (committed_at / active match), this
+  // no-ops entirely — the human is NOT removed and the in-match disconnect/forfeit
+  // machinery handles the drop during the active match, exactly as for
+  // human-vs-human.
   const result = await reservationService.abortLobby(lobbyId, 'auto_leave_lobby');
   if (!result.aborted) {
-    logger.info({ lobbyId }, 'releaseRankedAiLobbyMemberSafely: lobby advanced elsewhere — leaving it live');
+    logger.info({ lobbyId, leavingUserId }, 'releaseRankedAiLobbyMemberSafely: draft committed/active — leaving both members live');
   }
   const redis = getRedisClient();
   if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
@@ -120,14 +124,16 @@ export async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: st
 
 export async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
-  await lobbiesRepo.removeMember(lobbyId, userId);
 
   if (lobby && isRankedAiLobby(lobby)) {
-    // DB-resolve the bot, then remove-it-and-release atomically under the shared
-    // per-lobby advisory lock — never touches a lobby whose draft advanced, and
-    // no-op if Redis is down or the reservation already transferred (fixes P1-C
-    // Redis + P1-2 abort/activate TOCTOU).
-    await releaseRankedAiLobbyMemberSafely(lobbyId);
+    // Ranked-AI: the HUMAN member removal + bot release + teardown ALL happen
+    // INSIDE the per-lobby advisory lock (status-gated) — never remove the human
+    // outside the lock. If a draft activated first (committed_at / active match),
+    // this NO-OPS and the human stays (Sol P1); the in-match machinery handles the
+    // drop. Also no-ops if Redis is down / reservation already transferred.
+    await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
+  } else {
+    await lobbiesRepo.removeMember(lobbyId, userId);
   }
   await removeUserFromLobbySockets(io, lobbyId, userId);
   logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');

@@ -189,11 +189,16 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
         const stillPresent = sockets.some((s) => s.data.user.id === userId);
         if (stillPresent) return;
 
-        await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          // Resolve the bot from the DB (not Redis), remove it, confirm removal,
-          // THEN release — never orphan the bot in the lobby if Redis is down.
-          await releaseRankedAiLobbyMemberSafely(lobbyId);
+          // Ranked-AI lobby: the HUMAN member removal + bot release + lobby
+          // teardown ALL happen INSIDE the per-lobby advisory lock (with a status
+          // re-check) — never remove the human outside the lock. If a draft
+          // activated first (committed_at set / active match), this NO-OPS and the
+          // human stays: the in-match disconnect/forfeit machinery handles the
+          // drop during an active match, exactly as for human-vs-human.
+          await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
+        } else {
+          await lobbiesRepo.removeMember(lobbyId, userId);
         }
         logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
 

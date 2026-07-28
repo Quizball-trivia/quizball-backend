@@ -34,6 +34,7 @@ import {
   assertNotBurnedIn,
   insertBurnInMarker,
   validatedExistingMatchIds,
+  lockRosterGateRows,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
@@ -224,11 +225,11 @@ async function main(): Promise<void> {
       await lockBurnIn(tx); // serialize vs concurrent runs (released on commit)
       await assertNotBurnedIn(tx); // one-time guard (marker inserted only at the end)
 
-      // Pristine gate under the row lock (P2-pristine-race), once, in the first
-      // chunk — for the UNTOUCHED bots only.
+      // Pristine gate under FOR UPDATE row locks across EVERY table the gate
+      // reads (P2/P3-pristine-race), once, in the first chunk — UNTOUCHED bots.
       if (!gateChecked) {
         if (untouchedBotIds.length > 0) {
-          await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${untouchedBotIds}::uuid[]) FOR UPDATE`;
+          await lockRosterGateRows(tx, untouchedBotIds);
           const violations = await findNonPristineBots(tx, untouchedBotIds);
           if (violations.length > 0) {
             const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');

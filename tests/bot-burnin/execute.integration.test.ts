@@ -91,7 +91,7 @@ async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: num
       await data.assertNotBurnedIn(tx);
       if (!gateChecked) {
         if (untouchedBotIds.length > 0) {
-          await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${untouchedBotIds}::uuid[]) FOR UPDATE`;
+          await data.lockRosterGateRows(tx, untouchedBotIds);
           const violations = await data.findNonPristineBots(tx, untouchedBotIds);
           if (violations.length > 0) throw new Error(`not pristine: ${violations.map((v) => v.nickname).join(',')}`);
         }
@@ -189,6 +189,41 @@ describe('execute (chunked)', () => {
 
     // Teardown.
     await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
+  });
+
+  it('pristine gate holds a users-row lock: a concurrent users write BLOCKS until commit (P3)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const bot = await seedBot(81, 0.0);
+
+    let concurrentUpdateFinished = false;
+    let releaseGate!: () => void;
+    const gateHeld = new Promise<void>((r) => { releaseGate = r; });
+
+    // Tx A: take the gate row locks, then hold the tx open until we release it.
+    const gateTx = sql.begin(async (tx) => {
+      await data.lockRosterGateRows(tx, [bot.userId]);
+      await gateHeld; // keep the tx (and its FOR UPDATE locks) open
+    });
+
+    // Give tx A a moment to acquire its locks.
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Tx B: a concurrent write to the SAME users row must BLOCK on the lock.
+    const concurrentUpdate = sql`UPDATE users SET total_xp = total_xp + 1 WHERE id = ${bot.userId}`
+      .then(() => { concurrentUpdateFinished = true; });
+
+    // While the gate holds the lock, the concurrent update has NOT completed.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(concurrentUpdateFinished).toBe(false);
+
+    // Release the gate tx → the blocked update proceeds.
+    releaseGate();
+    await gateTx;
+    await concurrentUpdate;
+    expect(concurrentUpdateFinished).toBe(true);
+
+    // Reset the +1 for teardown determinism.
+    await sql`UPDATE users SET total_xp = 0 WHERE id = ${bot.userId}`;
   });
 
   it('resume ABORTS on a colliding non-burn-in match at a planned fixture slot (P2 validation depth)', async ({ skip }) => {

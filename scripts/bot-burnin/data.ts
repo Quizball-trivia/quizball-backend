@@ -138,6 +138,22 @@ export async function lockBurnIn(tx: TransactionSql): Promise<void> {
   await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
 }
 
+/**
+ * FOR UPDATE-lock the roster bots' rows in EVERY table the pristine gate reads
+ * (P3): users (total_xp/coins), ranked_profiles, ranked stats, achievements, and
+ * xp events — so no concurrent write can change a gate-checked fact between the
+ * check and the writes. (matches/lobbies/reservations aren't roster-PK-keyed;
+ * burn-in runs pre-flag with no live selection, so this is defense-in-depth.)
+ */
+export async function lockRosterGateRows(tx: TransactionSql, userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await tx`SELECT id FROM users WHERE id = ANY(${userIds}::uuid[]) FOR UPDATE`;
+  await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${userIds}::uuid[]) FOR UPDATE`;
+  await tx`SELECT user_id FROM user_mode_match_stats WHERE user_id = ANY(${userIds}::uuid[]) FOR UPDATE`;
+  await tx`SELECT user_id FROM user_achievements WHERE user_id = ANY(${userIds}::uuid[]) FOR UPDATE`;
+  await tx`SELECT user_id FROM user_xp_events WHERE user_id = ANY(${userIds}::uuid[]) FOR UPDATE`;
+}
+
 /** Refuse (throw) if a burn-in marker already exists. Call under the lock. */
 export async function assertNotBurnedIn(tx: TransactionSql): Promise<void> {
   const rows = await tx<{ params: RunMarker }[]>`

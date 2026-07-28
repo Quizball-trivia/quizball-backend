@@ -1,5 +1,5 @@
 import { logger } from '../../core/logger.js';
-import { withLock } from '../../realtime/locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../../realtime/locks.js';
 import { getRedisClient } from '../../realtime/redis.js';
 import type { AuctionMatchState } from './auction-match-state.js';
 
@@ -167,14 +167,32 @@ export async function mutateAuctionMatchState<T = AuctionMatchState>(
   });
 }
 
+// Concurrent timers for the same match (bot action + turn timeout + clue
+// reveal land in one scheduler poll) race for this lock; a single-attempt
+// acquire makes the losers fail and reschedule into the same collision next
+// poll. A short bounded wait serializes them instead.
+const AUCTION_MATCH_LOCK_ACQUIRE_WAIT_MS = 3_000;
+const AUCTION_MATCH_LOCK_ACQUIRE_STEP_MS = 50;
+
 export async function withAuctionMatchLock<T>(
   matchId: string,
   fn: () => Promise<T>
 ): Promise<T> {
   const lockKey = auctionMatchLockKey(matchId);
-  return withLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS, fn, {
-    onUnavailable: () => new AuctionMatchLockUnavailableError(matchId),
-  });
+  const deadline = Date.now() + AUCTION_MATCH_LOCK_ACQUIRE_WAIT_MS;
+  let lock = await acquireLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS);
+  while ((!lock.acquired || !lock.token) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, AUCTION_MATCH_LOCK_ACQUIRE_STEP_MS));
+    lock = await acquireLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS);
+  }
+  if (!lock.acquired || !lock.token) throw new AuctionMatchLockUnavailableError(matchId);
+  const heartbeat = startLockHeartbeat(lockKey, lock.token, AUCTION_MATCH_LOCK_TTL_MS);
+  try {
+    return await fn();
+  } finally {
+    heartbeat.stop();
+    await releaseLock(lockKey, lock.token);
+  }
 }
 
 export async function deleteAuctionMatchState(matchId: string): Promise<void> {

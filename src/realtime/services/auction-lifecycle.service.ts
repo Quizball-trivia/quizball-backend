@@ -8,13 +8,12 @@ import {
   type AuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
+import { redriveAuctionAdvanceForState } from './auction-advance-retry.service.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import {
   advanceAuctionMatchFlowAfterMutation,
   scheduleAuctionSoloPickTimeoutTimer,
 } from './auction-match-flow.service.js';
-import { scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
 import { emitAuctionUiReadyGateState } from './auction-ui-ready.service.js';
 import {
   handleAuctionSocketDisconnect as handleAuctionDisconnectGrace,
@@ -158,7 +157,7 @@ export const auctionLifecycleService = {
           await auctionStateStore.clearIndexes(state);
           continue;
         }
-        if (await ensureAuctionActiveTimers(io, state)) {
+        if (await ensureAuctionActiveTimers(io, state, { bootRecovery: true })) {
           summary.rearmed += 1;
         }
       } catch (error) {
@@ -174,18 +173,33 @@ export const auctionLifecycleService = {
 
 export async function ensureAuctionActiveTimers(
   io: QuizballServer,
-  state: AuctionMatchState
+  state: AuctionMatchState,
+  options: { bootRecovery?: boolean } = {},
 ): Promise<boolean> {
+  if (state.phase === 'created') {
+    // A content lookup can exhaust its transient retry budget after the prior
+    // round was resolved. The state intentionally remains at this recoverable
+    // transition point; reconnect/boot re-drive it instead of treating the
+    // temporary failure as content exhaustion and finishing the match.
+    await advanceAuctionMatchFlowAfterMutation(io, state);
+    return true;
+  }
+
   if (state.phase === 'clue_reveal' && state.currentRound) {
-    if (emitAuctionUiReadyGateState(io, state, 'round')) return true;
+    if (!options.bootRecovery && await emitAuctionUiReadyGateState(io, state, 'round')) return true;
     await scheduleAuctionClueRevealTimer(state);
     return true;
   }
 
   if (state.phase === 'bidding' && state.currentRound?.currentTurnSeatId) {
-    if (emitAuctionUiReadyGateState(io, state, 'bidding')) return true;
-    await scheduleAuctionTurnTimeoutTimer(state);
-    await scheduleAuctionBotActionTimer(state);
+    const turnEndsAtMs = state.currentRound.turnEndsAt
+      ? Date.parse(state.currentRound.turnEndsAt)
+      : Number.NaN;
+    const turnExpired = Number.isFinite(turnEndsAtMs) && turnEndsAtMs <= Date.now();
+    if (!options.bootRecovery && !turnExpired && await emitAuctionUiReadyGateState(io, state, 'bidding')) {
+      return true;
+    }
+    await redriveAuctionAdvanceForState(io, state, 'bidding');
     return true;
   }
 
@@ -201,8 +215,13 @@ export async function ensureAuctionActiveTimers(
     // gate + its ceiling timer were lost (server restart / crash) and the match
     // is frozen at reveal — re-open the gate so it advances. Without this the
     // match stays stuck and client ui_ready acks are ignored (no gate to match).
-    if (emitAuctionUiReadyGateState(io, state, 'reveal')) return true;
-    await advanceAuctionMatchFlowAfterMutation(io, state);
+    if (
+      !options.bootRecovery
+      && await emitAuctionUiReadyGateState(io, state, 'reveal')
+    ) {
+      return true;
+    }
+    await redriveAuctionAdvanceForState(io, state, 'reveal');
     return true;
   }
 

@@ -9,8 +9,16 @@ import type {
 import type { AuctionPlayerRanking, FormationName } from '../modules/auction/auction.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
-export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
-export type MatchVariant = LobbyGameMode;
+export type LobbyGameMode =
+  | 'friendly_possession'
+  | 'friendly_party_quiz'
+  | 'auction'
+  | 'ranked_sim';
+/**
+ * Variants backed by the `matches` table engine. Auction is a lobby game mode
+ * but runs on the auction state store, so it never becomes a match variant.
+ */
+export type MatchVariant = Exclude<LobbyGameMode, 'auction'>;
 export type LobbyStatus = 'waiting' | 'active' | 'closed';
 export type MatchPhase =
   | 'NORMAL_PLAY'
@@ -511,8 +519,13 @@ export interface MatchStatePayload {
       seat1: string | null;
       seat2: string | null;
     };
-    /** Whether this ban interlude is the second-half pick or the pre-penalty pick. */
-    purpose?: 'second_half' | 'penalty';
+    /**
+     * Whether this ban interlude is the second-half pick or the pre-penalty
+     * pick. 'second_half_preset' means the lobby host already chose the
+     * second-half category: there is no ban, `categoryOptions` holds that single
+     * category, and the client shows a short reveal instead of ban cards.
+     */
+    purpose?: 'second_half' | 'second_half_preset' | 'penalty';
   };
   penaltySuddenDeath?: boolean;
   stateVersion?: number;
@@ -884,6 +897,15 @@ export interface AuctionMatchFinishedPayload {
    * own entry to show the reward animation.
    */
   coinsByUserId?: Record<string, number>;
+  /**
+   * Auction Points granted per real-human userId (1st = 50, 2nd = 30, 3rd = 10),
+   * mirroring `coinsByUserId`. Only QUEUE matches award AP: a friendly/lobby
+   * match omits the map entirely, which the client reads as "hide AP". A
+   * forfeiter is present with an explicit 0 — they played, they just earned
+   * nothing — so the client can distinguish that from a friendly match. Bots
+   * (no real userId) never appear.
+   */
+  apByUserId?: Record<string, number>;
 }
 
 export interface AuctionSoloPickStartedPayload {

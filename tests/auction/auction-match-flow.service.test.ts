@@ -7,14 +7,25 @@ import {
   startSoloPick,
   type AuctionEngineContext,
 } from '../../src/modules/auction/auction-engine.js';
+import { AuctionContentUnavailableError } from '../../src/modules/auction/auction.errors.js';
 import { createEmptyTeam, needsPosition } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer, PositionGroup } from '../../src/modules/auction/auction.types.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
+import { logger } from '../../src/core/logger.js';
 import { installAuctionStateStoreMutationMock } from './auction-state-store-mock.js';
 
 const contentServiceMock = vi.hoisted(() => ({
   getRandomPublishedAuctionCard: vi.fn(),
+  findRandomPublishedAuctionCard: vi.fn(),
+  // Cross-match no-repeat pick used by the round flow. Delegates to
+  // findRandomPublishedAuctionCard so existing per-test card scripting (and its
+  // rejection cases) keeps driving the flow unchanged.
+  findRandomPublishedAuctionCardExcludingSeen: vi.fn(
+    (options: unknown) => contentServiceMock.findRandomPublishedAuctionCard(options)
+  ),
+  getRecentlySeenFootballPlayerIds: vi.fn(async () => [] as string[]),
+  recordSeenClueCards: vi.fn(async () => {}),
 }));
 
 const stateStoreMock = vi.hoisted(() => ({
@@ -27,6 +38,9 @@ const stateStoreMock = vi.hoisted(() => ({
 
 const schedulerMock = vi.hoisted(() => ({
   scheduleRealtimeTimer: vi.fn(),
+}));
+const persistenceMock = vi.hoisted(() => ({
+  persistFinishedAuctionMatch: vi.fn(async () => ({})),
 }));
 
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
@@ -57,7 +71,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (importOriginal)
 // in-memory flow test (and there's no DB in the unit env). Stub it out.
 vi.mock('../../src/realtime/services/auction-persistence.service.js', () => ({
   // Returns the per-user coin map; {} = no rewards in this in-memory test.
-  persistFinishedAuctionMatch: vi.fn(async () => ({})),
+  persistFinishedAuctionMatch: persistenceMock.persistFinishedAuctionMatch,
 }));
 
 const context: AuctionEngineContext = {
@@ -127,7 +141,7 @@ function fixturePool(): Record<PositionGroup, AuctionFootballer[]> {
 }
 
 function mockContentFromPool(pool: Record<PositionGroup, AuctionFootballer[]>): void {
-  contentServiceMock.getRandomPublishedAuctionCard.mockImplementation((options: {
+  contentServiceMock.findRandomPublishedAuctionCard.mockImplementation((options: {
     positionGroup: PositionGroup;
     excludeClueCardIds?: string[];
   }) => {
@@ -186,6 +200,7 @@ describe('auction match flow service', () => {
       return state;
     });
     stateStoreMock.clearIndexes.mockResolvedValue(undefined);
+    contentServiceMock.getRecentlySeenFootballPlayerIds.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -250,13 +265,13 @@ describe('auction match flow service', () => {
       expect.anything()
     );
 
-    acknowledgeAuctionUiReady(io, 'user-1', {
+    await acknowledgeAuctionUiReady(io, 'user-1', {
       matchId: 'match-1',
       phase: 'reveal',
       roundId: 'round-current',
       stateVersion: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(persisted?.phase).toBe('clue_reveal');
     expect(persisted?.version).toBe(2);
@@ -276,28 +291,33 @@ describe('auction match flow service', () => {
         waitingUserIds: ['user-1'],
       })
     );
+    const laterRoundReady = roomEmit.mock.calls
+      .filter(([event, payload]) => event === 'auction:waiting_for_ready' && payload.phase === 'round')
+      .at(-1)?.[1] as { forceStartsAt: string; serverNow: string };
+    expect(Date.parse(laterRoundReady.forceStartsAt) - Date.parse(laterRoundReady.serverNow)).toBeLessThanOrEqual(8_000);
+    expect(Date.parse(laterRoundReady.forceStartsAt) - Date.parse(laterRoundReady.serverNow)).toBeGreaterThanOrEqual(7_900);
     expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
 
-    acknowledgeAuctionUiReady(io, 'user-1', {
+    await acknowledgeAuctionUiReady(io, 'user-1', {
       matchId: 'match-1',
       phase: 'round',
       roundId: persisted!.currentRound!.roundId,
       stateVersion: 2,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       expect.any(String),
-      new Date('2026-06-20T10:00:01.200Z'),
+      new Date('2026-06-20T10:00:05.000Z'),
       expect.objectContaining({ kind: 'auction_clue_reveal', stateVersion: 2 })
     );
-    expect(contentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith(
+    expect(contentServiceMock.findRandomPublishedAuctionCard).toHaveBeenCalledWith(
       expect.objectContaining({ locale: 'en', excludeClueCardIds: expect.any(Array) })
     );
   });
 
-  it('does not stall a bots-only reveal gate', async () => {
+  it('short-circuits bots-only round advancement through finish and persistence', async () => {
     const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
     const { io, roomEmit } = createIo();
     mockContentFromPool(fixturePool());
@@ -335,18 +355,79 @@ describe('auction match flow service', () => {
     };
 
     const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
-    expect(next.phase).toBe('reveal');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(next.phase).toBe('finished');
+    expect(persistenceMock.persistFinishedAuctionMatch).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'finished' })
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:match_finished', expect.objectContaining({ matchId: 'match-1' })
+    );
+  });
 
-    expect(persisted?.phase).toBe('clue_reveal');
-    expect(roomEmit).toHaveBeenCalledWith(
-      'auction:round_revealed',
-      expect.objectContaining({ winnerSeatId: 'bot-seat-1', stateVersion: 1 })
+  it('excludes each human participant cross-match history from the round card pick', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io } = createIo();
+    mockContentFromPool(fixturePool());
+    contentServiceMock.getRecentlySeenFootballPlayerIds.mockResolvedValue([
+      'seen-player-1',
+      'seen-player-2',
+    ]);
+
+    persisted = { ...startInitialState(), version: 1 };
+    await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    // Bots are never tracked — only the seated human's id is looked up.
+    expect(contentServiceMock.getRecentlySeenFootballPlayerIds).toHaveBeenCalledWith(['user-1']);
+    expect(contentServiceMock.findRandomPublishedAuctionCardExcludingSeen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        excludeRecentlySeenFootballPlayerIds: ['seen-player-1', 'seen-player-2'],
+      })
     );
-    expect(roomEmit).toHaveBeenCalledWith(
-      'auction:round_started',
-      expect.objectContaining({ matchId: 'match-1', stateVersion: 2 })
+  });
+
+  it('records the started round card as seen for humans only', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io } = createIo();
+    mockContentFromPool(fixturePool());
+
+    persisted = { ...startInitialState(), version: 1 };
+    const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    const startedClueCardId = next.currentRound?.footballer.clueCardId;
+    expect(startedClueCardId).toBeTruthy();
+    expect(contentServiceMock.recordSeenClueCards).toHaveBeenCalledWith(['user-1'], [startedClueCardId]);
+  });
+
+  it('starts the round anyway when the history lookup fails', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io } = createIo();
+    mockContentFromPool(fixturePool());
+    contentServiceMock.getRecentlySeenFootballPlayerIds.mockRejectedValue(
+      new Error('history query failed')
     );
+
+    persisted = { ...startInitialState(), version: 1 };
+    const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    // Best-effort: history is a freshness optimization, never a round blocker.
+    expect(next.phase).toBe('clue_reveal');
+    expect(next.currentRound).toBeTruthy();
+    expect(contentServiceMock.findRandomPublishedAuctionCardExcludingSeen).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeRecentlySeenFootballPlayerIds: undefined })
+    );
+  });
+
+  it('starts the round anyway when recording seen cards fails', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io } = createIo();
+    mockContentFromPool(fixturePool());
+    contentServiceMock.recordSeenClueCards.mockRejectedValue(new Error('history write failed'));
+
+    persisted = { ...startInitialState(), version: 1 };
+    const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    expect(next.phase).toBe('clue_reveal');
+    expect(next.currentRound).toBeTruthy();
   });
 
   it('advances reveal on the force-ready fallback when a human never acks', async () => {
@@ -396,6 +477,9 @@ describe('auction match flow service', () => {
     expect(persisted?.phase).toBe('reveal');
 
     await vi.advanceTimersByTimeAsync(6_000);
+    for (let flush = 0; flush < 10; flush += 1) await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
+    for (let flush = 0; flush < 10; flush += 1) await Promise.resolve();
 
     expect(persisted?.phase).toBe('clue_reveal');
     expect(roomEmit).toHaveBeenCalledWith(
@@ -421,26 +505,26 @@ describe('auction match flow service', () => {
       }
 
       if (persisted.phase === 'clue_reveal') {
-        acknowledgeAuctionUiReady(io, 'user-1', {
+        await acknowledgeAuctionUiReady(io, 'user-1', {
           matchId: persisted.matchId,
           phase: 'round',
           roundId: persisted.currentRound!.roundId,
           stateVersion: persisted.version,
         });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setImmediate(resolve));
         persisted = resolveCurrentRoundForFirstNeeder(persisted);
         persisted = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
         continue;
       }
 
       if (persisted.phase === 'reveal' && persisted.currentRound) {
-        acknowledgeAuctionUiReady(io, 'user-1', {
+        await acknowledgeAuctionUiReady(io, 'user-1', {
           matchId: persisted.matchId,
           phase: 'reveal',
           roundId: persisted.currentRound.roundId,
           stateVersion: persisted.version,
         });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setImmediate(resolve));
         continue;
       }
 
@@ -474,7 +558,7 @@ describe('auction match flow service', () => {
   it('returns the latest persisted state after a bot solo-pick auto-selection', async () => {
     const { emitAuctionStepStarted } = await import('../../src/realtime/services/auction-match-flow.service.js');
     const { io, roomEmit } = createIo();
-    contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
     const initial = startInitialState();
     persisted = startSoloPick(
       initial,
@@ -511,7 +595,7 @@ describe('auction match flow service', () => {
     const { emitAuctionStepStarted, runAuctionSoloPickTimeoutTimer } =
       await import('../../src/realtime/services/auction-match-flow.service.js');
     const { io, roomEmit } = createIo();
-    contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
     persisted = startSoloPick(
       startInitialState(),
       'seat-human',
@@ -551,6 +635,64 @@ describe('auction match flow service', () => {
     );
   });
 
+  it('serializes a human solo-pick selection racing the timeout auto-selection', async () => {
+    const {
+      handleAuctionSoloPickSelection,
+      handleAuctionSoloPickSelectionForUser,
+    } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
+    persisted = startSoloPick(
+      startInitialState(),
+      'seat-human',
+      'FWD',
+      card('solo-option-a', 'FWD', 40_000_000),
+      card('solo-option-b', 'FWD', 45_000_000),
+      context
+    );
+    const staleState = persisted;
+    let mutationTail = Promise.resolve();
+    stateStoreMock.mutate.mockImplementation(async (
+      _matchId: string,
+      mutator: (current: AuctionMatchState) => unknown,
+      options: { now?: Date | (() => Date) } = {}
+    ) => {
+      const previous = mutationTail;
+      let release!: () => void;
+      mutationTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        const current = structuredClone(persisted!);
+        const mutation = await mutator(current) as AuctionMatchState | {
+          kind: 'save';
+          state: AuctionMatchState;
+          map: (saved: AuctionMatchState) => unknown;
+        } | { kind: 'skip'; result: unknown };
+        if ('kind' in mutation && mutation.kind === 'skip') return mutation.result;
+        const next = 'kind' in mutation ? mutation.state : mutation;
+        const saved = {
+          ...next,
+          version: current.version + 1,
+          updatedAt: (typeof options.now === 'function' ? options.now() : options.now ?? context.now()).toISOString(),
+        };
+        persisted = saved;
+        return 'kind' in mutation ? mutation.map(saved) : saved;
+      } finally {
+        release();
+      }
+    });
+
+    const results = await Promise.allSettled([
+      handleAuctionSoloPickSelectionForUser(io, 'match-1', 'user-1', 'A', { context }),
+      handleAuctionSoloPickSelection(io, staleState, 'seat-human', 'B', { context }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(roomEmit.mock.calls.filter(([event]) => event === 'auction:solo_pick_selected')).toHaveLength(1);
+    expect(persisted?.version).toBeGreaterThan(staleState.version);
+    expect(stateStoreMock.mutate).toHaveBeenCalledTimes(3);
+  });
+
   it('solo-pick timeout no-ops for a stale timer (pick already resolved or superseded)', async () => {
     const { runAuctionSoloPickTimeoutTimer } =
       await import('../../src/realtime/services/auction-match-flow.service.js');
@@ -581,7 +723,8 @@ describe('auction match flow service', () => {
   it('ranks complete teams above incomplete teams in the final event payload', async () => {
     const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
     const { io, roomEmit } = createIo();
-    contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
+    const finishLog = vi.spyOn(logger, 'info');
     persisted = {
       ...startInitialState(),
       phase: 'created',
@@ -614,6 +757,187 @@ describe('auction match flow service', () => {
           expect.objectContaining({ seatId: 'complete-high', rank: 1 }),
         ]),
       })
+    );
+    expect(finishLog).toHaveBeenCalledWith(
+      { matchId: 'match-1', finishReason: 'no_more_content' },
+      'Auction match finished'
+    );
+  });
+
+  it('emits AP per userId in the match_finished payload', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
+
+    const winner = completeTeamPlayer('complete-high', 200_000_000);
+    const runnerUp = completeTeamPlayer('complete-low', 100_000_000);
+    persisted = {
+      ...startInitialState(),
+      phase: 'created',
+      seats: [runnerUp, winner],
+    };
+
+    // Persistence resolves the AP awards; the flow layer passes them through
+    // keyed by userId, mirroring coinsByUserId.
+    persistenceMock.persistFinishedAuctionMatch.mockResolvedValueOnce({
+      coinsByUserId: { [winner.userId!]: 500, [runnerUp.userId!]: 300 },
+      apByUserId: { [winner.userId!]: 50, [runnerUp.userId!]: 30 },
+    } as never);
+
+    persisted = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    expect(persisted.phase).toBe('finished');
+    const payload = roomEmit.mock.calls.find(([event]) => event === 'auction:match_finished')?.[1] as {
+      apByUserId?: Record<string, number>;
+    };
+    expect(payload.apByUserId).toEqual({
+      [winner.userId!]: 50,
+      [runnerUp.userId!]: 30,
+    });
+  });
+
+  it('omits apByUserId entirely for a friendly match', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
+
+    persisted = {
+      ...startInitialState(),
+      phase: 'created',
+      seats: [
+        completeTeamPlayer('complete-low', 100_000_000),
+        completeTeamPlayer('complete-high', 200_000_000, true),
+      ],
+    };
+
+    // A friendly/lobby match: persistence reports no AP map at all.
+    persistenceMock.persistFinishedAuctionMatch.mockResolvedValueOnce({
+      coinsByUserId: {},
+    } as never);
+
+    persisted = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    const payload = roomEmit.mock.calls.find(([event]) => event === 'auction:match_finished')?.[1] as {
+      apByUserId?: Record<string, number>;
+    };
+    // Absent (not an empty object) so the client hides AP for friendlies.
+    expect(payload.apByUserId).toBeUndefined();
+  });
+
+  it('retries transient content failures and leaves the match recoverable instead of finishing', async () => {
+    vi.useFakeTimers();
+    const { advanceAuctionMatchFlowAfterMutation } =
+      await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    const transient = new AuctionContentUnavailableError({ source: 'temporary_db_failure' });
+    contentServiceMock.findRandomPublishedAuctionCard.mockRejectedValue(transient);
+    persisted = {
+      ...startInitialState(),
+      phase: 'created',
+      version: 4,
+    };
+    const before = structuredClone(persisted);
+
+    const advancing = advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+    const rejected = expect(advancing).rejects.toBe(transient);
+    await vi.advanceTimersByTimeAsync(250);
+
+    await rejected;
+    expect(contentServiceMock.findRandomPublishedAuctionCard).toHaveBeenCalledTimes(3);
+    expect(persisted).toEqual(before);
+    expect(roomEmit).not.toHaveBeenCalledWith('auction:match_finished', expect.anything());
+  });
+
+  it('retries transient database connection failures before leaving reveal recoverable', async () => {
+    vi.useFakeTimers();
+    const { advanceAuctionMatchFlowFromRevealGate } =
+      await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io } = createIo();
+    const transient = Object.assign(new Error('getaddrinfo ENOTFOUND db.example'), {
+      code: 'ENOTFOUND',
+    });
+    contentServiceMock.findRandomPublishedAuctionCard.mockRejectedValue(transient);
+    const initial = startInitialState();
+    persisted = {
+      ...initial,
+      phase: 'reveal',
+      version: 4,
+      currentRound: {
+        roundId: 'round-current',
+        roundIndex: 1,
+        positionGroup: 'FWD',
+        footballer: card('current', 'FWD'),
+        clueRevealIndex: 3,
+        bids: [],
+        highestBidderSeatId: null,
+        highestBid: 0,
+        startingPrice: 10_000_000,
+        winnerSeatId: null,
+        winningBid: 0,
+        revealed: true,
+        turnOrder: ['seat-human'],
+        currentTurnSeatId: null,
+        foldedSeatIds: [],
+        turnEndsAt: null,
+        startedAt: '2026-06-20T10:00:00.000Z',
+        updatedAt: '2026-06-20T10:00:00.000Z',
+      },
+    };
+
+    const advancing = advanceAuctionMatchFlowFromRevealGate(io, persisted, { context });
+    const rejected = expect(advancing).rejects.toBe(transient);
+    await vi.advanceTimersByTimeAsync(250);
+
+    await rejected;
+    expect(contentServiceMock.findRandomPublishedAuctionCard).toHaveBeenCalledTimes(3);
+    expect(persisted.phase).toBe('reveal');
+    expect(persisted.version).toBe(4);
+  });
+
+  it('advances persisted reveal state when the durable backstop fires', async () => {
+    const { runAuctionAdvanceRetryTimer } =
+      await import('../../src/realtime/services/auction-advance-retry.service.js');
+    const { io, roomEmit } = createIo();
+    mockContentFromPool(fixturePool());
+    const initial = startInitialState();
+    persisted = {
+      ...initial,
+      phase: 'reveal',
+      version: 4,
+      currentRound: {
+        roundId: 'round-current',
+        roundIndex: 1,
+        positionGroup: 'FWD',
+        footballer: card('current', 'FWD'),
+        clueRevealIndex: 3,
+        bids: [],
+        highestBidderSeatId: null,
+        highestBid: 0,
+        startingPrice: 10_000_000,
+        winnerSeatId: null,
+        winningBid: 0,
+        revealed: true,
+        turnOrder: ['seat-human'],
+        currentTurnSeatId: null,
+        foldedSeatIds: [],
+        turnEndsAt: null,
+        startedAt: '2026-06-20T10:00:00.000Z',
+        updatedAt: '2026-06-20T10:00:00.000Z',
+      },
+    };
+
+    await runAuctionAdvanceRetryTimer(io, {
+      kind: 'auction_advance_retry',
+      matchId: 'match-1',
+      phaseHint: 'reveal',
+    });
+
+    expect(persisted.phase).toBe('clue_reveal');
+    expect(persisted.version).toBe(5);
+    expect(persisted.completedRounds).toHaveLength(1);
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:round_started',
+      expect.objectContaining({ matchId: 'match-1', stateVersion: 5 }),
     );
   });
 });

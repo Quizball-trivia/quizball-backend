@@ -1,7 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
-import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
-import { CLUE_REVEAL_INTERVAL_MS, CLUE_STUDY_MS } from '../../modules/auction/auction.constants.js';
+import { CLUE_REVEAL_INTERVAL_MS } from '../../modules/auction/auction.constants.js';
 import { beginClueStudy, revealNextClue, startBidding, type AuctionEngineContext } from '../../modules/auction/auction-engine.js';
 import {
   toPublicAuctionMatchState,
@@ -27,6 +26,7 @@ import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.servi
 import { getAuctionPause } from './auction-disconnect-state.service.js';
 import { emitAndScheduleAuctionTurnStarted } from './auction-turn.service.js';
 import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 export type AuctionClueRevealPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_reveal' }>;
 export type AuctionClueStudyPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_study' }>;
@@ -68,7 +68,7 @@ export async function scheduleAuctionClueRevealTimer(
   const clueCount = round.footballer.clues?.length ?? 0;
   if (expectedClueIndex > clueCount) return;
 
-  const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
+  const nowMs = resolveRealtimeAuctionContext(options).now().getTime();
   const dueAt = new Date(nowMs + harnessDelayMs(CLUE_REVEAL_INTERVAL_MS, 50));
 
   await scheduleRealtimeTimer(
@@ -143,12 +143,13 @@ export async function scheduleAuctionClueStudyTimer(
   const round = state.currentRound;
   if (state.phase !== 'clue_reveal' || !round) return;
 
-  const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
+  const context = resolveRealtimeAuctionContext(options);
+  const nowMs = context.now().getTime();
   const studyEndsMs = round.biddingStartsAt ? Date.parse(round.biddingStartsAt) : NaN;
   const dueAt = new Date(
     Number.isFinite(studyEndsMs)
       ? Math.max(studyEndsMs, nowMs)
-      : nowMs + harnessDelayMs(CLUE_STUDY_MS, 50)
+      : nowMs + context.clueStudyMs
   );
 
   await scheduleRealtimeTimer(
@@ -186,7 +187,7 @@ export async function runAuctionClueStudyTimer(
     return { kind: 'noop', reason: 'paused' };
   }
 
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   const outcome = await auctionStateStore.mutate<AuctionClueStudyOutcome>(payload.matchId, (current) => {
     const round = current.currentRound;
     if (current.version !== payload.stateVersion) return skipAuctionMatchMutation(noop('version_mismatch'));
@@ -220,9 +221,7 @@ export async function runAuctionClueStudyTimer(
     io,
     state: outcome.state,
     phase: 'bidding',
-    dispatch: () => {
-      void emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
-    },
+    dispatch: () => emitAndScheduleAuctionTurnStarted(io, outcome.state, options),
   });
   return outcome;
 }
@@ -231,7 +230,7 @@ async function advanceClueRevealState(
   payload: AuctionClueRevealPayload,
   options: AuctionClueRevealTimerOptions
 ): Promise<AuctionClueTimerOutcome> {
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));

@@ -2,7 +2,6 @@ import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { shuffle } from '../../core/rng.js';
 import {
-  resolveAuctionContext,
   type ResolvedAuctionEngineContext,
 } from '../../modules/auction/auction-context.js';
 import {
@@ -23,6 +22,7 @@ import {
 } from '../../modules/auction/auction.constants.js';
 import {
   canPlayerContinue,
+  hasLastPlayerStanding,
   needsPosition,
 } from '../../modules/auction/auction-rules.js';
 import {
@@ -33,11 +33,15 @@ import {
 } from '../../modules/auction/auction-match-state.js';
 import {
   auctionStateStore,
+  AuctionMatchStateStaleError,
   saveAuctionMatchMutation,
   skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
 import type { AuctionFootballer, PositionGroup } from '../../modules/auction/auction.types.js';
-import { persistFinishedAuctionMatch } from './auction-persistence.service.js';
+import {
+  persistFinishedAuctionMatch,
+  type AuctionMatchRewards,
+} from './auction-persistence.service.js';
 import { getAuctionPause } from './auction-disconnect-state.service.js';
 import { scheduleRealtimeTimer, type RealtimeTimerPayload } from '../realtime-timer-scheduler.js';
 import type { QuizballServer } from '../socket-server.js';
@@ -49,10 +53,17 @@ import type {
   AuctionSquadUpdatedPayload,
 } from '../socket.types.js';
 import { AuctionActionError } from './auction-action-errors.js';
+import { scheduleAuctionAdvanceRetryTimer } from './auction-advance-retry-timer.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
-import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
+import {
+  AUCTION_FIRST_ROUND_UI_READY_CEILING_MS,
+  openAuctionUiReadyGate,
+} from './auction-ui-ready.service.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 const AUCTION_REVEAL_UI_READY_CEILING_MS = 6_000;
+const AUCTION_CONTENT_FETCH_ATTEMPTS = 3;
+const AUCTION_CONTENT_FETCH_RETRY_MS = 100;
 // A human's solo pick auto-resolves after this long (bots pick instantly).
 // Without a deadline a frozen tab / silent drop froze the whole match forever.
 const AUCTION_SOLO_PICK_TIMEOUT_MS = 30_000;
@@ -64,6 +75,19 @@ export type AuctionSoloPickTimeoutTimerPayload = Extract<RealtimeTimerPayload, {
 export interface AuctionMatchFlowOptions {
   now?: Date;
   context?: AuctionEngineContext;
+  finishReason?: AuctionMatchFinishReason;
+}
+
+export type AuctionMatchFinishReason =
+  | 'normal'
+  | 'no_more_content'
+  | 'no_live_humans'
+  | 'forfeit'
+  | 'last_player_standing';
+
+interface AuctionStepResult {
+  state: AuctionMatchState;
+  finishReason?: AuctionMatchFinishReason;
 }
 
 /**
@@ -144,6 +168,10 @@ export async function advanceAuctionMatchFlowAfterMutation(
   state: AuctionMatchState,
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
+  if (state.phase !== 'finished' && !hasLiveAuctionHuman(state)) {
+    const finished = await finishAuctionMatchWithoutLiveHumans(state, options);
+    return emitAuctionStepStarted(io, finished, { ...options, finishReason: 'no_live_humans' });
+  }
   if (state.phase === 'bidding') return state;
 
   if (state.phase === 'reveal' && state.currentRound) {
@@ -153,27 +181,21 @@ export async function advanceAuctionMatchFlowAfterMutation(
       state,
       phase: 'reveal',
       ceilingMs: AUCTION_REVEAL_UI_READY_CEILING_MS,
-      dispatch: () => {
-        // Never let a transient failure (e.g. a brief Redis blip) become an
-        // unhandled rejection — that would leave the match frozen at reveal.
-        // Log it; the boot/reconnect re-arm (ensureAuctionActiveTimers) re-opens
-        // the gate and advances if this dispatch was lost.
-        advanceAuctionMatchFlowFromRevealGate(io, state, options).catch((error) => {
-          logger.warn(
-            { error, matchId: state.matchId, phase: 'reveal' },
-            'Auction reveal-gate advance failed; will recover via re-arm'
-          );
-        });
-      },
+      // The gate owns error observation and retries a match-lock collision after
+      // its opener has unwound; return the promise so it can do both.
+      dispatch: () => advanceAuctionMatchFlowFromRevealGate(io, state, options),
     });
     return state;
   }
 
   const advanced = await advanceToNextAuctionStep(state, options);
-  return emitAuctionStepStarted(io, advanced, options);
+  return emitAuctionStepStarted(io, advanced.state, {
+    ...options,
+    finishReason: advanced.finishReason ?? options.finishReason,
+  });
 }
 
-async function advanceAuctionMatchFlowFromRevealGate(
+export async function advanceAuctionMatchFlowFromRevealGate(
   io: QuizballServer,
   state: AuctionMatchState,
   options: AuctionMatchFlowOptions
@@ -187,17 +209,19 @@ async function advanceAuctionMatchFlowFromRevealGate(
     const pauseUntilMs = Date.parse(pause.pauseUntil);
     const retryInMs = Math.max(0, (Number.isFinite(pauseUntilMs) ? pauseUntilMs : Date.now()) - Date.now()) + 2_000;
     logger.debug({ matchId: state.matchId }, 'Auction reveal advance deferred (match paused)');
-    const retry = setTimeout(() => {
-      advanceAuctionMatchFlowFromRevealGate(io, state, options).catch((error) => {
-        logger.warn({ error, matchId: state.matchId }, 'Deferred auction reveal advance failed');
-      });
-    }, retryInMs);
-    retry.unref?.();
+    await scheduleAuctionAdvanceRetryTimer(
+      state.matchId,
+      'reveal',
+      new Date(Date.now() + retryInMs),
+    );
     return;
   }
 
   const advanced = await advanceToNextAuctionStep(state, options);
-  await emitAuctionStepStarted(io, advanced, options);
+  await emitAuctionStepStarted(io, advanced.state, {
+    ...options,
+    finishReason: advanced.finishReason ?? options.finishReason,
+  });
 }
 
 export async function handleAuctionSoloPickSelection(
@@ -207,14 +231,15 @@ export async function handleAuctionSoloPickSelection(
   option: 'A' | 'B',
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
-  const context = resolveAuctionContext(options);
-  const selected = selectSoloPickOption(state, seatId, option, context);
-  const saved = await auctionStateStore.save({
-    ...selected,
-    version: state.version + 1,
+  const context = resolveRealtimeAuctionContext(options);
+  const saved = await auctionStateStore.mutate(state.matchId, (current) => {
+    if (current.version !== state.version) {
+      throw new AuctionMatchStateStaleError(state.matchId, state.version, current.version);
+    }
+    const selected = selectSoloPickOption(current, seatId, option, context);
+    return saveAuctionMatchMutation(selected, (savedState) => savedState);
   }, {
-    expectedVersion: state.version,
-    now: context.now(),
+    now: context.now,
   });
 
   emitSoloPickSelected(io, saved, seatId, option);
@@ -229,7 +254,7 @@ export async function handleAuctionSoloPickSelectionForUser(
   option: 'A' | 'B',
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   const saved = await auctionStateStore.mutate(matchId, (current) => {
     if (current.phase !== 'solo_pick' || !current.soloPick) {
       throw new AuctionActionError('auction_no_active_solo_pick', 'No active auction solo pick');
@@ -272,9 +297,10 @@ export async function emitAuctionStepStarted(
       io,
       state,
       phase: 'round',
-      dispatch: () => {
-        void scheduleAuctionClueRevealTimerFromFlow(state, options);
-      },
+      ceilingMs: state.currentRound.roundIndex === 1
+        ? AUCTION_FIRST_ROUND_UI_READY_CEILING_MS
+        : undefined,
+      dispatch: () => scheduleAuctionClueRevealTimerFromFlow(state, options),
     });
     return state;
   }
@@ -299,12 +325,17 @@ export async function emitAuctionStepStarted(
   }
 
   if (state.phase === 'finished' && state.rankings) {
-    // Persist first so we know each human's coin reward, then emit it with the
-    // finish payload. Persistence is best-effort (its own try/catch) and returns
-    // {} on failure, so a DB hiccup just means no reward shown — never blocks the
-    // finish broadcast.
-    const coinsByUserId = await persistFinishedAuctionMatch(state);
-    emitMatchFinished(io, state, coinsByUserId);
+    // Persist first so we know each human's coin + Auction Points reward, then
+    // emit it with the finish payload. Persistence is best-effort (its own
+    // try/catch) and returns empty rewards on failure, so a DB hiccup just means
+    // no reward shown — never blocks the finish broadcast.
+    const rewards = await persistFinishedAuctionMatch(state);
+    const finishReason = options.finishReason ?? inferAuctionMatchFinishReason(state);
+    logger.info(
+      { matchId: state.matchId, finishReason },
+      'Auction match finished'
+    );
+    emitMatchFinished(io, state, rewards);
     await auctionStateStore.clearIndexes(state);
   }
   return state;
@@ -313,15 +344,16 @@ export async function emitAuctionStepStarted(
 async function advanceToNextAuctionStep(
   state: AuctionMatchState,
   options: AuctionMatchFlowOptions
-): Promise<AuctionMatchState> {
-  const context = resolveAuctionContext(options);
+): Promise<AuctionStepResult> {
+  const context = resolveRealtimeAuctionContext(options);
   const nextBase = closeResolvedRound(state);
-  const nextState = await createNextStepState(nextBase, context);
+  const nextStep = await createNextStepState(nextBase, context);
+  const nextState = nextStep.state;
 
-  if (nextState === state) return state;
-  if (nextState.version !== state.version) return nextState;
+  if (nextState === state) return nextStep;
+  if (nextState.version !== state.version) return nextStep;
 
-  return auctionStateStore.mutate(state.matchId, (current) => {
+  const saved = await auctionStateStore.mutate(state.matchId, (current) => {
     if (current.version !== state.version) {
       // A concurrent mutation advanced the match first. Return ITS persisted
       // state — never the locally computed nextState, which was never saved
@@ -334,19 +366,24 @@ async function advanceToNextAuctionStep(
     now: context.now,
     onMissingState: () => state,
   });
+  return { state: saved, finishReason: nextStep.finishReason };
 }
 
 async function createNextStepState(
   state: AuctionMatchState,
   context: ResolvedAuctionEngineContext
-): Promise<AuctionMatchState> {
+): Promise<AuctionStepResult> {
   if (state.phase === 'finished' || state.phase === 'clue_reveal' || state.phase === 'solo_pick') {
-    return state;
+    return { state };
+  }
+
+  if (!hasLiveAuctionHuman(state)) {
+    return { state: finishMatch(state, context), finishReason: 'no_live_humans' };
   }
 
   const activePlayers = state.seats.filter(canPlayerContinue);
   if (activePlayers.length === 0) {
-    return finishMatch(state, context);
+    return { state: finishMatch(state, context), finishReason: 'normal' };
   }
 
   const positions = shuffle(
@@ -354,41 +391,207 @@ async function createNextStepState(
     context.random
   );
   const locale = resolveLocale(state);
+  const humanUserIds = auctionHumanUserIds(state);
+  const recentlySeenFootballPlayerIds = await getRecentlySeenFootballPlayerIds(
+    state.matchId,
+    humanUserIds
+  );
 
   for (const position of positions) {
     const needers = activePlayers.filter((player) => needsPosition(player, position));
-    const optionA = await getNextPublishedCard(locale, position, state.usedClueCardIds);
+    const optionA = await getNextPublishedCard(
+      locale,
+      position,
+      state.usedClueCardIds,
+      recentlySeenFootballPlayerIds
+    );
     if (!optionA) continue;
 
     if (needers.length === 1) {
       const optionBExcludeIds = optionA.clueCardId
         ? [...state.usedClueCardIds, optionA.clueCardId]
         : state.usedClueCardIds;
-      const optionB = await getNextPublishedCard(locale, position, optionBExcludeIds);
-      return startSoloPick(state, needers[0].seatId, position, optionA, optionB ?? optionA, context);
+      const optionB = await getNextPublishedCard(
+        locale,
+        position,
+        optionBExcludeIds,
+        recentlySeenFootballPlayerIds
+      );
+      // Both solo-pick options are shown to the picking human, so both count as seen.
+      recordSeenAuctionCards(state.matchId, humanUserIds, [optionA, optionB ?? optionA]);
+      return {
+        state: startSoloPick(state, needers[0].seatId, position, optionA, optionB ?? optionA, context),
+      };
     }
 
-    return startBiddingRound(state, position, optionA, needers, context);
+    recordSeenAuctionCards(state.matchId, humanUserIds, [optionA]);
+    return { state: startBiddingRound(state, position, optionA, needers, context) };
   }
 
-  return finishMatch(state, context);
+  return { state: finishMatch(state, context), finishReason: 'no_more_content' };
+}
+
+function hasLiveAuctionHuman(state: AuctionMatchState): boolean {
+  return state.seats.some((seat) => (
+    !seat.isBot && Boolean(seat.userId) && !seat.forfeited && !seat.isEliminated
+  ));
+}
+
+async function finishAuctionMatchWithoutLiveHumans(
+  state: AuctionMatchState,
+  options: AuctionMatchFlowOptions
+): Promise<AuctionMatchState> {
+  const context = resolveRealtimeAuctionContext(options);
+  return auctionStateStore.mutate(state.matchId, (current) => {
+    if (current.phase === 'finished') return skipAuctionMatchMutation(current);
+    if (hasLiveAuctionHuman(current)) return skipAuctionMatchMutation(current);
+    return saveAuctionMatchMutation(finishMatch(current, context), (saved) => saved);
+  }, {
+    now: context.now,
+    onMissingState: () => state,
+  });
+}
+
+/** Seated humans with a real user id — bots have no history worth tracking. */
+function auctionHumanUserIds(state: AuctionMatchState): string[] {
+  return state.seats
+    .filter((seat) => !seat.isBot && Boolean(seat.userId))
+    .map((seat) => seat.userId as string);
+}
+
+/**
+ * Cross-match history for this match's humans. Best-effort: a failure here must
+ * never block a round, so it degrades to "no history" and the pick proceeds.
+ */
+async function getRecentlySeenFootballPlayerIds(
+  matchId: string,
+  humanUserIds: string[]
+): Promise<string[]> {
+  if (humanUserIds.length === 0) return [];
+  try {
+    return await auctionContentService.getRecentlySeenFootballPlayerIds(humanUserIds);
+  } catch (error) {
+    logger.warn(
+      { error, matchId },
+      'getRecentlySeenFootballPlayerIds failed; picking without history exclusion'
+    );
+    return [];
+  }
+}
+
+/**
+ * Fire-and-forget: record the exact shown card IDs. The history read joins each
+ * card back to its football player, which makes locale/variant repeats collapse
+ * to the same no-repeat key without changing the existing history table.
+ */
+function recordSeenAuctionCards(
+  matchId: string,
+  humanUserIds: string[],
+  cards: ReadonlyArray<AuctionFootballer | null>
+): void {
+  if (humanUserIds.length === 0) return;
+  const clueCardIds = [...new Set(
+    cards.flatMap((card) => (card?.clueCardId ? [card.clueCardId] : []))
+  )];
+  if (clueCardIds.length === 0) return;
+
+  void auctionContentService.recordSeenClueCards(humanUserIds, clueCardIds).catch((error) => {
+    logger.warn({ error, matchId, clueCardIds }, 'Failed to record seen auction clue cards');
+  });
 }
 
 async function getNextPublishedCard(
   locale: AuctionContentLocale,
   positionGroup: PositionGroup,
-  excludeClueCardIds: readonly string[]
+  excludeClueCardIds: readonly string[],
+  excludeRecentlySeenFootballPlayerIds: readonly string[] = []
 ): Promise<AuctionFootballer | null> {
-  try {
-    return await auctionContentService.getRandomPublishedAuctionCard({
-      locale,
-      positionGroup,
-      excludeClueCardIds: [...excludeClueCardIds],
-    });
-  } catch (error) {
-    if (error instanceof AuctionContentUnavailableError) return null;
-    throw error;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= AUCTION_CONTENT_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+        locale,
+        positionGroup,
+        excludeClueCardIds: [...excludeClueCardIds],
+        excludeRecentlySeenFootballPlayerIds:
+          excludeRecentlySeenFootballPlayerIds.length > 0
+          ? [...excludeRecentlySeenFootballPlayerIds]
+          : undefined,
+      });
+    } catch (error) {
+      lastError = error;
+      if (
+        attempt < AUCTION_CONTENT_FETCH_ATTEMPTS
+        && isRetryableAuctionContentError(error)
+      ) {
+        await delay(AUCTION_CONTENT_FETCH_RETRY_MS);
+        continue;
+      }
+      throw error;
+    }
   }
+  throw lastError instanceof Error
+    ? lastError
+    : new AuctionContentUnavailableError({ locale, positionGroup });
+}
+
+const TRANSIENT_AUCTION_DATABASE_ERROR_CODES = new Set([
+  'DB_OVERLOADED',
+  'CONNECTION_CLOSED',
+  'CONNECTION_DESTROYED',
+  'CONNECT_TIMEOUT',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EPIPE',
+  'ETIMEDOUT',
+]);
+
+function isRetryableAuctionContentError(error: unknown, depth = 0): boolean {
+  if (error instanceof AuctionContentUnavailableError) return true;
+  if (!error || depth > 3 || typeof error !== 'object') return false;
+
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    cause?: unknown;
+    details?: unknown;
+    errors?: unknown;
+  };
+  if (
+    typeof candidate.code === 'string'
+    && TRANSIENT_AUCTION_DATABASE_ERROR_CODES.has(candidate.code.toUpperCase())
+  ) {
+    return true;
+  }
+  if (
+    typeof candidate.message === 'string'
+    && /(?:database|db|postgres|pool|pooler|connection).*(?:closed|destroyed|exhausted|overloaded|saturated|timeout|timed out|unavailable)/i.test(
+      candidate.message,
+    )
+  ) {
+    return true;
+  }
+  if (isRetryableAuctionContentError(candidate.cause, depth + 1)) return true;
+  if (isRetryableAuctionContentError(candidate.details, depth + 1)) return true;
+  return Array.isArray(candidate.errors)
+    && candidate.errors.some((nested) => isRetryableAuctionContentError(nested, depth + 1));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, harnessDelayMs(ms, 1));
+    timer.unref?.();
+  });
+}
+
+function inferAuctionMatchFinishReason(state: AuctionMatchState): AuctionMatchFinishReason {
+  if (hasLastPlayerStanding(state.seats)) return 'last_player_standing';
+  if (!hasLiveAuctionHuman(state)) return 'no_live_humans';
+  if (state.seats.some((seat) => seat.forfeited)) return 'forfeit';
+  return 'normal';
 }
 
 function closeResolvedRound(state: AuctionMatchState): AuctionMatchState {
@@ -443,10 +646,17 @@ function emitSoloPickSelected(
 function emitMatchFinished(
   io: QuizballServer,
   state: AuctionMatchState,
-  coinsByUserId: Record<string, number> = {},
+  rewards: AuctionMatchRewards = { coinsByUserId: {} },
 ): void {
   if (!state.rankings) return;
   const publicState = toPublicAuctionMatchState(state);
+  // Emitting the finish event is the one thing that must never throw, so a
+  // partial/absent rewards object degrades to "no reward shown". `apByUserId`
+  // stays undefined when the match awarded no AP (friendly), which the client
+  // reads as "hide AP" — distinct from a present map containing a 0.
+  const coinsByUserId = rewards?.coinsByUserId ?? {};
+  const apByUserId = rewards?.apByUserId;
+
   io.to(`match:${state.matchId}`).emit('auction:match_finished', {
     matchId: state.matchId,
     rankings: state.rankings,
@@ -454,6 +664,7 @@ function emitMatchFinished(
     state: publicState,
     stateVersion: state.version,
     coinsByUserId,
+    apByUserId,
   } satisfies AuctionMatchFinishedPayload);
 }
 

@@ -15,6 +15,7 @@ class FakeRedis {
   values = new Map<string, string>();
   expirations = new Map<string, number>();
   sets = new Map<string, Set<string>>();
+  evalCalls = 0;
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
@@ -38,25 +39,34 @@ class FakeRedis {
     return removed;
   }
 
-  async sAdd(key: string, member: string): Promise<number> {
+  async sAdd(key: string, member: string | string[]): Promise<number> {
     const set = this.sets.get(key) ?? new Set<string>();
     const sizeBefore = set.size;
-    set.add(member);
+    for (const entry of Array.isArray(member) ? member : [member]) set.add(entry);
     this.sets.set(key, set);
     return set.size - sizeBefore;
   }
 
-  async sRem(key: string, member: string): Promise<number> {
+  async sRem(key: string, member: string | string[]): Promise<number> {
     const set = this.sets.get(key);
     if (!set) return 0;
-    return set.delete(member) ? 1 : 0;
+    let removed = 0;
+    for (const entry of Array.isArray(member) ? member : [member]) {
+      if (set.delete(entry)) removed += 1;
+    }
+    return removed;
   }
 
   async sMembers(key: string): Promise<string[]> {
     return [...(this.sets.get(key) ?? new Set<string>())];
   }
 
+  async expire(): Promise<boolean> {
+    return true;
+  }
+
   async eval(_script: string, params: { keys: string[]; arguments: string[] }): Promise<unknown> {
+    this.evalCalls += 1;
     const [key] = params.keys;
     const [token] = params.arguments;
     if (this.values.get(key) !== token) return 0;
@@ -220,6 +230,25 @@ describe('auction state store', () => {
     expect(AUCTION_MATCH_LOCK_TTL_MS).toBe(5_000);
   });
 
+  it('renews the auction match lock while a mutation is still running', async () => {
+    vi.useFakeTimers();
+    const { auctionStateStore } = await import('../../src/modules/auction/auction-state.store.js');
+    await auctionStateStore.save(matchState());
+
+    let finish!: () => void;
+    const mutation = auctionStateStore.mutate('match-1', async (current) => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return current;
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_667);
+
+    expect(redis?.evalCalls).toBeGreaterThan(0);
+    finish();
+    await mutation;
+    vi.useRealTimers();
+  });
+
   it('can skip a locked mutation without bumping version', async () => {
     const {
       auctionStateStore,
@@ -287,9 +316,8 @@ describe('auction state store', () => {
     expect(redis?.values.has(auctionUserMatchKey('user-1'))).toBe(false);
   });
 
-  it('rejects concurrent mutations while the match lock is held', async () => {
+  it('serializes concurrent mutations by waiting for the match lock', async () => {
     const {
-      AuctionMatchLockUnavailableError,
       auctionStateStore,
     } = await import('../../src/modules/auction/auction-state.store.js');
     await auctionStateStore.save(matchState());
@@ -304,12 +332,54 @@ describe('auction state store', () => {
 
     await Promise.resolve();
 
-    await expect(
-      auctionStateStore.mutate('match-1', (current) => ({ ...current, phase: 'reveal' }))
-    ).rejects.toBeInstanceOf(AuctionMatchLockUnavailableError);
+    // A concurrent mutation waits for the lock instead of rejecting, then
+    // applies against the first mutation's committed state.
+    const secondMutation = auctionStateStore.mutate('match-1', (current) => ({ ...current, phase: 'reveal' }));
+    setTimeout(() => releaseMutator(), 100);
 
-    releaseMutator();
     await expect(firstMutation).resolves.toMatchObject({ phase: 'bidding', version: 1 });
+    await expect(secondMutation).resolves.toMatchObject({ phase: 'reveal', version: 2 });
+  });
+
+  it('defers a locally-complete UI-ready gate dispatch until its opener mutation releases the lock', async () => {
+    const {
+      auctionStateStore,
+    } = await import('../../src/modules/auction/auction-state.store.js');
+    const {
+      clearAuctionUiReadyGate,
+      openAuctionUiReadyGate,
+    } = await import('../../src/realtime/services/auction-ui-ready.service.js');
+    const state = await auctionStateStore.save(matchState());
+    const key = `auction:ui_ready:round:${state.matchId}:${state.currentRound!.roundId}:${state.version}:acks`;
+    redis?.sets.set(key, new Set(['user-1']));
+    let dispatchedMutation: Promise<AuctionMatchState> | undefined;
+
+    await auctionStateStore.mutate(state.matchId, async (current) => {
+      openAuctionUiReadyGate({
+        io: { to: vi.fn(() => ({ emit: vi.fn() })) } as never,
+        state: current,
+        phase: 'round',
+        dispatch: () => {
+          dispatchedMutation = auctionStateStore.mutate(current.matchId, (latest) => ({
+            ...latest,
+            phase: 'bidding',
+          }));
+          return dispatchedMutation;
+        },
+      });
+      // Keep the opener's lock live long enough for the deferred gate dispatch
+      // to collide once; the gate must retry after this mutation releases it.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return current;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(dispatchedMutation).toBeDefined();
+    await expect(dispatchedMutation).resolves.toMatchObject({
+      phase: 'bidding',
+      version: 2,
+    });
+    clearAuctionUiReadyGate(state.matchId, 'round', state.currentRound!.roundId, state.version);
   });
 
   it('supports seat lookup by user id and bot seat id', async () => {

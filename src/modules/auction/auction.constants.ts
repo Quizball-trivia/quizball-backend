@@ -10,7 +10,8 @@ export const MIN_BID_INCREMENT = 10_000_000;
 export const MIN_PLAYER_COST = 20_000_000;
 export const OPENING_TURN_MS = 30_000;
 export const RAISE_TURN_MS = 15_000;
-export const CLUE_REVEAL_INTERVAL_MS = 1_200;
+// 5s per clue so each can actually be read before the next lands.
+export const CLUE_REVEAL_INTERVAL_MS = 5_000;
 // Study window after the third clue lands, before the first turn opens.
 export const CLUE_STUDY_MS = 10_000;
 

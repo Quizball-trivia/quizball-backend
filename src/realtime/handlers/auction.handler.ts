@@ -127,7 +127,7 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
 
     const userId = socket.data.user?.id;
     if (!userId) return;
-    const acknowledged = acknowledgeAuctionUiReady(io, userId, parsed.data);
+    const acknowledged = await acknowledgeAuctionUiReady(io, userId, parsed.data);
     if (!acknowledged) {
       logger.debug(
         {

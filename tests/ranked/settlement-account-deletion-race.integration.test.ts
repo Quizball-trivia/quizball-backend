@@ -116,8 +116,8 @@ afterAll(async () => {
 });
 
 describe('ranked settlement vs account-deletion finalization', () => {
-  it('does not restore RP onto an account finalized before the settlement lands', async () => {
-    if (!dbAvailable) return;
+  it('does not restore RP onto an account finalized before the settlement lands', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const winner = await seedUser('race-winner-1');
     const loser = await seedUser('race-loser-1');
     await seedProfile(winner, 900);
@@ -148,8 +148,8 @@ describe('ranked settlement vs account-deletion finalization', () => {
     expect(ledger.length).toBe(0);
   });
 
-  it('still settles the surviving opponent when the other side was finalized', async () => {
-    if (!dbAvailable) return;
+  it('still settles the surviving opponent when the other side was finalized', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const winner = await seedUser('race-winner-2');
     const loser = await seedUser('race-loser-2');
     await seedProfile(winner, 900);
@@ -171,8 +171,37 @@ describe('ranked settlement vs account-deletion finalization', () => {
     expect(loserProfile?.rp).not.toBe(800);
   });
 
-  it('settles exactly once when finalization and settlement run concurrently', async () => {
-    if (!dbAvailable) return;
+  it('leaves no ghost profile when the finalized account had none to reset', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    const winner = await seedUser('race-winner-5');
+    const loser = await seedUser('race-loser-5');
+    // NOTE: deliberately NO ranked_profiles row for the winner. Finalization's
+    // reset then updates zero rows, and settlement's own ensureProfile would
+    // create a fresh 450-RP "Youth Prospect" profile for a deleted account.
+    await seedProfile(loser, 800);
+    const matchId = await seedCompletedRankedMatch({ winner, loser });
+
+    await finalizeDeletion(winner);
+    await rankedService.settleCompletedRankedMatch(matchId);
+
+    const [ghost] = await sql<{ rp: number; tier: string; placement_status: string }[]>`
+      SELECT rp, tier, placement_status FROM ranked_profiles WHERE user_id = ${winner}
+    `;
+    // Either no row at all, or a row that carries no standing whatsoever.
+    if (ghost) {
+      expect(ghost.rp).toBe(0);
+      expect(ghost.tier).toBe('Academy');
+      expect(ghost.placement_status).toBe('unplaced');
+    }
+
+    const ledger = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM ranked_rp_changes WHERE match_id = ${matchId} AND user_id = ${winner}
+    `;
+    expect(ledger.length).toBe(0);
+  });
+
+  it('settles exactly once when finalization and settlement run concurrently', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const winner = await seedUser('race-winner-4');
     const loser = await seedUser('race-loser-4');
     await seedProfile(winner, 900);
@@ -215,8 +244,8 @@ describe('ranked settlement vs account-deletion finalization', () => {
     expect(loserLedger.length).toBe(1);
   });
 
-  it('still settles an account that is only PENDING deletion (it can still cancel)', async () => {
-    if (!dbAvailable) return;
+  it('still settles an account that is only PENDING deletion (it can still cancel)', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const winner = await seedUser('race-winner-3');
     const loser = await seedUser('race-loser-3');
     await seedProfile(winner, 900);

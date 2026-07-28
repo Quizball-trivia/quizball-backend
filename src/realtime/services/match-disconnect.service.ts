@@ -468,31 +468,48 @@ export async function getDisconnectCount(matchId: string, userId: string): Promi
  *
  * Deliberately a fence, not a reset: the budget still shrinks across genuinely new
  * disconnects, so a player cannot drop forever by rejoining in between.
+ *
+ * The fence stores the SOCKET ID that completed the rejoin, not a timestamp. A
+ * timestamp cannot discriminate: the rejoining socket is already open when it
+ * sends `match:rejoin`, so its connectedAt necessarily PRECEDES the resume, and
+ * a time-based fence would swallow that socket's own later genuine drop for the
+ * rest of the match. Only events from a DIFFERENT (superseded) socket are stale.
  */
-export async function fenceDisconnectCountOnResume(matchId: string, userId: string): Promise<void> {
+export async function fenceDisconnectCountOnResume(
+  matchId: string,
+  userId: string,
+  resumedSocketId?: string
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
-  await redis.set(matchReconnectFenceKey(matchId, userId), String(Date.now()), { EX: FORFEIT_TTL_SEC });
+  if (!resumedSocketId) {
+    // Nothing identifies the recovered connection, so there is no safe fence to
+    // stamp. Clear any previous one rather than leave a stale socket id behind.
+    await redis.del(matchReconnectFenceKey(matchId, userId));
+    return;
+  }
+  await redis.set(matchReconnectFenceKey(matchId, userId), resumedSocketId, { EX: FORFEIT_TTL_SEC });
 }
 
 /**
- * True when this disconnect belongs to a connection the player has already
- * recovered from (it connected at or before the last completed rejoin).
- * Fails SAFE: an unknown connection age still counts, so the excused-exit call
- * site that passes no timestamp keeps its current behaviour.
+ * True when this disconnect comes from a connection the player has already been
+ * SUPERSEDED past: the fence names the socket that completed the rejoin, and
+ * this event belongs to a different one.
+ *
+ * Fails SAFE: with no fence, or no identifiable source socket, or when the event
+ * IS the fenced socket, the disconnect counts as normal.
  */
 async function isFencedStaleDisconnect(
   matchId: string,
   userId: string,
-  disconnectedConnectedAt: number | undefined
+  sourceSocketId: string | undefined
 ): Promise<boolean> {
-  if (typeof disconnectedConnectedAt !== 'number') return false;
+  if (typeof sourceSocketId !== 'string' || sourceSocketId.length === 0) return false;
   const redis = getRedisClient();
   if (!redis) return false;
-  const raw = await redis.get(matchReconnectFenceKey(matchId, userId));
-  const fencedAtMs = Number(raw);
-  if (!Number.isFinite(fencedAtMs) || fencedAtMs <= 0) return false;
-  return disconnectedConnectedAt <= fencedAtMs;
+  const fencedSocketId = await redis.get(matchReconnectFenceKey(matchId, userId));
+  if (!fencedSocketId) return false;
+  return fencedSocketId !== sourceSocketId;
 }
 
 async function incrementDisconnectCount(matchId: string, userId: string): Promise<number> {
@@ -752,7 +769,7 @@ export async function handleMatchRejoin(
           );
           await emitPartyQuizStateToSocket(socket, match.id);
         }
-        await resumePausedMatch(io, match.id, userId);
+        await resumePausedMatch(io, match.id, userId, socket.id);
         return;
       }
 
@@ -947,7 +964,11 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
 export async function resumePausedMatch(
   io: QuizballServer,
   matchId: string,
-  userId: string
+  userId: string,
+  // The socket the player recovered ON. Recorded as the reconnect fence so a
+  // late event from a SUPERSEDED socket cannot re-open a disconnect episode,
+  // while this socket's own later genuine drop still counts.
+  resumedSocketId?: string
 ): Promise<void> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return;
@@ -971,7 +992,7 @@ export async function resumePausedMatch(
   if (otherDisconnected.length > 0) {
     if (userWasDisconnected) {
       await redis.del(matchDisconnectKey(matchId, userId));
-      await fenceDisconnectCountOnResume(matchId, userId);
+      await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
     }
     const disconnectedOpponentId = otherDisconnected[0];
     if (!disconnectedOpponentId) return;
@@ -1018,7 +1039,7 @@ export async function resumePausedMatch(
     await redis.del(matchGraceKey(matchId));
     if (disconnectedBeforeResume.includes(userId)) {
       await redis.del(matchDisconnectKey(matchId, userId));
-      await fenceDisconnectCountOnResume(matchId, userId);
+      await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
     }
     for (const exitPendingUserId of exitPendingUserIds) {
       await redis.del(matchExitPendingKey(matchId, exitPendingUserId));
@@ -1091,7 +1112,7 @@ export async function resumePausedMatch(
       if (blockingDisconnectedUserIds.length > 0) {
         for (const recoveredUserId of reconnectingDisconnectedUserIds) {
           await redis.del(matchDisconnectKey(matchId, recoveredUserId));
-          await fenceDisconnectCountOnResume(matchId, recoveredUserId);
+          await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
         }
         const blockingDisconnectedUserId = blockingDisconnectedUserIds[0]!;
         const blockingMarkerRaw = await redis.get(
@@ -1121,7 +1142,7 @@ export async function resumePausedMatch(
 
       for (const recoveredUserId of reconnectingDisconnectedUserIds) {
         await redis.del(matchDisconnectKey(matchId, recoveredUserId));
-        await fenceDisconnectCountOnResume(matchId, recoveredUserId);
+        await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
       }
       await redis.del(matchGraceKey(matchId));
       await redis.del(matchGraceExtendedKey(matchId));
@@ -1417,12 +1438,12 @@ export async function pauseMatchForDisconnectedPlayer(
   const fencedStaleDisconnect = await isFencedStaleDisconnect(
     matchId,
     userId,
-    options.disconnectedConnectedAt
+    options.ignoreSocketId
   );
   if (fencedStaleDisconnect) {
     logger.info(
-      { matchId, userId, variant, disconnectedConnectedAt: options.disconnectedConnectedAt },
-      'Match disconnect pause skipped: connection predates the last completed rejoin'
+      { matchId, userId, variant, staleSocketId: options.ignoreSocketId },
+      'Match disconnect pause skipped: event is from a socket superseded by a completed rejoin'
     );
     return {
       graceMs: MATCH_DISCONNECT_GRACE_MS,
@@ -1656,7 +1677,7 @@ export async function pauseMatchForDisconnectedPlayer(
       { matchId, userId, socketCount: replacementSocketIds.length },
       'Auto-resuming match after fast socket replacement'
     );
-    await resumePausedMatch(io, matchId, userId);
+    await resumePausedMatch(io, matchId, userId, replacementSocketIds[0]);
   }
   if (acquired !== 'OK') {
     return {

@@ -192,6 +192,26 @@ export const rankedRepo = {
           // transaction. Skip ONLY this participant — the opponent's settlement is
           // independent and must still land.
           if (!activeUserIds.has(entry.change.userId)) {
+            // Re-assert the zeroed standing finalization applied. The
+            // pre-transaction ensureProfile may have re-created (or the eligibility
+            // read may have raced) a profile for this account AFTER finalization's
+            // own reset ran, which would leave a fresh 450-RP "Youth Prospect"
+            // ghost on a deleted player — the exact thing this guard prevents.
+            // Same field list as finalization / the season rollover.
+            await txSql`
+              UPDATE ranked_profiles
+              SET rp = 0, tier = 'Academy', placement_status = 'unplaced',
+                  placement_played = 0, placement_wins = 0, placement_seed_rp = NULL,
+                  placement_perf_sum = 0, placement_points_for_sum = 0,
+                  placement_points_against_sum = 0, current_win_streak = 0,
+                  updated_at = NOW()
+              WHERE user_id = ${entry.change.userId}
+                AND (rp <> 0 OR tier <> 'Academy' OR placement_status <> 'unplaced'
+                  OR placement_played <> 0 OR placement_wins <> 0
+                  OR placement_seed_rp IS NOT NULL OR placement_perf_sum <> 0
+                  OR placement_points_for_sum <> 0 OR placement_points_against_sum <> 0
+                  OR current_win_streak <> 0)
+            `;
             logger.warn({
               matchId: entry.change.matchId,
               userId: entry.change.userId,

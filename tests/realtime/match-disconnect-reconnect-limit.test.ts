@@ -510,7 +510,7 @@ describe('stale disconnect after a completed rejoin', () => {
     // One real disconnect already counted, then the player rejoined: the resume
     // path clears the episode marker and stamps the fence.
     redisValues.set('match:reconnect_count:m1:u1', '1');
-    await fenceDisconnectCountOnResume('m1', 'u1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
 
     // The old socket's `disconnect`/`match:leave` finally lands, well after resume.
     const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
@@ -535,7 +535,7 @@ describe('stale disconnect after a completed rejoin', () => {
     const staleConnectedAt = Date.now() - 120_000;
     // Sitting exactly on the limit after 3 genuine disconnects + a good rejoin.
     redisValues.set('match:reconnect_count:m1:u1', '3');
-    await fenceDisconnectCountOnResume('m1', 'u1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
 
     const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
       ignoreSocketId: 'stale-socket',
@@ -549,21 +549,24 @@ describe('stale disconnect after a completed rejoin', () => {
     expect(completeFromProgressMock).not.toHaveBeenCalled();
   });
 
-  it('still counts a genuinely NEW disconnect on a connection opened after the resume', async () => {
+  it('still counts a genuinely NEW disconnect from the socket that completed the rejoin', async () => {
     const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
       '../../src/realtime/services/match-disconnect.service.js'
     );
+    // PRODUCTION ORDERING: the socket is already open when it sends match:rejoin,
+    // so a TIME-based fence would classify that socket's own later genuine drop
+    // as stale and swallow every disconnect for the rest of the match. The fence
+    // is socket-scoped precisely so this still counts.
     redisValues.set('match:reconnect_count:m1:u1', '1');
-    await fenceDisconnectCountOnResume('m1', 'u1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
 
-    // The socket the player rejoined ON drops: it connected AFTER the fence, so
-    // this is a real new episode and the budget must still shrink.
     const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
-      ignoreSocketId: 'fresh-socket',
-      disconnectedConnectedAt: Date.now() + 1_000,
+      ignoreSocketId: 'rejoined-socket',
+      disconnectedConnectedAt: Date.now() - 30_000,
     });
 
     expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');
+    expect(redisValues.has('match:disconnect:m1:u1')).toBe(true);
     expect(result.finalized).toBe(false);
   });
 
@@ -590,17 +593,35 @@ describe('stale disconnect after a completed rejoin', () => {
     expect(armed?.[3]).toMatchObject({ disconnectMarkerMs: originalMarkerMs });
   });
 
-  it('counts the disconnect when the connection age is unknown (fail-safe)', async () => {
+  it('counts the disconnect when no source socket identifies the event (fail-safe)', async () => {
     const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
       '../../src/realtime/services/match-disconnect.service.js'
     );
     redisValues.set('match:reconnect_count:m1:u1', '1');
-    await fenceDisconnectCountOnResume('m1', 'u1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
 
-    // No disconnectedConnectedAt (e.g. the excused-exit conversion call site):
-    // the fence must NOT silently swallow the count.
+    // No ignoreSocketId (the excused-exit conversion call site passes none):
+    // the fence cannot prove staleness, so it must NOT swallow the count.
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {});
+
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');
+    expect(result.finalized).toBe(false);
+  });
+
+  it('does not stamp a fence when the resumed socket is unknown', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+    // A stale fence from an earlier episode must be cleared, not left to
+    // suppress real disconnects from every other socket.
+    await fenceDisconnectCountOnResume('m1', 'u1', 'old-socket');
+    await fenceDisconnectCountOnResume('m1', 'u1', undefined);
+
+    expect(redisValues.has('match:reconnect_fence:m1:u1')).toBe(false);
+
     const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
-      ignoreSocketId: 'unknown-age-socket',
+      ignoreSocketId: 'some-other-socket',
     });
 
     expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');

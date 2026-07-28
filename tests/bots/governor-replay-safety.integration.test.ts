@@ -88,8 +88,8 @@ function stateAfterOneWin(samples: number) {
 }
 
 describe('governor saveState idempotency under concurrent duplicate settlement', () => {
-  it('folds a match into the EMA exactly once when three duplicates race', async () => {
-    if (!dbAvailable) return;
+  it('folds a match into the EMA exactly once when three duplicates race', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const bot = await seedBot(`gov-race-${Date.now()}`);
     const matchId = await seedMatchId();
 
@@ -111,8 +111,8 @@ describe('governor saveState idempotency under concurrent duplicate settlement',
     expect(row?.governor_last_match_id).toBe(matchId);
   });
 
-  it('rejects a sequential replay of an already-folded match', async () => {
-    if (!dbAvailable) return;
+  it('rejects a sequential replay of an already-folded match', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const bot = await seedBot(`gov-replay-${Date.now()}`);
     const matchId = await seedMatchId();
 
@@ -128,8 +128,8 @@ describe('governor saveState idempotency under concurrent duplicate settlement',
     expect(row?.winrate_samples).toBe(1);
   });
 
-  it('still accepts a genuinely different match after one is folded', async () => {
-    if (!dbAvailable) return;
+  it('still accepts a genuinely different match after one is folded', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
     const bot = await seedBot(`gov-next-${Date.now()}`);
     const firstMatch = await seedMatchId();
     const secondMatch = await seedMatchId();

@@ -21,12 +21,13 @@ export default defineConfig({
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
       'tests/regression/auction-full-flow.test.ts',
-      // Burn-in EXECUTE/rollback tests mutate the SINGLETON one-time run marker,
-      // so they must run serially (vitest.burnin.config.ts, `npm run
-      // test:burnin`). Excluded here so the parallel suite never races on the
-      // marker. The writer + pure-unit burn-in tests do NOT touch the marker and
-      // stay in the parallel suite.
+      // Burn-in DB-integration tests run serially (vitest.burnin.config.ts,
+      // `npm run test:burnin`): execute/rollback mutate the SINGLETON one-time
+      // marker; the writer parity test drives the heavy production settlement
+      // path and times out under full-suite parallel load. The pure-unit burn-in
+      // tests (scheduler/manifest/target-guard) stay in the parallel suite.
       'tests/bot-burnin/execute.integration.test.ts',
+      'tests/bot-burnin/writer.integration.test.ts',
       'tests/bot-burnin/cli-args.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],

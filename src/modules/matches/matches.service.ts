@@ -623,7 +623,14 @@ export const matchesService = {
 
       const aiUser = user1?.is_ai ? user1 : user2?.is_ai ? user2 : null;
       const aiSeatId = user1?.is_ai ? seat1 : user2?.is_ai ? seat2 : null;
-      const persistentOpponent = aiUser != null && aiSeatId != null && isPersistentBot(aiUser);
+      // Require hasAiOpponent (XOR: exactly one AI) AND a resolved human — so ONLY
+      // a genuine human-vs-persistent-bot match enters the persistent branch. A
+      // bot-vs-bot pairing (both is_ai) would XOR to false → excluded here. (Ranked
+      // bot-vs-bot does not exist in prod: burn-in uses its own writer, not this
+      // path — this is a defensive guard so a stray bot-vs-bot could never try to
+      // transfer a single reservation onto both seats.)
+      const persistentOpponent =
+        hasAiOpponent && humanUserId != null && aiUser != null && aiSeatId != null && isPersistentBot(aiUser);
 
       if (hasAiOpponent && !humanUserId) {
         logger.warn(

@@ -31,6 +31,11 @@ import { reservationService } from './reservation.service.js';
 const RESERVATION_TTL_SEC = 180; // lobby-lifetime lease; heartbeated across the match.
 const RECENTLY_FACED_LIMIT = 5;
 const WIDENING_BANDS = [100, 250, 500] as const;
+// Cap total acquire (ON CONFLICT DO NOTHING) attempts across the whole eligibility
+// ladder for one selection. Each attempt is a DB round-trip; under heavy
+// contention many candidates may be concurrently reserved, so bound the work and
+// fall back to ephemeral rather than hammering the DB across a large roster.
+const MAX_ACQUIRE_ATTEMPTS = 12;
 
 function recentlyFacedKey(humanUserId: string): string {
   return `ranked:persistent:recent:${humanUserId}`;
@@ -159,12 +164,11 @@ function passesLevel(
  * bot (spreads load + avoids a detectable pattern).
  */
 function orderByNearestRp(bots: EligibleBotRow[], targetRp: number): EligibleBotRow[] {
-  const byDistance = [...bots].sort((a, b) => {
-    const da = Math.abs(a.rp - targetRp);
-    const db = Math.abs(b.rp - targetRp);
-    if (da !== db) return da - db;
-    return getRandom() - 0.5;
-  });
+  // Deterministic, stable sort by |rp - target| ONLY. Do NOT randomize inside the
+  // comparator — a non-deterministic comparator violates the sort contract
+  // (inconsistent/unstable results). Tie randomization is applied separately by
+  // the per-band Fisher-Yates shuffle below.
+  const byDistance = [...bots].sort((a, b) => Math.abs(a.rp - targetRp) - Math.abs(b.rp - targetRp));
   // Bucket into the widening bands, shuffling within each band, then append the
   // remaining (beyond ±500) closest-first tail.
   const ordered: EligibleBotRow[] = [];
@@ -232,9 +236,19 @@ export const syntheticBotSelectionService = {
     const recentlyFaced = new Set(recentlyFacedList);
     const ordered = orderByNearestRp(eligible, targetRp);
 
+    let acquireAttempts = 0;
     for (const level of ELIGIBILITY_LADDER) {
       const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now }));
       for (const bot of candidates) {
+        if (acquireAttempts >= MAX_ACQUIRE_ATTEMPTS) {
+          appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'acquire_cap' });
+          logger.info(
+            { humanUserId: params.humanUserId, targetRp, acquireAttempts },
+            'persistent-bot selection: acquire attempt cap reached, ephemeral fallback',
+          );
+          return null;
+        }
+        acquireAttempts++;
         const reservation = await reservationService.acquire({
           botUserId: bot.user_id,
           lobbyId: params.lobbyId,

@@ -27,6 +27,7 @@ const reservationService = {
   isEnabled: vi.fn().mockReturnValue(false),
   acquire: vi.fn(),
   releaseOwned: vi.fn().mockResolvedValue(undefined),
+  abortLobby: vi.fn().mockResolvedValue({ aborted: true, botReleased: 'persistent-bot', lobbyDeleted: true, removedMemberIds: [] }),
 };
 const selectionService = {
   selectAndReserve: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
     ensureProfile: vi.fn().mockResolvedValue({ user_id: 'human', rp: 1500, placement_status: 'placed', placement_played: 3, placement_required: 3, placement_wins: 2 }),
     buildAiMatchContext: vi.fn().mockReturnValue({ isPlacement: false, aiAnchorRp: 1500, aiCorrectness: 0.5, aiDelayProfile: { minMs: 500, maxMs: 3000 } }),
-    buildPersistentBotMatchContext: vi.fn(),
+    buildPersistentBotMatchContext: vi.fn().mockReturnValue({ aiCorrectness: 0.5, aiDelayProfile: { minMs: 500, maxMs: 3000 } }),
     DEFAULT_AI_OPPONENT_RP: 1900,
   },
 }));
@@ -100,5 +101,30 @@ describe('flag-off footprint parity', () => {
     // lobby was never created — no orphan.
     expect(lobbiesRepo.createLobby).not.toHaveBeenCalled();
     expect(lobbiesRepo.deleteLobby).not.toHaveBeenCalled();
+  });
+});
+
+describe('persistent lobby-build compensation runs even when a setup step throws BEFORE aiUser is assigned (CodeRabbit CRITICAL)', () => {
+  it('a throw in updateRankedContext (before aiUser) still compensates (release + teardown)', async () => {
+    // Flag ON + selection succeeds → the probe lobby is created and the reservation
+    // is held. A throw in updateRankedContext happens BEFORE aiUser is assigned, so
+    // the catch must NOT deref aiUser (would TypeError and skip compensation). We
+    // assert the compensation (abortLobby) still fired.
+    reservationService.isEnabled.mockReturnValue(true);
+    selectionService.selectAndReserve.mockResolvedValueOnce({
+      bot: { user_id: 'persistent-bot', rp: 1500, nickname: 'botname', avatar_url: null, country: 'GE', home_city: null, home_lat: null, home_lng: null, favorite_club: null },
+      reservation: { botUserId: 'persistent-bot', lobbyId: 'lobby-1', fence: 1 },
+      relaxationLevel: 'strict', targetRp: 1500,
+    });
+    // buildPersistentBotMatchContext succeeds; updateRankedContext THROWS (before aiUser=…).
+    lobbiesRepo.updateRankedContext.mockRejectedValueOnce(new Error('ctx write failed'));
+
+    // startRankedAiForUser returns (does not throw) because the catch compensates + returns.
+    await startRankedAiForUser(io, 'human', { skipSearchEmit: true, searchDurationMs: 100000 });
+
+    // The compensation MUST have run — the reservation is released via the locked
+    // abort, not stranded. (Before the fix, the catch's aiUser!.id threw a
+    // TypeError and this never ran.) compensateAbortLobby → abortLobby(lobbyId, path).
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
   });
 });

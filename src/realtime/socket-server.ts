@@ -526,8 +526,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
   startStaleMatchSweeper(io);
-  // Reconciliation sweeper for stranded persistent-bot reservations. Internally
-  // no-ops while PERSISTENT_BOTS_ENABLED is off (no DB traffic).
+  // Reconciliation sweeper for stranded persistent-bot reservations. NOT flag-
+  // gated (kill-switch safety): it must keep reconciling reservations created
+  // while PERSISTENT_BOTS_ENABLED was on even after the flag is turned off. Its
+  // work list is expired reservations, so with an empty table it is effectively
+  // idle regardless.
   startReservationSweeper();
 
   // A deploy can land inside an in-process round-transition window (ready-ack

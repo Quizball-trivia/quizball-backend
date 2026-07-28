@@ -250,7 +250,14 @@ export async function startRankedAiForUser(
           await emitLobbyState(io, probeLobby.id);
           await userSessionGuardService.emitState(io, userId);
         } catch (err) {
-          logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: aiUser!.id }, 'persistent-bot lobby build failed; compensating (locked release + teardown)');
+          // Use bot.user_id (always defined from the selection), NOT aiUser?.id —
+          // aiUser may be undefined if the throw happened before its assignment
+          // (buildPersistentBotMatchContext / updateRankedContext /
+          // buildPersistentBotGeo). Dereferencing aiUser! here would throw a
+          // TypeError INSIDE the catch and skip the compensation below, stranding
+          // the (already-acquired) reservation + orphaning the lobby. The
+          // compensation MUST always fire on any throw after acquire.
+          logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: bot.user_id }, 'persistent-bot lobby build failed; compensating (locked release + teardown)');
           await compensateAbortLobby(io, probeLobby.id);
           return;
         }
@@ -338,8 +345,11 @@ export async function startRankedAiForUser(
         searchDurationMs
       );
     } catch (err) {
+      // Gated on persistentBotReservation: with the flag off (no reservation) this
+      // rethrows exactly as main did — no new teardown (flag-off parity). Only the
+      // persistent path compensates (release + locked teardown).
       if (persistentBotReservation) {
-        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: aiUser!.id }, 'persistent-bot search scheduling failed; compensating (locked release + teardown)');
+        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: persistentBotReservation.botUserId }, 'persistent-bot search scheduling failed; compensating (locked release + teardown)');
         await compensateAbortLobby(io, lobby.id);
         return;
       }
@@ -367,12 +377,20 @@ async function handleRankedAiMatchFound(params: {
   const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, opponentRp, favoriteClub, persistentBotReservation, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
-  // Abort owned by THIS flow → compensateAbortLobby does the atomic,
-  // advisory-lock-guarded release + teardown in one transaction (serialized with
-  // draft activation). If a concurrent reconnect advanced the lobby, the whole
-  // abort no-ops — the live draft keeps the bot.
+  // Abort owned by THIS flow. STRICT FLAG-OFF PARITY: the new advisory-locked
+  // release + teardown ONLY runs when a persistent reservation is held. With the
+  // flag off (or an ephemeral opponent — no reservation), fall back to the exact
+  // legacy behavior main had for these bail-out returns (clear the AI lobby key),
+  // so the ephemeral/flag-off footprint is byte-identical. When persistent,
+  // compensateAbortLobby does the atomic locked release + teardown (no-op if a
+  // reconnect advanced the draft — the live draft keeps the bot).
   const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
-    await compensateAbortLobby(io, lobbyId);
+    if (persistentBotReservation) {
+      await compensateAbortLobby(io, lobbyId);
+      return;
+    }
+    const redis = getRedisClient();
+    if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
   };
 
   try {
@@ -473,12 +491,15 @@ async function handleRankedAiMatchFound(params: {
     );
   } catch (error) {
     // A throw here left the lobby wired but no draft scheduled by THIS flow.
-    // compensateAbortLobby does the atomic, lock-guarded release + teardown: if a
-    // reconnect independently activated the draft, it observes 'active' under the
-    // shared lock and no-ops entirely (no release, no teardown) — the live draft
-    // keeps the bot. No separate status pre-check needed (that would be a TOCTOU).
+    // STRICT FLAG-OFF PARITY: only the persistent path runs the new locked release
+    // + teardown; with the flag off (no reservation) this just logs, exactly as
+    // main did. When persistent, compensateAbortLobby releases + tears down under
+    // the lock (no-op if a reconnect activated the draft — the live draft keeps
+    // the bot).
     logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
-    await compensateAbortLobby(io, lobbyId);
+    if (persistentBotReservation) {
+      await compensateAbortLobby(io, lobbyId);
+    }
   }
 }
 

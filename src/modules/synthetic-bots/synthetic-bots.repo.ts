@@ -468,7 +468,11 @@ export const syntheticBotsRepo = {
           u.country AS country
         FROM synthetic_player_profiles p
         JOIN users u ON u.id = p.user_id
-        LEFT JOIN ranked_profiles rp ON rp.user_id = p.user_id
+        -- INNER JOIN: a persistent bot without a ranked_profile has no RP and
+        -- cannot be RP-matched — exclude it (EligibleBotRow.rp is non-null). Every
+        -- roster bot gets a profile at generation (PR5) + settlement (PR2); this is
+        -- a defensive guard against a NULL rp that would NaN the nearest-RP sort.
+        JOIN ranked_profiles rp ON rp.user_id = p.user_id
         WHERE p.status = 'active'
           AND u.ai_kind = 'persistent'
           AND NOT EXISTS (

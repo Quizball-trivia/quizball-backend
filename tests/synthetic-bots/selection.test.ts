@@ -244,6 +244,23 @@ describe('one-winner acquire race', () => {
     });
     expect(result).toBeNull();
   });
+
+  it('caps total acquire attempts and falls back to ephemeral under heavy contention', async () => {
+    // 50 eligible bots, every acquire loses (all concurrently reserved). The loop
+    // must NOT try all 50 × ladder-levels — it caps at MAX_ACQUIRE_ATTEMPTS (12)
+    // then returns null (ephemeral fallback).
+    const many = Array.from({ length: 50 }, (_, i) => bot(`bot-${i}`, { rp: 1500 }));
+    repo.listEligibleBots.mockResolvedValue(many);
+    reservation.acquire.mockResolvedValue(null); // every acquire loses
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result).toBeNull();
+    // Bounded: at most the cap (12), never all 50+.
+    expect(reservation.acquire.mock.calls.length).toBeLessThanOrEqual(12);
+  });
 });
 
 function tbilisiHour(): number {

@@ -57,12 +57,12 @@ export interface UserModeMatchStatsRow {
 }
 
 export interface RankedSplitStatsRow {
-  regular_wins: number;
-  regular_losses: number;
-  regular_draws: number;
-  event_wins: number;
-  event_losses: number;
-  event_draws: number;
+  previous_wins: number;
+  previous_losses: number;
+  previous_draws: number;
+  current_wins: number;
+  current_losses: number;
+  current_draws: number;
 }
 
 export interface RecentFormRow {
@@ -210,18 +210,15 @@ export const statsRepo = {
   },
 
   /**
-   * Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
+   * Ranked W/D/L split around the latest completed season-reset boundary.
    * The pre-aggregated `user_mode_match_stats` table has no date dimension, so we
-   * count from `matches` directly. Two buckets split at the event START:
-   *   regular — matches that ended BEFORE the event started (the normal ranked
-   *             record from before the World Cup event)
-   *   event   — matches that ended on/after the event start (games played during
-   *             the World Cup event window)
+   * count from `matches` directly. Previous matches ended before the boundary;
+   * current matches ended at or after it.
    * Only ranked, completed, non-dev matches are counted.
    */
-  async getRankedStatsByEventWindow(
+  async getRankedStatsSplitAtBoundary(
     userId: string,
-    eventStartIso: string,
+    boundaryIso: string,
   ): Promise<RankedSplitStatsRow> {
     // A no-winner match is only a real DRAW when both players were present and
     // the result was tied. Abandoned / opponent-never-joined matches also have a
@@ -230,12 +227,12 @@ export const statsRepo = {
     // draws, to keep the profile W/L/D consistent with RP.
     const [row] = await sql<RankedSplitStatsRow[]>`
       SELECT
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS regular_wins,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS regular_losses,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS regular_draws,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS event_losses,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS event_draws
+        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id = ${userId})::int AS previous_wins,
+        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS previous_losses,
+        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS previous_draws,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND m.winner_user_id = ${userId})::int AS current_wins,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS current_losses,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS current_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
       -- Count peers only for this user's already-selected matches. The former
@@ -255,12 +252,12 @@ export const statsRepo = {
     `;
     return (
       row ?? {
-        regular_wins: 0,
-        regular_losses: 0,
-        regular_draws: 0,
-        event_wins: 0,
-        event_losses: 0,
-        event_draws: 0,
+        previous_wins: 0,
+        previous_losses: 0,
+        previous_draws: 0,
+        current_wins: 0,
+        current_losses: 0,
+        current_draws: 0,
       }
     );
   },

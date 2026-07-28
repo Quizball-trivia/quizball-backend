@@ -97,8 +97,10 @@ export const modeStatsSummarySchema = z.object({
 });
 
 export const rankedSeasonSplitSchema = z.object({
-  regular: modeStatsSummarySchema,
-  event: modeStatsSummarySchema,
+  current: modeStatsSummarySchema,
+  previous: modeStatsSummarySchema,
+  currentSeasonNumber: z.number().int().min(1),
+  previousSeasonNumber: z.number().int().min(1).nullable(),
 });
 
 export const statsSummaryResponseSchema = z.object({

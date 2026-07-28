@@ -3,29 +3,41 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 vi.mock('../../src/modules/stats/stats.repo.js', () => ({
   statsRepo: {
     getUserModeStats: vi.fn(),
-    getRankedStatsByEventWindow: vi.fn(),
+    getRankedStatsSplitAtBoundary: vi.fn(),
     listRecentMatchesForUser: vi.fn(),
     listRecentFormsForUsers: vi.fn(),
   },
 }));
 
+vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
+  rankedRepo: {
+    getLatestCompletedSeasonReset: vi.fn(),
+  },
+}));
+
 import { statsRepo } from '../../src/modules/stats/stats.repo.js';
-import { statsService } from '../../src/modules/stats/stats.service.js';
+import { rankedRepo } from '../../src/modules/ranked/ranked.repo.js';
+import {
+  _resetSeasonBoundaryCacheForTests,
+  statsService,
+} from '../../src/modules/stats/stats.service.js';
 
 const EMPTY_SPLIT = {
-  regular_wins: 0,
-  regular_losses: 0,
-  regular_draws: 0,
-  event_wins: 0,
-  event_losses: 0,
-  event_draws: 0,
+  previous_wins: 0,
+  previous_losses: 0,
+  previous_draws: 0,
+  current_wins: 0,
+  current_losses: 0,
+  current_draws: 0,
 };
 const EMPTY_MODE = { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 };
 
 describe('statsService.getUserStatsSummary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (statsRepo.getRankedStatsByEventWindow as Mock).mockResolvedValue(EMPTY_SPLIT);
+    _resetSeasonBoundaryCacheForTests();
+    (rankedRepo.getLatestCompletedSeasonReset as Mock).mockResolvedValue(null);
+    (statsRepo.getRankedStatsSplitAtBoundary as Mock).mockResolvedValue(EMPTY_SPLIT);
   });
 
   it('returns zero summary when user has no stats rows', async () => {
@@ -37,37 +49,54 @@ describe('statsService.getUserStatsSummary', () => {
       overall: EMPTY_MODE,
       ranked: EMPTY_MODE,
       friendly: EMPTY_MODE,
-      rankedSeasons: { regular: EMPTY_MODE, event: EMPTY_MODE },
+      rankedSeasons: {
+        current: EMPTY_MODE,
+        previous: EMPTY_MODE,
+        currentSeasonNumber: 1,
+        previousSeasonNumber: null,
+      },
     });
+    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith(
+      'user-1',
+      '1970-01-01T00:00:00Z',
+    );
   });
 
-  it('splits ranked W/D/L at the event start (regular vs event)', async () => {
+  it('splits ranked W/D/L at the latest completed season boundary', async () => {
+    const completedAt = '2026-07-21T00:00:00.000Z';
     (statsRepo.getUserModeStats as Mock).mockResolvedValue([]);
-    (statsRepo.getRankedStatsByEventWindow as Mock).mockResolvedValue({
-      regular_wins: 5,
-      regular_losses: 3,
-      regular_draws: 2,
-      event_wins: 1,
-      event_losses: 0,
-      event_draws: 0,
+    (rankedRepo.getLatestCompletedSeasonReset as Mock).mockResolvedValue({
+      seasonNumber: 1,
+      completedAt,
+    });
+    (statsRepo.getRankedStatsSplitAtBoundary as Mock).mockResolvedValue({
+      previous_wins: 5,
+      previous_losses: 3,
+      previous_draws: 2,
+      current_wins: 1,
+      current_losses: 0,
+      current_draws: 0,
     });
 
     const summary = await statsService.getUserStatsSummary('user-1');
 
-    expect(summary.rankedSeasons.regular).toEqual({
+    expect(summary.rankedSeasons.previous).toEqual({
       gamesPlayed: 10,
       wins: 5,
       losses: 3,
       draws: 2,
       winRate: 50,
     });
-    expect(summary.rankedSeasons.event).toEqual({
+    expect(summary.rankedSeasons.current).toEqual({
       gamesPlayed: 1,
       wins: 1,
       losses: 0,
       draws: 0,
       winRate: 100,
     });
+    expect(summary.rankedSeasons.currentSeasonNumber).toBe(2);
+    expect(summary.rankedSeasons.previousSeasonNumber).toBe(1);
+    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith('user-1', completedAt);
   });
 
   it('computes per-mode and overall stats correctly', async () => {

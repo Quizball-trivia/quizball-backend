@@ -7,6 +7,7 @@ import {
   freezeBotBodySchema,
   botUserIdParamsSchema,
   zeroOffsetsBodySchema,
+  patchBotBodySchema,
 } from '../../modules/bots/tuning/tuning.schemas.js';
 
 const router = Router();
@@ -17,9 +18,11 @@ const router = Router();
  *
  * GET  /api/v1/internal/bots/tuning
  * PUT  /api/v1/internal/bots/tuning
- * GET  /api/v1/internal/bots/tuning/roster
- * POST /api/v1/internal/bots/tuning/roster/:botUserId/freeze
- * POST /api/v1/internal/bots/tuning/governor/zero-offsets
+ * GET   /api/v1/internal/bots/tuning/roster
+ * PATCH /api/v1/internal/bots/tuning/roster/:botUserId
+ * GET   /api/v1/internal/bots/tuning/roster/:botUserId/history
+ * POST  /api/v1/internal/bots/tuning/roster/:botUserId/freeze
+ * POST  /api/v1/internal/bots/tuning/governor/zero-offsets
  */
 router.get('/', tuningController.getTuning);
 
@@ -29,6 +32,18 @@ router.get(
   '/roster',
   validate({ query: rosterOverviewQuerySchema }),
   tuningController.getRoster,
+);
+
+router.patch(
+  '/roster/:botUserId',
+  validate({ params: botUserIdParamsSchema, body: patchBotBodySchema }),
+  tuningController.patchBot,
+);
+
+router.get(
+  '/roster/:botUserId/history',
+  validate({ params: botUserIdParamsSchema }),
+  tuningController.getBotHistory,
 );
 
 router.post(

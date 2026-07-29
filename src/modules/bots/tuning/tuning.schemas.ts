@@ -273,3 +273,70 @@ export const zeroOffsetsBodySchema = z
   .strict();
 
 export type ZeroOffsetsBody = z.infer<typeof zeroOffsetsBodySchema>;
+
+/* -------------------------------------------------------------------------- */
+/* PER-BOT ADMIN EDITS (PATCH roster/:botUserId)                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Roster band range for the hidden ability offset, from the generator that
+ * built the roster (scripts/persistent-bot-roster/measure.ts: five bands
+ * spanning 0.05..0.90). Mirrored by the CHECK added in 20260729140000 so the
+ * bound survives a caller that bypasses this schema.
+ */
+export const MIN_BASE_SKILL = 0.05;
+export const MAX_BASE_SKILL = 0.9;
+
+/**
+ * How far BELOW the live human #10 an admin-set RP must stay.
+ *
+ * Same intent as the governor's top-protection rings, enforced at write time:
+ * an operator typing a large RP could otherwise park a bot at the top of the
+ * human leaderboard instantly, which no amount of downstream governor
+ * correction can undo retroactively (the bot is already visible there).
+ */
+export const RP_CEILING_MARGIN_BELOW_HUMAN_TOP10 = 100;
+
+/** Nickname length bounds, matching the human rename flow (users.schemas.ts). */
+export const BOT_NICKNAME_MIN_LENGTH = 1;
+export const BOT_NICKNAME_MAX_LENGTH = 50;
+
+/**
+ * Body for PATCH /roster/:botUserId — any SUBSET of the four editable fields.
+ *
+ * `note` is REQUIRED (not optional as on the other write routes): every field
+ * here mutates one identifiable bot's identity or difficulty, and the audit row
+ * is worthless without the operator's reason.
+ *
+ * Deliberately NO charset regex on nickname. The human rename flow validates
+ * length + profanity + uniqueness only (users.schemas.ts is `z.string().min(1)
+ * .max(50)`), and inventing a stricter rule here would let an admin fail to set
+ * a name a human could freely register — the bots must stay indistinguishable.
+ */
+export const patchBotBodySchema = z
+  .object({
+    nickname: z.string().trim().min(BOT_NICKNAME_MIN_LENGTH).max(BOT_NICKNAME_MAX_LENGTH).optional(),
+    /** Absolute RP. Mutually exclusive with rpAdjust; rail-checked server-side. */
+    rpSet: z.number().int().min(0).optional(),
+    /** Relative RP delta. The resulting RP is clamped at >= 0 and rail-checked. */
+    rpAdjust: z.number().int().optional(),
+    baseSkill: z.number().min(MIN_BASE_SKILL).max(MAX_BASE_SKILL).optional(),
+    dailyCap: z.number().int().min(0).max(MAX_DAILY_CAP).optional(),
+    note: z.string().trim().min(1).max(200),
+  })
+  .strict()
+  .refine((body) => !(body.rpSet !== undefined && body.rpAdjust !== undefined), {
+    message: 'Supply rpSet OR rpAdjust, not both.',
+    path: ['rpSet'],
+  })
+  .refine(
+    (body) =>
+      body.nickname !== undefined ||
+      body.rpSet !== undefined ||
+      body.rpAdjust !== undefined ||
+      body.baseSkill !== undefined ||
+      body.dailyCap !== undefined,
+    { message: 'No editable fields supplied. Send at least one of nickname, rpSet/rpAdjust, baseSkill, dailyCap.' },
+  );
+
+export type PatchBotBody = z.infer<typeof patchBotBodySchema>;

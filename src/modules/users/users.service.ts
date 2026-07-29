@@ -74,7 +74,7 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
-function assertNicknameAllowed(nickname: string, userId?: string): void {
+export function assertNicknameAllowed(nickname: string, userId?: string): void {
   const match = findBannedNicknameTerm(nickname);
   if (!match) return;
 

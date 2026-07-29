@@ -721,15 +721,37 @@ export const usersRepo = {
     };
   },
 
-  /** Publishable previous nicknames, newest first. */
+  /**
+   * Publishable previous nicknames, newest first.
+   *
+   * `counted` is normally both the quota marker AND the publish marker, so an
+   * uncounted row is invisible here. Admin renames of ROSTER BOTS are the one
+   * exception: they are written uncounted (an operator edit must not spend the
+   * bot's 2 free renames) but must still appear publicly, because a bot whose
+   * name silently changed with no history is distinguishable from a human — the
+   * exact tell the roster exists to avoid.
+   *
+   * Scoped to bots on purpose. An admin rename of a HUMAN stays hidden, which
+   * is the pre-existing behaviour; widening it would retroactively publish
+   * support-initiated renames real users never consented to show.
+   */
   async getPublicNicknameHistory(userId: string, limit = 10): Promise<NicknameHistoryEntry[]> {
     const rows = await sql<{ nickname: string; changed_at: Date }[]>`
-      SELECT old_nickname AS nickname, changed_at
-      FROM nickname_history
-      WHERE user_id = ${userId}
-        AND counted
-        AND old_nickname IS NOT NULL
-      ORDER BY changed_at DESC
+      SELECT h.old_nickname AS nickname, h.changed_at
+      FROM nickname_history h
+      WHERE h.user_id = ${userId}
+        AND h.old_nickname IS NOT NULL
+        AND (
+          h.counted
+          OR (
+            h.changed_by = 'admin'
+            AND EXISTS (
+              SELECT 1 FROM users u
+              WHERE u.id = h.user_id AND u.is_ai = true
+            )
+          )
+        )
+      ORDER BY h.changed_at DESC
       LIMIT ${limit}
     `;
     return rows.map((row) => ({

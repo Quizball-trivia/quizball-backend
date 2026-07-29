@@ -94,6 +94,8 @@ export interface RosterOverviewRow {
   governorAdjustment: number;
   matchesToday: number;
   dailyCap: number;
+  /** Hidden ability offset; surfaced so the CMS edit modal can prefill it. */
+  baseSkill: number;
   lastSelectedAt: string | null;
 }
 
@@ -237,6 +239,7 @@ export const tuningRepo = {
         governor_adjustment: number;
         matches_today: number;
         daily_cap: number;
+        base_skill: number;
         last_selected_at: string | null;
         total: number;
       }>>`
@@ -252,6 +255,7 @@ export const tuningRepo = {
           p.governor_adjustment AS governor_adjustment,
           p.matches_today      AS matches_today,
           p.daily_cap          AS daily_cap,
+          p.base_skill         AS base_skill,
           p.last_selected_at   AS last_selected_at,
           COUNT(*) OVER ()::int AS total
         FROM synthetic_player_profiles p
@@ -275,6 +279,7 @@ export const tuningRepo = {
           governorAdjustment: Number(row.governor_adjustment) || 0,
           matchesToday: Number(row.matches_today) || 0,
           dailyCap: Number(row.daily_cap) || 0,
+          baseSkill: Number(row.base_skill),
           lastSelectedAt: row.last_selected_at,
         })),
         total: rows.length > 0 ? Number(rows[0].total) : 0,

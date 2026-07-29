@@ -27,6 +27,7 @@ import { friendsRoutes } from './friends.routes.js';
 import { translationRoutes } from './translation.routes.js';
 import { opsRoutes } from './ops.routes.js';
 import { botGovernorRoutes } from './bot-governor.routes.js';
+import { botTuningRoutes } from './bot-tuning.routes.js';
 import { feedbackRoutes } from './feedback.routes.js';
 import { campaignQuizzesRoutes } from './campaign-quizzes.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
@@ -70,6 +71,7 @@ router.use('/api/v1/admin/agents', adminAgentsRoutes);
 router.use('/api/v1/admin/translation', translationRoutes);
 router.use('/api/v1/internal/ops', opsRoutes);
 router.use('/api/v1/internal/bots/governor', botGovernorRoutes);
+router.use('/api/v1/internal/bots/tuning', botTuningRoutes);
 router.use('/api/v1/feedback', feedbackRoutes);
 router.use('/api/v1/campaign-quizzes', campaignQuizzesRoutes);
 

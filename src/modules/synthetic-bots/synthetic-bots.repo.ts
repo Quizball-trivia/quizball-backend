@@ -483,6 +483,11 @@ export const syntheticBotsRepo = {
         -- a defensive guard against a NULL rp that would NaN the nearest-RP sort.
         JOIN ranked_profiles rp ON rp.user_id = p.user_id
         WHERE p.status = 'active'
+          -- Operator freeze (PR10). A HARD constraint, deliberately alongside
+          -- status/reservation rather than in the relaxation ladder: an operator
+          -- freezing a misbehaving bot must never be undone by the ladder
+          -- widening when the eligible pool runs thin.
+          AND NOT p.selection_frozen
           AND u.ai_kind = 'persistent'
           AND NOT EXISTS (
             SELECT 1 FROM synthetic_bot_reservations r WHERE r.bot_user_id = p.user_id

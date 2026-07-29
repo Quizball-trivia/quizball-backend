@@ -7,6 +7,7 @@ import { selectionTargetRpForHuman } from '../ranked/ranked.service.js';
 import { syntheticBotsRepo, type EligibleBotRow } from './synthetic-bots.repo.js';
 import { reservationService } from './reservation.service.js';
 import { isWithinScheduleWindow } from './activity-window.js';
+import { loadBotTuning } from '../bots/tuning/tuning-config.service.js';
 
 /**
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
@@ -121,14 +122,39 @@ const ELIGIBILITY_LADDER: EligibilityLevel[] = [
   { respectSessionPreference: false, respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: false, relaxationLabel: 'relax_schedule' },
 ];
 
+/**
+ * A bot's EFFECTIVE daily cap: the generated per-bot cap scaled by the operator
+ * activity knob and clamped to the roster-wide ceiling (PR10).
+ *
+ * Floors at 0 rather than 1: activityScale = 0 must be able to idle the roster
+ * completely, which is the whole point of having the knob during an incident.
+ */
+export function effectiveDailyCap(
+  dailyCap: number,
+  tuning: { activityScale: number; maxDailyCap: number },
+): number {
+  const scaled = Math.floor(dailyCap * tuning.activityScale);
+  return Math.max(0, Math.min(scaled, tuning.maxDailyCap));
+}
+
 function passesLevel(
   bot: EligibleBotRow,
   level: EligibilityLevel,
-  ctx: { recentlyFaced: Set<string>; rosterDay: string; now: Date },
+  ctx: {
+    recentlyFaced: Set<string>;
+    rosterDay: string;
+    now: Date;
+    tuning: { activityScale: number; maxDailyCap: number };
+  },
 ): boolean {
   if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;
-  if (level.respectDailyCap && effectiveMatchesToday(bot, ctx.rosterDay) >= bot.daily_cap) return false;
+  if (
+    level.respectDailyCap &&
+    effectiveMatchesToday(bot, ctx.rosterDay) >= effectiveDailyCap(bot.daily_cap, ctx.tuning)
+  ) {
+    return false;
+  }
   if (level.respectSchedule && !isWithinScheduleWindow(bot.schedule, ctx.now)) return false;
   return true;
 }
@@ -198,9 +224,10 @@ export const syntheticBotSelectionService = {
     const rosterDay = currentRosterDay(now);
     const targetRp = selectionTargetRpForHuman(params.humanProfile);
 
-    const [eligible, recentlyFacedList] = await Promise.all([
+    const [eligible, recentlyFacedList, tuning] = await Promise.all([
       syntheticBotsRepo.listEligibleBots(),
       getRecentlyFaced(params.humanUserId),
+      loadBotTuning(),
     ]);
 
     if (eligible.length === 0) {
@@ -214,7 +241,7 @@ export const syntheticBotSelectionService = {
 
     let acquireAttempts = 0;
     for (const level of ELIGIBILITY_LADDER) {
-      const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now }));
+      const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now, tuning }));
       for (const bot of candidates) {
         if (acquireAttempts >= MAX_ACQUIRE_ATTEMPTS) {
           appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'acquire_cap' });

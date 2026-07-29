@@ -15,6 +15,7 @@ import type { PersistentBotModelPin } from '../lobbies/lobbies.types.js';
 import { botModelParamsRepo } from './bot-model-params.repo.js';
 import { syntheticProfileRepo } from './synthetic-profile.repo.js';
 import { questionStatsRepo } from './question-stats.repo.js';
+import { loadBotTuning } from './tuning/tuning-config.service.js';
 import { logit } from './calibration/math.js';
 import { effectiveProbCap, solveThetaCeilingBound } from '../../realtime/persistent-bot-gameplay.js';
 import type { BotModelParams } from './calibration/params-schema.js';
@@ -37,10 +38,11 @@ export async function buildPersistentBotModelPin(
   currentRp: number,
   now: Date = new Date(),
 ): Promise<PersistentBotModelPin | null> {
-  const [active, skill, accuracies] = await Promise.all([
+  const [active, skill, accuracies, tuning] = await Promise.all([
     botModelParamsRepo.getActive(),
     syntheticProfileRepo.getSkillInputs(botUserId),
     questionStatsRepo.getAllSmoothedAccuracies().catch(() => [] as number[]),
+    loadBotTuning(),
   ]);
   if (!active || !skill) {
     logger.info(
@@ -61,6 +63,7 @@ export async function buildPersistentBotModelPin(
 
   return {
     paramsVersion: active.version,
+    tuningVersion: tuning.version,
     params: active.params,
     botUserId,
     currentRp,

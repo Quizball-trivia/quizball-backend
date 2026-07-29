@@ -7,7 +7,7 @@
  *   - the telemetry aggregate behind the ops endpoint
  */
 
-import { sql } from '../../../db/index.js';
+import { sql, type TransactionSql } from '../../../db/index.js';
 import { withSpan } from '../../../core/tracing.js';
 import type { GovernorState } from './governor-state-machine.js';
 
@@ -137,8 +137,12 @@ export const governorRepo = {
    * pending-deletion excluded, placed only) so "the #10 human" here is the same
    * player a human sees at rank 10.
    */
-  async getHumanTop10Rp(): Promise<number | null> {
+  async getHumanTop10Rp(tx?: TransactionSql): Promise<number | null> {
     return withSpan('db.bots.human_top10_rp', { 'db.operation.name': 'select' }, async () => {
+      // Optional tx: the admin RP rail must read this INSIDE the write
+      // transaction (uncached), so the ceiling reflects committed truth at
+      // write time rather than a value up to the cache TTL out of date.
+      const db = (tx as unknown as typeof sql) ?? sql;
       // Take the top 10 in one pass so we can distinguish "no humans at all"
       // from "fewer than 10 humans" and still return a usable threshold in the
       // latter case (Sol finding #3): with <10 placed humans EVERY placed bot is
@@ -146,7 +150,7 @@ export const governorRepo = {
       // The LAST human we can see is then the most conservative threshold
       // available — it is at or below the true #10 slot, so the ring engages
       // earlier, never later.
-      const rows = await sql<{ rp: number }[]>`
+      const rows = await db<{ rp: number }[]>`
         SELECT rp.rp AS rp
         FROM ranked_profiles rp
         JOIN users u ON u.id = rp.user_id

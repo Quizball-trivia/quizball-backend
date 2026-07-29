@@ -1,4 +1,4 @@
-import { sql } from '../../db/index.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { tierFromRp } from './ranked.service.js';
@@ -349,8 +349,17 @@ export const rankedRepo = {
    * The RP ledger (ranked_rp_changes) is intentionally NOT written — admin
    * grants are audited separately and are not match-derived RP changes.
    */
-  async setRankPoints(userId: string, rp: number, tier: RankedTier): Promise<number | null> {
-    const [row] = await sql<{ rp: number }[]>`
+  async setRankPoints(
+    userId: string,
+    rp: number,
+    tier: RankedTier,
+    tx?: TransactionSql
+  ): Promise<number | null> {
+    // Optional tx so an admin edit can commit the RP write atomically with its
+    // audit rows (bot tuning PATCH); postgres.js drops the tagged-template
+    // signature from TransactionSql, hence the cast (see the note above).
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const [row] = await db<{ rp: number }[]>`
       UPDATE ranked_profiles
       SET rp = ${rp}, tier = ${tier}, updated_at = NOW()
       WHERE user_id = ${userId}

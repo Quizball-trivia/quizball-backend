@@ -11,17 +11,24 @@
  * those are applied at match time, strictly after any override resolved here.
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../../../core/config.js';
+import { sql } from '../../../db/index.js';
 import {
   AuthenticationError,
   BadRequestError,
+  ConflictError,
   InternalError,
   NotFoundError,
 } from '../../../core/errors.js';
 import { logger } from '../../../core/logger.js';
-import { tuningRepo, type OverrideField } from './tuning.repo.js';
+import { usersRepo } from '../../users/users.repo.js';
+import { assertNicknameAllowed } from '../../users/users.service.js';
+import { rankedRepo } from '../../ranked/ranked.repo.js';
+import { tierFromRp } from '../../ranked/season-rp-formula.js';
+import { governorRepo } from '../governor/governor.repo.js';
+import { tuningRepo, type OverrideField, type BotAdminEditEntry } from './tuning.repo.js';
 import { resolveTuning, invalidateBotTuningCache } from './tuning-config.service.js';
 import {
   MAX_TARGET_WINRATE,
@@ -35,11 +42,15 @@ import {
   MIN_TOP_PROTECTION_CRITICAL_RP,
   ceilingAccuracyForMargin,
   validateMergedRings,
+  RP_CEILING_MARGIN_BELOW_HUMAN_TOP10,
+  MIN_BASE_SKILL,
+  MAX_BASE_SKILL,
   type UpdateBotTuningBody,
   type RosterOverviewQuery,
   type FreezeBotBody,
   type BotUserIdParams,
   type ZeroOffsetsBody,
+  type PatchBotBody,
 } from './tuning.schemas.js';
 import { HARD_PROB_CAP, HARD_SKILL_CAP, HARD_MIN_ANSWER_TIME_MS } from '../calibration/hard-clamps.js';
 
@@ -104,6 +115,20 @@ function railsPayload() {
       note: 'May only WIDEN, and the critical ring must stay inside the warn ring.',
     },
     dailyCap: { max: MAX_DAILY_CAP },
+    // Per-bot admin edit rails (PATCH roster/:botUserId).
+    perBotEdit: {
+      baseSkill: {
+        min: MIN_BASE_SKILL,
+        max: MAX_BASE_SKILL,
+        note: 'Roster band range. Hard clamps still apply after this value at match time.',
+      },
+      rp: {
+        marginBelowHumanTop10: RP_CEILING_MARGIN_BELOW_HUMAN_TOP10,
+        note: 'An admin-set RP must stay this far below the live human #10. RP also affects play strength.',
+      },
+      dailyCap: { min: 0, max: MAX_DAILY_CAP },
+      noteRequired: true,
+    },
     immutable: {
       hardProbCap: HARD_PROB_CAP,
       hardSkillCap: HARD_SKILL_CAP,
@@ -214,6 +239,206 @@ export const tuningController = {
 
     logger.info({ botUserId, frozen, reason: reason ?? null }, 'Bot selection freeze changed');
     res.json(updated);
+  },
+
+  /**
+   * PATCH /api/v1/internal/bots/tuning/roster/:botUserId — per-bot admin edit.
+   *
+   * Accepts any subset of nickname / rpSet|rpAdjust / baseSkill / dailyCap plus
+   * a MANDATORY note. Three things make this different from the other writes:
+   *
+   *   1. RP CEILING RAIL. An admin-set RP may not land within
+   *      RP_CEILING_MARGIN_BELOW_HUMAN_TOP10 of the live human #10. The governor
+   *      pushes bots off the top over time, but it cannot un-display a bot that
+   *      was parked at rank 1 the moment the operator hit save.
+   *   2. RP IS ALSO A DIFFICULTY KNOB. Effective skill is
+   *      f(currentRp) + base_skill + governor (persistent-bot-gameplay.ts), so
+   *      an RP edit moves how strongly the bot plays, not just its ladder slot.
+   *      Echoed in the response so the CMS can warn.
+   *   3. NICKNAME REUSES THE HUMAN RULES. Same profanity + uniqueness +
+   *      freed-name reservation checks as PUT /users/me, and the history row is
+   *      written changed_by='admin', counted=false: publicly visible (see
+   *      getPublicNicknameHistory) without spending the bot's free renames.
+   *
+   * base_skill edits do NOT escape the hard clamps: effectiveSkillCap applies
+   * HARD_SKILL_CAP after every override, so this can move a bot within the
+   * band, never above the frozen cap. Stated in the response.
+   */
+  async patchBot(req: Request, res: Response): Promise<void> {
+    assertOpsAuthorized(req);
+    const { botUserId } = req.validated.params as BotUserIdParams;
+    const body = req.validated.body as PatchBotBody;
+
+    // ONE TRANSACTION for the whole patch: every validation that reads DB
+    // state, every write, the nickname history row and the audit rows.
+    //
+    // Previously these were separate statements, so a failure part-way through
+    // (a taken nickname after a valid rpSet) left the earlier writes committed
+    // with NO audit rows — a silent, untraceable difficulty change. Anything
+    // that throws below now rolls back the entire edit.
+    const result = await sql.begin(async (tx) => {
+      // Locked read: FOR UPDATE on users + ranked_profiles +
+      // synthetic_player_profiles, held to commit. This is the before-image for
+      // BOTH the audit rows and the rpAdjust arithmetic, so a concurrent PATCH
+      // on the same bot waits here rather than computing off a stale snapshot.
+      const before = await tuningRepo.getEditableBot(botUserId, { tx, lock: true });
+      if (!before) throw new NotFoundError('No persistent-bot profile for that user id');
+
+      const edits: BotAdminEditEntry[] = [];
+      const applied: Record<string, unknown> = {};
+      const warnings: string[] = [];
+
+      // --- RP -----------------------------------------------------------------
+      let newRp: number | undefined;
+      if (body.rpSet !== undefined || body.rpAdjust !== undefined) {
+        const currentRp = before.rp ?? 0;
+        const target = body.rpSet !== undefined ? body.rpSet : currentRp + body.rpAdjust!;
+        newRp = Math.max(0, Math.round(target));
+
+        // UNCACHED and inside the tx on purpose. loadHumanTop10Rp() caches for
+        // 60s, so the rail could be validated against a human #10 that has since
+        // moved — letting an admin park a bot above the live top 10, the exact
+        // outcome the rail exists to prevent.
+        const humanTop10Rp = await governorRepo.getHumanTop10Rp(tx);
+        if (humanTop10Rp !== null) {
+          const ceiling = humanTop10Rp - RP_CEILING_MARGIN_BELOW_HUMAN_TOP10;
+          if (newRp > ceiling) {
+            throw new BadRequestError(
+              `RP ${newRp} would place this bot above the safety ceiling of ${ceiling} `
+                + `(live human #10 is ${humanTop10Rp}, minus the ${RP_CEILING_MARGIN_BELOW_HUMAN_TOP10} RP margin).`,
+              { field: body.rpSet !== undefined ? 'rpSet' : 'rpAdjust', ceiling, humanTop10Rp },
+            );
+          }
+        } else {
+          // No placed humans yet: every bot is trivially in the public top 10, so
+          // refuse rather than guess a threshold.
+          throw new BadRequestError(
+            'Cannot rail-check RP: no placed human players exist to derive the top-10 ceiling from.',
+            { field: body.rpSet !== undefined ? 'rpSet' : 'rpAdjust' },
+          );
+        }
+
+        if (newRp !== currentRp) {
+          const tier = tierFromRp(newRp);
+          const updated = await rankedRepo.setRankPoints(botUserId, newRp, tier, tx);
+          if (updated === null) {
+            throw new NotFoundError('Bot has no ranked profile; RP cannot be set');
+          }
+          edits.push({ botUserId, field: 'rp', oldValue: String(currentRp), newValue: String(newRp) });
+          applied.rp = newRp;
+          applied.tier = tier;
+          warnings.push(
+            'RP also affects how strongly this bot plays: effective skill is derived from current RP '
+              + '+ hidden skill + governor offset.',
+          );
+        }
+      }
+
+      // --- nickname -----------------------------------------------------------
+      if (body.nickname !== undefined && body.nickname !== before.nickname) {
+        const nickname = body.nickname;
+        assertNicknameAllowed(nickname, botUserId);
+        if (await usersRepo.isNicknameTaken(nickname, botUserId, tx)) {
+          throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+        }
+        if (await usersRepo.isNicknameReserved(nickname, botUserId, tx)) {
+          throw new ConflictError(
+            'Nickname was recently released by another player and is temporarily reserved',
+            { field: 'nickname' },
+          );
+        }
+        // counted=false: an admin edit must not spend the bot's 2 free renames.
+        // changed_by='admin' is what keeps the row publicly visible anyway.
+        const updated = await usersRepo.changeNicknameInTx({
+          userId: botUserId,
+          oldNickname: before.nickname,
+          newNickname: nickname,
+          changedBy: 'admin',
+          counted: false,
+          // MUST join our tx: left to its own sql.begin it takes a separate pool
+          // connection and commits the rename even when this patch rolls back.
+          tx,
+        });
+        if (!updated) throw new InternalError('Nickname change failed unexpectedly');
+        edits.push({ botUserId, field: 'nickname', oldValue: before.nickname, newValue: nickname });
+        applied.nickname = nickname;
+      }
+
+      // --- profile fields -----------------------------------------------------
+      const profileFields: { baseSkill?: number; dailyCap?: number } = {};
+      if (body.baseSkill !== undefined && body.baseSkill !== before.baseSkill) {
+        profileFields.baseSkill = body.baseSkill;
+        edits.push({
+          botUserId,
+          field: 'base_skill',
+          oldValue: String(before.baseSkill),
+          newValue: String(body.baseSkill),
+        });
+        applied.baseSkill = body.baseSkill;
+        warnings.push(
+          `Hidden skill stays subject to the immutable clamps: HARD_SKILL_CAP (${HARD_SKILL_CAP}) and the `
+            + 'ceiling bound are applied after this value at match time, so raising it cannot lift a bot '
+            + 'above the frozen cap.',
+        );
+      }
+      if (body.dailyCap !== undefined && body.dailyCap !== before.dailyCap) {
+        profileFields.dailyCap = body.dailyCap;
+        edits.push({
+          botUserId,
+          field: 'daily_cap',
+          oldValue: String(before.dailyCap),
+          newValue: String(body.dailyCap),
+        });
+        applied.dailyCap = body.dailyCap;
+      }
+      await tuningRepo.updateProfileFields(botUserId, profileFields, tx);
+
+      // Nothing actually differed: commit an empty transaction and report it.
+      if (edits.length === 0) {
+        return { botUserId, changed: false as const, applied: {}, warnings: [], note: body.note };
+      }
+
+      const requestId = randomUUID();
+      // Same transaction as the writes above: audit rows and the changes they
+      // describe commit together or not at all.
+      await tuningRepo.recordAdminEdits(edits, requestId, body.note, tx);
+
+      return {
+        botUserId,
+        changed: true as const,
+        requestId,
+        applied,
+        before: {
+          nickname: before.nickname,
+          rp: before.rp,
+          baseSkill: before.baseSkill,
+          dailyCap: before.dailyCap,
+        },
+        warnings,
+        note: body.note,
+      };
+    });
+
+    // Logged only after COMMIT: an "edit applied" line for a rolled-back patch
+    // would be a lie in the operator's audit trail.
+    if (result.changed) {
+      logger.info(
+        { botUserId, requestId: result.requestId, fields: Object.keys(result.applied), note: body.note },
+        'Bot admin edit applied',
+      );
+    }
+
+    res.json(result);
+  },
+
+  /**
+   * GET /api/v1/internal/bots/tuning/roster/:botUserId/history — audit trail.
+   */
+  async getBotHistory(req: Request, res: Response): Promise<void> {
+    assertOpsAuthorized(req);
+    const { botUserId } = req.validated.params as BotUserIdParams;
+    const edits = await tuningRepo.listAdminEdits(botUserId);
+    res.json({ botUserId, edits });
   },
 
   /**

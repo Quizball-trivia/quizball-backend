@@ -96,10 +96,15 @@ export const usersRepo = {
    * the partial unique index `uq_users_lower_nickname_claimable`, so this is an
    * O(log n) index lookup even at high user counts.
    */
-  async isNicknameTaken(nickname: string, excludeUserId?: string): Promise<boolean> {
+  async isNicknameTaken(
+    nickname: string,
+    excludeUserId?: string,
+    tx?: TransactionSql
+  ): Promise<boolean> {
     const trimmed = nickname.trim();
     if (trimmed.length === 0) return false;
-    const rows = await sql<{ exists: boolean }[]>`
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const rows = await db<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1 FROM users
         WHERE lower(nickname) = lower(${trimmed})
@@ -125,10 +130,15 @@ export const usersRepo = {
    * Scoped to OTHER users: the original holder can always reclaim their own
    * former name (A held Foo -> B took and vacated Foo -> A may take Foo back).
    */
-  async isNicknameReserved(nickname: string, requesterUserId: string): Promise<boolean> {
+  async isNicknameReserved(
+    nickname: string,
+    requesterUserId: string,
+    tx?: TransactionSql
+  ): Promise<boolean> {
     const trimmed = nickname.trim();
     if (trimmed.length === 0) return false;
-    const rows = await sql<{ exists: boolean }[]>`
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const rows = await db<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1 FROM nickname_history AS other
         WHERE lower(other.old_nickname) = lower(${trimmed})
@@ -721,15 +731,37 @@ export const usersRepo = {
     };
   },
 
-  /** Publishable previous nicknames, newest first. */
+  /**
+   * Publishable previous nicknames, newest first.
+   *
+   * `counted` is normally both the quota marker AND the publish marker, so an
+   * uncounted row is invisible here. Admin renames of ROSTER BOTS are the one
+   * exception: they are written uncounted (an operator edit must not spend the
+   * bot's 2 free renames) but must still appear publicly, because a bot whose
+   * name silently changed with no history is distinguishable from a human — the
+   * exact tell the roster exists to avoid.
+   *
+   * Scoped to bots on purpose. An admin rename of a HUMAN stays hidden, which
+   * is the pre-existing behaviour; widening it would retroactively publish
+   * support-initiated renames real users never consented to show.
+   */
   async getPublicNicknameHistory(userId: string, limit = 10): Promise<NicknameHistoryEntry[]> {
     const rows = await sql<{ nickname: string; changed_at: Date }[]>`
-      SELECT old_nickname AS nickname, changed_at
-      FROM nickname_history
-      WHERE user_id = ${userId}
-        AND counted
-        AND old_nickname IS NOT NULL
-      ORDER BY changed_at DESC
+      SELECT h.old_nickname AS nickname, h.changed_at
+      FROM nickname_history h
+      WHERE h.user_id = ${userId}
+        AND h.old_nickname IS NOT NULL
+        AND (
+          h.counted
+          OR (
+            h.changed_by = 'admin'
+            AND EXISTS (
+              SELECT 1 FROM users u
+              WHERE u.id = h.user_id AND u.is_ai = true
+            )
+          )
+        )
+      ORDER BY h.changed_at DESC
       LIMIT ${limit}
     `;
     return rows.map((row) => ({
@@ -756,13 +788,24 @@ export const usersRepo = {
     newNickname: string;
     changedBy: NicknameChangeSource;
     counted: boolean;
+    /**
+     * Join the CALLER's transaction instead of opening our own.
+     *
+     * Required for any caller that must roll the rename back together with
+     * sibling writes (the bot tuning PATCH). Without it this method calls the
+     * module-level `sql.begin`, which takes a SEPARATE POOL CONNECTION and
+     * COMMITS INDEPENDENTLY — verified empirically: a rename issued from inside
+     * a failing outer transaction survived the outer rollback. postgres.js also
+     * exposes no `tx.begin`, so a savepoint is not an alternative here.
+     */
+    tx?: TransactionSql;
   }): Promise<User | null> {
-    const { userId, oldNickname, newNickname, changedBy, counted } = params;
+    const { userId, oldNickname, newNickname, changedBy, counted, tx: callerTx } = params;
     // User-driven renames are never identity-derived; only createWithIdentity
     // writes those rows.
     const identityDerived = false;
 
-    return sql.begin(async (tx: TransactionSql) => {
+    const run = async (tx: TransactionSql) => {
       // Serializes concurrent renames of THIS user. Must come first: the gate
       // below reads nickname_history, which this lock does not itself cover.
       await tx.unsafe(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
@@ -795,7 +838,11 @@ export const usersRepo = {
         [userId, newNickname]
       );
       return rows[0] ?? null;
-    });
+    };
+
+    // Joining the caller's tx keeps the users-row FOR UPDATE inside their
+    // transaction, so their lock order (users first) is preserved.
+    return callerTx ? run(callerTx) : sql.begin(run);
   },
 
   /** True once the one-shot onboarding naming pass has been consumed. */

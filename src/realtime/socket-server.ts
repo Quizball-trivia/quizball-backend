@@ -24,6 +24,7 @@ import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
+import { setLobbyChallengeRealtimeServer } from './services/lobby-challenge-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
@@ -538,6 +539,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   setAuthRealtimeServer(io);
   // Lets the notifications service push to a user's room without importing socket-server.
   setNotificationsRealtimeServer(io);
+  // Lets the bot challenge responder (a background worker with no socket of its
+  // own) deliver a decline to the challenger's room.
+  setLobbyChallengeRealtimeServer(io);
 
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 

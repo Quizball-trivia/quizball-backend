@@ -8,8 +8,16 @@
  *   - the emergency roster-wide offset zeroing
  */
 
-import { sql } from '../../../db/index.js';
+import { sql, type TransactionSql } from '../../../db/index.js';
 import { withSpan } from '../../../core/tracing.js';
+
+/**
+ * postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+ * tagged-template call signatures the runtime object still supports
+ * (codebase precedent: ranked.repo.ts). `exec(tx)` recovers them so a repo
+ * method can run on either the pool or a caller's transaction.
+ */
+const exec = (tx?: TransactionSql): typeof sql => (tx as unknown as typeof sql) ?? sql;
 
 /**
  * Raw singleton row. Every knob is nullable: NULL means "no override, use the
@@ -312,9 +320,36 @@ export const tuningRepo = {
    * The `ai_kind = 'persistent'` join predicate is the SECURITY boundary here:
    * without it a valid uuid for a HUMAN would flow into the nickname/RP writers
    * below and let an ops token rename real players.
+   *
+   * Pass `tx` to read inside the PATCH transaction. `lock` additionally takes
+   * FOR UPDATE on the users + profile + ranked rows, which is what makes an
+   * rpAdjust safe: the before-value is then read under a lock held to commit,
+   * so two concurrent +100 adjustments serialize (1000->1100, 1100->1200)
+   * instead of both recording 1000->1100 off the same stale snapshot.
+   *
+   * Lock order is users -> ranked_profiles -> synthetic_player_profiles, the
+   * same order the settlement path takes (ranked.repo.ts), so a PATCH racing a
+   * match settlement on the same bot cannot deadlock.
    */
-  async getEditableBot(botUserId: string): Promise<EditableBotState | null> {
-    const [row] = await sql<Array<{
+  async getEditableBot(
+    botUserId: string,
+    opts: { tx?: TransactionSql; lock?: boolean } = {},
+  ): Promise<EditableBotState | null> {
+    const db = exec(opts.tx);
+    if (opts.lock) {
+      if (!opts.tx) throw new Error('getEditableBot: lock requires a transaction');
+      // Locked in separate statements, in the fixed order above: a single
+      // multi-table FOR UPDATE gives no ordering guarantee across the join.
+      const [owner] = await db<Array<{ id: string }>>`
+        SELECT u.id FROM users u
+        WHERE u.id = ${botUserId} AND u.ai_kind = 'persistent'
+        FOR UPDATE
+      `;
+      if (!owner) return null;
+      await db`SELECT user_id FROM ranked_profiles WHERE user_id = ${botUserId} FOR UPDATE`;
+      await db`SELECT user_id FROM synthetic_player_profiles WHERE user_id = ${botUserId} FOR UPDATE`;
+    }
+    const [row] = await db<Array<{
       user_id: string;
       nickname: string | null;
       rp: number | null;
@@ -342,12 +377,14 @@ export const tuningRepo = {
   async updateProfileFields(
     botUserId: string,
     fields: { baseSkill?: number; dailyCap?: number },
+    tx?: TransactionSql,
   ): Promise<void> {
+    const db = exec(tx);
     const assignments = [];
     if (fields.baseSkill !== undefined) assignments.push(sql`base_skill = ${fields.baseSkill}`);
     if (fields.dailyCap !== undefined) assignments.push(sql`daily_cap = ${fields.dailyCap}`);
     if (assignments.length === 0) return;
-    await sql`
+    await db`
       UPDATE synthetic_player_profiles
         SET ${assignments.flatMap((a, i) => (i === 0 ? [a] : [sql`, `, a]))},
             updated_at = now()
@@ -359,9 +396,14 @@ export const tuningRepo = {
    * Append the audit rows for one PATCH. One row PER CHANGED FIELD, sharing a
    * request_id, so before->after stays queryable per knob.
    */
-  async recordAdminEdits(entries: BotAdminEditEntry[], requestId: string, note: string): Promise<void> {
+  async recordAdminEdits(
+    entries: BotAdminEditEntry[],
+    requestId: string,
+    note: string,
+    tx?: TransactionSql,
+  ): Promise<void> {
     if (entries.length === 0) return;
-    await sql`
+    await exec(tx)`
       INSERT INTO bot_admin_edits ${sql(
         entries.map((entry) => ({
           bot_user_id: entry.botUserId,

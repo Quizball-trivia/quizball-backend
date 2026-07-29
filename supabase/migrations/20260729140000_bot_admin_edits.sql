@@ -12,6 +12,9 @@
 --   3. daily_cap bounds — 20260729100000 added this CHECK as NOT VALID; validate
 --      it so the constraint covers pre-existing rows too.
 --
+-- Both bounds are applied only AFTER clamping any out-of-range legacy rows —
+-- see the normalization block for why NOT VALID is not a safe shortcut here.
+--
 -- Idempotent: safe under manual apply + deploy runner re-run.
 
 CREATE TABLE IF NOT EXISTS public.bot_admin_edits (
@@ -46,9 +49,33 @@ CREATE INDEX IF NOT EXISTS idx_bot_admin_edits_request
 
 ALTER TABLE public.bot_admin_edits ENABLE ROW LEVEL SECURITY;
 
--- base_skill: the roster generator samples 0.05..0.90 across five bands. NOT
--- VALID so a pre-existing out-of-band row (hand-edited, or an older generator)
--- cannot block the deploy; new writes and updates are still checked.
+-- NORMALIZE BEFORE CONSTRAINING.
+--
+-- NOT VALID is NOT a safe way to carry legacy bad rows forward here. It skips
+-- the backfill scan, but the CHECK still fires on every UPDATE of an existing
+-- row — so a single out-of-band base_skill would start rejecting the routine
+-- governor offset and match-counter writes that touch that bot, silently
+-- breaking it in live play. The same trap applies to daily_cap: 20260729100000
+-- normalized only `> 12`, so any NEGATIVE legacy value would abort the VALIDATE
+-- below and fail the deploy.
+--
+-- So: clamp both columns into range FIRST, then add/validate the constraints as
+-- VALID. The roster is ~1k rows, so the validation scan is trivial. Both
+-- statements are no-ops on a clean table, keeping the migration idempotent.
+UPDATE public.synthetic_player_profiles
+  SET base_skill = GREATEST(0.05, LEAST(0.90, base_skill)),
+      updated_at = now()
+  WHERE base_skill < 0.05 OR base_skill > 0.90;
+
+UPDATE public.synthetic_player_profiles
+  SET daily_cap = GREATEST(0, LEAST(12, daily_cap))::smallint,
+      updated_at = now()
+  WHERE daily_cap < 0 OR daily_cap > 12;
+
+-- base_skill: the roster generator samples 0.05..0.90 across five bands; the
+-- band range was a generator convention only until now. Added VALID: the rows
+-- are clean as of the statement above, so the constraint covers existing rows
+-- as well as future writes.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -58,7 +85,7 @@ BEGIN
   ) THEN
     ALTER TABLE public.synthetic_player_profiles
       ADD CONSTRAINT synthetic_profiles_base_skill_band
-      CHECK (base_skill >= 0.05 AND base_skill <= 0.90) NOT VALID;
+      CHECK (base_skill >= 0.05 AND base_skill <= 0.90);
   END IF;
 END $$;
 
@@ -66,9 +93,10 @@ COMMENT ON COLUMN public.synthetic_player_profiles.base_skill IS
   'Hidden ability on the calibration scale, 0.05..0.90 (generator band range, now CHECK-enforced). Effective in-match skill = f(currentRp) + this + governor_adjustment, then clamped by hard-clamps.ts. Editing RP therefore ALSO moves difficulty.';
 
 -- daily_cap: promote 20260729100000's NOT VALID CHECK to validated. That
--- migration normalized every existing row (daily_cap > 12 -> 8..12) and left
--- the constraint NOT VALID on purpose, noting "a follow-up migration can
--- VALIDATE it once the deploy is confirmed". This is that follow-up.
+-- migration left it NOT VALID on purpose, noting "a follow-up migration can
+-- VALIDATE it once the deploy is confirmed". This is that follow-up — and it is
+-- safe only because the clamp above covers the case that migration missed: it
+-- normalized `> 12` but not negatives, which would abort this VALIDATE.
 DO $$
 BEGIN
   IF EXISTS (

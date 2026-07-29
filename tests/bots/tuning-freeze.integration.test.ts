@@ -117,30 +117,30 @@ describe('PR10 overrides propagation + DB rail layer', () => {
   it('a write is visible to the next read and bumps the version', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
     const before = await tuningRepo.getOverrides();
-    const updated = await tuningRepo.updateOverrides({ governorStep: 0.2 }, 'pr10-test');
+    const updated = await tuningRepo.updateOverrides({ governorStep: 0.08 }, 'pr10-test');
 
-    expect(updated.governorStep).toBe(0.2);
+    expect(updated.governorStep).toBe(0.08);
     // The version bump is what makes a past decision traceable to a config.
     expect(updated.version).toBeGreaterThan(before.version);
 
     const reread = await tuningRepo.getOverrides();
-    expect(reread.governorStep).toBe(0.2);
+    expect(reread.governorStep).toBe(0.08);
     expect(reread.updatedBy).toBe('pr10-test');
   });
 
   it('an explicit null resets the knob back to the code constant', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
-    await tuningRepo.updateOverrides({ governorStep: 0.15 }, 'pr10-test');
+    await tuningRepo.updateOverrides({ governorStep: 0.06 }, 'pr10-test');
     const cleared = await tuningRepo.updateOverrides({ governorStep: null }, 'pr10-test');
     expect(cleared.governorStep).toBeNull();
   });
 
   it('a partial update leaves untouched knobs alone', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
-    await tuningRepo.updateOverrides({ governorStep: 0.2, activityScale: 0.5 }, 'pr10-test');
+    await tuningRepo.updateOverrides({ governorStep: 0.08, activityScale: 0.5 }, 'pr10-test');
     const after = await tuningRepo.updateOverrides({ activityScale: 0.8 }, 'pr10-test');
     expect(after.activityScale).toBe(0.8);
-    expect(after.governorStep).toBe(0.2);
+    expect(after.governorStep).toBe(0.08);
   });
 
   it('the DB CHECK rejects an out-of-rail daily cap even bypassing zod', async (ctx) => {
@@ -150,10 +150,38 @@ describe('PR10 overrides propagation + DB rail layer', () => {
     ).rejects.toThrow();
   });
 
-  it('the DB CHECK rejects a win-rate target above 0.55 even bypassing zod', async (ctx) => {
+  it('the DB CHECK rejects a win-rate target above the FROZEN value, bypassing zod', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    // Directional (Sol P0#1 + P1#8): 0.55 is under the brief's absolute cap but
+    // above the frozen 0.50, so the DB layer must reject it too.
+    await expect(
+      sql`UPDATE bot_tuning_overrides SET mid_ladder_target_winrate = 0.55 WHERE id = true`,
+    ).rejects.toThrow();
+  });
+
+  it('the DB CHECK rejects NARROWING a protection ring, bypassing zod', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
     await expect(
-      sql`UPDATE bot_tuning_overrides SET mid_ladder_target_winrate = 0.9 WHERE id = true`,
+      sql`UPDATE bot_tuning_overrides SET top_protection_margin_rp = 50 WHERE id = true`,
+    ).rejects.toThrow();
+  });
+
+  it('the DB CHECK rejects INVERTED protection rings', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    await expect(
+      sql`UPDATE bot_tuning_overrides
+            SET top_protection_margin_rp = 200, top_protection_critical_rp = 500
+          WHERE id = true`,
+    ).rejects.toThrow();
+  });
+
+  it('the DB CHECK rejects an out-of-rail daily_cap on a profile row', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    // Sol P2#10: without this the one-time normalization was a one-shot clean
+    // that any later generator run could undo.
+    const botId = await seedBot(`pr10-cap-${Date.now()}`);
+    await expect(
+      sql`UPDATE synthetic_player_profiles SET daily_cap = 40 WHERE user_id = ${botId}`,
     ).rejects.toThrow();
   });
 
@@ -166,12 +194,12 @@ describe('PR10 overrides propagation + DB rail layer', () => {
 });
 
 describe('PR10 emergency zero-offsets', () => {
-  it('clears live offsets but PRESERVES the EMA history', async (ctx) => {
+  it('clears BOOSTING offsets but PRESERVES the EMA history', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
     const botId = await seedBot(`pr10-zero-${Date.now()}`);
     await sql`
       UPDATE synthetic_player_profiles
-        SET governor_adjustment = -0.4, winrate_ema = 0.31, winrate_samples = 25
+        SET governor_adjustment = 0.4, winrate_ema = 0.31, winrate_samples = 25
       WHERE user_id = ${botId}
     `;
 
@@ -193,5 +221,34 @@ describe('PR10 emergency zero-offsets', () => {
     expect(Number(row.winrate_samples)).toBe(25);
     // Cooldown anchor re-stamped so the next match cannot immediately re-step.
     expect(Number(row.governor_samples_at_adjustment)).toBe(25);
+  });
+
+  it('PRESERVES a negative (safety-nerf) offset — zeroing it would BUFF the bot', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    // Sol P0#2: a negative offset is top-protection holding a bot away from the
+    // human top 10. Clearing it is a roster-wide buff, the be#175 failure mode.
+    const botId = await seedBot(`pr10-nerf-${Date.now()}`);
+    await sql`
+      UPDATE synthetic_player_profiles
+        SET governor_adjustment = -0.4, winrate_ema = 0.2, winrate_samples = 30
+      WHERE user_id = ${botId}
+    `;
+
+    await tuningRepo.zeroGovernorOffsets();
+
+    const [row] = await sql<Array<{ governor_adjustment: number }>>`
+      SELECT governor_adjustment FROM synthetic_player_profiles WHERE user_id = ${botId}
+    `;
+    expect(Number(row.governor_adjustment)).toBeCloseTo(-0.4, 5);
+  });
+
+  it('a pure READ does not bump the config version', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+    // Sol P1#5: getOverrides used INSERT..ON CONFLICT DO UPDATE, so every cache
+    // miss and CMS GET minted a fictitious version, destroying provenance.
+    const first = await tuningRepo.getOverrides();
+    await tuningRepo.getOverrides();
+    const third = await tuningRepo.getOverrides();
+    expect(third.version).toBe(first.version);
   });
 });

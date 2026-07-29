@@ -16,6 +16,7 @@ import { botModelParamsRepo } from './bot-model-params.repo.js';
 import { syntheticProfileRepo } from './synthetic-profile.repo.js';
 import { questionStatsRepo } from './question-stats.repo.js';
 import { loadBotTuning } from './tuning/tuning-config.service.js';
+import { ceilingAccuracyForMargin } from './tuning/tuning.schemas.js';
 import { logit } from './calibration/math.js';
 import { effectiveProbCap, solveThetaCeilingBound } from '../../realtime/persistent-bot-gameplay.js';
 import type { BotModelParams } from './calibration/params-schema.js';
@@ -52,7 +53,29 @@ export async function buildPersistentBotModelPin(
     return null;
   }
 
-  const thetaCeilingBound = solveCeilingBound(active.params, accuracies);
+  // Apply the operator ceiling margin (PR10). The margin is the gap BELOW the
+  // frozen S1 top-cohort accuracy, so a larger margin lowers the ceiling. The
+  // rails only accept a margin at or above the frozen one, and Math.min below
+  // makes that structural: the effective ceiling can only ever be TIGHTER than
+  // the calibrated one, never looser, whatever is stored.
+  //
+  // Without this the knob was accepted and echoed as "effective" while gameplay
+  // silently stayed at the frozen ceiling — a tightening the operator believed
+  // was live but was not.
+  const tunedCeilingAccuracy = Math.min(
+    active.params.ceiling.ceilingAccuracy,
+    ceilingAccuracyForMargin(tuning.ceilingMargin),
+  );
+  const tunedParams: BotModelParams = {
+    ...active.params,
+    ceiling: { ...active.params.ceiling, ceilingAccuracy: tunedCeilingAccuracy },
+    clamps: {
+      ...active.params.clamps,
+      finalProbCap: Math.min(active.params.clamps.finalProbCap, tunedCeilingAccuracy),
+    },
+  };
+
+  const thetaCeilingBound = solveCeilingBound(tunedParams, accuracies);
 
   // Kill switch (PR9): with the governor OFF the pin carries a ZERO offset, so
   // bots immediately fall back to base calibrated skill. Zeroing here rather
@@ -64,7 +87,9 @@ export async function buildPersistentBotModelPin(
   return {
     paramsVersion: active.version,
     tuningVersion: tuning.version,
-    params: active.params,
+    // The TUNED params are pinned, so the whole match runs on the ceiling that
+    // was in force at creation even if an operator changes it mid-match.
+    params: tunedParams,
     botUserId,
     currentRp,
     personalOffset: skill.baseSkill,

@@ -123,13 +123,14 @@ const ELIGIBILITY_LADDER: EligibilityLevel[] = [
 ];
 
 /**
- * A bot's EFFECTIVE daily cap: the generated per-bot cap scaled by the operator
- * activity knob and clamped to the roster-wide ceiling (PR10).
+ * The OPERATOR cap on a bot's matches today: the generated per-bot cap scaled
+ * by the activity knob and clamped to the roster-wide ceiling (PR10).
  *
- * Floors at 0 rather than 1: activityScale = 0 must be able to idle the roster
- * completely, which is the whole point of having the knob during an incident.
+ * Enforced as a HARD constraint in passesLevel — never relaxed by the
+ * eligibility ladder. Floors at 0 rather than 1 so activityScale = 0 genuinely
+ * idles the roster, which is the point of the knob during an incident.
  */
-export function effectiveDailyCap(
+export function operatorDailyCap(
   dailyCap: number,
   tuning: { activityScale: number; maxDailyCap: number },
 ): number {
@@ -147,14 +148,18 @@ function passesLevel(
     tuning: { activityScale: number; maxDailyCap: number };
   },
 ): boolean {
+  const matchesToday = effectiveMatchesToday(bot, ctx.rosterDay);
+
+  // HARD, never relaxed: the OPERATOR activity cap. The generated per-bot
+  // daily_cap below is a soft realism constraint the ladder may drop when the
+  // pool runs thin, but the operator knob is an incident control — if it were
+  // relaxable, activityScale=0 would still hand out matches at the
+  // relax_daily_cap rung and "idle the roster" would be a lie.
+  if (matchesToday >= operatorDailyCap(bot.daily_cap, ctx.tuning)) return false;
+
   if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;
-  if (
-    level.respectDailyCap &&
-    effectiveMatchesToday(bot, ctx.rosterDay) >= effectiveDailyCap(bot.daily_cap, ctx.tuning)
-  ) {
-    return false;
-  }
+  if (level.respectDailyCap && matchesToday >= bot.daily_cap) return false;
   if (level.respectSchedule && !isWithinScheduleWindow(bot.schedule, ctx.now)) return false;
   return true;
 }

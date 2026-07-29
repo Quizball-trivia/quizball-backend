@@ -61,7 +61,7 @@ describe('PR10 tuning rails: ceiling margin may only tighten', () => {
   });
 });
 
-describe('PR10 tuning rails: win-rate targets capped at 0.55', () => {
+describe('PR10 tuning rails: win-rate targets are DIRECTIONAL (no higher than frozen)', () => {
   it('REJECTS a top-band target above 0.55', () => {
     expect(updateBotTuningBodySchema.safeParse({ topBandTargetWinrate: 0.6 }).success).toBe(false);
   });
@@ -70,9 +70,18 @@ describe('PR10 tuning rails: win-rate targets capped at 0.55', () => {
     expect(updateBotTuningBodySchema.safeParse({ midLadderTargetWinrate: 0.56 }).success).toBe(false);
   });
 
-  it('ACCEPTS targets at and below the cap', () => {
-    expect(updateBotTuningBodySchema.safeParse({ midLadderTargetWinrate: MAX_TARGET_WINRATE }).success).toBe(true);
+  it('ACCEPTS targets at and below the FROZEN values', () => {
+    expect(updateBotTuningBodySchema.safeParse({ midLadderTargetWinrate: 0.5 }).success).toBe(true);
     expect(updateBotTuningBodySchema.safeParse({ topBandTargetWinrate: 0.425 }).success).toBe(true);
+    expect(updateBotTuningBodySchema.safeParse({ midLadderTargetWinrate: 0.4 }).success).toBe(true);
+  });
+
+  it('REJECTS a target ABOVE frozen even though it is under the 0.55 brief cap', () => {
+    // The decisive directional case (Sol P0#1): 0.55 <= the brief's absolute
+    // cap, but > the frozen 0.50/0.425, so it would make bots win MORE than
+    // the shipped calibration.
+    expect(updateBotTuningBodySchema.safeParse({ midLadderTargetWinrate: 0.55 }).success).toBe(false);
+    expect(updateBotTuningBodySchema.safeParse({ topBandTargetWinrate: 0.5 }).success).toBe(false);
   });
 
   it('REJECTS a non-positive target', () => {
@@ -80,17 +89,39 @@ describe('PR10 tuning rails: win-rate targets capped at 0.55', () => {
   });
 });
 
-describe('PR10 tuning rails: step sizes bounded', () => {
+describe('PR10 tuning rails: step + ring sizes are DIRECTIONAL', () => {
   it('REJECTS an oversized governor step', () => {
     expect(updateBotTuningBodySchema.safeParse({ governorStep: 0.9 }).success).toBe(false);
   });
 
-  it('ACCEPTS a step at the bound', () => {
+  it('ACCEPTS a step at the frozen bound and below (slower boosts)', () => {
     expect(updateBotTuningBodySchema.safeParse({ governorStep: MAX_GOVERNOR_STEP }).success).toBe(true);
+    expect(updateBotTuningBodySchema.safeParse({ governorStep: 0.05 }).success).toBe(true);
+  });
+
+  it('REJECTS RAISING the symmetric governor step (would accelerate boosts)', () => {
+    expect(updateBotTuningBodySchema.safeParse({ governorStep: 0.25 }).success).toBe(false);
   });
 
   it('REJECTS an oversized top-protection step', () => {
     expect(updateBotTuningBodySchema.safeParse({ topProtectionStep: 0.75 }).success).toBe(false);
+  });
+
+  it('REJECTS SHRINKING the top-protection step (slower escape from the top)', () => {
+    expect(updateBotTuningBodySchema.safeParse({ topProtectionStep: 0.1 }).success).toBe(false);
+  });
+
+  it('ACCEPTS growing the top-protection step', () => {
+    expect(updateBotTuningBodySchema.safeParse({ topProtectionStep: 0.4 }).success).toBe(true);
+  });
+
+  it('REJECTS NARROWING a protection ring (protection would engage later)', () => {
+    expect(updateBotTuningBodySchema.safeParse({ topProtectionMarginRp: 50 }).success).toBe(false);
+    expect(updateBotTuningBodySchema.safeParse({ topProtectionCriticalRp: 10 }).success).toBe(false);
+  });
+
+  it('ACCEPTS widening the protection rings', () => {
+    expect(updateBotTuningBodySchema.safeParse({ topProtectionMarginRp: 400 }).success).toBe(true);
   });
 });
 
@@ -121,6 +152,11 @@ describe('PR10 tuning rails: structural guards', () => {
       topProtectionCriticalRp: 300,
     });
     expect(result.success).toBe(false);
+  });
+
+  it('REJECTS an EMPTY update (would bump the version for nothing)', () => {
+    expect(updateBotTuningBodySchema.safeParse({}).success).toBe(false);
+    expect(updateBotTuningBodySchema.safeParse({ updatedBy: 'me' }).success).toBe(false);
   });
 
   it('ACCEPTS explicit null as "reset to the code constant"', () => {

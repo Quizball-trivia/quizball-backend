@@ -32,17 +32,29 @@ CREATE TABLE IF NOT EXISTS public.bot_tuning_overrides (
   -- Ceiling margin in PROBABILITY points below the frozen top-cohort accuracy.
   -- Larger margin = weaker bots. The API rejects any value that would raise the
   -- effective cap above the frozen HARD_PROB_CAP, so this can only TIGHTEN.
-  ceiling_margin numeric(6,4) CHECK (ceiling_margin IS NULL OR (ceiling_margin >= 0 AND ceiling_margin <= 0.5)),
-  -- Governor win-rate targets. Hard-railed at 0.55 by both API and CHECK: a
-  -- target above that steers bots toward beating humans more often than not.
-  top_band_target_winrate numeric(5,4) CHECK (top_band_target_winrate IS NULL OR (top_band_target_winrate > 0 AND top_band_target_winrate <= 0.55)),
-  mid_ladder_target_winrate numeric(5,4) CHECK (mid_ladder_target_winrate IS NULL OR (mid_ladder_target_winrate > 0 AND mid_ladder_target_winrate <= 0.55)),
-  -- Governor step sizes in theta units, bounded so one step cannot re-skill a bot.
-  governor_step numeric(5,4) CHECK (governor_step IS NULL OR (governor_step > 0 AND governor_step <= 0.25)),
-  top_protection_step numeric(5,4) CHECK (top_protection_step IS NULL OR (top_protection_step > 0 AND top_protection_step <= 0.5)),
-  -- Top-protection ring radii in RP. Wider = protection engages earlier.
-  top_protection_margin_rp integer CHECK (top_protection_margin_rp IS NULL OR (top_protection_margin_rp >= 0 AND top_protection_margin_rp <= 2000)),
-  top_protection_critical_rp integer CHECK (top_protection_critical_rp IS NULL OR (top_protection_critical_rp >= 0 AND top_protection_critical_rp <= 2000)),
+  -- DIRECTIONAL, mirroring tuning.schemas.ts. A generic bound is not enough: an
+  -- absolute "<= 0.55" target would still let an operator make bots win MORE
+  -- than the frozen 0.425/0.50 calibration. Each knob is constrained in its
+  -- SAFE direction relative to the frozen constant, so a writer bypassing the
+  -- API (psql, a future job) cannot loosen what the API advertises as a rail.
+  ceiling_margin numeric(6,4) CHECK (ceiling_margin IS NULL OR (ceiling_margin >= 0.04 AND ceiling_margin <= 0.4031)),
+  -- Targets may only be LOWERED below the frozen values (lower => weaker bots).
+  top_band_target_winrate numeric(5,4) CHECK (top_band_target_winrate IS NULL OR (top_band_target_winrate > 0 AND top_band_target_winrate <= 0.425)),
+  mid_ladder_target_winrate numeric(5,4) CHECK (mid_ladder_target_winrate IS NULL OR (mid_ladder_target_winrate > 0 AND mid_ladder_target_winrate <= 0.5)),
+  -- Symmetric step drives BOTH nerfs and boosts, so it may only be REDUCED.
+  governor_step numeric(5,4) CHECK (governor_step IS NULL OR (governor_step > 0 AND governor_step <= 0.1)),
+  -- Protection step may only GROW: bigger => bot falls off the top faster.
+  top_protection_step numeric(5,4) CHECK (top_protection_step IS NULL OR (top_protection_step >= 0.25 AND top_protection_step <= 0.5)),
+  -- Rings may only WIDEN: wider => protection engages earlier.
+  top_protection_margin_rp integer CHECK (top_protection_margin_rp IS NULL OR (top_protection_margin_rp >= 150 AND top_protection_margin_rp <= 2000)),
+  top_protection_critical_rp integer CHECK (top_protection_critical_rp IS NULL OR (top_protection_critical_rp >= 50 AND top_protection_critical_rp <= 2000)),
+  -- The critical ring must stay INSIDE the warn ring. A cross-column CHECK so a
+  -- partial update cannot invert the rings against a stored value.
+  CONSTRAINT bot_tuning_rings_nested CHECK (
+    top_protection_critical_rp IS NULL
+    OR top_protection_margin_rp IS NULL
+    OR top_protection_critical_rp <= top_protection_margin_rp
+  ),
   -- Roster-wide activity scaling: multiplies each bot's daily_cap at selection
   -- time. 0 = roster effectively idle, 1 = as generated.
   activity_scale numeric(4,3) CHECK (activity_scale IS NULL OR (activity_scale >= 0 AND activity_scale <= 2)),
@@ -107,7 +119,27 @@ CREATE INDEX IF NOT EXISTS idx_synthetic_profiles_selectable
 -- from personality_seed, so the roster keeps a spread of caps instead of a
 -- visible cliff of identical values, and so re-running this migration is a
 -- no-op (same seed -> same value, and the WHERE clause no longer matches).
+-- `mod(x, 5)` rather than `abs(x) % 5`: abs() overflows on the minimum bigint
+-- (there is no positive counterpart to -9223372036854775808), which would abort
+-- the whole migration on one pathological seed. mod() is overflow-safe; the
+-- extra +5 then %5 folds a negative remainder back into [0,4].
 UPDATE public.synthetic_player_profiles
-  SET daily_cap = 8 + (abs(personality_seed) % 5)::smallint,
+  SET daily_cap = (8 + ((mod(personality_seed, 5) + 5) % 5))::smallint,
       updated_at = now()
   WHERE daily_cap > 12;
+
+-- DURABILITY. Without a constraint the normalization above is a one-shot clean
+-- that any later generator run or manual write can undo, and re-running the
+-- migration would be the only repair. The runtime operator cap in
+-- synthetic-bot-selection.service.ts is defence in depth, not a substitute:
+-- the invariant belongs in the schema.
+--
+-- NOT VALIDATED deliberately (expand/contract): adding a validating constraint
+-- takes a lock that scans the table while the PREVIOUS app version is still
+-- serving. The rows are already normalized above, so this only guards future
+-- writes; a follow-up migration can VALIDATE it once the deploy is confirmed.
+ALTER TABLE public.synthetic_player_profiles
+  DROP CONSTRAINT IF EXISTS synthetic_profiles_daily_cap_rail;
+ALTER TABLE public.synthetic_player_profiles
+  ADD CONSTRAINT synthetic_profiles_daily_cap_rail
+  CHECK (daily_cap >= 0 AND daily_cap <= 12) NOT VALID;

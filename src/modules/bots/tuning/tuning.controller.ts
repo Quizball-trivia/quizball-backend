@@ -14,10 +14,15 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../../../core/config.js';
-import { AuthenticationError, InternalError, NotFoundError } from '../../../core/errors.js';
+import {
+  AuthenticationError,
+  BadRequestError,
+  InternalError,
+  NotFoundError,
+} from '../../../core/errors.js';
 import { logger } from '../../../core/logger.js';
 import { tuningRepo, type OverrideField } from './tuning.repo.js';
-import { loadBotTuning, invalidateBotTuningCache } from './tuning-config.service.js';
+import { resolveTuning, invalidateBotTuningCache } from './tuning-config.service.js';
 import {
   MAX_TARGET_WINRATE,
   MAX_GOVERNOR_STEP,
@@ -25,7 +30,11 @@ import {
   MAX_DAILY_CAP,
   MIN_CEILING_MARGIN,
   MAX_CEILING_MARGIN,
+  MIN_TOP_PROTECTION_STEP,
+  MIN_TOP_PROTECTION_MARGIN_RP,
+  MIN_TOP_PROTECTION_CRITICAL_RP,
   ceilingAccuracyForMargin,
+  validateMergedRings,
   type UpdateBotTuningBody,
   type RosterOverviewQuery,
   type FreezeBotBody,
@@ -74,9 +83,26 @@ function railsPayload() {
       max: MAX_CEILING_MARGIN,
       note: 'May only TIGHTEN: a smaller margin would raise the bot ceiling above the frozen hard cap.',
     },
-    targetWinrate: { max: MAX_TARGET_WINRATE },
-    governorStep: { max: MAX_GOVERNOR_STEP },
-    topProtectionStep: { max: MAX_TOP_PROTECTION_STEP },
+    // Directional: each knob is bounded in its SAFE direction relative to the
+    // frozen constant, not by an absolute limit.
+    targetWinrate: {
+      max: MAX_TARGET_WINRATE,
+      note: 'May only be LOWERED below the frozen targets (0.425 top band / 0.50 mid ladder).',
+    },
+    governorStep: {
+      max: MAX_GOVERNOR_STEP,
+      note: 'Symmetric (drives nerfs AND boosts), so it may only be REDUCED.',
+    },
+    topProtectionStep: {
+      min: MIN_TOP_PROTECTION_STEP,
+      max: MAX_TOP_PROTECTION_STEP,
+      note: 'May only be INCREASED: a bigger step pushes a bot off the top faster.',
+    },
+    topProtectionRings: {
+      minMarginRp: MIN_TOP_PROTECTION_MARGIN_RP,
+      minCriticalRp: MIN_TOP_PROTECTION_CRITICAL_RP,
+      note: 'May only WIDEN, and the critical ring must stay inside the warn ring.',
+    },
     dailyCap: { max: MAX_DAILY_CAP },
     immutable: {
       hardProbCap: HARD_PROB_CAP,
@@ -104,10 +130,13 @@ export const tuningController = {
   /** GET /api/v1/internal/bots/tuning — current effective params + rails. */
   async getTuning(req: Request, res: Response): Promise<void> {
     assertOpsAuthorized(req);
-    const [overrides, resolved] = await Promise.all([
-      tuningRepo.getOverrides(),
-      loadBotTuning(),
-    ]);
+    // ONE read, resolved locally. Reading the row and the cache in parallel
+    // could report overrides.version = N beside effective.version = N-1 (the
+    // cache lagging a just-committed write), which reads as a UI bug and makes
+    // the operator distrust the screen. The cache is a gameplay-path
+    // optimization; the CMS always sees committed truth.
+    const overrides = await tuningRepo.getOverrides();
+    const resolved = resolveTuning(overrides);
     res.json({
       // What is actually in force right now (code constants + overrides).
       effective: {
@@ -131,6 +160,16 @@ export const tuningController = {
     assertOpsAuthorized(req);
     const body = req.validated.body as UpdateBotTuningBody;
 
+    // A partial update can invert the protection rings against values already
+    // stored, which the per-request schema check cannot see. Merge with current
+    // state and re-validate before writing.
+    const current = resolveTuning(await tuningRepo.getOverrides());
+    const ringError = validateMergedRings(body, {
+      topProtectionMarginRp: current.governor.topProtectionMarginRp,
+      topProtectionCriticalRp: current.governor.topProtectionCriticalRp,
+    });
+    if (ringError) throw new BadRequestError(ringError);
+
     const fields: Partial<Record<OverrideField, number | null>> = {};
     for (const field of OVERRIDE_FIELDS) {
       if (field in body) fields[field] = body[field] ?? null;
@@ -144,7 +183,9 @@ export const tuningController = {
       'Bot tuning overrides updated',
     );
 
-    const resolved = await loadBotTuning();
+    // Resolve from the row we just wrote rather than re-reading the cache: the
+    // response must reflect the committed write, not a possibly-stale fill.
+    const resolved = resolveTuning(updated);
     res.json({
       effective: {
         ...resolved,

@@ -106,21 +106,31 @@ export interface RosterOverviewPage {
 
 export const tuningRepo = {
   /**
-   * The overrides singleton. The migration seeds the row, but a defensive
-   * INSERT..ON CONFLICT keeps this total even against a DB where the seed was
-   * rolled back — the caller must never have to handle a missing singleton.
+   * The overrides singleton.
+   *
+   * A PURE READ. An earlier version used INSERT..ON CONFLICT DO UPDATE to be
+   * defensive about a missing row, but DO UPDATE fires the version-bump
+   * trigger — so every cache miss and every CMS GET minted a fictitious new
+   * config version, destroying the provenance the version exists to provide.
+   * The migration seeds the row; a missing one is a broken deploy, and the
+   * ON CONFLICT DO NOTHING below repairs it without touching the version.
    */
   async getOverrides(): Promise<BotTuningOverrides> {
-    const [row] = await sql<BotTuningOverridesRow[]>`
-      INSERT INTO bot_tuning_overrides (id) VALUES (true)
-      ON CONFLICT (id) DO UPDATE SET id = true
-      RETURNING
+    const select = () => sql<BotTuningOverridesRow[]>`
+      SELECT
         version, ceiling_margin, top_band_target_winrate, mid_ladder_target_winrate,
         governor_step, top_protection_step, top_protection_margin_rp,
         top_protection_critical_rp, activity_scale, max_daily_cap,
         updated_at, updated_by
+      FROM bot_tuning_overrides WHERE id = true
     `;
-    return toOverrides(row);
+    const [row] = await select();
+    if (row) return toOverrides(row);
+
+    // Singleton missing (rolled-back seed / fresh DB): recreate WITHOUT bumping.
+    await sql`INSERT INTO bot_tuning_overrides (id) VALUES (true) ON CONFLICT (id) DO NOTHING`;
+    const [seeded] = await select();
+    return toOverrides(seeded);
   },
 
   /**
@@ -260,12 +270,18 @@ export const tuningRepo = {
   },
 
   /**
-   * EMERGENCY: drive every non-retired bot's governor offset to zero.
+   * EMERGENCY: clear BOOSTING governor offsets across the roster.
+   *
+   * WEAKER-ONLY. Only POSITIVE offsets are zeroed. A negative offset is a
+   * safety NERF the governor applied (usually top-protection pushing a bot away
+   * from the human top 10), and zeroing it would make that bot immediately
+   * STRONGER — turning the emergency button into a roster-wide buff, the exact
+   * be#175 failure mode. Clearing an over-boosted roster is the incident this
+   * endpoint exists for; use the kill switch to disable the governor wholesale.
    *
    * Deliberately does NOT touch winrate_ema / winrate_samples: the observation
    * history stays honest so the governor resumes from a warm estimate rather
-   * than a cold start, exactly as the kill switch does. Only the offset — the
-   * thing actually affecting live difficulty — is cleared.
+   * than a cold start, exactly as the kill switch does.
    *
    * governor_updated_at is re-stamped so the cooldown starts from now, which
    * stops the loop from immediately re-applying a large step on the next match.
@@ -278,7 +294,7 @@ export const tuningRepo = {
             governor_samples_at_adjustment = winrate_samples,
             updated_at = now()
       WHERE status <> 'retired'
-        AND governor_adjustment <> 0
+        AND governor_adjustment > 0
       RETURNING user_id
     `;
     return rows.length;

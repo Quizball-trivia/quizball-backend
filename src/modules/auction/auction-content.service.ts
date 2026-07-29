@@ -1,7 +1,9 @@
 import { logger } from '../../core/logger.js';
+import { getRandom } from '../../core/rng.js';
 import {
   auctionContentRepo,
   type AuctionContentLocale,
+  type AuctionFameTier,
   type PublishedAuctionCardRow,
   type RandomPublishedAuctionCardOptions,
 } from './auction-content.repo.js';
@@ -190,9 +192,26 @@ export const auctionContentService = {
   assertPublishedAuctionContentAvailable,
 };
 
+// Serve roughly 70% household names, 30% deeper cuts. Uniform picking would
+// drift toward unknowns as generation finishes the long €5-25M tail of the
+// pool; the weighted roll keeps matches recognisable regardless of pool shape.
+const FAME_MIX_WELL_KNOWN_SHARE = 0.7;
+
 async function findRandomPublishedAuctionCard(
-  options: RandomPublishedAuctionCardOptions
+  options: RandomPublishedAuctionCardOptions,
+  random: () => number = getRandom
 ): Promise<PublishedAuctionCard | null> {
+  if (!options.fameTier) {
+    const fameTier: AuctionFameTier =
+      random() < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+    const tiered = await auctionContentRepo.getRandomPublishedAuctionCard({
+      ...options,
+      fameTier,
+    });
+    if (tiered) return mapPublishedAuctionCard(tiered);
+    // The rolled tier is exhausted for this position/exclusion set — fall
+    // through to the unrestricted pool rather than failing the round.
+  }
   const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
   return row ? mapPublishedAuctionCard(row) : null;
 }

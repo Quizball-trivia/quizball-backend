@@ -88,7 +88,22 @@ export interface RandomPublishedAuctionCardOptions {
    * if none match. Not yet wired to game rules.
    */
   preferredDifficulty?: AuctionPreferredDifficulty;
+  /**
+   * Fame-mix seam: restrict the pick to household names (>= the fame value
+   * threshold) or the deeper cuts below it. Callers roll the 70/30 mix and
+   * fall back to the unrestricted pool when a tier is exhausted.
+   */
+  fameTier?: AuctionFameTier;
 }
+
+export type AuctionFameTier = 'well_known' | 'lesser_known';
+
+/**
+ * Market value is the fame proxy we have for every player. €25M keeps the
+ * "well known" pool at recognisable-starter level (~160 players today) while
+ * the long tail of €5-25M players fills the lesser-known 30%.
+ */
+export const AUCTION_WELL_KNOWN_VALUE_EUR = 25_000_000;
 
 const publishedEligiblePredicate = sql`
   status = 'published'
@@ -157,6 +172,11 @@ export const auctionContentRepo = {
     const positionFilter = options.positionGroup
       ? sql`AND position_group = ${options.positionGroup}`
       : sql``;
+    const fameFilter = options.fameTier === 'well_known'
+      ? sql`AND current_value_eur >= ${AUCTION_WELL_KNOWN_VALUE_EUR}`
+      : options.fameTier === 'lesser_known'
+        ? sql`AND current_value_eur < ${AUCTION_WELL_KNOWN_VALUE_EUR}`
+        : sql``;
     const excludeFilter = excludeIds.length > 0
       ? sql`AND football_player_id NOT IN (
           SELECT used.football_player_id
@@ -187,6 +207,7 @@ export const auctionContentRepo = {
         AND ${usablePricePredicate}
         AND locale = ${options.locale}
         ${positionFilter}
+        ${fameFilter}
         ${excludeFilter}
         ${seenFilter}
       ORDER BY ${leastRecentlySeenOrder} ${difficultyOrder} random()

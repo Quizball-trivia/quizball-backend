@@ -160,11 +160,48 @@ describe('auctionContentService', () => {
       excludeClueCardIds: [CLUE_CARD_ID],
     });
 
-    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledWith({
-      locale: 'en',
-      positionGroup: 'FWD',
-      excludeClueCardIds: [CLUE_CARD_ID],
-    });
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        locale: 'en',
+        positionGroup: 'FWD',
+        excludeClueCardIds: [CLUE_CARD_ID],
+      })
+    );
+  });
+
+  it('rolls the fame mix: 70% well known, 30% lesser known, tier dropped on fallback', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.69);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fameTier: 'well_known' })
+    );
+
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.7);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fameTier: 'lesser_known' })
+    );
+
+    // Rolled tier exhausted → the retry must be unrestricted, not the other tier.
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock)
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(basePublishedCard);
+    const result = await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
+    const calls = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls;
+    expect(calls[calls.length - 1][0].fameTier).toBeUndefined();
+  });
+
+  it('respects an explicit fameTier without re-rolling', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en', fameTier: 'lesser_known' });
+
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(1);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledWith(
+      expect.objectContaining({ fameTier: 'lesser_known' })
+    );
   });
 
   it('excludes cross-match recently-seen footballers when the filtered pool still has content', async () => {
@@ -187,7 +224,10 @@ describe('auctionContentService', () => {
   });
 
   it('falls back to the least-recently-seen footballer when the fresh pool runs dry', async () => {
+    // Fresh pool dry = tiered AND unrestricted picks return nothing; the
+    // history retry then hits (tiered first) and succeeds.
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(basePublishedCard);
 
@@ -200,7 +240,7 @@ describe('auctionContentService', () => {
 
     // Never fails the round: falls back to a repeat rather than returning null.
     expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
-    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(2);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(3);
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
       expect.objectContaining({
         excludeRecentlySeenFootballPlayerIds: undefined,
@@ -211,7 +251,7 @@ describe('auctionContentService', () => {
     );
   });
 
-  it('does not double-query when there is no history to exclude', async () => {
+  it('does not run the history retry when there is no history to exclude', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(null);
 
     const result = await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
@@ -221,7 +261,8 @@ describe('auctionContentService', () => {
     });
 
     expect(result).toBeNull();
-    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(1);
+    // Tiered pick + unrestricted fallback only — no third history-based query.
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(2);
   });
 
   it('leaves the difficulty seam off by default', async () => {

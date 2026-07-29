@@ -237,6 +237,10 @@ export const syntheticBotSelectionService = {
     humanUserId: string;
     humanProfile: RankedProfileRow;
     lobbyId: string;
+    /** Tags the acquired reservation so the sweeper reconciles it by mode. */
+    mode?: 'auction';
+    /** Bots already seated in THIS match, excluded so one match never seats the same bot twice. */
+    excludeBotUserIds?: readonly string[];
   }): Promise<SelectedPersistentBot | null> {
     if (!reservationService.isEnabled()) {
       appMetrics.persistentBotSelections.add(1, { outcome: 'flag_off', relaxation: 'none' });
@@ -260,7 +264,15 @@ export const syntheticBotSelectionService = {
     }
 
     const recentlyFaced = new Set(recentlyFacedList);
-    const ordered = orderByNearestRp(eligible, targetRp);
+    // HARD exclusion: a bot already seated in this same match must not be picked
+    // for a second seat. The reservations table's bot_user_id PK would reject the
+    // duplicate acquire anyway, but filtering here avoids burning acquire
+    // attempts (MAX_ACQUIRE_ATTEMPTS) on candidates that cannot possibly win.
+    const excluded = new Set(params.excludeBotUserIds ?? []);
+    const selectable = excluded.size > 0
+      ? eligible.filter((bot) => !excluded.has(bot.user_id))
+      : eligible;
+    const ordered = orderByNearestRp(selectable, targetRp);
 
     let acquireAttempts = 0;
     for (const level of ELIGIBILITY_LADDER) {
@@ -279,6 +291,7 @@ export const syntheticBotSelectionService = {
           botUserId: bot.user_id,
           lobbyId: params.lobbyId,
           ttlSec: RESERVATION_TTL_SEC,
+          mode: params.mode,
         });
         if (reservation) {
           appMetrics.persistentBotSelections.add(1, { outcome: 'hit', relaxation: level.relaxationLabel });

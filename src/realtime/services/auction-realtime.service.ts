@@ -46,6 +46,8 @@ import {
   resumeAuctionUserIfDisconnected,
 } from './auction-disconnect.service.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
+import { reserveAuctionPersistentBots } from './auction-bot-selection.service.js';
+import { releaseAuctionReservations } from './auction-bot-reservation.service.js';
 
 export interface AuctionStartAiMatchServiceInput {
   formation?: FormationName;
@@ -131,39 +133,66 @@ export async function startAuctionMatchForHumans(
   await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
   const primary = input.humanPlayers[0];
   const botCount = Math.max(0, AUCTION_SEAT_COUNT - input.humanPlayers.length);
-  const bots = await generateAuctionBotProfiles(botCount);
-  // Resolve each human's real avatar so opponents render their actual avatar
-  // (best-effort: a failed lookup just leaves it null → client falls back).
-  const humanPlayers = await resolveHumanAvatars(input.humanPlayers);
+
+  // The match id must exist BEFORE selection, because auction reservations are
+  // keyed by uuids derived from it (see auction-bot-reservation.service.ts).
   const context = resolveRealtimeAuctionContext(options);
-  const initial = createInitialAuctionMatch({
-    humanUserId: primary.userId,
-    humanDisplayName: primary.displayName,
-    humanPlayers,
-    bots,
-    // Formation is chosen by the SERVER (random, same for all seats) — ignore any
-    // client-supplied formation so every player in the match gets the same one.
-    formation: undefined,
-    locale: input.locale,
-    origin: input.origin ?? 'queue',
-    context,
-  });
+  const matchId = context.createId('match');
 
-  const firstCard = await auctionContentService.getRandomPublishedAuctionCard({
-    locale: input.locale,
+  // Persistent roster bots first; any seat we cannot reserve falls back to an
+  // ephemeral generated profile, so a thin roster degrades seat-by-seat.
+  const persistentBots = await reserveAuctionPersistentBots({
+    matchId,
+    count: botCount,
+    humanUserIds: input.humanPlayers.map((player) => player.userId),
   });
-  const needers = initial.seats.filter((seat) => needsPosition(seat, firstCard.positionGroup));
-  const withRound = startBiddingRound(
-    initial,
-    firstCard.positionGroup,
-    firstCard,
-    needers,
-    context
-  );
+  const ephemeralBots = await generateAuctionBotProfiles(botCount - persistentBots.length);
+  const bots = [...persistentBots, ...ephemeralBots];
 
-  const saved = await auctionStateStore.save(withRound, {
-    now: context.now(),
-  });
+  // Everything from here to the state SAVE is compensated: once reservations are
+  // held, a throw before the match state exists would strand those bots with no
+  // live match for any terminal hook to free them (the sweeper would only reap
+  // them after the TTL). Release explicitly instead, then rethrow unchanged.
+  let saved;
+  try {
+    // Resolve each human's real avatar so opponents render their actual avatar
+    // (best-effort: a failed lookup just leaves it null → client falls back).
+    const humanPlayers = await resolveHumanAvatars(input.humanPlayers);
+    const initial = createInitialAuctionMatch({
+      matchId,
+      humanUserId: primary.userId,
+      humanDisplayName: primary.displayName,
+      humanPlayers,
+      bots,
+      // Formation is chosen by the SERVER (random, same for all seats) — ignore any
+      // client-supplied formation so every player in the match gets the same one.
+      formation: undefined,
+      locale: input.locale,
+      origin: input.origin ?? 'queue',
+      context,
+    });
+
+    const firstCard = await auctionContentService.getRandomPublishedAuctionCard({
+      locale: input.locale,
+    });
+    const needers = initial.seats.filter((seat) => needsPosition(seat, firstCard.positionGroup));
+    const withRound = startBiddingRound(
+      initial,
+      firstCard.positionGroup,
+      firstCard,
+      needers,
+      context
+    );
+
+    saved = await auctionStateStore.save(withRound, {
+      now: context.now(),
+    });
+  } catch (error) {
+    if (persistentBots.length > 0) {
+      await releaseAuctionReservations(matchId, 'seating_failed');
+    }
+    throw error;
+  }
   const publicState = toPublicAuctionMatchState(saved);
 
   for (const player of input.humanPlayers) {

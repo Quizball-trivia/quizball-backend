@@ -114,17 +114,22 @@ export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPl
       if (a.totalTrueValue !== b.totalTrueValue) return b.totalTrueValue - a.totalTrueValue;
       return a.index - b.index;
     })
-    .map(({ player, isComplete, totalTrueValue }, index) => ({
-      seatId: player.seatId,
-      userId: player.userId,
-      isBot: player.isBot,
-      displayName: player.displayName,
-      rank: index + 1,
-      isComplete,
-      totalTrueValue,
-      budgetRemaining: player.budget,
-      player,
-    }));
+    .map(({ player, isComplete, totalTrueValue }, index) => {
+      // Rankings are emitted to clients verbatim (auction:match_finished), so the
+      // embedded seat must not carry the server-only bidding profile.
+      const { botProfile: _botProfile, ...publicPlayer } = player;
+      return {
+        seatId: player.seatId,
+        userId: player.userId,
+        isBot: player.isBot,
+        displayName: player.displayName,
+        rank: index + 1,
+        isComplete,
+        totalTrueValue,
+        budgetRemaining: player.budget,
+        player: publicPlayer,
+      };
+    });
 }
 
 function resolveFormation(formation: FormationName | AuctionFormation): AuctionFormation {

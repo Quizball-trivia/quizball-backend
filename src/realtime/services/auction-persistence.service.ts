@@ -41,9 +41,12 @@ export function auctionPointsForPlacement(placement: number): number {
  * no-op / already-persisted / failure) so the realtime layer can tell each
  * client what they earned.
  *
- * Bot seats aren't real users, so we create synthetic `is_ai` user rows for
- * them (mirroring how ranked/party persist AI opponents); orphaned AI users are
- * swept by the existing cleanup in matchesService.
+ * EPHEMERAL bot seats aren't real users, so we create synthetic `is_ai` user
+ * rows for them (mirroring how ranked/party persist AI opponents); orphaned AI
+ * users are swept by the existing cleanup in matchesService. PERSISTENT roster
+ * bots keep their own user id, so their auction matches appear in their public
+ * history like any player's — but they are still paid nothing (see the reward
+ * loop below).
  *
  * Idempotent: createAuctionMatch is ON CONFLICT DO NOTHING and gates everything
  * after it (coins and AP included), so a retry / double-finish never double-pays.
@@ -85,7 +88,11 @@ export async function persistFinishedAuctionMatch(
         const isBot = ranking.isBot;
         let userId = ranking.userId ?? null;
 
-        if (isBot || !userId) {
+        // A PERSISTENT roster bot already has a real user row, so reuse its id:
+        // the match then shows up in that bot's public match history, which is
+        // what makes the roster human-passing. Only EPHEMERAL bots (no userId)
+        // still get a throwaway is_ai user minted here.
+        if (!userId) {
           const aiUser = await usersRepo.create({
             nickname: ranking.displayName || `AI ${index + 1}`,
             avatarUrl: ranking.player?.avatarUrl ?? null,
@@ -132,7 +139,11 @@ export async function persistFinishedAuctionMatch(
     const apByUserId: Record<string, number> | undefined = awardsAuctionPoints ? {} : undefined;
 
     for (const row of seatRows) {
-      // Bots have no real user to credit and never appear in either map.
+      // Bots NEVER earn coins or Auction Points and never appear in either map —
+      // persistent roster bots included, even though they now have a real user id
+      // and real match history. The auction leaderboard has no rubber-band
+      // governor yet, so letting bots accrue AP would be the be#175 failure mode
+      // (bots crowding the human leaderboard) with no way to damp it.
       if (row.isBot) continue;
 
       if (row.forfeited) {

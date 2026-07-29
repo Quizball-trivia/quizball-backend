@@ -1,3 +1,7 @@
+import type { AuctionBotProfile } from '../../realtime/services/auction-bot-profile.js';
+
+export type { AuctionBotProfile };
+
 export type PositionGroup = 'GK' | 'DEF' | 'MID' | 'FWD';
 export type FormationName = '4-3-3' | '4-4-2' | '3-5-2' | '4-2-3-1' | '3-4-3';
 
@@ -45,6 +49,16 @@ export interface AuctionPlayer {
    */
   avatarCustomization?: unknown | null;
   isBot: boolean;
+  /**
+   * Bidding personality for a PERSISTENT roster bot, copied onto the seat at
+   * seating time so the decision function stays pure and the match's behaviour is
+   * pinned for its whole life (a roster refresh mid-match cannot alter it).
+   * Absent for humans and for ephemeral bots, which use the legacy heuristic.
+   *
+   * SERVER-ONLY: stripped by toPublicAuctionMatchState — never sent to clients,
+   * which must not be able to tell a bot seat from a human one.
+   */
+  botProfile?: AuctionBotProfile | null;
   budget: number;
   team: AuctionTeam;
   isEliminated: boolean;

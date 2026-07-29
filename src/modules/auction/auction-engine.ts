@@ -16,6 +16,7 @@ import {
   shouldEliminateAfterPurchase,
 } from './auction-rules.js';
 import type {
+  AuctionBotProfile,
   AuctionFootballer,
   AuctionPlayer,
   FormationName,
@@ -46,7 +47,16 @@ export interface CreateInitialAuctionMatchInput {
   // AI bidder profiles (name + avatar) for the seats not filled by humans.
   // Picked by the realtime layer from the shared AI pool so bots look like
   // real people; falls back to `Bot N` when not supplied (e.g. pure-engine tests).
-  bots?: readonly { displayName: string; avatarUrl?: string | null }[];
+  //
+  // A PERSISTENT roster bot additionally carries its real `userId` (so the match
+  // lands in that bot's public history) and its `botProfile` (bidding
+  // personality). Ephemeral bots leave both unset and keep `userId: null`.
+  bots?: readonly {
+    userId?: string | null;
+    displayName: string;
+    avatarUrl?: string | null;
+    botProfile?: AuctionBotProfile | null;
+  }[];
   formation?: FormationName;
   locale?: 'en' | 'ka';
   origin?: AuctionMatchOrigin;
@@ -85,9 +95,13 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
     })),
     ...Array.from({ length: AUCTION_SEAT_COUNT - humanPlayers.length }, (_, index) => ({
       seatId: context.createId('bot-seat') || `seat-bot-${index + 1}`,
-      userId: null,
+      // Persistent roster bots seat with their REAL user id; ephemeral bots keep
+      // the historical null. `isBot` stays true either way — a userId on a bot
+      // seat must never be read as "this is a human".
+      userId: input.bots?.[index]?.userId ?? null,
       displayName: input.bots?.[index]?.displayName ?? `Bot ${index + 1}`,
       avatarUrl: input.bots?.[index]?.avatarUrl ?? null,
+      botProfile: input.bots?.[index]?.botProfile ?? null,
       isBot: true,
       budget: STARTING_BUDGET,
       team: createEmptyTeam(formation),

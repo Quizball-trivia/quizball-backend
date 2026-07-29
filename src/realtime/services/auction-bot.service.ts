@@ -29,6 +29,10 @@ import {
   buildTurnStartedPayload,
 } from './auction-realtime-payloads.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
+import {
+  resolveAuctionBotBehaviour,
+  type AuctionBotProfile,
+} from './auction-bot-profile.js';
 
 // Bots deliberate long enough for the bidding to read as a back-and-forth
 // rather than resolving the instant a turn opens. Kept comfortably under
@@ -69,7 +73,7 @@ export async function scheduleAuctionBotActionTimer(
 
   const context = resolveRealtimeAuctionContext(options);
   const now = context.now();
-  const dueAt = getBotActionDueAt(now, new Date(round.turnEndsAt), context.random);
+  const dueAt = getBotActionDueAt(now, new Date(round.turnEndsAt), context.random, player.botProfile);
   const scheduledDueAt = isHarnessFastTimers()
     ? new Date(now.getTime() + harnessDelayMs(Math.max(0, dueAt.getTime() - now.getTime()), 75))
     : dueAt;
@@ -108,6 +112,16 @@ export async function runAuctionBotActionTimer(
   return outcome;
 }
 
+/**
+ * Decide one bot turn. PURE: all randomness arrives through `random` (the
+ * harness seeds it via AuctionEngineContext), and the bot's personality comes
+ * from the seat's own `botProfile`, so the same seed + profile always yields the
+ * same decision.
+ *
+ * A seat with no profile (human-facing ephemeral bot, or the flag-off path) uses
+ * EPHEMERAL_AUCTION_BOT_BEHAVIOUR, whose constants reproduce the original
+ * heuristic exactly — flag-off behaviour is unchanged, including RNG draw order.
+ */
 export function decideAuctionBotAction(
   state: AuctionMatchState,
   seatId: string,
@@ -121,21 +135,30 @@ export function decideAuctionBotAction(
   if (round.foldedSeatIds.includes(seatId)) return { kind: 'noop', reason: 'bot_already_folded' };
   if (round.highestBidderSeatId === seatId) return { kind: 'noop', reason: 'bot_is_high_bidder' };
 
+  const behaviour = resolveAuctionBotBehaviour(player.botProfile);
   const emptySlots = getEmptySlots(player.team);
   const minBid = getMinBid(round.startingPrice, round.highestBid);
-  const maxBid = getMaxBid(player.budget, emptySlots);
-  if (maxBid < minBid) {
+  const hardMaxBid = getMaxBid(player.budget, emptySlots);
+  if (hardMaxBid < minBid) {
     return round.highestBidderSeatId ? { kind: 'fold' } : { kind: 'noop', reason: 'bot_cannot_open' };
   }
 
-  const willingness = Math.floor(round.footballer.trueValue * (0.75 + random() * 0.55));
+  // Budget discipline: a skilled bot commits only part of its per-slot ceiling to
+  // one player, holding the rest back for the slots it still has to fill. Never
+  // drops below minBid — discipline must not make a bot unable to open a round it
+  // can afford (that would silently shrink the field and stall bidding).
+  const maxBid = Math.max(minBid, Math.floor(hardMaxBid * behaviour.budgetDiscipline));
+
+  const willingness = Math.floor(
+    round.footballer.trueValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
+  );
   if (round.highestBidderSeatId && minBid > willingness) {
     return { kind: 'fold' };
   }
 
   const cap = round.highestBidderSeatId ? Math.min(maxBid, willingness) : maxBid;
   let amount = minBid;
-  if (random() >= 0.8) {
+  if (random() >= behaviour.jumpThreshold) {
     amount += MIN_BID_INCREMENT * (1 + Math.floor(random() * 3));
   }
   amount = Math.min(amount, cap);
@@ -236,9 +259,18 @@ function validateBotPayload(state: AuctionMatchState, payload: AuctionBotActionT
   return null;
 }
 
-function getBotActionDueAt(now: Date, turnEndsAt: Date, random: () => number): Date {
-  const delayMs = AUCTION_BOT_MIN_THINK_MS
-    + Math.floor(random() * (AUCTION_BOT_MAX_THINK_MS - AUCTION_BOT_MIN_THINK_MS + 1));
+function getBotActionDueAt(
+  now: Date,
+  turnEndsAt: Date,
+  random: () => number,
+  profile?: AuctionBotProfile | null
+): Date {
+  // Persistent bots deliberate inside their own personality-derived window; a
+  // seat with no profile keeps the shared ephemeral band exactly as before.
+  const { minThinkMs, maxThinkMs } = profile
+    ? resolveAuctionBotBehaviour(profile)
+    : { minThinkMs: AUCTION_BOT_MIN_THINK_MS, maxThinkMs: AUCTION_BOT_MAX_THINK_MS };
+  const delayMs = minThinkMs + Math.floor(random() * (maxThinkMs - minThinkMs + 1));
   const dueAtMs = Math.min(now.getTime() + delayMs, turnEndsAt.getTime());
   return new Date(dueAtMs);
 }

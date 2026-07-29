@@ -193,8 +193,11 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
 }
 
 function toPublicAuctionPlayer(player: AuctionPlayer): PublicAuctionPlayer {
+  // botProfile is server-only: leaking a seat's skill parameters would let a
+  // client tell bots from humans, which the product rule forbids.
+  const { botProfile: _botProfile, ...publicFields } = player;
   return {
-    ...player,
+    ...publicFields,
     team: {
       ...player.team,
       slots: {

@@ -43,6 +43,7 @@ import {
   type AuctionMatchRewards,
 } from './auction-persistence.service.js';
 import { getAuctionPause } from './auction-disconnect-state.service.js';
+import { releaseAuctionReservations } from './auction-bot-reservation.service.js';
 import { scheduleRealtimeTimer, type RealtimeTimerPayload } from '../realtime-timer-scheduler.js';
 import type { QuizballServer } from '../socket-server.js';
 import type {
@@ -337,6 +338,14 @@ export async function emitAuctionStepStarted(
     );
     emitMatchFinished(io, state, rewards);
     await auctionStateStore.clearIndexes(state);
+    // Terminal choke point for EVERY finish — the normal 11-round end and the
+    // last-human-forfeit finish both land here — so persistent-bot reservations
+    // are freed exactly once, after persistence has written their history rows.
+    // Idempotent and never throws; a no-op when no persistent bot was seated.
+    await releaseAuctionReservations(
+      state.matchId,
+      finishReason === 'normal' || finishReason === 'no_more_content' ? 'finish' : 'forfeit_finish',
+    );
   }
   return state;
 }

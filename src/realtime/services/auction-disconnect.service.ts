@@ -457,6 +457,9 @@ export async function handleAuctionRejoin(
   // The match ended while this client was away (backgrounded tab missed the
   // finish broadcast). Replay the finished snapshot so the player lands on the
   // results screen — mirrors ranked — instead of a generic "can't rejoin".
+  // Deliberately BEFORE the forfeited check: a forfeited player returning to a
+  // finished match still deserves their results (rank + zero rewards); only
+  // rejoining live play is blocked for them below.
   if (state.phase === 'finished') {
     if (!state.rankings) return false;
     emitAuctionMatchFinishedReplay(socket, state);

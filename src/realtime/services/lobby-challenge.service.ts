@@ -2,6 +2,8 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbyChallengeInvitationsRepo } from '../../modules/lobbies/lobby-challenge-invitations.repo.js';
 import { isUserAccountInactive, usersRepo } from '../../modules/users/users.repo.js';
+import { isPersistentBot } from '../../modules/users/ai-classification.js';
+import { config } from '../../core/config.js';
 import { friendsRepo } from '../../modules/friends/friends.repo.js';
 import { logger } from '../../core/logger.js';
 import {
@@ -102,13 +104,22 @@ export async function challengeFriend(
     return;
   }
 
-  // Bots (any kind) are never challengeable, even a befriended persistent bot.
-  // The delayed friendly-challenge worker (PR12) has no bot support yet, and the
-  // friendly engine can never accept on a bot's behalf (§1.12), so reject with
-  // the same generic "unavailable" the FE already renders. Prevents a challenge
-  // from hanging until its 5-minute TTL expires. Until PR12, a befriended bot
-  // remains distinguishable to its FRIENDS only — the documented interim gap.
-  if (targetUser.is_ai) {
+  // Persistent roster bots are challengeable as of PR12: the invite is created
+  // normally and the delayed decline worker
+  // (`bot-challenge-responder.service.ts`) answers it like a real friend would
+  // — declining after seconds/minutes, or ignoring it so the 5-minute TTL
+  // lazy-expires it. Rejecting at send time was the PR3 interim behaviour and
+  // was itself a tell: no human target ever fails instantly.
+  //
+  // Ephemeral and auction bots stay unchallengeable. They present publicly as
+  // AI, are drained by cleanup, and are never meant to hold a social graph, so
+  // a pending 5-minute invite against one is pure dead weight.
+  // Flag-off parity: the decline worker only runs when PERSISTENT_BOTS_ENABLED
+  // is on. Letting a challenge through with the flag off would create an invite
+  // that NOTHING can answer, so the challenger stares at a pending card for the
+  // full 5-minute TTL — strictly worse than the instant PR3 rejection. With the
+  // flag off, every bot kind falls back to that rejection.
+  if (targetUser.is_ai && !(config.PERSISTENT_BOTS_ENABLED && isPersistentBot(targetUser))) {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_INVALID',
       message: 'This player is unavailable',
@@ -116,12 +127,18 @@ export async function challengeFriend(
     return;
   }
 
-  const targetSnapshot = await userSessionGuardService.resolveState(toUserId);
+  // Presence/readiness stays AI for persistent bots (capability matrix §1.1):
+  // a bot holds no lobby, match or queue state, so the busy probe below is
+  // skipped rather than asked about a user that can never be busy.
+  const targetSnapshot = targetUser.is_ai
+    ? null
+    : await userSessionGuardService.resolveState(toUserId);
   if (
-    targetSnapshot.activeMatchId ||
-    targetSnapshot.waitingLobbyId ||
-    targetSnapshot.queueSearchId ||
-    targetSnapshot.openLobbyIds.length > 0
+    targetSnapshot &&
+    (targetSnapshot.activeMatchId ||
+      targetSnapshot.waitingLobbyId ||
+      targetSnapshot.queueSearchId ||
+      targetSnapshot.openLobbyIds.length > 0)
   ) {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_TARGET_BUSY',
@@ -238,6 +255,28 @@ export async function acceptChallenge(
     return;
   }
 
+  // HARD INVARIANT (§1.12): a challenge aimed at a bot can NEVER be accepted.
+  // The friendly-possession engine has no bot driver in v1, so an accepted
+  // invite would strand a human in a lobby whose opponent can never ready up.
+  //
+  // Reachability is already narrow — accepting requires a socket authenticated
+  // AS the target, and bots hold no sessions — so this is defence in depth
+  // against a future path that drives accepts server-side (a rejoin replay, an
+  // admin tool, a test seam). It is asserted on the TARGET of the invite, not
+  // on the caller, so it holds no matter who initiates the accept.
+  const inviteTarget = await usersRepo.getById(invite.to_user_id);
+  if (!inviteTarget || inviteTarget.is_ai) {
+    logger.warn(
+      { invitationId: invite.id, toUserId: invite.to_user_id },
+      'Blocked challenge accept for a bot target'
+    );
+    socket.emit('error', {
+      code: 'LOBBY_CHALLENGE_INVALID',
+      message: 'This challenge is no longer available',
+    });
+    return;
+  }
+
   if (invite.status !== 'pending') {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_NOT_PENDING',
@@ -283,7 +322,21 @@ export async function acceptChallenge(
     return;
   }
 
-  await lobbyChallengeInvitationsRepo.updateStatus(invite.id, 'accepted');
+  // Only announce an accept the DB actually performed. updateStatus is a CAS on
+  // status='pending' AND (since PR12) a refusal for is_ai targets, so it returns
+  // null whenever the invite was already settled or the target is a bot.
+  // Emitting unconditionally would tell the challenger "accepted" for a write
+  // that never happened — previously only reachable via a settle race, but the
+  // bot guard makes it a real path, so the result is now checked.
+  const accepted = await lobbyChallengeInvitationsRepo.updateStatus(invite.id, 'accepted');
+  if (!accepted) {
+    socket.emit('error', {
+      code: 'LOBBY_CHALLENGE_NOT_PENDING',
+      message: 'This challenge is no longer pending',
+    });
+    return;
+  }
+
   emitChallengeStatus(io, {
     invitationId: invite.id,
     status: 'accepted',

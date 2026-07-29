@@ -6,6 +6,7 @@ import type { RankedProfileRow } from '../ranked/ranked.types.js';
 import { selectionTargetRpForHuman } from '../ranked/ranked.service.js';
 import { syntheticBotsRepo, type EligibleBotRow } from './synthetic-bots.repo.js';
 import { reservationService } from './reservation.service.js';
+import { isWithinScheduleWindow } from './activity-window.js';
 
 /**
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
@@ -86,38 +87,13 @@ function effectiveMatchesToday(bot: EligibleBotRow, rosterDay: string): number {
   return bot.matches_day === rosterDay ? bot.matches_today : 0;
 }
 
-/** Reads the bot's active-hour window from its schedule jsonb (defensive). */
-function isWithinScheduleWindow(bot: EligibleBotRow, now = new Date()): boolean {
-  const schedule = bot.schedule as { startHour?: unknown; endHour?: unknown } | null;
-  const start = typeof schedule?.startHour === 'number' ? schedule.startHour : null;
-  const endRaw = typeof schedule?.endHour === 'number' ? schedule.endHour : null;
-  // Missing/malformed schedule → treat as always in-window (schedule is the LAST
-  // soft constraint relaxed anyway; a bad schedule must never hard-exclude).
-  if (start === null || endRaw === null) return true;
-  const hourStr = now.toLocaleString('en-US', {
-    timeZone: 'Asia/Tbilisi',
-    hour: '2-digit',
-    hour12: false,
-  });
-  const hour = Number.parseInt(hourStr, 10) % 24;
-  // Generated evening schedules encode past-midnight windows as endHour > 24
-  // (e.g. 17→25 means 17:00–00:59). Treat any endHour ≥ 24 as wrapping, and
-  // normalize to [0,24) for the comparison so 00:00–00:59 is correctly INCLUDED.
-  const end = ((endRaw % 24) + 24) % 24;
-  const startNorm = ((start % 24) + 24) % 24;
-  if (startNorm === end) return true;
-  // Window wraps past midnight when the normalized end is at/behind the start
-  // (covers both an explicit 22→2 and an encoded 17→25).
-  return startNorm < end ? hour >= startNorm && hour < end : hour >= startNorm || hour < end;
-}
-
 // A bot "prefers" to be playing right now: it is within its active schedule
 // window AND either continuing a live session (last_session_at within the
 // session-gap window) or has no recent session (fresh start in-window). This is
 // the STRICTEST eligibility rung — dropped first when the pool is empty.
 const SESSION_GAP_MS = 20 * 60 * 1000; // matches the 20-min session segmentation used to learn archetypes.
 function prefersSessionNow(bot: EligibleBotRow, now: Date): boolean {
-  if (!isWithinScheduleWindow(bot, now)) return false;
+  if (!isWithinScheduleWindow(bot.schedule, now)) return false;
   const schedule = bot.schedule as { last_session_at?: unknown } | null;
   const lastRaw = schedule?.last_session_at;
   const lastMs = typeof lastRaw === 'string' ? Date.parse(lastRaw) : NaN;
@@ -153,7 +129,7 @@ function passesLevel(
   if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;
   if (level.respectDailyCap && effectiveMatchesToday(bot, ctx.rosterDay) >= bot.daily_cap) return false;
-  if (level.respectSchedule && !isWithinScheduleWindow(bot, ctx.now)) return false;
+  if (level.respectSchedule && !isWithinScheduleWindow(bot.schedule, ctx.now)) return false;
   return true;
 }
 

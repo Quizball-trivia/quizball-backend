@@ -146,6 +146,38 @@ export const TOP_PROTECTION_CRITICAL_RP = 50;
  */
 export const TOP_BAND_MARGIN_RP = 400;
 
+/**
+ * The subset of the constants above that an operator may retune live (PR10).
+ *
+ * Threaded in as an ARGUMENT rather than read from a cache inside this module,
+ * so the state machine stays pure and IO-free: the same state + input + config
+ * always yields the same decision, which is what makes the ordering and
+ * precedence tests meaningful and what makes a decision reproducible after the
+ * fact. The service resolves this once per settlement and passes it down; the
+ * resolved version is stamped into the match pin for provenance.
+ *
+ * Note MAX_GOVERNOR_ADJUSTMENT is deliberately NOT tunable: it is the bound the
+ * clamp-order guarantee rests on, and a live-editable bound is not a bound.
+ */
+export interface GovernorConfig {
+  governorStep: number;
+  topProtectionStep: number;
+  topProtectionMarginRp: number;
+  topProtectionCriticalRp: number;
+  topBandTargetWinrate: number;
+  midLadderTargetWinrate: number;
+}
+
+/** The frozen constants as a config — the default for every call site. */
+export const FROZEN_GOVERNOR_CONFIG: GovernorConfig = {
+  governorStep: GOVERNOR_STEP,
+  topProtectionStep: TOP_PROTECTION_STEP,
+  topProtectionMarginRp: TOP_PROTECTION_MARGIN_RP,
+  topProtectionCriticalRp: TOP_PROTECTION_CRITICAL_RP,
+  topBandTargetWinrate: TOP_BAND_TARGET_WINRATE,
+  midLadderTargetWinrate: MID_LADDER_TARGET_WINRATE,
+};
+
 export type GovernorTrigger =
   | 'none'
   | 'winrate_up'
@@ -188,6 +220,11 @@ export interface GovernorInput {
   now: Date;
   /** Kill switch: when false, every offset collapses to 0. */
   enabled: boolean;
+  /**
+   * Live operator config (PR10). Omitted => the frozen constants, so every
+   * existing call site keeps its exact previous behaviour.
+   */
+  config?: GovernorConfig;
 }
 
 export interface GovernorDecision {
@@ -232,11 +269,15 @@ export function updateWinrateEma(previous: number | null, won: boolean): number 
  * With an unknown top-10 RP we cannot place the bot on the ladder at all, so we
  * assume mid-ladder (the protection arm is disabled in that case regardless).
  */
-export function targetWinrate(botRp: number, humanTop10Rp: number | null): number {
-  if (humanTop10Rp == null || !Number.isFinite(humanTop10Rp)) return MID_LADDER_TARGET_WINRATE;
+export function targetWinrate(
+  botRp: number,
+  humanTop10Rp: number | null,
+  config: GovernorConfig = FROZEN_GOVERNOR_CONFIG,
+): number {
+  if (humanTop10Rp == null || !Number.isFinite(humanTop10Rp)) return config.midLadderTargetWinrate;
   return botRp >= humanTop10Rp - TOP_BAND_MARGIN_RP
-    ? TOP_BAND_TARGET_WINRATE
-    : MID_LADDER_TARGET_WINRATE;
+    ? config.topBandTargetWinrate
+    : config.midLadderTargetWinrate;
 }
 
 /**
@@ -250,10 +291,11 @@ export function targetWinrate(botRp: number, humanTop10Rp: number | null): numbe
 export function topProtectionZone(
   botRp: number,
   humanTop10Rp: number | null,
+  config: GovernorConfig = FROZEN_GOVERNOR_CONFIG,
 ): 'clear' | 'warn' | 'critical' {
   if (humanTop10Rp == null || !Number.isFinite(humanTop10Rp)) return 'clear';
-  if (botRp >= humanTop10Rp - TOP_PROTECTION_CRITICAL_RP) return 'critical';
-  if (botRp >= humanTop10Rp - TOP_PROTECTION_MARGIN_RP) return 'warn';
+  if (botRp >= humanTop10Rp - config.topProtectionCriticalRp) return 'critical';
+  if (botRp >= humanTop10Rp - config.topProtectionMarginRp) return 'warn';
   return 'clear';
 }
 
@@ -286,6 +328,7 @@ export function cooldownElapsed(state: GovernorState, now: Date): boolean {
  * not move, the EMA and sample count advanced.
  */
 export function stepGovernor(state: GovernorState, input: GovernorInput): GovernorDecision {
+  const config = input.config ?? FROZEN_GOVERNOR_CONFIG;
   // The EMA always advances, whatever the arms decide below.
   const observed: GovernorState = {
     adjustment: state.adjustment,
@@ -321,11 +364,11 @@ export function stepGovernor(state: GovernorState, input: GovernorInput): Govern
   // 1. TOP PROTECTION — dominates everything below. Downward only, no cooldown,
   //    no minimum-sample gate. Keeping bots out of the top 10 is a safety
   //    property, and safety is not rate-limited.
-  const zone = topProtectionZone(input.botRp, input.humanTop10Rp);
+  const zone = topProtectionZone(input.botRp, input.humanTop10Rp, config);
   if (zone === 'critical') return settle(-MAX_GOVERNOR_ADJUSTMENT, 'top_protection_critical');
   if (zone === 'warn') {
     // Math.min pins this arm to nerf-only: it can never raise the offset.
-    return settle(Math.min(state.adjustment - TOP_PROTECTION_STEP, state.adjustment), 'top_protection');
+    return settle(Math.min(state.adjustment - config.topProtectionStep, state.adjustment), 'top_protection');
   }
 
   // 2. WIN-RATE ARM — only ever reached OUTSIDE the protected zone, so a low win
@@ -333,7 +376,7 @@ export function stepGovernor(state: GovernorState, input: GovernorInput): Govern
   if (observed.winrateSamples < MIN_SAMPLES_FOR_WINRATE) {
     return { next: observed, trigger: 'none', changed: true };
   }
-  const error = (observed.winrateEma ?? 0) - targetWinrate(input.botRp, input.humanTop10Rp);
+  const error = (observed.winrateEma ?? 0) - targetWinrate(input.botRp, input.humanTop10Rp, config);
   if (Math.abs(error) <= HYSTERESIS_BAND + BAND_EPSILON) {
     // Inside the dead band: this IS the intended win-rate range, do nothing.
     return { next: observed, trigger: 'none', changed: true };
@@ -345,7 +388,7 @@ export function stepGovernor(state: GovernorState, input: GovernorInput): Govern
   // Winning too much -> lower the offset; losing too much -> raise it.
   const direction = error > 0 ? -1 : 1;
   return settle(
-    state.adjustment + direction * GOVERNOR_STEP,
+    state.adjustment + direction * config.governorStep,
     direction < 0 ? 'winrate_down' : 'winrate_up',
   );
 }

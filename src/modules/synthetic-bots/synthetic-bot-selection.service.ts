@@ -7,6 +7,8 @@ import { selectionTargetRpForHuman } from '../ranked/ranked.service.js';
 import { syntheticBotsRepo, type EligibleBotRow } from './synthetic-bots.repo.js';
 import { reservationService } from './reservation.service.js';
 import { isWithinScheduleWindow } from './activity-window.js';
+import { loadBotTuning } from '../bots/tuning/tuning-config.service.js';
+import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
 
 /**
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
@@ -121,14 +123,61 @@ const ELIGIBILITY_LADDER: EligibilityLevel[] = [
   { respectSessionPreference: false, respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: false, relaxationLabel: 'relax_schedule' },
 ];
 
+/**
+ * The OPERATOR cap on a bot's matches today: the generated per-bot cap scaled
+ * by the activity knob and clamped to the roster-wide ceiling (PR10).
+ *
+ * Enforced as a HARD constraint in passesLevel — never relaxed by the
+ * eligibility ladder. Floors at 0 rather than 1 so activityScale = 0 genuinely
+ * idles the roster, which is the point of the knob during an incident.
+ */
+export function operatorDailyCap(
+  dailyCap: number,
+  tuning: { activityScale: number; maxDailyCap: number },
+): number {
+  const scaled = Math.floor(dailyCap * tuning.activityScale);
+  return Math.max(0, Math.min(scaled, tuning.maxDailyCap));
+}
+
+/**
+ * Has the operator actually throttled the roster? Only then does the cap above
+ * become a hard constraint — at defaults (scale 1, cap at the rail) the
+ * generated daily_cap keeps its original SOFT, ladder-relaxable behaviour.
+ */
+export function isThrottled(tuning: { activityScale: number; maxDailyCap: number }): boolean {
+  return tuning.activityScale < 1 || tuning.maxDailyCap < MAX_DAILY_CAP;
+}
+
 function passesLevel(
   bot: EligibleBotRow,
   level: EligibilityLevel,
-  ctx: { recentlyFaced: Set<string>; rosterDay: string; now: Date },
+  ctx: {
+    recentlyFaced: Set<string>;
+    rosterDay: string;
+    now: Date;
+    tuning: { activityScale: number; maxDailyCap: number };
+  },
 ): boolean {
+  const matchesToday = effectiveMatchesToday(bot, ctx.rosterDay);
+
+  // HARD, never relaxed: the OPERATOR activity cap, but ONLY where the operator
+  // has actually throttled the roster (activityScale < 1 or a tightened
+  // maxDailyCap). The generated per-bot daily_cap below stays a SOFT realism
+  // constraint the ladder may drop when the pool runs thin — untouched
+  // behaviour when no override is set.
+  //
+  // Both halves matter. If the operator cap were relaxable, activityScale = 0
+  // would still hand out matches at the relax_daily_cap rung and "idle the
+  // roster" would be a lie. If it applied unconditionally it would silently
+  // promote the soft generated cap into a hard one, changing PR7 selection
+  // semantics for every deployment that never touches the knob.
+  if (isThrottled(ctx.tuning) && matchesToday >= operatorDailyCap(bot.daily_cap, ctx.tuning)) {
+    return false;
+  }
+
   if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;
-  if (level.respectDailyCap && effectiveMatchesToday(bot, ctx.rosterDay) >= bot.daily_cap) return false;
+  if (level.respectDailyCap && matchesToday >= bot.daily_cap) return false;
   if (level.respectSchedule && !isWithinScheduleWindow(bot.schedule, ctx.now)) return false;
   return true;
 }
@@ -198,9 +247,10 @@ export const syntheticBotSelectionService = {
     const rosterDay = currentRosterDay(now);
     const targetRp = selectionTargetRpForHuman(params.humanProfile);
 
-    const [eligible, recentlyFacedList] = await Promise.all([
+    const [eligible, recentlyFacedList, tuning] = await Promise.all([
       syntheticBotsRepo.listEligibleBots(),
       getRecentlyFaced(params.humanUserId),
+      loadBotTuning(),
     ]);
 
     if (eligible.length === 0) {
@@ -214,7 +264,7 @@ export const syntheticBotSelectionService = {
 
     let acquireAttempts = 0;
     for (const level of ELIGIBILITY_LADDER) {
-      const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now }));
+      const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now, tuning }));
       for (const bot of candidates) {
         if (acquireAttempts >= MAX_ACQUIRE_ATTEMPTS) {
           appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'acquire_cap' });

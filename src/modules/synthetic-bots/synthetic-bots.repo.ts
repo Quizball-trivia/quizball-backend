@@ -85,6 +85,13 @@ export const syntheticBotsRepo = {
    * on the bot_user_id PK: if another selection already holds this bot (or it
    * holds a live reservation from a prior lobby), the insert returns no row and
    * the caller moves on to the next candidate. Returns the fresh fence on a win.
+   *
+   * The INSERT ... SELECT re-checks status + selection_frozen INSIDE the write
+   * (PR10). Eligibility was read earlier in the selection pass, so a bare
+   * VALUES insert left a TOCTOU window: an operator could freeze a misbehaving
+   * bot, the freeze would commit, and a selection already holding the stale row
+   * could still reserve and launch that bot. Re-checking here makes the freeze
+   * effective against in-flight selections, not just future ones.
    */
   async acquireReservation(params: {
     botUserId: string;
@@ -94,7 +101,11 @@ export const syntheticBotsRepo = {
   }): Promise<SyntheticBotReservationRow | null> {
     const [row] = await sql<SyntheticBotReservationRow[]>`
       INSERT INTO synthetic_bot_reservations (bot_user_id, lobby_id, holder, expires_at)
-      VALUES (${params.botUserId}, ${params.lobbyId}, ${params.holder}, ${params.expiresAt})
+      SELECT ${params.botUserId}, ${params.lobbyId}, ${params.holder}, ${params.expiresAt}
+      FROM synthetic_player_profiles p
+      WHERE p.user_id = ${params.botUserId}
+        AND p.status = 'active'
+        AND NOT p.selection_frozen
       ON CONFLICT (bot_user_id) DO NOTHING
       RETURNING *
     `;
@@ -483,6 +494,11 @@ export const syntheticBotsRepo = {
         -- a defensive guard against a NULL rp that would NaN the nearest-RP sort.
         JOIN ranked_profiles rp ON rp.user_id = p.user_id
         WHERE p.status = 'active'
+          -- Operator freeze (PR10). A HARD constraint, deliberately alongside
+          -- status/reservation rather than in the relaxation ladder: an operator
+          -- freezing a misbehaving bot must never be undone by the ladder
+          -- widening when the eligible pool runs thin.
+          AND NOT p.selection_frozen
           AND u.ai_kind = 'persistent'
           AND NOT EXISTS (
             SELECT 1 FROM synthetic_bot_reservations r WHERE r.bot_user_id = p.user_id

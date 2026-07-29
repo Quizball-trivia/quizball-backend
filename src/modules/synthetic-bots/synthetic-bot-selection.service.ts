@@ -8,6 +8,7 @@ import { syntheticBotsRepo, type EligibleBotRow } from './synthetic-bots.repo.js
 import { reservationService } from './reservation.service.js';
 import { isWithinScheduleWindow } from './activity-window.js';
 import { loadBotTuning } from '../bots/tuning/tuning-config.service.js';
+import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
 
 /**
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
@@ -138,6 +139,15 @@ export function operatorDailyCap(
   return Math.max(0, Math.min(scaled, tuning.maxDailyCap));
 }
 
+/**
+ * Has the operator actually throttled the roster? Only then does the cap above
+ * become a hard constraint — at defaults (scale 1, cap at the rail) the
+ * generated daily_cap keeps its original SOFT, ladder-relaxable behaviour.
+ */
+export function isThrottled(tuning: { activityScale: number; maxDailyCap: number }): boolean {
+  return tuning.activityScale < 1 || tuning.maxDailyCap < MAX_DAILY_CAP;
+}
+
 function passesLevel(
   bot: EligibleBotRow,
   level: EligibilityLevel,
@@ -150,12 +160,20 @@ function passesLevel(
 ): boolean {
   const matchesToday = effectiveMatchesToday(bot, ctx.rosterDay);
 
-  // HARD, never relaxed: the OPERATOR activity cap. The generated per-bot
-  // daily_cap below is a soft realism constraint the ladder may drop when the
-  // pool runs thin, but the operator knob is an incident control — if it were
-  // relaxable, activityScale=0 would still hand out matches at the
-  // relax_daily_cap rung and "idle the roster" would be a lie.
-  if (matchesToday >= operatorDailyCap(bot.daily_cap, ctx.tuning)) return false;
+  // HARD, never relaxed: the OPERATOR activity cap, but ONLY where the operator
+  // has actually throttled the roster (activityScale < 1 or a tightened
+  // maxDailyCap). The generated per-bot daily_cap below stays a SOFT realism
+  // constraint the ladder may drop when the pool runs thin — untouched
+  // behaviour when no override is set.
+  //
+  // Both halves matter. If the operator cap were relaxable, activityScale = 0
+  // would still hand out matches at the relax_daily_cap rung and "idle the
+  // roster" would be a lie. If it applied unconditionally it would silently
+  // promote the soft generated cap into a hard one, changing PR7 selection
+  // semantics for every deployment that never touches the knob.
+  if (isThrottled(ctx.tuning) && matchesToday >= operatorDailyCap(bot.daily_cap, ctx.tuning)) {
+    return false;
+  }
 
   if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;

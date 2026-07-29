@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import '../setup.js';
-import { operatorDailyCap } from '../../src/modules/synthetic-bots/synthetic-bot-selection.service.js';
+import { operatorDailyCap, isThrottled } from '../../src/modules/synthetic-bots/synthetic-bot-selection.service.js';
 import { MAX_DAILY_CAP } from '../../src/modules/bots/tuning/tuning.schemas.js';
 
 const defaults = { activityScale: 1, maxDailyCap: MAX_DAILY_CAP };
@@ -43,5 +43,24 @@ describe('PR10 operatorDailyCap', () => {
 
   it('floors fractional results (a partial match is not a match)', () => {
     expect(operatorDailyCap(5, { ...defaults, activityScale: 0.3 })).toBe(1);
+  });
+});
+
+describe('PR10 isThrottled: the operator cap is hard ONLY when actually throttling', () => {
+  it('is NOT throttled at defaults, so the generated cap stays ladder-relaxable', () => {
+    // Guards a real regression found on rebase: applying the operator cap
+    // unconditionally silently promoted the SOFT generated daily_cap into a
+    // hard constraint, changing PR7 selection semantics for every deployment
+    // that never touches the knob.
+    expect(isThrottled({ activityScale: 1, maxDailyCap: MAX_DAILY_CAP })).toBe(false);
+  });
+
+  it('IS throttled once the operator scales activity down', () => {
+    expect(isThrottled({ activityScale: 0.5, maxDailyCap: MAX_DAILY_CAP })).toBe(true);
+    expect(isThrottled({ activityScale: 0, maxDailyCap: MAX_DAILY_CAP })).toBe(true);
+  });
+
+  it('IS throttled once the operator tightens the roster-wide cap', () => {
+    expect(isThrottled({ activityScale: 1, maxDailyCap: 4 })).toBe(true);
   });
 });

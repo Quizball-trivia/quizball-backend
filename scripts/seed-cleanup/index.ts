@@ -36,6 +36,12 @@ import { SCOPES, type Scope } from './predicate.js';
  */
 const RECENT_WINDOW = 10;
 const DEFAULT_BATCH_SIZE = 1000;
+/**
+ * Ceiling on --batch-size. Batching exists to keep each transaction's lock
+ * footprint and duration small; an arbitrarily large batch would take the
+ * entire population in one transaction and defeat the point.
+ */
+const MAX_BATCH_SIZE = 10_000;
 
 const BOOLEAN_FLAGS = ['--execute', '--allow-remote', '--drain-ephemeral'] as const;
 const VALUE_FLAGS = ['--scope', '--batch-size', '--max-batches'] as const;
@@ -107,13 +113,15 @@ export function parseArgs(argv: string[]): Args {
   };
   const has = (flag: string) => argv.includes(flag);
 
-  const int = (v: string | undefined, flag: string, min: number): number | undefined => {
+  const int = (v: string | undefined, flag: string, min: number, max: number): number | undefined => {
     if (v == null) return undefined;
     const n = Number(v);
     // Must ERROR rather than fall back to a default: a typo'd batch size
     // silently reverting to 1000 is exactly the class of surprise this guards.
-    if (v.trim() === '' || !Number.isInteger(n) || n < min) {
-      throw new Error(`Malformed value for ${flag}: '${v}' — expected an integer >= ${min}.`);
+    // The upper bound matters too — an unbounded batch size defeats batching
+    // entirely and takes the whole population in one long-locking transaction.
+    if (v.trim() === '' || !Number.isSafeInteger(n) || n < min || n > max) {
+      throw new Error(`Malformed value for ${flag}: '${v}' — expected an integer between ${min} and ${max}.`);
     }
     return n;
   };
@@ -137,8 +145,8 @@ export function parseArgs(argv: string[]): Args {
     execute: has('--execute'),
     allowRemote: has('--allow-remote'),
     drainEphemeral: drain,
-    batchSize: int(get('--batch-size'), '--batch-size', 1) ?? DEFAULT_BATCH_SIZE,
-    maxBatches: int(get('--max-batches'), '--max-batches', 1) ?? null,
+    batchSize: int(get('--batch-size'), '--batch-size', 1, MAX_BATCH_SIZE) ?? DEFAULT_BATCH_SIZE,
+    maxBatches: int(get('--max-batches'), '--max-batches', 1, 1_000_000) ?? null,
   };
 }
 
@@ -150,6 +158,12 @@ async function main(): Promise<void> {
   assertDbTarget(dsn, { allowRemote: args.allowRemote });
   const target = resolveTarget(dsn);
 
+  // NOTE on enforcing dry-run in the DB: neither a read-only transaction nor a
+  // read-only session can be used, because Postgres forbids temp-table DDL in
+  // both and the protected-match set is a temp table. Dry-run safety is
+  // therefore structural: census() issues only SELECTs against user data, its
+  // DDL is confined to pg_temp, and the write path (deleteScope /
+  // drainEphemeral) is simply never reached unless --execute was passed.
   const sql = postgres(dsn, { max: 2, idle_timeout: 20 }) as unknown as SqlLike;
   try {
     console.log(`target        : ${target.host} (${target.confirmToken})`);

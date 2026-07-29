@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import postgres from 'postgres';
 
 import type { SqlLike } from '../../scripts/persistent-bot-roster/db-types.js';
-import { deleteScope } from '../../scripts/seed-cleanup/engine.js';
+import { assertDrainSafe, deleteScope } from '../../scripts/seed-cleanup/engine.js';
 import { selectBatchSql } from '../../scripts/seed-cleanup/predicate.js';
 
 const DSN = process.env.SEED_CLEANUP_TEST_DSN
@@ -40,6 +40,9 @@ async function newUser(fields: Record<string, unknown>): Promise<string> {
     is_seed: false,
     role: 'user',
     onboarding_complete: true,
+    // Inside the legacy batch window by default, so a fixture is in scope
+    // unless a test deliberately moves it out.
+    created_at: '2026-02-20T00:00:00Z',
     ...fields,
   };
   const cols = Object.keys(base);
@@ -133,11 +136,19 @@ afterAll(async () => {
   if (dbAvailable) await sql.end({ timeout: 5 });
 });
 
+/**
+ * Skips cleanly when no local DB is present. The timeout is generous because
+ * these cases plant a dozen-plus rows each against a shared local database.
+ */
 const dbIt: typeof it = ((name: string, fn: () => Promise<void>) =>
-  it(name, async () => {
-    if (!dbAvailable) return;
-    await fn();
-  })) as typeof it;
+  it(
+    name,
+    async () => {
+      if (!dbAvailable) return;
+      await fn();
+    },
+    30_000,
+  )) as typeof it;
 
 describe('seed-cleanup deletion predicate', () => {
   dbIt('deletes a plain legacy seed (positive control)', async () => {
@@ -239,6 +250,27 @@ describe('seed-cleanup deletion predicate', () => {
     expect((await selectDeletable('legacy')).has(seed)).toBe(false);
   });
 
+  dbIt('spares a mis-flagged seed created OUTSIDE the legacy batch window', async () => {
+    // The legacy scope must identify the known Feb-17..Mar-07 batch POSITIVELY.
+    // If it were merely "not load-test", any future wrongly-flagged real
+    // account would fall into it with only the role guard left to save it.
+    const recent = await newUser({
+      is_seed: true,
+      email: `${TAG}_recent@gmail.com`,
+      created_at: new Date().toISOString(),
+    });
+    expect((await selectDeletable('legacy')).has(recent)).toBe(false);
+  });
+
+  dbIt('spares a mis-flagged seed on a non-gmail domain', async () => {
+    const odd = await newUser({
+      is_seed: true,
+      email: `${TAG}@outlook.com`,
+      created_at: '2026-02-20T00:00:00Z',
+    });
+    expect((await selectDeletable('legacy')).has(odd)).toBe(false);
+  });
+
   dbIt('keeps the two scopes disjoint — neither reaches the other population', async () => {
     const legacy = await newUser({ is_seed: true, email: `${TAG}_l@gmail.com` });
     const load = await newUser({ is_seed: true, email: `${TAG}_l@example.invalid` });
@@ -250,6 +282,37 @@ describe('seed-cleanup deletion predicate', () => {
     const loadPick = await selectDeletable('loadtest');
     expect(loadPick.has(load)).toBe(true);
     expect(loadPick.has(legacy)).toBe(false);
+  });
+});
+
+describe('ephemeral drain guard', () => {
+  dbIt('accepts a cleanup_ai_users() that carries the ai_kind allowlist', async () => {
+    // The local DB has the post-20260727150000 function.
+    await expect(assertDrainSafe(sql)).resolves.toBeUndefined();
+  });
+
+  dbIt('refuses a cleanup_ai_users() with no ai_kind allowlist', async () => {
+    // This is prod's CURRENT state (verified read-only): the pre-ai_kind
+    // function selects a bare `is_ai = true`, so draining there would delete
+    // every aged AI — including persistent roster bots once PR1 ships.
+    const original = (await sql.unsafe<{ src: string }[]>(
+      `SELECT pg_get_functiondef(oid) AS src FROM pg_proc WHERE proname = 'cleanup_ai_users'`,
+    ))[0].src;
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION cleanup_ai_users() RETURNS integer
+      LANGUAGE plpgsql AS $fn$
+      BEGIN
+        -- deliberately allowlist-free, mirroring the version live on prod
+        PERFORM 1 FROM public.users WHERE is_ai = true;
+        RETURN 0;
+      END;
+      $fn$;
+    `);
+    try {
+      await expect(assertDrainSafe(sql)).rejects.toThrow(/no ai_kind allowlist/i);
+    } finally {
+      await sql.unsafe(original);
+    }
   });
 });
 

@@ -109,8 +109,40 @@ export type Scope = (typeof SCOPES)[number];
 
 const LOADTEST_EMAIL = `u.email LIKE '%@example.invalid'`;
 
+/**
+ * The legacy filler batch, identified POSITIVELY rather than as "everything
+ * that is not load-test".
+ *
+ * A catch-all `NOT (loadtest)` would make the scope open-ended: any future row
+ * that gets wrongly flagged is_seed — a real account whose identity row is
+ * missing, say — would fall into it and become deletable. Only the role guard
+ * would stand in the way, and that is one clause too few for a hard delete.
+ *
+ * The real batch is tightly bounded and was measured read-only on BOTH envs:
+ * 1,806 rows, every one @gmail.com, created 2026-02-17..2026-03-07 at ~100/day.
+ * Pinning the domain and the creation window means the scope can only ever
+ * shrink as rows are deleted; it can never grow to cover an account created
+ * later.
+ */
+const LEGACY_FILLER = `u.email LIKE '%@gmail.com'
+    AND u.created_at >= TIMESTAMPTZ '2026-02-17'
+    AND u.created_at < TIMESTAMPTZ '2026-03-08'`;
+
 export function scopeClause(scope: Scope): string {
-  return scope === 'loadtest' ? LOADTEST_EMAIL : `NOT (${LOADTEST_EMAIL})`;
+  return scope === 'loadtest' ? LOADTEST_EMAIL : LEGACY_FILLER;
+}
+
+/**
+ * Numeric values are interpolated into SQL (they cannot be bound parameters in
+ * LIMIT/window position on every path), so they are proven to be plain integers
+ * HERE rather than trusting each caller. The CLI already validates its flags;
+ * this makes the module safe to call from anywhere, including tests.
+ */
+function assertInteger(value: number, name: string, min: number): number {
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be an integer >= ${min}, got ${String(value)}.`);
+  }
+  return value;
 }
 
 /**
@@ -119,6 +151,7 @@ export function scopeClause(scope: Scope): string {
  * 21k load-test seeds cannot protect each other's matches and stall the drain.
  */
 export function protectedMatchesSql(recentWindow: number): string {
+  assertInteger(recentWindow, 'recentWindow', 1);
   return `
     CREATE TEMP TABLE _seed_protected_match_ids ON COMMIT DROP AS
       SELECT match_id FROM (
@@ -161,6 +194,7 @@ export function deletablePredicate(scope: Scope): string {
  * assert against their own fixtures on a shared database).
  */
 export function selectBatchSql(scope: Scope, limit: number, restrictToIds = false): string {
+  assertInteger(limit, 'limit', 1);
   return `
     SELECT u.id
     FROM public.users u

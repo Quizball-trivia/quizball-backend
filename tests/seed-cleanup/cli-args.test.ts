@@ -41,7 +41,15 @@ describe('parseArgs', () => {
 
   it('errors on a malformed batch size instead of falling back to the default', () => {
     expect(() => parseArgs(['--scope', 'legacy', '--batch-size', 'lots'])).toThrow(/Malformed value/);
-    expect(() => parseArgs(['--scope', 'legacy', '--batch-size', '0'])).toThrow(/expected an integer >= 1/);
+    expect(() => parseArgs(['--scope', 'legacy', '--batch-size', '0'])).toThrow(/between 1 and/);
+  });
+
+  it('bounds --batch-size so a huge value cannot defeat batching', () => {
+    // An unbounded batch takes the whole population in one long-locking
+    // transaction, which is exactly what batching exists to prevent.
+    expect(() => parseArgs(['--scope', 'legacy', '--batch-size', '9007199254740992'])).toThrow(/between 1 and/);
+    expect(() => parseArgs(['--scope', 'legacy', '--batch-size', '100000'])).toThrow(/between 1 and/);
+    expect(parseArgs(['--scope', 'legacy', '--batch-size', '10000']).batchSize).toBe(10_000);
   });
 
   it('allows a drain with no scope', () => {

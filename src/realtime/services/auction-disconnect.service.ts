@@ -3,10 +3,15 @@ import { harnessDelayMs } from '../../core/harness-timing.js';
 import { type AuctionEngineContext } from '../../modules/auction/auction-context.js';
 import { advanceTurnOrResolveRound, finishMatch, getTurnMs, stripSeatBidLeadership } from '../../modules/auction/auction-engine.js';
 import {
+  auctionMatchOrigin,
   findAuctionSeatByUserId,
   toPublicAuctionMatchState,
   type AuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
+import {
+  auctionCoinsForPlacement,
+  auctionPointsForPlacement,
+} from './auction-persistence.service.js';
 import {
   auctionStateStore,
   saveAuctionMatchMutation,
@@ -444,11 +449,22 @@ export async function handleAuctionRejoin(
   if (!userId) return false;
 
   const state = await auctionStateStore.load(matchId).catch(() => null);
-  if (!state || state.phase === 'finished') return false;
+  if (!state) return false;
 
   const seat = findAuctionSeatByUserId(state, userId);
+  if (!seat || seat.isBot) return false;
+
+  // The match ended while this client was away (backgrounded tab missed the
+  // finish broadcast). Replay the finished snapshot so the player lands on the
+  // results screen — mirrors ranked — instead of a generic "can't rejoin".
+  if (state.phase === 'finished') {
+    if (!state.rankings) return false;
+    emitAuctionMatchFinishedReplay(socket, state);
+    return true;
+  }
+
   // A forfeited seat can't come back — their grace already expired.
-  if (!seat || seat.isBot || seat.forfeited) return false;
+  if (seat.forfeited) return false;
 
   socket.data.lobbyId = undefined;
   socket.data.matchId = matchId;
@@ -464,6 +480,42 @@ export async function handleAuctionRejoin(
   // (e.g. opponent's pause), the socket is simply back in sync.
   await resumeAuctionUserIfDisconnected(io, socket, state);
   return true;
+}
+
+/**
+ * Replay a finished match to a socket that missed the live finish broadcast.
+ * Rewards are recomputed deterministically from placements — the same formulas
+ * persistence used when it paid out — so the replayed results screen shows the
+ * coins/AP that were actually granted. Forfeiters earned nothing and show 0.
+ */
+function emitAuctionMatchFinishedReplay(socket: QuizballSocket, state: AuctionMatchState): void {
+  const rankings = state.rankings ?? [];
+  const publicState = toPublicAuctionMatchState(state);
+  const awardsAuctionPoints = auctionMatchOrigin(state) === 'queue';
+  const coinsByUserId: Record<string, number> = {};
+  const apByUserId: Record<string, number> | undefined = awardsAuctionPoints ? {} : undefined;
+  for (const ranking of rankings) {
+    if (ranking.isBot || !ranking.userId) continue;
+    const rankedSeat = state.seats.find((s) => s.seatId === ranking.seatId);
+    const earned = rankedSeat && !rankedSeat.forfeited;
+    coinsByUserId[ranking.userId] = earned ? auctionCoinsForPlacement(ranking.rank) : 0;
+    if (apByUserId) apByUserId[ranking.userId] = earned ? auctionPointsForPlacement(ranking.rank) : 0;
+  }
+  socket.emit('auction:state', {
+    matchId: state.matchId,
+    state: publicState,
+    stateVersion: state.version,
+    serverNow: new Date().toISOString(),
+  });
+  socket.emit('auction:match_finished', {
+    matchId: state.matchId,
+    rankings,
+    winnerSeatId: rankings[0]?.seatId ?? null,
+    state: publicState,
+    stateVersion: state.version,
+    coinsByUserId,
+    apByUserId,
+  });
 }
 
 /**

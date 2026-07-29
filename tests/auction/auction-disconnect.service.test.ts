@@ -76,9 +76,13 @@ vi.mock('../../src/realtime/redis.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/realtime/services/auction-persistence.service.js', () => ({
-  persistFinishedAuctionMatch: persistenceMock.persistFinishedAuctionMatch,
-}));
+vi.mock('../../src/realtime/services/auction-persistence.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/services/auction-persistence.service.js')>();
+  return {
+    ...actual,
+    persistFinishedAuctionMatch: persistenceMock.persistFinishedAuctionMatch,
+  };
+});
 
 const footballer = {
   id: 'footballer-1',
@@ -767,5 +771,52 @@ describe('auction disconnect service', () => {
     const pauseRaw = redisMock.store.get('auction:pause:match-1');
     expect(pauseRaw).toBeTruthy();
     expect(JSON.parse(pauseRaw!).userId).toBe('user-2');
+  });
+
+  it('replays the finished match to a rejoining socket that missed the finish broadcast', async () => {
+    const { handleAuctionRejoin } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const { io } = createIo();
+    const socket = createSocket();
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      phase: 'finished',
+      currentRound: null,
+      rankings: [
+        { seatId: 'seat-human', userId: 'user-1', isBot: false, displayName: 'User seat-human', rank: 1, isComplete: true, totalTrueValue: 500, budgetRemaining: 100 },
+        { seatId: 'seat-bot-a', userId: null, isBot: true, displayName: 'Bot seat-bot-a', rank: 2, isComplete: true, totalTrueValue: 400, budgetRemaining: 50 },
+        { seatId: 'seat-human-2', userId: 'user-2', isBot: false, displayName: 'User seat-human-2', rank: 3, isComplete: true, totalTrueValue: 300, budgetRemaining: 0 },
+      ],
+    }));
+
+    const rejoined = await handleAuctionRejoin(io, socket, 'match-1');
+
+    expect(rejoined).toBe(true);
+    const finished = socket.emit.mock.calls.find(([event]) => event === 'auction:match_finished');
+    expect(finished).toBeTruthy();
+    const payload = finished![1] as { coinsByUserId: Record<string, number>; winnerSeatId: string | null };
+    expect(payload.winnerSeatId).toBe('seat-human');
+    expect(payload.coinsByUserId['user-1']).toBeGreaterThan(0);
+    // Bots never appear in the reward map.
+    expect(Object.keys(payload.coinsByUserId)).not.toContain('seat-bot-a');
+    // The finished snapshot is also replayed so the client can hydrate straight
+    // into the results screen.
+    expect(socket.emit.mock.calls.some(([event]) => event === 'auction:state')).toBe(true);
+  });
+
+  it('does not replay a finished match to a user who never held a seat in it', async () => {
+    const { handleAuctionRejoin } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const { io } = createIo();
+    const socket = createSocket('user-outsider');
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      phase: 'finished',
+      currentRound: null,
+      rankings: [
+        { seatId: 'seat-human', userId: 'user-1', isBot: false, displayName: 'User seat-human', rank: 1, isComplete: true, totalTrueValue: 500, budgetRemaining: 100 },
+      ],
+    }));
+
+    const rejoined = await handleAuctionRejoin(io, socket, 'match-1');
+
+    expect(rejoined).toBe(false);
+    expect(socket.emit).not.toHaveBeenCalled();
   });
 });

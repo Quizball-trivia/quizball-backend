@@ -104,12 +104,15 @@ beforeAll(async () => {
   try {
     sql = postgres(DSN, { max: 2, idle_timeout: 10 }) as unknown as SqlLike;
     await sql.unsafe('SELECT 1');
-    dbAvailable = true;
     const [cat] = await sql.unsafe<{ id: string }[]>(`SELECT id FROM public.categories LIMIT 1`);
     categoryId = cat?.id ?? (await sql.unsafe<{ id: string }[]>(
       `INSERT INTO public.categories (slug, name, is_active) VALUES ($1,'SC',true) RETURNING id`,
       [`sc_${TAG}`],
     ))[0].id;
+    // Set LAST, only once every piece of setup has succeeded. Setting it right
+    // after the connectivity probe would leave it true if the category step
+    // threw, and every case would then run without a categoryId.
+    dbAvailable = true;
   } catch {
     console.warn('\n⚠️  Skipping seed-cleanup predicate tests: DB unavailable. Run `npm run db:start`.\n');
   }

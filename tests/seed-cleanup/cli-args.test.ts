@@ -21,6 +21,13 @@ describe('validateArgv', () => {
     expect(() => validateArgv(['--scope', '--execute'])).toThrow(/--scope requires a value/);
   });
 
+  it('rejects single-dash flags and stray positionals', () => {
+    // Both would otherwise pass silently, leaving the operator believing they
+    // had scoped or limited a destructive run.
+    expect(() => validateArgv(['-e', 'legacy'])).toThrow(/Unexpected argument: -e/);
+    expect(() => validateArgv(['--scope', 'legacy', 'execute'])).toThrow(/Unexpected argument: execute/);
+  });
+
   it('accepts a well-formed argv', () => {
     expect(() => validateArgv(['--scope', 'legacy', '--execute', '--batch-size', '500'])).not.toThrow();
   });

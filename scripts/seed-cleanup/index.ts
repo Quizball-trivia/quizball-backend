@@ -63,7 +63,14 @@ export function validateArgv(argv: string[]): void {
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
-    if (!token.startsWith('--')) continue; // a value consumed by its flag
+    if (!token.startsWith('--')) {
+      // Every value is consumed by its flag in the value-flag branch below, so
+      // any token still reaching here is junk: a single-dash flag (`-e`) or a
+      // bare typo (`execute`). Skipping these would silently accept exactly the
+      // "I thought I limited the run" mistake this validation exists to stop.
+      errors.push(`Unexpected argument: ${token}`);
+      continue;
+    }
 
     if (token.includes('=')) {
       const [name] = token.split('=', 1);

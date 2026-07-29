@@ -322,7 +322,21 @@ export async function acceptChallenge(
     return;
   }
 
-  await lobbyChallengeInvitationsRepo.updateStatus(invite.id, 'accepted');
+  // Only announce an accept the DB actually performed. updateStatus is a CAS on
+  // status='pending' AND (since PR12) a refusal for is_ai targets, so it returns
+  // null whenever the invite was already settled or the target is a bot.
+  // Emitting unconditionally would tell the challenger "accepted" for a write
+  // that never happened — previously only reachable via a settle race, but the
+  // bot guard makes it a real path, so the result is now checked.
+  const accepted = await lobbyChallengeInvitationsRepo.updateStatus(invite.id, 'accepted');
+  if (!accepted) {
+    socket.emit('error', {
+      code: 'LOBBY_CHALLENGE_NOT_PENDING',
+      message: 'This challenge is no longer pending',
+    });
+    return;
+  }
+
   emitChallengeStatus(io, {
     invitationId: invite.id,
     status: 'accepted',

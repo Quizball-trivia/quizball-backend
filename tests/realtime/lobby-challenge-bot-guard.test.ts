@@ -286,6 +286,42 @@ describe('acceptChallenge — ZERO ACCEPTS for an is_ai target (hard invariant)'
     expect(joinByCodeMock).not.toHaveBeenCalled();
   });
 
+  it('does not announce an accept the database refused', async () => {
+    // updateStatus is a CAS that also refuses is_ai targets, so it can return
+    // null. Emitting 'accepted' regardless would tell the challenger a match is
+    // starting when no write happened — and with the SQL bot guard in place
+    // that is a reachable path, not just a settle race.
+    getInvitationByIdMock.mockResolvedValue({
+      id: 'invite-4',
+      lobby_id: 'lobby-1',
+      from_user_id: 'human-1',
+      to_user_id: 'human-2',
+      status: 'pending',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    getByIdMock.mockResolvedValue({ id: 'human-2', is_ai: false, ai_kind: null });
+    getLobbyByIdMock.mockResolvedValue({ id: 'lobby-1', invite_code: 'ABC123', status: 'waiting' });
+    joinByCodeMock.mockImplementation(async (_io: unknown, socket: { data: { lobbyId?: string } }) => {
+      socket.data.lobbyId = 'lobby-1';
+    });
+    // The CAS loses — another replica settled it first.
+    updateInvitationStatusMock.mockResolvedValue(null);
+
+    const { acceptChallenge } = await import('../../src/realtime/services/lobby-challenge.service.js');
+    const { socket, emit } = makeSocket('human-2');
+    const { io, emit: ioEmit } = makeIo();
+
+    await acceptChallenge(io, socket, { invitationId: 'invite-4' });
+
+    expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({
+      code: 'LOBBY_CHALLENGE_NOT_PENDING',
+    }));
+    expect(ioEmit).not.toHaveBeenCalledWith(
+      'lobby:challenge_status',
+      expect.objectContaining({ status: 'accepted' })
+    );
+  });
+
   it('still lets a HUMAN target accept — the guard must not block real players', async () => {
     getInvitationByIdMock.mockResolvedValue({
       id: 'invite-3',

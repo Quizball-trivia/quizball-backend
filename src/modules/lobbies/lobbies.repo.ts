@@ -181,6 +181,14 @@ export const lobbiesRepo = {
     return row ?? null;
   },
 
+  async updateRankedContext(lobbyId: string, rankedContext: RankedLobbyContext | null): Promise<void> {
+    await sql`
+      UPDATE lobbies
+      SET ranked_context = ${sql.json((rankedContext ?? null) as Json)}, updated_at = NOW()
+      WHERE id = ${lobbyId}
+    `;
+  },
+
   async setVisibility(lobbyId: string, isPublic: boolean): Promise<void> {
     await sql`
       UPDATE lobbies
@@ -228,7 +236,7 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
-             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai
+             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind
       FROM lobby_members lm
       JOIN users u ON u.id = lm.user_id
       WHERE lm.lobby_id = ${lobbyId}

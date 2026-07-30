@@ -1,4 +1,4 @@
-import { sql } from '../../db/index.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { tierFromRp } from './ranked.service.js';
@@ -138,8 +138,21 @@ export const rankedRepo = {
     `;
   },
 
-  async applySettlement(entries: RankedSettlementEntry[]): Promise<void> {
-    if (entries.length === 0) return;
+  /**
+   * @param occurredAt  Optional backdated timestamp for the ledger row's
+   *   created_at and the profile's last_ranked_match_at/updated_at. Defaults to
+   *   NOW() so the LIVE settlement path is byte-identical. ONLY the one-time
+   *   persistent-bot burn-in writer passes an explicit historical value.
+   *
+   * @returns the user_ids whose ledger row THIS call actually inserted. A caller
+   *   racing another settlement of the same match loses the ON CONFLICT and gets
+   *   those users back OMITTED, so post-write side effects (analytics, governor)
+   *   fire exactly once per settled participant instead of once per replica.
+   *   Participants skipped as finalized accounts are omitted too.
+   */
+  async applySettlement(entries: RankedSettlementEntry[], occurredAt?: Date): Promise<Set<string>> {
+    const appliedUserIds = new Set<string>();
+    if (entries.length === 0) return appliedUserIds;
 
     try {
       logger.info({
@@ -149,8 +162,61 @@ export const rankedRepo = {
       }, 'Ranked settlement DB transaction starting');
 
       await sql.begin(async (tx) => {
+        // Serialize against finalize_pending_account_deletions(), which holds
+        // `SELECT ... FOR UPDATE` on public.users while it anonymizes the account
+        // and zeroes its ranked_profiles row. Locking the same rows here means the
+        // two can only run one after the other, so the recheck below sees a
+        // settled truth rather than a torn one.
+        //
+        // Ordered by user_id (and locked in ONE statement) so two concurrent
+        // settlements touching the same pair of users always take the locks in the
+        // same order and cannot deadlock.
+        const lockedUserIds = [...new Set(entries.map((entry) => entry.change.userId))].sort();
+        // postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+        // tagged-template call signatures; the runtime object still supports them.
+        const txSql = tx as unknown as typeof sql;
+        const activeRows = await txSql<{ id: string }[]>`
+          SELECT id FROM users
+          WHERE id = ANY(${sql.array(lockedUserIds)}::uuid[])
+            AND is_deleted = false
+            AND deleted_at IS NULL
+          ORDER BY id
+          FOR UPDATE
+        `;
+        const activeUserIds = new Set(activeRows.map((row) => row.id));
+
         for (const entry of entries) {
-          await tx.unsafe(
+          // The account was finalized between the eligibility read and this
+          // transaction. Skip ONLY this participant — the opponent's settlement is
+          // independent and must still land.
+          if (!activeUserIds.has(entry.change.userId)) {
+            // Re-assert the zeroed standing finalization applied. The
+            // pre-transaction ensureProfile may have re-created (or the eligibility
+            // read may have raced) a profile for this account AFTER finalization's
+            // own reset ran, which would leave a fresh 450-RP "Youth Prospect"
+            // ghost on a deleted player — the exact thing this guard prevents.
+            // Same field list as finalization / the season rollover.
+            await txSql`
+              UPDATE ranked_profiles
+              SET rp = 0, tier = 'Academy', placement_status = 'unplaced',
+                  placement_played = 0, placement_wins = 0, placement_seed_rp = NULL,
+                  placement_perf_sum = 0, placement_points_for_sum = 0,
+                  placement_points_against_sum = 0, current_win_streak = 0,
+                  updated_at = NOW()
+              WHERE user_id = ${entry.change.userId}
+                AND (rp <> 0 OR tier <> 'Academy' OR placement_status <> 'unplaced'
+                  OR placement_played <> 0 OR placement_wins <> 0
+                  OR placement_seed_rp IS NOT NULL OR placement_perf_sum <> 0
+                  OR placement_points_for_sum <> 0 OR placement_points_against_sum <> 0
+                  OR current_win_streak <> 0)
+            `;
+            logger.warn({
+              matchId: entry.change.matchId,
+              userId: entry.change.userId,
+            }, 'Ranked settlement skipped participant: account finalized before the write');
+            continue;
+          }
+          const appliedRows = await tx.unsafe<{ applied: boolean }[]>(
             `
             WITH inserted AS (
               INSERT INTO ranked_rp_changes (
@@ -167,10 +233,12 @@ export const rankedRepo = {
                 placement_anchor_rp,
                 placement_perf_score,
                 calculation_method,
-                coins_awarded
+                coins_awarded,
+                created_at
               )
               VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25,
+                COALESCE($26::timestamptz, NOW())
               )
               ON CONFLICT (match_id, user_id) DO NOTHING
               RETURNING 1
@@ -188,21 +256,27 @@ export const rankedRepo = {
                 placement_points_for_sum = $21,
                 placement_points_against_sum = $22,
                 current_win_streak = $23,
-                last_ranked_match_at = NOW(),
-                updated_at = NOW()
+                last_ranked_match_at = COALESCE($26::timestamptz, NOW()),
+                updated_at = COALESCE($26::timestamptz, NOW())
               WHERE user_id = $24
                 AND EXISTS (SELECT 1 FROM inserted)
               RETURNING 1
-            )
+            ),
             -- Coin participation reward (win/loss). Gated on the rp-change
             -- insert so the idempotent re-settlement path never double-pays.
-            UPDATE users
-            SET
-              coins = coins + $25,
-              updated_at = NOW()
-            WHERE id = $24
-              AND $25 > 0
-              AND EXISTS (SELECT 1 FROM inserted)
+            coins_awarded AS (
+              UPDATE users
+              SET
+                coins = coins + $25,
+                updated_at = COALESCE($26::timestamptz, NOW())
+              WHERE id = $24
+                AND $25 > 0
+                AND EXISTS (SELECT 1 FROM inserted)
+              RETURNING 1
+            )
+            -- Did THIS statement insert the ledger row? Lets the caller fire the
+            -- post-write side effects exactly once per settled participant.
+            SELECT EXISTS (SELECT 1 FROM inserted) AS applied
             `,
             [
               entry.change.matchId,
@@ -230,8 +304,12 @@ export const rankedRepo = {
               entry.profile.currentWinStreak,
               entry.profile.userId,
               entry.coinsAwarded,
+              occurredAt ?? null,
             ]
           );
+          if (appliedRows[0]?.applied === true) {
+            appliedUserIds.add(entry.change.userId);
+          }
         }
       });
 
@@ -239,6 +317,7 @@ export const rankedRepo = {
         entryCount: entries.length,
         matchIds: [...new Set(entries.map((entry) => entry.change.matchId))],
         userIds: entries.map((entry) => entry.change.userId),
+        appliedUserIds: [...appliedUserIds],
       }, 'Ranked settlement DB transaction committed');
     } catch (error) {
       logger.error({
@@ -258,6 +337,8 @@ export const rankedRepo = {
       }, 'Ranked settlement DB transaction failed');
       throw error;
     }
+
+    return appliedUserIds;
   },
 
   /**
@@ -266,8 +347,17 @@ export const rankedRepo = {
    * The RP ledger (ranked_rp_changes) is intentionally NOT written — admin
    * grants are audited separately and are not match-derived RP changes.
    */
-  async setRankPoints(userId: string, rp: number, tier: RankedTier): Promise<number | null> {
-    const [row] = await sql<{ rp: number }[]>`
+  async setRankPoints(
+    userId: string,
+    rp: number,
+    tier: RankedTier,
+    tx?: TransactionSql
+  ): Promise<number | null> {
+    // Optional tx so an admin edit can commit the RP write atomically with its
+    // audit rows (bot tuning PATCH); postgres.js drops the tagged-template
+    // signature from TransactionSql, hence the cast (see the note above).
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const [row] = await db<{ rp: number }[]>`
       UPDATE ranked_profiles
       SET rp = ${rp}, tier = ${tier}, updated_at = NOW()
       WHERE user_id = ${userId}
@@ -279,8 +369,9 @@ export const rankedRepo = {
   /**
    * Admin: reset the leaderboard for an event. Archives every existing ranked
    * profile and RP-change row into the archive tables under a single reset
-   * batch, then zeroes out the live ranked_profiles for real users only
-   * (excludes AI/seed/deleted). Tier becomes 'Academy' (the rp=0 tier) and all
+   * batch, then zeroes out the live ranked_profiles for settle-eligible users —
+   * real humans plus persistent roster bots (excludes ephemeral/auction AI, seed,
+   * deleted). Tier becomes 'Academy' (the rp=0 tier) and all
    * placement progress is cleared so players start fresh. Runs in one
    * transaction so the archive and reset are atomic.
    */
@@ -301,6 +392,10 @@ export const rankedRepo = {
       );
       const batchId = batchRows[0].id;
 
+      // The archive snapshots only the profiles the reset will actually zero —
+      // settle-eligible users (humans + persistent bots), excluding seed/deleted/
+      // pending-deletion — so it matches the live-reset predicate below and never
+      // retains rows that were never reset.
       const archivedProfiles = await tx.unsafe(
         `INSERT INTO ranked_profiles_archive (
           reset_batch_id, user_id, rp, tier, placement_status,
@@ -309,11 +404,20 @@ export const rankedRepo = {
           current_win_streak, last_ranked_match_at
         )
         SELECT
-          $1, user_id, rp, tier, placement_status,
-          placement_required, placement_played, placement_wins, placement_seed_rp,
-          placement_perf_sum, placement_points_for_sum, placement_points_against_sum,
-          current_win_streak, last_ranked_match_at
-        FROM ranked_profiles`,
+          $1, rp.user_id, rp.rp, rp.tier, rp.placement_status,
+          rp.placement_required, rp.placement_played, rp.placement_wins, rp.placement_seed_rp,
+          rp.placement_perf_sum, rp.placement_points_for_sum, rp.placement_points_against_sum,
+          rp.current_win_streak, rp.last_ranked_match_at
+        FROM ranked_profiles rp
+        WHERE EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = rp.user_id
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND u.is_seed = false
+            AND u.is_deleted = false
+            AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL
+        )`,
         [batchId]
       );
 
@@ -324,10 +428,19 @@ export const rankedRepo = {
           placement_anchor_rp, placement_perf_score, calculation_method, source_created_at
         )
         SELECT
-          $1, match_id, user_id, opponent_user_id, opponent_is_ai,
-          old_rp, delta_rp, new_rp, result, is_placement, placement_game_no,
-          placement_anchor_rp, placement_perf_score, calculation_method, created_at
-        FROM ranked_rp_changes`,
+          $1, rc.match_id, rc.user_id, rc.opponent_user_id, rc.opponent_is_ai,
+          rc.old_rp, rc.delta_rp, rc.new_rp, rc.result, rc.is_placement, rc.placement_game_no,
+          rc.placement_anchor_rp, rc.placement_perf_score, rc.calculation_method, rc.created_at
+        FROM ranked_rp_changes rc
+        WHERE EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = rc.user_id
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND u.is_seed = false
+            AND u.is_deleted = false
+            AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL
+        )`,
         [batchId]
       );
 
@@ -348,7 +461,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rp.user_id
-            AND u.is_ai = false
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL
@@ -396,7 +509,7 @@ export const rankedRepo = {
             ORDER BY created_at DESC LIMIT 3
           ) sub
         ) trend ON true
-        WHERE u.is_ai = false
+        WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
           AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
@@ -431,7 +544,7 @@ export const rankedRepo = {
           ORDER BY created_at DESC LIMIT 3
         ) sub
       ) trend ON true
-      WHERE u.is_ai = false
+      WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
         AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
@@ -498,7 +611,7 @@ export const rankedRepo = {
       FROM ranked_profiles_archive rp
       JOIN users u ON u.id = rp.user_id
       WHERE rp.reset_batch_id = ${batchId}
-        AND u.is_ai = false
+        AND (u.is_ai = false OR u.ai_kind = 'persistent')
         AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
@@ -523,7 +636,7 @@ export const rankedRepo = {
         FROM ranked_profiles_archive rp
         JOIN users u ON u.id = rp.user_id
         WHERE rp.reset_batch_id = ${batchId}
-          AND u.is_ai = false
+          AND (u.is_ai = false OR u.ai_kind = 'persistent')
           AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
@@ -564,7 +677,7 @@ export const rankedRepo = {
         (SELECT COUNT(*)::int + 1
          FROM ranked_profiles rp2
          JOIN users u ON u.id = rp2.user_id
-         WHERE u.is_ai = false
+         WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL
@@ -575,7 +688,7 @@ export const rankedRepo = {
         (SELECT COUNT(*)::int
          FROM ranked_profiles rp3
          JOIN users u ON u.id = rp3.user_id
-         WHERE u.is_ai = false
+         WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL

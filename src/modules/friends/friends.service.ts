@@ -103,20 +103,24 @@ export const friendsService = {
 
     // Persist a feed notification for the recipient (additive to the interactive
     // friend-request row; this gives the bell badge + toast + 3-day retention).
-    try {
-      const sender = await usersRepo.getById(senderUserId);
-      const senderName = sender?.nickname?.trim() || 'Someone';
-      await notificationsService.notify(targetUserId, {
-        type: 'friend_request',
-        title: { en: 'New friend request', ka: 'ახალი მეგობრობის მოთხოვნა' },
-        body: {
-          en: `${senderName} sent you a friend request.`,
-          ka: `${senderName}-მ გამოგიგზავნა მეგობრობის მოთხოვნა.`,
-        },
-        data: { requestId: request.id, senderUserId, senderName },
-      });
-    } catch (err) {
-      logger.warn({ err, targetUserId }, 'Failed to send friend-request notification');
+    // Skipped for bot targets (capability matrix: notifications stay AI) — the
+    // request row itself still lands so the live 30/70 responder worker can act.
+    if (!targetUser.is_ai) {
+      try {
+        const sender = await usersRepo.getById(senderUserId);
+        const senderName = sender?.nickname?.trim() || 'Someone';
+        await notificationsService.notify(targetUserId, {
+          type: 'friend_request',
+          title: { en: 'New friend request', ka: 'ახალი მეგობრობის მოთხოვნა' },
+          body: {
+            en: `${senderName} sent you a friend request.`,
+            ka: `${senderName}-მ გამოგიგზავნა მეგობრობის მოთხოვნა.`,
+          },
+          data: { requestId: request.id, senderUserId, senderName },
+        });
+      } catch (err) {
+        logger.warn({ err, targetUserId }, 'Failed to send friend-request notification');
+      }
     }
 
     return {

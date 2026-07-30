@@ -11,6 +11,7 @@ import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { statsService } from '../../modules/stats/stats.service.js';
 import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { isRankedSettleEligible } from '../../modules/users/ai-classification.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { trackPartyQuizStarted, trackMatchCreated } from '../../core/analytics/game-events.js';
@@ -390,7 +391,9 @@ export async function beginMatchForLobby(
     const profiles = await Promise.all(
       members.map(async (member, index) => {
         const memberUser = memberUsers[index];
-        if (memberUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
+        // Persistent bots load their real profile RP; only ephemeral/auction AI
+        // read the pinned anchor.
+        if (memberUser && !isRankedSettleEligible(memberUser) && typeof rankedContext?.aiAnchorRp === 'number') {
           return { userId: member.user_id, rp: rankedContext.aiAnchorRp };
         }
         const profile = await rankedService.ensureProfile(member.user_id);

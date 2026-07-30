@@ -53,8 +53,8 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
 
     // Create a test category for our questions
     const [category] = await sql<{ id: string }[]>`
-      INSERT INTO categories (name, is_active)
-      VALUES (${{ en: 'Test Category' }}::jsonb, true)
+      INSERT INTO categories (name, slug, is_active)
+      VALUES (${{ en: 'Test Category' }}::jsonb, ${`test-category-${Date.now()}`}, true)
       RETURNING id
     `;
     testCategoryId = category.id;
@@ -177,7 +177,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       // Update with empty object prompt
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { prompt: {} as I18nField },
+        { categoryId: testCategoryId, prompt: {} as I18nField },
         { type: 'mcq_single', options: [] }
       );
 
@@ -198,7 +198,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       // Update without prompt field (undefined)
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { status: 'published' }, // prompt is undefined
+        { categoryId: testCategoryId, status: 'published' }, // prompt is undefined
         { type: 'mcq_single', options: [] }
       );
 
@@ -217,7 +217,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
 
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { prompt: newPrompt },
+        { categoryId: testCategoryId, prompt: newPrompt },
         { type: 'mcq_single', options: [] }
       );
 
@@ -245,7 +245,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       // Update with explicit null
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { explanation: null },
+        { categoryId: testCategoryId, explanation: null },
         { type: 'mcq_single', options: [] }
       );
 
@@ -268,7 +268,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       // Update without explanation field (undefined)
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { status: 'published' }, // explanation is undefined
+        { categoryId: testCategoryId, status: 'published' }, // explanation is undefined
         { type: 'mcq_single', options: [] }
       );
 
@@ -290,7 +290,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
 
       const updated = await questionsRepo.updateWithPayload(
         question.id,
-        { explanation: newExplanation },
+        { categoryId: testCategoryId, explanation: newExplanation },
         { type: 'mcq_single', options: [] }
       );
 
@@ -319,7 +319,11 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
         options: [{ id: 'opt1', text: { en: 'Option 1' }, is_correct: true }],
       };
 
-      await questionsRepo.updateWithPayload(question.id, {}, newPayload);
+      await questionsRepo.updateWithPayload(
+        question.id,
+        { categoryId: testCategoryId },
+        newPayload
+      );
 
       // Verify payload was inserted
       payload = await readPayloadFromDb(question.id);
@@ -352,7 +356,11 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
         ],
       };
 
-      await questionsRepo.updateWithPayload(question.id, {}, updatedPayload);
+      await questionsRepo.updateWithPayload(
+        question.id,
+        { categoryId: testCategoryId },
+        updatedPayload
+      );
 
       // Verify payload was updated
       payload = await readPayloadFromDb(question.id);
@@ -407,6 +415,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       const updated = await questionsRepo.updateWithPayload(
         created.id,
         {
+          categoryId: testCategoryId,
           prompt: updatedPrompt,
           status: 'published',
           // explanation is undefined - should preserve
@@ -432,7 +441,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       // Step 4: Update to clear explanation
       const finalUpdate = await questionsRepo.updateWithPayload(
         created.id,
-        { explanation: null },
+        { categoryId: testCategoryId, explanation: null },
         updatedPayload
       );
 
@@ -453,11 +462,33 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
 
       const result = await questionsRepo.updateWithPayload(
         nonExistentId,
-        { status: 'published' },
+        { categoryId: testCategoryId, status: 'published' },
         { type: 'mcq_single', options: [] }
       );
 
       expect(result).toBeNull();
+    });
+
+    it('should update payload without categoryId (normal CMS payload edit)', async () => {
+      if (!dbAvailable) return;
+
+      const question = await createTestQuestion(
+        { en: 'Keep my category' },
+        null,
+        { type: 'mcq_single', options: [] }
+      );
+      const newPayload = { type: 'mcq_single', options: [{ id: 'a', text: { en: 'A' } }] };
+
+      const updated = await questionsRepo.updateWithPayload(
+        question.id,
+        { status: 'published' },
+        newPayload
+      );
+
+      expect(updated).not.toBeNull();
+      expect(updated!.category_id).toBe(testCategoryId);
+      expect(updated!.status).toBe('published');
+      expect(await readPayloadFromDb(question.id)).toEqual(newPayload);
     });
 
     it('should handle complex nested JSON in payload', async () => {
@@ -483,7 +514,11 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
         special_chars: '特殊字符 émojis 🎉',
       };
 
-      await questionsRepo.updateWithPayload(question.id, {}, complexPayload);
+      await questionsRepo.updateWithPayload(
+        question.id,
+        { categoryId: testCategoryId },
+        complexPayload
+      );
 
       // Verify complex JSON is stored correctly
       const payload = await readPayloadFromDb(question.id);
@@ -509,7 +544,11 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
 
       const question = await createTestQuestion({ en: 'Question' });
 
-      await questionsRepo.updateWithPayload(question.id, {}, {});
+      await questionsRepo.updateWithPayload(
+        question.id,
+        { categoryId: testCategoryId },
+        {}
+      );
 
       const payload = await readPayloadFromDb(question.id);
       expect(payload).toEqual({});

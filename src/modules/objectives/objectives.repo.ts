@@ -529,7 +529,7 @@ export const objectivesRepo = {
           WHERE m.status = 'completed'
             AND m.mode = 'ranked'
             AND m.is_dev = false
-            AND u.is_ai = false
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
             AND COALESCE(m.ended_at, m.started_at) >= ${periodStart}
             AND COALESCE(m.ended_at, m.started_at) < ${periodEnd}
         ) sub
@@ -562,7 +562,7 @@ export const objectivesRepo = {
           WHERE m.status = 'completed'
             AND m.mode = 'ranked'
             AND m.is_dev = false
-            AND u.is_ai = false
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
             AND COALESCE(m.ended_at, m.started_at) >= $2
             AND COALESCE(m.ended_at, m.started_at) < $3
         ) sub

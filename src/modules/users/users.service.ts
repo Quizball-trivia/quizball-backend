@@ -74,7 +74,7 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
-function assertNicknameAllowed(nickname: string, userId?: string): void {
+export function assertNicknameAllowed(nickname: string, userId?: string): void {
   const match = findBannedNicknameTerm(nickname);
   if (!match) return;
 
@@ -792,7 +792,9 @@ export const usersService = {
   },
 
   /**
-   * Search users by nickname substring. Excludes AI bots and the requester.
+   * Search users by nickname substring. Persistent roster bots are searchable
+   * like real users (public masking); ephemeral/auction bots and the requester
+   * are excluded.
    */
   async searchByNickname(query: string, excludeUserId: string) {
     const rows = await usersRepo.searchByNickname(query, excludeUserId);

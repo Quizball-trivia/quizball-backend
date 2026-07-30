@@ -3,7 +3,6 @@ node_modules/
 
 # Build output
 dist/
-
 # Environment
 .env
 .env.remote
@@ -11,25 +10,19 @@ dist/
 .env.*.bak
 !.env.local
 !.env.example
-
 # IDE
 .vscode/
 .idea/
-
 # OS
 .DS_Store
 Thumbs.db
-
 # Logs
 *.log
 logs/
-
 # Test coverage
 coverage/
-
 # Supabase
 supabase/.temp/
-
 # Secrets/scripts
 scripts/*
 !scripts/generate-image-question-preview.ts
@@ -42,15 +35,38 @@ scripts/*
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**
-
+!scripts/load/
+!scripts/load/**
+# Persistent-bot calibration pipeline + question_stats refresh runner (code only;
+# the offline calibration script is read-only and reads its DSN from env).
+!scripts/refresh-question-stats.ts
+!scripts/bot-calibration/
+!scripts/bot-calibration/**
+# Persistent bot roster generator — code + measured patterns.json + the dry-run
+# deliverables (report/CSV/manifest) are all committed for review. The out/
+# .gitignore then narrows out/ to just those three deliverables.
+!scripts/persistent-bot-roster/
+!scripts/persistent-bot-roster/**
 # Local agent instructions (not shared)
 CLAUDE.md
 game-regression/.env.local
 dump.rdb
-
 # Game-regression fuzzer failure artifacts (local dumps)
 game-regression/artifacts/
-
 # Staging harness — local secrets + report bundles (never commit)
 game-regression/staging/.env.staging
 game-regression/staging/reports/
+scripts/chaos/reports/
+scripts/load/k6/reports/
+scripts/load/distributed/reports/
+scripts/load/distributed/runtime/
+# Persistent-bot burn-in engine (code only; reads DSN + calibration params from
+# env/CLI at runtime). Local run artifacts (snapshots/receipts) stay ignored.
+!scripts/bot-burnin/
+!scripts/bot-burnin/**
+scripts/bot-burnin/out/
+scripts/bot-burnin/*.snapshot.json
+scripts/bot-burnin/*.receipt.json
+# Legacy fake-account cleanup (code only; reads DSN from env, dry-run default).
+!scripts/seed-cleanup/
+!scripts/seed-cleanup/**

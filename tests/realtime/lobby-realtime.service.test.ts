@@ -15,6 +15,7 @@ const clearLobbyCategoryBansMock = vi.fn();
 const clearLobbyCategoriesMock = vi.fn();
 const insertLobbyCategoriesMock = vi.fn();
 const setLobbyStatusMock = vi.fn();
+const activateLobbyForDraftLockedMock = vi.fn();
 const deleteLobbyMock = vi.fn();
 const buildLobbyStateMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
@@ -67,6 +68,14 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     insertLobbyCategories: (...args: unknown[]) => insertLobbyCategoriesMock(...args),
     setLobbyStatus: (...args: unknown[]) => setLobbyStatusMock(...args),
     deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
+  },
+}));
+
+// startDraft flips waiting→active via syntheticBotsRepo.activateLobbyForDraftLocked
+// (advisory-lock-guarded). Mock it so the unit test doesn't hit the real DB.
+vi.mock('../../src/modules/synthetic-bots/synthetic-bots.repo.js', () => ({
+  syntheticBotsRepo: {
+    activateLobbyForDraftLocked: (...args: unknown[]) => activateLobbyForDraftLockedMock(...args),
   },
 }));
 
@@ -200,6 +209,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     ]);
     insertLobbyCategoriesMock.mockResolvedValue(undefined);
     setLobbyStatusMock.mockResolvedValue(undefined);
+    activateLobbyForDraftLockedMock.mockResolvedValue({ activated: true, committedReservation: false });
     cleanupLobbyMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
     removeMemberMock.mockResolvedValue(undefined);
@@ -238,7 +248,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     });
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
-    expect(setLobbyStatusMock).toHaveBeenCalledWith('lobby-1', 'active');
+    // Activation now goes through the advisory-lock-guarded repo method.
+    expect(activateLobbyForDraftLockedMock).toHaveBeenCalledWith('lobby-1');
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
       turnUserId: 'u1',

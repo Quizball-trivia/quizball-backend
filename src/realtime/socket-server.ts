@@ -23,6 +23,7 @@ import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
+import { setLobbyChallengeRealtimeServer } from './services/lobby-challenge-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
@@ -38,6 +39,7 @@ import {
   type RealtimeTimerHandlers,
 } from './realtime-timer-scheduler.js';
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
+import { startReservationSweeper } from './services/synthetic-bot-reservation-sweeper.service.js';
 import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
 import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
@@ -392,7 +394,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
         payload.qIndex,
         payload.plannedAnswerTimeMs,
         payload.plannedClueIndex,
-        payload.plannedIsCorrect
+        payload.plannedIsCorrect,
+        payload.plannedFoundCount,
+        payload.plannedPutInOrderCount,
+        payload.plannedClueSolved,
       );
     },
     possession_halftime: async (server, payload: RealtimeTimerPayload) => {
@@ -454,10 +459,19 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   setAuthRealtimeServer(io);
   // Lets the notifications service push to a user's room without importing socket-server.
   setNotificationsRealtimeServer(io);
+  // Lets the bot challenge responder (a background worker with no socket of its
+  // own) deliver a decline to the challenger's room.
+  setLobbyChallengeRealtimeServer(io);
 
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
   startStaleMatchSweeper(io);
+  // Reconciliation sweeper for stranded persistent-bot reservations. NOT flag-
+  // gated (kill-switch safety): it must keep reconciling reservations created
+  // while PERSISTENT_BOTS_ENABLED was on even after the flag is turned off. Its
+  // work list is expired reservations, so with an empty table it is effectively
+  // idle regardless.
+  startReservationSweeper();
 
   // A deploy can land inside an in-process round-transition window (ready-ack
   // gates, inter-question delay) — re-arm timers for every active match so no

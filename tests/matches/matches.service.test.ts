@@ -406,7 +406,7 @@ describe('matches.service completeMatch', () => {
 
     await matchesService.completeMatch(matchId, userA);
 
-    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, userA);
+    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, userA, undefined);
     expect(listMatchPlayersMock).toHaveBeenCalledWith(matchId, 'tx');
     expect(recordUserModeStatsMock).toHaveBeenCalledTimes(1);
     const [, statRows] = (recordUserModeStatsMock.mock.calls[0] as [unknown, Array<Record<string, unknown>>]);
@@ -421,7 +421,7 @@ describe('matches.service completeMatch', () => {
 
     await matchesService.completeMatch(matchId, null);
 
-    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, null);
+    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, null, undefined);
     const [, statRows] = (recordUserModeStatsMock.mock.calls[0] as [unknown, Array<Record<string, unknown>>]);
     expect(statRows).toEqual([
       { userId: userA, mode: 'friendly', wins: 0, losses: 0, draws: 1, lastMatchAt: '2026-01-01T00:00:00.000Z' },

@@ -1,9 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
-import { getRedisClient } from '../redis.js';
 import { logger } from '../../core/logger.js';
-import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import {
   attachUserSocketsToLobby,
   emitLobbyState,
@@ -15,8 +13,8 @@ import {
   closeLobbyIfEmpty,
   getFirstDraftActorId,
   getNextDraftActorId,
-  getRankedAiUserIdForLobby,
   isRankedAiLobby,
+  releaseRankedAiLobbyMemberSafely,
   resolveRankedAiUserIdForDraft,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
@@ -191,16 +189,16 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
         const stillPresent = sockets.some((s) => s.data.user.id === userId);
         if (stillPresent) return;
 
-        await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-          if (aiUserId) {
-            await lobbiesRepo.removeMember(lobbyId, aiUserId);
-          }
-          const redis = getRedisClient();
-          if (redis) {
-            await redis.del(rankedAiLobbyKey(lobbyId));
-          }
+          // Ranked-AI lobby: the HUMAN member removal + bot release + lobby
+          // teardown ALL happen INSIDE the per-lobby advisory lock (with a status
+          // re-check) — never remove the human outside the lock. If a draft
+          // activated first (committed_at set / active match), this NO-OPS and the
+          // human stays: the in-match disconnect/forfeit machinery handles the
+          // drop during an active match, exactly as for human-vs-human.
+          await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
+        } else {
+          await lobbiesRepo.removeMember(lobbyId, userId);
         }
         logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
 

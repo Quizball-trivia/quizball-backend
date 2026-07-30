@@ -1,0 +1,131 @@
+/**
+ * Run manifest + canonical fixture identity.
+ *
+ * A fixture id must identify the FIXTURE, not `seed + ordinal`. The manifest
+ * hashes the PLAN INTENT (see RunManifest — seed, explicit season window,
+ * target, ceiling margin, roster membership + fixed hidden ability, category
+ * set, full params contents; NOT mutable ranked state or the wall clock). Each
+ * fixture key then hashes the manifest hash together with the canonical fixture
+ * CONTENT (participants, planned timestamps, winner, decision, scores). On
+ * resume, an existing DB row is accepted only after a field-by-field match —
+ * and because H is invariant to mutable state, the SAME args after a crash yield
+ * the SAME H, so the resume reconciles rather than refusing (P1-1).
+ */
+import { createHash } from 'node:crypto';
+import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
+import type { BurnInBot, BotSchedule, PlannedFixture } from './types.js';
+import { skillBandFromBaseSkill, type SkillBand } from './s2-distribution.js';
+
+/**
+ * The manifest identifies the PLAN INTENT, never the mutable world state or the
+ * wall clock (P1-1). Two invocations of the SAME plan produce the same H whether
+ * or not fixtures have already run — which is what makes crash-resume work.
+ *
+ * IN H: seed, ceiling config, target, the EXPLICIT season window (start+end,
+ * both passed as args — no wall-clock default), roster MEMBERSHIP (bot ids), the
+ * per-bot HIDDEN ABILITY (base_skill/dailyCap/schedule/status — fixed roster
+ * properties that drive the plan), the category set, and the model params.
+ * OUT of H: per-bot current RP/placement/streak (mutable ranked state — a
+ * partial run moves it) and the wall-clock run date.
+ */
+export interface RunManifest {
+  version: 4;
+  seed: number;
+  seasonStart: string;
+  seasonEnd: string;
+  targetMatches: number;
+  // Only the ceiling MARGIN config is in H (stable). The concrete ceilingRp is
+  // derived from live human RP at run time (which drifts) and is enforced
+  // per-fixture pre-commit — so it must NOT be part of the plan identity.
+  ceilingMarginRp: number;
+  // Finding 4/5: hash the FULL calibration params CONTENTS, not just metadata.
+  params: BotModelParams;
+  /** Roster membership + fixed hidden ability. NO mutable ranked state. */
+  roster: Array<{
+    userId: string;
+    baseSkill: number;
+    skillBand: SkillBand;
+    dailyCap: number;
+    status: string;
+    schedule: BotSchedule;
+  }>;
+  categoryIds: string[];
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+export function buildManifest(opts: {
+  seed: number;
+  seasonStart: Date;
+  seasonEnd: Date;
+  targetMatches: number;
+  ceilingMarginRp: number;
+  params: BotModelParams;
+  bots: BurnInBot[];
+  categoryIds: string[];
+}): RunManifest {
+  return {
+    version: 4,
+    seed: opts.seed,
+    seasonStart: opts.seasonStart.toISOString(),
+    seasonEnd: opts.seasonEnd.toISOString(),
+    targetMatches: opts.targetMatches,
+    ceilingMarginRp: opts.ceilingMarginRp,
+    params: opts.params,
+    roster: [...opts.bots]
+      .map((b) => ({
+        userId: b.userId,
+        baseSkill: b.baseSkill,
+        skillBand: b.skillBand ?? skillBandFromBaseSkill(b.baseSkill),
+        dailyCap: b.dailyCap,
+        status: b.status,
+        schedule: b.schedule,
+      }))
+      .sort((a, b) => (a.userId < b.userId ? -1 : 1)),
+    categoryIds: [...opts.categoryIds].sort(),
+  };
+}
+
+export function manifestHash(manifest: RunManifest): string {
+  return createHash('sha256').update(stableStringify(manifest)).digest('hex');
+}
+
+/** Canonical content that uniquely identifies a fixture within a run. */
+export function fixtureContentDigest(manifestHashHex: string, fixture: {
+  botAUserId: string;
+  botBUserId: string;
+  startedAt: Date;
+  endedAt: Date;
+  winnerUserId: string;
+  decision: string;
+  scoreA: PlannedFixture['scoreA'];
+  scoreB: PlannedFixture['scoreB'];
+}): string {
+  const canonical = stableStringify({
+    m: manifestHashHex,
+    a: fixture.botAUserId,
+    b: fixture.botBUserId,
+    s: fixture.startedAt.toISOString(),
+    e: fixture.endedAt.toISOString(),
+    w: fixture.winnerUserId,
+    d: fixture.decision,
+    sa: fixture.scoreA,
+    sb: fixture.scoreB,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+/** A v4-shaped UUID derived from the fixture content digest (stable id). */
+export function fixtureMatchIdFromDigest(digestHex: string): string {
+  const h = digestHex;
+  return (
+    `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-` +
+    `${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`
+  );
+}

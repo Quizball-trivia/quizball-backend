@@ -22,8 +22,10 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
 } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { buildStandings } from '../match-utils.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import type { MatchForfeitPendingPayload } from '../socket.types.js';
@@ -418,6 +420,11 @@ export async function finalizeMatchAsForfeit(
       )
     );
 
+    // Terminal release of any persistent-bot reservation for this match
+    // (regular forfeit choke point — self-forfeit, disconnect-terminal-forfeit,
+    // orphan-resolved forfeit all pass through finalizeMatchAsForfeit).
+    await reservationService.releaseIfSettled(params.matchId, 'self_forfeit');
+
     const resultVersion = Date.now();
     const redis = getRedisClient();
     if (redis) {
@@ -584,6 +591,7 @@ export async function handleMatchForfeit(
           matchExitPendingKey(activeMatch.id, player.user_id),
           matchPresenceKey(activeMatch.id, player.user_id),
           matchReconnectCountKey(activeMatch.id, player.user_id),
+          matchReconnectFenceKey(activeMatch.id, player.user_id),
         ]),
         rankedAiMatchKey(activeMatch.id),
       ];

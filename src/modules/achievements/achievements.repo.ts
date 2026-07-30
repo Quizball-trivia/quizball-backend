@@ -14,8 +14,11 @@ interface AchievementMetricsRow {
 }
 
 export const achievementsRepo = {
-  async listForUser(userId: string): Promise<UserAchievementRow[]> {
-    return sql<UserAchievementRow[]>`
+  async listForUser(
+    userId: string,
+    executor: typeof sql = sql
+  ): Promise<UserAchievementRow[]> {
+    return executor<UserAchievementRow[]>`
       SELECT *
       FROM user_achievements
       WHERE user_id = ${userId}
@@ -32,42 +35,57 @@ export const achievementsRepo = {
     `;
   },
 
+  /**
+   * @param params.occurredAt  Optional backdated timestamp for the created_at
+   *   of a newly inserted progress row. Defaults to the column default (NOW())
+   *   so the LIVE path is unchanged; ONLY the one-time persistent-bot burn-in
+   *   writer passes an explicit historical value. `unlockedAt` already carries
+   *   the (possibly backdated) unlock timestamp the service computed.
+   */
   async upsertProgress(params: {
     userId: string;
     achievementId: string;
     progress: number;
     unlockedAt: string | null;
     sourceMatchId: string | null;
-  }): Promise<UserAchievementRow> {
-    const [row] = await sql<UserAchievementRow[]>`
+    occurredAt?: Date;
+  }, executor: typeof sql = sql): Promise<UserAchievementRow> {
+    const [row] = await executor<UserAchievementRow[]>`
       INSERT INTO user_achievements (
         user_id,
         achievement_id,
         progress,
         unlocked_at,
-        source_match_id
+        source_match_id,
+        created_at,
+        updated_at
       )
       VALUES (
         ${params.userId},
         ${params.achievementId},
         ${params.progress},
         ${params.unlockedAt},
-        ${params.sourceMatchId}
+        ${params.sourceMatchId},
+        COALESCE(${params.occurredAt ?? null}::timestamptz, NOW()),
+        COALESCE(${params.occurredAt ?? null}::timestamptz, NOW())
       )
       ON CONFLICT (user_id, achievement_id)
       DO UPDATE SET
         progress = EXCLUDED.progress,
         unlocked_at = COALESCE(user_achievements.unlocked_at, EXCLUDED.unlocked_at),
         source_match_id = COALESCE(user_achievements.source_match_id, EXCLUDED.source_match_id),
-        updated_at = NOW()
+        updated_at = COALESCE(${params.occurredAt ?? null}::timestamptz, NOW())
       RETURNING *
     `;
 
     return row;
   },
 
-  async getMetricsForUser(userId: string): Promise<UserAchievementMetrics> {
-    const [row] = await sql<AchievementMetricsRow[]>`
+  async getMetricsForUser(
+    userId: string,
+    executor: typeof sql = sql
+  ): Promise<UserAchievementMetrics> {
+    const [row] = await executor<AchievementMetricsRow[]>`
       WITH user_matches AS (
         SELECT
           m.id,
@@ -110,10 +128,21 @@ export const achievementsRepo = {
       FROM user_matches
     `;
 
-    const [bestWinStreak, currentWinStreak] = await Promise.all([
-      this.getBestWinStreak(userId),
-      this.getCurrentWinStreak(userId),
-    ]);
+    // When running inside a caller-provided transaction, the streak helpers MUST
+    // use the SAME executor (so they see this tx's uncommitted fixtures) AND run
+    // sequentially (a single postgres.js tx connection can't run parallel queries).
+    const usingTx = executor !== sql;
+    let bestWinStreak: number;
+    let currentWinStreak: number;
+    if (usingTx) {
+      bestWinStreak = await this.getBestWinStreak(userId, executor);
+      currentWinStreak = await this.getCurrentWinStreak(userId, executor);
+    } else {
+      [bestWinStreak, currentWinStreak] = await Promise.all([
+        this.getBestWinStreak(userId, executor),
+        this.getCurrentWinStreak(userId, executor),
+      ]);
+    }
 
     return {
       completedMatches: row?.completed_matches ?? 0,
@@ -127,8 +156,8 @@ export const achievementsRepo = {
     };
   },
 
-  async getCurrentWinStreak(userId: string): Promise<number> {
-    const [row] = await sql<{ current_win_streak: number | null }[]>`
+  async getCurrentWinStreak(userId: string, executor: typeof sql = sql): Promise<number> {
+    const [row] = await executor<{ current_win_streak: number | null }[]>`
       SELECT current_win_streak
       FROM ranked_profiles
       WHERE user_id = ${userId}
@@ -136,8 +165,8 @@ export const achievementsRepo = {
     return Math.max(0, Number(row?.current_win_streak ?? 0));
   },
 
-  async getBestWinStreak(userId: string): Promise<number> {
-    const [row] = await sql<{ best_win_streak: number }[]>`
+  async getBestWinStreak(userId: string, executor: typeof sql = sql): Promise<number> {
+    const [row] = await executor<{ best_win_streak: number }[]>`
       SELECT COALESCE(MAX(streak_len), 0)::int AS best_win_streak
       FROM (
         SELECT COUNT(*) AS streak_len

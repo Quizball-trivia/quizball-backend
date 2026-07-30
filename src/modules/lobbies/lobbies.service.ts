@@ -1,5 +1,6 @@
 import { lobbiesRepo } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
+import { isRankedSettleEligible } from '../users/ai-classification.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
 import { logger, NotFoundError } from '../../core/index.js';
 import { getRandom } from '../../core/rng.js';
@@ -44,7 +45,9 @@ async function buildRankPointsByUserId(
 
   const entries = await Promise.all(
     members.map(async (member): Promise<[string, number] | null> => {
-      if (member.is_ai && typeof lobby.ranked_context?.aiAnchorRp === 'number') {
+      // Persistent bots load their real profile RP; only ephemeral/auction AI
+      // read the pinned anchor.
+      if (!isRankedSettleEligible(member) && typeof lobby.ranked_context?.aiAnchorRp === 'number') {
         return [member.user_id, lobby.ranked_context.aiAnchorRp];
       }
 

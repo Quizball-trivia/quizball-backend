@@ -7,6 +7,8 @@ const listLobbyCategoryBansMock = vi.fn();
 const insertLobbyCategoryBanMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
 const deleteLobbyMock = vi.fn();
+const abortLobbyMock = vi.fn();
+const releaseIfSettledMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
@@ -104,6 +106,14 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
       openLobbyIds: [],
       resolvedAt: new Date().toISOString(),
     })),
+  },
+}));
+
+// Lobby teardown + reservation release goes through the locked abort primitive.
+vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
+  reservationService: {
+    abortLobby: (...args: unknown[]) => abortLobbyMock(...args),
+    releaseIfSettled: (...args: unknown[]) => releaseIfSettledMock(...args),
   },
 }));
 
@@ -233,6 +243,8 @@ describe('draftRealtimeService', () => {
     });
     abortRankedDraftStartForTicketsMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
+    abortLobbyMock.mockResolvedValue({ aborted: true, botReleased: null, lobbyDeleted: true, removedMemberIds: [] });
+    releaseIfSettledMock.mockResolvedValue(undefined);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
     abandonMatchMock.mockResolvedValue(undefined);
     beginMatchForLobbyMock.mockResolvedValue(undefined);
@@ -393,7 +405,7 @@ describe('draftRealtimeService', () => {
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
     expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
-    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
@@ -655,7 +667,7 @@ describe('draftRealtimeService', () => {
       expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
       expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
       expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
-      expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+      expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
       expect(redisDelMock).toHaveBeenCalledWith([
         'ranked:ai:lobby:l1',
         'draft:absent_after_grace:l1:u1',
@@ -1179,7 +1191,7 @@ describe('draftRealtimeService', () => {
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
-    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 

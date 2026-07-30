@@ -23,6 +23,8 @@ export interface NicknameQuota {
   nextChangeAt: string | null;
 }
 
+export type AiKind = 'ephemeral' | 'persistent' | 'auction';
+
 export interface CreateUserData {
   email?: string | null;
   phoneNumber?: string | null;
@@ -32,6 +34,7 @@ export interface CreateUserData {
   avatarUrl?: string | null;
   avatarCustomization?: AvatarCustomization | null;
   isAi?: boolean;
+  aiKind?: AiKind;
 }
 
 export interface CreateIdentityData {
@@ -87,19 +90,25 @@ export const usersRepo = {
   },
 
   /**
-   * Case-insensitive nickname existence check among active real users.
-   * Backed by the partial unique index `uq_users_lower_nickname_real`
-   * (lower(nickname) WHERE is_ai = false AND not deleted), so this is an
+   * Case-insensitive nickname existence check among name-holding users: active
+   * real users plus persistent roster bots (whose names must block signups —
+   * a human registering a roster bot's exact name would out the bot). Backed by
+   * the partial unique index `uq_users_lower_nickname_claimable`, so this is an
    * O(log n) index lookup even at high user counts.
    */
-  async isNicknameTaken(nickname: string, excludeUserId?: string): Promise<boolean> {
+  async isNicknameTaken(
+    nickname: string,
+    excludeUserId?: string,
+    tx?: TransactionSql
+  ): Promise<boolean> {
     const trimmed = nickname.trim();
     if (trimmed.length === 0) return false;
-    const rows = await sql<{ exists: boolean }[]>`
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const rows = await db<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1 FROM users
         WHERE lower(nickname) = lower(${trimmed})
-          AND is_ai = false
+          AND (is_ai = false OR ai_kind = 'persistent')
           AND is_deleted = false
           AND deleted_at IS NULL
           AND pending_deletion_at IS NULL
@@ -121,10 +130,15 @@ export const usersRepo = {
    * Scoped to OTHER users: the original holder can always reclaim their own
    * former name (A held Foo -> B took and vacated Foo -> A may take Foo back).
    */
-  async isNicknameReserved(nickname: string, requesterUserId: string): Promise<boolean> {
+  async isNicknameReserved(
+    nickname: string,
+    requesterUserId: string,
+    tx?: TransactionSql
+  ): Promise<boolean> {
     const trimmed = nickname.trim();
     if (trimmed.length === 0) return false;
-    const rows = await sql<{ exists: boolean }[]>`
+    const db = (tx as unknown as typeof sql) ?? sql;
+    const rows = await db<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1 FROM nickname_history AS other
         WHERE lower(other.old_nickname) = lower(${trimmed})
@@ -146,9 +160,11 @@ export const usersRepo = {
 
   /**
    * Batch lookup: returns the subset of input nicknames already taken by
-   * active real (non-AI, non-seed) users, lowercased. Seed leaderboard users
-   * must not block ranked AI nickname selection. Uses the partial index on
-   * lower(nickname) — single query, O((k + matches) log n).
+   * active name-holding users — real users (non-seed) plus persistent roster
+   * bots, lowercased. Seed leaderboard users must not block ranked AI nickname
+   * selection, but roster bots must: an ephemeral opponent spawning with a
+   * roster bot's exact name would show two identical players. Uses the partial
+   * index on lower(nickname) — single query, O((k + matches) log n).
    */
   async findTakenLowerNicknames(nicknames: string[]): Promise<Set<string>> {
     if (nicknames.length === 0) return new Set();
@@ -156,7 +172,7 @@ export const usersRepo = {
     const rows = await sql<{ lower_nickname: string }[]>`
       SELECT lower(nickname) AS lower_nickname FROM users
       WHERE lower(nickname) = ANY(${lowered}::text[])
-        AND is_ai = false
+        AND (is_ai = false OR ai_kind = 'persistent')
         AND is_seed = false
         AND is_deleted = false
         AND deleted_at IS NULL
@@ -167,9 +183,11 @@ export const usersRepo = {
 
   async create(data: CreateUserData): Promise<User> {
     const phoneNumber = normalizeOptionalText(data.phoneNumber);
+    const isAi = data.isAi ?? false;
+    const aiKind = isAi ? data.aiKind ?? 'ephemeral' : null;
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${phoneNumber}, ${phoneNumber ? data.phoneVerifiedAt ?? null : null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
+      INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai, ai_kind)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${phoneNumber}, ${phoneNumber ? data.phoneVerifiedAt ?? null : null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${isAi}, ${aiKind})
       RETURNING *
     `;
     return user;
@@ -385,7 +403,7 @@ export const usersRepo = {
         rp.last_ranked_match_at AS ranked_last_ranked_match_at
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
-      WHERE u.is_ai = false
+      WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
@@ -556,7 +574,10 @@ export const usersRepo = {
    */
   async deleteAiUser(id: string): Promise<boolean> {
     const result = await sql`
-      DELETE FROM users WHERE id = ${id} AND is_ai = true
+      DELETE FROM users
+      WHERE id = ${id}
+        AND is_ai = true
+        AND ai_kind IN ('ephemeral', 'auction')
     `;
     return result.count > 0;
   },
@@ -596,6 +617,8 @@ export const usersRepo = {
     // Idempotent: re-calling on a user already pending deletion returns the existing
     // timestamps unchanged. updated_at only bumps on the first scheduling so we don't
     // create spurious audit entries or invalidate caches on no-op repeats.
+    // AI users are excluded: account deletion is a human-account flow, and letting it
+    // schedule a synthetic user would give deletion automation a path to roster bots.
     const [user] = await sql<User[]>`
       UPDATE users
       SET
@@ -603,6 +626,7 @@ export const usersRepo = {
         pending_deletion_at = COALESCE(pending_deletion_at, NOW() + INTERVAL '30 days'),
         updated_at = CASE WHEN pending_deletion_at IS NULL THEN NOW() ELSE updated_at END
       WHERE id = ${id}
+        AND is_ai = false
         AND is_deleted = false
         AND deleted_at IS NULL
       RETURNING *
@@ -707,15 +731,37 @@ export const usersRepo = {
     };
   },
 
-  /** Publishable previous nicknames, newest first. */
+  /**
+   * Publishable previous nicknames, newest first.
+   *
+   * `counted` is normally both the quota marker AND the publish marker, so an
+   * uncounted row is invisible here. Admin renames of ROSTER BOTS are the one
+   * exception: they are written uncounted (an operator edit must not spend the
+   * bot's 2 free renames) but must still appear publicly, because a bot whose
+   * name silently changed with no history is distinguishable from a human — the
+   * exact tell the roster exists to avoid.
+   *
+   * Scoped to bots on purpose. An admin rename of a HUMAN stays hidden, which
+   * is the pre-existing behaviour; widening it would retroactively publish
+   * support-initiated renames real users never consented to show.
+   */
   async getPublicNicknameHistory(userId: string, limit = 10): Promise<NicknameHistoryEntry[]> {
     const rows = await sql<{ nickname: string; changed_at: Date }[]>`
-      SELECT old_nickname AS nickname, changed_at
-      FROM nickname_history
-      WHERE user_id = ${userId}
-        AND counted
-        AND old_nickname IS NOT NULL
-      ORDER BY changed_at DESC
+      SELECT h.old_nickname AS nickname, h.changed_at
+      FROM nickname_history h
+      WHERE h.user_id = ${userId}
+        AND h.old_nickname IS NOT NULL
+        AND (
+          h.counted
+          OR (
+            h.changed_by = 'admin'
+            AND EXISTS (
+              SELECT 1 FROM users u
+              WHERE u.id = h.user_id AND u.is_ai = true
+            )
+          )
+        )
+      ORDER BY h.changed_at DESC
       LIMIT ${limit}
     `;
     return rows.map((row) => ({
@@ -742,13 +788,24 @@ export const usersRepo = {
     newNickname: string;
     changedBy: NicknameChangeSource;
     counted: boolean;
+    /**
+     * Join the CALLER's transaction instead of opening our own.
+     *
+     * Required for any caller that must roll the rename back together with
+     * sibling writes (the bot tuning PATCH). Without it this method calls the
+     * module-level `sql.begin`, which takes a SEPARATE POOL CONNECTION and
+     * COMMITS INDEPENDENTLY — verified empirically: a rename issued from inside
+     * a failing outer transaction survived the outer rollback. postgres.js also
+     * exposes no `tx.begin`, so a savepoint is not an alternative here.
+     */
+    tx?: TransactionSql;
   }): Promise<User | null> {
-    const { userId, oldNickname, newNickname, changedBy, counted } = params;
+    const { userId, oldNickname, newNickname, changedBy, counted, tx: callerTx } = params;
     // User-driven renames are never identity-derived; only createWithIdentity
     // writes those rows.
     const identityDerived = false;
 
-    return sql.begin(async (tx: TransactionSql) => {
+    const run = async (tx: TransactionSql) => {
       // Serializes concurrent renames of THIS user. Must come first: the gate
       // below reads nickname_history, which this lock does not itself cover.
       await tx.unsafe(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
@@ -781,7 +838,11 @@ export const usersRepo = {
         [userId, newNickname]
       );
       return rows[0] ?? null;
-    });
+    };
+
+    // Joining the caller's tx keeps the users-row FOR UPDATE inside their
+    // transaction, so their lock order (users first) is preserved.
+    return callerTx ? run(callerTx) : sql.begin(run);
   },
 
   /** True once the one-shot onboarding naming pass has been consumed. */

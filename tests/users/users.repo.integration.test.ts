@@ -20,6 +20,7 @@ const POOL_SAMPLE = ['beaborjgali', 'leaborjgali', 'gioooo'] as const;
 async function insertUser(opts: {
   nickname: string;
   isAi?: boolean;
+  aiKind?: 'ephemeral' | 'persistent' | 'auction';
   isSeed?: boolean;
   isDeleted?: boolean;
   pendingDeletion?: boolean;
@@ -28,6 +29,7 @@ async function insertUser(opts: {
     INSERT INTO users (
       nickname,
       is_ai,
+      ai_kind,
       is_seed,
       onboarding_complete,
       is_deleted,
@@ -37,6 +39,7 @@ async function insertUser(opts: {
     VALUES (
       ${opts.nickname},
       ${opts.isAi ?? false},
+      ${opts.isAi ? opts.aiKind ?? 'ephemeral' : null},
       ${opts.isSeed ?? false},
       true,
       ${opts.isDeleted ?? false},

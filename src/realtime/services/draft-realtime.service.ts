@@ -5,6 +5,7 @@ import { AppError, ErrorCode } from '../../core/errors.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import {
   RANKED_RECENT_CATEGORY_MODE,
@@ -28,6 +29,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
@@ -206,7 +208,11 @@ async function abortRankedDraftBeforeMatchCreation(
     forceAtMs?: number | null;
   } = {}
 ): Promise<void> {
-  await lobbiesRepo.deleteLobby(lobby.id);
+  // Genuine draft-teardown: this runs AFTER the draft was activated (committed_at
+  // is set), so pass draftTeardown:true to clear the commit flag first — then the
+  // locked abort frees the bot + ends the lobby, all under the shared advisory
+  // lock (serialized with any concurrent activation of THIS lobby).
+  await reservationService.abortLobby(lobby.id, 'abort_before_match_creation', { draftTeardown: true });
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del([
@@ -492,6 +498,7 @@ async function startMatchFromDraft(
               matchDisconnectKey(matchId, member.user_id),
               matchPresenceKey(matchId, member.user_id),
               matchReconnectCountKey(matchId, member.user_id),
+              matchReconnectFenceKey(matchId, member.user_id),
             ]),
           ],
         });
@@ -529,6 +536,14 @@ async function startMatchFromDraft(
           reason: 'pre_match_ranked_abandon',
         });
       }
+      // The reservation was transferred onto the match at creation; the match is
+      // now abandoned. Match-keyed settlement-gated release handles the
+      // transferred reservation; the locked lobby abort is a belt-and-braces for
+      // the crash-between-creation-and-transfer window (reservation still
+      // lobby-keyed, committed_at set from activation) — draftTeardown clears the
+      // commit flag so the abort reclaims it under the shared lock.
+      await reservationService.releaseIfSettled(matchId, 'pre_match_abandon');
+      await reservationService.abortLobby(lobbyId, 'pre_match_abandon', { draftTeardown: true });
       await redis.del([
         rankedAiMatchKey(matchId),
         rankedAiLobbyKey(lobbyId),

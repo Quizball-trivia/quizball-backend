@@ -54,6 +54,50 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+  // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
+  // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
+  // must gate on this flag. The manual `npm run bot:refresh-question-stats`
+  // entrypoint runs regardless (it is invoked by a human, not the scheduler).
+  QUESTION_STATS_REFRESH_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Persistent-bot live selection kill switch. Ships DISABLED (PR7). When OFF
+  // the ranked AI-fallback path is byte-identical to today: an ephemeral bot is
+  // created per match, no reservation row is ever touched. When ON, an eligible
+  // roster bot is reserved and used where one exists; an empty roster or an
+  // exhausted eligibility ladder always falls back to the ephemeral path, so
+  // matchmaking never fails. Read at selection time (config reflects the
+  // deployed env — flipping it is an env change, like every other flag here).
+  PERSISTENT_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Rubber-band governor kill switch (PR9). Ships ENABLED, unlike the flags
+  // above, because it is a SAFETY loop, not a feature: it is what keeps roster
+  // bots from climbing into the human top 10 and what steers win rate into the
+  // 40-45% / 45-55% bands. It is inert while PERSISTENT_BOTS_ENABLED is off
+  // (no persistent bot settles a match, so the governor is never invoked), so
+  // defaulting ON adds no behavior until the roster actually ships.
+  //
+  // Turning it OFF zeroes the offset at PIN time (so every match created after
+  // the flip runs on base calibrated skill) and additionally drives the stored
+  // value to 0 at each bot's next settlement.
+  //
+  // Two residual windows it does NOT close, by construction:
+  //   - a match ALREADY IN FLIGHT keeps the adjustment pinned into its
+  //     ranked_context (that immutability is the §1.7 invariant — a live match
+  //     must not change under the players);
+  //   - during a ROLLING deploy, replicas still running the previous release
+  //     read the stored offset directly and cannot honour the new flag.
+  // Both drain within one match / one deploy. For an immediate, global stop,
+  // zero the column: UPDATE synthetic_player_profiles SET governor_adjustment=0.
+  // Base calibrated skill is still bound by the Layer-1 hard clamps either way,
+  // so neither window is a safety hole — only a delay in the trim.
+  BOT_GOVERNOR_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

@@ -34,6 +34,17 @@ export function isGenuineAnswerSubmission(row: MatchAnswerRow): boolean {
 }
 
 /**
+ * Whether a user counts as a "human" for no-contest/zero-interaction detection.
+ * Deliberately ALL AI (including persistent roster bots) are excluded: a bot is
+ * synthetically driven, so its (non-)participation says nothing about whether a
+ * real player interacted. Single source of truth for the human set the guard
+ * builds — persistent bots stay AI here per the capability matrix.
+ */
+export function isNoContestHuman(user: { is_ai: boolean }): boolean {
+  return user.is_ai === false;
+}
+
+/**
  * True when NO human in the match ever genuinely submitted an answer — every
  * row for every human user is a timeout backfill. AI rows are ignored: an AI is
  * synthetically driven, so its (non-)participation says nothing about whether a

@@ -16,12 +16,16 @@ import {
   getAiNicknamePool,
   generateRankedAiGeo,
   generateRankedAiFavoriteClub,
+  buildPersistentBotGeo,
   rankedAiLobbyKey,
 } from '../ai-ranked.constants.js';
 import { attachUserSocketsToLobby, emitLobbyState } from '../lobby-utils.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { startDraft } from './lobby-draft-start.service.js';
-import { randomIntBetween, RANKED_AI_KEY_TTL_SEC } from './lobby-lifecycle.helpers.js';
+import { randomIntBetween, RANKED_AI_KEY_TTL_SEC, detachAllSocketsFromLobby } from './lobby-lifecycle.helpers.js';
+import { syntheticBotSelectionService } from '../../modules/synthetic-bots/synthetic-bot-selection.service.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
+import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 
 const RANKED_SIM_SEARCH_MIN_MS = 3000;
 const RANKED_SIM_SEARCH_MAX_MS = 10000;
@@ -78,6 +82,15 @@ async function getSupersedingSessionState(
   };
 }
 
+// NOTE (pre-existing race, tracked separately — concurrency-hardening backlog):
+// this EPHEMERAL-only superseded cleanup does an UNLOCKED member removal + Redis
+// key delete (check-then-act on status). It races draft activation the same way
+// the staging code always has (this exact unlocked shape exists on origin/staging
+// today for ephemeral/HvH ranked lobbies). It is NOT introduced by this PR — the
+// PERSISTENT-bot superseded path is routed through the advisory-locked
+// compensateAbortLobby instead; only the ephemeral path (no reservation, nothing
+// to double-book) still uses this. Deliberately out of scope for this persistent
+// -bot PR; tracked separately.
 async function cleanupSupersededRankedAiLobby(params: {
   lobbiesRepoRef: RankedAiLobbiesRepo;
   lobbyId: string;
@@ -100,6 +113,47 @@ async function cleanupSupersededRankedAiLobby(params: {
     await redis.del(rankedAiLobbyKey(lobbyId));
   }
   logger.info({ lobbyId, userId, aiUserId, reason }, 'Cleaned up superseded ranked AI lobby');
+}
+
+type RankedAiOpponentGeo = {
+  city: string;
+  country: string;
+  countryCode: string;
+  flag: string;
+  lat: number;
+  lon: number;
+};
+
+/**
+ * Abort a ranked-AI lobby we created but failed to fully wire (compensation),
+ * AND free its persistent-bot reservation — as ONE atomic, advisory-lock-guarded
+ * operation (reservationService.abortLobby). The lock is the same one the draft
+ * activation (startDraft → activateLobbyForDraftLocked) takes, so this whole
+ * abort serializes with activation. Whether the bot is reclaimed is decided by
+ * the reservation's committed_at, not lobby status: a committed reservation (a
+ * draft has started) is left alone unless `draftTeardown` is set (this flow owns
+ * the draft it is tearing down → clears the commit flag first). Redis/socket
+ * cleanup is idempotent and safe outside the tx.
+ */
+async function compensateAbortLobby(
+  io: QuizballServer,
+  lobbyId: string,
+  path: 'match_found_cancel' | 'cleanup_superseded_lobby' | 'draft_start_cancel' | 'draft_start_error' = 'match_found_cancel',
+  opts?: { draftTeardown?: boolean },
+): Promise<void> {
+  try {
+    const result = await reservationService.abortLobby(lobbyId, path, opts);
+    if (!result.aborted) {
+      logger.info({ lobbyId }, 'compensateAbortLobby: draft committed elsewhere — not tearing down');
+      // Do NOT touch Redis/sockets of a live lobby.
+      return;
+    }
+    const redis = getRedisClient();
+    if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
+    await detachAllSocketsFromLobby(io, lobbyId).catch(() => undefined);
+  } catch (err) {
+    logger.warn({ err, lobbyId }, 'Failed to compensate-abort ranked AI lobby');
+  }
 }
 
 export async function startRankedAiForUser(
@@ -128,67 +182,179 @@ export async function startRankedAiForUser(
       span.setAttribute('quizball.skipped_cancelled', true);
       return;
     }
-    const aiUser = await usersRepo.create({
-      nickname: aiProfile.username,
-      avatarUrl: aiProfile.avatarUrl,
-      country: aiGeo.countryCode,
-      isAi: true,
-    });
-    registerAiUserId(aiUser.id);
     const playerProfile = await rankedService.ensureProfile(userId);
-    const rankedContext = rankedService.buildAiMatchContext(playerProfile);
+    const ephemeralRankedContext = rankedService.buildAiMatchContext(playerProfile);
 
-    const lobby = await lobbiesRepo.createLobby({
-      mode: 'ranked',
-      hostUserId: userId,
-      inviteCode: null,
-      rankedContext,
-    });
+    // Attempt persistent selection FIRST (flag-gated inside the selection
+    // service). Selection is lobby-keyed, so create the lobby up front ONLY when
+    // we intend to select persistently; if selection yields nothing we tear that
+    // probe lobby down and fall through to the ephemeral path, which creates the
+    // ephemeral user BEFORE the lobby exactly as main does (flag-off inertness:
+    // the ephemeral failure footprint is unchanged — an ephemeral-user insert
+    // failure never leaves an orphan lobby).
+    let lobby: { id: string } | null = null;
+    let aiUser: { id: string; nickname: string | null; avatar_url: string | null };
+    let resolvedGeo: RankedAiOpponentGeo;
+    let resolvedProfile: { username: string; avatarUrl: string };
+    let rankedContext: RankedLobbyContext;
+    let opponentRp: number;
+    let favoriteClub: string;
+    let persistent = false;
+    let persistentBotReservation: { botUserId: string; fence: number } | null = null;
 
-    span.setAttribute('quizball.lobby_id', lobby.id);
-    span.setAttribute('quizball.ai_user_id', aiUser.id);
+    if (reservationService.isEnabled()) {
+      const probeLobby = await lobbiesRepo.createLobby({
+        mode: 'ranked',
+        hostUserId: userId,
+        inviteCode: null,
+        rankedContext: ephemeralRankedContext,
+      });
+      let selected: Awaited<ReturnType<typeof syntheticBotSelectionService.selectAndReserve>> = null;
+      try {
+        selected = await syntheticBotSelectionService.selectAndReserve({
+          humanUserId: userId,
+          humanProfile: playerProfile,
+          lobbyId: probeLobby.id,
+        });
+      } catch (err) {
+        logger.warn({ err, userId, lobbyId: probeLobby.id }, 'persistent-bot selection threw; falling back to ephemeral');
+      }
+      if (selected) {
+        lobby = probeLobby;
+        persistent = true;
+        persistentBotReservation = { botUserId: selected.reservation.botUserId, fence: selected.reservation.fence };
+        const { bot } = selected;
+        // ANY throw after acquire compensates: release the reservation AND tear
+        // down the lobby so no bot is stranded and no empty lobby is orphaned.
+        try {
+          rankedContext = rankedService.buildPersistentBotMatchContext(bot.rp);
+          await lobbiesRepo.updateRankedContext(probeLobby.id, rankedContext);
+          resolvedGeo = buildPersistentBotGeo({
+            country: bot.country,
+            home_city: bot.home_city,
+            home_lat: bot.home_lat,
+            home_lng: bot.home_lng,
+          });
+          resolvedProfile = { username: bot.nickname ?? aiProfile.username, avatarUrl: bot.avatar_url ?? aiProfile.avatarUrl };
+          aiUser = { id: bot.user_id, nickname: bot.nickname, avatar_url: bot.avatar_url };
+          opponentRp = bot.rp;
+          favoriteClub = bot.favorite_club ?? generateRankedAiFavoriteClub();
 
-    await lobbiesRepo.addMember(lobby.id, userId, true);
-    await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
-
-    const redis = getRedisClient();
-    if (redis) {
-      await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+          await lobbiesRepo.addMember(probeLobby.id, userId, true);
+          await lobbiesRepo.addMember(probeLobby.id, aiUser.id, true);
+          const redis = getRedisClient();
+          if (redis) {
+            await redis.set(rankedAiLobbyKey(probeLobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+          }
+          await attachUserSocketsToLobby(io, userId, probeLobby.id);
+          await emitLobbyState(io, probeLobby.id);
+          await userSessionGuardService.emitState(io, userId);
+        } catch (err) {
+          // Use bot.user_id (always defined from the selection), NOT aiUser?.id —
+          // aiUser may be undefined if the throw happened before its assignment
+          // (buildPersistentBotMatchContext / updateRankedContext /
+          // buildPersistentBotGeo). Dereferencing aiUser! here would throw a
+          // TypeError INSIDE the catch and skip the compensation below, stranding
+          // the (already-acquired) reservation + orphaning the lobby. The
+          // compensation MUST always fire on any throw after acquire.
+          logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: bot.user_id }, 'persistent-bot lobby build failed; compensating (locked release + teardown)');
+          await compensateAbortLobby(io, probeLobby.id);
+          return;
+        }
+      } else {
+        // No bot reserved — discard the probe lobby and use the ephemeral path.
+        await compensateAbortLobby(io, probeLobby.id);
+      }
     }
 
-    await attachUserSocketsToLobby(io, userId, lobby.id);
-    await emitLobbyState(io, lobby.id);
-    await userSessionGuardService.emitState(io, userId);
+    if (!lobby) {
+      // Ephemeral path — byte-identical to main: ephemeral user BEFORE the lobby.
+      const created = await usersRepo.create({
+        nickname: aiProfile.username,
+        avatarUrl: aiProfile.avatarUrl,
+        country: aiGeo.countryCode,
+        isAi: true,
+        aiKind: 'ephemeral',
+      });
+      registerAiUserId(created.id);
+      aiUser = created;
+      resolvedGeo = aiGeo;
+      resolvedProfile = aiProfile;
+      rankedContext = ephemeralRankedContext;
+      opponentRp = ephemeralRankedContext.aiAnchorRp ?? rankedService.DEFAULT_AI_OPPONENT_RP;
+      favoriteClub = generateRankedAiFavoriteClub();
 
-    const searchDurationMs =
-      options?.searchDurationMs ??
-      harnessDelayMs(randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS));
-    span.setAttribute('quizball.search_duration_ms', searchDurationMs);
-    if (!options?.skipSearchEmit) {
-      io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+      lobby = await lobbiesRepo.createLobby({
+        mode: 'ranked',
+        hostUserId: userId,
+        inviteCode: null,
+        rankedContext,
+      });
+      await lobbiesRepo.addMember(lobby.id, userId, true);
+      await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
+
+      const redis = getRedisClient();
+      if (redis) {
+        await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+      }
+      await attachUserSocketsToLobby(io, userId, lobby.id);
+      await emitLobbyState(io, lobby.id);
+      await userSessionGuardService.emitState(io, userId);
     }
-    logger.info(
-      { lobbyId: lobby.id, userId, searchDurationMs, skipSearchEmit: options?.skipSearchEmit ?? false },
-      'Ranked AI search started'
-    );
 
-    setTimeout(
-      () =>
-        void handleRankedAiMatchFound({
-          io,
-          lobbyId: lobby.id,
-          userId,
-          aiUser,
-          aiProfile,
-          aiGeo,
-          rankedContext,
-          lobbiesRepo,
-          logger,
-          foundModalMs: harnessDelayMs(RANKED_SIM_FOUND_MODAL_MS),
-          startDraft,
-        }),
-      searchDurationMs
-    );
+    // Compensation extends through the timer calc + search-started emit +
+    // scheduling: a throw ANYWHERE here (before the search-timer is installed)
+    // must also release the reservation and tear down the lobby, else the bot is
+    // stranded with no live flow to free it (Sol P2).
+    try {
+      span.setAttribute('quizball.lobby_id', lobby.id);
+      span.setAttribute('quizball.ai_user_id', aiUser!.id);
+      span.setAttribute('quizball.persistent_bot', persistent);
+
+      const searchDurationMs =
+        options?.searchDurationMs ??
+        harnessDelayMs(randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS));
+      span.setAttribute('quizball.search_duration_ms', searchDurationMs);
+      if (!options?.skipSearchEmit) {
+        io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+      }
+      logger.info(
+        { lobbyId: lobby.id, userId, searchDurationMs, persistent, skipSearchEmit: options?.skipSearchEmit ?? false },
+        'Ranked AI search started'
+      );
+
+      const startedLobbyId = lobby.id;
+      setTimeout(
+        () =>
+          void handleRankedAiMatchFound({
+            io,
+            lobbyId: startedLobbyId,
+            userId,
+            aiUser: aiUser!,
+            aiProfile: resolvedProfile!,
+            aiGeo: resolvedGeo!,
+            rankedContext: rankedContext!,
+            opponentRp: opponentRp!,
+            favoriteClub: favoriteClub!,
+            persistentBotReservation,
+            lobbiesRepo,
+            logger,
+            foundModalMs: harnessDelayMs(RANKED_SIM_FOUND_MODAL_MS),
+            startDraft,
+          }),
+        searchDurationMs
+      );
+    } catch (err) {
+      // Gated on persistentBotReservation: with the flag off (no reservation) this
+      // rethrows exactly as main did — no new teardown (flag-off parity). Only the
+      // persistent path compensates (release + locked teardown).
+      if (persistentBotReservation) {
+        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: persistentBotReservation.botUserId }, 'persistent-bot search scheduling failed; compensating (locked release + teardown)');
+        await compensateAbortLobby(io, lobby.id);
+        return;
+      }
+      throw err;
+    }
   });
 }
 
@@ -199,32 +365,66 @@ async function handleRankedAiMatchFound(params: {
   aiUser: { id: string; nickname: string | null; avatar_url: string | null };
   aiProfile: { username: string; avatarUrl: string };
   aiGeo: { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number };
-  rankedContext: {
-    aiAnchorRp: number;
-  };
+  rankedContext: RankedLobbyContext;
+  opponentRp: number;
+  favoriteClub: string;
+  persistentBotReservation: { botUserId: string; fence: number } | null;
   lobbiesRepo: RankedAiLobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   foundModalMs: number;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, rankedContext, lobbiesRepo, logger, foundModalMs, startDraft } =
+  const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, opponentRp, favoriteClub, persistentBotReservation, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
+
+  // Abort owned by THIS flow. STRICT FLAG-OFF PARITY: the new advisory-locked
+  // release + teardown ONLY runs when a persistent reservation is held. With the
+  // flag off (or an ephemeral opponent — no reservation), fall back to the exact
+  // legacy behavior main had for these bail-out returns (clear the AI lobby key),
+  // so the ephemeral/flag-off footprint is byte-identical. When persistent,
+  // compensateAbortLobby does the atomic locked release + teardown (no-op if a
+  // reconnect advanced the draft — the live draft keeps the bot).
+  const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
+    if (persistentBotReservation) {
+      await compensateAbortLobby(io, lobbyId);
+      return;
+    }
+    const redis = getRedisClient();
+    if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
+  };
 
   try {
     if (await hasRankedCancelRequest(userId)) {
+      // THIS flow's user cancelled — we own the abort.
       logger.info({ lobbyId, userId, aiUserId: aiUser.id }, 'Ranked AI match_found skipped because user cancelled search');
+      await releasePreMatch('match_found_cancel');
       return;
     }
 
     const latestLobby = await lobbiesRepo.getById(lobbyId);
-    if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
+    if (!latestLobby || latestLobby.mode !== 'ranked') {
+      // Lobby genuinely gone → free the (lobby-keyed) reservation. Nothing to tear
+      // down; compensate is a no-op on a missing lobby.
+      await releasePreMatch('match_found_cancel');
+      return;
+    }
+    if (latestLobby.status !== 'waiting') {
+      // Someone ELSE advanced this lobby (e.g. a reconnect started the draft) —
+      // it is LIVE and NOT ours to cancel. Do NOT release or tear down; the
+      // draft/match lifecycle now owns the reservation's fate.
+      logger.info({ lobbyId, userId, status: latestLobby.status }, 'Ranked AI match_found: lobby advanced elsewhere — leaving it live');
       return;
     }
 
     const members = await lobbiesRepo.listMembersWithUser(lobbyId);
     const hasHost = members.some((member) => member.user_id === userId);
     const hasAi = members.some((member) => member.user_id === aiUser.id);
-    if (!hasHost || !hasAi) return;
+    if (!hasHost || !hasAi) {
+      // Membership was torn down out from under us → the lobby is being abandoned;
+      // free the reservation (still lobby-keyed) and clean up.
+      await releasePreMatch('match_found_cancel');
+      return;
+    }
 
     const supersedingSession = await getSupersedingSessionState(lobbiesRepo, userId, lobbyId);
     if (supersedingSession) {
@@ -232,13 +432,18 @@ async function handleRankedAiMatchFound(params: {
         { lobbyId, userId, aiUserId: aiUser.id, session: supersedingSession },
         'Ranked AI match_found skipped because user session moved elsewhere'
       );
-      await cleanupSupersededRankedAiLobby({
-        lobbiesRepoRef: lobbiesRepo,
-        lobbyId,
-        userId,
-        aiUserId: aiUser.id,
-        reason: 'match_found_superseded',
-      });
+      if (persistentBotReservation) {
+        // Locked release + teardown (serialized with draft activation).
+        await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
+      } else {
+        await cleanupSupersededRankedAiLobby({
+          lobbiesRepoRef: lobbiesRepo,
+          lobbyId,
+          userId,
+          aiUserId: aiUser.id,
+          reason: 'match_found_superseded',
+        });
+      }
       return;
     }
 
@@ -257,12 +462,12 @@ async function handleRankedAiMatchFound(params: {
         id: aiUser.id,
         username: aiUser.nickname ?? aiProfile.username,
         avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
-        rp: rankedContext.aiAnchorRp,
+        rp: opponentRp,
         country: aiGeo.country,
         countryCode: aiGeo.countryCode,
         city: aiGeo.city,
         flag: aiGeo.flag,
-        favoriteClub: generateRankedAiFavoriteClub(),
+        favoriteClub,
         recentForm: generateAiRecentForm(),
         lat: aiGeo.lat,
         lon: aiGeo.lon,
@@ -277,6 +482,7 @@ async function handleRankedAiMatchFound(params: {
           lobbyId,
           userId,
           aiUserId: aiUser.id,
+          persistentBotReservation,
           lobbiesRepo,
           logger,
           startDraft,
@@ -284,7 +490,16 @@ async function handleRankedAiMatchFound(params: {
       foundModalMs
     );
   } catch (error) {
+    // A throw here left the lobby wired but no draft scheduled by THIS flow.
+    // STRICT FLAG-OFF PARITY: only the persistent path runs the new locked release
+    // + teardown; with the flag off (no reservation) this just logs, exactly as
+    // main did. When persistent, compensateAbortLobby releases + tears down under
+    // the lock (no-op if a reconnect activated the draft — the live draft keeps
+    // the bot).
     logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
+    if (persistentBotReservation) {
+      await compensateAbortLobby(io, lobbyId);
+    }
   }
 }
 
@@ -293,18 +508,57 @@ async function startRankedAiDraft(params: {
   lobbyId: string;
   userId: string;
   aiUserId: string;
+  persistentBotReservation: { botUserId: string; fence: number } | null;
   lobbiesRepo: RankedAiLobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, userId, aiUserId, lobbiesRepo, logger, startDraft } = params;
+  const { io, lobbyId, userId, aiUserId, persistentBotReservation, lobbiesRepo, logger, startDraft } = params;
+
+  // Draft-start cancel/error ENDS this flow. For a PERSISTENT bot, tear the lobby
+  // down entirely under the shared advisory lock (compensateAbortLobby →
+  // abortLobby): there is no "release the bot but keep the lobby" path — a waiting
+  // lobby with a freed bot could be activated by a reconnect and re-reserve the
+  // bot elsewhere. If a concurrent reconnect already advanced the draft, the
+  // locked abort observes 'active' and no-ops. Ephemeral keeps its legacy
+  // Redis-key-only cleanup (no reservation exists; other paths reap the lobby).
+  const releasePreMatch = async (
+    path: 'draft_start_cancel' | 'draft_start_error',
+  ): Promise<void> => {
+    if (persistentBotReservation) {
+      // draft_start_error may fire post-activation (committed_at set) → pass
+      // teardown-intent. The AUTHORITATIVE decision is the in-lock live-match
+      // check inside the locked abort: if a reconnect activated + created a match,
+      // it no-ops and the fresh commit survives; only a genuinely-stuck draft (no
+      // live match) is reclaimed. draft_start_cancel is pre-activation (no commit
+      // by us) so it does not pass teardown-intent.
+      await compensateAbortLobby(io, lobbyId, path, { draftTeardown: path === 'draft_start_error' });
+      return;
+    }
+    const redis = getRedisClient();
+    if (redis?.isOpen) {
+      await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
+    }
+  };
+
   try {
     if (await hasRankedCancelRequest(userId)) {
+      // THIS flow's user cancelled BEFORE activation — pre-activation, no commit.
       logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped because user cancelled search');
+      await releasePreMatch('draft_start_cancel');
       return;
     }
     const readyLobby = await lobbiesRepo.getById(lobbyId);
-    if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
+    if (!readyLobby || readyLobby.mode !== 'ranked') {
+      // Lobby gone → free the still-lobby-keyed reservation (pre-activation).
+      await releasePreMatch('draft_start_cancel');
+      return;
+    }
+    if (readyLobby.status !== 'waiting') {
+      // A reconnect (or another actor) already advanced this lobby's draft — it
+      // is LIVE and NOT ours to cancel. The draft/match lifecycle owns the
+      // reservation now; do not release or tear down.
+      logger.info({ lobbyId, userId, status: readyLobby.status }, 'Ranked AI draft start: lobby advanced elsewhere — leaving it live');
       return;
     }
     const supersedingSession = await getSupersedingSessionState(lobbiesRepo, userId, lobbyId);
@@ -313,18 +567,28 @@ async function startRankedAiDraft(params: {
         { lobbyId, userId, aiUserId, session: supersedingSession },
         'Ranked AI draft start skipped because user session moved elsewhere'
       );
-      await cleanupSupersededRankedAiLobby({
-        lobbiesRepoRef: lobbiesRepo,
-        lobbyId,
-        userId,
-        aiUserId,
-        reason: 'draft_start_superseded',
-      });
+      if (persistentBotReservation) {
+        // Pre-activation superseded cleanup — we have not committed (no teardown).
+        await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
+      } else {
+        await cleanupSupersededRankedAiLobby({
+          lobbiesRepoRef: lobbiesRepo,
+          lobbyId,
+          userId,
+          aiUserId,
+          reason: 'draft_start_superseded',
+        });
+      }
       return;
     }
     await startDraft(io, lobbyId);
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
+    // startDraft may have ACTIVATED (committed_at set) before throwing. The locked
+    // abort's in-lock live-match check is the authoritative gate: if a reconnect
+    // created a match, it no-ops (the live draft keeps the bot); only a stuck
+    // no-match draft is reclaimed.
+    await releasePreMatch('draft_start_error');
     io.to(`lobby:${lobbyId}`).emit('error', {
       code: 'MATCH_PREPARATION_FAILED',
       message: 'Match preparation got stuck. Please restart ranked matchmaking.',

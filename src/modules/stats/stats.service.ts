@@ -241,8 +241,10 @@ export const statsService = {
           avatarUrl: row.opponent_avatar_url,
           avatarCustomization: parseStoredAvatarCustomization(row.opponent_avatar_customization),
           isAi: row.opponent_is_ai ?? false,
-          // Only show a tier for placed opponents — unplaced/AI/deleted/no-profile
-          // map to null so the client renders a neutral frame instead of a wrong one.
+          // Only show a tier for placed opponents — unplaced/ephemeral-AI/deleted/
+          // no-profile map to null so the client renders a neutral frame instead
+          // of a wrong one. opponent_is_ai is already public-masked (persistent
+          // bots read false), so a placed persistent bot shows its real tier.
           tier:
             !row.opponent_is_ai
             && row.opponent_placement_status === 'placed'

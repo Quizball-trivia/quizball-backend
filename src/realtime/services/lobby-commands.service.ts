@@ -17,6 +17,7 @@ import {
 } from '../../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
+import { isDbWriteOutage, DbWriteOutageError } from '../../db/readonly-breaker.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import {
   FRIENDLY_LOBBY_MAX_MEMBERS,
@@ -78,6 +79,20 @@ export async function createLobby(
 ): Promise<LobbyCreateResult> {
   const userId = socket.data.user.id;
   const correlationId = payload.correlationId ?? 'missing';
+  // INC-2026-07-29: creating a lobby during a write outage produces a row that
+  // cannot be persisted (or a match that cannot be settled). Fail fast and
+  // retryable instead of stranding the player in a broken session.
+  if (isDbWriteOutage()) {
+    logger.error({ userId, correlationId, mode: payload.mode }, 'Lobby create refused: database write outage');
+    const outage = new DbWriteOutageError();
+    return {
+      ok: false,
+      code: outage.code,
+      message: outage.message,
+      retryable: true,
+      correlationId,
+    };
+  }
   let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,

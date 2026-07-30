@@ -5,7 +5,7 @@ import { logger } from './core/logger.js';
 import { shutdownLokiLogStream } from './core/loki.js';
 import { shutdownTelemetry } from './core/otel.js';
 import { disconnectDb } from './db/index.js';
-import { dbPoolStats, withDbWatchdogProbe } from './db/index.js';
+import { dbPoolStats, withDbWatchdogProbe, probeDbWritable, readOnlyDbBreaker } from './db/index.js';
 import { DbWatchdog } from './db/watchdog.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
@@ -64,10 +64,35 @@ if (config.NODE_ENV !== 'local' && config.DB_WATCHDOG_ENABLED) {
   dbWatchdog.start();
 }
 
+// Read-only-pool write prober (INC-2026-07-29). Deliberately SEPARATE from
+// dbWatchdog: the watchdog escalates to process.exit(1), which is the right
+// answer for a dead pool but the WRONG answer for a read-only one — every
+// replacement replica would dial the same contaminated Supavisor pool and drop
+// live matches on the way out. This prober only flips the breaker, so writes
+// resume the moment the pool is genuinely writable again.
+const writeProbeIntervalMs = Math.max(5_000, config.DB_WATCHDOG_INTERVAL_MS);
+let writeProbeInFlight = false;
+const writeProbeTimer = setInterval(() => {
+  if (writeProbeInFlight) return;
+  // Only probe while degraded: a healthy pool is already proven writable by
+  // real traffic, and an idle-hour probe would add pointless pool churn.
+  if (!readOnlyDbBreaker.snapshot().degraded) return;
+  writeProbeInFlight = true;
+  void probeDbWritable(2_000)
+    .catch((error) => {
+      logger.error({ error }, 'Read-only recovery write probe threw unexpectedly');
+    })
+    .finally(() => {
+      writeProbeInFlight = false;
+    });
+}, writeProbeIntervalMs);
+writeProbeTimer.unref?.();
+
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
+  clearInterval(writeProbeTimer);
   // Stop responder ticks immediately (server.close waits for open connections,
   // during which the interval could still fire) and drain the in-flight tick
   // before the DB pool closes so a mid-tick accept never hits a closing pool.

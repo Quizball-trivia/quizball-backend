@@ -6,6 +6,7 @@ import {
   DbOverloadedError,
   type DbAdmissionStats,
 } from './admission.js';
+import { readOnlyDbBreaker } from './readonly-breaker.js';
 
 // Runtime fallbacks also keep unit tests with intentionally partial config
 // mocks safe; the real parsed config always supplies these values.
@@ -63,6 +64,10 @@ async function runWithAdmission<T>(operation: () => PromiseLike<T> | T): Promise
         logger.warn({ ...stats, reason: error.reason }, 'DB admission gate shedding load');
       }
     }
+    // Central 25006 hook: EVERY query, transaction and probe funnels through
+    // admission, so this is the one place that sees all read-only write
+    // failures regardless of which repo issued them.
+    readOnlyDbBreaker.recordError(error);
     throw error;
   }
 }
@@ -217,13 +222,62 @@ export async function withDbWatchdogProbe<T>(
   statementMs = 2_000,
   acquireTimeoutMs = 3_500,
 ): Promise<T> {
-  return admission.runPriority(
-    () => rawBegin<T>(async (tx) => {
-      await setLocalTimeouts(tx, statementMs, IDLE_IN_TX_MS);
-      return fn(tx);
-    }) as Promise<T>,
-    acquireTimeoutMs,
-  );
+  try {
+    return await admission.runPriority(
+      () => rawBegin<T>(async (tx) => {
+        await setLocalTimeouts(tx, statementMs, IDLE_IN_TX_MS);
+        return fn(tx);
+      }) as Promise<T>,
+      acquireTimeoutMs,
+    );
+  } catch (error) {
+    // runPriority bypasses runWithAdmission, so the breaker is fed here too.
+    readOnlyDbBreaker.recordError(error, { source: 'watchdog_probe' });
+    throw error;
+  }
+}
+
+/**
+ * Rollback-only WRITE probe — the readiness check that a plain `SELECT 1`
+ * cannot provide (INC-2026-07-29 contributing factor #1: read-only pooled
+ * connections looked perfectly healthy).
+ *
+ * `CREATE TEMP TABLE ... ON COMMIT DROP` inside a transaction that always
+ * rolls back was chosen after verifying the alternatives against the real
+ * Supabase Supavisor TRANSACTION-mode pooler (port 6543):
+ *
+ *  - It DOES fail with SQLSTATE 25006 on a connection contaminated with
+ *    `default_transaction_read_only=on` (empirically confirmed 2026-07-30) —
+ *    which is exactly the detection we need.
+ *  - It touches NO application table, so it cannot corrupt game data, needs no
+ *    migration, and leaves zero footprint: the temp relation dies with the
+ *    rolled-back transaction (verified: no residue in pg_tables or pg_temp*).
+ *  - `SET LOCAL default_transaction_read_only = off` was tested and REJECTED:
+ *    Postgres has already entered the transaction read-only, so the SET LOCAL
+ *    is accepted but `transaction_read_only` stays `on` and the write still
+ *    fails. It neither repairs nor detects anything, so it is not used.
+ *
+ * Resolves true when the pool can write, false otherwise. Never throws, so it
+ * is safe to call from a health route and from the watchdog.
+ */
+export async function probeDbWritable(statementMs = 2_000): Promise<boolean> {
+  const ROLLBACK = new Error('__probe_rollback__');
+  try {
+    await withDbWatchdogProbe(async (tx) => {
+      await tx.unsafe('CREATE TEMP TABLE _quizball_write_probe (probe int) ON COMMIT DROP');
+      // Always abort: the probe must never commit anything, not even a temp DDL.
+      throw ROLLBACK;
+    }, statementMs);
+    return true;
+  } catch (error) {
+    if (error === ROLLBACK) {
+      // The write was accepted by Postgres; only our own rollback ended the txn.
+      readOnlyDbBreaker.recordProbeSuccess();
+      return true;
+    }
+    readOnlyDbBreaker.recordProbeFailure(error);
+    return false;
+  }
 }
 
 // Re-export postgres types for use in repos
@@ -235,3 +289,11 @@ export async function disconnectDb(): Promise<void> {
 }
 
 export { DbOverloadedError } from './admission.js';
+export {
+  readOnlyDbBreaker,
+  isDbWriteOutage,
+  isReadOnlyTransactionError,
+  DbWriteOutageError,
+  READ_ONLY_SQLSTATE,
+  READ_ONLY_ALERT_MARKER,
+} from './readonly-breaker.js';

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { hostname } from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
+import { dbPoolStats, probeDbWritable, readOnlyDbBreaker } from '../../db/index.js';
 import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 import {
@@ -65,47 +65,38 @@ router.get('/health', (_req: Request, res: Response) => {
 
 /**
  * GET /health/db
- * Readiness check that actually exercises the DB pool: acquires a connection
- * and runs SELECT 1 with a tight timeout. Returns 503 if the pool is exhausted
- * or the DB is unreachable — this is what surfaces the 2026-06-09 incident
- * (when /health stayed green but every DB endpoint hung).
+ * Readiness check that actually exercises the DB pool with a rollback-only
+ * WRITE probe. A plain SELECT 1 was not enough: during INC-2026-07-29 the pool
+ * handed out connections contaminated with `default_transaction_read_only=on`,
+ * so reads passed while every write failed with SQLSTATE 25006 and readiness
+ * stayed green. Returns 503 if the pool is exhausted, unreachable, or read-only.
  */
 router.get('/health/db', async (_req: Request, res: Response) => {
   const started = Date.now();
-  try {
-    // Run the probe inside a transaction with a 2s SET LOCAL statement_timeout so
-    // Postgres ITSELF aborts a hung probe (no orphaned query holding a slot —
-    // unlike a Promise.race that only abandons the wait). 5s overall ceiling as
-    // a backstop for the connection-acquire phase.
-    await withStatementTimeout(async (tx) => {
-      await tx.unsafe('SELECT 1');
-    }, 2000);
-    res.json({
-      ok: true,
-      durationMs: Date.now() - started,
-      pool: dbPoolStats(),
-      authAdmission: authAdmissionStats(),
-      socketDbTasks: socketDbTaskLimiter.stats(),
-      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
-      sockets: socketRuntimeTracker.stats(),
-      rankedMatchmaking: rankedMatchmakingRuntimeTracker.stats(),
-      runtime: runtimeStats(),
-    });
-  } catch (error) {
-    const stats = dbPoolStats();
-    logger.error({ error, durationMs: Date.now() - started, pool: stats }, 'health/db probe failed');
-    res.status(503).json({
-      ok: false,
-      durationMs: Date.now() - started,
-      pool: stats,
-      authAdmission: authAdmissionStats(),
-      socketDbTasks: socketDbTaskLimiter.stats(),
-      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
-      sockets: socketRuntimeTracker.stats(),
-      rankedMatchmaking: rankedMatchmakingRuntimeTracker.stats(),
-      runtime: runtimeStats(),
-    });
+  const writable = await probeDbWritable(2_000);
+  const breaker = readOnlyDbBreaker.snapshot();
+  const body = {
+    ok: writable && !breaker.degraded,
+    writable,
+    dbOutageBreaker: breaker,
+    durationMs: Date.now() - started,
+    pool: dbPoolStats(),
+    authAdmission: authAdmissionStats(),
+    socketDbTasks: socketDbTaskLimiter.stats(),
+    postConnectDbTasks: postConnectDbTaskLimiter.stats(),
+    sockets: socketRuntimeTracker.stats(),
+    rankedMatchmaking: rankedMatchmakingRuntimeTracker.stats(),
+    runtime: runtimeStats(),
+  };
+  if (body.ok) {
+    res.json(body);
+    return;
   }
+  logger.error(
+    { writable, breaker, durationMs: body.durationMs, pool: body.pool },
+    'health/db write probe failed'
+  );
+  res.status(503).json(body);
 });
 
 export const healthRoutes = router;

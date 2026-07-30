@@ -70,6 +70,15 @@ export interface EligibleBotRow extends SyntheticPlayerProfileRow {
   country: string | null;
 }
 
+/** A roster bot the rename worker may consider this tick. */
+export interface RenameCandidateRow {
+  user_id: string;
+  schedule: unknown;
+  rename_propensity: number;
+  personality_seed: string | number;
+  nickname: string | null;
+}
+
 export const syntheticBotsRepo = {
   /**
    * Acquire a reservation for one roster bot. INSERT ... ON CONFLICT DO NOTHING
@@ -479,6 +488,134 @@ export const syntheticBotsRepo = {
             SELECT 1 FROM synthetic_bot_reservations r WHERE r.bot_user_id = p.user_id
           )
       `;
+    });
+  },
+
+  /**
+   * Roster bots that could plausibly rename right now, for the rename worker.
+   *
+   * HARD filters in SQL:
+   *   - persistent + active (a retired/resting bot does not fiddle with its
+   *     handle; a non-persistent AI has no public identity to evolve)
+   *   - rename_propensity > 0 — the per-bot lifetime propensity assigned at
+   *     generation, which is what makes only ~10-15% of the roster ever rename
+   *   - NOT currently reserved — a rename must never land mid-match, where the
+   *     opponent would watch their rival's name change between questions
+   *   - a non-empty current nickname to evolve from
+   *
+   * The 2-free/30-day quota is NOT filtered here: it is enforced authoritatively
+   * inside `changeNicknameInTx`, and duplicating it as a scan predicate would
+   * let the two drift apart. Bots that are out of quota simply come back gated.
+   *
+   * A MINIMUM RENAME INTERVAL is filtered here, and it is load-bearing for
+   * multi-replica safety. Every replica runs this worker, and the per-tick draw
+   * is hash-deterministic — so on a firing hour EVERY replica draws true for the
+   * same bot and would each call changeNicknameInTx. While the bot still has
+   * free allowance the SQL quota gate accepts all of them, producing several
+   * nickname_history rows minutes apart: both a wasted allowance and a visible
+   * tell (no human renames three times in one hour). Excluding any bot that
+   * already renamed recently collapses that to at most one rename per window,
+   * whatever the replica count. `changed_by = 'user'` matches the rows this
+   * worker writes and the ones a human write would produce.
+   */
+  async listRenameCandidates(limit = 1000): Promise<RenameCandidateRow[]> {
+    return sql<RenameCandidateRow[]>`
+      SELECT
+        p.user_id,
+        p.schedule,
+        p.rename_propensity,
+        p.personality_seed,
+        u.nickname
+      FROM synthetic_player_profiles p
+      JOIN users u ON u.id = p.user_id
+      WHERE p.status = 'active'
+        AND u.ai_kind = 'persistent'
+        AND p.rename_propensity > 0
+        AND u.nickname IS NOT NULL
+        AND length(btrim(u.nickname)) > 0
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM synthetic_bot_reservations r WHERE r.bot_user_id = p.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM nickname_history nh
+          WHERE nh.user_id = p.user_id
+            AND nh.changed_at > NOW() - INTERVAL '30 days'
+        )
+      LIMIT ${limit}
+    `;
+  },
+
+  /**
+   * Atomically rename a roster bot, or refuse.
+   *
+   * WHY THIS EXISTS RATHER THAN A CHECK FOLLOWED BY changeNicknameInTx: the
+   * candidate scan's predicates are a snapshot taken at the top of the tick,
+   * and the write lands seconds later after the name-generation round trips. A
+   * separate re-check before the write only NARROWS that window — two replicas
+   * can both pass the check before either writes (duplicate counted history), or
+   * a reservation can be acquired in between (rename lands mid-match, changing
+   * the name under a live opponent).
+   *
+   * So the preconditions and the write share ONE transaction, with the users row
+   * locked FIRST — the same lock changeNicknameInTx takes, which is what
+   * serializes concurrent renames of this bot across replicas. Once the lock is
+   * held, the two NOT EXISTS checks are evaluated against a state no one else
+   * can be mutating, and the loser of a race sees the winner's committed
+   * nickname_history row and backs off.
+   *
+   * The human quota gate is re-implemented here identically to
+   * users.repo.changeNicknameInTx (counted rows < FREE, else 30-day cooldown) so
+   * a bot faces exactly the allowance a human faces, and the history row it
+   * writes is byte-identical: changed_by='user', counted=true,
+   * identity_derived=false.
+   *
+   * Returns 'renamed' | 'raced' | 'quota_gated'.
+   */
+  async renameBotAtomically(params: {
+    botUserId: string;
+    oldNickname: string | null;
+    newNickname: string;
+    freeChanges: number;
+    cooldownDays: number;
+  }): Promise<'renamed' | 'raced' | 'quota_gated'> {
+    const { botUserId, oldNickname, newNickname, freeChanges, cooldownDays } = params;
+    return sql.begin(async (tx: TransactionSql) => {
+      // Same lock, taken first, as the human rename path — this is what makes
+      // the checks below race-free against another replica's rename.
+      await tx.unsafe(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [botUserId]);
+
+      const [guard] = await tx.unsafe<{ eligible: boolean }[]>(
+        `SELECT NOT EXISTS (
+           SELECT 1 FROM synthetic_bot_reservations r WHERE r.bot_user_id = $1
+         ) AND NOT EXISTS (
+           SELECT 1 FROM nickname_history nh
+           WHERE nh.user_id = $1
+             AND nh.changed_at > NOW() - ($2::int * INTERVAL '1 day')
+         ) AS eligible`,
+        [botUserId, cooldownDays]
+      );
+      if (guard?.eligible !== true) return 'raced';
+
+      const gated = await tx.unsafe<{ id: string }[]>(
+        `INSERT INTO nickname_history
+           (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
+         SELECT $1, $2, $3, 'user', true, false
+         WHERE (SELECT count(*) FROM nickname_history WHERE user_id = $1 AND counted) < $4
+            OR (SELECT max(changed_at) FROM nickname_history WHERE user_id = $1 AND counted)
+               <= now() - ($5::int * INTERVAL '1 day')
+         RETURNING id`,
+        [botUserId, oldNickname, newNickname, freeChanges, cooldownDays]
+      );
+      if (gated.length === 0) return 'quota_gated';
+
+      await tx.unsafe(`UPDATE users SET nickname = $2, updated_at = NOW() WHERE id = $1`, [
+        botUserId,
+        newNickname,
+      ]);
+      return 'renamed';
     });
   },
 

@@ -14,6 +14,11 @@ import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
 import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
+import {
+  startBotChallengeResponder,
+  stopBotChallengeResponder,
+} from './modules/lobbies/bot-challenge-responder.service.js';
+import { startBotRenameWorker, stopBotRenameWorker } from './modules/bots/bot-rename.service.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -29,6 +34,9 @@ const server = httpServer.listen(config.PORT, () => {
   );
 });
 startAiFriendResponder();
+// Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).
+startBotChallengeResponder();
+startBotRenameWorker();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -66,7 +74,11 @@ const shutdown = async (signal: string) => {
   // Stop responder ticks immediately (server.close waits for open connections,
   // during which the interval could still fire) and drain the in-flight tick
   // before the DB pool closes so a mid-tick accept never hits a closing pool.
-  const responderStopped = stopAiFriendResponder().catch((error) => {
+  const responderStopped = Promise.all([
+    stopAiFriendResponder(),
+    stopBotChallengeResponder(),
+    stopBotRenameWorker(),
+  ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });
   io.close();

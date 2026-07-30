@@ -10,6 +10,13 @@
  */
 
 import { sql } from '../../db/index.js';
+import { MAX_GOVERNOR_ADJUSTMENT } from './governor/governor-state-machine.js';
+
+/** Clamp a stored governor offset into its contractual bounds; NaN/null -> 0. */
+function boundGovernorAdjustment(value: number | null): number {
+  if (value == null || !Number.isFinite(value)) return 0;
+  return Math.min(MAX_GOVERNOR_ADJUSTMENT, Math.max(-MAX_GOVERNOR_ADJUSTMENT, value));
+}
 
 export interface SyntheticSkillInputs {
   baseSkill: number;
@@ -42,7 +49,13 @@ export const syntheticProfileRepo = {
     if (!row) return null;
     return {
       baseSkill: row.base_skill,
-      governorAdjustment: row.governor_adjustment,
+      // Defence in depth (PR9): the governor writer already bounds this, but the
+      // column is a plain `real` that a migration, a CMS tool or a manual UPDATE
+      // could put out of range. Re-bound on READ so no stored value can widen
+      // the offset beyond the state machine's contract. (The hard clamps in
+      // persistent-bot-gameplay still apply after this either way — this only
+      // keeps the offset itself honest.)
+      governorAdjustment: boundGovernorAdjustment(row.governor_adjustment),
       categoryAffinities: toAffinities(row.category_affinities),
     };
   },

@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-27T20:14:41.937Z",
+  "source": {
+    "batchId": "faa0bedc-8b48-4b8b-81d8-b86bae6ccc62",
+    "seasonNumber": 1,
+    "batchCompletedAt": "2026-07-20T21:27:36.798Z",
+    "isSmokeRun": false
+  },
+  "thetaAnchoring": {
+    "convention": "mean-zero-over-fitted-s1-cohort",
+    "cohortSize": 1078
+  },
+  "fCurve": [
+    {
+      "rp": 315,
+      "skill": -0.9106349171889523
+    },
+    {
+      "rp": 425,
+      "skill": -0.7147676385781996
+    },
+    {
+      "rp": 671,
+      "skill": -0.42933504250258797
+    },
+    {
+      "rp": 889,
+      "skill": -0.2027661414773082
+    },
+    {
+      "rp": 1008,
+      "skill": -0.0770593698469709
+    },
+    {
+      "rp": 1196,
+      "skill": 0.08536054788889436
+    },
+    {
+      "rp": 1739,
+      "skill": 0.3193399958678555
+    },
+    {
+      "rp": 4015,
+      "skill": 0.816022440140759
+    },
+    {
+      "rp": 8983,
+      "skill": 1.2060230550706017
+    }
+  ],
+  "difficultyLink": {
+    "intercept": 0.4322176739072116,
+    "slope": -1.4784173752434977,
+    "holdoutR2": 0.8741358117133428,
+    "holdoutRmse": 0.47293030121213064,
+    "nQuestions": 6249
+  },
+  "ceiling": {
+    "topCohortSize": 10,
+    "topAggregateAccuracyHoldout": 0.9030612244897959,
+    "topAggregateAccuracyInSample": 0.9108910891089109,
+    "marginPp": 4,
+    "ceilingAccuracy": 0.8630612244897958,
+    "speedFloor": [
+      {
+        "percentile": 0.1,
+        "timeMs": 469
+      },
+      {
+        "percentile": 0.25,
+        "timeMs": 813
+      },
+      {
+        "percentile": 0.5,
+        "timeMs": 1184
+      }
+    ],
+    "topMedianTimeMs": 1184,
+    "topLogTimeSigma": 0.7190141162873863
+  },
+  "clamps": {
+    "finalProbCap": 0.93,
+    "skillCap": 4,
+    "minAnswerTimeMs": 600
+  },
+  "validation": {
+    "fitConverged": true,
+    "fitIters": 128,
+    "finalUpdateNorm": 0.00009812524956713523,
+    "holdoutAuc": 0.8080864991220417
+  }
+}

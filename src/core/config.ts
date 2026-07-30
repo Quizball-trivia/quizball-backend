@@ -62,6 +62,17 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Persistent-bot live selection kill switch. Ships DISABLED (PR7). When OFF
+  // the ranked AI-fallback path is byte-identical to today: an ephemeral bot is
+  // created per match, no reservation row is ever touched. When ON, an eligible
+  // roster bot is reserved and used where one exists; an empty roster or an
+  // exhausted eligibility ladder always falls back to the ephemeral path, so
+  // matchmaking never fails. Read at selection time (config reflects the
+  // deployed env — flipping it is an env change, like every other flag here).
+  PERSISTENT_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

@@ -2538,6 +2538,7 @@ export type Database = {
         Row: {
           acquired_at: string
           bot_user_id: string
+          committed_at: string | null
           expires_at: string
           fence: number
           heartbeat_at: string
@@ -2548,6 +2549,7 @@ export type Database = {
         Insert: {
           acquired_at?: string
           bot_user_id: string
+          committed_at?: string | null
           expires_at: string
           fence?: number
           heartbeat_at?: string
@@ -2558,6 +2560,7 @@ export type Database = {
         Update: {
           acquired_at?: string
           bot_user_id?: string
+          committed_at?: string | null
           expires_at?: string
           fence?: number
           heartbeat_at?: string

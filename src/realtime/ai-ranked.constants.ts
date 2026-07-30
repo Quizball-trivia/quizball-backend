@@ -258,6 +258,36 @@ export function generateRankedAiGeo(playerCountryCode?: string | null): { city: 
 }
 
 /**
+ * Geo payload for a PERSISTENT roster bot from its stored profile (PR7).
+ *
+ * Persistent bots carry a stable city/country/coords in
+ * synthetic_player_profiles (unlike ephemeral bots, which sample AI_GEO_POOL per
+ * match). We surface those real values; the flag + full country name come from
+ * AI_GEO_POOL when the countryCode matches (its flags are curated), otherwise we
+ * fall back to the raw country string and an empty flag. Any missing coord falls
+ * back to a pool entry for the country so the map pin still renders.
+ */
+export function buildPersistentBotGeo(profile: {
+  country: string | null;
+  home_city: string | null;
+  home_lat: number | null;
+  home_lng: number | null;
+}): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+  const countryCode = normalizeCountryCode(profile.country) ?? '';
+  const poolMatch = countryCode
+    ? AI_GEO_POOL.find((g) => g.countryCode === countryCode)
+    : undefined;
+  return {
+    city: profile.home_city ?? poolMatch?.city ?? '',
+    country: poolMatch?.country ?? profile.country ?? countryCode,
+    countryCode,
+    flag: poolMatch?.flag ?? '',
+    lat: profile.home_lat ?? poolMatch?.lat ?? 0,
+    lon: profile.home_lng ?? poolMatch?.lon ?? 0,
+  };
+}
+
+/**
  * Generate a random AI profile (username + avatar URL).
  * Uses cached Dicebear URLs without validation.
  */

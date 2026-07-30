@@ -5,6 +5,7 @@ import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { deleteMatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import {
@@ -37,6 +38,9 @@ function staleSweepLockKey(matchId: string): string {
 
 /** Best-effort cleanup of the per-match Redis keys a normal resolution would clear. */
 async function cleanupMatchRedisKeys(matchId: string, userIds: string[]): Promise<void> {
+  // Terminal release of any persistent-bot reservation (stale-sweep + boot-sweep
+  // direct-abandon path; forfeit-resolved matches release at the finalizer).
+  await reservationService.releaseIfSettled(matchId, 'stale_sweeper');
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
   const keys = [

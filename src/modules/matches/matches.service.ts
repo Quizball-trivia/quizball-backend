@@ -15,6 +15,10 @@ import type {
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
 import { rankedService } from '../ranked/ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
+import { isPersistentBot } from '../users/ai-classification.js';
+import { reservationService } from '../synthetic-bots/reservation.service.js';
+import { syntheticBotsRepo } from '../synthetic-bots/synthetic-bots.repo.js';
+import { syntheticBotSelectionService } from '../synthetic-bots/synthetic-bot-selection.service.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -599,6 +603,10 @@ export const matchesService = {
     // For ranked AI matches, store a stable AI context so matchmaking, gameplay and settlement
     // all use the same synthetic opponent RP and difficulty profile.
     let rankedContext: RankedLobbyContext | null = null;
+    // The persistent roster bot to transfer its reservation onto this match
+    // (atomically with creation). null for ephemeral / human-vs-human.
+    let persistentBotUserId: string | null = null;
+    let persistentMatchHumanId: string | null = null;
     if (params.mode === 'ranked') {
       const [seat1, seat2] = playerIds;
       const [user1, user2] = await Promise.all([
@@ -613,11 +621,48 @@ export const matchesService = {
         else if (user2 && !user2.is_ai) humanUserId = seat2;
       }
 
+      const aiUser = user1?.is_ai ? user1 : user2?.is_ai ? user2 : null;
+      const aiSeatId = user1?.is_ai ? seat1 : user2?.is_ai ? seat2 : null;
+      // Require hasAiOpponent (XOR: exactly one AI) AND a resolved human — so ONLY
+      // a genuine human-vs-persistent-bot match enters the persistent branch. A
+      // bot-vs-bot pairing (both is_ai) would XOR to false → excluded here. (Ranked
+      // bot-vs-bot does not exist in prod: burn-in uses its own writer, not this
+      // path — this is a defensive guard so a stray bot-vs-bot could never try to
+      // transfer a single reservation onto both seats.)
+      const persistentOpponent =
+        hasAiOpponent && humanUserId != null && aiUser != null && aiSeatId != null && isPersistentBot(aiUser);
+
       if (hasAiOpponent && !humanUserId) {
         logger.warn(
           { lobbyId: params.lobbyId, seat1, seat2 },
           'Could not determine human player for ranked AI context'
         );
+      } else if (persistentOpponent && aiSeatId) {
+        // Persistent bot: NO aiAnchorRp (settlement + payloads read the bot's
+        // real profile, PR3). Difficulty is the temporary bridge from the bot's
+        // own RP (§1.7) until PR8. Placement is derived per-side at settlement,
+        // never pinned here.
+        //
+        // ANY failure here ABORTS creation (rethrow) — we must NOT silently drop
+        // the persistent branch and create a match whose reservation is never
+        // transferred (Sol P1-D). The lobby retains the bot and the caller's
+        // retry re-enters this path.
+        try {
+          const botProfile = await rankedService.ensureProfile(aiSeatId);
+          rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
+          persistentBotUserId = aiSeatId;
+          persistentMatchHumanId = humanUserId;
+          logger.info(
+            { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, rankedContext },
+            'Built persistent-bot ranked context for match'
+          );
+        } catch (err) {
+          logger.error(
+            { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
+            'Failed to load persistent-bot ranked profile; aborting match creation (will retry with the same bot)'
+          );
+          throw err;
+        }
       } else if (humanUserId) {
         try {
           const profile = await rankedService.ensureProfile(humanUserId);
@@ -643,24 +688,88 @@ export const matchesService = {
         ? createInitialPartyQuizState(totalQuestions)
         : createInitialPossessionState(params.variant === 'ranked_sim' ? 'ranked_sim' : 'friendly_possession');
 
-    const match = await matchesRepo.createMatch({
-      lobbyId: params.lobbyId,
-      mode: params.mode,
-      categoryAId: params.categoryAId,
-      categoryBId: params.categoryBId,
-      totalQuestions,
-      statePayload,
-      rankedContext,
-      isDev: params.isDev,
-    });
+    // Persistent-bot path commits the match row, its players, AND the
+    // reservation's match_id in ONE transaction so a match can never exist
+    // without its reservation being handed off (and vice versa). The ephemeral
+    // path keeps the exact two-statement sequence it had before (flag-off
+    // inertness: reservationService.transferInTx is a no-op when the flag is off
+    // or no reservation exists, so this branch is byte-equivalent then).
+    const match = persistentBotUserId
+      ? await sql.begin(async (tx) => {
+          // Take the SAME per-lobby advisory lock the draft activation + abort
+          // take, as the FIRST statement — so match creation and a concurrent
+          // reservation abort have a TOTAL ORDER on the lobby. This closes the
+          // interleaving where an abort's EXISTS(active match) sees none, this tx
+          // then commits the match + transfer, and the abort still tears down the
+          // just-created live match's lobby/members (nulling matches.lobby_id).
+          // With both paths taking the lobby advisory lock FIRST (before any row
+          // lock), the ordering is consistent → no split state and no deadlock.
+          await syntheticBotsRepo.takeLobbyAdvisoryLockTx(tx, params.lobbyId);
+          const created = await matchesRepo.createMatch({
+            lobbyId: params.lobbyId,
+            mode: params.mode,
+            categoryAId: params.categoryAId,
+            categoryBId: params.categoryBId,
+            totalQuestions,
+            statePayload,
+            rankedContext,
+            isDev: params.isDev,
+          }, tx);
+          await matchPlayersRepo.insertMatchPlayers(
+            created.id,
+            playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
+            tx,
+          );
+          const transferred = await reservationService.transferInTx(tx, {
+            botUserId: persistentBotUserId!,
+            lobbyId: params.lobbyId,
+            matchId: created.id,
+          });
+          if (!transferred) {
+            // The reservation could not be handed off (it was released/re-keyed
+            // out from under us, or the lobby no longer owns it). We must NOT
+            // commit a persistent-bot match without its reservation — throw to
+            // ROLL BACK the whole tx (match + players). The lobby retains the bot
+            // and the caller's retry re-enters selection/creation (Sol P1-D).
+            throw new AppError(
+              'Persistent-bot reservation transfer failed; aborting match creation',
+              409,
+              ErrorCode.CONFLICT,
+            );
+          }
+          // Bump the bot's Georgia-day counter + session timestamp INSIDE the
+          // same tx — exactly-once per match by construction (the transfer above
+          // is proven to have happened), never lost to a post-commit crash.
+          await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, persistentBotUserId!);
+          return created;
+        })
+      : await matchesRepo.createMatch({
+          lobbyId: params.lobbyId,
+          mode: params.mode,
+          categoryAId: params.categoryAId,
+          categoryBId: params.categoryBId,
+          totalQuestions,
+          statePayload,
+          rankedContext,
+          isDev: params.isDev,
+        });
 
-    await matchPlayersRepo.insertMatchPlayers(
-      match.id,
-      playerIds.map((userId, index) => ({
-        userId,
-        seat: index + 1,
-      }))
-    );
+    if (!persistentBotUserId) {
+      await matchPlayersRepo.insertMatchPlayers(
+        match.id,
+        playerIds.map((userId, index) => ({
+          userId,
+          seat: index + 1,
+        }))
+      );
+    } else if (persistentMatchHumanId) {
+      // The Georgia-day counter + session timestamp were bumped inside the
+      // creation tx above. Recording the human's recent opponent is a Redis-only
+      // LRU (not a durable counter), so it stays best-effort after commit.
+      void syntheticBotSelectionService
+        .recordRecentlyFaced(persistentMatchHumanId, persistentBotUserId)
+        .catch(() => undefined);
+    }
 
     if (params.variant === 'friendly_party_quiz') {
       try {

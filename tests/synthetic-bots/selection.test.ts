@@ -34,6 +34,20 @@ vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => redis,
 }));
+// Selection reads the PR10 live-tuning overrides. Unmocked this is a real DB
+// read, which makes a PURE-UNIT ladder test depend on whatever the shared test
+// database happens to hold — a parallel suite writing an activityScale override
+// would flip the operator cap on and fail this test nondeterministically. Pin
+// the untuned defaults so the ladder assertions stay hermetic.
+vi.mock('../../src/modules/bots/tuning/tuning-config.service.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../src/modules/bots/tuning/tuning-config.service.js')
+  >('../../src/modules/bots/tuning/tuning-config.service.js');
+  return {
+    ...actual,
+    loadBotTuning: vi.fn().mockResolvedValue(actual.DEFAULT_RESOLVED_TUNING),
+  };
+});
 
 const { syntheticBotSelectionService } = await import(
   '../../src/modules/synthetic-bots/synthetic-bot-selection.service.js'

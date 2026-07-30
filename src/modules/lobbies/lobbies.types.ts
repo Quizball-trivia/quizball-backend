@@ -30,6 +30,13 @@ export interface RankedLobbyContext {
 export interface PersistentBotModelPin {
   /** bot_model_params.version that was active at match creation (audit + pin). */
   paramsVersion: number | null;
+  /**
+   * bot_tuning_overrides.version in force at match creation (PR10). The fitted
+   * params above are only half the provenance once operator knobs are live —
+   * without this, a past decision cannot be reproduced because the overrides
+   * singleton has since moved on. Audit-only: nothing reads it back at runtime.
+   */
+  tuningVersion?: number | null;
   /** Full frozen params copy (immutable for the life of the match). */
   params: unknown;
   /** The bot's user id (redundant with match_players but explicit for the model). */

@@ -18,6 +18,7 @@ import { logger } from '../../../core/logger.js';
 import { config } from '../../../core/config.js';
 import { getOrLoadJson } from '../../../core/json-cache.js';
 import { governorRepo } from './governor.repo.js';
+import { loadBotTuning } from '../tuning/tuning-config.service.js';
 import { stepGovernor, type GovernorDecision } from './governor-state-machine.js';
 
 /**
@@ -93,13 +94,17 @@ export async function recordSettledMatch(
       return null;
     }
 
-    const humanTop10Rp = await loadHumanTop10Rp();
+    // Resolve the live operator config ONCE per settlement and pass it into the
+    // pure state machine (PR10). A lookup failure resolves to the frozen
+    // defaults inside loadBotTuning, so this never fails the settlement.
+    const [humanTop10Rp, tuning] = await Promise.all([loadHumanTop10Rp(), loadBotTuning()]);
     const decision = stepGovernor(state, {
       botRp: input.botRp,
       humanTop10Rp,
       won: input.won,
       now: input.now ?? new Date(),
       enabled: governorEnabled(),
+      config: tuning.governor,
     });
 
     const saved = await governorRepo.saveState(

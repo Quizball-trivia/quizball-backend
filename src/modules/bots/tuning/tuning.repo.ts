@@ -8,8 +8,16 @@
  *   - the emergency roster-wide offset zeroing
  */
 
-import { sql } from '../../../db/index.js';
+import { sql, type TransactionSql } from '../../../db/index.js';
 import { withSpan } from '../../../core/tracing.js';
+
+/**
+ * postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+ * tagged-template call signatures the runtime object still supports
+ * (codebase precedent: ranked.repo.ts). `exec(tx)` recovers them so a repo
+ * method can run on either the pool or a caller's transaction.
+ */
+const exec = (tx?: TransactionSql): typeof sql => (tx as unknown as typeof sql) ?? sql;
 
 /**
  * Raw singleton row. Every knob is nullable: NULL means "no override, use the
@@ -94,7 +102,39 @@ export interface RosterOverviewRow {
   governorAdjustment: number;
   matchesToday: number;
   dailyCap: number;
+  /** Hidden ability offset; surfaced so the CMS edit modal can prefill it. */
+  baseSkill: number;
   lastSelectedAt: string | null;
+}
+
+/** Current values of the admin-editable fields for one roster bot. */
+export interface EditableBotState {
+  botUserId: string;
+  nickname: string | null;
+  rp: number | null;
+  baseSkill: number;
+  dailyCap: number;
+}
+
+/** Audit-log field names; mirrors the CHECK in 20260729140000. */
+export type BotAdminEditField = 'nickname' | 'rp' | 'base_skill' | 'daily_cap';
+
+/** One before->after audit entry, pre-insert. */
+export interface BotAdminEditEntry {
+  botUserId: string;
+  field: BotAdminEditField;
+  oldValue: string | null;
+  newValue: string;
+}
+
+/** One audit row as read back for the CMS. */
+export interface BotAdminEditRow {
+  field: string;
+  oldValue: string | null;
+  newValue: string;
+  note: string;
+  actor: string;
+  createdAt: string;
 }
 
 export interface RosterOverviewPage {
@@ -207,6 +247,7 @@ export const tuningRepo = {
         governor_adjustment: number;
         matches_today: number;
         daily_cap: number;
+        base_skill: number;
         last_selected_at: string | null;
         total: number;
       }>>`
@@ -222,6 +263,7 @@ export const tuningRepo = {
           p.governor_adjustment AS governor_adjustment,
           p.matches_today      AS matches_today,
           p.daily_cap          AS daily_cap,
+          p.base_skill         AS base_skill,
           p.last_selected_at   AS last_selected_at,
           COUNT(*) OVER ()::int AS total
         FROM synthetic_player_profiles p
@@ -245,6 +287,7 @@ export const tuningRepo = {
           governorAdjustment: Number(row.governor_adjustment) || 0,
           matchesToday: Number(row.matches_today) || 0,
           dailyCap: Number(row.daily_cap) || 0,
+          baseSkill: Number(row.base_skill),
           lastSelectedAt: row.last_selected_at,
         })),
         total: rows.length > 0 ? Number(rows[0].total) : 0,
@@ -267,6 +310,137 @@ export const tuningRepo = {
       RETURNING user_id, selection_frozen
     `;
     return row ? { botUserId: row.user_id, selectionFrozen: row.selection_frozen } : null;
+  },
+
+  /**
+   * Current values of every admin-editable field, for the before->after audit
+   * and the rail checks. Returns null when the id is not a persistent-bot
+   * profile, so the controller can 404 instead of editing an arbitrary user.
+   *
+   * The `ai_kind = 'persistent'` join predicate is the SECURITY boundary here:
+   * without it a valid uuid for a HUMAN would flow into the nickname/RP writers
+   * below and let an ops token rename real players.
+   *
+   * Pass `tx` to read inside the PATCH transaction. `lock` additionally takes
+   * FOR UPDATE on the users + profile + ranked rows, which is what makes an
+   * rpAdjust safe: the before-value is then read under a lock held to commit,
+   * so two concurrent +100 adjustments serialize (1000->1100, 1100->1200)
+   * instead of both recording 1000->1100 off the same stale snapshot.
+   *
+   * Lock order is users -> ranked_profiles -> synthetic_player_profiles, the
+   * same order the settlement path takes (ranked.repo.ts), so a PATCH racing a
+   * match settlement on the same bot cannot deadlock.
+   */
+  async getEditableBot(
+    botUserId: string,
+    opts: { tx?: TransactionSql; lock?: boolean } = {},
+  ): Promise<EditableBotState | null> {
+    const db = exec(opts.tx);
+    if (opts.lock) {
+      if (!opts.tx) throw new Error('getEditableBot: lock requires a transaction');
+      // Locked in separate statements, in the fixed order above: a single
+      // multi-table FOR UPDATE gives no ordering guarantee across the join.
+      const [owner] = await db<Array<{ id: string }>>`
+        SELECT u.id FROM users u
+        WHERE u.id = ${botUserId} AND u.ai_kind = 'persistent'
+        FOR UPDATE
+      `;
+      if (!owner) return null;
+      await db`SELECT user_id FROM ranked_profiles WHERE user_id = ${botUserId} FOR UPDATE`;
+      await db`SELECT user_id FROM synthetic_player_profiles WHERE user_id = ${botUserId} FOR UPDATE`;
+    }
+    const [row] = await db<Array<{
+      user_id: string;
+      nickname: string | null;
+      rp: number | null;
+      base_skill: number;
+      daily_cap: number;
+    }>>`
+      SELECT p.user_id, u.nickname, rp.rp, p.base_skill, p.daily_cap
+      FROM synthetic_player_profiles p
+      JOIN users u ON u.id = p.user_id
+      LEFT JOIN ranked_profiles rp ON rp.user_id = p.user_id
+      WHERE p.user_id = ${botUserId}
+        AND u.ai_kind = 'persistent'
+    `;
+    if (!row) return null;
+    return {
+      botUserId: row.user_id,
+      nickname: row.nickname,
+      rp: num(row.rp),
+      baseSkill: Number(row.base_skill),
+      dailyCap: Number(row.daily_cap),
+    };
+  },
+
+  /** Update the profile-local fields (base_skill / daily_cap) of one bot. */
+  async updateProfileFields(
+    botUserId: string,
+    fields: { baseSkill?: number; dailyCap?: number },
+    tx?: TransactionSql,
+  ): Promise<void> {
+    const db = exec(tx);
+    const assignments = [];
+    if (fields.baseSkill !== undefined) assignments.push(sql`base_skill = ${fields.baseSkill}`);
+    if (fields.dailyCap !== undefined) assignments.push(sql`daily_cap = ${fields.dailyCap}`);
+    if (assignments.length === 0) return;
+    await db`
+      UPDATE synthetic_player_profiles
+        SET ${assignments.flatMap((a, i) => (i === 0 ? [a] : [sql`, `, a]))},
+            updated_at = now()
+      WHERE user_id = ${botUserId}
+    `;
+  },
+
+  /**
+   * Append the audit rows for one PATCH. One row PER CHANGED FIELD, sharing a
+   * request_id, so before->after stays queryable per knob.
+   */
+  async recordAdminEdits(
+    entries: BotAdminEditEntry[],
+    requestId: string,
+    note: string,
+    tx?: TransactionSql,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    await exec(tx)`
+      INSERT INTO bot_admin_edits ${sql(
+        entries.map((entry) => ({
+          bot_user_id: entry.botUserId,
+          field: entry.field,
+          old_value: entry.oldValue,
+          new_value: entry.newValue,
+          request_id: requestId,
+          note,
+        })),
+      )}
+    `;
+  },
+
+  /** Recent admin edits for one bot, newest first (CMS history panel). */
+  async listAdminEdits(botUserId: string, limit = 20): Promise<BotAdminEditRow[]> {
+    const rows = await sql<Array<{
+      field: string;
+      old_value: string | null;
+      new_value: string;
+      note: string;
+      actor: string;
+      created_at: string;
+    }>>`
+      SELECT field, old_value, new_value, note, actor, created_at
+      FROM bot_admin_edits
+      WHERE bot_user_id = ${botUserId}
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => ({
+      field: row.field,
+      oldValue: row.old_value,
+      newValue: row.new_value,
+      note: row.note,
+      actor: row.actor,
+      createdAt: row.created_at,
+    }));
   },
 
   /**

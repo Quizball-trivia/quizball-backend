@@ -67,3 +67,6 @@ scripts/load/distributed/runtime/
 scripts/bot-burnin/out/
 scripts/bot-burnin/*.snapshot.json
 scripts/bot-burnin/*.receipt.json
+# Legacy fake-account cleanup (code only; reads DSN from env, dry-run default).
+!scripts/seed-cleanup/
+!scripts/seed-cleanup/**

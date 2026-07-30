@@ -17,6 +17,8 @@
     "roster:generate": "tsx scripts/persistent-bot-roster/generate.ts",
     "roster:create": "tsx scripts/persistent-bot-roster/create.ts",
     "roster:rollback": "tsx scripts/persistent-bot-roster/rollback.ts",
+    "seed:cleanup": "tsx scripts/seed-cleanup/index.ts",
+    "test:seed-cleanup": "vitest run tests/seed-cleanup",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:burnin": "vitest run --config vitest.burnin.config.ts",

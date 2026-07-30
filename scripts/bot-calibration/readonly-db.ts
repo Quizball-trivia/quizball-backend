@@ -72,7 +72,30 @@ export function openReadOnlyDb(options: { statementTimeoutMs?: number } = {}): R
   if (!dsn) {
     throw new Error(
       'CALIBRATION_DATABASE_URL is required (this script never uses DATABASE_URL). ' +
-        'Point it at a read-only pooler connection, e.g. the Supabase transaction pooler.',
+        'Point it at a read-only SESSION-mode connection (port 5432 or direct); ' +
+        'the transaction pooler (6543) is forbidden — see INC-2026-07-29.',
+    );
+  }
+
+  // INC-2026-07-29: a session-scoped default_transaction_read_only=on sent
+  // through the shared TRANSACTION pooler leaked onto app connections and froze
+  // production writes (25006) for 36 minutes. Session-scoped state is only safe
+  // where the server backend is dedicated to this client for the whole session
+  // (session pooler :5432 / direct) — so the transaction pooler is forbidden
+  // outright, and the session read-only default below is retained as the
+  // server-side guarantee for the raw `sql` escape hatch.
+  const port = (() => {
+    try {
+      return new URL(dsn).port || '5432';
+    } catch {
+      return '';
+    }
+  })();
+  if (port === '6543') {
+    throw new Error(
+      'CALIBRATION_DATABASE_URL points at the transaction pooler (:6543). ' +
+        'Refusing: session state on the transaction pooler leaks onto shared app ' +
+        'connections (INC-2026-07-29). Use the session pooler (:5432) or a direct connection.',
     );
   }
 
@@ -81,7 +104,9 @@ export function openReadOnlyDb(options: { statementTimeoutMs?: number } = {}): R
     max: 2,
     idle_timeout: 20,
     connection: {
-      // Belt-and-suspenders: mark the whole session read-only at the server too.
+      // Safe ONLY because :6543 is rejected above: on a session-mode/direct
+      // connection this state is confined to our dedicated server backend and
+      // dies with the connection. Never reachable via the transaction pooler.
       default_transaction_read_only: 'on',
       statement_timeout: String(timeoutMs),
     },

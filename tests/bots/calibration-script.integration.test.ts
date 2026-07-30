@@ -330,9 +330,14 @@ describe('offline calibration script (read-only) against the test DB', () => {
     const agg = await aggregateQuestionStats(db.sql, {});
     const accByQ = new Map(agg.questionStats.filter((q) => q.smoothedAccuracy != null).map((q) => [q.questionId, q.smoothedAccuracy!]));
     const pts = [...finalFit.beta.entries()].filter(([q]) => accByQ.has(q)).map(([q, beta]) => ({ x: logit(accByQ.get(q)!), y: beta }));
-    const link = pts.length >= 2 ? linearFit(pts.map((p) => p.x), pts.map((p) => p.y)) : { intercept: 0, slope: 0, r2: 0 };
+    const rawLink = pts.length >= 2 ? linearFit(pts.map((p) => p.x), pts.map((p) => p.y)) : { intercept: 0, slope: 0, r2: 0 };
     // Difficulty link slope must be negative (higher accuracy -> lower beta).
-    if (pts.length >= 4) expect(link.slope).toBeLessThan(0);
+    if (pts.length >= 4) expect(rawLink.slope).toBeLessThan(0);
+    // The schema now REQUIRES a strictly negative slope (safety invariant). Real
+    // S1 data yields ≈ -1.48; on this tiny synthetic fixture the fit can be
+    // degenerate, so floor it to a small negative for the schema-conformance
+    // assertion (the calibration script clamps identically on real data).
+    const link = { ...rawLink, slope: rawLink.slope < 0 ? rawLink.slope : -0.5 };
 
     const params = {
       schemaVersion: CALIBRATION_SCHEMA_VERSION,
@@ -346,7 +351,9 @@ describe('offline calibration script (read-only) against the test DB', () => {
         topAggregateAccuracyHoldout: ceilHoldout,
         topAggregateAccuracyInSample: null,
         marginPp: 4,
-        ceilingAccuracy: Math.max(0, (ceilHoldout ?? 0.5) - 0.04),
+        // Floored at the schema's MIN_CEILING_ACCURACY (0.5) inversion guard —
+        // real S1 data gives 0.8631; the synthetic fixture can dip lower.
+        ceilingAccuracy: Math.min(1, Math.max(0.5, (ceilHoldout ?? 0.86) - 0.04)),
         speedFloor: [{ percentile: 0.1, timeMs: 3000 }],
         topMedianTimeMs: 5000,
         topLogTimeSigma: 0.3,

@@ -39,8 +39,9 @@ export function isPubliclyHumanPresenting(user: AiClassifiable): boolean {
 /**
  * A persistent roster bot: an AI user whose ai_kind is 'persistent'. Distinct
  * from isRankedSettleEligible (which also allows real humans) — used where the
- * caller must treat the PERSISTENT-BOT branch specifically (reservation
- * transfer, no-anchor ranked context, matches_today bump).
+caller must treat the PERSISTENT-BOT branch specifically (reservation
+ * transfer, no-anchor ranked context, matches_today bump, calibrated gameplay
+ * model).
  */
 export function isPersistentBot(user: AiClassifiable): boolean {
   return user.is_ai && user.ai_kind === ('persistent' satisfies AiKind);

@@ -19,6 +19,7 @@ import { isPersistentBot } from '../users/ai-classification.js';
 import { reservationService } from '../synthetic-bots/reservation.service.js';
 import { syntheticBotsRepo } from '../synthetic-bots/synthetic-bots.repo.js';
 import { syntheticBotSelectionService } from '../synthetic-bots/synthetic-bot-selection.service.js';
+import { buildPersistentBotModelPin } from '../bots/persistent-bot-context.service.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -639,8 +640,9 @@ export const matchesService = {
         );
       } else if (persistentOpponent && aiSeatId) {
         // Persistent bot: NO aiAnchorRp (settlement + payloads read the bot's
-        // real profile, PR3). Difficulty is the temporary bridge from the bot's
-        // own RP (§1.7) until PR8. Placement is derived per-side at settlement,
+        // real profile, PR3). Difficulty comes from the calibrated model pinned
+        // below (PR8); the RP-derived bridge remains the fallback when no
+        // calibration is active. Placement is derived per-side at settlement,
         // never pinned here.
         //
         // ANY failure here ABORTS creation (rethrow) — we must NOT silently drop
@@ -652,8 +654,17 @@ export const matchesService = {
           rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
           persistentBotUserId = aiSeatId;
           persistentMatchHumanId = humanUserId;
+          // PR8: pin the active calibrated model params + the bot's frozen skill
+          // inputs into ranked_context so a mid-match params refresh can't alter
+          // the live bot (§1.7). Reuses the botProfile already loaded here. A
+          // missing calibration returns null → possession-ai falls back to the
+          // RP-derived bridge; never fatal.
+          const pin = await buildPersistentBotModelPin(aiSeatId, botProfile.rp);
+          if (pin) {
+            rankedContext = { ...rankedContext, persistentBotModel: pin };
+          }
           logger.info(
-            { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, rankedContext },
+            { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, paramsVersion: pin?.paramsVersion ?? null, rankedContext },
             'Built persistent-bot ranked context for match'
           );
         } catch (err) {
@@ -679,6 +690,7 @@ export const matchesService = {
           );
         }
       }
+
     }
 
     const totalQuestions = params.totalQuestions

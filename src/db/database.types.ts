@@ -1804,6 +1804,7 @@ export type Database = {
           question_id: string
           refreshed_at: string
           smoothed_accuracy: number | null
+          timing_samples: number | null
         }
         Insert: {
           answers_count?: number
@@ -1814,6 +1815,7 @@ export type Database = {
           question_id: string
           refreshed_at?: string
           smoothed_accuracy?: number | null
+          timing_samples?: number | null
         }
         Update: {
           answers_count?: number
@@ -1824,6 +1826,7 @@ export type Database = {
           question_id?: string
           refreshed_at?: string
           smoothed_accuracy?: number | null
+          timing_samples?: number | null
         }
         Relationships: [
           {
@@ -1845,6 +1848,7 @@ export type Database = {
           scope: string
           scope_key: string
           smoothed_accuracy: number | null
+          timing_samples: number | null
         }
         Insert: {
           answers_count?: number
@@ -1855,6 +1859,7 @@ export type Database = {
           scope: string
           scope_key: string
           smoothed_accuracy?: number | null
+          timing_samples?: number | null
         }
         Update: {
           answers_count?: number
@@ -1865,6 +1870,7 @@ export type Database = {
           scope?: string
           scope_key?: string
           smoothed_accuracy?: number | null
+          timing_samples?: number | null
         }
         Relationships: []
       }

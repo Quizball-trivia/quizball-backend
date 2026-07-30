@@ -13,6 +13,16 @@ bot-vs-bot history settled through the real Season-2026 RP formula.
   `parseBotModelParams` from `src/modules/bots/calibration/params-schema.ts`.
 - `DATABASE_URL` available via `.env.local` or `.env` (both are loaded, with
   `.env.local` taking precedence).
+
+  > **Trap — setting `DATABASE_URL` in code does not work, and fails silently.**
+  > ESM hoists every `import` above module-body statements, so `src/core/config.ts`
+  > (which runs `dotenv` against `.env`) is evaluated *before* any
+  > `process.env.DATABASE_URL = ...` written at the top of a script. The pool is
+  > built from `.env` — which is **staging** — while the script's own banner
+  > happily prints `localhost`. A scratch harness did exactly this on 2026-07-28
+  > and created bot rows on staging. Always pass the DSN on the command line
+  > (`DATABASE_URL='postgresql://…' npx tsx …`), and guard on
+  > `config.DATABASE_URL` (what the pool actually used), never on `process.env`.
 - At least 2 roster bots and at least one active category
   (`categories.is_active = true`); the engine throws otherwise.
 - `PERSISTENT_BOTS` flag must be OFF — burn-in is a pristine-state operation
@@ -129,18 +139,24 @@ and is stored in the durable marker for exact rollback recomputation.
 ## What it writes (execute mode)
 
 Per fixture, using the SAME production settlement math
-(`computeParticipantSettlement` from `season-rp-formula.ts`) and achievement
-evaluation, called directly inside the transaction with the fixture's
-backdated timestamp:
+(`computeParticipantSettlement` from `season-rp-formula.ts`), written as plain
+SQL directly inside the transaction with the fixture's backdated timestamp:
 
 - `matches` (one row, `mode='ranked'`, `is_dev=false`, backdated `started_at`/`ended_at`)
 - `match_players` (both bot seats, with points/goals from the simulation)
 - `ranked_rp_changes` + `ranked_profiles` (RP, tier, placement, streak)
 - `user_mode_match_stats` (ranked aggregation)
 - `user_xp_events` + `users.total_xp`
-- `user_achievements`
 
-It does **not** write coins, tickets, notifications, or analytics events.
+That list is exhaustive, and deliberately so. Burn-in invokes **no side-effect
+services**: no achievements, notifications, quests, streak rewards, coins,
+tickets or analytics. These fixtures are backdated synthetic history rather than
+gameplay that happened, so a service that treats match completion as a live
+event would manufacture unlocks for matches nobody played — and would also make
+the executed ladder drift from the plan the seed solver computed. If you wire a
+new post-match service into the live flow, do **not** add it here; the
+`writes ONLY the ledger tables` test in `tests/bot-burnin/writer.integration.test.ts`
+is there to fail if someone does.
 
 ## Also produced
 

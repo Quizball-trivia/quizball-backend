@@ -152,14 +152,13 @@ describe('writeFixtureInTx — direct transactional write', () => {
     expect(xp.count).toBe(2);
     expect(new Date(xp.created_at!).toISOString()).toBe(endedAt.toISOString());
 
-    // debut_match unlocks on the first completed match, backdated + bot-sourced.
-    const debut = await sql<{ unlocked_at: string | null; source_match_id: string | null }[]>`
-      SELECT unlocked_at, source_match_id FROM user_achievements WHERE user_id = ${a} AND achievement_id = 'debut_match'
+    // Burn-in writes NO achievements. These fixtures are backdated synthetic
+    // history, not gameplay, so no side-effect service may fire for them —
+    // otherwise a bot "unlocks" a debut for a match nobody played.
+    const debut = await sql<{ unlocked_at: string | null }[]>`
+      SELECT unlocked_at FROM user_achievements WHERE user_id = ${a} AND achievement_id = 'debut_match'
     `;
-    expect(debut.length).toBe(1);
-    expect(debut[0].unlocked_at).not.toBeNull();
-    expect(new Date(debut[0].unlocked_at!).toISOString()).toBe(endedAt.toISOString());
-    expect(debut[0].source_match_id).toBe(fixture.matchId);
+    expect(debut.length).toBe(0);
 
     const [aUser] = await sql<{ coins: number; total_xp: number }[]>`SELECT coins, total_xp FROM users WHERE id = ${a}`;
     expect(aUser.coins).toBe(0);
@@ -241,11 +240,11 @@ describe('writeFixtureInTx — direct transactional write', () => {
     expect(dProfX).toEqual(pProfX);
   });
 
-  it('STREAK achievement sees the SAME-TX just-written fixtures (P2-streak)', async ({ skip }) => {
+  it('STREAK accumulates across SAME-TX just-written fixtures, and NO achievements are written (P2-streak)', async ({ skip }) => {
     if (!dbAvailable) skip();
-    // A bot wins 5 fixtures in ONE transaction. The winning_streak achievement
-    // (target 5) can only unlock if the tx-aware streak helper reads THIS tx's
-    // current_win_streak (updated by the fixtures written moments earlier).
+    // A bot wins 5 fixtures in ONE transaction: each settlement must read the
+    // current_win_streak written by the fixtures moments earlier in the SAME tx,
+    // so the streak chains to 5 rather than resetting per fixture.
     const w = await seedBot(`w_streak_${Date.now()}`);
     const losers = await Promise.all(Array.from({ length: 5 }, (_, i) => seedBot(`w_streak_l${i}_${Date.now()}`)));
 
@@ -260,13 +259,51 @@ describe('writeFixtureInTx — direct transactional write', () => {
       }
     });
 
-    const [streak] = await sql<{ progress: number; unlocked_at: string | null }[]>`
-      SELECT progress, unlocked_at FROM user_achievements WHERE user_id = ${w} AND achievement_id = 'winning_streak'
-    `;
-    expect(streak).toBeDefined();
-    expect(streak.progress).toBe(5);
-    expect(streak.unlocked_at).not.toBeNull();
     const [prof] = await sql<{ current_win_streak: number }[]>`SELECT current_win_streak FROM ranked_profiles WHERE user_id = ${w}`;
     expect(prof.current_win_streak).toBe(5);
+
+    // Burn-in is SQL-only: no achievement rows for any participant.
+    const [{ c: achievements }] = await sql<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM user_achievements WHERE user_id = ANY(${[w, ...losers]}::uuid[])
+    `;
+    expect(achievements).toBe(0);
+  });
+
+  it('writes ONLY the ledger tables — no side-effect service rows', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    // The contract burn-in must hold: a fixture seeds ranked history and nothing
+    // else. Any newly wired side-effect service (achievements, notifications,
+    // quests, streak rewards) would show up as rows here and fail this test.
+    const a = await seedBot(`w_only_a_${Date.now()}`);
+    const b = await seedBot(`w_only_b_${Date.now()}`);
+
+    await sql.begin(async (tx) => {
+      for (let i = 0; i < 6; i++) {
+        await writeFixtureInTx(tx, makeFixture({
+          a, b, winner: i % 2 === 0 ? a : b,
+          startedAt: new Date(`2026-07-24T${String(6 + i).padStart(2, '0')}:00:00Z`),
+          endedAt: new Date(`2026-07-24T${String(6 + i).padStart(2, '0')}:05:00Z`),
+          isPlacement: false,
+        }));
+      }
+    });
+
+    const users = [a, b];
+    const [counts] = await sql<{ achievements: number; notifications: number }[]>`
+      SELECT
+        (SELECT COUNT(*)::int FROM user_achievements WHERE user_id = ANY(${users}::uuid[])) AS achievements,
+        (SELECT COUNT(*)::int FROM notifications WHERE user_id = ANY(${users}::uuid[])) AS notifications
+    `;
+    expect(counts.achievements).toBe(0);
+    expect(counts.notifications).toBe(0);
+
+    // The ledger itself is still fully written.
+    const [ledger] = await sql<{ mp: number; rp: number }[]>`
+      SELECT
+        (SELECT COUNT(*)::int FROM match_players WHERE user_id = ANY(${users}::uuid[])) AS mp,
+        (SELECT COUNT(*)::int FROM ranked_rp_changes WHERE user_id = ANY(${users}::uuid[])) AS rp
+    `;
+    expect(ledger.mp).toBe(12);
+    expect(ledger.rp).toBe(12);
   });
 });

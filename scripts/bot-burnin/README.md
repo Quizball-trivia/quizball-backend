@@ -77,6 +77,33 @@ it with `--execute` is refused, since a partial burn plus a global one-time
 marker would be incoherent. There is no `--snapshot-out` — nothing is
 snapshotted.
 
+**Arguments are validated strictly, before any planning or DB work.** An
+unknown flag, a flag missing its value, a `--flag=value` form, a repeated flag,
+or a non-numeric value for a numeric flag all exit non-zero and list the valid
+flags. Burn-in is one-time and marker-guarded, so a typo that silently reverted
+to a default (`--margin` for `--margin-rp`) would change the planned ladder
+while the operator believed they had overridden it.
+
+#### Writes are batched per chunk
+
+Each 250-fixture chunk commits in ~7 statements — one locked read of the
+chunk's ranked profiles, then one multi-row write per table — instead of ~7
+statements *per fixture*. Measured at full scale (1,000 bots / 5,927 fixtures /
+24 chunks): **41,489 → 168 statements, a 247x round-trip reduction**, 24.2s →
+4.2s on loopback. Over a WAN link to the Supabase pooler that is ~21 minutes of
+pure network time reduced to ~5 seconds, and it keeps each chunk transaction
+far below the pooler's 15s `idle_in_transaction_session_timeout` (slowest chunk
+measured locally: 281ms).
+
+Because `ranked_profiles` is read-modify-write per fixture (streak chaining and
+RP accumulation across a bot's many fixtures in one chunk), the batched writer
+folds each bot's sequence **in memory** — seeded from a live locked read at
+chunk start, so a resumed run picks up the RP/streak the committed prefix left
+— and writes one final row-state per bot. `tests/bot-burnin/writer-equivalence.integration.test.ts`
+is the merge gate: it replays one plan through both writers and asserts the
+final state is identical across every table, including a resume seam where a
+per-fixture prefix is finished by the batched writer.
+
 ### Rollback
 
 ```bash

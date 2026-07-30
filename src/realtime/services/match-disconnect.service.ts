@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
+import { isDbWriteOutage } from '../../db/readonly-breaker.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { appMetrics } from '../../core/metrics.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
@@ -1476,7 +1477,11 @@ export async function pauseMatchForDisconnectedPlayer(
   const episodeMarkerMs = alreadyDisconnected
     ? Number(await redis.get(matchDisconnectKey(matchId, userId))) || disconnectedAtMs
     : disconnectedAtMs;
-  const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
+  // INC-2026-07-29 preventive action #6: during a database write outage the
+  // drops we observe are OUR fault, not the player's. Freezing the counter
+  // keeps their reconnect budget intact so a broken pool can never spend it.
+  const dbWriteOutage = isDbWriteOutage();
+  const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent || dbWriteOutage;
   const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
     : await incrementDisconnectCount(matchId, userId);
@@ -1572,6 +1577,28 @@ export async function pauseMatchForDisconnectedPlayer(
   }
   if (variant === 'friendly_party_quiz' && autoResumeReplacementMatchUiSocketPresent) {
     await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
+  }
+
+  // A database write outage must never be settled as a player forfeit. The
+  // reconnect-limit path forfeits with `definiteForfeiterUserId`, which by
+  // design bypasses every presence guard — during INC-2026-07-29 that is how
+  // players who were still connected lost RP and tickets. Bail out before it.
+  if (disconnectCount > MAX_MATCH_DISCONNECTS && dbWriteOutage) {
+    logger.error(
+      {
+        matchId,
+        userId,
+        variant,
+        disconnectCount,
+        maxDisconnects: MAX_MATCH_DISCONNECTS,
+      },
+      'Reconnect-limit forfeit suppressed: database write outage in progress'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects,
+      finalized: false,
+    };
   }
 
   if (disconnectCount > MAX_MATCH_DISCONNECTS) {
@@ -1834,6 +1861,19 @@ export async function resolveExpiredGraceWindow(
     );
     return;
   }
+  // Never settle a grace expiry while the database cannot accept writes. The
+  // pause is almost certainly OUR outage rather than the player leaving, and a
+  // forfeit written now would be both unfair and only half-persisted. Returning
+  // leaves the grace + pause keys intact, so the match stays paused and a later
+  // expiry (once writes recover) resolves it normally.
+  if (isDbWriteOutage()) {
+    logger.error(
+      { matchId, disconnectedUserId },
+      'Disconnect grace expiry deferred: database write outage in progress'
+    );
+    return;
+  }
+
   // Hoisted so the finally can preserve the grace/pause keys when we defer for a
   // reconnect-pending player (the re-armed timer needs the grace window alive).
   let deferredForReconnect = false;

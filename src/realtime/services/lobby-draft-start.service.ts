@@ -4,6 +4,7 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
+import { isDbWriteOutage } from '../../db/readonly-breaker.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
@@ -86,6 +87,14 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
   await withSpan('lobby.start_draft', {
     'quizball.lobby_id': lobbyId,
   }, async (span) => {
+    // A draft started during a write outage cannot persist its questions or its
+    // match, so the lobby is left intact and the start is simply refused.
+    if (isDbWriteOutage()) {
+      span.setAttribute('quizball.db_write_outage', true);
+      logger.error({ lobbyId }, 'Draft start refused: database write outage in progress');
+      return;
+    }
+
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby) {
       span.setAttribute('quizball.lobby_found', false);

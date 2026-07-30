@@ -10,6 +10,7 @@ import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import type { LobbyRow } from '../../modules/lobbies/lobbies.types.js';
 import { DbOverloadedError } from '../../db/admission.js';
+import { isDbWriteOutage, DbWriteOutageError } from '../../db/readonly-breaker.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import type { RankedProfileRow } from '../../modules/ranked/ranked.types.js';
 import { statsService } from '../../modules/stats/stats.service.js';
@@ -1176,6 +1177,20 @@ async function rankedTick(): Promise<void> {
         return;
       }
 
+      // INC-2026-07-29 preventive action #4: stop creating matches the moment a
+      // 25006 is seen. Gating the whole tick pauses BOTH human pairing and AI
+      // fallbacks, and deliberately claims nothing out of Redis — queued
+      // players keep their place and their ticket, and pairing resumes on the
+      // first tick after the write probe recovers.
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.db_write_outage', true);
+        logger.error(
+          { queueDepth: await redis.zCard(RANKED_MM_QUEUE_KEY) },
+          'Ranked matchmaking tick paused: database write outage in progress'
+        );
+        return;
+      }
+
       // Each replica runs one local tick. Cross-replica exclusion is
       // intentionally delegated to the atomic Redis claim scripts: a global
       // tick lock made one Railway replica build every lobby while the other
@@ -1307,6 +1322,20 @@ export const rankedMatchmakingService = {
           queueSearchId: earlySessionBlock.queueSearchId,
         });
         await userSessionGuardService.emitState(io, userId);
+        return;
+      }
+
+      // Refuse the join BEFORE the ticket preflight: entering the queue during a
+      // write outage risks spending a ticket on a match whose result cannot be
+      // persisted. Retryable so the client can simply try again after recovery.
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.queue_block_reason', 'DB_WRITE_OUTAGE');
+        logger.error({ userId, ...queueClientContext }, 'Ranked queue join refused: database write outage');
+        io.to(`user:${userId}`).emit('error', {
+          code: 'DB_WRITE_OUTAGE',
+          message: new DbWriteOutageError().message,
+        });
+        io.to(`user:${userId}`).emit('ranked:queue_left');
         return;
       }
 

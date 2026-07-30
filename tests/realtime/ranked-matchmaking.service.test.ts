@@ -336,6 +336,92 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT).not.toContain('ZRANDMEMBER');
   });
 
+  // INC-2026-07-29 preventive action #4: matchmaking kept creating matches into
+  // a pool that could not persist their results.
+  describe('database write outage gate', () => {
+    async function tripBreaker() {
+      const { readOnlyDbBreaker } = await import('../../src/db/readonly-breaker.js');
+      const error = new Error('cannot execute INSERT in a read-only transaction') as Error & {
+        code: string;
+      };
+      error.code = '25006';
+      readOnlyDbBreaker.recordError(error);
+      return readOnlyDbBreaker;
+    }
+
+    afterEach(async () => {
+      const { readOnlyDbBreaker } = await import('../../src/db/readonly-breaker.js');
+      readOnlyDbBreaker.resetForTests();
+    });
+
+    it('creates no match while the pool is read-only, and claims nothing from the queue', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      await tripBreaker();
+
+      redisMock.eval.mockImplementation(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      });
+
+      service.start(io);
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(createLobbyMock).not.toHaveBeenCalled();
+      expect(startDraftMock).not.toHaveBeenCalled();
+      expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+      // Queued players keep their place and their ticket: no claim script ran.
+      expect(redisMock.eval).not.toHaveBeenCalled();
+      service.stop();
+    });
+
+    it('resumes pairing on the first tick after recovery', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const breaker = await tripBreaker();
+
+      // The pair can be claimed only once, mirroring the atomic Redis claim.
+      let pairAvailable = true;
+      redisMock.eval.mockImplementation(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT && pairAvailable) {
+          pairAvailable = false;
+          return ['s1', 'u1', 's2', 'u2'];
+        }
+        return [];
+      });
+
+      service.start(io);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(createLobbyMock).not.toHaveBeenCalled();
+      // Still unclaimed, because the gate returned before the claim script.
+      expect(pairAvailable).toBe(true);
+
+      breaker.resetForTests();
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(createLobbyMock).toHaveBeenCalledTimes(1);
+      service.stop();
+    });
+
+    it('refuses a queue join without spending a ticket while degraded', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      await tripBreaker();
+      const socket = createSocketMock('u9');
+
+      await service.handleQueueJoin(io, socket as never, { source: 'mode_select' });
+
+      // The ticket preflight is downstream of the gate, so nothing was consumed.
+      expect(getWalletMock).not.toHaveBeenCalled();
+      expect(redisMock.multi).not.toHaveBeenCalled();
+      const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({ code: 'DB_WRITE_OUTAGE' })
+      );
+    });
+  });
+
   it('ignores a queue join while the user is mid-draft instead of emitting INSUFFICIENT_TICKETS', async () => {
     // Reload-mid-draft regression (staging 2026-06-10): the client restores
     // into "searching" and re-emits queue_join, but the ticket was already

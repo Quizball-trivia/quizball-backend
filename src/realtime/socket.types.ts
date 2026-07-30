@@ -947,7 +947,13 @@ export type LobbyCreateResult =
     }
   | {
       ok: false;
-      code: 'ALREADY_IN_LOBBY' | 'TRANSITION_IN_PROGRESS' | 'INVALID_LOBBY_CREATE' | 'LOBBY_CREATE_ERROR';
+      code:
+        | 'ALREADY_IN_LOBBY'
+        | 'TRANSITION_IN_PROGRESS'
+        | 'INVALID_LOBBY_CREATE'
+        | 'LOBBY_CREATE_ERROR'
+        // Read-only database pool (INC-2026-07-29); always retryable.
+        | 'DB_WRITE_OUTAGE';
       message: string;
       retryable: boolean;
       correlationId: string;

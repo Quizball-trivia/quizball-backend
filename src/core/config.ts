@@ -33,6 +33,16 @@ const configSchema = z.object({
   DB_WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
   DB_WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(4_000),
   DB_WATCHDOG_FAILURES: z.coerce.number().int().min(1).max(10).default(3),
+  // INC-2026-07-29: a pooled connection contaminated with
+  // default_transaction_read_only=on let reads succeed while every write failed
+  // with SQLSTATE 25006. Kill switch in case the breaker ever misfires.
+  DB_OUTAGE_BREAKER_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  // Minimum time to stay degraded after a 25006. Recovery additionally requires
+  // a successful rollback-only write probe, so this is a floor, not a timer.
+  DB_OUTAGE_BREAKER_WINDOW_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
 
   // Redis
   REDIS_URL: z.string().url().optional(),

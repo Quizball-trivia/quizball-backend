@@ -20,6 +20,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { rankedPairingInFlightKey } from '../ranked-matchmaking-keys.js';
@@ -93,6 +94,7 @@ function rankedMatchCleanupKeys(matchId: string, userIds: string[]): string[] {
       matchExitPendingKey(matchId, playerUserId),
       matchPresenceKey(matchId, playerUserId),
       matchReconnectCountKey(matchId, playerUserId),
+      matchReconnectFenceKey(matchId, playerUserId),
     ]),
   ];
 }

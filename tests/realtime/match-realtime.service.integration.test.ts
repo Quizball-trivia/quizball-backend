@@ -55,6 +55,16 @@ const fakeRedis = {
   async get(key: string): Promise<string | null> {
     return fakeRedisStore.values.get(key) ?? null;
   },
+  async incr(key: string): Promise<number> {
+    const next = Number(fakeRedisStore.values.get(key) ?? '0') + 1;
+    fakeRedisStore.values.set(key, String(next));
+    return next;
+  },
+  async expire(key: string, seconds: number): Promise<boolean> {
+    if (!fakeRedisStore.values.has(key)) return false;
+    fakeRedisStore.ttls.set(key, seconds);
+    return true;
+  },
   async del(keys: string | string[]): Promise<number> {
     const keyList = Array.isArray(keys) ? keys : [keys];
     let removed = 0;

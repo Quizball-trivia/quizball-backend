@@ -29,6 +29,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
@@ -497,6 +498,7 @@ async function startMatchFromDraft(
               matchDisconnectKey(matchId, member.user_id),
               matchPresenceKey(matchId, member.user_id),
               matchReconnectCountKey(matchId, member.user_id),
+              matchReconnectFenceKey(matchId, member.user_id),
             ]),
           ],
         });

@@ -4,7 +4,7 @@ import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
-import { isPersistentBot, isRankedSettleEligible } from '../users/ai-classification.js';
+import { isPersistentBot, isRankedSettleEligible, isUserAccountFinalized } from '../users/ai-classification.js';
 import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
@@ -331,9 +331,14 @@ export const rankedService = {
     const byUserId = new Map(players.map((player) => [player.user_id, usersById.get(player.user_id) ?? null]));
     // Settle-eligible = real humans PLUS persistent roster bots (both accrue RP,
     // W/L/D, streak, placement). Ephemeral/auction AI never settle a profile.
+    // A FINALIZED account is excluded: finalization zeroes its ranked_profiles
+    // row, so settling it afterwards would resurrect RP/tier/placement on a
+    // deleted player. Merely pending-deletion accounts still settle — they can
+    // still cancel and must keep their standing. Re-checked inside the write
+    // transaction (applySettlement) against a finalization racing this read.
     const settleEligiblePlayers = players.filter((player) => {
       const user = byUserId.get(player.user_id);
-      return user != null && isRankedSettleEligible(user);
+      return user != null && isRankedSettleEligible(user) && !isUserAccountFinalized(user);
     });
     if (settleEligiblePlayers.length === 0) {
       logger.debug({ matchId }, 'Ranked settlement skipped: no settle-eligible players');
@@ -435,7 +440,13 @@ export const rankedService = {
       const opponentUser = opponent ? byUserId.get(opponent.user_id) ?? null : null;
       // Opponent RP comes from a real profile for humans AND persistent bots;
       // ephemeral/auction opponents fall back to the pinned aiAnchorRp below.
-      const opponentProfile = opponent && opponentUser && isRankedSettleEligible(opponentUser)
+      // A FINALIZED opponent is excluded here too: its profile was zeroed by
+      // deletion finalization, so rating against it would read 0 RP as a genuine
+      // rating (and ensureProfile would recreate a row for a deleted user).
+      const opponentProfile = opponent
+        && opponentUser
+        && isRankedSettleEligible(opponentUser)
+        && !isUserAccountFinalized(opponentUser)
         ? (profileByUser.get(opponent.user_id) ?? await rankedRepo.ensureProfile(opponent.user_id))
         : null;
 
@@ -541,15 +552,23 @@ export const rankedService = {
       entryCount: settlementEntries.length,
       userIds: settlementEntries.map((entry) => entry.outcome.userId),
     }, 'Ranked settlement applying persistence');
-    await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
+    // Only the participants THIS call actually wrote. A concurrent settlement of
+    // the same match loses the ON CONFLICT, and a finalized account is skipped
+    // inside the transaction — neither may fire the post-write side effects below.
+    const applied = await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
     })), occurredAt);
+    // A writer that does not report an applied set (the burn-in writer's stub)
+    // is treated as "everything landed", which is the pre-existing behaviour.
+    const appliedUserIds = applied ?? new Set(settlementEntries.map((entry) => entry.outcome.userId));
+    const appliedEntries = settlementEntries.filter((entry) => appliedUserIds.has(entry.outcome.userId));
     logger.info({
       matchId,
       entryCount: settlementEntries.length,
       userIds: settlementEntries.map((entry) => entry.outcome.userId),
+      appliedUserIds: [...appliedUserIds],
     }, 'Ranked settlement persistence applied');
 
     const byUserIdOutcome: Record<string, RankedUserOutcome> = {};
@@ -560,9 +579,36 @@ export const rankedService = {
       if (!profile) continue;
       byUserIdOutcome[row.user_id] = outcomeFromLedgerRow(row, profile);
     }
-    // Overlay the freshly settled participants.
-    for (const entry of settlementEntries) {
+    // Overlay the participants whose row this call actually wrote. Anything this
+    // call did NOT write is re-read from the committed ledger below rather than
+    // reported from the in-memory computation, which would be fiction: a
+    // finalized account never settled at all, and a participant lost to a racing
+    // replica settled with THAT replica's numbers.
+    for (const entry of appliedEntries) {
       byUserIdOutcome[entry.outcome.userId] = entry.outcome;
+    }
+    const unappliedEntries = settlementEntries.filter(
+      (entry) => !appliedUserIds.has(entry.outcome.userId)
+    );
+    if (unappliedEntries.length > 0) {
+      const committed = await rankedRepo.getRpChangesForMatch(matchId);
+      const committedByUser = new Map(committed.map((row) => [row.user_id, row]));
+      const committedProfiles = await rankedRepo.getProfilesByUserIds(
+        unappliedEntries.map((entry) => entry.outcome.userId)
+      );
+      const committedProfileByUser = new Map(committedProfiles.map((p) => [p.user_id, p]));
+      for (const entry of unappliedEntries) {
+        const row = committedByUser.get(entry.outcome.userId);
+        const committedProfile = committedProfileByUser.get(entry.outcome.userId);
+        // No committed row => the participant genuinely did not settle (finalized
+        // account): leave it out of the outcome entirely.
+        if (!row || !committedProfile) continue;
+        byUserIdOutcome[entry.outcome.userId] = outcomeFromLedgerRow(row, committedProfile);
+      }
+      logger.info({
+        matchId,
+        unappliedUserIds: unappliedEntries.map((entry) => entry.outcome.userId),
+      }, 'Ranked settlement reconciled participants this call did not write');
     }
     const outcome = {
       isPlacement: Object.values(byUserIdOutcome).some((o) => o.isPlacement),
@@ -574,10 +620,11 @@ export const rankedService = {
       'Ranked settlement completed'
     );
 
-    // Analytics: emit once per human player ONLY for FRESHLY settled rows (never
-    // the reused/idempotent ones), so ranked progression is visible in PostHog
-    // without double-counting a replay. Persistent bots stay out of analytics.
-    for (const entry of settlementEntries) {
+    // Analytics: emit once per human player ONLY for rows THIS call actually
+    // inserted (never the reused/idempotent ones, and never a row a racing
+    // replica won), so ranked progression is visible in PostHog without
+    // double-counting a replay. Persistent bots stay out of analytics.
+    for (const entry of appliedEntries) {
       const settledUser = byUserId.get(entry.outcome.userId);
       if (settledUser && settledUser.is_ai) continue;
       const o = entry.outcome;
@@ -585,15 +632,15 @@ export const rankedService = {
     }
 
     // Rubber-band governor (PR9): fold this result into each PERSISTENT BOT's
-    // win-rate EMA and re-evaluate its effective-skill offset. Only FRESHLY
-    // settled entries (a replay must not double-count a sample) and only
+    // win-rate EMA and re-evaluate its effective-skill offset. Only entries this
+    // call actually WROTE (a replay must not double-count a sample) and only
     // matches against a HUMAN opponent — the 40-45%/45-55% targets are defined
     // against humans, and a bot-vs-bot result would be a self-referential
     // signal. Awaited so the write lands before the reservation is released
     // (possession-completion releases only after settlement returns), but the
     // service swallows its own errors so a governor fault can never fail
     // settlement or strand a reservation.
-    for (const entry of settlementEntries) {
+    for (const entry of appliedEntries) {
       const settledUser = byUserId.get(entry.outcome.userId);
       if (!settledUser || !isPersistentBot(settledUser)) continue;
       const opponentUserId = entry.change.opponentUserId;

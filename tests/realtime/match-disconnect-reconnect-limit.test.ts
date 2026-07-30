@@ -29,6 +29,12 @@ const fakeRedis = {
     return 'OK';
   }),
   get: vi.fn(async (key: string) => redisValues.get(key) ?? null),
+  incr: vi.fn(async (key: string) => {
+    const next = Number(redisValues.get(key) ?? '0') + 1;
+    redisValues.set(key, String(next));
+    return next;
+  }),
+  expire: vi.fn(async () => true),
   mGet: vi.fn(async (keys: string[]) => keys.map((key) => redisValues.get(key) ?? null)),
   del: vi.fn(async (keys: string | string[]) => {
     const keyList = Array.isArray(keys) ? keys : [keys];
@@ -470,4 +476,155 @@ describe('pauseMatchForDisconnectedPlayer reconnect-limit hardening', () => {
     expect(completeFromProgressMock).not.toHaveBeenCalled();
   });
 
+});
+
+// A completed rejoin clears the disconnect EPISODE marker. Before the fence, it
+// left the reconnect COUNTER untouched and unfenced, so a stale disconnect for a
+// connection that predates the resume found no marker, counted as a brand-new
+// episode, and pushed the player over MAX_MATCH_DISCONNECTS into the
+// `definiteForfeiterUserId` fast path — which deliberately bypasses the presence
+// guards. Same family as the Talakha wrongful forfeit.
+describe('stale disconnect after a completed rejoin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    redisValues.clear();
+    fakeRedis.isOpen = true;
+    const roster = [player('u1', 1), player('u2', 2)];
+    getMatchMock.mockResolvedValue(createMatch());
+    getActiveMatchForUserMock.mockResolvedValue(createMatch());
+    listMatchPlayersMock.mockResolvedValue(roster);
+    getParticipantSnapshotMock.mockResolvedValue({ participants: roster, cache: null });
+    getOpponentInfoMock.mockResolvedValue({ userId: 'u2', username: 'u2' });
+    getByIdsMock.mockImplementation(async (ids: string[]) => userMap(ids));
+    completeFromProgressMock.mockResolvedValue({ completed: true, winnerId: 'u1', decisionBasis: 'total_points' });
+    finalizeForfeitMock.mockResolvedValue({ completed: true, winnerId: 'u2', resultVersion: 1 });
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    hasAnyStagePresenceMock.mockResolvedValue(false);
+  });
+
+  it('does not re-count a disconnect for a connection that predates the resume fence', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const staleConnectedAt = Date.now() - 120_000;
+    // One real disconnect already counted, then the player rejoined: the resume
+    // path clears the episode marker and stamps the fence.
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
+
+    // The old socket's `disconnect`/`match:leave` finally lands, well after resume.
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'stale-socket',
+      disconnectedConnectedAt: staleConnectedAt,
+    });
+
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('1');
+    expect(result.finalized).toBe(false);
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    // Rejected as a whole, not merely uncounted: a recovered match must not be
+    // re-paused and no forfeit timer may be re-armed for the stale episode.
+    expect(redisValues.has('match:disconnect:m1:u1')).toBe(false);
+    expect(redisValues.has('match:pause:m1')).toBe(false);
+    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('does not forfeit at the reconnect limit on a stale post-resume disconnect', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const staleConnectedAt = Date.now() - 120_000;
+    // Sitting exactly on the limit after 3 genuine disconnects + a good rejoin.
+    redisValues.set('match:reconnect_count:m1:u1', '3');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
+
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'stale-socket',
+      disconnectedConnectedAt: staleConnectedAt,
+    });
+
+    // Without the fence this reaches 4 and takes the definiteForfeiter fast path.
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('3');
+    expect(result.finalized).toBe(false);
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+  });
+
+  it('still counts a genuinely NEW disconnect from the socket that completed the rejoin', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    // PRODUCTION ORDERING: the socket is already open when it sends match:rejoin,
+    // so a TIME-based fence would classify that socket's own later genuine drop
+    // as stale and swallow every disconnect for the rest of the match. The fence
+    // is socket-scoped precisely so this still counts.
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
+
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'rejoined-socket',
+      disconnectedConnectedAt: Date.now() - 30_000,
+    });
+
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');
+    expect(redisValues.has('match:disconnect:m1:u1')).toBe(true);
+    expect(result.finalized).toBe(false);
+  });
+
+  it('arms the forfeit timer with the EPISODE marker, not the duplicate handler clock', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    // The first handler of the episode already claimed the marker.
+    const originalMarkerMs = Date.now() - 5_000;
+    redisValues.set('match:disconnect:m1:u1', String(originalMarkerMs));
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+
+    // A duplicate handler for the SAME episode (socket disconnect + match:leave)
+    // loses the SET NX claim. The grace-expiry handler refuses to forfeit unless
+    // the armed timestamp equals the STORED marker, so arming with this
+    // handler's own clock would silently drop the forfeit.
+    await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'second-socket',
+      disconnectedConnectedAt: Date.now() - 60_000,
+    });
+
+    expect(redisValues.get('match:disconnect:m1:u1')).toBe(String(originalMarkerMs));
+    const armed = scheduleRealtimeTimerMock.mock.calls.at(-1);
+    expect(armed?.[3]).toMatchObject({ disconnectMarkerMs: originalMarkerMs });
+  });
+
+  it('counts the disconnect when no source socket identifies the event (fail-safe)', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+    await fenceDisconnectCountOnResume('m1', 'u1', 'rejoined-socket');
+
+    // No ignoreSocketId (the excused-exit conversion call site passes none):
+    // the fence cannot prove staleness, so it must NOT swallow the count.
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {});
+
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');
+    expect(result.finalized).toBe(false);
+  });
+
+  it('does not stamp a fence when the resumed socket is unknown', async () => {
+    const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+    // A stale fence from an earlier episode must be cleared, not left to
+    // suppress real disconnects from every other socket.
+    await fenceDisconnectCountOnResume('m1', 'u1', 'old-socket');
+    await fenceDisconnectCountOnResume('m1', 'u1', undefined);
+
+    expect(redisValues.has('match:reconnect_fence:m1:u1')).toBe(false);
+
+    const result = await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'some-other-socket',
+    });
+
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('2');
+    expect(result.finalized).toBe(false);
+  });
 });

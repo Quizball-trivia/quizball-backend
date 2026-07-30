@@ -76,6 +76,13 @@ const MAX_NAME_ATTEMPTS = 40;
 /** Minimum category count needed to sample 2-4 strengths + 2-4 weaknesses. */
 const MIN_CATEGORIES = 8;
 
+/**
+ * Hard ceiling on a bot's matches-per-day cap, applied AFTER the archetype draw.
+ * OVERRIDDEN vs measured: real prod players have a heavy tail (measured p99 ~34,
+ * max ~120 matches/day) that we deliberately do NOT mimic — see the clamp site.
+ */
+export const DAILY_CAP_CEILING = 12;
+
 /** Canonical case-insensitive key (shared with the exclusion hashing). */
 function normalizeForExclusion(name: string): string {
   return nfcLower(name);
@@ -218,7 +225,12 @@ export function generateRoster(options: GenerateOptions): GeneratedBot[] {
     const archetype = sampleSchedule(schedRng, patterns.activity.scheduleArchetypes);
     // Cap is drawn JOINTLY with the archetype (finding #6): from THIS archetype's
     // own cap quantiles, so a night-owl can never get a 15-match cap.
-    const dailyCap = quantileSample(capRng, archetype.dailyCapQuantiles);
+    // Then clamped to DAILY_CAP_CEILING: the measured tail of real prod players
+    // reaches 120 matches/day, but a cap is a worst-case ceiling on an
+    // always-available synthetic identity, and a bot saturating dozens of matches
+    // a day is conspicuous on the leaderboard and inflates matchmaking load. The
+    // clamp keeps the realistic central mass and truncates only the tail.
+    const dailyCap = Math.min(quantileSample(capRng, archetype.dailyCapQuantiles), DAILY_CAP_CEILING);
     const renamePropensity = +(patterns.rename.lifetimeRate * (0.5 + renamePropensityRng())).toFixed(3);
     const willRename = chance(willRenameRng, patterns.rename.lifetimeRate);
 

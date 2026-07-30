@@ -167,6 +167,16 @@ export interface RosterPatterns {
     sha256: string;
     /** The salted hashes themselves (sorted hex). Membership-test only. */
     hashes: string[];
+    /**
+     * Provenance of the set: how many distinct names came from this DB vs from
+     * each `--exclude-names` file (e.g. another environment's roster CSV, whose
+     * names must stay reserved even though this DB has never seen them).
+     * Labels are basenames only — no absolute paths in the committed artifact.
+     */
+    sources?: {
+      db: number;
+      extra: { label: string; count: number }[];
+    };
   };
   /**
    * FROZEN list of real, active category slugs measured from the DB (hyphenated,

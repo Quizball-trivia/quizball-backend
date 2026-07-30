@@ -493,7 +493,9 @@ describe('rankedService', () => {
         expect.objectContaining({
           change: expect.objectContaining({ userId: 'u-2', result: 'loss' }),
         }),
-      ])
+      ]),
+      // Live settlement passes no backdated timestamp (burn-in-only seam).
+      undefined,
     );
   });
 

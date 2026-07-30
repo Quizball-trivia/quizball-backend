@@ -138,7 +138,13 @@ export const rankedRepo = {
     `;
   },
 
-  async applySettlement(entries: RankedSettlementEntry[]): Promise<void> {
+  /**
+   * @param occurredAt  Optional backdated timestamp for the ledger row's
+   *   created_at and the profile's last_ranked_match_at/updated_at. Defaults to
+   *   NOW() so the LIVE settlement path is byte-identical. ONLY the one-time
+   *   persistent-bot burn-in writer passes an explicit historical value.
+   */
+  async applySettlement(entries: RankedSettlementEntry[], occurredAt?: Date): Promise<void> {
     if (entries.length === 0) return;
 
     try {
@@ -167,10 +173,12 @@ export const rankedRepo = {
                 placement_anchor_rp,
                 placement_perf_score,
                 calculation_method,
-                coins_awarded
+                coins_awarded,
+                created_at
               )
               VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25,
+                COALESCE($26::timestamptz, NOW())
               )
               ON CONFLICT (match_id, user_id) DO NOTHING
               RETURNING 1
@@ -188,8 +196,8 @@ export const rankedRepo = {
                 placement_points_for_sum = $21,
                 placement_points_against_sum = $22,
                 current_win_streak = $23,
-                last_ranked_match_at = NOW(),
-                updated_at = NOW()
+                last_ranked_match_at = COALESCE($26::timestamptz, NOW()),
+                updated_at = COALESCE($26::timestamptz, NOW())
               WHERE user_id = $24
                 AND EXISTS (SELECT 1 FROM inserted)
               RETURNING 1
@@ -199,7 +207,7 @@ export const rankedRepo = {
             UPDATE users
             SET
               coins = coins + $25,
-              updated_at = NOW()
+              updated_at = COALESCE($26::timestamptz, NOW())
             WHERE id = $24
               AND $25 > 0
               AND EXISTS (SELECT 1 FROM inserted)
@@ -230,6 +238,7 @@ export const rankedRepo = {
               entry.profile.currentWinStreak,
               entry.profile.userId,
               entry.coinsAwarded,
+              occurredAt ?? null,
             ]
           );
         }

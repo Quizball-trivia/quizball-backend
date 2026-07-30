@@ -1,3 +1,4 @@
+import { type TransactionSql } from '../../db/index.js';
 import { trackAchievementUnlocked } from '../../core/analytics/game-events.js';
 import { achievementsRepo } from './achievements.repo.js';
 import { ACHIEVEMENT_DEFINITIONS } from './achievements.definitions.js';
@@ -72,23 +73,54 @@ export const achievementsService = {
     });
   },
 
+  /**
+   * @param options.occurredAt        Optional backdated unlock/insert timestamp.
+   *   Defaults to now(); ONLY the one-time persistent-bot burn-in writer passes
+   *   an explicit historical value so a bot's unlocks are dated in the past.
+   * @param options.suppressAnalytics When true, no achievement-unlocked
+   *   analytics fire (capability matrix: persistent bots stay out of analytics).
+   * @param options.tx                Optional caller-provided transaction. When
+   *   set, all repo reads/writes run against this transaction connection
+   *   instead of the pooled `sql`, and batches that would otherwise run in
+   *   parallel are run sequentially (a single postgres.js transaction
+   *   connection cannot execute concurrent queries).
+   */
   async evaluateForMatch(
     matchId: string,
     userIds: string[],
-    matchVariant: AchievementMatchVariant
+    matchVariant: AchievementMatchVariant,
+    options?: { occurredAt?: Date; suppressAnalytics?: boolean; tx?: TransactionSql }
   ): Promise<Record<string, AchievementUnlockPayload[]>> {
+    const occurredAtIso = options?.occurredAt?.toISOString();
+    // The repo executor param is typed as `typeof sql`; TransactionSql exposes
+    // the same tagged-template call convention but TS can't express the union
+    // (documented in matches.repo.ts). Pass the caller tx through untyped — the
+    // repo runs it as a tagged template either way.
+    const txExec = options?.tx as unknown as Parameters<typeof achievementsRepo.listForUser>[1];
     const uniqueUserIds = [...new Set(userIds)];
     const result: Record<string, AchievementUnlockPayload[]> = {};
 
     // Batch: fetch all user data in parallel instead of sequentially per user
-    const allData = await Promise.all(
-      uniqueUserIds.map((userId) =>
-        Promise.all([
-          achievementsRepo.listForUser(userId),
-          achievementsRepo.getMetricsForUser(userId),
-        ])
-      )
-    );
+    // (unless running inside a caller-provided tx, which can't run concurrent queries)
+    const allData = options?.tx
+      ? await (async () => {
+          const data: [Awaited<ReturnType<typeof achievementsRepo.listForUser>>, Awaited<ReturnType<typeof achievementsRepo.getMetricsForUser>>][] = [];
+          for (const userId of uniqueUserIds) {
+            data.push([
+              await achievementsRepo.listForUser(userId, txExec),
+              await achievementsRepo.getMetricsForUser(userId, txExec),
+            ]);
+          }
+          return data;
+        })()
+      : await Promise.all(
+          uniqueUserIds.map((userId) =>
+            Promise.all([
+              achievementsRepo.listForUser(userId),
+              achievementsRepo.getMetricsForUser(userId),
+            ])
+          )
+        );
 
     for (let i = 0; i < uniqueUserIds.length; i++) {
       const userId = uniqueUserIds[i];
@@ -115,7 +147,7 @@ export const achievementsService = {
         const unlockedAt = alreadyUnlocked
           ? existing?.unlocked_at ?? null
           : unlockedNow
-            ? new Date().toISOString()
+            ? occurredAtIso ?? new Date().toISOString()
             : null;
 
         upsertBatch.push({
@@ -124,6 +156,7 @@ export const achievementsService = {
           progress,
           unlockedAt,
           sourceMatchId: !alreadyUnlocked && unlockedNow ? matchId : null,
+          ...(options?.occurredAt ? { occurredAt: options.occurredAt } : {}),
         });
 
         if (!alreadyUnlocked && unlockedNow && unlockedAt) {
@@ -138,13 +171,24 @@ export const achievementsService = {
             unlockedAt,
           };
           unlockedForUser.push(payload);
-          trackAchievementUnlocked(userId, definition.id, definition.title.en ?? definition.id);
+          // Analytics stay human-only (capability matrix). Persistent bots
+          // unlock silently.
+          if (!options?.suppressAnalytics) {
+            trackAchievementUnlocked(userId, definition.id, definition.title.en ?? definition.id);
+          }
         }
       }
 
       // Batch upsert all achievements for this user in parallel
+      // (sequentially when running inside a caller-provided tx)
       if (upsertBatch.length > 0) {
-        await Promise.all(upsertBatch.map((params) => achievementsRepo.upsertProgress(params)));
+        if (options?.tx) {
+          for (const params of upsertBatch) {
+            await achievementsRepo.upsertProgress(params, txExec);
+          }
+        } else {
+          await Promise.all(upsertBatch.map((params) => achievementsRepo.upsertProgress(params)));
+        }
       }
 
       result[userId] = unlockedForUser;

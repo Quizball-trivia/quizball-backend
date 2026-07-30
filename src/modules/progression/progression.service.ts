@@ -31,7 +31,7 @@ export const progressionService = {
     return getProgressionFromTotalXp(totalXp);
   },
 
-  async awardCompletedMatchXp(matchId: string): Promise<void> {
+  async awardCompletedMatchXp(matchId: string, occurredAt?: Date): Promise<void> {
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'completed' || match.is_dev) {
       return;
@@ -79,6 +79,7 @@ export const progressionService = {
             result,
             winnerDecisionMethod,
           },
+          occurredAt,
         });
 
         if (grantResult.awarded) {

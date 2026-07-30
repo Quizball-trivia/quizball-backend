@@ -19,6 +19,7 @@
     "roster:rollback": "tsx scripts/persistent-bot-roster/rollback.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:burnin": "vitest run --config vitest.burnin.config.ts",
     "test:regression": "vitest run --config vitest.regression.config.ts",
     "test:regression:live": "REGRESSION_DB_URL=${REGRESSION_DB_URL:-postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression} REGRESSION_REDIS_URL=${REGRESSION_REDIS_URL:-redis://localhost:6379/15} REGRESSION_LOG_LEVEL=${REGRESSION_LOG_LEVEL:-info} vitest run --config vitest.regression.config.ts 2>&1 | tee game-regression/last-run.log",
     "staging:gate": "tsx game-regression/staging/run.mts",
@@ -47,7 +48,9 @@
     "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
     "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
-    "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts"
+    "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
+    "bot:burnin": "tsx scripts/bot-burnin/index.ts",
+    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts"
   },
   "keywords": [],
   "author": "",

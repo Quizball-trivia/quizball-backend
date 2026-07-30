@@ -4,7 +4,7 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
-import { isDbWriteOutage } from '../../db/readonly-breaker.js';
+import { isDbWriteOutage, DbWriteOutageDeferral } from '../../db/readonly-breaker.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
@@ -88,11 +88,14 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
     'quizball.lobby_id': lobbyId,
   }, async (span) => {
     // A draft started during a write outage cannot persist its questions or its
-    // match, so the lobby is left intact and the start is simply refused.
+    // match. THROW rather than return: when this runs from the durable timer a
+    // clean return would mark the timer handled and delete its payload, leaving
+    // a committed lobby waiting forever for a draft that never restarts. The
+    // deferral is rethrown by runRankedDraftStart so the scheduler re-arms it.
     if (isDbWriteOutage()) {
       span.setAttribute('quizball.db_write_outage', true);
-      logger.error({ lobbyId }, 'Draft start refused: database write outage in progress');
-      return;
+      logger.error({ lobbyId }, 'Draft start deferred: database write outage in progress');
+      throw new DbWriteOutageDeferral(`draft start for lobby ${lobbyId}`);
     }
 
     const lobby = await lobbiesRepo.getById(lobbyId);

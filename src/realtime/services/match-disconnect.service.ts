@@ -1,7 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
-import { isDbWriteOutage } from '../../db/readonly-breaker.js';
+import { isDbWriteOutage, DbWriteOutageDeferral } from '../../db/readonly-breaker.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { appMetrics } from '../../core/metrics.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
@@ -1863,15 +1863,19 @@ export async function resolveExpiredGraceWindow(
   }
   // Never settle a grace expiry while the database cannot accept writes. The
   // pause is almost certainly OUR outage rather than the player leaving, and a
-  // forfeit written now would be both unfair and only half-persisted. Returning
-  // leaves the grace + pause keys intact, so the match stays paused and a later
-  // expiry (once writes recover) resolves it normally.
+  // forfeit written now would be both unfair and only half-persisted.
+  //
+  // THROW rather than return: this runs as a durable timer handler, and the
+  // scheduler has already popped the ZSET member. A clean return would mark the
+  // timer handled and delete its payload, losing the only thing that can ever
+  // resolve this paused match. Throwing re-arms the member ~1s later, so the
+  // expiry retries until writes recover and then settles normally.
   if (isDbWriteOutage()) {
     logger.error(
       { matchId, disconnectedUserId },
       'Disconnect grace expiry deferred: database write outage in progress'
     );
-    return;
+    throw new DbWriteOutageDeferral(`grace expiry for match ${matchId}`);
   }
 
   // Hoisted so the finally can preserve the grace/pause keys when we defer for a

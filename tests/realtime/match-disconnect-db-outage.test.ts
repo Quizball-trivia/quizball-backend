@@ -346,19 +346,25 @@ describe('pauseMatchForDisconnectedPlayer during a database write outage', () =>
     expect(result.finalized).toBe(true);
   });
 
-  it('defers grace-window expiry instead of settling a forfeit while degraded', async () => {
+  it('defers grace-window expiry by THROWING so the durable timer is re-armed', async () => {
     const { resolveExpiredGraceWindow } = await import(
       '../../src/realtime/services/match-disconnect.service.js'
     );
+    const { DbWriteOutageDeferral } = await import('../../src/db/readonly-breaker.js');
     await tripBreaker();
     redisValues.set('match:disconnect:m1:u1', String(Date.now()));
     redisValues.set('match:grace:m1', String(Date.now()));
 
-    await resolveExpiredGraceWindow(createIo(), 'm1', 'u1');
+    // Must THROW, not return: the scheduler has already popped the ZSET member,
+    // so a clean return would mark the timer handled and delete its payload —
+    // losing the only thing that can ever resolve this paused match.
+    await expect(resolveExpiredGraceWindow(createIo(), 'm1', 'u1')).rejects.toThrow(
+      DbWriteOutageDeferral
+    );
 
     expect(finalizeForfeitMock).not.toHaveBeenCalled();
     expect(completeFromProgressMock).not.toHaveBeenCalled();
-    // The pause survives so a later expiry can resolve it normally.
+    // The pause survives so the re-armed expiry can resolve it once writes recover.
     expect(redisValues.get('match:grace:m1')).toBeDefined();
     expect(redisValues.get('match:disconnect:m1:u1')).toBeDefined();
   });

@@ -403,6 +403,32 @@ describe('ranked-matchmaking.service queue behavior', () => {
       service.stop();
     });
 
+    it('stops claiming further pairs when the breaker latches mid-tick', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const { readOnlyDbBreaker } = await import('../../src/db/readonly-breaker.js');
+
+      // Healthy at tick entry; the FIRST claim latches the breaker (as a
+      // concurrent write failing with 25006 would), so no second claim may run.
+      let claims = 0;
+      redisMock.eval.mockImplementation(async (script: string) => {
+        if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
+        claims += 1;
+        const error = new Error('cannot execute INSERT in a read-only transaction') as Error & {
+          code: string;
+        };
+        error.code = '25006';
+        readOnlyDbBreaker.recordError(error);
+        return [`s${claims}a`, `u${claims}a`, `s${claims}b`, `u${claims}b`];
+      });
+
+      service.start(io);
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(claims).toBe(1);
+      service.stop();
+    });
+
     it('refuses a queue join without spending a ticket while degraded', async () => {
       const service = await loadService();
       const io = createIoMock();

@@ -2,9 +2,14 @@ import { logger } from '../core/logger.js';
 import { config } from '../core/config.js';
 
 /**
- * PostgreSQL SQLSTATE for "cannot execute X in a read-only transaction".
- * This is the ONLY signal that a pooled connection has been contaminated with
+ * PostgreSQL SQLSTATE for "cannot execute X in a read-only transaction" — the
+ * signal that a pooled connection has been contaminated with
  * `default_transaction_read_only=on` (INC-2026-07-29 / recurrence 2026-07-30).
+ *
+ * No application code currently opens an explicit READ ONLY transaction, so in
+ * this codebase 25006 means contamination. If a deliberate read-only path is
+ * ever added (an admin report, a read replica), it must be excluded here or it
+ * will latch the breaker and pause matchmaking.
  */
 export const READ_ONLY_SQLSTATE = '25006';
 
@@ -46,6 +51,20 @@ export function isReadOnlyTransactionError(error: unknown): boolean {
  * rollback-only write probe must actually succeed before writes resume. The
  * timed window is a ceiling, not a healer, so a still-poisoned pool cannot
  * silently un-degrade just because time passed.
+ *
+ * KNOWN LIMITS (deliberate, emergency scope — see PR discussion):
+ *
+ *  - PER-REPLICA. Replica A can be degraded while replica B is healthy, and
+ *    Redis-global durable timers may fire on either. This narrows the wrongful
+ *    -forfeit window rather than closing it; a cross-replica latch needs shared
+ *    Redis state and is deliberately out of scope here.
+ *  - RECOVERY CAN FLAP. Only a subset of pooled backends is typically poisoned,
+ *    so one healthy probe does not prove the pool is clean. A resumed write that
+ *    hits a poisoned backend simply re-trips within ~1s. Accepted: the
+ *    alternative is never auto-recovering without operator action.
+ *  - FREE DISCONNECT EPISODES. While degraded a player can drop repeatedly at no
+ *    cost to their reconnect budget. Intentional: during OUR outage the fairness
+ *    error must favour the player, not the broken database.
  */
 class ReadOnlyDbBreaker {
   private state: BreakerState = 'closed';
@@ -186,5 +205,22 @@ export class DbWriteOutageError extends Error {
   constructor(message = 'The service is temporarily unable to save game data. Please try again shortly.') {
     super(message);
     this.name = 'DbWriteOutageError';
+  }
+}
+
+/**
+ * Thrown by a DURABLE TIMER handler that must not run during a write outage.
+ *
+ * Returning normally is NOT safe for these: the realtime timer scheduler has
+ * already popped the ZSET member, and a clean return marks the timer handled
+ * and deletes its payload — permanently losing it. Throwing routes into the
+ * scheduler's catch, which re-arms the member ~1s later, so the work retries
+ * until writes recover.
+ */
+export class DbWriteOutageDeferral extends Error {
+  readonly code = 'DB_WRITE_OUTAGE_DEFERRED';
+  constructor(what: string) {
+    super(`Deferred ${what}: database write outage in progress`);
+    this.name = 'DbWriteOutageDeferral';
   }
 }

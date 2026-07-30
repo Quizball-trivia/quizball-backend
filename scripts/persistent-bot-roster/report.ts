@@ -5,7 +5,7 @@
  */
 
 import type { RosterPatterns, WeightedString } from './patterns.js';
-import type { GeneratedBot } from './roster.js';
+import { DAILY_CAP_CEILING, type GeneratedBot } from './roster.js';
 
 const BAND_LABELS = ['B1 (bottom)', 'B2', 'B3', 'B4', 'B5 (top)'];
 
@@ -244,6 +244,22 @@ export function renderReport(input: ReportInputs): string {
 
   // Joint cap-by-archetype: prove night-owls never get high caps.
   out.push('### Daily match cap by archetype (joint sampling check)');
+  out.push('');
+  out.push(`Caps are clamped to a hard ceiling of **${DAILY_CAP_CEILING}** matches/day — OVERRIDDEN, not`);
+  out.push('measured. Real players have a heavy tail (measured archetype p99s reach ~34, max ~120/day);');
+  out.push('we deliberately do not mimic it, because a cap is a worst-case ceiling on an');
+  out.push('always-available synthetic identity and a bot playing dozens of matches a day would be');
+  out.push('conspicuous on the leaderboard and inflate matchmaking load. Central mass is preserved.');
+  out.push('');
+  const allCaps = bots.map((b) => b.dailyCap);
+  const clamped = patterns.activity.scheduleArchetypes.length
+    ? bots.filter((b) => {
+        const arch = patterns.activity.scheduleArchetypes.find((s) => s.key === b.schedule.archetype);
+        const top = arch ? Math.max(...arch.dailyCapQuantiles.map(([, v]) => v)) : 0;
+        return top > DAILY_CAP_CEILING && b.dailyCap === DAILY_CAP_CEILING;
+      }).length
+    : 0;
+  out.push(`Max generated cap: **${Math.max(...allCaps)}** (ceiling ${DAILY_CAP_CEILING}); bots sitting at the ceiling: ${clamped}.`);
   out.push('');
   out.push('| archetype | max generated cap | mean cap |');
   out.push('|---|---|---|');

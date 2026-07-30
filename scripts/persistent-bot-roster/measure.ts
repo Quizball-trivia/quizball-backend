@@ -15,7 +15,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,67 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function argVal(flag: string, fallback: string): string {
   const i = process.argv.indexOf(flag);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
+}
+
+function argValues(flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === flag && process.argv[i + 1]) out.push(process.argv[i + 1]!);
+  }
+  return out;
+}
+
+function countDistinctNames(names: string[]): number {
+  return new Set(names.map((n) => n.normalize('NFC').toLowerCase())).size;
+}
+
+/**
+ * Reads additional nicknames to reserve from `--exclude-names <file>` (repeatable).
+ * A file is either a roster CSV (a header containing a `nickname` column) or a
+ * newline-delimited plaintext name list. Only the nickname column is read; no
+ * other CSV field is parsed, and plaintext never reaches the emitted artifact —
+ * it is hashed with the same salt as the DB names.
+ */
+function readExtraExclusionNames(): { names: string[]; sources: { label: string; count: number }[] } {
+  const names: string[] = [];
+  const sources: { label: string; count: number }[] = [];
+  for (const file of argValues('--exclude-names')) {
+    const abs = path.isAbsolute(file) ? file : path.resolve(process.cwd(), file);
+    const lines = readFileSync(abs, 'utf8').split(/\r?\n/).filter((l) => l.trim() !== '');
+    if (lines.length === 0) throw new Error(`--exclude-names file is empty: ${file}`);
+    const header = lines[0]!.split(',').map((h) => h.trim().toLowerCase());
+    const nickIdx = header.indexOf('nickname');
+    let fileNames: string[];
+    if (nickIdx >= 0) {
+      fileNames = lines.slice(1).map((line) => parseCsvRow(line)[nickIdx] ?? '').filter((n) => n.trim() !== '');
+    } else {
+      fileNames = lines.map((l) => l.trim());
+    }
+    if (fileNames.length === 0) throw new Error(`--exclude-names file yielded no names: ${file}`);
+    names.push(...fileNames);
+    // Label by basename only — never the absolute path (committed artifact).
+    sources.push({ label: path.basename(abs), count: countDistinctNames(fileNames) });
+  }
+  return { names, sources };
+}
+
+/** Minimal RFC4180-ish row split honouring double-quoted fields containing commas. */
+function parseCsvRow(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else quoted = false;
+      } else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
 }
 
 const REAL_FILTER =
@@ -260,9 +321,21 @@ async function measure(): Promise<RosterPatterns> {
         UNION ALL SELECT new_nickname FROM nickname_history WHERE new_nickname IS NOT NULL
       ) s WHERE x IS NOT NULL
     `);
-    const rawNames = exclusionRows.map((r) => r.x);
+    const dbNames = exclusionRows.map((r) => r.x);
+    // Cross-environment reservations: names already used by a roster generated
+    // for ANOTHER environment must not be reissued here, even though they are
+    // absent from this DB. Sourced from that roster's plaintext CSV (see
+    // readExtraExclusionNames); folded into the same salted-hash set.
+    const extra = readExtraExclusionNames();
+    const rawNames = [...dbNames, ...extra.names];
     const salt = randomBytes(16).toString('hex');
-    const exclusion = buildExclusion(rawNames, salt);
+    const exclusion = {
+      ...buildExclusion(rawNames, salt),
+      sources: {
+        db: countDistinctNames(dbNames),
+        extra: extra.sources,
+      },
+    };
 
     return {
       schemaVersion: 1,

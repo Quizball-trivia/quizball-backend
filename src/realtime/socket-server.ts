@@ -360,6 +360,13 @@ function runLimitedPostConnectHydration(
  */
 export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
   return {
+    wl_tick: async (io, payload) => {
+      if (payload.kind !== 'wl_tick') return;
+      // Hint only: the scoped advance verifies Redis time + CAS state itself,
+      // and the reconciler re-arms anything a lost hint missed.
+      const { wlAdvanceOneTournament } = await import('../modules/weekend-league/wl-orchestrator.js');
+      await wlAdvanceOneTournament(io, payload.tournamentId);
+    },
     draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_ai_ban') return;
       await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);

@@ -86,18 +86,79 @@ export async function wlDeliverPending(
       const renewed = await wlEventsRepo.renewLease(tournamentId, event.seq, event.claim_token);
       if (!renewed) break;
       const redisNow = await wlRedisNowMs();
+
+      // Question dispatches get their one-shot playable/deadline stamps at
+      // first emission; a too-late crash-retry voids to a reserve instead
+      // (the dispatch event is terminally aborted — never emitted).
+      let outPayload: Record<string, unknown> = event.payload;
+      if (event.type === 'dispatch') {
+        const { wlLiveEngineInternals } = await import('./wl-live-engine.js');
+        const enriched = await wlLiveEngineInternals.stampForEmission(
+          tournamentId, event.payload, redisNow
+        );
+        if (!enriched) {
+          const attemptId = String(event.payload['attempt_id'] ?? '');
+          if (attemptId) {
+            // One fenced transaction: event abort + run void + void event +
+            // replacement dispatch — or nothing (fence lost / already moved).
+            await wlLiveEngineInternals.voidAttempt(
+              tournamentId, attemptId, redisNow, 'stale_dispatch_retry',
+              { seq: event.seq, claimToken: event.claim_token }
+            );
+          } else {
+            await wlEventsRepo.markAborted(
+              tournamentId, event.seq, event.claim_token, 'dispatch_stale_or_voided'
+            );
+          }
+          continue;
+        }
+        outPayload = enriched;
+        await wlEventsRepo.persistDispatchStamps(
+          tournamentId, event.seq, event.claim_token,
+          Number(enriched['playableAt']), Number(enriched['deadlineAt'])
+        );
+      }
+
+      // Fresh clock IMMEDIATELY before the visible emission: DB latency in
+      // the enrichment above must neither skew client offsets nor shorten
+      // the spectator delay (visibility = emitNow + 30s).
+      const emitNow = await wlRedisNowMs();
+      // Staleness re-validated on THIS clock: the awaited stamp-persistence
+      // above may have pushed a dispatch below its minimum lead (or past
+      // its deadline) — such a dispatch is voided, never emitted.
+      if (event.type === 'dispatch') {
+        const deadlineAt = Number(outPayload['deadlineAt']);
+        const { WL_MIN_REMAINING_LEAD_MS, wlLiveEngineInternals } = await import('./wl-live-engine.js');
+        if (!Number.isFinite(deadlineAt) || emitNow > deadlineAt - WL_MIN_REMAINING_LEAD_MS) {
+          const attemptId = String(event.payload['attempt_id'] ?? '');
+          if (attemptId) {
+            await wlLiveEngineInternals.voidAttempt(
+              tournamentId, attemptId, emitNow, 'stale_before_emit',
+              { seq: event.seq, claimToken: event.claim_token }
+            );
+          }
+          continue;
+        }
+      }
       const stamped = await wlEventsRepo.markLiveEmission(
-        tournamentId, event.seq, event.claim_token, redisNow, WL_SPECTATOR_DELAY_MS
+        tournamentId, event.seq, event.claim_token, emitNow, WL_SPECTATOR_DELAY_MS
       );
       if (!stamped) break; // fence lost
 
       io.to(wlPlayersRoom(tournamentId)).emit(publicEventName(event), {
-        ...event.payload,
+        ...outPayload,
         tournamentId,
         seq: event.seq,
         type: event.type,
-        serverNowAtEmit: redisNow,
+        serverNowAtEmit: emitNow,
       } as never);
+
+      if (event.type === 'dispatch' && typeof outPayload['deadlineAt'] === 'number') {
+        // Wake-up hint at the deadline; the 5s live reconciler is the
+        // durable backstop (timers are never the source of truth).
+        const { scheduleWlTick } = await import('./wl-timer.js');
+        await scheduleWlTick(tournamentId, Number(outPayload['deadlineAt'])).catch(() => {});
+      }
 
       const done = await wlEventsRepo.markDelivered(tournamentId, event.seq, event.claim_token);
       if (!done) break; // fence lost after emit — client seq-dedup absorbs the retry

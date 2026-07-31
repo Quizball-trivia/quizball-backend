@@ -167,6 +167,8 @@ function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow)
     newRp: row.new_rp,
     deltaRp: row.delta_rp,
     coinsAwarded: row.coins_awarded,
+    qpAwarded: 0,
+    qpWeekTotal: 0,
     oldTier: tierFromRp(row.old_rp),
     newTier: tierFromRp(row.new_rp),
     placementStatus: profile.placement_status,
@@ -174,6 +176,30 @@ function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow)
     placementRequired: profile.placement_required,
     isPlacement: row.is_placement,
   };
+}
+
+/**
+ * Fill qpAwarded / qpWeekTotal on already-built outcomes from the durable QP
+ * tables (award ledger for this match + weekly totals) — correct for live
+ * settlements, replays and ledger-reconstructed outcomes alike.
+ */
+async function decorateOutcomesWithQp(
+  matchId: string,
+  outcomeByUser: Record<string, RankedUserOutcome>
+): Promise<void> {
+  const userIds = Object.keys(outcomeByUser);
+  if (userIds.length === 0) return;
+  try {
+    const rows = await rankedRepo.getQpForMatchUsers(matchId, userIds);
+    for (const row of rows) {
+      const outcome = outcomeByUser[row.user_id];
+      if (!outcome) continue;
+      outcome.qpAwarded = row.points;
+      outcome.qpWeekTotal = row.week_total;
+    }
+  } catch (error) {
+    logger.warn({ err: error, matchId }, 'QP outcome decoration failed');
+  }
 }
 
 export const rankedService = {
@@ -406,6 +432,7 @@ export const rankedService = {
         if (!profile) continue;
         outcomeByUser[row.user_id] = outcomeFromLedgerRow(row, profile);
       }
+      await decorateOutcomesWithQp(matchId, outcomeByUser);
       return {
         isPlacement: Object.values(outcomeByUser).some((entry) => entry.isPlacement),
         byUserId: outcomeByUser,
@@ -581,6 +608,8 @@ export const rankedService = {
           newRp: settlement.newRp,
           deltaRp: settlement.deltaRp,
           coinsAwarded: settlement.coinsAwarded,
+          qpAwarded: settlement.qpAwarded,
+          qpWeekTotal: 0,
           oldTier: settlement.oldTier,
           newTier: settlement.newTier,
           placementStatus: settlement.placementStatus,
@@ -666,6 +695,7 @@ export const rankedService = {
         unappliedUserIds: unappliedEntries.map((entry) => entry.outcome.userId),
       }, 'Ranked settlement reconciled participants this call did not write');
     }
+    await decorateOutcomesWithQp(matchId, byUserIdOutcome);
     const outcome = {
       isPlacement: Object.values(byUserIdOutcome).some((o) => o.isPlacement),
       byUserId: byUserIdOutcome,
@@ -725,6 +755,8 @@ export const rankedService = {
       if (!profile) continue;
       byUserId[change.user_id] = outcomeFromLedgerRow(change, profile);
     }
+    // Recovery payloads carry the same QP truth as live settlements.
+    await decorateOutcomesWithQp(matchId, byUserId);
 
     return {
       isPlacement: changes.some((change) => change.is_placement),

@@ -117,7 +117,7 @@ beforeEach(async () => {
         AND status NOT IN ('completed', 'cancelled', 'voided')
     `;
   }
-});
+}, 120_000);
 
 afterAll(async () => {
   if (!dbAvailable) {

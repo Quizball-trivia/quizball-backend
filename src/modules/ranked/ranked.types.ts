@@ -76,6 +76,14 @@ export interface RankedUserOutcome {
   deltaRp: number;
   /** Coin participation reward granted with the settlement (win/loss). */
   coinsAwarded: number;
+  /**
+   * Weekend League qualification points this result earned (win 25 / loss
+   * 10; 0 outside the Mon-Fri accrual window or for bots) and the player's
+   * weekly total AFTER this match — powers the "+25 QP" moment and the
+   * league-card progress bar on the result screen.
+   */
+  qpAwarded: number;
+  qpWeekTotal: number;
   oldTier: RankedTier;
   newTier: RankedTier;
   placementStatus: PlacementStatus;

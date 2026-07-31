@@ -31,7 +31,7 @@ import {
   wlRenewStrictLock,
   wlRedisNowMs,
 } from './wl-redis.js';
-import { wlEngine } from './wl-engine.adapter.js';
+import { getWlEngine } from './wl-engine.adapter.js';
 import { wlUpcomingEventSchedule } from './wl-week.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
@@ -197,8 +197,26 @@ export async function wlOrchestratorTick(
     || pendingWork.length > 0;
 }
 
-/** Scoped advance+drain for one tournament (two-process harness). */
+/**
+ * Scoped advance+drain for one tournament (wl_tick hints + harness). Honors
+ * the SAME gates as the loop: the launch flag (a persisted timer firing
+ * after a restart must not advance a real tournament while orchestration is
+ * disabled) and the strict lock (never racing the reconciler).
+ */
 export async function wlAdvanceOneTournament(io: QuizballServer, tournamentId: string): Promise<void> {
+  const t0 = await wlOrchestratorRepo.getById(tournamentId);
+  if (!t0) return;
+  if (!config.WL_ORCHESTRATION_ENABLED && !t0.is_test) return;
+  const token = await wlAcquireStrictLock(ORCHESTRATOR_LOCK_KEY, LOCK_TTL_MS);
+  if (!token) return; // the lock holder's pass will cover this work
+  try {
+    await wlAdvanceOneLocked(io, tournamentId);
+  } finally {
+    await wlReleaseStrictLock(ORCHESTRATOR_LOCK_KEY, token);
+  }
+}
+
+async function wlAdvanceOneLocked(io: QuizballServer, tournamentId: string): Promise<void> {
   const redisNow = await wlRedisNowMs();
   const t = await wlOrchestratorRepo.getById(tournamentId);
   if (!t) return;
@@ -236,7 +254,7 @@ async function advanceTournament(
     t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
   if (t.status === 'content_pending') {
-    const seeded = await wlEngine.seedContent(t);
+    const seeded = await getWlEngine(t).seedContent(t);
     if (seeded) {
       await wlOrchestratorRepo.transition({
         tournamentId: t.id, from: 'content_pending', to: 'ready', redisTimeMs: redisNow,
@@ -270,12 +288,12 @@ async function advanceTournament(
       // crash-resumable) — not fired inline here.
       return;
     }
-    await wlEngine.startQualifier(t, redisNow);
+    await getWlEngine(t).startQualifier(t, redisNow);
     return;
   }
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
-    await wlEngine.advance(t, redisNow);
+    await getWlEngine(t).advance(t, redisNow);
     return;
   }
 
@@ -284,7 +302,7 @@ async function advanceTournament(
     && view.finalStartsAtMs != null
     && redisNow >= view.finalStartsAtMs
   ) {
-    await wlEngine.adjudicateFinalStart(t, redisNow);
+    await getWlEngine(t).adjudicateFinalStart(t, redisNow);
   }
 }
 

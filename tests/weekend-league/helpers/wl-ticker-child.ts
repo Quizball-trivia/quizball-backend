@@ -16,6 +16,18 @@ const sinkIo = {
 const iterations = Number(process.argv[2] ?? 40);
 const intervalMs = Number(process.argv[3] ?? 150);
 
+// Orphan guard: if the parent test process dies (crash, assertion abort)
+// this child must NOT keep ticking against the shared DB/Redis — an
+// orphaned ticker silently delivers other tests' events into its sink.
+const parentPid = process.ppid;
+setInterval(() => {
+  try {
+    process.kill(parentPid, 0);
+  } catch {
+    process.exit(0);
+  }
+}, 500).unref();
+
 await initRedisClients();
 for (let i = 0; i < iterations; i += 1) {
   try {

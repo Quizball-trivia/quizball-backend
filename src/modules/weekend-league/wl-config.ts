@@ -17,6 +17,9 @@ import {
 export const wlTournamentConfigSchema = z.object({
   rules_version: z.literal(1),
   launch_edition: z.boolean(),
+  /** Which engine drives this tournament. 'stub' is for orchestration tests
+   *  only and is refused for real (non-test) tournaments at runtime. */
+  engine: z.enum(['live', 'stub']).default('live'),
   qp_target: z.number().int().min(0).max(999_999),
   question_time_ms: z.number().int().min(1_000).max(120_000),
   dispatch_lead_ms: z.number().int().min(0).max(30_000),
@@ -30,6 +33,7 @@ export function buildWlConfig(overrides: Partial<WlTournamentConfig> = {}): WlTo
   return wlTournamentConfigSchema.parse({
     rules_version: 1,
     launch_edition: false,
+    engine: 'live',
     qp_target: WL_QP_TARGET,
     question_time_ms: WL_QUESTION_TIME_MS,
     dispatch_lead_ms: WL_DISPATCH_LEAD_MS,

@@ -19,6 +19,12 @@ const subscribeSchema = z.object({
   role: z.enum(['player', 'spectator']),
 }).strict();
 
+const answerSchema = z.object({
+  tournament_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  answer: z.unknown(),
+}).strict();
+
 type SubscribeAck = (response: {
   ok: boolean;
   reason?: 'not_entered' | 'not_found' | 'invalid';
@@ -86,5 +92,38 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
 
   socket.on('wl:unsubscribe', async () => {
     await leaveWlRooms(socket).catch(() => {});
+  });
+
+  socket.on('wl:answer', async (raw: unknown, ack?: Parameters<
+    import('../socket.types.js').ClientToServerEvents['wl:answer']
+  >[1]) => {
+    const parsed = answerSchema.safeParse(raw);
+    if (!parsed.success) {
+      ack?.({ accepted: false, reason: 'invalid' });
+      return;
+    }
+    const userId = socket.data.user?.id;
+    if (!userId) {
+      ack?.({ accepted: false, reason: 'invalid' });
+      return;
+    }
+    // Byte cap BEFORE any Redis/DB work — typed guesses are short strings.
+    if (JSON.stringify(parsed.data.answer ?? null).length > 512) {
+      ack?.({ accepted: false, reason: 'invalid' });
+      return;
+    }
+    try {
+      const { wlAcceptAnswer } = await import('../../modules/weekend-league/wl-live-engine.js');
+      const result = await wlAcceptAnswer({
+        tournamentId: parsed.data.tournament_id,
+        attemptId: parsed.data.attempt_id,
+        userId,
+        answer: parsed.data.answer ?? null,
+      });
+      ack?.(result);
+    } catch (error) {
+      logger.warn({ err: error, userId }, 'wl:answer failed');
+      ack?.({ accepted: false, reason: 'invalid' });
+    }
   });
 }

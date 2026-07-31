@@ -311,7 +311,18 @@ export const wlEngineLive: WlEngine = {
         LIMIT 1
       `;
       if (!current) {
-        await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
+        // Either nothing dispatched yet, or every attempt of the tail slot
+        // voided with reserves exhausted. If ALL slots are resolved
+        // (revealed or void-exhausted), the game is over.
+        const [anyRun] = await sql<Array<{ n: number }>>`
+          SELECT COUNT(*)::int AS n FROM wl_question_runs
+          WHERE tournament_id = ${t.id} AND game_index = 0
+        `;
+        if ((anyRun?.n ?? 0) === 0) {
+          await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
+        } else if (t.status === 'game_live') {
+          await finalizeQualifierGame(t.id, redisNow);
+        }
         return;
       }
       if (current.status === 'dispatched') {

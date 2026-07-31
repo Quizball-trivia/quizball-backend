@@ -174,14 +174,16 @@ export const wlLiveEngineInternals = {
     `;
     const cfg = wlConfigFrom(t?.config);
     // One-shot: only a NULL stamp is written; retries keep the original.
-    await sql`
+    const stampedNow = await sql`
       UPDATE wl_question_runs
       SET playable_at_ms = ${redisNow + cfg.dispatch_lead_ms},
           deadline_at_ms = ${redisNow + cfg.dispatch_lead_ms + cfg.question_time_ms},
           status = 'dispatched'
       WHERE attempt_id = ${attemptId} AND playable_at_ms IS NULL
         AND status IN ('created', 'dispatched')
+      RETURNING attempt_id
     `;
+    const isFirstEmission = stampedNow.length > 0;
     const [run] = await sql<WlRunRow[]>`
       SELECT attempt_id, tournament_id, game_index, round_index, question_index,
              question_id, status, playable_at_ms::text, deadline_at_ms::text
@@ -190,8 +192,12 @@ export const wlLiveEngineInternals = {
     if (!run || run.status === 'voided') return null;
     const playable = Number(run.playable_at_ms);
     if (run.status !== 'dispatched' || !Number.isFinite(playable)) return null;
-    if (redisNow > playable - WL_MIN_REMAINING_LEAD_MS) {
-      // Crash-retry too late to honor the original window fairly.
+    // The staleness rule applies ONLY to crash-retries of an already-stamped
+    // attempt: a first emission is by definition on time (its window was
+    // stamped from this very moment). A retry either still has meaningful
+    // lead before playableAt (re-broadcast the identical payload) or the
+    // window is burned and the attempt must be voided to a reserve.
+    if (!isFirstEmission && redisNow > playable - WL_MIN_REMAINING_LEAD_MS) {
       return null;
     }
     return {

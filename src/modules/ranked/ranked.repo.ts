@@ -430,6 +430,24 @@ export const rankedRepo = {
   },
 
   /**
+   * QP payload for a settled match: per-user points from the award ledger
+   * joined with the player's CURRENT weekly total (post-settlement read).
+   */
+  async getQpForMatchUsers(
+    matchId: string,
+    userIds: string[]
+  ): Promise<Array<{ user_id: string; points: number; week_total: number }>> {
+    if (userIds.length === 0) return [];
+    return sql<Array<{ user_id: string; points: number; week_total: number }>>`
+      SELECT a.user_id, a.points, COALESCE(q.points, a.points) AS week_total
+      FROM wl_qp_awards a
+      LEFT JOIN wl_qp q ON q.week_key = a.week_key AND q.user_id = a.user_id
+      WHERE a.match_id = ${matchId}
+        AND a.user_id = ANY(${sql.array(userIds)}::uuid[])
+    `;
+  },
+
+  /**
    * Admin: set a user's RP + tier to absolute values. Returns the new rp if a
    * ranked_profiles row exists, or null if the user has no profile yet.
    * The RP ledger (ranked_rp_changes) is intentionally NOT written — admin

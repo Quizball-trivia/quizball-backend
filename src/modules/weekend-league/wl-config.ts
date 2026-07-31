@@ -30,7 +30,7 @@ export const wlTournamentConfigSchema = z.object({
   checkin_window_ms: z.number().int().min(10_000).max(60 * 60_000),
   /** Spectator delay — how far behind live the spec room runs. Fixed 30s in
    *  production; configurable so compressed test events stay testable. */
-  spectator_delay_ms: z.number().int().min(1_000).max(120_000),
+  spectator_delay_ms: z.number().int().min(1_000).max(120_000).default(30_000),
 });
 
 export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;

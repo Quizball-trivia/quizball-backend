@@ -196,11 +196,18 @@ describe('WL spectator delay', () => {
       expect(s.atMs - live!.atMs).toBeGreaterThanOrEqual(SPEC_DELAY - 250);
     }
 
-    // 2) Order + monotonic cursor: spec seqs strictly increase; the persisted
-    //    cursor equals the last spec seq delivered.
+    // 2) GAPLESS: the spectator stream is exactly the contiguous prefix of
+    //    the live stream — every seq equals its predecessor plus one, and
+    //    matches the live seqs in order.
     const specSeqs = spec.map((s) => s.payload['seq'] as number);
-    expect(specSeqs).toEqual([...specSeqs].sort((a, b) => a - b));
-    expect(new Set(specSeqs).size).toBe(specSeqs.length);
+    for (let i = 1; i < specSeqs.length; i += 1) {
+      expect(specSeqs[i]).toBe(specSeqs[i - 1]! + 1);
+    }
+    const liveSeqsSorted = [...liveBySeq.keys()].sort((a, b) => a - b);
+    expect(specSeqs).toEqual(liveSeqsSorted.slice(
+      liveSeqsSorted.indexOf(specSeqs[0]!),
+      liveSeqsSorted.indexOf(specSeqs[0]!) + specSeqs.length
+    ));
     const t = await wlOrchestratorRepo.getById(tid);
     expect(Number(t?.spec_delivered_seq)).toBe(specSeqs.at(-1));
 
@@ -211,5 +218,9 @@ describe('WL spectator delay', () => {
     expect(typeof specDispatch!.payload['playableAt']).toBe('number');
     expect(typeof specDispatch!.payload['deadlineAt']).toBe('number');
     expect(specDispatch!.payload['spectator']).toBe(true);
+    // The replayed stamps are EXACTLY what the players saw.
+    const liveTwin = liveBySeq.get(specDispatch!.payload['seq'] as number)!;
+    expect(specDispatch!.payload['playableAt']).toBe(liveTwin.payload['playableAt']);
+    expect(specDispatch!.payload['deadlineAt']).toBe(liveTwin.payload['deadlineAt']);
   }, 120_000);
 });

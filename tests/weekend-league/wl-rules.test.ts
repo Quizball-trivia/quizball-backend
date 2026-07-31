@@ -110,6 +110,20 @@ describe('score encoding + comparator', () => {
   });
 });
 
+describe('wlConfigFrom legacy snapshots', () => {
+  it('accepts pre-PR5 configs lacking spectator_delay_ms without wiping timings', async () => {
+    const { wlConfigFrom } = await import('../../src/modules/weekend-league/wl-config.js');
+    const legacy = {
+      rules_version: 1, launch_edition: true, engine: 'stub', free_entry: true,
+      qp_target: 200, question_time_ms: 1234, dispatch_lead_ms: 0,
+      break_ms: 2000, checkin_window_ms: 60000,
+    };
+    const parsed = wlConfigFrom(legacy);
+    expect(parsed.question_time_ms).toBe(1234);
+    expect(parsed.spectator_delay_ms).toBe(30_000);
+  });
+});
+
 describe('wlBuildLadder', () => {
   it('matches the product ladder at 600', () => {
     expect(wlBuildLadder(600)).toEqual([200, 100, 24]);

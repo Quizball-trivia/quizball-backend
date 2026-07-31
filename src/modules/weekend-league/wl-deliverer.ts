@@ -42,11 +42,21 @@ function publicEventName(event: WlEventRow): WlEventName {
 
 const MAX_EVENTS_PER_DRAIN = 200;
 
+/** Thrown when the strict orchestrator lock is lost mid-work: the caller
+ * MUST stop all further side effects — another process owns the work now. */
+export class WlLockLostError extends Error {
+  constructor() {
+    super('WL orchestrator lock lost');
+    this.name = 'WlLockLostError';
+  }
+}
+
 /**
  * Drain the pending outbox head-first for one tournament (bounded per call
  * so a single tournament can never hold the orchestrator lock past its
- * TTL). `heartbeat` is invoked per event; false aborts before any further
- * side effect. Safe to call from any replica at any time.
+ * TTL). `heartbeat` is invoked per event; a false return raises
+ * WlLockLostError so no later step (spectator delivery, next tournament)
+ * can run under a lost lock. Safe to call from any replica at any time.
  */
 export async function wlDeliverPending(
   io: QuizballServer,
@@ -55,7 +65,7 @@ export async function wlDeliverPending(
 ): Promise<number> {
   let delivered = 0;
   while (delivered < MAX_EVENTS_PER_DRAIN) {
-    if (heartbeat && !(await heartbeat())) break;
+    if (heartbeat && !(await heartbeat())) throw new WlLockLostError();
     const head = await wlEventsRepo.pendingHead(tournamentId);
     if (!head) break;
     // Poison classification only for an UNCLAIMED head: attempts counts

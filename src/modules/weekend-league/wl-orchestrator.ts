@@ -17,9 +17,10 @@
  */
 
 import { logger } from '../../core/logger.js';
+import { sql } from '../../db/index.js';
 import { config } from '../../core/config.js';
 import type { QuizballServer } from '../../realtime/socket-server.js';
-import { wlDeliverPending, wlDeliverSpectator } from './wl-deliverer.js';
+import { WlLockLostError, wlDeliverPending, wlDeliverSpectator } from './wl-deliverer.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { buildWlConfig, wlConfigFrom } from './wl-config.js';
 import { wlDueTransition, type WlScheduleView } from './wl-phase.js';
@@ -148,8 +149,16 @@ export async function wlOrchestratorTick(
 
   // Waves for RECENTLY TERMINAL tournaments too: a crash between the
   // cancelled CAS and its wave must heal on later passes even though the
-  // row left listActive.
-  for (const t of await wlOrchestratorRepo.listRecentlyTerminal(48)) {
+  // row left listActive. Flag rule applies here as well.
+  const recentTerminalAll = await wlOrchestratorRepo.listRecentlyTerminal(48);
+  const recentTerminal = config.WL_ORCHESTRATION_ENABLED
+    ? recentTerminalAll
+    : recentTerminalAll.filter((t) => t.is_test);
+  for (const t of recentTerminal) {
+    if (opts.heartbeat && !(await opts.heartbeat())) {
+      logger.warn('WL orchestrator lock lost mid-wave-reconcile; aborting');
+      return;
+    }
     try {
       await reconcileWaves(t);
     } catch (error) {
@@ -158,7 +167,12 @@ export async function wlOrchestratorTick(
   }
 
   // Outbox drain — includes TERMINAL tournaments with outstanding work.
-  const pendingWork = await wlEventsRepo.listTournamentsWithPendingWork();
+  // Same flag rule as advancement: with orchestration disabled, only test
+  // tournaments may produce side effects (waves, emissions, cursors).
+  const pendingWorkAll = await wlEventsRepo.listTournamentsWithPendingWork();
+  const pendingWork = config.WL_ORCHESTRATION_ENABLED
+    ? pendingWorkAll
+    : await filterTestTournamentIds(pendingWorkAll);
   for (const tournamentId of pendingWork) {
     if (opts.heartbeat && !(await opts.heartbeat())) {
       logger.warn('WL orchestrator lock lost mid-drain; aborting');
@@ -168,6 +182,10 @@ export async function wlOrchestratorTick(
       await wlDeliverPending(io, tournamentId, opts.heartbeat);
       await wlDeliverSpectator(io, tournamentId);
     } catch (error) {
+      if (error instanceof WlLockLostError) {
+        logger.warn({ tournamentId }, 'WL orchestrator lock lost mid-delivery; aborting pass');
+        return;
+      }
       logger.error({ err: error, tournamentId }, 'WL outbox drain failed');
     }
   }
@@ -268,6 +286,15 @@ async function advanceTournament(
   ) {
     await wlEngine.adjudicateFinalStart(t, redisNow);
   }
+}
+
+async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return ids;
+  const rows = await sql<{ id: string }[]>`
+    SELECT id FROM wl_tournaments
+    WHERE id = ANY(${sql.array(ids)}::uuid[]) AND is_test = true
+  `;
+  return rows.map((r) => r.id);
 }
 
 /**

@@ -1077,6 +1077,13 @@ export interface ClientToServerEvents {
     ack?: (result: { ok: boolean; reason?: 'not_entered' | 'not_found' | 'invalid'; seq?: number }) => void
   ) => void;
   'wl:unsubscribe': () => void;
+  'wl:answer': (
+    data: { tournament_id: string; attempt_id: string; answer: unknown },
+    ack?: (result:
+      | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+      | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' | 'invalid' }
+    ) => void
+  ) => void;
   'lobby:create': (
     data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
     ack?: (result: LobbyCreateResult) => void

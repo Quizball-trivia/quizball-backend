@@ -233,5 +233,187 @@ async function completeTournament(
   });
 }
 
-// PR3/PR4 swap this binding for the real engine.
-export const wlEngine: WlEngine = wlEngineStub;
+/**
+ * The LIVE engine: real seeded content, real dispatched questions, real
+ * standings. PR3 scope = one playable game (game 0) to qualifier_done; the
+ * final still settles by walkover semantics ON REAL qualifier standings
+ * (PR4 turns the final into a played game and adds the 3-game gauntlet).
+ */
+export const wlEngineLive: WlEngine = {
+  async seedContent(t): Promise<boolean> {
+    const { wlSeedTournamentContent } = await import('./wl-seeder.js');
+    const cfg = (t.config ?? {}) as Record<string, unknown>;
+    const launchEdition = cfg['launch_edition'] === true || cfg['launch_edition'] === 'true';
+    const result = await wlSeedTournamentContent({
+      tournamentId: t.id,
+      allowPublicBank: t.is_test || launchEdition,
+      deterministic: process.env.REGRESSION_DETERMINISTIC === '1',
+    });
+    return result.ok;
+  },
+
+  async startQualifier(t, redisNow): Promise<boolean> {
+    const { wlLiveEngineInternals } = await import('./wl-live-engine.js');
+    let started = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const moved = await txSql`
+        UPDATE wl_tournaments SET status = 'game_live'
+        WHERE id = ${t.id} AND status = 'checkin'
+        RETURNING id
+      `;
+      if (moved.length === 0) return;
+      const frozen = await txSql<{ user_id: string }[]>`
+        INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+        SELECT tournament_id, 0, user_id FROM wl_entries
+        WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
+        ON CONFLICT DO NOTHING
+        RETURNING user_id
+      `;
+      await txSql`
+        UPDATE wl_entries SET state = 'playing'
+        WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
+      `;
+      await txSql`
+        UPDATE wl_tournaments
+        SET ladder = ${sql.json({ fieldSize: frozen.length, advance: wlBuildLadder(frozen.length) } as never)}
+        WHERE id = ${t.id}
+      `;
+      await wlEventsRepo.append(txSql, {
+        tournamentId: t.id,
+        type: 'phase',
+        payload: { from: 'checkin', to: 'game_live', field: frozen.length },
+        redisTimeMs: redisNow,
+      });
+      started = true;
+      logger.info({ tournamentId: t.id, field: frozen.length }, 'WL qualifier kicked off');
+    });
+    if (started) {
+      // First question of game 0 (own tx; idempotent — recovery re-appends).
+      await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
+    }
+    return started;
+  },
+
+  async advance(t, redisNow): Promise<void> {
+    const { wlLiveEngineInternals, wlNextSlot, wlSlotSequence } = await import('./wl-live-engine.js');
+    if (t.status === 'game_live' || t.status === 'final_live') {
+      const [current] = await sql<Array<{
+        attempt_id: string; tournament_id: string; game_index: number; round_index: number;
+        question_index: number; question_id: string; status: string;
+        playable_at_ms: string | null; deadline_at_ms: string | null;
+      }>>`
+        SELECT attempt_id, tournament_id, game_index, round_index, question_index,
+               question_id, status, playable_at_ms::text, deadline_at_ms::text
+        FROM wl_question_runs
+        WHERE tournament_id = ${t.id} AND game_index = 0 AND status <> 'voided'
+        ORDER BY round_index DESC, question_index DESC
+        LIMIT 1
+      `;
+      if (!current) {
+        await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
+        return;
+      }
+      if (current.status === 'dispatched') {
+        const deadline = Number(current.deadline_at_ms);
+        if (Number.isFinite(deadline) && redisNow >= deadline) {
+          await wlLiveEngineInternals.freezeAndReveal(t.id, current as never, redisNow);
+        }
+        return;
+      }
+      if (current.status === 'revealed') {
+        const next = wlNextSlot({
+          gameIndex: current.game_index, roundIndex: current.round_index,
+          questionIndex: current.question_index,
+        });
+        if (next) {
+          await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
+          return;
+        }
+        const lastSlot = wlSlotSequence().at(-1)!;
+        const isLast = current.round_index === lastSlot.roundIndex
+          && current.question_index === lastSlot.questionIndex;
+        if (isLast) await finalizeQualifierGame(t.id, redisNow);
+      }
+      return;
+    }
+  },
+
+  async adjudicateFinalStart(t, redisNow): Promise<void> {
+    // PR3: dns_v1 settlement on REAL qualifier standings — champion is the
+    // best-ranked finalist who checked in for Sunday. PR4 replaces this with
+    // a genuinely played final game.
+    const ranked = await sql<Array<{ user_id: string; final_checked_in_at: string | null }>>`
+      SELECT e.user_id, e.final_checked_in_at::text
+      FROM wl_entries e
+      JOIN wl_game_results r
+        ON r.tournament_id = e.tournament_id AND r.user_id = e.user_id AND r.game_index = 0
+      WHERE e.tournament_id = ${t.id} AND e.state = 'finalist'
+      ORDER BY r.rank ASC
+    `;
+    const checkedIn = ranked.filter((r) => r.final_checked_in_at != null);
+    await completeTournament(t.id, redisNow, checkedIn[0]?.user_id ?? null, false);
+  },
+};
+
+async function finalizeQualifierGame(tournamentId: string, redisNow: number): Promise<void> {
+  const { wlLiveEngineInternals } = await import('./wl-live-engine.js');
+  const board = await wlLiveEngineInternals.topBoard(tournamentId, 0, Number.MAX_SAFE_INTEGER);
+  if (board.length === 0) return;
+  const finalists = board.slice(0, WL_FINALISTS).map((b) => b.user_id);
+  const eliminated = board.slice(WL_FINALISTS).map((b) => b.user_id);
+  await sql.begin(async (tx) => {
+    const txSql = tx as unknown as typeof sql;
+    const moved = await txSql`
+      UPDATE wl_tournaments SET status = 'qualifier_done'
+      WHERE id = ${tournamentId} AND status = 'game_live'
+      RETURNING id
+    `;
+    if (moved.length === 0) return;
+    for (const row of board) {
+      await txSql`
+        INSERT INTO wl_game_results (
+          tournament_id, game_index, user_id, score, time_ms_total, rank, advanced
+        )
+        VALUES (
+          ${tournamentId}, 0, ${row.user_id}, ${row.points}, ${row.time_ms_total},
+          ${row.rank}, ${row.rank <= WL_FINALISTS}
+        )
+        ON CONFLICT (tournament_id, game_index, user_id) DO NOTHING
+      `;
+    }
+    if (finalists.length > 0) {
+      await txSql`
+        UPDATE wl_entries SET state = 'finalist'
+        WHERE tournament_id = ${tournamentId} AND user_id = ANY(${sql.array(finalists)}::uuid[])
+      `;
+    }
+    if (eliminated.length > 0) {
+      await txSql`
+        UPDATE wl_entries SET state = 'eliminated', eliminated_game = 0
+        WHERE tournament_id = ${tournamentId} AND user_id = ANY(${sql.array(eliminated)}::uuid[])
+      `;
+    }
+    await wlEventsRepo.append(txSql, {
+      tournamentId, type: 'phase',
+      payload: { from: 'game_live', to: 'qualifier_done' },
+      redisTimeMs: redisNow,
+    });
+    await wlEventsRepo.append(txSql, {
+      tournamentId, type: 'game_result',
+      payload: {
+        game_index: 0,
+        board: board.slice(0, WL_FINALISTS),
+        finalists: finalists.length,
+        field: board.length,
+      },
+      redisTimeMs: redisNow,
+    });
+  });
+  logger.info({ tournamentId, field: board.length, finalists: finalists.length }, 'WL qualifier game finalized');
+}
+
+// Env seam: orchestration-focused tests (traversal/two-process) run the fast
+// stub; everything else runs the live engine. Never available in prod.
+const useStub = process.env.WL_ENGINE === 'stub' && process.env.NODE_ENV !== 'prod';
+export const wlEngine: WlEngine = useStub ? wlEngineStub : wlEngineLive;

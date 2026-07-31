@@ -7,6 +7,8 @@
  * tournament with gapless, exactly-once-delivered events.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+
+process.env.WL_ENGINE = 'stub';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { WL_EVENT_POISON_ATTEMPTS } from '../../src/modules/weekend-league/wl-events.repo.js';
@@ -78,6 +80,7 @@ function spawnTicker(iterations: number, intervalMs: number): ChildProcess {
       ...process.env,
       NODE_ENV: 'local',
       LOG_LEVEL: 'silent',
+      WL_ENGINE: 'stub',
       DATABASE_URL: process.env.DATABASE_URL,
       SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://test.supabase.co',
       SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ?? 'test-anon-key',

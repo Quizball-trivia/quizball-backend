@@ -8,6 +8,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
+process.env.WL_ENGINE = 'stub';
+
 let sql: typeof import('../../src/db/index.js').sql;
 let repo: typeof import('../../src/modules/weekend-league/wl-orchestrator.repo.js').wlOrchestratorRepo;
 let tick: typeof import('../../src/modules/weekend-league/wl-orchestrator.js').wlOrchestratorTick;

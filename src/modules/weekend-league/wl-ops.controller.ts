@@ -230,8 +230,22 @@ export const wlOpsController = {
       ) s
       WHERE s.wins * 25 + s.losses * 10 > 0
       ON CONFLICT (match_id, user_id) DO UPDATE SET
-        points = EXCLUDED.points, week_key = EXCLUDED.week_key
+        points = EXCLUDED.points, week_key = EXCLUDED.week_key, result = 'grant'
       RETURNING user_id
+    `;
+    // Convergence for users whose previously-unmatched matches have since
+    // gained ordinary ledger rows: their recomputed total is zero and the
+    // stale grant must go (points CHECK > 0 forbids a zero upsert).
+    await sql`
+      DELETE FROM wl_qp_awards g
+      WHERE g.match_id = '00000000-0000-4000-8000-00000000019b'::uuid
+        AND NOT EXISTS (
+          SELECT 1 FROM ranked_rp_changes rc
+          LEFT JOIN wl_qp_awards existing
+            ON existing.match_id = rc.match_id AND existing.user_id = rc.user_id
+          WHERE rc.user_id = g.user_id AND rc.created_at >= ${new Date(input.since)}
+            AND existing.match_id IS NULL AND rc.result IN ('win', 'loss')
+        )
     `;
     logger.warn({ actor: input.actor, inserted: rows.length }, 'WL ops: S2 QP bootstrap');
     res.json({ inserted: rows.length });

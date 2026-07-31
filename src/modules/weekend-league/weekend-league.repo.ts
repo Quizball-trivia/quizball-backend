@@ -160,10 +160,26 @@ export const weekendLeagueRepo = {
       INSERT INTO wl_qp_resets (user_id, tournament_id, balance_spent)
       SELECT claimed.user_id, ${tournamentId}, balance.points
       FROM claimed, balance
+      -- Free test entries never touch the wallet: no reset, balance intact.
+      WHERE NOT EXISTS (
+        SELECT 1 FROM wl_tournaments t2
+        WHERE t2.id = ${tournamentId} AND t2.is_test = true
+          AND COALESCE(t2.config->>'free_entry', 'false') = 'true'
+      )
       ON CONFLICT (user_id, tournament_id) DO NOTHING
       RETURNING user_id
     `;
-      entered = rows.length > 0;
+      // A free entry inserts no reset row — confirm the claim itself.
+      if (rows.length > 0) {
+        entered = true;
+      } else {
+        const [claimedRow] = await txSql<{ user_id: string }[]>`
+          SELECT user_id FROM wl_entries
+          WHERE tournament_id = ${tournamentId} AND user_id = ${userId}
+            AND entered_at > NOW() - interval '5 seconds'
+        `;
+        entered = claimedRow != null;
+      }
     });
     return entered;
   },

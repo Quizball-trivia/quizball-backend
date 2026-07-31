@@ -231,16 +231,25 @@ async function completeTournament(
       WHERE e.tournament_id = ${tournamentId} AND e.state IN ('champion', 'finalist', 'no_show')
     `;
     await writeAwards(txSql, tournamentId, ordering);
+    const field = await txSql<{ user_id: string }[]>`
+      SELECT user_id FROM wl_entries
+      WHERE tournament_id = ${tournamentId}
+        AND state IN ('champion', 'finalist', 'no_show', 'playing')
+    `;
+    const evict = field.map((f) => f.user_id);
     await wlEventsRepo.append(txSql, {
       tournamentId,
       type: 'phase',
-      payload: { to: 'completed', final_played: finalPlayed },
+      payload: { to: 'completed', final_played: finalPlayed, evicted_user_ids: evict },
       redisTimeMs: redisNow,
     });
     await wlEventsRepo.append(txSql, {
       tournamentId,
       type: 'final_result',
-      payload: { champion_user_id: championUserId, final_played: finalPlayed },
+      payload: {
+        champion_user_id: championUserId, final_played: finalPlayed,
+        evicted_user_ids: evict,
+      },
       redisTimeMs: redisNow,
     });
   });

@@ -78,6 +78,45 @@ describe('matcher behaviour is unchanged by instrumentation', () => {
     explainClueGuess('Roman Burki', accepted);
     expect(accepted).toEqual(ACCEPTED);
   });
+
+  // The instrumentation is only trustworthy if its diagnosis can never contradict
+  // the verdict players actually receive. Sweeping the awkward inputs this
+  // matcher deals with (accents, Georgian script, apostrophes, short tokens,
+  // empty sets) guards that invariant far better than the fixed cases above.
+  it('never disagrees with the verdict across a broad input sweep', () => {
+    const guesses = [
+      '', ' ', '!!!', 'a', 'ab', 'abc', 'abcd', 'Pele', 'Pelé', 'pele',
+      'Roman', 'Burki', 'Romen Burki', 'Roman Burkii', 'ROMAN BURKI', 'roman  burki',
+      'Man Utd', 'man utd', 'Manchester United', 'Kaka', 'Kaká', 'Ronaldo',
+      'Cristiano Ronaldo', 'C. Ronaldo', 'xyz', 'zzzzzzzzzz',
+      'მიროსლავ კლოზე', 'კლოზე', "N'Golo Kante", 'Ngolo Kante', 'de Gea', 'De-Gea',
+    ];
+    const sets = [
+      ['Roman Burki'], ['Roman Burki', 'Bürki'], ['Manchester United'], ['Pelé'],
+      ['Kaká'], ['Cristiano Ronaldo'], ['Miroslav Klose', 'მიროსლავ კლოზე'],
+      ["N'Golo Kanté"], ['David de Gea'], [''], [], ['a'], ['abcd'],
+    ];
+
+    const disagreements: string[] = [];
+    for (const guess of guesses) {
+      for (const accepted of sets) {
+        const verdict = fuzzyMatchesAnswer(guess, accepted);
+        const explanation = explainClueGuess(guess, accepted);
+        if ((explanation.matchedRule !== null) !== verdict) {
+          disagreements.push(`${JSON.stringify(guess)} vs ${JSON.stringify(accepted)}: verdict=${verdict} rule=${explanation.matchedRule}`);
+        }
+        // A reject must always carry a reason, and an accept must never carry one.
+        if (!verdict && explanation.rejectReason === null) {
+          disagreements.push(`missing rejectReason for ${JSON.stringify(guess)}`);
+        }
+        if (verdict && explanation.rejectReason !== null) {
+          disagreements.push(`rejectReason on accept for ${JSON.stringify(guess)}`);
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
+  });
 });
 
 describe('explainClueGuess diagnosis', () => {

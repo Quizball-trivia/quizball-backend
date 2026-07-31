@@ -671,6 +671,32 @@ export async function wlAcceptAnswer(input: {
   const redisNow = await wlRedisNowMs();
   if (run.status !== 'dispatched' || !Number.isFinite(playable)
     || redisNow < playable || redisNow >= deadline) {
+    // Idempotent recovery MUST survive closure: a client whose ack was
+    // dropped near the deadline retries after it — the accepted result it
+    // already earned has to come back, not `closed`. Redis first (until
+    // TTL), then the persisted row after freeze.
+    const storedLate = await wlRedis()
+      .hGet(answersKey(input.tournamentId, input.attemptId), input.userId)
+      .catch(() => null);
+    if (storedLate) {
+      try {
+        const p = JSON.parse(storedLate) as { correct: boolean; points: number; elapsedMs: number };
+        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      } catch { /* fall through to the persisted row */ }
+    }
+    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number }>>`
+      SELECT correct, points, elapsed_ms FROM wl_answers
+      WHERE attempt_id = ${input.attemptId} AND user_id = ${input.userId}
+        AND timing_source <> 'voided_audit'
+    `;
+    if (persistedRow) {
+      return {
+        accepted: true,
+        correct: persistedRow.correct,
+        points: persistedRow.points,
+        elapsedMs: persistedRow.elapsed_ms,
+      };
+    }
     return { accepted: false, reason: 'closed' };
   }
   const [participant] = await sql<{ user_id: string }[]>`
@@ -734,16 +760,24 @@ export interface WlSubscribeSnapshot {
 }
 
 /**
- * Role-appropriate state snapshot for the wl:subscribe ack, so a late join or
- * a transient reconnect resumes mid-question instead of waiting for the next
- * dispatch. Players get the in-flight attempt (question + evaluation + window
- * stamps — the same payload a live dispatch carries) plus their own accepted
- * answer and per-game score; spectators get status + board only, because the
- * in-flight question hasn't cleared the 30s delay yet.
+ * PLAYER state snapshot for the wl:subscribe ack, so a late join or a
+ * transient reconnect resumes mid-question instead of waiting for the next
+ * dispatch: the in-flight attempt (question + evaluation + window stamps —
+ * the same payload a live dispatch carries) plus the caller's own accepted
+ * answer and per-game score. Spectators get NO snapshot at all — their whole
+ * world is the 30s-delayed stream, and live standings/status through the ack
+ * would leak ahead of it.
+ *
+ * Read ordering makes the score safe against a concurrent freeze: the
+ * persisted sum is read BEFORE the dispatched-run/Redis pair, and the freeze
+ * transaction persists answers atomically with the run leaving 'dispatched',
+ * so an attempt can never be counted twice (a freeze landing between the
+ * reads can only cause a momentary undercount that the very next reveal
+ * event corrects).
  */
 export async function wlSubscribeSnapshot(
   tournamentId: string,
-  userId: string | null
+  userId: string
 ): Promise<WlSubscribeSnapshot | null> {
   const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
     SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
@@ -754,28 +788,31 @@ export async function wlSubscribeSnapshot(
   const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
   const redisNow = await wlRedisNowMs();
 
-  if (userId == null) {
-    return {
-      status: t.status, server_now: redisNow, game_index: gameIndex,
-      attempt: null, your_answer: null, score: 0, board,
-    };
-  }
+  const [persisted] = await sql<Array<{ points: number }>>`
+    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
+    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
+  `;
 
   let attempt: Record<string, unknown> | null = null;
   let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
   let inFlightPoints = 0;
-  const [run] = await sql<Array<{
-    attempt_id: string; game_index: number; round_index: number; question_index: number;
-    question_id: string; playable_at_ms: string | null; deadline_at_ms: string | null;
-  }>>`
-    SELECT attempt_id, game_index, round_index, question_index, question_id,
-           playable_at_ms::text, deadline_at_ms::text
-    FROM wl_question_runs
-    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
-      AND status = 'dispatched'
-    ORDER BY round_index DESC, question_index DESC
-    LIMIT 1
-  `;
+  // No in-flight attempt outside an actually-running game: cancellation does
+  // not close runs, so gate by tournament status rather than run state alone.
+  const gameRunning = t.status === 'game_live' || t.status === 'final_live';
+  const [run] = gameRunning
+    ? await sql<Array<{
+        attempt_id: string; game_index: number; round_index: number; question_index: number;
+        question_id: string; playable_at_ms: string | null; deadline_at_ms: string | null;
+      }>>`
+        SELECT attempt_id, game_index, round_index, question_index, question_id,
+               playable_at_ms::text, deadline_at_ms::text
+        FROM wl_question_runs
+        WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
+          AND status = 'dispatched'
+        ORDER BY round_index DESC, question_index DESC
+        LIMIT 1
+      `
+    : [];
   if (run && Number(run.deadline_at_ms) > redisNow) {
     const [content] = await sql<Array<{ kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
       SELECT kind, payload, evaluation FROM wl_questions WHERE question_id = ${run.question_id}
@@ -809,10 +846,6 @@ export async function wlSubscribeSnapshot(
     }
   }
 
-  const [persisted] = await sql<Array<{ points: number }>>`
-    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
-    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
-  `;
   return {
     status: t.status,
     server_now: redisNow,

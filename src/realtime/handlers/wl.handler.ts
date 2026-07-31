@@ -77,17 +77,18 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       }
       await leaveWlRooms(socket);
       await socket.join(role === 'player' ? wlPlayersRoom(tournamentId) : wlSpectatorsRoom(tournamentId));
-      // Role-appropriate state so a late join / transient reconnect resumes
+      // Player-only state so a late join / transient reconnect resumes
       // mid-question instead of waiting out the current attempt. Spectators
-      // get no attempt — the in-flight question hasn't cleared the delay.
-      const { wlSubscribeSnapshot } = await import('../../modules/weekend-league/wl-live-engine.js');
-      const snapshot = await wlSubscribeSnapshot(
-        tournamentId,
-        role === 'player' ? userId : null
-      ).catch((error) => {
-        logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe snapshot failed');
-        return null;
-      });
+      // get NO snapshot: their whole world is the 30s-delayed stream, and
+      // live standings/status through the ack would leak ahead of it.
+      let snapshot = null;
+      if (role === 'player') {
+        const { wlSubscribeSnapshot } = await import('../../modules/weekend-league/wl-live-engine.js');
+        snapshot = await wlSubscribeSnapshot(tournamentId, userId).catch((error) => {
+          logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe snapshot failed');
+          return null;
+        });
+      }
       // Role-appropriate cursor: the seq this room's stream has reached, so
       // the client knows which snapshot version to demand before trusting
       // events (a spectator ack'd with the LIVE cursor would discard its

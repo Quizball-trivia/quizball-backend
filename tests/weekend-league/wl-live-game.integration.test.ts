@@ -263,8 +263,12 @@ describe('WL live game end-to-end', () => {
             expect(pre?.attempt?.['question']).toBeTruthy();
             expect(Number(pre?.attempt?.['deadlineAt'])).toBeGreaterThan(Date.now() - 60_000);
             expect(pre?.your_answer).toBeNull();
-            const spec = await wlSubscribeSnapshot(tid, null);
-            expect(spec?.attempt).toBeNull();
+            // Spectators get no snapshot at all (handler never builds one);
+            // a non-participant player snapshot must still carry no answer.
+            const outsider = await wlSubscribeSnapshot(tid, '00000000-0000-4000-8000-000000000000');
+            expect(outsider?.attempt?.['attempt_id']).toBe(run.attempt_id);
+            expect(outsider?.your_answer).toBeNull();
+            expect(outsider?.score).toBe(0);
           }
           const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
           if (aceResult.accepted) expect(aceResult.correct).toBe(true);

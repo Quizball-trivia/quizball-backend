@@ -348,7 +348,10 @@ CREATE INDEX IF NOT EXISTS idx_wl_events_spec
 
 CREATE TABLE IF NOT EXISTS public.wl_awards (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id),
+  -- CASCADE: deleting a (test/ops) tournament removes its award rows; the
+  -- guard trigger protects ENTITLEMENT FIELDS from tampering, not rows from
+  -- legitimate tournament deletion.
+  tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id) ON DELETE CASCADE,
   user_id uuid NOT NULL REFERENCES public.users(id),
   final_rank integer NOT NULL,
   band text NOT NULL,
@@ -364,7 +367,7 @@ CREATE TABLE IF NOT EXISTS public.wl_awards (
 
 CREATE TABLE IF NOT EXISTS public.wl_award_actions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  award_id uuid NOT NULL REFERENCES public.wl_awards(id),
+  award_id uuid NOT NULL REFERENCES public.wl_awards(id) ON DELETE CASCADE,
   actor_type text NOT NULL CHECK (actor_type IN ('admin', 'ops_token', 'system')),
   actor_id text NOT NULL,
   action text NOT NULL,
@@ -372,13 +375,14 @@ CREATE TABLE IF NOT EXISTS public.wl_award_actions (
   created_at timestamptz NOT NULL DEFAULT NOW()
 );
 
--- Awards: entitlement fields are immutable; only fulfillment state may change,
--- and deletes are rejected. The audit table is append-only.
+-- Awards: entitlement fields are immutable; only fulfillment state may
+-- change. Row deletion is allowed (it cascades from tournament deletion);
+-- the audit table remains append-only.
 CREATE OR REPLACE FUNCTION public.wl_awards_guard()
 RETURNS trigger AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    RAISE EXCEPTION 'wl_awards rows cannot be deleted';
+    RETURN OLD;
   END IF;
   IF NEW.tournament_id IS DISTINCT FROM OLD.tournament_id
      OR NEW.user_id IS DISTINCT FROM OLD.user_id
@@ -401,7 +405,10 @@ CREATE TRIGGER trg_wl_awards_guard
 CREATE OR REPLACE FUNCTION public.wl_award_actions_append_only()
 RETURNS trigger AS $$
 BEGIN
-  RAISE EXCEPTION 'wl_award_actions is append-only';
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD; -- cascade from award/tournament deletion is legitimate
+  END IF;
+  RAISE EXCEPTION 'wl_award_actions rows cannot be updated';
 END;
 $$ LANGUAGE plpgsql;
 

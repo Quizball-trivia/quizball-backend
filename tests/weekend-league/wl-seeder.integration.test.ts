@@ -137,6 +137,14 @@ async function createTournament(): Promise<string> {
 describe('wlSeedTournamentContent', () => {
   it('refuses to seed anything on insufficient stock', async ({ skip }) => {
     if (!dbAvailable) skip();
+    // Self-sufficient precondition: leftover wl_private stock from other
+    // (kept-state) runs must not satisfy this test. Localhost-guarded.
+    if (/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) {
+      await sql`DELETE FROM question_payloads WHERE question_id IN
+        (SELECT id FROM questions WHERE visibility = 'wl_private')`;
+      await sql`DELETE FROM questions WHERE visibility = 'wl_private'
+        AND id NOT IN (SELECT source_question_id FROM wl_questions WHERE source_question_id IS NOT NULL)`;
+    }
     const tid = await createTournament();
     const result = await seed({ tournamentId: tid, allowPublicBank: false, deterministic: true });
     expect(result.ok).toBe(false);

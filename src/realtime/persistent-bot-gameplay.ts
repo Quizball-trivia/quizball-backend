@@ -516,9 +516,15 @@ export function decidePutInOrderCorrectCount(
   keys: { botId: string; matchId: string; questionId: string },
 ): number {
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:pio:${params.source.batchId}`);
+  // Same preference order as decideClue: calibrated per-question distribution,
+  // else the PROD-measured prior for this item count, else skill-scaled.
+  const priorHist = priorHistogram(PROD_PUT_IN_ORDER_PRIOR, totalItems, Math.max(0, totalItems));
+  const hist = correctCountDistribution && Object.keys(correctCountDistribution).length > 0
+    ? correctCountDistribution
+    : priorHist;
   let count: number;
-  if (correctCountDistribution && Object.keys(correctCountDistribution).length > 0) {
-    count = sampleHistogram(correctCountDistribution, next) ?? 0;
+  if (hist) {
+    count = sampleHistogram(hist, next) ?? 0;
   } else {
     count = Math.round(totalItems * cappedSkillFraction(params, inputs));
   }
@@ -571,6 +577,70 @@ function putInOrderScore(matched: number, totalItems: number): number {
   return clamp(Math.round(raw), 0, 100);
 }
 
+/**
+ * PROVISIONAL measured human priors for the special formats, used ONLY as the
+ * fallback when question_stats carries no per-question format distribution.
+ *
+ * Measured on PROD (lfbwhx), correct human ranked answers, answered_at >=
+ * 2026-07-05 (the be#161 reveal-ack fix, after which time_ms is trustworthy),
+ * is_ai/is_seed/is_deleted excluded. Read-only session-pooler query.
+ *
+ * WHY THESE ARE HARDCODED AND PROVISIONAL: question_stats.format_stats is
+ * populated from the aggregation, which currently derives special-format
+ * distributions from whatever corpus it is pointed at. On staging that corpus is
+ * dominated by the game-regression harness client (which submits junk guesses BY
+ * DESIGN, ~0% correct), so a staging-derived prior is an artifact, not behaviour.
+ * These prod-measured shares are the interim ground truth until the aggregation
+ * is re-run against prod. Replace them then.
+ *
+ * IMPORTANT — shares, not rates: the live clue-answer rejection bug
+ * (project_clue_answer_rejection_bug) suppresses how OFTEN real players are
+ * marked correct, so absolute solve RATES from this corpus are not trustworthy.
+ * Only the RELATIVE SHARES across indices are used here; the solve RATE is
+ * supplied independently by the ceiling gate.
+ *
+ * clue_chain, clueCount=5, N=28,130 correct solves:
+ *   idx 0 41.63% | 1 29.95% | 2 16.63% | 3 7.76% | 4 4.04%
+ * (median times 6.2s/15.7s/25.2s/35.2s/45.6s — ~10s apart, confirming the
+ * per-clue slice arithmetic.)
+ */
+export const PROD_CLUE_INDEX_PRIOR: Readonly<Record<number, readonly number[]>> = {
+  5: [11710, 8424, 4677, 2183, 1136],
+};
+
+/**
+ * put_in_order matched-count prior. Measured on PROD, totalItems=4, N=52,001:
+ *   0 16.45% | 1 18.04% | 2 30.19% | 3 0.00% | 4 35.32%
+ * Note the empty 3 bucket and the strong full-credit mode — real players either
+ * get the ordering right or miss by a lot. (The staging-derived numbers the
+ * previous PR used showed full credit at only 1.3%, an artifact of the same
+ * harness-dominated corpus.)
+ */
+export const PROD_PUT_IN_ORDER_PRIOR: Readonly<Record<number, readonly number[]>> = {
+  4: [8555, 9382, 15699, 0, 18365],
+};
+
+/**
+ * Build an index->weight histogram from a measured prior, restricted to the
+ * indices actually reachable for this variant. Returns undefined when no prior
+ * covers the variant, so the caller keeps its skill-scaled fallback.
+ */
+function priorHistogram(
+  prior: Readonly<Record<number, readonly number[]>>,
+  variant: number,
+  maxIndex: number,
+): Record<string, number> | undefined {
+  const weights = prior[variant];
+  if (!weights) return undefined;
+  const hist: Record<string, number> = {};
+  let total = 0;
+  for (let i = 0; i <= maxIndex && i < weights.length; i += 1) {
+    const w = weights[i];
+    if (w > 0) { hist[String(i)] = w; total += w; }
+  }
+  return total > 0 ? hist : undefined;
+}
+
 /** Clue SCORE mirror of calculateCluesScore (max(20, 100 − index*20), 0 if wrong). */
 function clueScore(solved: boolean, index: number): number {
   if (!solved) return 0;
@@ -596,20 +666,28 @@ export function decideClue(
   const maxIndex = Math.max(0, clueCount - 1);
 
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:clue:${params.source.batchId}`);
+  // Preference order: the per-question calibrated distribution, else the
+  // PROD-measured prior for this clue count, else the skill-scaled fallback.
+  const priorHist = priorHistogram(PROD_CLUE_INDEX_PRIOR, clueCount, maxIndex);
+  const hist = clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0
+    ? clueRevealIndexDistribution
+    : priorHist;
   let index: number;
-  if (clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0) {
-    index = sampleHistogram(clueRevealIndexDistribution, next) ?? maxIndex;
+  if (hist) {
+    index = sampleHistogram(hist, next) ?? maxIndex;
   } else {
     const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
   }
   index = clamp(index, 0, maxIndex);
 
-  // The reveal index is NOT floored: a bot solves at the same index a human does
-  // (measured: 21,618/21,619 human solves land on index 0). The ceiling is held
-  // by gating the SOLVE RATE instead — E[score] = p * clueScore(index) ≤ ceiling.
+  // The reveal index is NOT floored: a bot solves at the index a human does.
+  // PROD-measured (clueCount=5, N=28,130 correct solves): 41.6% / 30.0% / 16.6%
+  // / 7.8% / 4.0% across indices 0..4. The ceiling is held by gating the SOLVE
+  // RATE per drawn index — E[score] = p * clueScore(index) ≤ ceiling — so every
+  // index carries its own gate and the mix is bounded regardless of the shares.
   // Flooring the index was the robotic tell: it forced every solve to index ≥ 1,
-  // i.e. ≥10s of clue-slice offset, which no real player exhibits.
+  // i.e. ≥10s of clue-slice offset.
   const solved = ceilingSuccessGate(
     params,
     keys,

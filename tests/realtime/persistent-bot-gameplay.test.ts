@@ -25,6 +25,8 @@ import {
   maxCountdownFoundForCeiling,
   maxPutInOrderMatchedForCeiling,
   minClueIndexForCeiling,
+  PROD_CLUE_INDEX_PRIOR,
+  PROD_PUT_IN_ORDER_PRIOR,
   questionBetaFromStats,
   resolveQuestionStats,
   sampleHistogram,
@@ -276,13 +278,80 @@ describe('HIGH — per-format models bypass Bernoulli AND respect the SCORE ceil
   it('clue index 0 IS reachable (the realism fix) — the ceiling is held by the solve gate', () => {
     // Regression guard for the robotic tell: decideClue used to clamp every solve
     // up to minClueIndexForCeiling (=1), forcing a >=10s clue-slice offset on every
-    // bot solve. Measured humans solve at index 0 in 21,618 of 21,619 cases.
+    // bot solve. PROD-measured humans solve at index 0 in 41.6% of correct solves
+    // (N=28,130) — common, but far from the only outcome.
     let sawIndexZero = false;
     for (let i = 0; i < 500; i += 1) {
       const clue = decideClue(params, inputs(), { '0': 100 }, 5, { ...keys, questionId: `clue0-${i}` });
       if (clue.index === 0) sawIndexZero = true;
     }
     expect(sawIndexZero).toBe(true);
+  });
+
+  it('clue: with NO calibrated distribution the bot draws the PROD-measured index mix', () => {
+    // The fallback used to be a single deterministic skill-scaled index. It now
+    // samples the prod prior, so the bot's reveal-index mix matches real players.
+    const counts = [0, 0, 0, 0, 0];
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const clue = decideClue(params, inputs(), undefined, 5, { ...keys, questionId: `prior-${i}` });
+      counts[clue.index] += 1;
+    }
+    const expectedShares = PROD_CLUE_INDEX_PRIOR[5];
+    const total = expectedShares.reduce((a, b) => a + b, 0);
+    for (let idx = 0; idx < 5; idx += 1) {
+      const actual = counts[idx] / n;
+      const expected = expectedShares[idx] / total;
+      expect(Math.abs(actual - expected)).toBeLessThan(0.02); // within 2pp
+    }
+    // Every index is genuinely reachable (no collapsed mass).
+    expect(Math.min(...counts)).toBeGreaterThan(0);
+  });
+
+  it('put-in-order: with NO calibrated distribution the bot draws the PROD-measured count mix', () => {
+    const counts = [0, 0, 0, 0, 0];
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      // Count the DRAWN count, not the post-gate value, by reading the gate-free
+      // buckets: 0 is ambiguous (drawn-0 or gated-away), so assert on 1,2,4 and
+      // that 3 never appears (the prod prior has an empty 3 bucket).
+      const c = decidePutInOrderCorrectCount(params, inputs(), undefined, 4, { ...keys, questionId: `pioprior-${i}` });
+      counts[c] += 1;
+    }
+    const w = PROD_PUT_IN_ORDER_PRIOR[4];
+    const total = w.reduce((a, b) => a + b, 0);
+    // 3 has zero mass in the prod data and must never be drawn.
+    expect(counts[3]).toBe(0);
+    // 1 and 2 score under the ceiling (25/50) so they are never gated away —
+    // their observed shares should match the prior directly.
+    for (const idx of [1, 2]) {
+      expect(Math.abs(counts[idx] / n - w[idx] / total)).toBeLessThan(0.02);
+    }
+    // Full credit is drawn often (prod 35.3%) and survives the gate most of the
+    // time (gated at 86.31/100), so it must be clearly present.
+    expect(counts[4] / n).toBeGreaterThan(0.25);
+  });
+
+  it('clue: E[score] <= ceiling under the PROD index mix (the real-world case)', () => {
+    // The invariant must hold for the mixture the bot actually draws, not just
+    // per-index in isolation.
+    let scoreSum = 0;
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const clue = decideClue(params, inputs(), undefined, 5, { ...keys, questionId: `mix-${i}` });
+      scoreSum += calculateCluesScore(clue.solved, clue.index);
+    }
+    expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2);
+  });
+
+  it('put-in-order: E[score] <= ceiling under the PROD count mix', () => {
+    let scoreSum = 0;
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const c = decidePutInOrderCorrectCount(params, inputs(), undefined, 4, { ...keys, questionId: `piomix-${i}` });
+      scoreSum += calculatePutInOrderScore(c, 4);
+    }
+    expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2);
   });
 
   it('clue: E[score] <= ceiling at EVERY reveal index, for every clue count', () => {

@@ -18583,7 +18583,7 @@
     },
     "/api/v1/weekend-league/qp": {
       "get": {
-        "summary": "Caller's qualification points for the active week",
+        "summary": "Caller's QP running balance (resets when a ticket is claimed)",
         "tags": [
           "WeekendLeague"
         ],

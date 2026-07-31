@@ -50,6 +50,25 @@ describe('weekKeyFor', () => {
   });
 });
 
+describe('wlUpcomingEventSchedule', () => {
+  it('Sunday belongs to the ongoing event until the final starts', async () => {
+    const { wlUpcomingEventSchedule } = await import('../../src/modules/weekend-league/wl-week.js');
+    // Sunday 2026-08-02 13:59:59 GE — final not started: still week 2026-08-01.
+    const beforeFinal = geDate('2026-08-02T13:59:59').getTime();
+    expect(wlUpcomingEventSchedule(beforeFinal).weekKey).toBe('2026-08-01');
+    // Exactly Sunday 14:00 GE — the final has started; creation/selection
+    // rolls to next Saturday (the ongoing event is protected by
+    // earliest-final DB selection, not by this function).
+    const atFinal = geDate('2026-08-02T14:00:00').getTime();
+    expect(wlUpcomingEventSchedule(atFinal).weekKey).toBe('2026-08-08');
+    // Monday maps to its own week.
+    const monday = geDate('2026-07-27T00:00:00').getTime();
+    expect(wlUpcomingEventSchedule(monday).weekKey).toBe('2026-08-01');
+    // Entry opens Monday 00:00 GE for the computed week.
+    expect(wlUpcomingEventSchedule(monday).entryOpensAtMs).toBe(monday);
+  });
+});
+
 describe('qpForResult', () => {
   it('win 25, loss 10', () => {
     expect(qpForResult('win')).toBe(WL_QP_WIN);

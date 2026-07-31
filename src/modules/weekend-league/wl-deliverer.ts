@@ -26,6 +26,12 @@ import { wlRedisNowMs } from './wl-redis.js';
 
 export const WL_SPECTATOR_DELAY_MS = 30_000;
 
+async function spectatorDelayMs(tournamentId: string): Promise<number> {
+  const t = await wlOrchestratorRepo.getById(tournamentId);
+  const { wlConfigFrom } = await import('./wl-config.js');
+  return t ? wlConfigFrom(t.config).spectator_delay_ms : WL_SPECTATOR_DELAY_MS;
+}
+
 export function wlPlayersRoom(tournamentId: string): string {
   return `wl:${tournamentId}`;
 }
@@ -119,9 +125,13 @@ export async function wlDeliverPending(
         );
       }
 
+      // Resolve the tournament's spectator delay BEFORE sampling the
+      // emission clock — its PG read must not sit between the clock and the
+      // broadcast (it would shorten the physical lag and stale the offset).
+      const specDelay = await spectatorDelayMs(tournamentId);
       // Fresh clock IMMEDIATELY before the visible emission: DB latency in
       // the enrichment above must neither skew client offsets nor shorten
-      // the spectator delay (visibility = emitNow + 30s).
+      // the spectator delay (visibility = emitNow + delay).
       const emitNow = await wlRedisNowMs();
       // Staleness re-validated on THIS clock: the awaited stamp-persistence
       // above may have pushed a dispatch below its minimum lead (or past
@@ -141,7 +151,7 @@ export async function wlDeliverPending(
         }
       }
       const stamped = await wlEventsRepo.markLiveEmission(
-        tournamentId, event.seq, event.claim_token, emitNow, WL_SPECTATOR_DELAY_MS
+        tournamentId, event.seq, event.claim_token, emitNow, specDelay
       );
       if (!stamped) break; // fence lost
 

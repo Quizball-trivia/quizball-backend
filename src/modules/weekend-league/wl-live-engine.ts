@@ -101,19 +101,19 @@ const CLOSE_SCRIPT = `
   return redis.call('HGETALL', KEYS[1])
 `;
 
-export function wlSlotSequence(): WlSlotRef[] {
+export function wlSlotSequence(gameIndex = 0): WlSlotRef[] {
   const slots: WlSlotRef[] = [];
   for (let round = 0; round < WL_ROUND_ORDER.length; round += 1) {
     const kind = WL_ROUND_ORDER[round]!;
     for (let q = 0; q < WL_QUESTIONS_PER_ROUND[kind]; q += 1) {
-      slots.push({ gameIndex: 0, roundIndex: round, questionIndex: q });
+      slots.push({ gameIndex, roundIndex: round, questionIndex: q });
     }
   }
   return slots;
 }
 
 export function wlNextSlot(current: WlSlotRef): WlSlotRef | null {
-  const seq = wlSlotSequence();
+  const seq = wlSlotSequence(current.gameIndex);
   const idx = seq.findIndex(
     (s) => s.roundIndex === current.roundIndex && s.questionIndex === current.questionIndex
   );

@@ -160,6 +160,18 @@ export async function wlDeliverPending(
         await scheduleWlTick(tournamentId, Number(outPayload['deadlineAt'])).catch(() => {});
       }
 
+      if (event.type === 'game_result' || event.type === 'final_result') {
+        // Eliminated players lose live-room access the moment their cut is
+        // announced — from here they belong in the 30s-delayed spectator
+        // room. Eviction rides the user rooms every socket joins at auth.
+        const eliminatedIds = Array.isArray(event.payload['eliminated_user_ids'])
+          ? (event.payload['eliminated_user_ids'] as string[])
+          : [];
+        for (const userId of eliminatedIds) {
+          io.in(`user:${userId}`).socketsLeave(wlPlayersRoom(tournamentId));
+        }
+      }
+
       const done = await wlEventsRepo.markDelivered(tournamentId, event.seq, event.claim_token);
       if (!done) break; // fence lost after emit — client seq-dedup absorbs the retry
       delivered += 1;

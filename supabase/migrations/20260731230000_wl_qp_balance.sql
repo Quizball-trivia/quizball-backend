@@ -13,7 +13,7 @@
 
 CREATE TABLE IF NOT EXISTS public.wl_qp_resets (
   user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id),
+  tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id) ON DELETE CASCADE,
   reset_at timestamptz NOT NULL DEFAULT NOW(),
   balance_spent integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, tournament_id)

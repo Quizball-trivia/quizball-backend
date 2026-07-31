@@ -297,7 +297,33 @@ export const wlEngineLive: WlEngine = {
 
   async advance(t, redisNow): Promise<void> {
     const { wlLiveEngineInternals, wlNextSlot, wlSlotSequence } = await import('./wl-live-engine.js');
+    if (t.status === 'break') {
+      // Break ends by the clock; the next game's field was frozen when the
+      // break began, so resuming is a single CAS.
+      const stage = t.stage ?? {};
+      const breakUntil = Number(stage['break_until_ms']);
+      if (Number.isFinite(breakUntil) && redisNow >= breakUntil) {
+        const nextGame = Number(stage['current_game'] ?? 0);
+        await sql.begin(async (tx) => {
+          const txSql = tx as unknown as typeof sql;
+          const moved = await txSql`
+            UPDATE wl_tournaments SET status = 'game_live'
+            WHERE id = ${t.id} AND status = 'break'
+            RETURNING id
+          `;
+          if (moved.length === 0) return;
+          await wlEventsRepo.append(txSql, {
+            tournamentId: t.id, type: 'phase',
+            payload: { from: 'break', to: 'game_live', game_index: nextGame },
+            redisTimeMs: redisNow,
+          });
+        });
+      }
+      return;
+    }
+
     if (t.status === 'game_live' || t.status === 'final_live') {
+      const gameIndex = await currentGameIndex(t);
       // Progression looks at the FRONTIER slot across ALL attempts (voided
       // included): a slot whose reserves are exhausted is resolved-by-void
       // and must advance/finalize, never be re-created from its primary.
@@ -309,13 +335,13 @@ export const wlEngineLive: WlEngine = {
         SELECT attempt_id, tournament_id, game_index, round_index, question_index,
                question_id, status, playable_at_ms::text, deadline_at_ms::text
         FROM wl_question_runs
-        WHERE tournament_id = ${t.id} AND game_index = 0
+        WHERE tournament_id = ${t.id} AND game_index = ${gameIndex}
         ORDER BY round_index DESC, question_index DESC,
                  (status <> 'voided') DESC, created_at DESC
         LIMIT 1
       `;
       if (!frontier) {
-        await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
+        await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex, roundIndex: 0, questionIndex: 0 }, redisNow);
         return;
       }
       const slot = {
@@ -323,7 +349,7 @@ export const wlEngineLive: WlEngine = {
         roundIndex: frontier.round_index,
         questionIndex: frontier.question_index,
       };
-      const lastSlot = wlSlotSequence().at(-1)!;
+      const lastSlot = wlSlotSequence(gameIndex).at(-1)!;
       const isLast = slot.roundIndex === lastSlot.roundIndex
         && slot.questionIndex === lastSlot.questionIndex;
 
@@ -365,7 +391,7 @@ export const wlEngineLive: WlEngine = {
         // void tx would have created a reserve attempt otherwise, which
         // would BE the frontier).
         if (isLast) {
-          if (t.status === 'game_live') await finalizeQualifierGame(t.id, redisNow);
+          await finalizeGame(t, gameIndex, redisNow);
           return;
         }
         const next = wlNextSlot(slot);
@@ -376,36 +402,119 @@ export const wlEngineLive: WlEngine = {
   },
 
   async adjudicateFinalStart(t, redisNow): Promise<void> {
-    // PR3: dns_v1 settlement on REAL qualifier standings — champion is the
-    // best-ranked finalist who checked in for Sunday. PR4 replaces this with
-    // a genuinely played final game.
+    // The final is a PLAYED game (game index 3) among checked-in finalists;
+    // dns_v1: no-shows are marked and, with fewer than two present, the
+    // best-qualified finalist takes the walkover.
     const ranked = await sql<Array<{ user_id: string; final_checked_in_at: string | null }>>`
       SELECT e.user_id, e.final_checked_in_at::text
       FROM wl_entries e
       JOIN wl_game_results r
-        ON r.tournament_id = e.tournament_id AND r.user_id = e.user_id AND r.game_index = 0
+        ON r.tournament_id = e.tournament_id AND r.user_id = e.user_id
       WHERE e.tournament_id = ${t.id} AND e.state = 'finalist'
+        AND r.game_index = (
+          SELECT MAX(game_index) FROM wl_game_results g2
+          WHERE g2.tournament_id = e.tournament_id AND g2.user_id = e.user_id
+            AND g2.game_index <= 2
+        )
       ORDER BY r.rank ASC
     `;
     const checkedIn = ranked.filter((r) => r.final_checked_in_at != null);
-    await completeTournament(t.id, redisNow, checkedIn[0]?.user_id ?? null, false);
+    if (checkedIn.length < 2) {
+      await completeTournament(t.id, redisNow, checkedIn[0]?.user_id ?? null, false);
+      return;
+    }
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const moved = await txSql`
+        UPDATE wl_tournaments SET status = 'final_live',
+          stage = COALESCE(stage, '{}'::jsonb) || jsonb_build_object('current_game', ${WL_FINAL_GAME_INDEX}::int)
+        WHERE id = ${t.id} AND status = 'final_checkin'
+        RETURNING id
+      `;
+      if (moved.length === 0) return;
+      await txSql`
+        UPDATE wl_entries SET state = 'no_show'
+        WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NULL
+      `;
+      const ids = checkedIn.map((c) => c.user_id);
+      await txSql`
+        INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+        SELECT ${t.id}, ${WL_FINAL_GAME_INDEX}, u FROM unnest(${sql.array(ids)}::uuid[]) AS t(u)
+        ON CONFLICT DO NOTHING
+      `;
+      await wlEventsRepo.append(txSql, {
+        tournamentId: t.id, type: 'phase',
+        payload: { from: 'final_checkin', to: 'final_live', checked_in: checkedIn.length },
+        redisTimeMs: redisNow,
+      });
+    });
   },
 };
 
-async function finalizeQualifierGame(tournamentId: string, redisNow: number): Promise<void> {
+export const WL_FINAL_GAME_INDEX = 3;
+
+async function currentGameIndex(t: WlOrchestratorTournament): Promise<number> {
+  if (t.status === 'final_live') return WL_FINAL_GAME_INDEX;
+  const fromStage = Number((t.stage ?? {})['current_game']);
+  if (Number.isFinite(fromStage)) return fromStage;
+  const [row] = await sql<Array<{ g: number | null }>>`
+    SELECT MAX(game_index)::int AS g FROM wl_game_participants
+    WHERE tournament_id = ${t.id} AND game_index <= 2
+  `;
+  return row?.g ?? 0;
+}
+
+/**
+ * End-of-game settlement for any game of the gauntlet or the final:
+ *  - persists the full ranking (canonical comparator) as wl_game_results;
+ *  - applies the cut per the frozen ladder: qualifier games advance the
+ *    ladder count (survivors stay 'playing'; game 2's survivors become
+ *    finalists), the final crowns the champion;
+ *  - freezes the NEXT game's participants and enters the 2-minute break, or
+ *    transitions to qualifier_done / completed;
+ *  - the game_result event carries the eliminated ids so the deliverer can
+ *    evict them from the live room.
+ * All in ONE status-CAS-first transaction.
+ */
+async function finalizeGame(
+  t: WlOrchestratorTournament,
+  gameIndex: number,
+  redisNow: number
+): Promise<void> {
   const { wlLiveEngineInternals } = await import('./wl-live-engine.js');
-  const board = await wlLiveEngineInternals.topBoard(tournamentId, 0, Number.MAX_SAFE_INTEGER);
+  const board = await wlLiveEngineInternals.topBoard(t.id, gameIndex, Number.MAX_SAFE_INTEGER);
   if (board.length === 0) return;
-  const finalists = board.slice(0, WL_FINALISTS).map((b) => b.user_id);
-  const eliminated = board.slice(WL_FINALISTS).map((b) => b.user_id);
+
+  const isFinal = gameIndex === WL_FINAL_GAME_INDEX;
+  const ladder = (t.ladder ?? {}) as { advance?: number[] };
+  const advanceCount = isFinal
+    ? 0
+    : Math.min(board.length, ladder.advance?.[gameIndex] ?? WL_FINALISTS);
+  const survivors = board.slice(0, advanceCount).map((b) => b.user_id);
+  const eliminated = isFinal ? [] : board.slice(advanceCount).map((b) => b.user_id);
+  const isLastQualifierGame = !isFinal && gameIndex >= 2;
+  const cfg = (t.config ?? {}) as Record<string, unknown>;
+  const breakMs = Number(cfg['break_ms']) >= 0 && Number.isFinite(Number(cfg['break_ms']))
+    ? Number(cfg['break_ms']) : 120_000;
+
+  const toStatus = isFinal ? 'completed' : (isLastQualifierGame ? 'qualifier_done' : 'break');
+  const fromStatus = isFinal ? 'final_live' : 'game_live';
+
   await sql.begin(async (tx) => {
     const txSql = tx as unknown as typeof sql;
     const moved = await txSql`
-      UPDATE wl_tournaments SET status = 'qualifier_done'
-      WHERE id = ${tournamentId} AND status = 'game_live'
+      UPDATE wl_tournaments SET status = ${toStatus},
+        champion_user_id = CASE WHEN ${isFinal} THEN ${board[0]?.user_id ?? null}::uuid ELSE champion_user_id END,
+        final_played = CASE WHEN ${isFinal} THEN true ELSE final_played END,
+        stage = COALESCE(stage, '{}'::jsonb) || ${sql.json({
+          current_game: isFinal || isLastQualifierGame ? gameIndex : gameIndex + 1,
+          break_until_ms: toStatus === 'break' ? redisNow + breakMs : null,
+        } as never)}
+      WHERE id = ${t.id} AND status = ${fromStatus}
       RETURNING id
     `;
     if (moved.length === 0) return;
+
     {
       const userIds = board.map((b) => b.user_id);
       const scores = board.map((b) => b.points);
@@ -415,7 +524,7 @@ async function finalizeQualifierGame(tournamentId: string, redisNow: number): Pr
         INSERT INTO wl_game_results (
           tournament_id, game_index, user_id, score, time_ms_total, rank, advanced
         )
-        SELECT ${tournamentId}, 0, u, s, tm, r, r <= ${WL_FINALISTS}
+        SELECT ${t.id}, ${gameIndex}, u, s, tm, r, r <= ${advanceCount}
         FROM unnest(
           ${sql.array(userIds)}::uuid[], ${sql.array(scores)}::int[],
           ${sql.array(times)}::bigint[], ${sql.array(ranks)}::int[]
@@ -423,35 +532,82 @@ async function finalizeQualifierGame(tournamentId: string, redisNow: number): Pr
         ON CONFLICT (tournament_id, game_index, user_id) DO NOTHING
       `;
     }
-    if (finalists.length > 0) {
+
+    if (isFinal) {
+      const ranksArr = board.map((b) => b.rank);
+      const idsArr = board.map((b) => b.user_id);
       await txSql`
-        UPDATE wl_entries SET state = 'finalist'
-        WHERE tournament_id = ${tournamentId} AND user_id = ANY(${sql.array(finalists)}::uuid[])
+        UPDATE wl_entries e SET final_rank = t.r,
+          state = CASE WHEN t.r = 1 THEN 'champion' ELSE e.state END
+        FROM unnest(${sql.array(idsArr)}::uuid[], ${sql.array(ranksArr)}::int[]) AS t(u, r)
+        WHERE e.tournament_id = ${t.id} AND e.user_id = t.u
       `;
-    }
-    if (eliminated.length > 0) {
+      // Awards with the humans-only firewall: prize bands map to the
+      // humans-only ordering, cascading past any bot placements (PR8 fills
+      // fields with bots; a bot must never hold an entitlement row).
       await txSql`
-        UPDATE wl_entries SET state = 'eliminated', eliminated_game = 0
-        WHERE tournament_id = ${tournamentId} AND user_id = ANY(${sql.array(eliminated)}::uuid[])
+        INSERT INTO wl_awards (tournament_id, user_id, final_rank, band, prize_type)
+        SELECT ${t.id}, h.user_id, h.rank,
+               CASE h.human_rank WHEN 1 THEN 'champion' WHEN 2 THEN 'second'
+                                 WHEN 3 THEN 'third' ELSE 'finalist' END,
+               CASE h.human_rank WHEN 1 THEN 'grand' WHEN 2 THEN 'runner_up'
+                                 WHEN 3 THEN 'third' ELSE 'participation' END
+        FROM (
+          SELECT r.user_id, r.rank,
+                 ROW_NUMBER() OVER (ORDER BY r.rank ASC) AS human_rank
+          FROM wl_game_results r
+          JOIN users u ON u.id = r.user_id AND u.is_ai = false
+          WHERE r.tournament_id = ${t.id} AND r.game_index = ${gameIndex}
+        ) h
+        ON CONFLICT (tournament_id, user_id) DO NOTHING
       `;
+    } else {
+      if (isLastQualifierGame && survivors.length > 0) {
+        await txSql`
+          UPDATE wl_entries SET state = 'finalist'
+          WHERE tournament_id = ${t.id} AND user_id = ANY(${sql.array(survivors)}::uuid[])
+        `;
+      }
+      if (eliminated.length > 0) {
+        await txSql`
+          UPDATE wl_entries SET state = 'eliminated', eliminated_game = ${gameIndex}
+          WHERE tournament_id = ${t.id} AND user_id = ANY(${sql.array(eliminated)}::uuid[])
+        `;
+      }
+      if (!isLastQualifierGame && survivors.length > 0) {
+        // Freeze the next game's field NOW so the break→game_live CAS is
+        // a pure status flip.
+        await txSql`
+          INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+          SELECT ${t.id}, ${gameIndex + 1}, u FROM unnest(${sql.array(survivors)}::uuid[]) AS t(u)
+          ON CONFLICT DO NOTHING
+        `;
+      }
     }
+
     await wlEventsRepo.append(txSql, {
-      tournamentId, type: 'phase',
-      payload: { from: 'game_live', to: 'qualifier_done' },
+      tournamentId: t.id, type: 'phase',
+      payload: { from: fromStatus, to: toStatus, game_index: gameIndex },
       redisTimeMs: redisNow,
     });
     await wlEventsRepo.append(txSql, {
-      tournamentId, type: 'game_result',
+      tournamentId: t.id,
+      type: isFinal ? 'final_result' : 'game_result',
       payload: {
-        game_index: 0,
+        game_index: gameIndex,
         board: board.slice(0, WL_FINALISTS),
-        finalists: finalists.length,
         field: board.length,
+        advanced: advanceCount,
+        eliminated_user_ids: eliminated,
+        ...(isFinal ? { champion_user_id: board[0]?.user_id ?? null, final_played: true } : {}),
       },
       redisTimeMs: redisNow,
     });
   });
-  logger.info({ tournamentId, field: board.length, finalists: finalists.length }, 'WL qualifier game finalized');
+  logger.info(
+    { tournamentId: t.id, gameIndex, field: board.length, advanced: advanceCount, toStatus },
+    'WL game finalized'
+  );
 }
 
 /**

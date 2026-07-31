@@ -448,6 +448,10 @@ export interface RankedUserOutcomePayload {
   deltaRp: number;
   /** Coin participation reward granted with the ranked settlement (win/loss). */
   coinsAwarded?: number;
+  /** Weekend League QP this result earned (win 25 / loss 10; 0 outside the
+   *  Mon-Fri window or for bots) and the weekly total after it. */
+  qpAwarded?: number;
+  qpWeekTotal?: number;
   oldTier: string;
   newTier: string;
   placementStatus: 'unplaced' | 'in_progress' | 'placed';
@@ -1077,6 +1081,13 @@ export interface ClientToServerEvents {
     ack?: (result: { ok: boolean; reason?: 'not_entered' | 'not_found' | 'invalid'; seq?: number }) => void
   ) => void;
   'wl:unsubscribe': () => void;
+  'wl:answer': (
+    data: { tournament_id: string; attempt_id: string; answer: unknown },
+    ack?: (result:
+      | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+      | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' | 'invalid' }
+    ) => void
+  ) => void;
   'lobby:create': (
     data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
     ack?: (result: LobbyCreateResult) => void

@@ -40,7 +40,8 @@ export type RealtimeTimerKind =
   | 'possession_ai_answer'
   | 'possession_halftime'
   | 'possession_question'
-  | 'ranked_draft_start';
+  | 'ranked_draft_start'
+  | 'wl_tick';
 
 export type RealtimeTimerPayload =
   | { kind: 'auction_advance_retry'; matchId: string; phaseHint: 'round' | 'bidding' | 'reveal' }
@@ -76,7 +77,8 @@ export type RealtimeTimerPayload =
     }
   | { kind: 'possession_halftime'; matchId: string }
   | { kind: 'possession_question'; matchId: string; qIndex: number }
-  | { kind: 'ranked_draft_start'; lobbyId: string; userAId: string; userBId: string };
+  | { kind: 'ranked_draft_start'; lobbyId: string; userAId: string; userBId: string }
+  | { kind: 'wl_tick'; tournamentId: string };
 
 export type RealtimeTimerHandler = (
   io: QuizballServer,
@@ -130,6 +132,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'possession_ai_answer'
     && kind !== 'possession_halftime'
     && kind !== 'possession_question'
+    && kind !== 'wl_tick'
     && kind !== 'ranked_draft_start'
   ) {
     return null;

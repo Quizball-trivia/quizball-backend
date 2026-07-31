@@ -105,9 +105,16 @@ describe('WL QP settlement accrual', () => {
     const loser = await seedUser(`wlqp-l-${Date.now()}`, false);
     const matchId = await seedCompletedMatch(winner, loser, IN_WINDOW);
 
-    await rankedService.settleCompletedRankedMatch(matchId);
-    // Replay (crash-retry / duplicate event) — must be a no-op for QP.
-    await rankedService.settleCompletedRankedMatch(matchId);
+    const outcome = await rankedService.settleCompletedRankedMatch(matchId);
+    // The result payload carries the QP moment for the client.
+    expect(outcome?.byUserId[winner]?.qpAwarded).toBe(25);
+    expect(outcome?.byUserId[winner]?.qpWeekTotal).toBe(25);
+    expect(outcome?.byUserId[loser]?.qpAwarded).toBe(10);
+    // Replay (crash-retry / duplicate event) — must be a no-op for QP, and
+    // the replayed payload still reports the original award + current total.
+    const replayed = await rankedService.settleCompletedRankedMatch(matchId);
+    expect(replayed?.byUserId[winner]?.qpAwarded).toBe(25);
+    expect(replayed?.byUserId[winner]?.qpWeekTotal).toBe(25);
 
     const w = await qpRows(winner);
     expect(w.awards).toEqual([

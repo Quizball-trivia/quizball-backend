@@ -167,9 +167,15 @@ function computeRankedAiAnchor(profile: RankedProfileRow): number {
  * drives which bot is a good match.
  */
 export function selectionTargetRpForHuman(profile: RankedProfileRow): number {
-  return needsPlacement(profile)
-    ? computeNextPlacementAnchor(profile)
-    : computeRankedAiAnchor(profile);
+  if (needsPlacement(profile)) return computeNextPlacementAnchor(profile);
+  // Placed humans target their REAL RP, unclamped upward. computeRankedAiAnchor
+  // caps at MAX_PLACEMENT_ANCHOR_RP (2700) — right for the ephemeral difficulty
+  // anchor it was built for, but here it quietly defeated the ±300 pairing
+  // ceiling for every human above ~3000: a 4900-RP player's target clamped to
+  // 2700, making 2400-RP bots look "in band" (observed live: 4900 vs 2403).
+  // Uncapped, no bot exists within the ceiling of a 3000+ human, so selection
+  // correctly returns null → ephemeral fallback instead of a farmable pairing.
+  return Math.max(MIN_PLACEMENT_ANCHOR_RP, roundToNearest25(profile.rp));
 }
 
 // Reconstruct a settled participant's outcome from its persisted ledger row +

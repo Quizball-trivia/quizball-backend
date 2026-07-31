@@ -91,6 +91,24 @@ async function runTick(): Promise<void> {
   }
 }
 
+/**
+ * Advance + deliver a SINGLE tournament — the unit the full tick loops over.
+ * Exported for the two-process harness (scoped, so harness processes can
+ * never touch tournaments owned by other concurrently running tests).
+ */
+export async function wlAdvanceOneTournament(io: QuizballServer, tournamentId: string): Promise<void> {
+  const redisNow = await wlRedisNowMs();
+  const t = await wlOrchestratorRepo.getById(tournamentId);
+  if (!t || ['completed', 'cancelled', 'voided'].includes(t.status)) return;
+  try {
+    await advanceTournament(io, t, redisNow);
+  } catch (error) {
+    logger.error({ err: error, tournamentId }, 'WL tournament advance failed');
+  }
+  await wlDeliverPending(io, tournamentId);
+  await wlDeliverSpectator(io, tournamentId);
+}
+
 /** One full reconcile pass — exported for tests and the ops force-tick. */
 export async function wlOrchestratorTick(io: QuizballServer): Promise<void> {
   const redisNow = await wlRedisNowMs();

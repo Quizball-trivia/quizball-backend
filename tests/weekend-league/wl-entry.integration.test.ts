@@ -10,6 +10,35 @@ let weekendLeagueService: typeof import('../../src/modules/weekend-league/index.
 let weekendLeagueRepo: typeof import('../../src/modules/weekend-league/index.js').weekendLeagueRepo;
 let dbAvailable = false;
 
+
+// Cross-worker mutex: tournament-facing integration files act on the global
+// "current tournament", so two files running in parallel against the shared
+// DB shadow each other. A session-scoped advisory lock on a reserved
+// connection serializes them across vitest workers.
+
+async function deleteAutoCreatedRealTournaments(): Promise<void> {
+  // The orchestrator's weekly auto-creation plants a REAL tournament during
+  // ticks, which then shadows every test tournament (real-first resolution).
+  // Local-test-DB only, by construction of tests/setup.ts — hard-guard anyway.
+  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
+}
+
+const WL_TEST_LOCK = 774431001;
+let lockConn: Awaited<ReturnType<typeof sql.reserve>> | null = null;
+
+async function acquireFileLock(): Promise<void> {
+  lockConn = await sql.reserve();
+  await lockConn`SELECT pg_advisory_lock(${WL_TEST_LOCK})`;
+}
+
+async function releaseFileLock(): Promise<void> {
+  if (!lockConn) return;
+  await lockConn`SELECT pg_advisory_unlock(${WL_TEST_LOCK})`.catch(() => {});
+  lockConn.release();
+  lockConn = null;
+}
+
 const testUserIds: string[] = [];
 const testTournamentIds: string[] = [];
 
@@ -69,6 +98,8 @@ beforeAll(async () => {
     const wl = await import('../../src/modules/weekend-league/index.js');
     weekendLeagueService = wl.weekendLeagueService;
     weekendLeagueRepo = wl.weekendLeagueRepo;
+    await acquireFileLock();
+    await deleteAutoCreatedRealTournaments();
     dbAvailable = true;
   } catch {
     console.warn('\n⚠️  Skipping WL entry integration tests: DB unavailable.\n');
@@ -98,6 +129,7 @@ afterAll(async () => {
     await sql`DELETE FROM wl_qp WHERE user_id = ANY(${sql.array(testUserIds)}::uuid[])`;
     await sql`DELETE FROM users WHERE id = ANY(${sql.array(testUserIds)}::uuid[])`;
   }
+  await releaseFileLock();
   await sql.end({ timeout: 5 });
 });
 

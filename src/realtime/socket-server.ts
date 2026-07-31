@@ -8,6 +8,7 @@ import { socketAuthMiddleware, type SocketAuthData } from './socket-auth.js';
 import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
+import { registerWlHandlers } from './handlers/wl.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
@@ -41,6 +42,7 @@ import {
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
 import { startReservationSweeper } from './services/synthetic-bot-reservation-sweeper.service.js';
 import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
+import { startWlOrchestrator } from '../modules/weekend-league/wl-orchestrator.js';
 import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
 import {
@@ -477,6 +479,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // gates, inter-question delay) — re-arm timers for every active match so no
   // match silently freezes until the 15-minute sweeper.
   scheduleBootMatchTimerRearm(io);
+  startWlOrchestrator(io);
 
   rankedMatchmakingService.start(io);
 
@@ -507,6 +510,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerMatchHandlers(io, socket);
     registerWarmupHandlers(io, socket);
     registerDevHandlers(io, socket);
+    registerWlHandlers(io, socket);
 
     socket.on('connection:ping', (payload, ack) => {
       ack?.({

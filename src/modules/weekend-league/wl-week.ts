@@ -36,3 +36,46 @@ export function weekKeyFor(endedAt: Date): string | null {
 export function qpForResult(result: 'win' | 'loss'): number {
   return result === 'win' ? WL_QP_WIN : WL_QP_LOSS;
 }
+
+export interface WlEventSchedule {
+  weekKey: string;
+  entryOpensAtMs: number;
+  entryClosesAtMs: number;
+  qualifierStartsAtMs: number;
+  finalStartsAtMs: number;
+}
+
+/**
+ * The current-or-next applicable weekly event for a moment in time. A week's
+ * event belongs to it through Sunday's final (Sunday maps to the PREVIOUS
+ * day's Saturday key); once the final start has passed, the next Saturday is
+ * applicable. This is the single source of the event calendar — weekly
+ * creation, bootstrap and selection all derive from it, so a Thursday
+ * evening or weekend deploy can never skip or shadow the ongoing event.
+ */
+export function wlUpcomingEventSchedule(nowMs: number): WlEventSchedule {
+  const ge = new Date(nowMs + GE_OFFSET_MS);
+  const dow = ge.getUTCDay();
+  const toSaturdayDays = dow === 0 ? -1 : 6 - dow;
+  let saturday = new Date(Date.UTC(
+    ge.getUTCFullYear(), ge.getUTCMonth(), ge.getUTCDate() + toSaturdayDays
+  ));
+  let schedule = scheduleForSaturday(saturday);
+  if (nowMs >= schedule.finalStartsAtMs) {
+    saturday = new Date(saturday.getTime() + 7 * DAY_MS);
+    schedule = scheduleForSaturday(saturday);
+  }
+  return schedule;
+}
+
+function scheduleForSaturday(saturdayGeDate: Date): WlEventSchedule {
+  const weekKey = saturdayGeDate.toISOString().slice(0, 10);
+  const saturdayMidnightUtc = saturdayGeDate.getTime() - GE_OFFSET_MS;
+  return {
+    weekKey,
+    entryOpensAtMs: saturdayMidnightUtc - 5 * DAY_MS,            // Mon 00:00 GE
+    entryClosesAtMs: saturdayMidnightUtc - DAY_MS + 12 * 3600_000, // Fri 12:00 GE
+    qualifierStartsAtMs: saturdayMidnightUtc + 14 * 3600_000,    // Sat 14:00 GE
+    finalStartsAtMs: saturdayMidnightUtc + DAY_MS + 14 * 3600_000, // Sun 14:00 GE
+  };
+}

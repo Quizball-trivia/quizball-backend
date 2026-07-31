@@ -163,7 +163,7 @@ describe('WL live game end-to-end', () => {
     const { wlRedisNowMs } = await import('../../src/modules/weekend-league/wl-redis.js');
     const { wlOrchestratorRepo } = await import('../../src/modules/weekend-league/wl-orchestrator.repo.js');
     const { wlOrchestratorTick } = await import('../../src/modules/weekend-league/wl-orchestrator.js');
-    const { wlAcceptAnswer } = await import('../../src/modules/weekend-league/wl-live-engine.js');
+    const { wlAcceptAnswer, wlSubscribeSnapshot } = await import('../../src/modules/weekend-league/wl-live-engine.js');
     const { buildWlConfig } = await import('../../src/modules/weekend-league/wl-config.js');
 
     const now = await wlRedisNowMs();
@@ -214,6 +214,7 @@ describe('WL live game end-to-end', () => {
     // Drive the whole tournament: tick, answer the current dispatched
     // attempt with every alive participant, repeat until completed.
     const answeredAttempts = new Set<string>();
+    let snapshotChecked = false;
     const deadline = Date.now() + 280_000;
     const loopStart = Date.now();
     let lastStatus = '';
@@ -254,8 +255,30 @@ describe('WL live game end-to-end', () => {
         const aliveSet = new Set(alive.map((a) => a.user_id));
         const answer = correctAnswerFor(q!.kind);
         if (aliveSet.has(ace)) {
+          // Reconnect snapshot BEFORE answering: the in-flight attempt (with
+          // its question + window stamps) must be recoverable, unanswered.
+          if (!snapshotChecked) {
+            const pre = await wlSubscribeSnapshot(tid, ace);
+            expect(pre?.attempt?.['attempt_id']).toBe(run.attempt_id);
+            expect(pre?.attempt?.['question']).toBeTruthy();
+            expect(Number(pre?.attempt?.['deadlineAt'])).toBeGreaterThan(Date.now() - 60_000);
+            expect(pre?.your_answer).toBeNull();
+            // Spectators get no snapshot at all (handler never builds one);
+            // a non-participant player snapshot must still carry no answer.
+            const outsider = await wlSubscribeSnapshot(tid, '00000000-0000-4000-8000-000000000000');
+            expect(outsider?.attempt?.['attempt_id']).toBe(run.attempt_id);
+            expect(outsider?.your_answer).toBeNull();
+            expect(outsider?.score).toBe(0);
+          }
           const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
           if (aceResult.accepted) expect(aceResult.correct).toBe(true);
+          // ...and AFTER answering it restores the accepted answer + score.
+          if (!snapshotChecked && aceResult.accepted) {
+            const post = await wlSubscribeSnapshot(tid, ace);
+            expect(post?.your_answer?.correct).toBe(true);
+            expect(post?.score ?? 0).toBeGreaterThan(0);
+            snapshotChecked = true;
+          }
         }
         for (const mid of mids) {
           if (!aliveSet.has(mid)) continue;

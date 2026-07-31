@@ -1078,7 +1078,12 @@ export type MatchCluesAnswerPayload =
 export interface ClientToServerEvents {
   'wl:subscribe': (
     data: { tournament_id: string; role: 'player' | 'spectator' },
-    ack?: (result: { ok: boolean; reason?: 'not_entered' | 'not_found' | 'invalid'; seq?: number }) => void
+    ack?: (result: {
+      ok: boolean;
+      reason?: 'not_entered' | 'not_found' | 'invalid';
+      seq?: number;
+      snapshot?: import('../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
+    }) => void
   ) => void;
   'wl:unsubscribe': () => void;
   'wl:answer': (

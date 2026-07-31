@@ -375,6 +375,12 @@ export const wlLiveEngineInternals = {
     } catch (error) {
       if (!(error instanceof VoidLost)) throw error;
     }
+    if (voided) {
+      // Purge the answers hash: a voided attempt scores nobody, so its
+      // stored answers must not be servable through the late-idempotency
+      // recovery path (which reads Redis before the audit-filtered DB row).
+      await redis.del(answersKey(tournamentId, attemptId)).catch(() => {});
+    }
     return voided;
   },
 
@@ -671,6 +677,32 @@ export async function wlAcceptAnswer(input: {
   const redisNow = await wlRedisNowMs();
   if (run.status !== 'dispatched' || !Number.isFinite(playable)
     || redisNow < playable || redisNow >= deadline) {
+    // Idempotent recovery MUST survive closure: a client whose ack was
+    // dropped near the deadline retries after it — the accepted result it
+    // already earned has to come back, not `closed`. Redis first (until
+    // TTL), then the persisted row after freeze.
+    const storedLate = await wlRedis()
+      .hGet(answersKey(input.tournamentId, input.attemptId), input.userId)
+      .catch(() => null);
+    if (storedLate) {
+      try {
+        const p = JSON.parse(storedLate) as { correct: boolean; points: number; elapsedMs: number };
+        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      } catch { /* fall through to the persisted row */ }
+    }
+    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number }>>`
+      SELECT correct, points, elapsed_ms FROM wl_answers
+      WHERE attempt_id = ${input.attemptId} AND user_id = ${input.userId}
+        AND timing_source <> 'voided_audit'
+    `;
+    if (persistedRow) {
+      return {
+        accepted: true,
+        correct: persistedRow.correct,
+        points: persistedRow.points,
+        elapsedMs: persistedRow.elapsed_ms,
+      };
+    }
     return { accepted: false, reason: 'closed' };
   }
   const [participant] = await sql<{ user_id: string }[]>`
@@ -707,7 +739,21 @@ export async function wlAcceptAnswer(input: {
       String(REDIS_TTL_SECONDS),
     ],
   }) as number;
-  if (stored === -1) return { accepted: false, reason: 'closed' };
+  if (stored === -1) {
+    // The window closed between our PG time check and the script (TOCTOU) —
+    // same idempotency duty as the early-closed path: if THIS user already
+    // has a stored answer, return it instead of `closed`.
+    const prior = await redis
+      .hGet(answersKey(input.tournamentId, input.attemptId), input.userId)
+      .catch(() => null);
+    if (prior) {
+      try {
+        const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
+        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      } catch { /* unreadable → closed */ }
+    }
+    return { accepted: false, reason: 'closed' };
+  }
   if (stored === 0) {
     const prior = await redis.hGet(answersKey(input.tournamentId, input.attemptId), input.userId);
     if (prior) {
@@ -717,4 +763,138 @@ export async function wlAcceptAnswer(input: {
     return { accepted: false, reason: 'duplicate' };
   }
   return { accepted: true, correct, points, elapsedMs };
+}
+
+export interface WlSubscribeSnapshot {
+  status: string;
+  /** Redis server clock at snapshot build — seeds the client's clock offset. */
+  server_now: number;
+  game_index: number;
+  /** Dispatch-shaped payload for the in-flight question (players only). */
+  attempt: Record<string, unknown> | null;
+  /** The caller's already-accepted answer on that attempt, if any. */
+  your_answer: { correct: boolean; points: number; elapsedMs: number } | null;
+  /** The caller's most recent PERSISTED answer this game, attempt-identified —
+      recovers the verdict even when the attempt froze before this snapshot. */
+  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
+  /** The caller's accepted points this game (persisted + in-flight). */
+  score: number;
+  board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
+}
+
+/**
+ * PLAYER state snapshot for the wl:subscribe ack, so a late join or a
+ * transient reconnect resumes mid-question instead of waiting for the next
+ * dispatch: the in-flight attempt (question + evaluation + window stamps —
+ * the same payload a live dispatch carries) plus the caller's own accepted
+ * answer and per-game score. Spectators get NO snapshot at all — their whole
+ * world is the 30s-delayed stream, and live standings/status through the ack
+ * would leak ahead of it.
+ *
+ * Read ordering makes the score safe against a concurrent freeze: the
+ * persisted sum is read BEFORE the dispatched-run/Redis pair, and the freeze
+ * transaction persists answers atomically with the run leaving 'dispatched',
+ * so an attempt can never be counted twice (a freeze landing between the
+ * reads can only cause a momentary undercount that the very next reveal
+ * event corrects).
+ */
+export async function wlSubscribeSnapshot(
+  tournamentId: string,
+  userId: string
+): Promise<WlSubscribeSnapshot | null> {
+  const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
+    SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  if (!t) return null;
+  const stage = t.stage ?? {};
+  const gameIndex = Number.isFinite(Number(stage['current_game'])) ? Number(stage['current_game']) : 0;
+  const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
+  const redisNow = await wlRedisNowMs();
+
+  const [persisted] = await sql<Array<{ points: number }>>`
+    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
+    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
+  `;
+
+  let attempt: Record<string, unknown> | null = null;
+  let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
+  let inFlightPoints = 0;
+  // No in-flight attempt outside an actually-running game: cancellation does
+  // not close runs, so gate by tournament status rather than run state alone.
+  const gameRunning = t.status === 'game_live' || t.status === 'final_live';
+  const [run] = gameRunning
+    ? await sql<Array<{
+        attempt_id: string; game_index: number; round_index: number; question_index: number;
+        question_id: string; playable_at_ms: string | null; deadline_at_ms: string | null;
+      }>>`
+        SELECT attempt_id, game_index, round_index, question_index, question_id,
+               playable_at_ms::text, deadline_at_ms::text
+        FROM wl_question_runs
+        WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
+          AND status = 'dispatched'
+        ORDER BY round_index DESC, question_index DESC
+        LIMIT 1
+      `
+    : [];
+  if (run && Number(run.deadline_at_ms) > redisNow) {
+    const [content] = await sql<Array<{ kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
+      SELECT kind, payload, evaluation FROM wl_questions WHERE question_id = ${run.question_id}
+    `;
+    if (content) {
+      attempt = {
+        attempt_id: run.attempt_id,
+        game_index: run.game_index,
+        round_index: run.round_index,
+        question_index: run.question_index,
+        kind: content.kind,
+        question: content.payload,
+        evaluation: content.evaluation,
+        playableAt: Number(run.playable_at_ms),
+        deadlineAt: Number(run.deadline_at_ms),
+      };
+      const stored = await wlRedis().hGet(answersKey(tournamentId, run.attempt_id), userId);
+      if (stored) {
+        try {
+          const p = JSON.parse(stored) as { correct?: boolean; points?: number; elapsedMs?: number };
+          yourAnswer = {
+            correct: p.correct === true,
+            points: Number(p.points) || 0,
+            elapsedMs: Number(p.elapsedMs) || 0,
+          };
+          inFlightPoints = yourAnswer.points;
+        } catch {
+          // unreadable stored answer — treat as unanswered
+        }
+      }
+    }
+  }
+
+  const [lastPersisted] = await sql<Array<{
+    attempt_id: string; correct: boolean; points: number; elapsed_ms: number;
+  }>>`
+    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms
+    FROM wl_answers a
+    JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
+    WHERE a.tournament_id = ${tournamentId} AND a.game_index = ${gameIndex}
+      AND a.user_id = ${userId} AND a.timing_source <> 'voided_audit'
+    ORDER BY r.round_index DESC, r.question_index DESC
+    LIMIT 1
+  `;
+  return {
+    status: t.status,
+    server_now: redisNow,
+    game_index: gameIndex,
+    attempt,
+    your_answer: yourAnswer,
+    your_last_answer: lastPersisted
+      ? {
+          attempt_id: lastPersisted.attempt_id,
+          correct: lastPersisted.correct,
+          points: lastPersisted.points,
+          elapsedMs: lastPersisted.elapsed_ms,
+        }
+      : null,
+    score: (persisted?.points ?? 0) + inFlightPoints,
+    board,
+  };
 }

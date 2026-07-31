@@ -36,6 +36,7 @@ import {
   WL_FINALISTS,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
+  WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
   wlStepPoints,
@@ -46,6 +47,7 @@ import {
 
 export const WL_MIN_REMAINING_LEAD_MS = 400;
 const REDIS_TTL_SECONDS = 48 * 3600;
+
 
 export interface WlSlotRef {
   gameIndex: number;
@@ -173,11 +175,17 @@ export const wlLiveEngineInternals = {
       SELECT config FROM wl_tournaments WHERE id = ${tournamentId}
     `;
     const cfg = wlConfigFrom(t?.config);
+    const kind = String(eventPayload['kind'] ?? '');
+    // Who-Am-I runs one window per clue (5 clues, one puzzle); every other
+    // kind gets a single question window.
+    const windowMs = kind === 'who_am_i'
+      ? cfg.question_time_ms * WL_WHO_AM_I_CLUE_POINTS.length
+      : cfg.question_time_ms;
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs
       SET playable_at_ms = ${redisNow + cfg.dispatch_lead_ms},
-          deadline_at_ms = ${redisNow + cfg.dispatch_lead_ms + cfg.question_time_ms},
+          deadline_at_ms = ${redisNow + cfg.dispatch_lead_ms + windowMs},
           status = 'dispatched'
       WHERE attempt_id = ${attemptId} AND playable_at_ms IS NULL
         AND status IN ('created', 'dispatched')
@@ -432,7 +440,8 @@ export const wlLiveEngineInternals = {
     kind: WlRoundKind,
     evaluation: Record<string, unknown>,
     answer: unknown,
-    elapsedMs: number
+    elapsedMs: number,
+    clueWindowMs = 10_000
   ): { correct: boolean; points: number } {
     switch (kind) {
       case 'mcq':
@@ -452,9 +461,15 @@ export const wlLiveEngineInternals = {
         return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
       }
       case 'who_am_i': {
-        const parsed = answer as { guess?: unknown; clue_index?: unknown } | null;
+        // The clue index is SERVER-derived from elapsed time (the clue the
+        // player could have seen when answering) — a client-claimed index
+        // would let a modified client take clue-1 points at clue 5.
+        const parsed = answer as { guess?: unknown } | null;
         const correct = matchesAccepted(parsed?.guess, evaluation);
-        const clueIndex = Number(parsed?.clue_index ?? 4);
+        const clueIndex = Math.min(
+          WL_WHO_AM_I_CLUE_POINTS.length - 1,
+          Math.floor(elapsedMs / Math.max(1, clueWindowMs))
+        );
         return { correct, points: wlWhoAmIPoints(correct, clueIndex) };
       }
     }
@@ -507,14 +522,18 @@ export async function wlAcceptAnswer(input: {
   `;
   if (!participant) return { accepted: false, reason: 'not_participant' };
 
-  const [content] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown> }>>`
-    SELECT kind, evaluation FROM wl_questions WHERE question_id = ${run.question_id}
+  const [content] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
+    SELECT q.kind, q.evaluation, t.config
+    FROM wl_questions q
+    JOIN wl_tournaments t ON t.id = q.tournament_id
+    WHERE q.question_id = ${run.question_id}
   `;
   if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);
   const { correct, points } = wlLiveEngineInternals.scoreAnswer(
-    content.kind, content.evaluation, input.answer, elapsedMs
+    content.kind, content.evaluation, input.answer, elapsedMs,
+    wlConfigFrom(content.config).question_time_ms
   );
 
   const redis = wlRedis();

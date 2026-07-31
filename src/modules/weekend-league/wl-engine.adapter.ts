@@ -424,7 +424,14 @@ async function finalizeQualifierGame(tournamentId: string, redisNow: number): Pr
   logger.info({ tournamentId, field: board.length, finalists: finalists.length }, 'WL qualifier game finalized');
 }
 
-// Env seam: orchestration-focused tests (traversal/two-process) run the fast
-// stub; everything else runs the live engine. Never available in prod.
-const useStub = process.env.WL_ENGINE === 'stub' && process.env.NODE_ENV !== 'prod';
-export const wlEngine: WlEngine = useStub ? wlEngineStub : wlEngineLive;
+/**
+ * Engine selection is a property of the TOURNAMENT (validated config field),
+ * not process state: orchestration-focused tests create their tournaments
+ * with engine:'stub'; everything else defaults to 'live'. The stub is
+ * additionally refused for non-test tournaments by its own safety assert,
+ * so a mislabeled real event can never run without gameplay.
+ */
+export function getWlEngine(t: WlOrchestratorTournament): WlEngine {
+  const cfg = (t.config ?? {}) as Record<string, unknown>;
+  return cfg['engine'] === 'stub' && t.is_test ? wlEngineStub : wlEngineLive;
+}

@@ -71,11 +71,11 @@ beforeAll(async () => {
     }
     console.warn('\n⚠️  Skipping WL live-game tests: DB or Redis unavailable.\n');
   }
-});
+}, 120_000);
 
 afterAll(async () => {
   if (!dbAvailable) return;
-  if (testTournamentIds.length > 0) {
+  if (testTournamentIds.length > 0 && process.env.WL_KEEP_STATE !== '1') {
     await sql`DELETE FROM wl_tournaments WHERE id = ANY(${sql.array(testTournamentIds)}::uuid[])`;
   }
   if (testQuestionIds.length > 0) {

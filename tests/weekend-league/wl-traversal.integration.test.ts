@@ -8,8 +8,6 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
-process.env.WL_ENGINE = 'stub';
-
 let sql: typeof import('../../src/db/index.js').sql;
 let repo: typeof import('../../src/modules/weekend-league/wl-orchestrator.repo.js').wlOrchestratorRepo;
 let tick: typeof import('../../src/modules/weekend-league/wl-orchestrator.js').wlOrchestratorTick;
@@ -86,7 +84,7 @@ beforeAll(async () => {
   } catch {
     console.warn('\n⚠️  Skipping WL traversal tests: DB or Redis unavailable.\n');
   }
-});
+}, 120_000);
 
 afterAll(async () => {
   if (!available) {
@@ -116,7 +114,7 @@ async function createBackdatedTournament(now: number): Promise<string> {
   const created = await repo.createWithInitialEvent({
     weekKey: null,
     isTest: true,
-    config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000 }),
+    config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000, engine: 'stub' }),
     entryOpensAt: new Date(now - 3600_000),
     entryClosesAt: new Date(now - 120_000),
     qualifierStartsAt: new Date(now - 30_000),

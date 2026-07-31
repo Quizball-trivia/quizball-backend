@@ -104,7 +104,7 @@ beforeAll(async () => {
     }
     console.warn('\n⚠️  Skipping WL seeder tests: DB unavailable.\n');
   }
-});
+}, 120_000);
 
 afterAll(async () => {
   if (!dbAvailable) {

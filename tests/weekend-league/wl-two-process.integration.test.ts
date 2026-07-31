@@ -7,8 +7,6 @@
  * tournament with gapless, exactly-once-delivered events.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-
-process.env.WL_ENGINE = 'stub';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { WL_EVENT_POISON_ATTEMPTS } from '../../src/modules/weekend-league/wl-events.repo.js';
@@ -46,7 +44,7 @@ beforeAll(async () => {
   } catch {
     console.warn('\n⚠️  Skipping WL two-process tests: DB or Redis unavailable.\n');
   }
-});
+}, 120_000);
 
 afterAll(async () => {
   if (!available) {
@@ -80,7 +78,6 @@ function spawnTicker(iterations: number, intervalMs: number): ChildProcess {
       ...process.env,
       NODE_ENV: 'local',
       LOG_LEVEL: 'silent',
-      WL_ENGINE: 'stub',
       DATABASE_URL: process.env.DATABASE_URL,
       SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://test.supabase.co',
       SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ?? 'test-anon-key',
@@ -103,7 +100,7 @@ describe('WL two-process orchestration', () => {
     const created = await repo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
-      config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000 }),
+      config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000, engine: 'stub' }),
       entryOpensAt: new Date(now - 3600_000),
       entryClosesAt: new Date(now - 120_000),
       qualifierStartsAt: new Date(now - 30_000),

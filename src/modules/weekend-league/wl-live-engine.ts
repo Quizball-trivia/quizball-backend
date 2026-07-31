@@ -191,13 +191,17 @@ export const wlLiveEngineInternals = {
     `;
     if (!run || run.status === 'voided') return null;
     const playable = Number(run.playable_at_ms);
+    const deadlineMs = Number(run.deadline_at_ms);
     if (run.status !== 'dispatched' || !Number.isFinite(playable)) return null;
-    // The staleness rule applies ONLY to crash-retries of an already-stamped
-    // attempt: a first emission is by definition on time (its window was
-    // stamped from this very moment). A retry either still has meaningful
-    // lead before playableAt (re-broadcast the identical payload) or the
-    // window is burned and the attempt must be voided to a reserve.
-    if (!isFirstEmission && redisNow > playable - WL_MIN_REMAINING_LEAD_MS) {
+    // Staleness applies ONLY to crash-retries of an already-stamped attempt
+    // (a first emission is on time by definition — its window was stamped
+    // from this very moment). A retry may re-broadcast the IDENTICAL payload
+    // as long as the answer window is still meaningfully open — a mid-window
+    // re-emission is no worse than network delay for the receivers, and
+    // clients dedup by seq. Only a window that is effectively over voids the
+    // attempt to a reserve.
+    if (!isFirstEmission && (!Number.isFinite(deadlineMs)
+      || redisNow > deadlineMs - WL_MIN_REMAINING_LEAD_MS)) {
       return null;
     }
     return {

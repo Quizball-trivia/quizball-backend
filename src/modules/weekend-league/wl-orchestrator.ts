@@ -31,7 +31,7 @@ import {
   wlRenewStrictLock,
   wlRedisNowMs,
 } from './wl-redis.js';
-import { wlEngine } from './wl-engine.adapter.js';
+import { getWlEngine } from './wl-engine.adapter.js';
 import { wlUpcomingEventSchedule } from './wl-week.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
@@ -236,7 +236,7 @@ async function advanceTournament(
     t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
   if (t.status === 'content_pending') {
-    const seeded = await wlEngine.seedContent(t);
+    const seeded = await getWlEngine(t).seedContent(t);
     if (seeded) {
       await wlOrchestratorRepo.transition({
         tournamentId: t.id, from: 'content_pending', to: 'ready', redisTimeMs: redisNow,
@@ -270,12 +270,12 @@ async function advanceTournament(
       // crash-resumable) — not fired inline here.
       return;
     }
-    await wlEngine.startQualifier(t, redisNow);
+    await getWlEngine(t).startQualifier(t, redisNow);
     return;
   }
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
-    await wlEngine.advance(t, redisNow);
+    await getWlEngine(t).advance(t, redisNow);
     return;
   }
 
@@ -284,7 +284,7 @@ async function advanceTournament(
     && view.finalStartsAtMs != null
     && redisNow >= view.finalStartsAtMs
   ) {
-    await wlEngine.adjudicateFinalStart(t, redisNow);
+    await getWlEngine(t).adjudicateFinalStart(t, redisNow);
   }
 }
 

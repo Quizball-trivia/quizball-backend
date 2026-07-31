@@ -28,6 +28,9 @@ export const wlTournamentConfigSchema = z.object({
   dispatch_lead_ms: z.number().int().min(0).max(30_000),
   break_ms: z.number().int().min(0).max(30 * 60_000),
   checkin_window_ms: z.number().int().min(10_000).max(60 * 60_000),
+  /** Spectator delay — how far behind live the spec room runs. Fixed 30s in
+   *  production; configurable so compressed test events stay testable. */
+  spectator_delay_ms: z.number().int().min(1_000).max(120_000).default(30_000),
 });
 
 export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;
@@ -42,6 +45,7 @@ export function buildWlConfig(overrides: Partial<WlTournamentConfig> = {}): WlTo
     dispatch_lead_ms: WL_DISPATCH_LEAD_MS,
     break_ms: WL_BREAK_MS,
     checkin_window_ms: WL_CHECKIN_WINDOW_MS,
+    spectator_delay_ms: 30_000,
     ...overrides,
   });
 }

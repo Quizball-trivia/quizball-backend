@@ -32,6 +32,13 @@ export interface CaptureClueGuessInput {
   userId: string;
   qIndex: number;
   questionId: string | null;
+  /**
+   * The guess as the matcher received it. `matchCluesAnswerSchema` applies
+   * `z.string().trim()`, so outer whitespace is already gone by the time any
+   * handler sees this — it is the exact string that was evaluated, which is
+   * what the verdict must be explained against. Interior spacing, case and
+   * punctuation are preserved verbatim.
+   */
   guess: string;
   acceptedAnswers: string[];
   isCorrect: boolean;

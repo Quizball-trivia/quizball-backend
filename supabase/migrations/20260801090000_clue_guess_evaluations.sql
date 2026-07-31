@@ -23,9 +23,12 @@ CREATE TABLE IF NOT EXISTS public.clue_guess_evaluations (
   q_index       integer     NOT NULL,
   question_id   uuid,
 
-  -- What the player typed, plus the normalized form normalizeAnswer() produced
-  -- and actually compared. Both are needed: a normalization bug is invisible if
-  -- only one side is stored.
+  -- What the player typed as the matcher received it, plus the normalized form
+  -- normalizeAnswer() produced and actually compared. Both are needed: a
+  -- normalization bug is invisible if only one side is stored.
+  -- NOTE: matchCluesAnswerSchema applies z.string().trim(), so outer whitespace
+  -- is already stripped before any handler sees the guess. Interior spacing,
+  -- case and punctuation are preserved verbatim.
   raw_guess         text    NOT NULL,
   normalized_guess  text    NOT NULL,
 
@@ -41,8 +44,14 @@ CREATE TABLE IF NOT EXISTS public.clue_guess_evaluations (
 
   -- Verdict as returned to the player, and the diagnosis of how it was reached.
   -- match_rule: exact | wholeWord | alias | typo on accept; NULL on reject.
-  -- reject_reason: why nothing matched (empty_normalized_guess,
-  -- below_typo_min_length, no_rule_matched, give_up, empty_answer_set).
+  -- match_distance: the distance of the match the matcher actually made.
+  -- reject_reason: why nothing matched --
+  --   empty_normalized_guess   normalization reduced the guess to nothing
+  --   empty_answer_set         no usable accepted answer (content problem)
+  --   no_typo_eligible_target  every target was under 5 chars, so the typo rule
+  --                            never ran (short surnames: Pele, Kaka, Zico)
+  --   below_typo_min_length    guess under 4 chars, typo rule skipped
+  --   no_rule_matched          a real miss: rules ran and none matched
   is_correct     boolean NOT NULL,
   give_up        boolean NOT NULL DEFAULT false,
   match_rule     text,
@@ -62,9 +71,13 @@ CREATE TABLE IF NOT EXISTS public.clue_guess_evaluations (
   -- (users.is_ai can be flipped or the row cleaned up by the AI reaper).
   is_ai boolean NOT NULL DEFAULT false,
 
-  -- 'sampled' marks accepts kept under the accept sampling rate; rejects are
-  -- always 'full'. Lets analysis avoid mistaking sampling for a shift in the
-  -- accept/reject ratio.
+  -- 'sampled' marks accepts kept under the 10% accept sampling rate; rejects
+  -- are always 'full'.
+  -- WARNING for analysis: a naive
+  --   count(*) FILTER (WHERE NOT is_correct) / count(*)
+  -- over this table overstates the reject rate by ~10x, because only 1 in 10
+  -- accepts is stored. Weight rows with capture_mode='sampled' by 10, or
+  -- compute reject rates against match_answers instead.
   capture_mode text NOT NULL DEFAULT 'full'
 );
 
@@ -85,8 +98,11 @@ CREATE INDEX IF NOT EXISTS clue_guess_evaluations_rejects_idx
   ON public.clue_guess_evaluations (created_at DESC)
   WHERE NOT is_correct AND NOT is_ai;
 
+-- created_at trails match_id so the endpoint's
+-- "WHERE match_id = ... ORDER BY created_at DESC LIMIT n" is satisfied by the
+-- index instead of sorting; q_index trails it for per-question drilldowns.
 CREATE INDEX IF NOT EXISTS clue_guess_evaluations_match_idx
-  ON public.clue_guess_evaluations (match_id, q_index);
+  ON public.clue_guess_evaluations (match_id, created_at DESC, q_index);
 
 -- RLS on, no policies: service-role backend writes/reads only. Matches the
 -- posture set by the 2026-07-02 RLS lockdown — anon must never reach this table,

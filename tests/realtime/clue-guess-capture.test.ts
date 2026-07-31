@@ -112,6 +112,20 @@ describe('matcher behaviour is unchanged by instrumentation', () => {
         if (verdict && explanation.rejectReason !== null) {
           disagreements.push(`rejectReason on accept for ${JSON.stringify(guess)}`);
         }
+        for (const candidate of explanation.candidates) {
+          // A reported distance must always sit against a budget that could
+          // have admitted it; "distance 1, allowed 0" is self-contradictory.
+          if (candidate.bestDistance !== null && candidate.allowedDistance <= 0) {
+            disagreements.push(`distance with zero budget: ${JSON.stringify(guess)} vs ${JSON.stringify(accepted)}`);
+          }
+          if (candidate.bestDistance === null && candidate.closestTypoTarget !== null) {
+            disagreements.push(`target without distance: ${JSON.stringify(guess)}`);
+          }
+          // A typo accept must be within the budget recorded alongside it.
+          if (candidate.matchedRule === 'typo' && (candidate.matchDistance ?? 0) > candidate.allowedDistance) {
+            disagreements.push(`typo accept over budget: ${JSON.stringify(guess)} vs ${JSON.stringify(accepted)}`);
+          }
+        }
       }
     }
 
@@ -154,6 +168,66 @@ describe('explainClueGuess diagnosis', () => {
 
   it('flags an empty answer set — the content-side failure mode', () => {
     expect(explainClueGuess('Roman Burki', ['']).rejectReason).toBe('empty_answer_set');
+  });
+
+  // Regression: short famous surnames (Pele, Kaka, Zico, Cafu) get a typo budget
+  // of 0, so the typo rule never runs for them. Reporting those as a distance-1
+  // near-miss against a budget of 0 would point the investigation at "loosen the
+  // threshold" when the real story is that the rule never fired.
+  describe('short-surname targets, the reported bug population', () => {
+    it.each([
+      ['Pelee', 'Pelé'],
+      ['Kakaa', 'Kaká'],
+      ['Ziko', 'Zico'],
+      ['Cafuu', 'Cafu'],
+    ])('classifies %s vs %s as no_typo_eligible_target', (guess, accepted) => {
+      const explanation = explainClueGuess(guess, [accepted]);
+      expect(explanation.matchedRule).toBeNull();
+      expect(explanation.rejectReason).toBe('no_typo_eligible_target');
+      // No misleading "close but over budget" pair.
+      expect(explanation.candidates[0].closestTypoTarget).toBeNull();
+      expect(explanation.candidates[0].bestDistance).toBeNull();
+      expect(explanation.candidates[0].allowedDistance).toBe(0);
+      // The true nearest distance is still available as context.
+      expect(explanation.candidates[0].nearestDistance).toBe(1);
+    });
+  });
+
+  it('never reports a distance against a budget that excluded it', () => {
+    // 'abcd' is nearest but ineligible (budget 0); 'abcdefg' is the target the
+    // matcher actually used. The recorded budget must belong to the recorded
+    // target, and must never be a distance <= 0 budget pair.
+    const explanation = explainClueGuess('abcde', ['abcd abcdefg']);
+    const candidate = explanation.candidates[0];
+    expect(candidate.closestTypoTarget).toBe('abcdefg');
+    expect(candidate.allowedDistance).toBeGreaterThan(0);
+    expect(candidate.bestDistance).toBe(2);
+    // match_distance comes from the matcher, not re-derived from the nearest target.
+    expect(explanation.matchDistance).toBe(2);
+    expect(candidate.nearestDistance).toBe(1);
+  });
+
+  it('records the matcher-produced distance for every typo accept', () => {
+    // Guards the class of bug where match_distance was re-derived as the min
+    // over ALL targets and could undercount the real match distance.
+    const inputs: Array<[string, string[]]> = [
+      ['Romen Burki', ['Roman Burki']],
+      ['abcde', ['abcd abcdefg']],
+      ['Cristiano Ronald', ['Cristiano Ronaldo']],
+    ];
+    for (const [guess, accepted] of inputs) {
+      const explanation = explainClueGuess(guess, accepted);
+      if (explanation.matchedRule !== 'typo') continue;
+      const matched = explanation.candidates.find((c) => c.matchedRule === 'typo');
+      expect(explanation.matchDistance).toBe(matched?.matchDistance);
+      expect(explanation.matchDistance).toBeLessThanOrEqual(matched!.allowedDistance);
+    }
+  });
+
+  it('reports a content problem as such, not as a too-short guess', () => {
+    // Ordering guard: an unusable answer set must not be labelled
+    // below_typo_min_length just because the guess was short.
+    expect(explainClueGuess('Pel', ['']).rejectReason).toBe('empty_answer_set');
   });
 });
 

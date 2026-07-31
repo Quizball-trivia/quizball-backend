@@ -155,6 +155,7 @@ export type ClueGuessRejectReason =
   | 'empty_normalized_guess'
   | 'empty_answer_set'
   | 'below_typo_min_length'
+  | 'no_typo_eligible_target'
   | 'no_rule_matched'
   | 'give_up';
 
@@ -162,10 +163,20 @@ export interface ClueGuessCandidateExplanation {
   accepted: string;
   normalizedAccepted: string;
   matchedRule: AcceptedAnswerMatchKind | null;
-  /** Best levenshtein distance to the accepted answer or any of its tokens. */
+  /** Distance of the match the matcher actually made, when it matched. */
+  matchDistance: number | null;
+  /**
+   * Closest target the matcher was WILLING to typo-match (budget > 0), and the
+   * budget that applied to it. Reporting the globally closest target instead
+   * would be misleading: short tokens get a budget of 0, so a "distance 1,
+   * allowed 0" pair would imply a near-miss the matcher never considered.
+   * Null when no target was typo-eligible.
+   */
+  closestTypoTarget: string | null;
   bestDistance: number | null;
-  /** Typo budget the matcher would have allowed for the closest target. */
   allowedDistance: number;
+  /** Closest target of any kind, ignoring eligibility. Context only. */
+  nearestDistance: number | null;
 }
 
 export interface ClueGuessExplanation {
@@ -193,15 +204,26 @@ export function explainClueGuess(input: string, acceptedAnswers: string[]): Clue
       ? matchNormalizedAcceptedAnswer(normalizedGuess, normalizedAccepted)
       : null;
 
+    // Mirror the matcher's own target list, scoring typo-ELIGIBLE targets
+    // separately from the global nearest, so the recorded budget always belongs
+    // to the target it is reported against.
     const typoTargets = [normalizedAccepted, ...answerTokens(normalizedAccepted)];
+    let closestTypoTarget: string | null = null;
     let bestDistance: number | null = null;
     let allowedDistance = 0;
+    let nearestDistance: number | null = null;
+
     for (const target of typoTargets) {
       if (!target) continue;
       const distance = levenshtein(normalizedGuess, target);
-      if (bestDistance === null || distance < bestDistance) {
+      if (nearestDistance === null || distance < nearestDistance) {
+        nearestDistance = distance;
+      }
+      const budget = maxTypoDistance(target);
+      if (budget > 0 && (bestDistance === null || distance < bestDistance)) {
+        closestTypoTarget = target;
         bestDistance = distance;
-        allowedDistance = maxTypoDistance(target);
+        allowedDistance = budget;
       }
     }
 
@@ -209,22 +231,36 @@ export function explainClueGuess(input: string, acceptedAnswers: string[]): Clue
       accepted,
       normalizedAccepted,
       matchedRule: match?.kind ?? null,
+      matchDistance: match ? match.distance : null,
+      closestTypoTarget,
       bestDistance,
       allowedDistance,
+      nearestDistance,
     };
   });
 
+  // Use the distance the matcher itself produced rather than re-deriving it.
   const best = candidates.reduce<AcceptedAnswerMatch | null>((acc, candidate) => {
     if (!candidate.matchedRule) return acc;
-    const distance = candidate.matchedRule === 'typo' ? (candidate.bestDistance ?? 0) : 0;
-    return betterAcceptedMatch(acc, { kind: candidate.matchedRule, distance });
+    return betterAcceptedMatch(acc, {
+      kind: candidate.matchedRule,
+      distance: candidate.matchDistance ?? 0,
+    });
   }, null);
 
+  // Order matters: content-side failures are checked before guess-side ones, so
+  // an unusable answer set is never mislabelled as "the player typed too little".
   let rejectReason: ClueGuessRejectReason | null = null;
   if (!best) {
     if (!normalizedGuess) rejectReason = 'empty_normalized_guess';
     else if (candidates.every((candidate) => !candidate.normalizedAccepted)) rejectReason = 'empty_answer_set';
-    else if (normalizedGuess.length < 4) rejectReason = 'below_typo_min_length';
+    else if (candidates.every((candidate) => candidate.closestTypoTarget === null)) {
+      // Every accepted answer was too short to earn a typo budget, so the typo
+      // rule never ran. Distinct from a near-miss that blew a real budget —
+      // conflating them points the investigation at the threshold instead of
+      // at the fact that short names bypass typo matching entirely.
+      rejectReason = 'no_typo_eligible_target';
+    } else if (normalizedGuess.length < 4) rejectReason = 'below_typo_min_length';
     else rejectReason = 'no_rule_matched';
   }
 

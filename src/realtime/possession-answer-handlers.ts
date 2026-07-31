@@ -1024,25 +1024,6 @@ export async function handlePossessionCluesAnswer(
     });
   });
 
-  // Forensic capture for the "correct answers marked WRONG" investigation. Runs
-  // after the verdict is already committed and emitted, so it cannot affect
-  // scoring or answer latency.
-  fireAndForget('captureClueGuess(handlePossessionCluesAnswer)', async () => {
-    await captureClueGuessEvaluation({
-      matchId,
-      userId,
-      qIndex,
-      questionId: committed.question.questionId,
-      guess,
-      acceptedAnswers: committed.acceptedAnswers,
-      isCorrect: committed.isCorrect,
-      giveUp,
-      timeMs: committed.answerTimeMs,
-      clueIndex: committed.clueIndex,
-      isAi: socket.data.user.is_ai === true,
-    });
-  });
-
   socket.emit('match:answer_ack', {
     matchId,
     qIndex,
@@ -1059,6 +1040,26 @@ export async function handlePossessionCluesAnswer(
     cluesDisplayAnswer: committed.question.reveal.kind === 'clues'
       ? committed.question.reveal.displayAnswer
       : undefined,
+  });
+
+  // Forensic capture for the "correct answers marked WRONG" investigation.
+  // Deliberately placed AFTER the ack emit: the diagnosis re-runs the matcher
+  // rules synchronously up to its first await, so running it earlier would put
+  // that work on the player's ack path.
+  fireAndForget('captureClueGuess(handlePossessionCluesAnswer)', async () => {
+    await captureClueGuessEvaluation({
+      matchId,
+      userId,
+      qIndex,
+      questionId: committed.question.questionId,
+      guess,
+      acceptedAnswers: committed.acceptedAnswers,
+      isCorrect: committed.isCorrect,
+      giveUp,
+      timeMs: committed.answerTimeMs,
+      clueIndex: committed.clueIndex,
+      isAi: socket.data.user.is_ai === true,
+    });
   });
 
   if (committed.question.phaseKind !== 'penalty') {

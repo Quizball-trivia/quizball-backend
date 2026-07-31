@@ -52,8 +52,11 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
     }
     const { tournament_id: tournamentId, role } = parsed.data;
     try {
-      const [t] = await sql<{ id: string }[]>`
-        SELECT id FROM wl_tournaments WHERE id = ${tournamentId}
+      // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
+      // is (for players) reflected in the snapshot built below.
+      const [t] = await sql<{ id: string; live_delivered_seq: string; spec_delivered_seq: string }[]>`
+        SELECT id, live_delivered_seq::text, spec_delivered_seq::text
+        FROM wl_tournaments WHERE id = ${tournamentId}
       `;
       if (!t) {
         ack?.({ ok: false, reason: 'not_found' });
@@ -76,15 +79,6 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       }
       await leaveWlRooms(socket);
       await socket.join(role === 'player' ? wlPlayersRoom(tournamentId) : wlSpectatorsRoom(tournamentId));
-      // Cursor read AFTER the join: an event emitted between a pre-join read
-      // and the join would be neither delivered (not in the room yet) nor
-      // covered by the acked cursor — a permanent gap. Read after joining,
-      // and any event we couldn't receive is ≤ this cursor, while anything
-      // newer arrives through the room.
-      const [cursors] = await sql<{ live_delivered_seq: string; spec_delivered_seq: string }[]>`
-        SELECT live_delivered_seq::text, spec_delivered_seq::text
-        FROM wl_tournaments WHERE id = ${tournamentId}
-      `;
       // Player-only state so a late join / transient reconnect resumes
       // mid-question instead of waiting out the current attempt. Spectators
       // get NO snapshot: their whole world is the 30s-delayed stream, and
@@ -97,17 +91,48 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
           return null;
         });
       }
-      // Role-appropriate cursor: the seq this room's stream has reached, so
-      // the client knows which snapshot version to demand before trusting
-      // events (a spectator ack'd with the LIVE cursor would discard its
-      // still-pending delayed events as duplicates).
+      // Close the join-window gap: events marked delivered between C0 (read
+      // before the join) and C1 (read now) may have been BROADCAST before
+      // this socket was in the room — replay them directly from the outbox
+      // (their payloads are final, dispatch stamps included). The client
+      // dedups by seq, so a double delivery is harmless; events > C1 either
+      // arrive through the room or are caught by the next subscribe.
+      const [c1] = await sql<{ live_delivered_seq: string; spec_delivered_seq: string }[]>`
+        SELECT live_delivered_seq::text, spec_delivered_seq::text
+        FROM wl_tournaments WHERE id = ${tournamentId}
+      `;
+      const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      const hi = Number(
+        role === 'player' ? c1?.live_delivered_seq ?? '0' : c1?.spec_delivered_seq ?? '0'
+      );
+      if (hi > lo) {
+        const missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
+          SELECT seq::text, type, payload FROM wl_events
+          WHERE tournament_id = ${tournamentId} AND seq > ${lo} AND seq <= ${hi}
+          ORDER BY seq ASC
+        `;
+        if (missed.length > 0) {
+          const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
+          const nowMs = await wlRedisNowMs();
+          const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
+          for (const row of missed) {
+            rawEmit.emit(`wl:${row.type}`, {
+              ...row.payload,
+              type: row.type,
+              tournamentId,
+              seq: Number(row.seq),
+              serverNowAtEmit: nowMs,
+              ...(role === 'spectator' ? { spectator: true } : {}),
+            });
+          }
+        }
+      }
+      // Role-appropriate cursor: the seq this room's stream has reached
+      // BEFORE the join (C0) — everything above it reaches the client via
+      // the replay or the room, so nothing is silently skipped.
       ack?.({
         ok: true,
-        seq: Number(
-          role === 'player'
-            ? cursors?.live_delivered_seq ?? '0'
-            : cursors?.spec_delivered_seq ?? '0'
-        ),
+        seq: lo,
         snapshot,
       });
     } catch (error) {

@@ -121,7 +121,7 @@ export const weekendLeagueRepo = {
     return rows.length > 0;
   },
 
-  /** Saturday check-in window: [qualifier_starts_at − 10min, qualifier_starts_at). */
+  /** Saturday check-in window: [qualifier_starts_at − config window, start). */
   async checkin(tournamentId: string, userId: string): Promise<boolean> {
     const rows = await sql<{ user_id: string }[]>`
       UPDATE wl_entries e
@@ -134,14 +134,17 @@ export const weekendLeagueRepo = {
         AND e.state = 'entered'
         AND t.status = 'checkin'
         AND t.qualifier_starts_at IS NOT NULL
-        AND NOW() >= t.qualifier_starts_at - interval '10 minutes'
+        AND NOW() >= t.qualifier_starts_at - make_interval(secs => (
+          CASE WHEN t.config->>'checkin_window_ms' ~ '^[0-9]{1,9}$'
+               THEN (t.config->>'checkin_window_ms')::bigint ELSE 600000 END
+        ) / 1000.0)
         AND NOW() < t.qualifier_starts_at
       RETURNING e.user_id
     `;
     return rows.length > 0;
   },
 
-  /** Sunday final check-in — finalists only, same 10-minute window shape. */
+  /** Sunday final check-in — finalists only, same config-window shape. */
   async finalCheckin(tournamentId: string, userId: string): Promise<boolean> {
     const rows = await sql<{ user_id: string }[]>`
       UPDATE wl_entries e
@@ -154,7 +157,10 @@ export const weekendLeagueRepo = {
         AND e.state = 'finalist'
         AND t.status = 'final_checkin'
         AND t.final_starts_at IS NOT NULL
-        AND NOW() >= t.final_starts_at - interval '10 minutes'
+        AND NOW() >= t.final_starts_at - make_interval(secs => (
+          CASE WHEN t.config->>'checkin_window_ms' ~ '^[0-9]{1,9}$'
+               THEN (t.config->>'checkin_window_ms')::bigint ELSE 600000 END
+        ) / 1000.0)
         AND NOW() < t.final_starts_at
       RETURNING e.user_id
     `;

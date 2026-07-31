@@ -123,13 +123,13 @@ describe('WL two-process orchestration', () => {
       `;
     }
 
-    const childA = spawnTicker(60, 100);
-    const childB = spawnTicker(60, 100);
+    const childA = spawnTicker(300, 100);
+    const childB = spawnTicker(300, 100);
     // Ungraceful death mid-run: B dies, A must finish the job alone.
     setTimeout(() => childB.kill('SIGKILL'), 700);
 
     // Poll for completion rather than waiting for the full child runtime.
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 45_000;
     let status = '';
     while (Date.now() < deadline) {
       const t = await repo.getById(created.id);
@@ -152,5 +152,5 @@ describe('WL two-process orchestration', () => {
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
     expect(events.every((e) => e.delivered)).toBe(true);
     expect(events.every((e) => e.attempts < WL_EVENT_POISON_ATTEMPTS)).toBe(true);
-  }, 40_000);
+  }, 60_000);
 });

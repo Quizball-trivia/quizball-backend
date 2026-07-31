@@ -44,6 +44,16 @@ export const wlOrchestratorRepo = {
     `;
   },
 
+  /** Terminal tournaments that ended recently (wave/drain healing window). */
+  async listRecentlyTerminal(hours: number): Promise<WlOrchestratorTournament[]> {
+    return sql<WlOrchestratorTournament[]>`
+      SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
+      WHERE status IN ('completed', 'cancelled', 'voided')
+        AND updated_at > NOW() - make_interval(hours => ${hours})
+      ORDER BY updated_at DESC
+    `;
+  },
+
   /**
    * CAS transition + outbox event in one transaction. Returns true when THIS
    * call performed the transition (the loser of a race gets false).

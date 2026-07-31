@@ -15,6 +15,9 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 
 const WAVE_BATCH_SIZE = 200;
+// Bound per pass so one wave can never hold the orchestrator lock past its
+// TTL — the remainder continues next pass (waves are state-reconciled).
+const MAX_BATCHES_PER_PASS = 10;
 
 export type WlWaveKind = 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open';
 
@@ -45,7 +48,7 @@ export async function wlNotifyEntrants(
 ): Promise<number> {
   const key = sourceKey(tournamentId, kind);
   let total = 0;
-  for (;;) {
+  for (let batch = 0; batch < MAX_BATCHES_PER_PASS; batch += 1) {
     const inserted = await sql<{ id: string }[]>`
       INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
       SELECT e.user_id, 'weekend_league',
@@ -86,7 +89,7 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
   const key = sourceKey(tournamentId, 'started');
   const content = STARTED_CONTENT;
   let total = 0;
-  for (;;) {
+  for (let batch = 0; batch < MAX_BATCHES_PER_PASS; batch += 1) {
     const inserted = await sql<{ id: string }[]>`
       INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
       SELECT c.user_id, 'weekend_league',

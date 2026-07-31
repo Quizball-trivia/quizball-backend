@@ -97,7 +97,8 @@ export const wlEventsRepo = {
       UPDATE wl_events
       SET claim_expires_at = NOW() + make_interval(secs => ${WL_EVENT_LEASE_MS / 1000})
       WHERE tournament_id = ${tournamentId} AND seq = ${seq}
-        AND claim_token = ${token} AND delivered_at IS NULL
+        AND claim_token = ${token}
+        AND delivered_at IS NULL AND aborted_at IS NULL AND skipped_at IS NULL
       RETURNING seq
     `;
     return rows.length > 0;
@@ -165,12 +166,20 @@ export const wlEventsRepo = {
    * skipped by accident.
    */
   async skipPoisonHead(tournamentId: string, seq: number, actor: string): Promise<boolean> {
+    // Atomic guards: the tournament must (still) be paused, the row must be
+    // the exact head, at/over the poison threshold, AND have no LIVE lease —
+    // an active claimant may be mid-emission and must not be yanked away.
     const rows = await sql`
       UPDATE wl_events e
       SET skipped_at = NOW(), last_error = ${'ops_skip:' + actor}
       WHERE e.tournament_id = ${tournamentId} AND e.seq = ${seq}
         AND e.delivered_at IS NULL AND e.aborted_at IS NULL AND e.skipped_at IS NULL
         AND e.attempts >= ${WL_EVENT_POISON_ATTEMPTS}
+        AND (e.claim_token IS NULL OR e.claim_expires_at < NOW())
+        AND EXISTS (
+          SELECT 1 FROM wl_tournaments t
+          WHERE t.id = e.tournament_id AND t.status = 'paused'
+        )
         AND NOT EXISTS (
           SELECT 1 FROM wl_events p
           WHERE p.tournament_id = e.tournament_id AND p.seq < e.seq
@@ -239,13 +248,17 @@ export const wlEventsRepo = {
     `;
   },
 
-  async pendingHead(tournamentId: string): Promise<{ seq: number; attempts: number } | null> {
-    const [row] = await sql<{ seq: string; attempts: number }[]>`
-      SELECT seq::text, attempts FROM wl_events
+  async pendingHead(
+    tournamentId: string
+  ): Promise<{ seq: number; attempts: number; claimLive: boolean } | null> {
+    const [row] = await sql<{ seq: string; attempts: number; claim_live: boolean }[]>`
+      SELECT seq::text, attempts,
+             (claim_token IS NOT NULL AND claim_expires_at >= NOW()) AS claim_live
+      FROM wl_events
       WHERE tournament_id = ${tournamentId}
         AND delivered_at IS NULL AND aborted_at IS NULL AND skipped_at IS NULL
       ORDER BY seq ASC LIMIT 1
     `;
-    return row ? { seq: Number(row.seq), attempts: row.attempts } : null;
+    return row ? { seq: Number(row.seq), attempts: row.attempts, claimLive: row.claim_live } : null;
   },
 };

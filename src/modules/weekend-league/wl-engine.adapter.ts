@@ -10,13 +10,17 @@
 import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
-import { wlOrchestratorRepo, type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
+import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
 import { WL_FINALISTS, wlBuildLadder } from './wl-rules.js';
 
 export interface WlEngine {
   /** Freeze/copy content for the tournament. True = ready to open entry. */
   seedContent(t: WlOrchestratorTournament): Promise<boolean>;
-  /** Freeze game-1 participants from checked-in entries. True = kickoff OK. */
+  /**
+   * Kick off game 1 ATOMICALLY: wins the checkin→game_live CAS and, in the
+   * same transaction, freezes participants, marks entries playing, stores
+   * the ladder and appends the phase event. True = this call started it.
+   */
   startQualifier(t: WlOrchestratorTournament, redisNow: number): Promise<boolean>;
   /** Advance live play (game_live / break / final_live). */
   advance(t: WlOrchestratorTournament, redisNow: number): Promise<void>;
@@ -42,31 +46,50 @@ function assertStubSafety(t: WlOrchestratorTournament): void {
 }
 
 export const wlEngineStub: WlEngine = {
-  async seedContent(): Promise<boolean> {
+  async seedContent(t): Promise<boolean> {
+    assertStubSafety(t);
     return true; // PR3: real picker draws wl_private content + reserves.
   },
 
-  async startQualifier(t, _redisNow): Promise<boolean> {
+  async startQualifier(t, redisNow): Promise<boolean> {
     assertStubSafety(t);
-    const inserted = await sql<{ user_id: string }[]>`
-      INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
-      SELECT tournament_id, 0, user_id FROM wl_entries
-      WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
-      ON CONFLICT DO NOTHING
-      RETURNING user_id
-    `;
-    await sql`
-      UPDATE wl_entries SET state = 'playing'
-      WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
-    `;
-    const field = await participants(t.id, 0);
-    await sql`
-      UPDATE wl_tournaments
-      SET ladder = ${sql.json({ fieldSize: field.length, advance: wlBuildLadder(field.length) } as never)}
-      WHERE id = ${t.id}
-    `;
-    logger.info({ tournamentId: t.id, field: field.length, inserted: inserted.length }, 'WL qualifier field frozen (stub)');
-    return field.length > 0;
+    let started = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      // Win the phase FIRST — a concurrent ops pause/cancel that got there
+      // before us means NONE of the kickoff mutations happen.
+      const moved = await txSql`
+        UPDATE wl_tournaments SET status = 'game_live'
+        WHERE id = ${t.id} AND status = 'checkin'
+        RETURNING id
+      `;
+      if (moved.length === 0) return;
+      const frozen = await txSql<{ user_id: string }[]>`
+        INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+        SELECT tournament_id, 0, user_id FROM wl_entries
+        WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
+        ON CONFLICT DO NOTHING
+        RETURNING user_id
+      `;
+      await txSql`
+        UPDATE wl_entries SET state = 'playing'
+        WHERE tournament_id = ${t.id} AND checked_in_at IS NOT NULL AND state = 'entered'
+      `;
+      await txSql`
+        UPDATE wl_tournaments
+        SET ladder = ${sql.json({ fieldSize: frozen.length, advance: wlBuildLadder(frozen.length) } as never)}
+        WHERE id = ${t.id}
+      `;
+      await wlEventsRepo.append(txSql, {
+        tournamentId: t.id,
+        type: 'phase',
+        payload: { from: 'checkin', to: 'game_live', field: frozen.length },
+        redisTimeMs: redisNow,
+      });
+      started = true;
+      logger.info({ tournamentId: t.id, field: frozen.length }, 'WL qualifier kicked off (stub)');
+    });
+    return started;
   },
 
   async advance(t, redisNow): Promise<void> {
@@ -136,19 +159,35 @@ export const wlEngineStub: WlEngine = {
       WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NOT NULL
       ORDER BY user_id ASC
     `;
-    await sql`
-      UPDATE wl_entries SET state = 'no_show'
-      WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NULL
-    `;
     if (checkedIn.length >= 2) {
-      await wlOrchestratorRepo.transition({
-        tournamentId: t.id, from: 'final_checkin', to: 'final_live', redisTimeMs: redisNow,
-        eventPayload: { checked_in: checkedIn.length },
+      // Phase CAS first; no_show marking commits with it or not at all.
+      let moved = false;
+      await sql.begin(async (tx) => {
+        const txSql = tx as unknown as typeof sql;
+        const rows = await txSql`
+          UPDATE wl_tournaments SET status = 'final_live'
+          WHERE id = ${t.id} AND status = 'final_checkin'
+          RETURNING id
+        `;
+        if (rows.length === 0) return;
+        await txSql`
+          UPDATE wl_entries SET state = 'no_show'
+          WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NULL
+        `;
+        await wlEventsRepo.append(txSql, {
+          tournamentId: t.id,
+          type: 'phase',
+          payload: { from: 'final_checkin', to: 'final_live', checked_in: checkedIn.length },
+          redisTimeMs: redisNow,
+        });
+        moved = true;
       });
+      void moved;
       return;
     }
     // dns_v1 walkover: final not played; champion = sole checked-in finalist
-    // (or nobody). Standings settle from qualifier order in PR4's real engine.
+    // (or nobody). completeTournament wins its own CAS and carries the
+    // no_show marking in the same transaction.
     await completeTournament(t.id, redisNow, checkedIn[0]?.user_id ?? null, false);
   },
 };
@@ -169,6 +208,10 @@ async function completeTournament(
       RETURNING id
     `;
     if (moved.length === 0) return;
+    await txSql`
+      UPDATE wl_entries SET state = 'no_show'
+      WHERE tournament_id = ${tournamentId} AND state = 'finalist' AND final_checked_in_at IS NULL
+    `;
     if (championUserId) {
       await txSql`
         UPDATE wl_entries SET state = 'champion', final_rank = 1

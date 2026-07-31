@@ -123,7 +123,12 @@ export async function wlOrchestratorTick(
     await ensureUpcomingTournament(redisNow);
   }
 
-  const active = await wlOrchestratorRepo.listActive();
+  // With the launch flag off, ONLY test tournaments move — a force-tick can
+  // never advance a real event through the stub engine.
+  const activeAll = await wlOrchestratorRepo.listActive();
+  const active = config.WL_ORCHESTRATION_ENABLED
+    ? activeAll
+    : activeAll.filter((t) => t.is_test);
   for (const tournament of active) {
     if (opts.heartbeat && !(await opts.heartbeat())) {
       logger.warn('WL orchestrator lock lost mid-pass; aborting');
@@ -133,6 +138,22 @@ export async function wlOrchestratorTick(
       await advanceTournament(tournament, redisNow);
     } catch (error) {
       logger.error({ err: error, tournamentId: tournament.id }, 'WL tournament advance failed');
+    }
+    try {
+      await reconcileWaves(tournament);
+    } catch (error) {
+      logger.warn({ err: error, tournamentId: tournament.id }, 'WL wave reconcile failed');
+    }
+  }
+
+  // Waves for RECENTLY TERMINAL tournaments too: a crash between the
+  // cancelled CAS and its wave must heal on later passes even though the
+  // row left listActive.
+  for (const t of await wlOrchestratorRepo.listRecentlyTerminal(48)) {
+    try {
+      await reconcileWaves(t);
+    } catch (error) {
+      logger.warn({ err: error, tournamentId: t.id }, 'WL terminal wave reconcile failed');
     }
   }
 
@@ -144,7 +165,7 @@ export async function wlOrchestratorTick(
       return;
     }
     try {
-      await wlDeliverPending(io, tournamentId);
+      await wlDeliverPending(io, tournamentId, opts.heartbeat);
       await wlDeliverSpectator(io, tournamentId);
     } catch (error) {
       logger.error({ err: error, tournamentId }, 'WL outbox drain failed');
@@ -214,14 +235,6 @@ async function advanceTournament(
     if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
-  // Notification waves are reconciled EVERY pass (idempotent, resumable):
-  // a crash mid-wave simply continues next tick until candidate exhaustion.
-  if (t.status === 'checkin' && !t.is_test) {
-    const { wlEnsureStartedWave } = await import('./wl-notifications.js');
-    await wlEnsureStartedWave(t.id).catch((err: unknown) =>
-      logger.warn({ err, tournamentId: t.id }, 'WL started wave reconcile failed'));
-  }
-
   const view = scheduleView(t);
   if (
     t.status === 'checkin'
@@ -235,23 +248,12 @@ async function advanceTournament(
         cancelledReason: 'not_enough_players',
         eventPayload: { checked_in: checkedIn },
       });
-      const { wlNotifyEntrants } = await import('./wl-notifications.js');
-      await wlNotifyEntrants(t.id, 'cancelled', {
-        titleEn: 'Weekend League cancelled',
-        titleKa: 'უიქენდის ლიგა გაუქმდა',
-        bodyEn: 'Not enough players checked in this week. See you next Saturday!',
-        bodyKa: 'ამ კვირას საკმარისმა მოთამაშემ ვერ გაიარა ჩექინი. შეხვედრამდე მომავალ შაბათს!',
-      }).catch((err: unknown) => logger.warn({ err, tournamentId: t.id }, 'WL cancellation wave failed'));
+      // The cancellation wave is delivered by reconcileWaves (state-derived,
+      // crash-resumable) — not fired inline here.
       return;
     }
-    const started = await wlEngine.startQualifier(t, redisNow);
-    if (started) {
-      await wlOrchestratorRepo.transition({
-        tournamentId: t.id, from: 'checkin', to: 'game_live', redisTimeMs: redisNow,
-        eventPayload: { checked_in: checkedIn },
-      });
-      return;
-    }
+    await wlEngine.startQualifier(t, redisNow);
+    return;
   }
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
@@ -265,6 +267,27 @@ async function advanceTournament(
     && redisNow >= view.finalStartsAtMs
   ) {
     await wlEngine.adjudicateFinalStart(t, redisNow);
+  }
+}
+
+/**
+ * State-derived notification waves — idempotent and resumable: each pass
+ * re-derives which waves a tournament OWES from its current status and
+ * tops them up to candidate exhaustion. Crash anywhere ⇒ healed next pass.
+ */
+async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
+  const { wlEnsureStartedWave, wlNotifyEntrants } = await import('./wl-notifications.js');
+  if (!t.is_test && ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
+    .includes(t.status)) {
+    await wlEnsureStartedWave(t.id);
+  }
+  if (t.status === 'cancelled') {
+    await wlNotifyEntrants(t.id, 'cancelled', {
+      titleEn: 'Weekend League cancelled',
+      titleKa: 'უიქენდის ლიგა გაუქმდა',
+      bodyEn: 'Not enough players checked in this week. See you next Saturday!',
+      bodyKa: 'ამ კვირას საკმარისმა მოთამაშემ ვერ გაიარა ჩექინი. შეხვედრამდე მომავალ შაბათს!',
+    }, ['entered', 'playing', 'cancelled']);
   }
 }
 

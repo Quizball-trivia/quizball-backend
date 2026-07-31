@@ -40,19 +40,32 @@ function publicEventName(event: WlEventRow): WlEventName {
   return `wl:${event.type}`;
 }
 
+const MAX_EVENTS_PER_DRAIN = 200;
+
 /**
- * Drain the pending outbox head-first for one tournament. Returns the number
- * of events delivered. Safe to call from any replica at any time.
+ * Drain the pending outbox head-first for one tournament (bounded per call
+ * so a single tournament can never hold the orchestrator lock past its
+ * TTL). `heartbeat` is invoked per event; false aborts before any further
+ * side effect. Safe to call from any replica at any time.
  */
-export async function wlDeliverPending(io: QuizballServer, tournamentId: string): Promise<number> {
+export async function wlDeliverPending(
+  io: QuizballServer,
+  tournamentId: string,
+  heartbeat?: () => Promise<boolean>
+): Promise<number> {
   let delivered = 0;
-  for (;;) {
+  while (delivered < MAX_EVENTS_PER_DRAIN) {
+    if (heartbeat && !(await heartbeat())) break;
     const head = await wlEventsRepo.pendingHead(tournamentId);
     if (!head) break;
-    if (head.attempts >= WL_EVENT_POISON_ATTEMPTS) {
+    // Poison classification only for an UNCLAIMED head: attempts counts
+    // claims, so a live claimant's own in-flight attempt must not be
+    // mistaken for a stuck row by a concurrent deliverer.
+    if (head.attempts >= WL_EVENT_POISON_ATTEMPTS && !head.claimLive) {
       await pauseForPoison(tournamentId, head.seq, head.attempts);
       break;
     }
+    if (head.claimLive && head.attempts >= WL_EVENT_POISON_ATTEMPTS) break;
 
     const event = await wlEventsRepo.claimNext(tournamentId);
     if (!event) break; // another replica holds the lease

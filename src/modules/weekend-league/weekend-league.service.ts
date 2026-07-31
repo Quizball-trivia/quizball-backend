@@ -16,7 +16,7 @@ const COUNTS_CACHE_TTL_SECONDS = 5;
 // an integer (number or all-digit string), defaulting to WL_QP_TARGET.
 function qpTargetOf(tournament: WlTournamentRow | null): number {
   const raw = tournament?.config?.['qp_target'];
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0) return raw;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw <= 999_999) return raw;
   if (typeof raw === 'string' && /^[0-9]{1,6}$/.test(raw)) return parseInt(raw, 10);
   return WL_QP_TARGET;
 }

@@ -198,6 +198,38 @@ describe('checkin', () => {
     expect(result).toEqual({ checked_in: false, already_checked_in: false, reason: 'not_entered' });
   });
 
+  it('deleting a tournament cascades through questions, runs and answers', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wld-a-${Date.now()}`);
+    const tid = await seedTournament({ launchEdition: true });
+    const [q] = await sql<{ question_id: string }[]>`
+      INSERT INTO wl_questions (tournament_id, game_index, round_index, question_index, kind, payload, evaluation)
+      VALUES (${tid}, 0, 0, 0, 'mcq', '{}'::jsonb, '{}'::jsonb)
+      RETURNING question_id
+    `;
+    const [run] = await sql<{ attempt_id: string }[]>`
+      INSERT INTO wl_question_runs (tournament_id, game_index, round_index, question_index, question_id)
+      VALUES (${tid}, 0, 0, 0, ${q.question_id})
+      RETURNING attempt_id
+    `;
+    await sql`
+      INSERT INTO wl_answers (attempt_id, user_id, tournament_id, game_index, answer, correct, points, elapsed_ms, time_charge_ms, timing_source)
+      VALUES (${run.attempt_id}, ${user}, ${tid}, 0, '{}'::jsonb, true, 40, 1200, 1200, 'server')
+    `;
+
+    await sql`DELETE FROM wl_tournaments WHERE id = ${tid}`;
+
+    const [counts] = await sql<{ q: number; r: number; a: number }[]>`
+      SELECT
+        (SELECT COUNT(*) FROM wl_questions WHERE tournament_id = ${tid})::int AS q,
+        (SELECT COUNT(*) FROM wl_question_runs WHERE tournament_id = ${tid})::int AS r,
+        (SELECT COUNT(*) FROM wl_answers WHERE tournament_id = ${tid})::int AS a
+    `;
+    expect(counts).toEqual({ q: 0, r: 0, a: 0 });
+    // Row is gone — drop it from the teardown list.
+    testTournamentIds.splice(testTournamentIds.indexOf(tid), 1);
+  });
+
   it('final check-in requires finalist state', async ({ skip }) => {
     if (!dbAvailable) skip();
     const finalist = await seedUser(`wlf-a-${Date.now()}`);

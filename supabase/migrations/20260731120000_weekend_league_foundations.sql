@@ -265,8 +265,10 @@ CREATE TABLE IF NOT EXISTS public.wl_answers (
   created_at timestamptz NOT NULL DEFAULT NOW(),
   PRIMARY KEY (attempt_id, user_id),
   -- The answer's denormalized coordinates must agree with its attempt's.
+  -- CASCADE so deleting a (test/ops) tournament can cascade through runs.
   FOREIGN KEY (attempt_id, tournament_id, game_index)
     REFERENCES public.wl_question_runs (attempt_id, tournament_id, game_index)
+    ON DELETE CASCADE
 );
 
 -- Game-total recomputation (scoring repair, results, recovery).

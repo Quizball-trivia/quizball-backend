@@ -193,6 +193,7 @@ export const matchQuestionsRepo = {
       WHERE q.category_id = $1
         AND c.is_active = true
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
@@ -210,6 +211,7 @@ export const matchQuestionsRepo = {
         WHERE q.category_id = $1
           AND c.is_active = true
           AND q.status = 'published'
+          AND q.visibility = 'public'
           AND q.ranked_eligible = true
           AND q.type = 'mcq_single'
         ${VALID_PAYLOAD_CONDITIONS}
@@ -233,6 +235,7 @@ export const matchQuestionsRepo = {
       WHERE q.category_id = $1
         AND c.is_active = true
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
@@ -258,6 +261,7 @@ export const matchQuestionsRepo = {
       WHERE q.category_id = $1
         AND c.is_active = true
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
@@ -380,6 +384,7 @@ export const matchQuestionsRepo = {
         WHERE q.category_id = ANY($2::uuid[])
           AND c.is_active = true
           AND q.status = 'published'
+          AND q.visibility = 'public'
           AND q.ranked_eligible = true
           AND q.type = ANY($3::text[])
           ${includesMcq ? `AND (q.type <> 'mcq_single' OR (${perRowMcqPayloadValidation}))` : ''}
@@ -438,6 +443,7 @@ export const matchQuestionsRepo = {
         WHERE q.category_id = ANY($2::uuid[])
           AND c.is_active = true
           AND q.status = 'published'
+          AND q.visibility = 'public'
           AND q.ranked_eligible = true
           AND q.type = 'mcq_single'
           AND (${perRowMcqPayloadValidation})
@@ -491,6 +497,7 @@ export const matchQuestionsRepo = {
         WHERE q.id = $2
           AND c.is_active = true
           AND q.status = 'published'
+          AND q.visibility = 'public'
           AND q.ranked_eligible = true
           AND q.type = 'mcq_single'
           AND (${perRowMcqPayloadValidation})

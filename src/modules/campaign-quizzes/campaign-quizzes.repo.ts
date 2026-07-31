@@ -47,6 +47,7 @@ export const campaignQuizzesRepo = {
       WHERE cqq.quiz_slug = ${slug}
         AND cq.status = 'published'
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = false
       ORDER BY cqq.display_order ASC
     `;
@@ -72,6 +73,7 @@ export const campaignQuizzesRepo = {
         AND cqq.question_id = ${questionId}
         AND cq.status = 'published'
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = false
       LIMIT 1
     `;

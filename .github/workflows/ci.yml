@@ -1,0 +1,31 @@
+# Backend CI — lint + typecheck + unit suite on every PR.
+#
+# test:ci = the default suite minus vitest.ci.config.ts's QUARANTINE list —
+# tests that were already failing on staging when CI was introduced (see that
+# file for the per-file reasons; it is a burn-down list). Well-behaved
+# DB-backed *.integration.test.ts files self-skip when no local database
+# answers. The heavier tiers (test:regression, chaos fleet, staging gate)
+# remain manual by design — they need real Redis/DB/staging state.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [staging, main]
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run test:ci

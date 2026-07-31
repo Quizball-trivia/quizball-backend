@@ -45,6 +45,7 @@ vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
     getProfilesByUserIds: vi.fn(),
     getRpChangesForMatch: vi.fn(),
     applySettlement: vi.fn(),
+    repairQpFromLedger: vi.fn().mockResolvedValue(0),
     listLeaderboard: vi.fn(),
   },
 }));

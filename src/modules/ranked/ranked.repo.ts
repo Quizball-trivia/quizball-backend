@@ -48,6 +48,14 @@ interface RankedSettlementEntry {
   change: RankedRpChangeInsertInput;
   /** Coin reward granted with the settlement (win/loss participation reward). */
   coinsAwarded: number;
+  /**
+   * Weekend League QP earned by this result, or 0 for non-humans. Lands only
+   * when qpWeekKey is set (the match ended inside the Mon–Fri GE accrual
+   * window — derived from matches.ended_at, never from wall-clock at
+   * settlement time, so replays of old matches credit the correct week).
+   */
+  qpAwarded: number;
+  qpWeekKey: string | null;
 }
 
 export const rankedRepo = {
@@ -275,6 +283,33 @@ export const rankedRepo = {
                 AND $25 > 0
                 AND EXISTS (SELECT 1 FROM inserted)
               RETURNING 1
+            ),
+            -- Weekend League QP ledger. SELECT ... FROM inserted (not VALUES +
+            -- ON CONFLICT WHERE): an upsert's insert branch would fire even
+            -- when "inserted" is empty, breaking exactly-once on re-settlement.
+            qp_award AS (
+              INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
+              SELECT $1, $2, $27::date, $28::int, $8
+              FROM inserted
+              WHERE $28::int > 0 AND $27::date IS NOT NULL
+              ON CONFLICT (match_id, user_id) DO NOTHING
+              RETURNING points
+            ),
+            -- Totals read-model, advanced only by the award row this statement
+            -- actually inserted (rebuildable from the ledger at any time).
+            qp_total AS (
+              INSERT INTO wl_qp AS t (week_key, user_id, points, wins, losses, last_match_at)
+              SELECT $27::date, $2, qa.points,
+                     CASE WHEN $8 = 'win' THEN 1 ELSE 0 END,
+                     CASE WHEN $8 = 'loss' THEN 1 ELSE 0 END,
+                     COALESCE($26::timestamptz, NOW())
+              FROM qp_award qa
+              ON CONFLICT (week_key, user_id) DO UPDATE SET
+                points = t.points + EXCLUDED.points,
+                wins = t.wins + EXCLUDED.wins,
+                losses = t.losses + EXCLUDED.losses,
+                last_match_at = GREATEST(t.last_match_at, EXCLUDED.last_match_at)
+              RETURNING 1
             )
             -- Did THIS statement insert the ledger row? Lets the caller fire the
             -- post-write side effects exactly once per settled participant.
@@ -307,6 +342,8 @@ export const rankedRepo = {
               entry.profile.userId,
               entry.coinsAwarded,
               occurredAt ?? null,
+              entry.qpWeekKey,
+              entry.qpAwarded,
             ]
           );
           if (appliedRows[0]?.applied === true) {

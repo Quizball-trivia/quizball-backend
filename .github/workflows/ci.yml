@@ -1,0 +1,26 @@
+# Backend CI — lint + typecheck + unit suite on every PR.
+#
+# The DB-backed *.integration.test.ts files self-skip when no local database
+# answers (their beforeAll probes and warns), so this stays green without a
+# service container while still running them for contributors with the local
+# stack up. The heavier tiers (test:regression, chaos fleet, staging gate)
+# remain manual by design — they need real Redis/DB/staging state.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [staging, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test

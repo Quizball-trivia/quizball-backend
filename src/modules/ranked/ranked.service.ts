@@ -10,6 +10,7 @@ import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
+import { weekKeyFor } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
   computeSeasonRpDelta,
@@ -268,6 +269,8 @@ export const rankedService = {
           calculationMethod: 'ranked_formula',
         },
         coinsAwarded: 0, // tier normalization only — no reward
+        qpAwarded: 0,
+        qpWeekKey: null,
       }]);
       profile.tier = normalizedTier;
     }
@@ -466,6 +469,7 @@ export const rankedService = {
         calculationMethod: 'placement_seed' | 'ranked_formula';
       };
       coinsAwarded: number;
+      qpAwarded: number;
       outcome: RankedUserOutcome;
     }> = [];
 
@@ -574,6 +578,7 @@ export const rankedService = {
           calculationMethod: settlement.calculationMethod,
         },
         coinsAwarded: settlement.coinsAwarded,
+        qpAwarded: settlement.qpAwarded,
         outcome: {
           userId: player.user_id,
           oldRp,
@@ -598,10 +603,16 @@ export const rankedService = {
     // Only the participants THIS call actually wrote. A concurrent settlement of
     // the same match loses the ON CONFLICT, and a finalized account is skipped
     // inside the transaction — neither may fire the post-write side effects below.
+    // WL QP accrues by the match's own ended_at (immutable), so a replayed or
+    // late settlement credits the week the match was actually played in — and
+    // a match outside the Mon–Fri window credits nothing.
+    const qpWeekKey = match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
     const applied = await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
+      qpAwarded: entry.qpAwarded,
+      qpWeekKey,
     })), occurredAt);
     // A writer that does not report an applied set (the burn-in writer's stub)
     // is treated as "everything landed", which is the pre-existing behaviour.

@@ -46,6 +46,9 @@ export const questionsController = {
         // the expensive admin-only search/image filters.
         status: isAdmin ? query.status : 'published',
         rankedEligible: isAdmin ? undefined : true,
+        // Weekend League competition content is server-only: players must not
+        // be able to enumerate it (payloads carry answers for the solo flow).
+        visibility: isAdmin ? undefined : 'public',
         difficulty: query.difficulty,
         type: query.type,
         mcqImage: isAdmin ? query.mcq_image : undefined,
@@ -74,10 +77,15 @@ export const questionsController = {
 
     const question = await questionsService.getById(id);
 
-    // Return 404 rather than revealing that a draft/archived question exists.
+    // Return 404 rather than revealing that a draft/archived/WL-private
+    // question exists.
     if (
       req.user?.role !== 'admin'
-      && (question.status !== 'published' || question.ranked_eligible === false)
+      && (
+        question.status !== 'published'
+        || question.ranked_eligible === false
+        || question.visibility !== 'public'
+      )
     ) {
       throw new NotFoundError('Question not found');
     }

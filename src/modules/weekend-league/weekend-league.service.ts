@@ -1,0 +1,150 @@
+import { getOrLoadJson } from '../../core/json-cache.js';
+import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
+import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
+import type {
+  WlCheckinResponse,
+  WlCurrentResponse,
+  WlEnterResponse,
+  WlQpResponse,
+} from './weekend-league.schemas.js';
+
+const COUNTS_CACHE_TTL_SECONDS = 5;
+
+function qpTargetOf(tournament: WlTournamentRow | null): number {
+  const raw = tournament?.config?.['qp_target'];
+  return typeof raw === 'number' && Number.isInteger(raw) ? raw : WL_QP_TARGET;
+}
+
+function launchEditionOf(tournament: WlTournamentRow | null): boolean {
+  return tournament?.config?.['launch_edition'] === true;
+}
+
+/**
+ * The week whose QP we surface: the active tournament's week when one exists,
+ * else the calendar week accruing right now (null on weekends between events).
+ */
+function activeWeekKey(tournament: WlTournamentRow | null): string | null {
+  return tournament?.week_key ?? weekKeyFor(new Date());
+}
+
+async function loadQp(
+  tournament: WlTournamentRow | null,
+  userId: string
+): Promise<WlQpResponse> {
+  const weekKey = activeWeekKey(tournament);
+  const target = qpTargetOf(tournament);
+  const row = weekKey ? await weekendLeagueRepo.getQp(weekKey, userId) : null;
+  const points = row?.points ?? 0;
+  return {
+    week_key: weekKey,
+    points,
+    wins: row?.wins ?? 0,
+    losses: row?.losses ?? 0,
+    target,
+    qualified: launchEditionOf(tournament) || points >= target,
+  };
+}
+
+export const weekendLeagueService = {
+  async current(userId: string): Promise<WlCurrentResponse> {
+    const tournament = await weekendLeagueRepo.getCurrentTournament();
+    if (!tournament) {
+      return { tournament: null, you: null };
+    }
+
+    const [counts, entry, qp] = await Promise.all([
+      getOrLoadJson(
+        `wl:counts:${tournament.id}`,
+        COUNTS_CACHE_TTL_SECONDS,
+        () => weekendLeagueRepo.getCounts(tournament.id)
+      ),
+      weekendLeagueRepo.getEntry(tournament.id, userId),
+      loadQp(tournament, userId),
+    ]);
+
+    return {
+      tournament: {
+        id: tournament.id,
+        week_key: tournament.week_key,
+        status: tournament.status,
+        is_test: tournament.is_test,
+        entry_opens_at: tournament.entry_opens_at,
+        entry_closes_at: tournament.entry_closes_at,
+        qualifier_starts_at: tournament.qualifier_starts_at,
+        final_starts_at: tournament.final_starts_at,
+        registered_count: counts.registered,
+        checked_in_count: counts.checkedIn,
+        launch_edition: launchEditionOf(tournament),
+        qp_target: qpTargetOf(tournament),
+      },
+      you: {
+        entered: entry != null,
+        state: entry?.state ?? null,
+        checked_in: entry?.checked_in_at != null,
+        final_checked_in: entry?.final_checked_in_at != null,
+        qp,
+      },
+    };
+  },
+
+  async qp(userId: string): Promise<WlQpResponse> {
+    const tournament = await weekendLeagueRepo.getCurrentTournament();
+    return loadQp(tournament, userId);
+  },
+
+  async enter(userId: string): Promise<WlEnterResponse> {
+    const tournament = await weekendLeagueRepo.getCurrentTournament();
+    if (!tournament) {
+      return { entered: false, already_entered: false, reason: 'no_tournament' };
+    }
+
+    const inserted = await weekendLeagueRepo.enter(tournament.id, userId);
+    if (inserted) {
+      return { entered: true, already_entered: false, reason: 'ok' };
+    }
+
+    // The conditional INSERT declined — classify for the client (reporting
+    // only; the statement above is the sole authorization point).
+    const entry = await weekendLeagueRepo.getEntry(tournament.id, userId);
+    if (entry) {
+      return { entered: true, already_entered: true, reason: 'ok' };
+    }
+    const windowOpen = tournament.status === 'entry_open'
+      && tournament.entry_closes_at != null
+      && new Date(tournament.entry_closes_at).getTime() > Date.now();
+    if (!windowOpen) {
+      return { entered: false, already_entered: false, reason: 'window_closed' };
+    }
+    return { entered: false, already_entered: false, reason: 'not_qualified' };
+  },
+
+  async checkin(userId: string): Promise<WlCheckinResponse> {
+    const tournament = await weekendLeagueRepo.getCurrentTournament();
+    if (!tournament) {
+      return { checked_in: false, already_checked_in: false, reason: 'no_tournament' };
+    }
+
+    const isFinalWindow = tournament.status === 'final_checkin';
+    const updated = isFinalWindow
+      ? await weekendLeagueRepo.finalCheckin(tournament.id, userId)
+      : await weekendLeagueRepo.checkin(tournament.id, userId);
+    if (updated) {
+      return { checked_in: true, already_checked_in: false, reason: 'ok' };
+    }
+
+    const entry = await weekendLeagueRepo.getEntry(tournament.id, userId);
+    if (!entry) {
+      return { checked_in: false, already_checked_in: false, reason: 'not_entered' };
+    }
+    if (isFinalWindow && entry.state !== 'finalist') {
+      return { checked_in: false, already_checked_in: false, reason: 'not_finalist' };
+    }
+    const already = isFinalWindow
+      ? entry.final_checked_in_at != null
+      : entry.checked_in_at != null;
+    if (already) {
+      return { checked_in: true, already_checked_in: true, reason: 'ok' };
+    }
+    return { checked_in: false, already_checked_in: false, reason: 'window_closed' };
+  },
+};

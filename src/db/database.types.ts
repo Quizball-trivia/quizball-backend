@@ -1887,6 +1887,7 @@ export type Database = {
           status: string
           type: string
           updated_at: string
+          visibility: string
         }
         Insert: {
           category_id: string
@@ -1900,6 +1901,7 @@ export type Database = {
           status?: string
           type: string
           updated_at?: string
+          visibility?: string
         }
         Update: {
           category_id?: string
@@ -1913,6 +1915,7 @@ export type Database = {
           status?: string
           type?: string
           updated_at?: string
+          visibility?: string
         }
         Relationships: [
           {

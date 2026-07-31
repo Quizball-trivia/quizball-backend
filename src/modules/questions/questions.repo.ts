@@ -49,6 +49,8 @@ export interface ListQuestionsFilter {
   categoryId?: string;
   status?: string;
   rankedEligible?: boolean;
+  /** 'public' hides Weekend League competition content from player reads. */
+  visibility?: 'public' | 'wl_private';
   difficulty?: string;
   type?: string;
   mcqImage?: 'with' | 'without';
@@ -77,6 +79,9 @@ export const questionsRepo = {
     const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
     const rankedEligibleFilter = filter?.rankedEligible !== undefined
       ? sql`AND q.ranked_eligible = ${filter.rankedEligible}`
+      : sql``;
+    const visibilityFilter = filter?.visibility
+      ? sql`AND q.visibility = ${filter.visibility}`
       : sql``;
     const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
     const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
@@ -143,6 +148,7 @@ export const questionsRepo = {
       ${categoryFilter}
       ${statusFilter}
       ${rankedEligibleFilter}
+      ${visibilityFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}
@@ -162,6 +168,7 @@ export const questionsRepo = {
       ${categoryFilter}
       ${statusFilter}
       ${rankedEligibleFilter}
+      ${visibilityFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}

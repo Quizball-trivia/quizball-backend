@@ -108,6 +108,7 @@ const mockQuestion = {
   type: 'mcq_single',
   difficulty: 'medium',
   status: 'draft',
+  visibility: 'public',
   prompt: { en: 'What is 2+2?', ka: 'რა არის 2+2?' },
   explanation: { en: 'Basic math' },
   payload: mockMcqPayload,
@@ -352,6 +353,33 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('published');
+    });
+
+    it('hides published wl_private questions from player callers', async () => {
+      authenticateAs('player');
+      (questionsRepo.getById as Mock).mockResolvedValue({
+        ...mockQuestion,
+        status: 'published',
+        visibility: 'wl_private',
+      });
+
+      const response = await request(app).get(`/api/v1/questions/${mockQuestion.id}`);
+
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('NOT_FOUND');
+    });
+
+    it('still shows wl_private questions to admins', async () => {
+      authenticateAs('admin');
+      (questionsRepo.getById as Mock).mockResolvedValue({
+        ...mockQuestion,
+        status: 'published',
+        visibility: 'wl_private',
+      });
+
+      const response = await request(app).get(`/api/v1/questions/${mockQuestion.id}`);
+
+      expect(response.status).toBe(200);
     });
 
     it('should return question with payload', async () => {

@@ -28,6 +28,7 @@ import {
   isRedisAvailable,
   withAnswerLock,
 } from './possession-answer-lock.js';
+import { captureClueGuessEvaluation } from './clue-guess-capture.js';
 import {
   answerInputLogFields,
   answerLogFields,
@@ -846,6 +847,8 @@ export async function handlePossessionCluesAnswer(
     myTotalPoints: number;
     expectedCount: number;
     answerCount: number;
+    /** Instrumentation only: the exact set the matcher compared against. */
+    acceptedAnswers: string[];
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
@@ -988,6 +991,7 @@ export async function handlePossessionCluesAnswer(
         myTotalPoints: player.totalPoints + pointsEarned,
         expectedCount,
         answerCount: currentAnswerCount,
+        acceptedAnswers,
       },
     };
   });
@@ -1036,6 +1040,26 @@ export async function handlePossessionCluesAnswer(
     cluesDisplayAnswer: committed.question.reveal.kind === 'clues'
       ? committed.question.reveal.displayAnswer
       : undefined,
+  });
+
+  // Forensic capture for the "correct answers marked WRONG" investigation.
+  // Deliberately placed AFTER the ack emit: the diagnosis re-runs the matcher
+  // rules synchronously up to its first await, so running it earlier would put
+  // that work on the player's ack path.
+  fireAndForget('captureClueGuess(handlePossessionCluesAnswer)', async () => {
+    await captureClueGuessEvaluation({
+      matchId,
+      userId,
+      qIndex,
+      questionId: committed.question.questionId,
+      guess,
+      acceptedAnswers: committed.acceptedAnswers,
+      isCorrect: committed.isCorrect,
+      giveUp,
+      timeMs: committed.answerTimeMs,
+      clueIndex: committed.clueIndex,
+      isAi: socket.data.user.is_ai === true,
+    });
   });
 
   if (committed.question.phaseKind !== 'penalty') {

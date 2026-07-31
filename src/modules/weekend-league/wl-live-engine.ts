@@ -718,3 +718,108 @@ export async function wlAcceptAnswer(input: {
   }
   return { accepted: true, correct, points, elapsedMs };
 }
+
+export interface WlSubscribeSnapshot {
+  status: string;
+  /** Redis server clock at snapshot build — seeds the client's clock offset. */
+  server_now: number;
+  game_index: number;
+  /** Dispatch-shaped payload for the in-flight question (players only). */
+  attempt: Record<string, unknown> | null;
+  /** The caller's already-accepted answer on that attempt, if any. */
+  your_answer: { correct: boolean; points: number; elapsedMs: number } | null;
+  /** The caller's accepted points this game (persisted + in-flight). */
+  score: number;
+  board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
+}
+
+/**
+ * Role-appropriate state snapshot for the wl:subscribe ack, so a late join or
+ * a transient reconnect resumes mid-question instead of waiting for the next
+ * dispatch. Players get the in-flight attempt (question + evaluation + window
+ * stamps — the same payload a live dispatch carries) plus their own accepted
+ * answer and per-game score; spectators get status + board only, because the
+ * in-flight question hasn't cleared the 30s delay yet.
+ */
+export async function wlSubscribeSnapshot(
+  tournamentId: string,
+  userId: string | null
+): Promise<WlSubscribeSnapshot | null> {
+  const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
+    SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  if (!t) return null;
+  const stage = t.stage ?? {};
+  const gameIndex = Number.isFinite(Number(stage['current_game'])) ? Number(stage['current_game']) : 0;
+  const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
+  const redisNow = await wlRedisNowMs();
+
+  if (userId == null) {
+    return {
+      status: t.status, server_now: redisNow, game_index: gameIndex,
+      attempt: null, your_answer: null, score: 0, board,
+    };
+  }
+
+  let attempt: Record<string, unknown> | null = null;
+  let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
+  let inFlightPoints = 0;
+  const [run] = await sql<Array<{
+    attempt_id: string; game_index: number; round_index: number; question_index: number;
+    question_id: string; playable_at_ms: string | null; deadline_at_ms: string | null;
+  }>>`
+    SELECT attempt_id, game_index, round_index, question_index, question_id,
+           playable_at_ms::text, deadline_at_ms::text
+    FROM wl_question_runs
+    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
+      AND status = 'dispatched'
+    ORDER BY round_index DESC, question_index DESC
+    LIMIT 1
+  `;
+  if (run && Number(run.deadline_at_ms) > redisNow) {
+    const [content] = await sql<Array<{ kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
+      SELECT kind, payload, evaluation FROM wl_questions WHERE question_id = ${run.question_id}
+    `;
+    if (content) {
+      attempt = {
+        attempt_id: run.attempt_id,
+        game_index: run.game_index,
+        round_index: run.round_index,
+        question_index: run.question_index,
+        kind: content.kind,
+        question: content.payload,
+        evaluation: content.evaluation,
+        playableAt: Number(run.playable_at_ms),
+        deadlineAt: Number(run.deadline_at_ms),
+      };
+      const stored = await wlRedis().hGet(answersKey(tournamentId, run.attempt_id), userId);
+      if (stored) {
+        try {
+          const p = JSON.parse(stored) as { correct?: boolean; points?: number; elapsedMs?: number };
+          yourAnswer = {
+            correct: p.correct === true,
+            points: Number(p.points) || 0,
+            elapsedMs: Number(p.elapsedMs) || 0,
+          };
+          inFlightPoints = yourAnswer.points;
+        } catch {
+          // unreadable stored answer — treat as unanswered
+        }
+      }
+    }
+  }
+
+  const [persisted] = await sql<Array<{ points: number }>>`
+    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
+    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
+  `;
+  return {
+    status: t.status,
+    server_now: redisNow,
+    game_index: gameIndex,
+    attempt,
+    your_answer: yourAnswer,
+    score: (persisted?.points ?? 0) + inFlightPoints,
+    board,
+  };
+}

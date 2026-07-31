@@ -29,6 +29,7 @@ type SubscribeAck = (response: {
   ok: boolean;
   reason?: 'not_entered' | 'not_found' | 'invalid';
   seq?: number;
+  snapshot?: import('../../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
 }) => void;
 
 async function leaveWlRooms(socket: QuizballSocket): Promise<void> {
@@ -76,6 +77,17 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       }
       await leaveWlRooms(socket);
       await socket.join(role === 'player' ? wlPlayersRoom(tournamentId) : wlSpectatorsRoom(tournamentId));
+      // Role-appropriate state so a late join / transient reconnect resumes
+      // mid-question instead of waiting out the current attempt. Spectators
+      // get no attempt — the in-flight question hasn't cleared the delay.
+      const { wlSubscribeSnapshot } = await import('../../modules/weekend-league/wl-live-engine.js');
+      const snapshot = await wlSubscribeSnapshot(
+        tournamentId,
+        role === 'player' ? userId : null
+      ).catch((error) => {
+        logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe snapshot failed');
+        return null;
+      });
       // Role-appropriate cursor: the seq this room's stream has reached, so
       // the client knows which snapshot version to demand before trusting
       // events (a spectator ack'd with the LIVE cursor would discard its
@@ -83,6 +95,7 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({
         ok: true,
         seq: Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq),
+        snapshot,
       });
     } catch (error) {
       logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe failed');

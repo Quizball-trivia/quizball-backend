@@ -52,9 +52,8 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
     }
     const { tournament_id: tournamentId, role } = parsed.data;
     try {
-      const [t] = await sql<{ id: string; live_delivered_seq: string; spec_delivered_seq: string }[]>`
-        SELECT id, live_delivered_seq::text, spec_delivered_seq::text
-        FROM wl_tournaments WHERE id = ${tournamentId}
+      const [t] = await sql<{ id: string }[]>`
+        SELECT id FROM wl_tournaments WHERE id = ${tournamentId}
       `;
       if (!t) {
         ack?.({ ok: false, reason: 'not_found' });
@@ -77,6 +76,15 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       }
       await leaveWlRooms(socket);
       await socket.join(role === 'player' ? wlPlayersRoom(tournamentId) : wlSpectatorsRoom(tournamentId));
+      // Cursor read AFTER the join: an event emitted between a pre-join read
+      // and the join would be neither delivered (not in the room yet) nor
+      // covered by the acked cursor — a permanent gap. Read after joining,
+      // and any event we couldn't receive is ≤ this cursor, while anything
+      // newer arrives through the room.
+      const [cursors] = await sql<{ live_delivered_seq: string; spec_delivered_seq: string }[]>`
+        SELECT live_delivered_seq::text, spec_delivered_seq::text
+        FROM wl_tournaments WHERE id = ${tournamentId}
+      `;
       // Player-only state so a late join / transient reconnect resumes
       // mid-question instead of waiting out the current attempt. Spectators
       // get NO snapshot: their whole world is the 30s-delayed stream, and
@@ -95,7 +103,11 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // still-pending delayed events as duplicates).
       ack?.({
         ok: true,
-        seq: Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq),
+        seq: Number(
+          role === 'player'
+            ? cursors?.live_delivered_seq ?? '0'
+            : cursors?.spec_delivered_seq ?? '0'
+        ),
         snapshot,
       });
     } catch (error) {

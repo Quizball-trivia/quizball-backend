@@ -375,6 +375,12 @@ export const wlLiveEngineInternals = {
     } catch (error) {
       if (!(error instanceof VoidLost)) throw error;
     }
+    if (voided) {
+      // Purge the answers hash: a voided attempt scores nobody, so its
+      // stored answers must not be servable through the late-idempotency
+      // recovery path (which reads Redis before the audit-filtered DB row).
+      await redis.del(answersKey(tournamentId, attemptId)).catch(() => {});
+    }
     return voided;
   },
 
@@ -733,7 +739,21 @@ export async function wlAcceptAnswer(input: {
       String(REDIS_TTL_SECONDS),
     ],
   }) as number;
-  if (stored === -1) return { accepted: false, reason: 'closed' };
+  if (stored === -1) {
+    // The window closed between our PG time check and the script (TOCTOU) —
+    // same idempotency duty as the early-closed path: if THIS user already
+    // has a stored answer, return it instead of `closed`.
+    const prior = await redis
+      .hGet(answersKey(input.tournamentId, input.attemptId), input.userId)
+      .catch(() => null);
+    if (prior) {
+      try {
+        const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
+        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      } catch { /* unreadable → closed */ }
+    }
+    return { accepted: false, reason: 'closed' };
+  }
   if (stored === 0) {
     const prior = await redis.hGet(answersKey(input.tournamentId, input.attemptId), input.userId);
     if (prior) {

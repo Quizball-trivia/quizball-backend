@@ -123,6 +123,23 @@ export async function wlDeliverPending(
       // the enrichment above must neither skew client offsets nor shorten
       // the spectator delay (visibility = emitNow + 30s).
       const emitNow = await wlRedisNowMs();
+      // Staleness re-validated on THIS clock: the awaited stamp-persistence
+      // above may have pushed a dispatch below its minimum lead (or past
+      // its deadline) — such a dispatch is voided, never emitted.
+      if (event.type === 'dispatch') {
+        const deadlineAt = Number(outPayload['deadlineAt']);
+        const { WL_MIN_REMAINING_LEAD_MS, wlLiveEngineInternals } = await import('./wl-live-engine.js');
+        if (!Number.isFinite(deadlineAt) || emitNow > deadlineAt - WL_MIN_REMAINING_LEAD_MS) {
+          const attemptId = String(event.payload['attempt_id'] ?? '');
+          if (attemptId) {
+            await wlLiveEngineInternals.voidAttempt(
+              tournamentId, attemptId, emitNow, 'stale_before_emit',
+              { seq: event.seq, claimToken: event.claim_token }
+            );
+          }
+          continue;
+        }
+      }
       const stamped = await wlEventsRepo.markLiveEmission(
         tournamentId, event.seq, event.claim_token, emitNow, WL_SPECTATOR_DELAY_MS
       );

@@ -339,8 +339,14 @@ export const wlEngineLive: WlEngine = {
             SELECT (e.delivered_at IS NOT NULL) AS ok
             FROM wl_question_runs r
             JOIN wl_events e
-              ON e.tournament_id = r.tournament_id AND e.seq = r.dispatched_seq
+              ON e.tournament_id = r.tournament_id
+             AND (
+               e.seq = r.dispatched_seq
+               OR (r.dispatched_seq IS NULL AND e.type = 'dispatch'
+                   AND e.payload->>'attempt_id' = r.attempt_id::text)
+             )
             WHERE r.attempt_id = ${frontier.attempt_id}
+            ORDER BY e.seq DESC LIMIT 1
           `;
           if (delivered?.ok) {
             await wlLiveEngineInternals.freezeAndReveal(t.id, frontier as never, redisNow);

@@ -203,11 +203,11 @@ describe('WL spectator delay', () => {
     for (let i = 1; i < specSeqs.length; i += 1) {
       expect(specSeqs[i]).toBe(specSeqs[i - 1]! + 1);
     }
+    // The spectator stream IS the live prefix: it starts at the very first
+    // live seq and matches element-for-element.
     const liveSeqsSorted = [...liveBySeq.keys()].sort((a, b) => a - b);
-    expect(specSeqs).toEqual(liveSeqsSorted.slice(
-      liveSeqsSorted.indexOf(specSeqs[0]!),
-      liveSeqsSorted.indexOf(specSeqs[0]!) + specSeqs.length
-    ));
+    expect(specSeqs[0]).toBe(liveSeqsSorted[0]);
+    expect(specSeqs).toEqual(liveSeqsSorted.slice(0, specSeqs.length));
     const t = await wlOrchestratorRepo.getById(tid);
     expect(Number(t?.spec_delivered_seq)).toBe(specSeqs.at(-1));
 

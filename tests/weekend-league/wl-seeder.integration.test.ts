@@ -139,7 +139,10 @@ describe('wlSeedTournamentContent', () => {
     if (!dbAvailable) skip();
     // Self-sufficient precondition: leftover wl_private stock from other
     // (kept-state) runs must not satisfy this test. Localhost-guarded.
-    if (/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) {
+    if ((() => {
+      try { return ['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname); }
+      catch { return false; }
+    })()) {
       await sql`DELETE FROM question_payloads WHERE question_id IN
         (SELECT id FROM questions WHERE visibility = 'wl_private')`;
       await sql`DELETE FROM questions WHERE visibility = 'wl_private'

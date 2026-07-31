@@ -59,7 +59,10 @@ beforeAll(async () => {
     await wlRedisNowMs();
     lockConn = await sql.reserve();
     await lockConn`SELECT pg_advisory_lock(${WL_TEST_LOCK})`;
-    if (/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) {
+    if ((() => {
+      try { return ['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname); }
+      catch { return false; }
+    })()) {
       await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
     }
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;

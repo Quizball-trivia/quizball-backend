@@ -323,8 +323,12 @@ export const wlEngineLive: WlEngine = {
       // Break ends by the clock; the next game's field was frozen when the
       // break began, so resuming is a single CAS.
       const stage = t.stage ?? {};
-      const breakUntil = Number(stage['break_until_ms']);
-      if (Number.isFinite(breakUntil) && redisNow >= breakUntil) {
+      const rawBreakUntil = Number(stage['break_until_ms']);
+      // A missing/corrupt anchor must never strand the event in 'break' —
+      // treat it as elapsed and resume (the anchor is written in the same tx
+      // as the break status, so this is pure defense).
+      const breakUntil = Number.isFinite(rawBreakUntil) ? rawBreakUntil : 0;
+      if (redisNow >= breakUntil) {
         const nextGame = Number(stage['current_game'] ?? 0);
         await sql.begin(async (tx) => {
           const txSql = tx as unknown as typeof sql;

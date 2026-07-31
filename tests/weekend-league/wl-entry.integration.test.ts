@@ -20,7 +20,9 @@ async function deleteAutoCreatedRealTournaments(): Promise<void> {
   // The orchestrator's weekly auto-creation plants a REAL tournament during
   // ticks, which then shadows every test tournament (real-first resolution).
   // Local-test-DB only, by construction of tests/setup.ts — hard-guard anyway.
-  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  try {
+    if (!['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname)) return;
+  } catch { return; }
   await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
 }
 

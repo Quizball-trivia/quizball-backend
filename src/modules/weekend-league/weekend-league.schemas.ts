@@ -12,7 +12,10 @@ export const wlEntryStateSchema = z.enum([
 ]);
 
 export const wlQpResponseSchema = z.object({
+  /** The upcoming event's week — display context only; QP is NOT weekly. */
   week_key: z.string().nullable(),
+  /** RUNNING BALANCE: awards since the player's latest ticket purchase
+   *  (entering a tournament resets it) — not this week's counter. */
   points: z.number().int(),
   wins: z.number().int(),
   losses: z.number().int(),

@@ -23,7 +23,9 @@ const WL_TEST_LOCK = 774431001;
 let lockConn: Awaited<ReturnType<typeof sql.reserve>> | null = null;
 
 async function deleteAutoCreatedRealTournaments(): Promise<void> {
-  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  try {
+    if (!['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname)) return;
+  } catch { return; }
   await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
 }
 

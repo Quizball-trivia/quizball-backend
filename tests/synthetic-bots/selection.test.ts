@@ -240,6 +240,58 @@ describe('RP-gap ceiling (parity guard)', () => {
     expect(reservation.acquire).not.toHaveBeenCalled();
   });
 
+  it('applies the ceiling around an UNPLACED human’s placement anchor, not their hidden RP', async () => {
+    // Unplaced humans are anchored near 1900 (PR2), not their hidden ~450 RP.
+    // A bot next to the anchor must pair; one next to the hidden RP must not.
+    const unplaced = {
+      ...placedHuman,
+      rp: 450,
+      placement_status: 'unplaced' as const,
+      placement_played: 0,
+      placement_wins: 0,
+    };
+    repo.listEligibleBots.mockResolvedValue([bot('near-hidden-rp', { rp: 450 })]);
+    const wrongAnchor = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: unplaced,
+      lobbyId: 'lobby',
+    });
+    expect(wrongAnchor).toBeNull(); // 450 is ~1450 away from the anchor
+
+    vi.clearAllMocks();
+    reservation.isEnabled.mockReturnValue(true);
+    reservation.acquire.mockImplementation(async ({ botUserId }: { botUserId: string }) => ({
+      botUserId,
+      lobbyId: 'lobby',
+      fence: 1,
+    }));
+    redis.lRange.mockResolvedValue([]);
+    repo.listEligibleBots.mockResolvedValue([bot('near-anchor', { rp: 1900 })]);
+    const rightAnchor = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: unplaced,
+      lobbyId: 'lobby',
+    });
+    expect(rightAnchor?.bot.user_id).toBe('near-anchor');
+  });
+
+  it('excludes in-band bots already seated in this match without pairing out of band', async () => {
+    // Multi-seat auction: the only in-band bot is already seated. The next seat
+    // must go ephemeral rather than reaching for the far-away bot.
+    repo.listEligibleBots.mockResolvedValue([
+      bot('seated', { rp: 1500 }),
+      bot('far', { rp: 600 }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      excludeBotUserIds: ['seated'],
+    });
+    expect(result).toBeNull();
+    expect(reservation.acquire).not.toHaveBeenCalled();
+  });
+
   it('does not resurrect an out-of-band bot by relaxing the eligibility ladder', async () => {
     // The only bot is far away AND constrained. Relaxing soft constraints must
     // never widen the RP band — the ceiling is not part of the ladder.

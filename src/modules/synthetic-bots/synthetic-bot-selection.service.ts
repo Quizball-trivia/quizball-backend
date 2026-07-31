@@ -42,10 +42,11 @@ const RECENTLY_FACED_LIMIT = 5;
 const INNER_BAND_RP = 150;
 
 /**
- * Widening bands, tightest first, capped by BOT_PAIRING_MAX_RP_GAP. Read per
- * selection so an env change takes effect on the next match without a deploy.
- * The cap's floor (150) equals the inner band, so a fully-tightened config
- * collapses to a single ±150 band rather than producing an empty ladder.
+ * Widening bands, tightest first, capped by BOT_PAIRING_MAX_RP_GAP. The ceiling
+ * is an env var parsed at process start, so retuning it takes a restart/redeploy
+ * of the env — not a code change. The cap's floor (150) equals the inner band,
+ * so a fully-tightened config collapses to a single ±150 band rather than
+ * producing an empty ladder.
  */
 function wideningBands(): number[] {
   const maxGap = config.BOT_PAIRING_MAX_RP_GAP;
@@ -291,13 +292,28 @@ export const syntheticBotSelectionService = {
     // No bot within the pairing ceiling of this human (typically a strong active
     // above the roster's top RP). Take the ephemeral fallback rather than pairing
     // them down against a bot they would beat ~95% of the time.
+    //
+    // Distinguish the two ways this can happen so the metric means one thing:
+    // 'all_excluded' is a multi-seat auction that already seated every in-band
+    // bot (expected on a thin roster, NOT an RP-coverage hole), while
+    // 'no_bot_in_rp_band' is a genuine gap in roster coverage at this RP — the
+    // signal to widen BOT_PAIRING_MAX_RP_GAP or extend the roster's top end.
     if (ordered.length === 0) {
-      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'no_bot_in_rp_band' });
+      // Was the band actually populated before this match's own seats were
+      // excluded? If so the roster covers this RP fine and the miss is purely
+      // exclusion, not coverage.
+      const inBandBeforeExclusion = excluded.size > 0
+        ? orderByNearestRp(eligible, targetRp).length
+        : 0;
+      const relaxation = inBandBeforeExclusion > 0 ? 'all_excluded' : 'no_bot_in_rp_band';
+      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation });
       logger.info(
         {
           humanUserId: params.humanUserId,
           targetRp,
-          eligibleCount: selectable.length,
+          eligibleCount: eligible.length,
+          selectableCount: selectable.length,
+          excludedCount: excluded.size,
           maxRpGap: config.BOT_PAIRING_MAX_RP_GAP,
         },
         'persistent-bot selection: no bot within RP band, ephemeral fallback',

@@ -103,8 +103,9 @@ const configSchema = z.object({
   // Hard ceiling on the RP gap between a human and the roster bot selected for
   // them. Selection widens ±150 → ±BOT_PAIRING_MAX_RP_GAP and then STOPS: a
   // human with no bot inside the ceiling falls back to the ephemeral path rather
-  // than being paired against a far-weaker bot. Tunable without a deploy so ops
-  // can widen it if roster coverage suffers (wider = more coverage, worse parity).
+  // than being paired against a far-weaker bot. Exposed as an env var so the
+  // ceiling can be retuned by an env change + restart rather than a code change
+  // (wider = more roster coverage, worse parity).
   BOT_PAIRING_MAX_RP_GAP: z.coerce.number().int().min(150).max(2000).default(300),
   // Rubber-band governor kill switch (PR9). Ships ENABLED, unlike the flags
   // above, because it is a SAFETY loop, not a feature: it is what keeps roster

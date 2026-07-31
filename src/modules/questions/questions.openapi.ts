@@ -300,6 +300,7 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
             type: questionTypeEnum,
             difficulty: z.enum(['easy', 'medium', 'hard']),
             status: z.enum(['draft', 'published', 'archived']).optional(),
+            visibility: z.enum(['public', 'wl_private']).optional(),
             prompt: i18nFieldSchema,
             explanation: i18nFieldSchema.nullable().optional(),
             payload: questionPayloadOpenApiSchema,

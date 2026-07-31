@@ -86,6 +86,13 @@ describe('score encoding + comparator', () => {
     expect(wlEncodeScore(500, 100_000)).toBeGreaterThan(wlEncodeScore(500, 100_001));
   });
 
+  it('one point beats ANY time advantage (encoding-scale regression)', () => {
+    // A zero-time player must never outrank a player with one more point,
+    // even at the encoding's time ceiling.
+    expect(wlEncodeScore(500, 99_999_999)).toBeGreaterThan(wlEncodeScore(499, 0));
+    expect(wlEncodeScore(1, 99_999_999)).toBeGreaterThan(wlEncodeScore(0, 0));
+  });
+
   it('stays inside the 53-bit exact double range', () => {
     expect(wlEncodeScore(1000, 0)).toBeLessThan(Number.MAX_SAFE_INTEGER);
     expect(Number.isSafeInteger(wlEncodeScore(1000, 0))).toBe(true);

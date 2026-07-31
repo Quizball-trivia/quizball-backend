@@ -77,13 +77,15 @@ export function wlTimeChargeMs(answered: boolean, elapsedMs: number): number {
 
 /**
  * ZSET score encoding: higher is better, points dominate, lower cumulative
- * time wins ties. Bounded well inside the 53-bit exact range Redis doubles
- * preserve (max ≈ 1e10).
+ * time wins ties. One point unit (1e8) strictly exceeds the whole time range
+ * (< 1e8), so no time difference can ever outweigh a single point. Max
+ * encoded value ~1.001e11, well inside the 53-bit exact range Redis doubles
+ * preserve.
  */
 export const WL_TIME_ENCODING_CEILING = 99_999_999;
 
 export function wlEncodeScore(points: number, timeMsTotal: number): number {
-  return points * 1e7 + (WL_TIME_ENCODING_CEILING - Math.min(timeMsTotal, WL_TIME_ENCODING_CEILING));
+  return points * 1e8 + (WL_TIME_ENCODING_CEILING - Math.min(timeMsTotal, WL_TIME_ENCODING_CEILING));
 }
 
 /**

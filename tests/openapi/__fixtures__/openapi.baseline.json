@@ -16063,6 +16063,13 @@
                             "archived"
                           ]
                         },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "wl_private"
+                          ]
+                        },
                         "prompt": {
                           "$ref": "#/components/schemas/I18nField"
                         },

@@ -210,8 +210,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_wl_questions_reserve
 
 -- Composite FK target: a run referencing (question_id, tournament_id,
 -- game_index) can only point at content from ITS OWN tournament and game.
-ALTER TABLE public.wl_questions
-  ADD CONSTRAINT uq_wl_questions_id_scope UNIQUE (question_id, tournament_id, game_index);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.wl_questions'::regclass
+      AND conname = 'uq_wl_questions_id_scope'
+  ) THEN
+    ALTER TABLE public.wl_questions
+      ADD CONSTRAINT uq_wl_questions_id_scope UNIQUE (question_id, tournament_id, game_index);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.wl_question_runs (
   attempt_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -38,7 +38,8 @@ export const weekendLeagueRepo = {
   async getCurrentTournament(): Promise<WlTournamentRow | null> {
     const [row] = await sql<WlTournamentRow[]>`
       SELECT id, week_key::text, is_test, status, config,
-             entry_opens_at, entry_closes_at, qualifier_starts_at, final_starts_at
+             entry_opens_at::text, entry_closes_at::text,
+             qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments
       WHERE status NOT IN ('completed', 'cancelled', 'voided')
       ORDER BY is_test ASC, created_at DESC
@@ -50,7 +51,8 @@ export const weekendLeagueRepo = {
   async getTournamentById(id: string): Promise<WlTournamentRow | null> {
     const [row] = await sql<WlTournamentRow[]>`
       SELECT id, week_key::text, is_test, status, config,
-             entry_opens_at, entry_closes_at, qualifier_starts_at, final_starts_at
+             entry_opens_at::text, entry_closes_at::text,
+             qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments
       WHERE id = ${id}
     `;

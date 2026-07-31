@@ -432,6 +432,7 @@ export const questionsService = {
           type: questions[i].type,
           difficulty: questions[i].difficulty,
           status: questions[i].status || 'draft',
+          visibility: questions[i].visibility,
           prompt: questions[i].prompt,
           explanation: questions[i].explanation,
           createdBy,

@@ -29,6 +29,7 @@ type SubscribeAck = (response: {
   ok: boolean;
   reason?: 'not_entered' | 'not_found' | 'invalid';
   seq?: number;
+  snapshot?: import('../../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
 }) => void;
 
 async function leaveWlRooms(socket: QuizballSocket): Promise<void> {
@@ -51,6 +52,8 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
     }
     const { tournament_id: tournamentId, role } = parsed.data;
     try {
+      // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
+      // is (for players) reflected in the snapshot built below.
       const [t] = await sql<{ id: string; live_delivered_seq: string; spec_delivered_seq: string }[]>`
         SELECT id, live_delivered_seq::text, spec_delivered_seq::text
         FROM wl_tournaments WHERE id = ${tournamentId}
@@ -76,13 +79,85 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       }
       await leaveWlRooms(socket);
       await socket.join(role === 'player' ? wlPlayersRoom(tournamentId) : wlSpectatorsRoom(tournamentId));
-      // Role-appropriate cursor: the seq this room's stream has reached, so
-      // the client knows which snapshot version to demand before trusting
-      // events (a spectator ack'd with the LIVE cursor would discard its
-      // still-pending delayed events as duplicates).
+      // Player-only state so a late join / transient reconnect resumes
+      // mid-question instead of waiting out the current attempt. Spectators
+      // get NO snapshot: their whole world is the 30s-delayed stream, and
+      // live standings/status through the ack would leak ahead of it.
+      let snapshot = null;
+      if (role === 'player') {
+        const { wlSubscribeSnapshot } = await import('../../modules/weekend-league/wl-live-engine.js');
+        snapshot = await wlSubscribeSnapshot(tournamentId, userId).catch((error) => {
+          logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe snapshot failed');
+          return null;
+        });
+      }
+      // Close the join-window gap. The boundary is a marker persisted BEFORE
+      // the broadcast (the deliverer runs markLiveEmission, then emits, then
+      // markDelivered): any event this socket could have missed by joining
+      // mid-broadcast already has live_emitted_redis_ms set, so replaying
+      // every emitted row above C0 covers the race regardless of when the
+      // delivered cursor advances. Payloads are final in the outbox
+      // (dispatch stamps persisted at emission); the client dedups by seq,
+      // so double delivery through the room is harmless. Aborted/skipped
+      // rows were never public and stay that way. Spectator replay is
+      // additionally gated by the persisted visibility time, so the 30s
+      // delay holds no matter what the cursors say.
+      const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
+      const nowMs = await wlRedisNowMs();
+      const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
+      if (role === 'player') {
+        missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
+          SELECT seq::text, type, payload FROM wl_events
+          WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+            AND live_emitted_redis_ms IS NOT NULL
+            AND aborted_at IS NULL AND skipped_at IS NULL
+          ORDER BY seq ASC
+          LIMIT 500
+        `;
+      } else {
+        // Contiguous visible prefix only (same rule as wlDeliverSpectator):
+        // an extended-visibility dispatch holds back everything behind it,
+        // so a reveal can never be replayed before its question.
+        const rows = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown>; visible_at_spec_ms: string | null }>>`
+          SELECT seq::text, type, payload, visible_at_spec_ms::text FROM wl_events
+          WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+            AND delivered_at IS NOT NULL
+            AND aborted_at IS NULL AND skipped_at IS NULL
+          ORDER BY seq ASC
+          LIMIT 500
+        `;
+        missed = [];
+        for (const r of rows) {
+          const visibleAt = r.visible_at_spec_ms == null ? null : Number(r.visible_at_spec_ms);
+          if (visibleAt == null || visibleAt > nowMs) break;
+          missed.push({ seq: r.seq, type: r.type, payload: r.payload });
+        }
+      }
+      if (missed.length > 0) {
+        const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
+        for (const row of missed) {
+          // Spectators never get the answer key (see wlDeliverSpectator).
+          const payload = role === 'spectator' && row.type === 'dispatch'
+            ? { ...row.payload, evaluation: {} }
+            : row.payload;
+          rawEmit.emit(`wl:${row.type}`, {
+            ...payload,
+            type: row.type,
+            tournamentId,
+            seq: Number(row.seq),
+            serverNowAtEmit: nowMs,
+            ...(role === 'spectator' ? { spectator: true } : {}),
+          });
+        }
+      }
+      // Role-appropriate cursor: the seq this room's stream has reached
+      // BEFORE the join (C0) — everything above it reaches the client via
+      // the replay or the room, so nothing is silently skipped.
       ack?.({
         ok: true,
-        seq: Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq),
+        seq: lo,
+        snapshot,
       });
     } catch (error) {
       logger.warn({ err: error, tournamentId, userId }, 'wl:subscribe failed');

@@ -150,8 +150,18 @@ export async function wlDeliverPending(
           continue;
         }
       }
+      // A dispatch must NEVER become spectator-visible while its live window
+      // is still open: who_am_i runs 5 clue windows (50s in production),
+      // longer than the base delay, and the payload carries the evaluation.
+      let effectiveSpecDelay = specDelay;
+      if (event.type === 'dispatch') {
+        const deadlineAt = Number(outPayload['deadlineAt']);
+        if (Number.isFinite(deadlineAt)) {
+          effectiveSpecDelay = Math.max(specDelay, deadlineAt + 1_000 - emitNow);
+        }
+      }
       const stamped = await wlEventsRepo.markLiveEmission(
-        tournamentId, event.seq, event.claim_token, emitNow, specDelay
+        tournamentId, event.seq, event.claim_token, emitNow, effectiveSpecDelay
       );
       if (!stamped) break; // fence lost
 
@@ -211,8 +221,14 @@ export async function wlDeliverSpectator(io: QuizballServer, tournamentId: strin
   );
   let deliveredTo = Number(tournament.spec_delivered_seq);
   for (const event of due) {
+    // Spectators never answer, so they never need the answer key — strip it
+    // from dispatches even though their visibility already postdates the
+    // live window (belt and suspenders for the relay-cheat vector).
+    const payload = event.type === 'dispatch'
+      ? { ...event.payload, evaluation: {} }
+      : event.payload;
     io.to(wlSpectatorsRoom(tournamentId)).emit(publicEventName(event), {
-      ...event.payload,
+      ...payload,
       tournamentId,
       seq: event.seq,
       type: event.type,

@@ -3,7 +3,8 @@ import type { Request, Response } from 'express';
 import { config } from '../../core/config.js';
 import { AuthenticationError, InternalError } from '../../core/errors.js';
 import { opsService } from './ops.service.js';
-import type { DailyReportEmailBody } from './ops.schemas.js';
+import { clueGuessEvaluationsRepo } from '../matches/clue-guess-evaluations.repo.js';
+import type { ClueGuessQuery, DailyReportEmailBody } from './ops.schemas.js';
 
 const OPS_TOKEN_HEADER = 'x-ops-report-token';
 
@@ -44,5 +45,24 @@ export const opsController = {
     const body = req.validated.body as DailyReportEmailBody;
     const result = await opsService.sendDailyReportEmail(body);
     res.json({ ok: true, emailId: result.id });
+  },
+
+  /**
+   * Recent clue-guess evaluations for the rejection investigation. Same shared
+   * ops token as the report relay — this returns free text players typed, so it
+   * must never be reachable with a user JWT.
+   */
+  async listClueGuesses(req: Request, res: Response): Promise<void> {
+    assertOpsAuthorized(req);
+    const query = req.validated.query as ClueGuessQuery;
+    const rows = await clueGuessEvaluationsRepo.listRecent({
+      questionId: query.questionId,
+      userId: query.userId,
+      matchId: query.matchId,
+      rejectsOnly: query.rejectsOnly !== 'false',
+      excludeAi: query.includeAi !== 'true',
+      limit: query.limit,
+    });
+    res.json({ ok: true, count: rows.length, rows });
   },
 };

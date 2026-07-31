@@ -151,6 +151,92 @@ export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): bo
   return matchAcceptedAnswers(input, acceptedAnswers) !== null;
 }
 
+export type ClueGuessRejectReason =
+  | 'empty_normalized_guess'
+  | 'empty_answer_set'
+  | 'below_typo_min_length'
+  | 'no_rule_matched'
+  | 'give_up';
+
+export interface ClueGuessCandidateExplanation {
+  accepted: string;
+  normalizedAccepted: string;
+  matchedRule: AcceptedAnswerMatchKind | null;
+  /** Best levenshtein distance to the accepted answer or any of its tokens. */
+  bestDistance: number | null;
+  /** Typo budget the matcher would have allowed for the closest target. */
+  allowedDistance: number;
+}
+
+export interface ClueGuessExplanation {
+  normalizedGuess: string;
+  matchedRule: AcceptedAnswerMatchKind | null;
+  matchDistance: number | null;
+  rejectReason: ClueGuessRejectReason | null;
+  candidates: ClueGuessCandidateExplanation[];
+}
+
+/**
+ * Read-only diagnosis of how `fuzzyMatchesAnswer` reached its verdict.
+ *
+ * Instrumentation ONLY — the live verdict still comes from
+ * `fuzzyMatchesAnswer`; this never feeds back into scoring. It deliberately
+ * calls the same private rule helpers rather than reimplementing them, so the
+ * recorded explanation cannot drift from the rules actually applied.
+ */
+export function explainClueGuess(input: string, acceptedAnswers: string[]): ClueGuessExplanation {
+  const normalizedGuess = normalizeAnswer(input);
+
+  const candidates: ClueGuessCandidateExplanation[] = acceptedAnswers.map((accepted) => {
+    const normalizedAccepted = normalizeAnswer(accepted);
+    const match = normalizedGuess && normalizedAccepted
+      ? matchNormalizedAcceptedAnswer(normalizedGuess, normalizedAccepted)
+      : null;
+
+    const typoTargets = [normalizedAccepted, ...answerTokens(normalizedAccepted)];
+    let bestDistance: number | null = null;
+    let allowedDistance = 0;
+    for (const target of typoTargets) {
+      if (!target) continue;
+      const distance = levenshtein(normalizedGuess, target);
+      if (bestDistance === null || distance < bestDistance) {
+        bestDistance = distance;
+        allowedDistance = maxTypoDistance(target);
+      }
+    }
+
+    return {
+      accepted,
+      normalizedAccepted,
+      matchedRule: match?.kind ?? null,
+      bestDistance,
+      allowedDistance,
+    };
+  });
+
+  const best = candidates.reduce<AcceptedAnswerMatch | null>((acc, candidate) => {
+    if (!candidate.matchedRule) return acc;
+    const distance = candidate.matchedRule === 'typo' ? (candidate.bestDistance ?? 0) : 0;
+    return betterAcceptedMatch(acc, { kind: candidate.matchedRule, distance });
+  }, null);
+
+  let rejectReason: ClueGuessRejectReason | null = null;
+  if (!best) {
+    if (!normalizedGuess) rejectReason = 'empty_normalized_guess';
+    else if (candidates.every((candidate) => !candidate.normalizedAccepted)) rejectReason = 'empty_answer_set';
+    else if (normalizedGuess.length < 4) rejectReason = 'below_typo_min_length';
+    else rejectReason = 'no_rule_matched';
+  }
+
+  return {
+    normalizedGuess,
+    matchedRule: best?.kind ?? null,
+    matchDistance: best ? best.distance : null,
+    rejectReason,
+    candidates,
+  };
+}
+
 function hasPrefixMatch(acceptedAnswers: string[], normalizedGuess: string): boolean {
   return acceptedAnswers.some((accepted) => {
     const normalizedAccepted = normalizeAnswer(accepted);

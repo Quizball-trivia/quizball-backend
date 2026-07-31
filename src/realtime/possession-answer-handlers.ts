@@ -28,6 +28,7 @@ import {
   isRedisAvailable,
   withAnswerLock,
 } from './possession-answer-lock.js';
+import { captureClueGuessEvaluation } from './clue-guess-capture.js';
 import {
   answerInputLogFields,
   answerLogFields,
@@ -846,6 +847,8 @@ export async function handlePossessionCluesAnswer(
     myTotalPoints: number;
     expectedCount: number;
     answerCount: number;
+    /** Instrumentation only: the exact set the matcher compared against. */
+    acceptedAnswers: string[];
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
@@ -988,6 +991,7 @@ export async function handlePossessionCluesAnswer(
         myTotalPoints: player.totalPoints + pointsEarned,
         expectedCount,
         answerCount: currentAnswerCount,
+        acceptedAnswers,
       },
     };
   });
@@ -1017,6 +1021,25 @@ export async function handlePossessionCluesAnswer(
       phaseKind: committed.question.phaseKind,
       phaseRound: committed.question.phaseRound,
       shooterSeat: committed.question.shooterSeat,
+    });
+  });
+
+  // Forensic capture for the "correct answers marked WRONG" investigation. Runs
+  // after the verdict is already committed and emitted, so it cannot affect
+  // scoring or answer latency.
+  fireAndForget('captureClueGuess(handlePossessionCluesAnswer)', async () => {
+    await captureClueGuessEvaluation({
+      matchId,
+      userId,
+      qIndex,
+      questionId: committed.question.questionId,
+      guess,
+      acceptedAnswers: committed.acceptedAnswers,
+      isCorrect: committed.isCorrect,
+      giveUp,
+      timeMs: committed.answerTimeMs,
+      clueIndex: committed.clueIndex,
+      isAi: socket.data.user.is_ai === true,
     });
   });
 

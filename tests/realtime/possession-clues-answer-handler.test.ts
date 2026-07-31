@@ -13,6 +13,7 @@ const commitCachedAnswerMock = vi.hoisted(() => vi.fn());
 const insertMatchAnswerIfMissingMock = vi.hoisted(() => vi.fn());
 const updatePlayerTotalsMock = vi.hoisted(() => vi.fn());
 const resolvePossessionRoundMock = vi.hoisted(() => vi.fn());
+const insertClueGuessEvaluationMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -26,6 +27,12 @@ vi.mock('../../src/core/logger.js', () => ({
 vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   matchAnswersRepo: {
     insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/clue-guess-evaluations.repo.js', () => ({
+  clueGuessEvaluationsRepo: {
+    insert: (...args: unknown[]) => insertClueGuessEvaluationMock(...args),
   },
 }));
 
@@ -219,6 +226,7 @@ describe('handlePossessionCluesAnswer', () => {
     insertMatchAnswerIfMissingMock.mockResolvedValue(true);
     updatePlayerTotalsMock.mockResolvedValue(undefined);
     resolvePossessionRoundMock.mockResolvedValue(undefined);
+    insertClueGuessEvaluationMock.mockResolvedValue(undefined);
   });
 
   it('persists a wrong clue guess as a final answer ack without emitting clues_guess_ack', async () => {
@@ -407,5 +415,138 @@ describe('handlePossessionCluesAnswer', () => {
     const ack = findPayload<MatchAnswerAckPayload>(emitted, 'match:answer_ack');
     expect(ack.oppAnswered).toBe(true);
     expect(resolvePossessionRoundMock).toHaveBeenCalledWith(io, 'match-1', 4, false);
+  });
+
+  describe('clue guess forensic capture', () => {
+    it('records a rejected guess with the raw text and the answer set compared against', async () => {
+      getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+      const { socket } = createSocketMock('u1');
+
+      await handlePossessionCluesAnswer(createIoMock(), socket, {
+        kind: 'guess',
+        matchId: 'match-1',
+        qIndex: 4,
+        guess: 'Manuel Neuer',
+        timeMs: 12000,
+      });
+
+      expect(insertClueGuessEvaluationMock).toHaveBeenCalledTimes(1);
+      const row = insertClueGuessEvaluationMock.mock.calls[0][0];
+      expect(row).toMatchObject({
+        matchId: 'match-1',
+        userId: 'u1',
+        qIndex: 4,
+        questionId: 'question-1',
+        rawGuess: 'Manuel Neuer',
+        normalizedGuess: 'manuel neuer',
+        isCorrect: false,
+        giveUp: false,
+        matchRule: null,
+        rejectReason: 'no_rule_matched',
+        clueIndex: 1,
+        isAi: false,
+        captureMode: 'full',
+      });
+      // The handler matches against accepted answers PLUS localized display
+      // answers; the captured set must reflect what was actually compared.
+      expect(row.acceptedAnswers).toEqual(['Roman Burki', 'Roman Burki']);
+      expect(row.timeMs).toBeTypeOf('number');
+      expect(row.candidateDetail).toHaveLength(2);
+    });
+
+    it('records an accepted guess when the sampler selects it', async () => {
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.01);
+      try {
+        getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+        const { socket } = createSocketMock('u1');
+
+        await handlePossessionCluesAnswer(createIoMock(), socket, {
+          kind: 'guess',
+          matchId: 'match-1',
+          qIndex: 4,
+          guess: 'Roman Burki',
+          timeMs: 12000,
+        });
+
+        expect(insertClueGuessEvaluationMock).toHaveBeenCalledTimes(1);
+        expect(insertClueGuessEvaluationMock.mock.calls[0][0]).toMatchObject({
+          rawGuess: 'Roman Burki',
+          isCorrect: true,
+          matchRule: 'exact',
+          rejectReason: null,
+          captureMode: 'sampled',
+        });
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+
+    it('skips an accepted guess the sampler passes over', async () => {
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.95);
+      try {
+        getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+        const { socket } = createSocketMock('u1');
+
+        await handlePossessionCluesAnswer(createIoMock(), socket, {
+          kind: 'guess',
+          matchId: 'match-1',
+          qIndex: 4,
+          guess: 'Roman Burki',
+          timeMs: 12000,
+        });
+
+        expect(insertClueGuessEvaluationMock).not.toHaveBeenCalled();
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+
+    it('does not change the verdict when the capture write fails', async () => {
+      insertClueGuessEvaluationMock.mockRejectedValue(new Error('db down'));
+      getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+      const { socket, emitted } = createSocketMock('u1');
+
+      await handlePossessionCluesAnswer(createIoMock(), socket, {
+        kind: 'guess',
+        matchId: 'match-1',
+        qIndex: 4,
+        guess: 'Roman Burki',
+        timeMs: 12000,
+      });
+
+      const ack = findPayload<MatchAnswerAckPayload>(emitted, 'match:answer_ack');
+      expect(ack).toMatchObject({ isCorrect: true, pointsEarned: 80 });
+    });
+
+    it('flags harness/bot traffic via is_ai so it can be filtered from analysis', async () => {
+      getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+      const { socket } = createSocketMock('u1');
+      (socket.data.user as { is_ai?: boolean }).is_ai = true;
+
+      await handlePossessionCluesAnswer(createIoMock(), socket, {
+        kind: 'guess',
+        matchId: 'match-1',
+        qIndex: 4,
+        guess: 'junk harness guess',
+        timeMs: 12000,
+      });
+
+      expect(insertClueGuessEvaluationMock.mock.calls[0][0].isAi).toBe(true);
+    });
+
+    it('does not capture a give-up', async () => {
+      getMatchCacheOrRebuildMock.mockResolvedValue(makeCache());
+      const { socket } = createSocketMock('u1');
+
+      await handlePossessionCluesAnswer(createIoMock(), socket, {
+        kind: 'giveUp',
+        matchId: 'match-1',
+        qIndex: 4,
+        giveUp: true,
+        timeMs: 12000,
+      });
+
+      expect(insertClueGuessEvaluationMock).not.toHaveBeenCalled();
+    });
   });
 });

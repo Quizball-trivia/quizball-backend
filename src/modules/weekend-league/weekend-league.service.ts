@@ -38,17 +38,17 @@ async function loadQp(
   tournament: WlTournamentRow | null,
   userId: string
 ): Promise<WlQpResponse> {
-  const weekKey = activeWeekKey(tournament);
+  // QP economy v2: the RUNNING BALANCE (awards since the player's latest
+  // ticket purchase) gates qualification — not this week's counter.
   const target = qpTargetOf(tournament);
-  const row = weekKey ? await weekendLeagueRepo.getQp(weekKey, userId) : null;
-  const points = row?.points ?? 0;
+  const { balance, wins, losses } = await weekendLeagueRepo.getQpBalance(userId);
   return {
-    week_key: weekKey,
-    points,
-    wins: row?.wins ?? 0,
-    losses: row?.losses ?? 0,
+    week_key: activeWeekKey(tournament),
+    points: balance,
+    wins,
+    losses,
     target,
-    qualified: launchEditionOf(tournament) || points >= target,
+    qualified: launchEditionOf(tournament) || balance >= target,
   };
 }
 

@@ -69,6 +69,26 @@ export const weekendLeagueRepo = {
     return row ?? null;
   },
 
+  /**
+   * QP economy v2: the running balance = awards since the user's latest
+   * reset ("buy the ticket, reset, grind again"). Wins/losses from any week
+   * accrue; entering a tournament zeroes it via wl_qp_resets.
+   */
+  async getQpBalance(userId: string): Promise<{ balance: number; wins: number; losses: number }> {
+    const [row] = await sql<Array<{ balance: number; wins: number; losses: number }>>`
+      SELECT COALESCE(SUM(a.points), 0)::int AS balance,
+             COUNT(*) FILTER (WHERE a.result = 'win')::int AS wins,
+             COUNT(*) FILTER (WHERE a.result = 'loss')::int AS losses
+      FROM wl_qp_awards a
+      WHERE a.user_id = ${userId}
+        AND a.created_at > COALESCE(
+          (SELECT MAX(r.reset_at) FROM wl_qp_resets r WHERE r.user_id = ${userId}),
+          '-infinity'::timestamptz
+        )
+    `;
+    return row ?? { balance: 0, wins: 0, losses: 0 };
+  },
+
   async getQp(weekKey: string, userId: string): Promise<WlQpRow | null> {
     const [row] = await sql<WlQpRow[]>`
       SELECT week_key::text, points, wins, losses
@@ -97,25 +117,45 @@ export const weekendLeagueRepo = {
    * reads, which is only reporting, never authorization.
    */
   async enter(tournamentId: string, userId: string): Promise<boolean> {
+    // One transaction, one authorization point: the entry INSERT gates on
+    // the RUNNING BALANCE (awards since latest reset); a successful claim
+    // inserts the reset row alongside it — the ticket is bought, the
+    // balance is zero, the grind restarts. launch_edition=true (test
+    // tournaments) skips the balance gate but still resets.
     const rows = await sql<{ user_id: string }[]>`
-      INSERT INTO wl_entries (tournament_id, user_id, qp_at_entry)
-      SELECT t.id, ${userId}, COALESCE(q.points, 0)
-      FROM wl_tournaments t
-      LEFT JOIN wl_qp q ON q.week_key = t.week_key AND q.user_id = ${userId}
-      WHERE t.id = ${tournamentId}
-        AND t.status = 'entry_open'
-        AND t.entry_opens_at IS NOT NULL
-        AND NOW() >= t.entry_opens_at
-        AND t.entry_closes_at IS NOT NULL
-        AND NOW() < t.entry_closes_at
-        AND (
-          COALESCE(t.config->>'launch_edition', 'false') = 'true'
-          OR COALESCE(q.points, 0) >= (
-            CASE WHEN t.config->>'qp_target' ~ '^[0-9]{1,6}$'
-                 THEN (t.config->>'qp_target')::int ELSE 200 END
+      WITH balance AS (
+        SELECT COALESCE(SUM(a.points), 0)::int AS points
+        FROM wl_qp_awards a
+        WHERE a.user_id = ${userId}
+          AND a.created_at > COALESCE(
+            (SELECT MAX(r.reset_at) FROM wl_qp_resets r WHERE r.user_id = ${userId}),
+            '-infinity'::timestamptz
           )
-        )
-      ON CONFLICT (tournament_id, user_id) DO NOTHING
+      ),
+      claimed AS (
+        INSERT INTO wl_entries (tournament_id, user_id, qp_at_entry)
+        SELECT t.id, ${userId}, balance.points
+        FROM wl_tournaments t, balance
+        WHERE t.id = ${tournamentId}
+          AND t.status = 'entry_open'
+          AND t.entry_opens_at IS NOT NULL
+          AND NOW() >= t.entry_opens_at
+          AND t.entry_closes_at IS NOT NULL
+          AND NOW() < t.entry_closes_at
+          AND (
+            COALESCE(t.config->>'launch_edition', 'false') = 'true'
+            OR balance.points >= (
+              CASE WHEN t.config->>'qp_target' ~ '^[0-9]{1,6}$'
+                   THEN (t.config->>'qp_target')::int ELSE 200 END
+            )
+          )
+        ON CONFLICT (tournament_id, user_id) DO NOTHING
+        RETURNING user_id
+      )
+      INSERT INTO wl_qp_resets (user_id, tournament_id, balance_spent)
+      SELECT claimed.user_id, ${tournamentId}, balance.points
+      FROM claimed, balance
+      ON CONFLICT (user_id, tournament_id) DO NOTHING
       RETURNING user_id
     `;
     return rows.length > 0;

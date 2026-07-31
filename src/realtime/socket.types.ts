@@ -448,6 +448,10 @@ export interface RankedUserOutcomePayload {
   deltaRp: number;
   /** Coin participation reward granted with the ranked settlement (win/loss). */
   coinsAwarded?: number;
+  /** Weekend League QP this result earned (win 25 / loss 10; 0 outside the
+   *  Mon-Fri window or for bots) and the weekly total after it. */
+  qpAwarded?: number;
+  qpWeekTotal?: number;
   oldTier: string;
   newTier: string;
   placementStatus: 'unplaced' | 'in_progress' | 'placed';

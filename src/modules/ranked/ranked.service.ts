@@ -796,6 +796,8 @@ export const rankedService = {
       if (!profile) continue;
       byUserId[change.user_id] = outcomeFromLedgerRow(change, profile);
     }
+    // Recovery payloads carry the same QP truth as live settlements.
+    await decorateOutcomesWithQp(matchId, byUserId);
 
     return {
       isPlacement: changes.some((change) => change.is_placement),

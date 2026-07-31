@@ -439,7 +439,12 @@ export const rankedRepo = {
   ): Promise<Array<{ user_id: string; points: number; week_total: number }>> {
     if (userIds.length === 0) return [];
     return sql<Array<{ user_id: string; points: number; week_total: number }>>`
-      SELECT a.user_id, a.points, COALESCE(q.points, a.points) AS week_total
+      SELECT a.user_id, a.points,
+             COALESCE(
+               q.points,
+               (SELECT SUM(l.points)::int FROM wl_qp_awards l
+                WHERE l.week_key = a.week_key AND l.user_id = a.user_id)
+             ) AS week_total
       FROM wl_qp_awards a
       LEFT JOIN wl_qp q ON q.week_key = a.week_key AND q.user_id = a.user_id
       WHERE a.match_id = ${matchId}

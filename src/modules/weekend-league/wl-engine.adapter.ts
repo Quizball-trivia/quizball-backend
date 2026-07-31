@@ -298,7 +298,10 @@ export const wlEngineLive: WlEngine = {
   async advance(t, redisNow): Promise<void> {
     const { wlLiveEngineInternals, wlNextSlot, wlSlotSequence } = await import('./wl-live-engine.js');
     if (t.status === 'game_live' || t.status === 'final_live') {
-      const [current] = await sql<Array<{
+      // Progression looks at the FRONTIER slot across ALL attempts (voided
+      // included): a slot whose reserves are exhausted is resolved-by-void
+      // and must advance/finalize, never be re-created from its primary.
+      const [frontier] = await sql<Array<{
         attempt_id: string; tournament_id: string; game_index: number; round_index: number;
         question_index: number; question_id: string; status: string;
         playable_at_ms: string | null; deadline_at_ms: string | null;
@@ -306,45 +309,47 @@ export const wlEngineLive: WlEngine = {
         SELECT attempt_id, tournament_id, game_index, round_index, question_index,
                question_id, status, playable_at_ms::text, deadline_at_ms::text
         FROM wl_question_runs
-        WHERE tournament_id = ${t.id} AND game_index = 0 AND status <> 'voided'
-        ORDER BY round_index DESC, question_index DESC
+        WHERE tournament_id = ${t.id} AND game_index = 0
+        ORDER BY round_index DESC, question_index DESC,
+                 (status <> 'voided') DESC, created_at DESC
         LIMIT 1
       `;
-      if (!current) {
-        // Either nothing dispatched yet, or every attempt of the tail slot
-        // voided with reserves exhausted. If ALL slots are resolved
-        // (revealed or void-exhausted), the game is over.
-        const [anyRun] = await sql<Array<{ n: number }>>`
-          SELECT COUNT(*)::int AS n FROM wl_question_runs
-          WHERE tournament_id = ${t.id} AND game_index = 0
-        `;
-        if ((anyRun?.n ?? 0) === 0) {
-          await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
-        } else if (t.status === 'game_live') {
-          await finalizeQualifierGame(t.id, redisNow);
-        }
+      if (!frontier) {
+        await wlLiveEngineInternals.appendDispatch(t.id, { gameIndex: 0, roundIndex: 0, questionIndex: 0 }, redisNow);
         return;
       }
-      if (current.status === 'dispatched') {
-        const deadline = Number(current.deadline_at_ms);
+      const slot = {
+        gameIndex: frontier.game_index,
+        roundIndex: frontier.round_index,
+        questionIndex: frontier.question_index,
+      };
+      const lastSlot = wlSlotSequence().at(-1)!;
+      const isLast = slot.roundIndex === lastSlot.roundIndex
+        && slot.questionIndex === lastSlot.questionIndex;
+
+      if (frontier.status === 'dispatched') {
+        const deadline = Number(frontier.deadline_at_ms);
         if (Number.isFinite(deadline) && redisNow >= deadline) {
-          await wlLiveEngineInternals.freezeAndReveal(t.id, current as never, redisNow);
+          await wlLiveEngineInternals.freezeAndReveal(t.id, frontier as never, redisNow);
         }
         return;
       }
-      if (current.status === 'revealed') {
-        const next = wlNextSlot({
-          gameIndex: current.game_index, roundIndex: current.round_index,
-          questionIndex: current.question_index,
-        });
-        if (next) {
-          await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
+      if (frontier.status === 'frozen') {
+        // Crash between freeze and reveal: resume idempotently — standings
+        // and the reveal re-derive from the persisted answers.
+        await wlLiveEngineInternals.resumeFrozen(t.id, frontier as never, redisNow);
+        return;
+      }
+      if (frontier.status === 'revealed' || frontier.status === 'voided') {
+        // A voided frontier only progresses when its slot is exhausted (the
+        // void tx would have created a reserve attempt otherwise, which
+        // would BE the frontier).
+        if (isLast) {
+          if (t.status === 'game_live') await finalizeQualifierGame(t.id, redisNow);
           return;
         }
-        const lastSlot = wlSlotSequence().at(-1)!;
-        const isLast = current.round_index === lastSlot.roundIndex
-          && current.question_index === lastSlot.questionIndex;
-        if (isLast) await finalizeQualifierGame(t.id, redisNow);
+        const next = wlNextSlot(slot);
+        if (next) await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
       }
       return;
     }
@@ -381,15 +386,20 @@ async function finalizeQualifierGame(tournamentId: string, redisNow: number): Pr
       RETURNING id
     `;
     if (moved.length === 0) return;
-    for (const row of board) {
+    {
+      const userIds = board.map((b) => b.user_id);
+      const scores = board.map((b) => b.points);
+      const times = board.map((b) => b.time_ms_total);
+      const ranks = board.map((b) => b.rank);
       await txSql`
         INSERT INTO wl_game_results (
           tournament_id, game_index, user_id, score, time_ms_total, rank, advanced
         )
-        VALUES (
-          ${tournamentId}, 0, ${row.user_id}, ${row.points}, ${row.time_ms_total},
-          ${row.rank}, ${row.rank <= WL_FINALISTS}
-        )
+        SELECT ${tournamentId}, 0, u, s, tm, r, r <= ${WL_FINALISTS}
+        FROM unnest(
+          ${sql.array(userIds)}::uuid[], ${sql.array(scores)}::int[],
+          ${sql.array(times)}::bigint[], ${sql.array(ranks)}::int[]
+        ) AS t(u, s, tm, r)
         ON CONFLICT (tournament_id, game_index, user_id) DO NOTHING
       `;
     }

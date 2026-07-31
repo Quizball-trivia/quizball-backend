@@ -129,6 +129,28 @@ export const wlEventsRepo = {
     return rows.length > 0;
   },
 
+  /**
+   * Fenced payload enrichment for dispatch events: persists the one-shot
+   * playable/deadline stamps so the spectator replay (which re-reads the
+   * stored payload 30s later) carries the same timing the players saw.
+   */
+  async persistDispatchStamps(
+    tournamentId: string,
+    seq: number,
+    token: string,
+    playableAt: number,
+    deadlineAt: number
+  ): Promise<boolean> {
+    const rows = await sql`
+      UPDATE wl_events
+      SET payload = payload
+        || jsonb_build_object('playableAt', ${playableAt}::bigint, 'deadlineAt', ${deadlineAt}::bigint)
+      WHERE tournament_id = ${tournamentId} AND seq = ${seq} AND claim_token = ${token}
+      RETURNING seq
+    `;
+    return rows.length > 0;
+  },
+
   /** Fenced terminal delivery mark + live cursor advance, atomically. */
   async markDelivered(tournamentId: string, seq: number, token: string): Promise<boolean> {
     const rows = await sql`

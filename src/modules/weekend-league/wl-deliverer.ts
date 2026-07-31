@@ -98,17 +98,25 @@ export async function wlDeliverPending(
         );
         if (!enriched) {
           const attemptId = String(event.payload['attempt_id'] ?? '');
-          await wlEventsRepo.markAborted(
-            tournamentId, event.seq, event.claim_token, 'dispatch_stale_or_voided'
-          );
           if (attemptId) {
+            // One fenced transaction: event abort + run void + void event +
+            // replacement dispatch — or nothing (fence lost / already moved).
             await wlLiveEngineInternals.voidAttempt(
-              tournamentId, attemptId, redisNow, 'stale_dispatch_retry'
+              tournamentId, attemptId, redisNow, 'stale_dispatch_retry',
+              { seq: event.seq, claimToken: event.claim_token }
+            );
+          } else {
+            await wlEventsRepo.markAborted(
+              tournamentId, event.seq, event.claim_token, 'dispatch_stale_or_voided'
             );
           }
           continue;
         }
         outPayload = enriched;
+        await wlEventsRepo.persistDispatchStamps(
+          tournamentId, event.seq, event.claim_token,
+          Number(enriched['playableAt']), Number(enriched['deadlineAt'])
+        );
       }
 
       const stamped = await wlEventsRepo.markLiveEmission(

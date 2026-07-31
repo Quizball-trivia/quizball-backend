@@ -40,7 +40,6 @@ import {
   wlCompareStanding,
   wlEncodeScore,
   wlStepPoints,
-  wlTimeChargeMs,
   wlWhoAmIPoints,
   type WlRoundKind,
 } from './wl-rules.js';
@@ -70,6 +69,37 @@ export interface WlRunRow {
 function answersKey(tournamentId: string, attemptId: string): string {
   return `wl:${tournamentId}:a:${attemptId}:answers`;
 }
+
+function closedKey(tournamentId: string, attemptId: string): string {
+  return `wl:${tournamentId}:a:${attemptId}:closed`;
+}
+
+/**
+ * Atomic accept: validates the window against REDIS TIME and the freeze
+ * marker, then stores once-only — all inside one script, so a freeze that
+ * begins after our PG reads can no longer accept-then-lose an answer.
+ * KEYS: [answersKey, closedKey]; ARGV: [userId, packedAnswer, deadlineMs, ttl]
+ * Returns: 1 stored | 0 duplicate | -1 closed/past-deadline.
+ */
+const ACCEPT_SCRIPT = `
+  if redis.call('EXISTS', KEYS[2]) == 1 then return -1 end
+  local t = redis.call('TIME')
+  local nowMs = t[1] * 1000 + math.floor(t[2] / 1000)
+  if nowMs >= tonumber(ARGV[3]) then return -1 end
+  local stored = redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2])
+  redis.call('EXPIRE', KEYS[1], ARGV[4])
+  return stored
+`;
+
+/**
+ * Atomic close: sets the freeze marker and returns the full snapshot in one
+ * script — no answer can land between snapshot and close.
+ * KEYS: [answersKey, closedKey]; ARGV: [ttl]
+ */
+const CLOSE_SCRIPT = `
+  redis.call('SET', KEYS[2], '1', 'EX', tonumber(ARGV[1]))
+  return redis.call('HGETALL', KEYS[1])
+`;
 
 export function wlSlotSequence(): WlSlotRef[] {
   const slots: WlSlotRef[] = [];
@@ -102,14 +132,31 @@ export const wlLiveEngineInternals = {
     redisNow: number,
     reserveOrdinal = 0
   ): Promise<boolean> {
+    let appended = false;
+    await sql.begin(async (tx) => {
+      appended = await this.appendDispatchTx(
+        tx as unknown as typeof sql, tournamentId, slot, redisNow, reserveOrdinal
+      );
+    });
+    return appended;
+  },
+
+  /** Same as appendDispatch but composes into a caller-owned transaction. */
+  async appendDispatchTx(
+    db: typeof sql,
+    tournamentId: string,
+    slot: WlSlotRef,
+    redisNow: number,
+    reserveOrdinal = 0
+  ): Promise<boolean> {
     const [question] = reserveOrdinal === 0
-      ? await sql<Array<{ question_id: string; kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
+      ? await db<Array<{ question_id: string; kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
           SELECT question_id, kind, payload, evaluation FROM wl_questions
           WHERE tournament_id = ${tournamentId} AND game_index = ${slot.gameIndex}
             AND round_index = ${slot.roundIndex} AND question_index = ${slot.questionIndex}
             AND reserve_ordinal = 0
         `
-      : await sql<Array<{ question_id: string; kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
+      : await db<Array<{ question_id: string; kind: WlRoundKind; payload: unknown; evaluation: unknown }>>`
           SELECT q.question_id, q.kind, q.payload, q.evaluation FROM wl_questions q
           WHERE q.tournament_id = ${tournamentId} AND q.game_index = ${slot.gameIndex}
             AND q.reserve_ordinal = ${reserveOrdinal}
@@ -124,39 +171,33 @@ export const wlLiveEngineInternals = {
       logger.error({ tournamentId, slot, reserveOrdinal }, 'WL dispatch: no content for slot');
       return false;
     }
-
-    let appended = false;
-    await sql.begin(async (tx) => {
-      const txSql = tx as unknown as typeof sql;
-      const run = await txSql<{ attempt_id: string }[]>`
-        INSERT INTO wl_question_runs (
-          tournament_id, game_index, round_index, question_index, question_id, status
-        )
-        VALUES (
-          ${tournamentId}, ${slot.gameIndex}, ${slot.roundIndex}, ${slot.questionIndex},
-          ${question.question_id}, 'created'
-        )
-        ON CONFLICT DO NOTHING
-        RETURNING attempt_id
-      `;
-      if (run.length === 0) return; // live run already exists for the slot
-      await wlEventsRepo.append(txSql, {
-        tournamentId,
-        type: 'dispatch',
-        payload: {
-          attempt_id: run[0]!.attempt_id,
-          game_index: slot.gameIndex,
-          round_index: slot.roundIndex,
-          question_index: slot.questionIndex,
-          kind: question.kind,
-          question: question.payload,
-          evaluation: question.evaluation,
-        },
-        redisTimeMs: redisNow,
-      });
-      appended = true;
+    const run = await db<{ attempt_id: string }[]>`
+      INSERT INTO wl_question_runs (
+        tournament_id, game_index, round_index, question_index, question_id, status
+      )
+      VALUES (
+        ${tournamentId}, ${slot.gameIndex}, ${slot.roundIndex}, ${slot.questionIndex},
+        ${question.question_id}, 'created'
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING attempt_id
+    `;
+    if (run.length === 0) return false; // live run already exists for the slot
+    await wlEventsRepo.append(db, {
+      tournamentId,
+      type: 'dispatch',
+      payload: {
+        attempt_id: run[0]!.attempt_id,
+        game_index: slot.gameIndex,
+        round_index: slot.roundIndex,
+        question_index: slot.questionIndex,
+        kind: question.kind,
+        question: question.payload,
+        evaluation: question.evaluation,
+      },
+      redisTimeMs: redisNow,
     });
-    return appended;
+    return true;
   },
 
   /**
@@ -201,15 +242,14 @@ export const wlLiveEngineInternals = {
     const playable = Number(run.playable_at_ms);
     const deadlineMs = Number(run.deadline_at_ms);
     if (run.status !== 'dispatched' || !Number.isFinite(playable)) return null;
-    // Staleness applies ONLY to crash-retries of an already-stamped attempt
-    // (a first emission is on time by definition — its window was stamped
-    // from this very moment). A retry may re-broadcast the IDENTICAL payload
-    // as long as the answer window is still meaningfully open — a mid-window
-    // re-emission is no worse than network delay for the receivers, and
-    // clients dedup by seq. Only a window that is effectively over voids the
-    // attempt to a reserve.
-    if (!isFirstEmission && (!Number.isFinite(deadlineMs)
-      || redisNow > deadlineMs - WL_MIN_REMAINING_LEAD_MS)) {
+    // ANY emission (first stamp included — the process may have stalled
+    // between stamping and here) requires a meaningfully open window; a
+    // re-broadcast of the identical payload mid-window is no worse than
+    // network delay and clients dedup by seq. An effectively-over window
+    // voids the attempt to a reserve.
+    void isFirstEmission;
+    const freshNow = await wlRedisNowMs();
+    if (!Number.isFinite(deadlineMs) || freshNow > deadlineMs - WL_MIN_REMAINING_LEAD_MS) {
       return null;
     }
     return {
@@ -219,22 +259,44 @@ export const wlLiveEngineInternals = {
     };
   },
 
-  /** Void an attempt and (once) queue its reserve replacement. */
+  /**
+   * Void an attempt and queue its reserve replacement — ONE transaction for
+   * the abort of the dispatch event (fenced by the caller's claim token),
+   * the run void, the client-facing void event (whose payload names the
+   * aborted seq so the visible sequence gap is accounted for), and the
+   * replacement/next dispatch. A crash leaves either the fully-dispatched
+   * old state or the fully-voided new state, never a stranded question.
+   */
   async voidAttempt(
     tournamentId: string,
     attemptId: string,
     redisNow: number,
-    reason: string
-  ): Promise<void> {
-    const [run] = await sql<WlRunRow[]>`
-      UPDATE wl_question_runs SET status = 'voided', void_reason = ${reason}
-      WHERE attempt_id = ${attemptId} AND status IN ('created', 'dispatched')
-      RETURNING attempt_id, tournament_id, game_index, round_index, question_index,
-                question_id, status, playable_at_ms::text, deadline_at_ms::text
-    `;
-    if (!run) return;
+    reason: string,
+    fence?: { seq: number; claimToken: string }
+  ): Promise<boolean> {
+    let voided = false;
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
+      if (fence) {
+        const aborted = await txSql`
+          UPDATE wl_events
+          SET aborted_at = NOW(), last_error = ${'void:' + reason}
+          WHERE tournament_id = ${tournamentId} AND seq = ${fence.seq}
+            AND claim_token = ${fence.claimToken}
+            AND delivered_at IS NULL AND aborted_at IS NULL AND skipped_at IS NULL
+          RETURNING seq
+        `;
+        // Fence lost ⇒ another claimant owns this dispatch — do NOT void.
+        if (aborted.length === 0) return;
+      }
+      const runs = await txSql<WlRunRow[]>`
+        UPDATE wl_question_runs SET status = 'voided', void_reason = ${reason}
+        WHERE attempt_id = ${attemptId} AND status IN ('created', 'dispatched')
+        RETURNING attempt_id, tournament_id, game_index, round_index, question_index,
+                  question_id, status, playable_at_ms::text, deadline_at_ms::text
+      `;
+      const run = runs[0];
+      if (!run) return;
       await wlEventsRepo.append(txSql, {
         tournamentId,
         type: 'void',
@@ -244,33 +306,32 @@ export const wlLiveEngineInternals = {
           round_index: run.round_index,
           question_index: run.question_index,
           reason,
+          covers_seq: fence?.seq ?? null,
         },
         redisTimeMs: redisNow,
       });
+      const voidedCount = await txSql<{ n: number }[]>`
+        SELECT COUNT(*)::int AS n FROM wl_question_runs
+        WHERE tournament_id = ${tournamentId} AND game_index = ${run.game_index}
+          AND round_index = ${run.round_index} AND question_index = ${run.question_index}
+          AND status = 'voided'
+      `;
+      const nextReserve = voidedCount[0]?.n ?? 1;
+      const replaced = await this.appendDispatchTx(
+        txSql, tournamentId,
+        { gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index },
+        redisNow, nextReserve
+      );
+      if (!replaced) {
+        logger.warn({ tournamentId, attemptId, nextReserve }, 'WL void: reserves exhausted, slot skipped');
+        const next = wlNextSlot({
+          gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
+        });
+        if (next) await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+      }
+      voided = true;
     });
-    // Reserve replacement for the same slot (next unused reserve ordinal of
-    // the slot's kind). Exhausted reserves ⇒ the slot scores 0 for everyone
-    // (nominal-1000 rule) and play continues with the next slot.
-    const voidedCount = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM wl_question_runs
-      WHERE tournament_id = ${tournamentId} AND game_index = ${run.game_index}
-        AND round_index = ${run.round_index} AND question_index = ${run.question_index}
-        AND status = 'voided'
-    `;
-    const nextReserve = voidedCount[0]?.n ?? 1;
-    const replaced = await this.appendDispatch(
-      tournamentId,
-      { gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index },
-      redisNow,
-      nextReserve
-    );
-    if (!replaced) {
-      logger.warn({ tournamentId, attemptId, nextReserve }, 'WL void: reserves exhausted, slot skipped');
-      const next = wlNextSlot({
-        gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
-      });
-      if (next) await this.appendDispatch(tournamentId, next, redisNow);
-    }
+    return voided;
   },
 
   /**
@@ -280,17 +341,18 @@ export const wlLiveEngineInternals = {
    */
   async freezeAndReveal(tournamentId: string, run: WlRunRow, redisNow: number): Promise<void> {
     const redis = wlRedis();
-    const kind = await this.kindOf(run.question_id);
-    const raw = await redis.hGetAll(answersKey(tournamentId, run.attempt_id));
+    // Atomic close + snapshot: after this, the accept script rejects — no
+    // answer can be acknowledged yet miss the snapshot.
+    const rawFlat = await redis.eval(CLOSE_SCRIPT, {
+      keys: [answersKey(tournamentId, run.attempt_id), closedKey(tournamentId, run.attempt_id)],
+      arguments: [String(REDIS_TTL_SECONDS)],
+    }) as string[];
+    const raw: Record<string, string> = {};
+    for (let i = 0; i + 1 < rawFlat.length; i += 2) raw[rawFlat[i]!] = rawFlat[i + 1]!;
 
-    // CAS dispatched→frozen; the loser (concurrent freezer / replay) exits.
-    const frozen = await sql`
-      UPDATE wl_question_runs SET status = 'frozen'
-      WHERE attempt_id = ${run.attempt_id} AND status = 'dispatched'
-      RETURNING attempt_id
-    `;
-    if (frozen.length === 0) return;
-
+    const windowMs = Math.max(
+      1, Number(run.deadline_at_ms) - Number(run.playable_at_ms)
+    );
     const answerRows = Object.entries(raw).map(([userId, packed]) => {
       const a = JSON.parse(packed) as {
         answer: unknown; correct: boolean; points: number; elapsedMs: number;
@@ -298,28 +360,61 @@ export const wlLiveEngineInternals = {
       return { userId, ...a };
     });
 
+    // Freeze CAS + answer persistence in ONE transaction: a crash cannot
+    // strand a frozen run without its answers (finding P1-1), and the CAS
+    // loser (concurrent freezer / replay) commits nothing.
+    let won = false;
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
-      for (const row of answerRows) {
+      const frozen = await txSql`
+        UPDATE wl_question_runs SET status = 'frozen'
+        WHERE attempt_id = ${run.attempt_id} AND status = 'dispatched'
+        RETURNING attempt_id
+      `;
+      if (frozen.length === 0) return;
+      if (answerRows.length > 0) {
+        // One bulk statement — a 600-player freeze must not issue 600
+        // sequential inserts against the admission-limited pool.
+        const userIds = answerRows.map((r) => r.userId);
+        const answers = answerRows.map((r) => JSON.stringify(r.answer ?? null));
+        const corrects = answerRows.map((r) => r.correct);
+        const points = answerRows.map((r) => r.points);
+        const elapsed = answerRows.map((r) => Math.min(Math.max(r.elapsedMs, 0), windowMs));
         await txSql`
           INSERT INTO wl_answers (
             attempt_id, user_id, tournament_id, game_index, answer, correct,
             points, elapsed_ms, time_charge_ms, timing_source
           )
-          VALUES (
-            ${run.attempt_id}, ${row.userId}, ${tournamentId}, ${run.game_index},
-            ${sql.json(row.answer as never)}, ${row.correct}, ${row.points},
-            ${row.elapsedMs}, ${wlTimeChargeMs(true, row.elapsedMs)}, 'redis_accept'
-          )
+          SELECT ${run.attempt_id}, u, ${tournamentId}, ${run.game_index},
+                 a::jsonb, c, p, e, e, 'redis_accept'
+          FROM unnest(
+            ${sql.array(userIds)}::uuid[], ${sql.array(answers)}::text[],
+            ${sql.array(corrects)}::boolean[], ${sql.array(points)}::int[],
+            ${sql.array(elapsed)}::int[]
+          ) AS t(u, a, c, p, e)
           ON CONFLICT (attempt_id, user_id) DO NOTHING
         `;
       }
+      won = true;
     });
+    if (!won && run.status !== 'frozen') return;
+    await this.revealFrozen(tournamentId, run, redisNow);
+  },
 
+  /**
+   * Idempotent frozen→revealed tail: recompute standings from the durable
+   * answers, then CAS-reveal with the reveal event. Also the recovery path
+   * for a crash between the freeze commit and the reveal commit.
+   */
+  async revealFrozen(tournamentId: string, run: WlRunRow, redisNow: number): Promise<void> {
     await this.applyAbsoluteStandings(tournamentId, run.game_index);
 
+    // Distribution from the DURABLE answers (identical on resume).
+    const persisted = await sql<Array<{ answer: unknown }>>`
+      SELECT answer FROM wl_answers WHERE attempt_id = ${run.attempt_id}
+    `;
     const distribution: Record<string, number> = {};
-    for (const row of answerRows) {
+    for (const row of persisted) {
       const key = typeof row.answer === 'string' ? row.answer : JSON.stringify(row.answer);
       distribution[key] = (distribution[key] ?? 0) + 1;
     }
@@ -344,9 +439,9 @@ export const wlLiveEngineInternals = {
           game_index: run.game_index,
           round_index: run.round_index,
           question_index: run.question_index,
-          kind,
+          kind: await this.kindOf(run.question_id),
           evaluation: content?.evaluation ?? null,
-          answered: answerRows.length,
+          answered: persisted.length,
           distribution,
           board,
         },
@@ -362,34 +457,45 @@ export const wlLiveEngineInternals = {
     }
   },
 
+  /** Recovery alias — advance() resumes a stranded frozen run through here. */
+  async resumeFrozen(tournamentId: string, run: WlRunRow, redisNow: number): Promise<void> {
+    await this.revealFrozen(tournamentId, run, redisNow);
+  },
+
   /** Absolute (repair-safe) standings from persisted answers + miss charges. */
   async applyAbsoluteStandings(tournamentId: string, gameIndex: number): Promise<void> {
-    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string; answered: number }>>`
+    // Per-user totals with WINDOW-correct miss charges: an unanswered
+    // attempt charges that attempt's full window (who_am_i = 5 clue windows),
+    // never a flat constant — wrong-but-present must always beat absent.
+    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string }>>`
+      WITH asked AS (
+        SELECT attempt_id,
+               GREATEST(1, deadline_at_ms - playable_at_ms) AS window_ms
+        FROM wl_question_runs
+        WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
+          AND status IN ('frozen', 'revealed')
+      )
       SELECT p.user_id,
              COALESCE(SUM(a.points), 0)::int AS points,
-             COALESCE(SUM(a.time_charge_ms), 0)::text AS time_ms,
-             COUNT(a.user_id)::int AS answered
+             (
+               COALESCE(SUM(LEAST(a.time_charge_ms, asked.window_ms)), 0)
+               + COALESCE((SELECT SUM(window_ms) FROM asked), 0)
+               - COALESCE(SUM(asked.window_ms), 0)
+             )::text AS time_ms
       FROM wl_game_participants p
       LEFT JOIN wl_answers a
         ON a.tournament_id = p.tournament_id AND a.game_index = p.game_index
        AND a.user_id = p.user_id
+      LEFT JOIN asked ON asked.attempt_id = a.attempt_id
       WHERE p.tournament_id = ${tournamentId} AND p.game_index = ${gameIndex}
       GROUP BY p.user_id
     `;
-    const revealedCount = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM wl_question_runs
-      WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
-        AND status IN ('frozen', 'revealed')
-    `;
-    const asked = revealedCount[0]?.n ?? 0;
     const redis = wlRedis();
     const key = `wl:${tournamentId}:g${gameIndex}:scores`;
     if (rows.length === 0) return;
-    await redis.zAdd(key, rows.map((r) => {
-      const missed = Math.max(0, asked - r.answered);
-      const timeTotal = Number(r.time_ms) + missed * wlTimeChargeMs(false, 0);
-      return { score: wlEncodeScore(r.points, timeTotal), value: r.user_id };
-    }));
+    await redis.zAdd(key, rows.map((r) => (
+      { score: wlEncodeScore(r.points, Number(r.time_ms)), value: r.user_id }
+    )));
     await redis.expire(key, REDIS_TTL_SECONDS);
   },
 
@@ -399,28 +505,36 @@ export const wlLiveEngineInternals = {
     gameIndex: number,
     limit: number
   ): Promise<Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>> {
-    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string; answered: number }>>`
+    // Per-user totals with WINDOW-correct miss charges: an unanswered
+    // attempt charges that attempt's full window (who_am_i = 5 clue windows),
+    // never a flat constant — wrong-but-present must always beat absent.
+    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string }>>`
+      WITH asked AS (
+        SELECT attempt_id,
+               GREATEST(1, deadline_at_ms - playable_at_ms) AS window_ms
+        FROM wl_question_runs
+        WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
+          AND status IN ('frozen', 'revealed')
+      )
       SELECT p.user_id,
              COALESCE(SUM(a.points), 0)::int AS points,
-             COALESCE(SUM(a.time_charge_ms), 0)::text AS time_ms,
-             COUNT(a.user_id)::int AS answered
+             (
+               COALESCE(SUM(LEAST(a.time_charge_ms, asked.window_ms)), 0)
+               + COALESCE((SELECT SUM(window_ms) FROM asked), 0)
+               - COALESCE(SUM(asked.window_ms), 0)
+             )::text AS time_ms
       FROM wl_game_participants p
       LEFT JOIN wl_answers a
         ON a.tournament_id = p.tournament_id AND a.game_index = p.game_index
        AND a.user_id = p.user_id
+      LEFT JOIN asked ON asked.attempt_id = a.attempt_id
       WHERE p.tournament_id = ${tournamentId} AND p.game_index = ${gameIndex}
       GROUP BY p.user_id
     `;
-    const askedRows = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM wl_question_runs
-      WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex}
-        AND status IN ('frozen', 'revealed')
-    `;
-    const asked = askedRows[0]?.n ?? 0;
     const standings = rows.map((r) => ({
       userId: r.user_id,
       points: r.points,
-      timeMsTotal: Number(r.time_ms) + Math.max(0, asked - r.answered) * wlTimeChargeMs(false, 0),
+      timeMsTotal: Number(r.time_ms),
     }));
     standings.sort(wlCompareStanding);
     return standings.slice(0, limit).map((s, i) => ({
@@ -537,12 +651,20 @@ export async function wlAcceptAnswer(input: {
   );
 
   const redis = wlRedis();
-  const stored = await redis.hSetNX(
-    answersKey(input.tournamentId, input.attemptId),
-    input.userId,
-    JSON.stringify({ answer: input.answer, correct, points, elapsedMs })
-  );
-  if (!stored) {
+  const stored = await redis.eval(ACCEPT_SCRIPT, {
+    keys: [
+      answersKey(input.tournamentId, input.attemptId),
+      closedKey(input.tournamentId, input.attemptId),
+    ],
+    arguments: [
+      input.userId,
+      JSON.stringify({ answer: input.answer, correct, points, elapsedMs }),
+      String(deadline),
+      String(REDIS_TTL_SECONDS),
+    ],
+  }) as number;
+  if (stored === -1) return { accepted: false, reason: 'closed' };
+  if (stored === 0) {
     const prior = await redis.hGet(answersKey(input.tournamentId, input.attemptId), input.userId);
     if (prior) {
       const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
@@ -550,6 +672,5 @@ export async function wlAcceptAnswer(input: {
     }
     return { accepted: false, reason: 'duplicate' };
   }
-  await redis.expire(answersKey(input.tournamentId, input.attemptId), REDIS_TTL_SECONDS);
   return { accepted: true, correct, points, elapsedMs };
 }

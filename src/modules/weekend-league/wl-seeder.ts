@@ -79,30 +79,42 @@ async function drawSources(
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
   const minMatchups = kind === 'higher_lower' ? 3 : 0;
-  const order = deterministic ? sql`ORDER BY md5(q.id::text)` : sql`ORDER BY RANDOM()`;
+  const order = deterministic ? sql`md5(q.id::text)` : sql`RANDOM()`;
   const visibility = allowPublicBank
     ? sql`q.visibility IN ('wl_private', 'public')`
     : sql`q.visibility = 'wl_private'`;
-  const rows = await sql<SourceRow[]>`
-    SELECT q.id, q.prompt, qp.payload
-    FROM questions q
-    JOIN question_payloads qp ON qp.question_id = q.id
-    WHERE q.status = 'published'
-      AND q.type = ${sourceType}
-      AND ${visibility}
-      AND (${minMatchups} = 0 OR jsonb_array_length(qp.payload->'matchups') >= ${minMatchups})
-      AND NOT EXISTS (
-        SELECT 1 FROM wl_questions w
-        JOIN wl_tournaments wt ON wt.id = w.tournament_id
-        WHERE w.source_question_id = q.id
-          AND wt.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})
-      )
-    ${order}
-    LIMIT ${need * 3}
-  `;
-  // wl_private first so the protected pool is always preferred over public
-  // fallback rows, then bilingual filtering.
-  return rows.filter((r) => payloadFullyBilingual(r.prompt, r.payload)).slice(0, need);
+  // Protected stock is ALWAYS preferred over public fallback (SQL-level
+  // priority, before any randomization), and pages keep fetching until the
+  // bilingual filter has enough rows or the pool is exhausted — a batch of
+  // monolingual rows must not masquerade as a shortage.
+  const picked: SourceRow[] = [];
+  const pageSize = Math.max(need * 3, 50);
+  for (let offset = 0; picked.length < need; offset += pageSize) {
+    const rows = await sql<SourceRow[]>`
+      SELECT q.id, q.prompt, qp.payload
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status = 'published'
+        AND q.type = ${sourceType}
+        AND ${visibility}
+        AND (${minMatchups} = 0 OR jsonb_array_length(qp.payload->'matchups') >= ${minMatchups})
+        AND NOT EXISTS (
+          SELECT 1 FROM wl_questions w
+          JOIN wl_tournaments wt ON wt.id = w.tournament_id
+          WHERE w.source_question_id = q.id
+            AND wt.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})
+        )
+      ORDER BY (q.visibility = 'wl_private') DESC, ${order}
+      LIMIT ${pageSize} OFFSET ${offset}
+    `;
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (picked.length >= need) break;
+      if (payloadFullyBilingual(r.prompt, r.payload)) picked.push(r);
+    }
+    if (rows.length < pageSize) break;
+  }
+  return picked;
 }
 
 interface SlotInsert {

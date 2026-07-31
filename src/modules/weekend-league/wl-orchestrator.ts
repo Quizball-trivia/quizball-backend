@@ -197,8 +197,26 @@ export async function wlOrchestratorTick(
     || pendingWork.length > 0;
 }
 
-/** Scoped advance+drain for one tournament (two-process harness). */
+/**
+ * Scoped advance+drain for one tournament (wl_tick hints + harness). Honors
+ * the SAME gates as the loop: the launch flag (a persisted timer firing
+ * after a restart must not advance a real tournament while orchestration is
+ * disabled) and the strict lock (never racing the reconciler).
+ */
 export async function wlAdvanceOneTournament(io: QuizballServer, tournamentId: string): Promise<void> {
+  const t0 = await wlOrchestratorRepo.getById(tournamentId);
+  if (!t0) return;
+  if (!config.WL_ORCHESTRATION_ENABLED && !t0.is_test) return;
+  const token = await wlAcquireStrictLock(ORCHESTRATOR_LOCK_KEY, LOCK_TTL_MS);
+  if (!token) return; // the lock holder's pass will cover this work
+  try {
+    await wlAdvanceOneLocked(io, tournamentId);
+  } finally {
+    await wlReleaseStrictLock(ORCHESTRATOR_LOCK_KEY, token);
+  }
+}
+
+async function wlAdvanceOneLocked(io: QuizballServer, tournamentId: string): Promise<void> {
   const redisNow = await wlRedisNowMs();
   const t = await wlOrchestratorRepo.getById(tournamentId);
   if (!t) return;

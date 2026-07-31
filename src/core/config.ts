@@ -170,6 +170,9 @@ const configSchema = z.object({
   // `x-chaos-bypass` header matches this secret skips the API rate limiter so
   // the chaos harness can drive real RPS. Hard-disabled when NODE_ENV==='prod'.
   CHAOS_BYPASS_TOKEN: z.string().optional(),
+  // Weekend League ops controls (pause/resume/cancel/test tournaments).
+  // Unset = the WL ops surface is disabled entirely (404).
+  WL_OPS_TOKEN: z.string().optional(),
 
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),

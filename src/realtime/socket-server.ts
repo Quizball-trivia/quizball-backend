@@ -39,6 +39,7 @@ import {
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
 import { startReservationSweeper } from './services/synthetic-bot-reservation-sweeper.service.js';
 import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
+import { startWlOrchestrator } from '../modules/weekend-league/wl-orchestrator.js';
 import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
 import {
@@ -557,6 +558,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // gates, inter-question delay) — re-arm timers for every active match so no
   // match silently freezes until the 15-minute sweeper.
   scheduleBootMatchTimerRearm(io);
+  startWlOrchestrator(io);
   scheduleBootAuctionTimerRearm(io);
 
   rankedMatchmakingService.start(io);

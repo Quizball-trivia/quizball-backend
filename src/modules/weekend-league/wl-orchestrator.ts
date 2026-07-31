@@ -49,6 +49,10 @@ export function startWlOrchestrator(io: QuizballServer): void {
   logger.info('WL orchestrator started');
 }
 
+export function getWlOrchestratorIo(): QuizballServer | null {
+  return activeIo;
+}
+
 export function stopWlOrchestrator(): void {
   if (loopTimer) clearTimeout(loopTimer);
   loopTimer = null;
@@ -147,7 +151,21 @@ async function advanceTournament(
     const moved = await wlOrchestratorRepo.transition({
       tournamentId: t.id, from: t.status, to: due, redisTimeMs: redisNow,
     });
-    if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
+    if (moved) {
+      if (due === 'checkin' && !t.is_test) {
+        // Everyone active hears the league is starting: entrants can join,
+        // the rest can spectate from the same tab.
+        void import('./wl-notifications.js').then(({ wlNotifyAllActiveUsers }) =>
+          wlNotifyAllActiveUsers(t.id, 'started', {
+            titleEn: 'Weekend League is starting!',
+            titleKa: 'უიქენდის ლიგა იწყება!',
+            bodyEn: 'Check in now if you are registered — or watch the games live.',
+            bodyKa: 'გაიარე ჩექინი თუ დარეგისტრირებული ხარ — ან უყურე თამაშებს ლაივში.',
+          })
+        ).catch((err) => logger.warn({ err, tournamentId: t.id }, 'WL started wave failed'));
+      }
+      t = await wlOrchestratorRepo.getById(t.id) ?? t;
+    }
   }
 
   // Kickoff adjudication: at qualifier start, a big-enough checked-in field

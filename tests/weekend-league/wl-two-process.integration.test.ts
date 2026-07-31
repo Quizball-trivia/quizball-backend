@@ -23,7 +23,9 @@ const WL_TEST_LOCK = 774431001;
 let lockConn: Awaited<ReturnType<typeof sql.reserve>> | null = null;
 
 async function deleteAutoCreatedRealTournaments(): Promise<void> {
-  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  try {
+    if (!['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname)) return;
+  } catch { return; }
   await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
 }
 
@@ -100,7 +102,7 @@ describe('WL two-process orchestration', () => {
     const created = await repo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
-      config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000, engine: 'stub' }),
+      config: buildConfig({ launch_edition: true, free_entry: true, checkin_window_ms: 60_000, engine: 'stub' }),
       entryOpensAt: new Date(now - 3600_000),
       entryClosesAt: new Date(now - 120_000),
       qualifierStartsAt: new Date(now - 30_000),

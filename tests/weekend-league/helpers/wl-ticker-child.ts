@@ -11,6 +11,9 @@ const sinkIo = {
   to() {
     return { emit() { /* sink */ } };
   },
+  in() {
+    return { socketsLeave() { /* sink */ } };
+  },
 } as unknown as QuizballServer;
 
 const iterations = Number(process.argv[2] ?? 40);

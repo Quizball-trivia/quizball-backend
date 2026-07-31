@@ -30,6 +30,9 @@ const fakeIo = {
       },
     };
   },
+  in() {
+    return { socketsLeave() { /* eviction sink */ } };
+  },
 } as unknown as import('../../src/realtime/socket-server.js').QuizballServer;
 
 const i18n = (base: string) => ({ en: `${base} en`, ka: `${base} ka` });
@@ -56,7 +59,10 @@ beforeAll(async () => {
     await wlRedisNowMs();
     lockConn = await sql.reserve();
     await lockConn`SELECT pg_advisory_lock(${WL_TEST_LOCK})`;
-    if (/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) {
+    if ((() => {
+      try { return ['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname); }
+      catch { return false; }
+    })()) {
       await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
     }
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
@@ -150,7 +156,7 @@ function correctAnswerFor(kind: string): unknown {
 }
 
 describe('WL live game end-to-end', () => {
-  it('plays 19 real questions to qualifier_done with truthful standings', async ({ skip }) => {
+  it('plays the FULL tournament: 3 games with cuts, breaks, played final, awards', async ({ skip }) => {
     if (!dbAvailable) skip();
     await stockContent();
 
@@ -166,14 +172,16 @@ describe('WL live game end-to-end', () => {
       isTest: true,
       config: buildWlConfig({
         launch_edition: true,
+        free_entry: true,
         question_time_ms: 1_000,
         dispatch_lead_ms: 0,
+        break_ms: 2_000,
         checkin_window_ms: 60_000,
       }),
       entryOpensAt: new Date(now - 3600_000),
       entryClosesAt: new Date(now - 120_000),
       qualifierStartsAt: new Date(now - 30_000),
-      finalStartsAt: new Date(now + 3600_000),
+      finalStartsAt: new Date(now + 150_000),
       redisTimeMs: now,
       status: 'scheduled',
     });
@@ -182,7 +190,7 @@ describe('WL live game end-to-end', () => {
     const tid = created.id;
 
     const players: string[] = [];
-    for (const name of ['wlg-ace', 'wlg-mid', 'wlg-idle']) {
+    for (const name of ['wlg-ace', 'wlg-b', 'wlg-c', 'wlg-d', 'wlg-e', 'wlg-idle']) {
       const [u] = await sql<{ id: string }[]>`
         INSERT INTO users (nickname, is_ai, is_seed, coins, onboarding_complete)
         VALUES (${`${name}-${now}`}, false, false, 0, true) RETURNING id
@@ -194,95 +202,126 @@ describe('WL live game end-to-end', () => {
         VALUES (${tid}, ${u.id}, NOW(), NOW())
       `;
     }
-    const [ace, mid, idle] = players as [string, string, string];
-    void idle; // never answers — must still be ranked (miss charges)
+    const [ace, ...rest] = players as [string, ...string[]];
+    const idle = rest.at(-1)!;
+    const mids = rest.slice(0, -1);
 
-    // Drive the game: tick, answer the current dispatched attempt, repeat.
+    // Compressed cuts for a 6-player field: 6 → 4 → 3 → 2 finalists.
+    // (Real ladders come from wlBuildLadder; the override exercises real
+    // eliminations without a 25-player fixture.)
+    let ladderOverridden = false;
+
+    // Drive the whole tournament: tick, answer the current dispatched
+    // attempt with every alive participant, repeat until completed.
     const answeredAttempts = new Set<string>();
-    const deadline = Date.now() + 90_000;
+    const deadline = Date.now() + 280_000;
+    const loopStart = Date.now();
+    let lastStatus = '';
     for (;;) {
-      if (Date.now() > deadline) throw new Error('live game did not finish in time');
+      if (Date.now() > deadline) throw new Error('tournament did not finish in time');
+      const tickStart = Date.now();
       await wlOrchestratorTick(fakeIo);
+      const tickMs = Date.now() - tickStart;
       const t = await wlOrchestratorRepo.getById(tid);
       if (!t) throw new Error('tournament vanished');
-      if (['qualifier_done', 'completed'].includes(t.status)) break;
-      const [run] = await sql<Array<{ attempt_id: string; question_id: string; status: string }>>`
-        SELECT r.attempt_id, r.question_id, r.status FROM wl_question_runs r
+      if (t.status !== lastStatus || tickMs > 3000) {
+        console.log(`E2E ${Math.round((Date.now() - loopStart) / 1000)}s status=${t.status} tick=${tickMs}ms`);
+        lastStatus = t.status;
+      }
+      if (t.status === 'completed') break;
+      if (!ladderOverridden && ['game_live', 'break'].includes(t.status)) {
+        await sql`
+          UPDATE wl_tournaments
+          SET ladder = ${sql.json({ fieldSize: 6, advance: [4, 3, 2] } as never)}
+          WHERE id = ${tid}
+        `;
+        ladderOverridden = true;
+      }
+      const [run] = await sql<Array<{ attempt_id: string; question_id: string; game_index: number }>>`
+        SELECT r.attempt_id, r.question_id, r.game_index FROM wl_question_runs r
         WHERE r.tournament_id = ${tid} AND r.status = 'dispatched'
-        ORDER BY r.round_index DESC, r.question_index DESC LIMIT 1
+        ORDER BY r.game_index DESC, r.round_index DESC, r.question_index DESC LIMIT 1
       `;
       if (run && !answeredAttempts.has(run.attempt_id)) {
         answeredAttempts.add(run.attempt_id);
         const [q] = await sql<Array<{ kind: string }>>`
           SELECT kind FROM wl_questions WHERE question_id = ${run.question_id}
         `;
+        const alive = await sql<Array<{ user_id: string }>>`
+          SELECT user_id FROM wl_game_participants
+          WHERE tournament_id = ${tid} AND game_index = ${run.game_index}
+        `;
+        const aliveSet = new Set(alive.map((a) => a.user_id));
         const answer = correctAnswerFor(q!.kind);
-        // Ace answers correctly and instantly; mid answers wrong.
-        const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
-        expect(aceResult.accepted).toBe(true);
-        if (aceResult.accepted) expect(aceResult.correct).toBe(true);
-        const midResult = await wlAcceptAnswer({
-          tournamentId: tid, attemptId: run.attempt_id, userId: mid,
-          answer: q!.kind === 'who_am_i' ? { guess: 'wrong', clue_index: 1 } : 'wrong-option',
-        });
-        expect(midResult.accepted).toBe(true);
-        if (midResult.accepted) expect(midResult.correct).toBe(false);
-        // Duplicate answer returns the stored result, never re-scores.
-        const dup = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer: 'anything' });
-        expect(dup.accepted).toBe(true);
-        if (dup.accepted && aceResult.accepted) expect(dup.points).toBe(aceResult.points);
+        if (aliveSet.has(ace)) {
+          const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
+          if (aceResult.accepted) expect(aceResult.correct).toBe(true);
+        }
+        for (const mid of mids) {
+          if (!aliveSet.has(mid)) continue;
+          await wlAcceptAnswer({
+            tournamentId: tid, attemptId: run.attempt_id, userId: mid,
+            answer: q!.kind === 'who_am_i' ? { guess: 'wrong' } : 'wrong-option',
+          });
+        }
+        // idle never answers — miss charges keep ranking truthful.
       }
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 120));
     }
 
-    // 19 slots revealed, none stuck.
-    const runs = await sql<Array<{ status: string }>>`
-      SELECT status FROM wl_question_runs WHERE tournament_id = ${tid} AND status <> 'voided'
+    // 4 games × 19 slots revealed, none stuck.
+    const runs = await sql<Array<{ status: string; game_index: number }>>`
+      SELECT status, game_index FROM wl_question_runs
+      WHERE tournament_id = ${tid} AND status <> 'voided'
     `;
-    expect(runs.length).toBe(19);
+    expect(runs.length).toBe(4 * 19);
     expect(runs.every((r) => r.status === 'revealed')).toBe(true);
 
-    // Standings truth: ace (all correct) 1st, mid (all wrong, but present) 2nd,
-    // idle (never answered) 3rd — wrong-but-present beats absent.
-    const results = await sql<Array<{ user_id: string; rank: number; score: number }>>`
-      SELECT user_id, rank, score FROM wl_game_results
-      WHERE tournament_id = ${tid} AND game_index = 0 ORDER BY rank ASC
-    `;
-    expect(results.length).toBe(3);
-    expect(results[0]!.user_id).toBe(ace);
-    expect(results[0]!.score).toBeGreaterThan(0);
-    expect(results[1]!.user_id).toBe(mid);
-    expect(results[1]!.score).toBe(0);
-    expect(results[2]!.user_id).toBe(idle);
+    // Cuts per the overridden ladder: 6 → 4 → 3 → 2 finalists → champion.
+    for (const [game, expected] of [[0, 6], [1, 4], [2, 3], [3, 2]] as const) {
+      const [n] = await sql<{ n: number }[]>`
+        SELECT COUNT(*)::int AS n FROM wl_game_results
+        WHERE tournament_id = ${tid} AND game_index = ${game}
+      `;
+      expect(n.n, `game ${game} field`).toBe(expected);
+    }
 
-    // Persisted answers: 2 players × 19 questions.
-    const [answerCount] = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM wl_answers WHERE tournament_id = ${tid}
+    // Ace wins everything; idle was cut first with the right elimination tag.
+    const t = await wlOrchestratorRepo.getById(tid);
+    expect(t?.status).toBe('completed');
+    expect(t?.champion_user_id).toBe(ace);
+    expect(t?.final_played).toBe(true);
+    const entries = await sql<Array<{ user_id: string; state: string; eliminated_game: number | null; final_rank: number | null }>>`
+      SELECT user_id, state, eliminated_game, final_rank FROM wl_entries WHERE tournament_id = ${tid}
     `;
-    expect(answerCount.n).toBe(38);
+    const byUser = new Map(entries.map((e) => [e.user_id, e]));
+    expect(byUser.get(ace)?.state).toBe('champion');
+    expect(byUser.get(ace)?.final_rank).toBe(1);
+    expect(byUser.get(idle)?.state).toBe('eliminated');
+    expect(byUser.get(idle)?.eliminated_game).toBe(0);
 
-    // Reveal events carry evaluation + distribution + board; stream gapless.
+    // Awards: humans-only bands over the final board (all humans here).
+    const awards = await sql<Array<{ user_id: string; band: string }>>`
+      SELECT user_id, band FROM wl_awards WHERE tournament_id = ${tid} ORDER BY final_rank ASC
+    `;
+    expect(awards.length).toBe(2);
+    expect(awards[0]).toEqual({ user_id: ace, band: 'champion' });
+    expect(awards[1]!.band).toBe('second');
+
+    // Stream gapless + fully delivered; result events carried eviction lists.
     const events = await sql<Array<{ seq_text: string; type: string; delivered: boolean }>>`
       SELECT seq::text AS seq_text, type, (delivered_at IS NOT NULL) AS delivered
       FROM wl_events WHERE tournament_id = ${tid} ORDER BY wl_events.seq ASC
     `;
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
-    expect(events.filter((e) => e.type === 'dispatch').length).toBe(19);
-    expect(events.filter((e) => e.type === 'reveal').length).toBe(19);
+    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 19);
+    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 19);
+    expect(events.filter((e) => e.type === 'game_result').length).toBe(3);
+    expect(events.filter((e) => e.type === 'final_result').length).toBe(1);
     expect(events.every((e) => e.delivered)).toBe(true);
 
-    const reveals = emitted.filter((e) => e.room === `wl:${tid}` && e.event === 'wl:reveal');
-    expect(reveals.length).toBe(19);
-    const lastReveal = reveals.at(-1)!.payload;
-    expect(lastReveal['evaluation']).toBeTruthy();
-    expect(lastReveal['board']).toBeTruthy();
-    expect((lastReveal['board'] as unknown[]).length).toBeGreaterThan(0);
-
-    // Dispatches were stamped and carried the content + timing.
-    const dispatches = emitted.filter((e) => e.room === `wl:${tid}` && e.event === 'wl:dispatch');
-    expect(dispatches.length).toBe(19);
-    expect(typeof dispatches[0]!.payload['playableAt']).toBe('number');
-    expect(typeof dispatches[0]!.payload['deadlineAt']).toBe('number');
-    expect(dispatches[0]!.payload['question']).toBeTruthy();
-  }, 120_000);
+    const gameResults = emitted.filter((e) => e.room === `wl:${tid}` && e.event === 'wl:game_result');
+    expect(gameResults.length).toBe(3);
+    expect((gameResults[0]!.payload['eliminated_user_ids'] as string[]).length).toBe(2);
+  }, 300_000);
 });

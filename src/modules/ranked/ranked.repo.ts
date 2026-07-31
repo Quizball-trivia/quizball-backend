@@ -398,7 +398,18 @@ export const rankedRepo = {
     lossPoints: number;
   }): Promise<number> {
     if (input.userIds.length === 0) return 0;
-    const rows = await sql<{ user_id: string }[]>`
+    let repairedCount = 0;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      // Wallet-lock protocol: same sorted users-row locks the settlement and
+      // entry paths take, so a repair award can never slip behind a
+      // concurrent reset with an earlier timestamp.
+      const lockedIds = [...new Set(input.userIds)].sort();
+      await txSql`
+        SELECT id FROM users WHERE id = ANY(${sql.array(lockedIds)}::uuid[])
+        ORDER BY id FOR UPDATE
+      `;
+      const rows = await txSql<{ user_id: string }[]>`
       WITH repaired AS (
         INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
         SELECT rc.match_id, rc.user_id, ${input.weekKey}::date,
@@ -424,7 +435,9 @@ export const rankedRepo = {
         last_match_at = GREATEST(t.last_match_at, EXCLUDED.last_match_at)
       RETURNING user_id
     `;
-    return rows.length;
+      repairedCount = rows.length;
+    });
+    return repairedCount;
   },
 
   /**

@@ -24,7 +24,9 @@ async function deleteAutoCreatedRealTournaments(): Promise<void> {
   // The orchestrator's weekly auto-creation plants a REAL tournament during
   // ticks, which then shadows every test tournament (real-first resolution).
   // Local-test-DB only, by construction of tests/setup.ts — hard-guard anyway.
-  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  try {
+    if (!['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname)) return;
+  } catch { return; }
   await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
 }
 
@@ -55,6 +57,9 @@ const fakeIo = {
         emitted.push({ room, event, payload });
       },
     };
+  },
+  in() {
+    return { socketsLeave() { /* sink */ } };
   },
 } as unknown as import('../../src/realtime/socket-server.js').QuizballServer;
 
@@ -114,7 +119,7 @@ async function createBackdatedTournament(now: number): Promise<string> {
   const created = await repo.createWithInitialEvent({
     weekKey: null,
     isTest: true,
-    config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000, engine: 'stub' }),
+    config: buildConfig({ launch_edition: true, free_entry: true, checkin_window_ms: 60_000, engine: 'stub' }),
     entryOpensAt: new Date(now - 3600_000),
     entryClosesAt: new Date(now - 120_000),
     qualifierStartsAt: new Date(now - 30_000),

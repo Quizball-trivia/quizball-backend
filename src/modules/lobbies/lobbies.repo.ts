@@ -425,6 +425,7 @@ export const lobbiesRepo = {
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -449,6 +450,7 @@ export const lobbiesRepo = {
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -468,6 +470,7 @@ export const lobbiesRepo = {
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -495,6 +498,7 @@ export const lobbiesRepo = {
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${exclusionClause}
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -519,6 +523,7 @@ export const lobbiesRepo = {
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type = 'mcq_single'
       GROUP BY c.id
@@ -540,6 +545,7 @@ export const lobbiesRepo = {
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
+        AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id

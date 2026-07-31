@@ -29,6 +29,7 @@ export interface CreateQuestionData {
   type: string;
   difficulty: string;
   status?: string;
+  visibility?: 'public' | 'wl_private';
   prompt: I18nField;
   explanation?: I18nField | null;
   payload?: Json;
@@ -40,6 +41,7 @@ export interface UpdateQuestionData {
   type?: string;
   difficulty?: string;
   status?: string;
+  visibility?: 'public' | 'wl_private';
   prompt?: I18nField;
   explanation?: I18nField | null;
   payload?: Json;
@@ -49,6 +51,8 @@ export interface ListQuestionsFilter {
   categoryId?: string;
   status?: string;
   rankedEligible?: boolean;
+  /** 'public' hides Weekend League competition content from player reads. */
+  visibility?: 'public' | 'wl_private';
   difficulty?: string;
   type?: string;
   mcqImage?: 'with' | 'without';
@@ -77,6 +81,9 @@ export const questionsRepo = {
     const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
     const rankedEligibleFilter = filter?.rankedEligible !== undefined
       ? sql`AND q.ranked_eligible = ${filter.rankedEligible}`
+      : sql``;
+    const visibilityFilter = filter?.visibility
+      ? sql`AND q.visibility = ${filter.visibility}`
       : sql``;
     const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
     const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
@@ -143,6 +150,7 @@ export const questionsRepo = {
       ${categoryFilter}
       ${statusFilter}
       ${rankedEligibleFilter}
+      ${visibilityFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}
@@ -162,6 +170,7 @@ export const questionsRepo = {
       ${categoryFilter}
       ${statusFilter}
       ${rankedEligibleFilter}
+      ${visibilityFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}
@@ -205,12 +214,13 @@ export const questionsRepo = {
 
   async create(data: CreateQuestionData): Promise<Question> {
     const [question] = await sql<Question[]>`
-      INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
+      INSERT INTO questions (category_id, type, difficulty, status, visibility, prompt, explanation, created_by)
       VALUES (
         ${data.categoryId},
         ${data.type},
         ${data.difficulty},
         ${data.status ?? 'draft'},
+        ${data.visibility ?? 'public'},
         ${sql.json(data.prompt as unknown as Json)},
         ${data.explanation ? sql.json(data.explanation as unknown as Json) : null},
         ${data.createdBy ?? null}
@@ -233,12 +243,13 @@ export const questionsRepo = {
       // tagged-template call signatures; the runtime object still supports them.
       const tx = transaction as unknown as typeof sql;
       const [question] = await tx<Question[]>`
-        INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
+        INSERT INTO questions (category_id, type, difficulty, status, visibility, prompt, explanation, created_by)
         VALUES (
           ${data.categoryId},
           ${data.type},
           ${data.difficulty},
           ${data.status ?? 'draft'},
+          ${data.visibility ?? 'public'},
           ${sql.json(data.prompt as unknown as Json)},
           ${data.explanation ? sql.json(data.explanation as unknown as Json) : null},
           ${data.createdBy ?? null}
@@ -275,6 +286,7 @@ export const questionsRepo = {
         type = CASE WHEN ${data.type !== undefined} THEN ${data.type ?? ''} ELSE type END,
         difficulty = CASE WHEN ${data.difficulty !== undefined} THEN ${data.difficulty ?? ''} ELSE difficulty END,
         status = CASE WHEN ${data.status !== undefined} THEN ${data.status ?? ''} ELSE status END,
+        visibility = CASE WHEN ${data.visibility !== undefined} THEN ${data.visibility ?? ''} ELSE visibility END,
         prompt = CASE WHEN ${data.prompt !== undefined} THEN ${sql.json(data.prompt as unknown as Json)}::jsonb ELSE prompt END,
         explanation = CASE WHEN ${data.explanation !== undefined} THEN ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}::jsonb ELSE explanation END,
         updated_at = NOW()
@@ -321,6 +333,7 @@ export const questionsRepo = {
           type = CASE WHEN ${data.type !== undefined} THEN ${data.type ?? ''} ELSE type END,
           difficulty = CASE WHEN ${data.difficulty !== undefined} THEN ${data.difficulty ?? ''} ELSE difficulty END,
           status = CASE WHEN ${data.status !== undefined} THEN ${data.status ?? ''} ELSE status END,
+          visibility = CASE WHEN ${data.visibility !== undefined} THEN ${data.visibility ?? ''} ELSE visibility END,
           prompt = CASE WHEN ${data.prompt !== undefined} THEN ${data.prompt ? sql.json(data.prompt as unknown as Json) : null}::jsonb ELSE prompt END,
           explanation = CASE WHEN ${data.explanation !== undefined} THEN ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}::jsonb ELSE explanation END,
           updated_at = NOW()

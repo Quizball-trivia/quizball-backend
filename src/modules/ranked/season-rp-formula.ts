@@ -14,6 +14,7 @@
  */
 
 import type { PlacementStatus, RankedTier } from '../ranked/ranked.types.js';
+import { qpForResult } from '../weekend-league/wl-week.js';
 
 export type WinnerDecision =
   | 'goals'
@@ -117,6 +118,13 @@ export interface ParticipantSettlement {
   placementPerfScore: number | null;
   calculationMethod: 'placement_seed' | 'ranked_formula';
   coinsAwarded: number;
+  /**
+   * Weekend League qualification points earned by this result (win 25 / loss
+   * 10), humans only — the same gate as coins, so bots and ephemeral AI never
+   * accrue QP. Whether the points actually land is decided at write time by
+   * the match's ended_at falling inside the Mon–Fri accrual window.
+   */
+  qpAwarded: number;
 }
 
 // Season 2 curve — recalibrated from Season 1 prod data (94 GOATs, 49 players
@@ -197,6 +205,7 @@ export function computeParticipantSettlement(
   const coinsAwarded = input.isHumanForCoins
     ? (input.isWin ? RANKED_WIN_COINS : RANKED_LOSS_COINS)
     : 0;
+  const qpAwarded = input.isHumanForCoins ? qpForResult(result) : 0;
 
   return {
     newRp,
@@ -218,5 +227,6 @@ export function computeParticipantSettlement(
     placementPerfScore,
     calculationMethod,
     coinsAwarded,
+    qpAwarded,
   };
 }

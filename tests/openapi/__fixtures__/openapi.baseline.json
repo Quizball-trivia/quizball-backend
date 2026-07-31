@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8000",
       "description": "Local development"
     }
   ],
@@ -772,8 +772,8 @@
               },
               "previousSeasonNumber": {
                 "type": "integer",
-                "minimum": 1,
-                "nullable": true
+                "nullable": true,
+                "minimum": 1
               }
             },
             "required": [
@@ -3793,6 +3793,13 @@
               "archived"
             ]
           },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "wl_private"
+            ]
+          },
           "prompt": {
             "$ref": "#/components/schemas/I18nField"
           },
@@ -3829,6 +3836,7 @@
           "type",
           "difficulty",
           "status",
+          "visibility",
           "prompt",
           "explanation",
           "payload",
@@ -6031,6 +6039,244 @@
         },
         "required": [
           "unreadCount"
+        ]
+      },
+      "WlCurrentResponse": {
+        "type": "object",
+        "properties": {
+          "tournament": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "week_key": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "scheduled",
+                  "content_pending",
+                  "ready",
+                  "entry_open",
+                  "entry_closed",
+                  "checkin",
+                  "game_live",
+                  "break",
+                  "qualifier_done",
+                  "final_checkin",
+                  "final_live",
+                  "completed",
+                  "cancelled",
+                  "voided",
+                  "paused"
+                ]
+              },
+              "is_test": {
+                "type": "boolean"
+              },
+              "entry_opens_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "entry_closes_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "qualifier_starts_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "final_starts_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "registered_count": {
+                "type": "integer"
+              },
+              "checked_in_count": {
+                "type": "integer"
+              },
+              "launch_edition": {
+                "type": "boolean"
+              },
+              "qp_target": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "week_key",
+              "status",
+              "is_test",
+              "entry_opens_at",
+              "entry_closes_at",
+              "qualifier_starts_at",
+              "final_starts_at",
+              "registered_count",
+              "checked_in_count",
+              "launch_edition",
+              "qp_target"
+            ]
+          },
+          "you": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "entered": {
+                "type": "boolean"
+              },
+              "state": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "entered",
+                  "playing",
+                  "eliminated",
+                  "finalist",
+                  "champion",
+                  "no_show",
+                  "withdrawn",
+                  "disqualified",
+                  "cancelled"
+                ]
+              },
+              "checked_in": {
+                "type": "boolean"
+              },
+              "final_checked_in": {
+                "type": "boolean"
+              },
+              "qp": {
+                "type": "object",
+                "properties": {
+                  "week_key": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "points": {
+                    "type": "integer"
+                  },
+                  "wins": {
+                    "type": "integer"
+                  },
+                  "losses": {
+                    "type": "integer"
+                  },
+                  "target": {
+                    "type": "integer"
+                  },
+                  "qualified": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "week_key",
+                  "points",
+                  "wins",
+                  "losses",
+                  "target",
+                  "qualified"
+                ]
+              }
+            },
+            "required": [
+              "entered",
+              "state",
+              "checked_in",
+              "final_checked_in",
+              "qp"
+            ]
+          }
+        },
+        "required": [
+          "tournament",
+          "you"
+        ]
+      },
+      "WlQpResponse": {
+        "type": "object",
+        "properties": {
+          "week_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "points": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          },
+          "losses": {
+            "type": "integer"
+          },
+          "target": {
+            "type": "integer"
+          },
+          "qualified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "week_key",
+          "points",
+          "wins",
+          "losses",
+          "target",
+          "qualified"
+        ]
+      },
+      "WlEnterResponse": {
+        "type": "object",
+        "properties": {
+          "entered": {
+            "type": "boolean"
+          },
+          "already_entered": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "no_tournament",
+              "window_closed",
+              "not_qualified"
+            ]
+          }
+        },
+        "required": [
+          "entered",
+          "already_entered"
+        ]
+      },
+      "WlCheckinResponse": {
+        "type": "object",
+        "properties": {
+          "checked_in": {
+            "type": "boolean"
+          },
+          "already_checked_in": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "no_tournament",
+              "window_closed",
+              "not_entered",
+              "not_finalist"
+            ]
+          }
+        },
+        "required": [
+          "checked_in",
+          "already_checked_in"
         ]
       },
       "Announcement": {
@@ -9966,8 +10212,8 @@
                         },
                         "previousSeasonNumber": {
                           "type": "integer",
-                          "minimum": 1,
-                          "nullable": true
+                          "nullable": true,
+                          "minimum": 1
                         }
                       },
                       "required": [
@@ -15384,6 +15630,13 @@
                       "archived"
                     ]
                   },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "wl_private"
+                    ]
+                  },
                   "prompt": {
                     "$ref": "#/components/schemas/I18nField"
                   },
@@ -15574,6 +15827,13 @@
                       "draft",
                       "published",
                       "archived"
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "wl_private"
                     ]
                   },
                   "prompt": {
@@ -15801,6 +16061,13 @@
                             "draft",
                             "published",
                             "archived"
+                          ]
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "wl_private"
                           ]
                         },
                         "prompt": {
@@ -18261,6 +18528,146 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnreadCountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/current": {
+      "get": {
+        "summary": "Current Weekend League tournament + the caller's standing",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament phase, timestamps, counts, entry and QP",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlCurrentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/qp": {
+      "get": {
+        "summary": "Caller's qualification points for the active week",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "QP total, W/L and qualification state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlQpResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/enter": {
+      "post": {
+        "summary": "Claim entry into the open tournament",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entry outcome (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlEnterResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/checkin": {
+      "post": {
+        "summary": "Check in during the pre-kickoff window (Saturday or final)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Check-in outcome (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlCheckinResponse"
                 }
               }
             }

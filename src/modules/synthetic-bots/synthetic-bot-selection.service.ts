@@ -290,18 +290,14 @@ export const syntheticBotSelectionService = {
       // Was the band actually populated before this match's own seats were
       // excluded? If so the roster covers this RP fine and the miss is purely
       // exclusion, not coverage.
-      const inBandBeforeExclusion = excluded.size > 0
-        ? orderByNearestRp(eligible, targetRp).length
-        : 0;
-      const relaxation = inBandBeforeExclusion > 0 ? 'all_excluded' : 'no_bot_in_rp_band';
-      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation });
+      // No auction-style exclusion set exists on this branch (auction is not on
+      // main); every miss here is a genuine RP-coverage hole.
+      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'no_bot_in_rp_band' });
       logger.info(
         {
           humanUserId: params.humanUserId,
           targetRp,
           eligibleCount: eligible.length,
-          selectableCount: selectable.length,
-          excludedCount: excluded.size,
           maxRpGap: config.BOT_PAIRING_MAX_RP_GAP,
         },
         'persistent-bot selection: no bot within RP band, ephemeral fallback',

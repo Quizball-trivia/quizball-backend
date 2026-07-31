@@ -508,3 +508,14 @@ describe('session-preference first rung (finding #10)', () => {
     expect(result?.relaxationLevel).toBe('relax_session_preference');
   });
 });
+
+describe('selectionTargetRpForHuman clamp fix (INC: 4900-RP human drew a 2403 bot)', () => {
+  it('placed high-RP humans target their real RP, not the 2700 ephemeral anchor cap', async () => {
+    const { selectionTargetRpForHuman } = await import('../../src/modules/ranked/ranked.service.js');
+    const placed = (rp: number) => ({ rp, placement_status: 'placed', placement_played: 3, placement_wins: 2 }) as any;
+    expect(selectionTargetRpForHuman(placed(4900))).toBe(4900);
+    expect(selectionTargetRpForHuman(placed(3585))).toBe(3575);
+    expect(selectionTargetRpForHuman(placed(1200))).toBe(1200);
+    expect(selectionTargetRpForHuman(placed(0))).toBe(150);
+  });
+});

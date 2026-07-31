@@ -56,8 +56,8 @@ function payloadFullyBilingual(prompt: unknown, payload: unknown): boolean {
     if (node == null || typeof node !== 'object') return true;
     if (Array.isArray(node)) return node.every(walk);
     const record = node as Record<string, unknown>;
-    // An object with an `en` key is an i18n field — require ka too.
-    if ('en' in record) return hasBothLocales(record);
+    // An object with EITHER locale key is an i18n field — require both.
+    if ('en' in record || 'ka' in record) return hasBothLocales(record);
     return Object.values(record).every(walk);
   };
   return walk(payload);
@@ -75,11 +75,18 @@ async function drawSources(
   kind: WlRoundKind,
   need: number,
   allowPublicBank: boolean,
-  deterministic: boolean
+  deterministic: boolean,
+  pagingSeed: string
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
   const minMatchups = kind === 'higher_lower' ? 3 : 0;
-  const order = deterministic ? sql`md5(q.id::text)` : sql`RANDOM()`;
+  // Stable within one seeding pass: RANDOM() would reshuffle every page,
+  // repeating and skipping rows across OFFSETs. The per-tournament seed
+  // keeps selection pseudo-random ACROSS tournaments yet deterministic
+  // within this draw.
+  const order = deterministic
+    ? sql`md5(q.id::text)`
+    : sql`md5(q.id::text || ${pagingSeed})`;
   const visibility = allowPublicBank
     ? sql`q.visibility IN ('wl_private', 'public')`
     : sql`q.visibility = 'wl_private'`;
@@ -208,7 +215,7 @@ export async function wlSeedTournamentContent(input: {
   const shortages: WlSeedResult['shortages'] = {};
   for (const kind of WL_ROUND_ORDER) {
     const need = wlSourceNeedPerKind(kind);
-    const rows = await drawSources(kind, need, input.allowPublicBank, input.deterministic ?? false);
+    const rows = await drawSources(kind, need, input.allowPublicBank, input.deterministic ?? false, input.tournamentId);
     if (rows.length < need) {
       shortages[kind] = { need, have: rows.length };
     }

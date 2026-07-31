@@ -183,7 +183,7 @@ export const wlLiveEngineInternals = {
       RETURNING attempt_id
     `;
     if (run.length === 0) return false; // live run already exists for the slot
-    await wlEventsRepo.append(db, {
+    const seq = await wlEventsRepo.append(db, {
       tournamentId,
       type: 'dispatch',
       payload: {
@@ -197,6 +197,10 @@ export const wlLiveEngineInternals = {
       },
       redisTimeMs: redisNow,
     });
+    await db`
+      UPDATE wl_question_runs SET dispatched_seq = ${seq}
+      WHERE attempt_id = ${run[0]!.attempt_id}
+    `;
     return true;
   },
 
@@ -274,29 +278,66 @@ export const wlLiveEngineInternals = {
     reason: string,
     fence?: { seq: number; claimToken: string }
   ): Promise<boolean> {
+    // Close the Redis window FIRST: after this, no accept can succeed for
+    // the attempt (the accept script checks the closed marker atomically),
+    // so an answer can never be acknowledged after its attempt was voided.
+    // Already-accepted answers are snapshotted and persisted below for
+    // audit — the void event supersedes their acks client-side (a voided
+    // attempt scores nobody, equally).
+    const redis = wlRedis();
+    const rawFlat = await redis.eval(CLOSE_SCRIPT, {
+      keys: [answersKey(tournamentId, attemptId), closedKey(tournamentId, attemptId)],
+      arguments: [String(REDIS_TTL_SECONDS)],
+    }) as string[];
+    const raw: Record<string, string> = {};
+    for (let i = 0; i + 1 < rawFlat.length; i += 2) raw[rawFlat[i]!] = rawFlat[i + 1]!;
+
+    class VoidLost extends Error {}
     let voided = false;
-    await sql.begin(async (tx) => {
-      const txSql = tx as unknown as typeof sql;
-      if (fence) {
-        const aborted = await txSql`
-          UPDATE wl_events
-          SET aborted_at = NOW(), last_error = ${'void:' + reason}
-          WHERE tournament_id = ${tournamentId} AND seq = ${fence.seq}
-            AND claim_token = ${fence.claimToken}
-            AND delivered_at IS NULL AND aborted_at IS NULL AND skipped_at IS NULL
-          RETURNING seq
+    try {
+      await sql.begin(async (tx) => {
+        const txSql = tx as unknown as typeof sql;
+        if (fence) {
+          const aborted = await txSql`
+            UPDATE wl_events
+            SET aborted_at = NOW(), last_error = ${'void:' + reason}
+            WHERE tournament_id = ${tournamentId} AND seq = ${fence.seq}
+              AND claim_token = ${fence.claimToken}
+              AND delivered_at IS NULL AND aborted_at IS NULL AND skipped_at IS NULL
+            RETURNING seq
+          `;
+          // Fence lost ⇒ another claimant owns this dispatch — do NOT void.
+          if (aborted.length === 0) throw new VoidLost();
+        }
+        const runs = await txSql<WlRunRow[]>`
+          UPDATE wl_question_runs SET status = 'voided', void_reason = ${reason}
+          WHERE attempt_id = ${attemptId} AND status IN ('created', 'dispatched')
+          RETURNING attempt_id, tournament_id, game_index, round_index, question_index,
+                    question_id, status, playable_at_ms::text, deadline_at_ms::text
         `;
-        // Fence lost ⇒ another claimant owns this dispatch — do NOT void.
-        if (aborted.length === 0) return;
-      }
-      const runs = await txSql<WlRunRow[]>`
-        UPDATE wl_question_runs SET status = 'voided', void_reason = ${reason}
-        WHERE attempt_id = ${attemptId} AND status IN ('created', 'dispatched')
-        RETURNING attempt_id, tournament_id, game_index, round_index, question_index,
-                  question_id, status, playable_at_ms::text, deadline_at_ms::text
-      `;
-      const run = runs[0];
-      if (!run) return;
+        const run = runs[0];
+        // The run moved on (frozen/revealed by another path): the whole tx —
+        // INCLUDING the event abort — must roll back, never commit an abort
+        // for a question that actually played.
+        if (!run) throw new VoidLost();
+        // Audit-persist any answers accepted before the void (scored 0 by
+        // the nominal-void rule: a voided attempt never enters standings —
+        // standings aggregate only frozen/revealed runs).
+        const users = Object.keys(raw);
+        if (users.length > 0) {
+          const answers = users.map((u) => raw[u]!);
+          await txSql`
+            INSERT INTO wl_answers (
+              attempt_id, user_id, tournament_id, game_index, answer, correct,
+              points, elapsed_ms, time_charge_ms, timing_source
+            )
+            SELECT ${attemptId}, u, ${tournamentId}, ${run.game_index},
+                   (a::jsonb)->'answer', COALESCE(((a::jsonb)->>'correct')::boolean, false),
+                   0, COALESCE(((a::jsonb)->>'elapsedMs')::int, 0), 0, 'voided_audit'
+            FROM unnest(${sql.array(users)}::uuid[], ${sql.array(answers)}::text[]) AS t(u, a)
+            ON CONFLICT (attempt_id, user_id) DO NOTHING
+          `;
+        }
       await wlEventsRepo.append(txSql, {
         tournamentId,
         type: 'void',
@@ -329,8 +370,11 @@ export const wlLiveEngineInternals = {
         });
         if (next) await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
       }
-      voided = true;
-    });
+        voided = true;
+      });
+    } catch (error) {
+      if (!(error instanceof VoidLost)) throw error;
+    }
     return voided;
   },
 

@@ -119,8 +119,12 @@ export async function wlDeliverPending(
         );
       }
 
+      // Fresh clock IMMEDIATELY before the visible emission: DB latency in
+      // the enrichment above must neither skew client offsets nor shorten
+      // the spectator delay (visibility = emitNow + 30s).
+      const emitNow = await wlRedisNowMs();
       const stamped = await wlEventsRepo.markLiveEmission(
-        tournamentId, event.seq, event.claim_token, redisNow, WL_SPECTATOR_DELAY_MS
+        tournamentId, event.seq, event.claim_token, emitNow, WL_SPECTATOR_DELAY_MS
       );
       if (!stamped) break; // fence lost
 
@@ -129,7 +133,7 @@ export async function wlDeliverPending(
         tournamentId,
         seq: event.seq,
         type: event.type,
-        serverNowAtEmit: redisNow,
+        serverNowAtEmit: emitNow,
       } as never);
 
       if (event.type === 'dispatch' && typeof outPayload['deadlineAt'] === 'number') {

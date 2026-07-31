@@ -330,7 +330,21 @@ export const wlEngineLive: WlEngine = {
       if (frontier.status === 'dispatched') {
         const deadline = Number(frontier.deadline_at_ms);
         if (Number.isFinite(deadline) && redisNow >= deadline) {
-          await wlLiveEngineInternals.freezeAndReveal(t.id, frontier as never, redisNow);
+          // Freeze ONLY a question players actually received: the dispatch
+          // event must be terminally delivered. An undelivered stale
+          // dispatch belongs to the deliverer, which voids it to a reserve —
+          // freezing it would reveal a question nobody saw and charge every
+          // participant a miss.
+          const [delivered] = await sql<Array<{ ok: boolean }>>`
+            SELECT (e.delivered_at IS NOT NULL) AS ok
+            FROM wl_question_runs r
+            JOIN wl_events e
+              ON e.tournament_id = r.tournament_id AND e.seq = r.dispatched_seq
+            WHERE r.attempt_id = ${frontier.attempt_id}
+          `;
+          if (delivered?.ok) {
+            await wlLiveEngineInternals.freezeAndReveal(t.id, frontier as never, redisNow);
+          }
         }
         return;
       }

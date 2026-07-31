@@ -424,9 +424,37 @@ function ceilingSuccessGate(
   params: BotModelParams,
   keys: { botId: string; matchId: string; questionId: string },
   subkey: string,
+  probability?: number,
 ): boolean {
-  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:${subkey}:gate:${params.source.batchId}`);
-  return next() < ceilingScoreFraction(params);
+  // JSON tuple encoding: unambiguous even if an identifier ever contained the
+  // separator character (concatenation would alias {"a:b","c"} with {"a","b:c"}).
+  const next = seededStream(
+    JSON.stringify([keys.botId, keys.matchId, keys.questionId, subkey, 'gate', params.source.batchId]),
+  );
+  const p = probability ?? ceilingScoreFraction(params);
+  // Quantize p DOWNWARD to the generator's 2^-32 grid: comparing a uint32-derived
+  // uniform against an un-quantized p rounds the effective probability UP by as
+  // much as 2^-32, nudging E[score] a hair ABOVE the ceiling. Flooring keeps the
+  // "never above" invariant exact rather than approximately true.
+  return next() < Math.floor(p * 2 ** 32) / 2 ** 32;
+}
+
+/**
+ * The solve probability that makes E[score] land at (never above) the ceiling for
+ * a solve that would otherwise score `scoreIfSolved`. A non-solve scores 0, so
+ * E[score] = p * scoreIfSolved; requiring E[score] ≤ ceilingScore gives
+ * p ≤ ceilingScore / scoreIfSolved. Scores at/below the ceiling need no gate (p=1).
+ *
+ * This is what lets a bot solve at the SAME reveal index a human does (index 0 is
+ * where 21,618 of 21,619 measured human clue solves land) while keeping the
+ * ceiling invariant: realism moves into the SOLVE RATE instead of being faked by
+ * an artificially deep reveal index.
+ */
+function ceilingGateProbability(params: BotModelParams, scoreIfSolved: number): number {
+  if (scoreIfSolved <= 0) return 1;
+  const ceilScore = ceilingScoreFraction(params) * 100;
+  if (scoreIfSolved <= ceilScore + 1e-9) return 1;
+  return clamp(ceilScore / scoreIfSolved, 0, 1);
 }
 
 /**
@@ -494,27 +522,53 @@ export function decidePutInOrderCorrectCount(
   } else {
     count = Math.round(totalItems * cappedSkillFraction(params, inputs));
   }
-  return clamp(count, 0, maxPutInOrderMatchedForCeiling(params, totalItems));
+  count = clamp(count, 0, Math.max(0, totalItems));
+
+  // Full credit is REACHABLE (humans do it: 280 of 22,273 measured orderings were
+  // perfect), but a perfect placement scores 100 > ceiling, so it is gated rather
+  // than truncated: E[score] = p * putInOrderScore(count) ≤ ceiling. Truncating to
+  // maxPutInOrderMatchedForCeiling made a perfect ordering structurally
+  // impossible, which also made put-in-order "correct" unreachable for a bot.
+  //
+  // The gate is all-or-nothing (fail → 0). Falling back to the largest ungated
+  // count would ADD score on the failure branch, making
+  // E[score] = p*100 + (1-p)*83 exceed the ceiling — the gate only bounds
+  // E[score] when the complement scores 0.
+  const scoreIfPlaced = putInOrderScore(count, totalItems);
+  const gateP = ceilingGateProbability(params, scoreIfPlaced);
+  if (gateP >= 1) return count; // already at/under the ceiling: never gated
+  return ceilingSuccessGate(params, keys, 'pio', gateP) ? count : 0;
 }
 
 /**
- * The largest put-in-order matched-position count whose SCORE (20 pts/position,
- * capped 100, via calculatePutInOrderScore) stays at/under the ceiling. This is
- * what stops 5/6 → 100 pts from defeating a raw-fraction cap.
+ * The largest put-in-order matched-position count whose SCORE stays at/under the
+ * ceiling, using the REAL proportional scoring (calculatePutInOrderScore:
+ * round(matched/total * 100)). The previous `m * 20` mirror only coincided with
+ * the real formula at totalItems === 5; at totalItems === 4 it scored a perfect
+ * 4/4 as 80 while the engine awards 100, so the "cap" silently admitted a
+ * ceiling-breaching 100. Retained as the "largest count that needs no gate at
+ * all" threshold helper (decidePutInOrderCorrectCount now gates instead of
+ * truncating).
  */
 export function maxPutInOrderMatchedForCeiling(params: BotModelParams, totalItems: number): number {
   const maxScore = ceilingScoreFraction(params) * 100;
   const total = Math.max(0, totalItems);
   let best = 0;
   for (let m = 0; m <= total; m += 1) {
-    const score = Math.min(m * 20, 100);
-    if (score <= maxScore + 1e-9) best = m;
+    if (putInOrderScore(m, total) <= maxScore + 1e-9) best = m;
     else break;
   }
-  // With the 20-pt/position step and a ≥50% ceiling, m=1 (→20 pts) always passes
-  // for totalItems ≥ 1, so `best` is never a false 0 here; full credit is
-  // reachable on a 1-item question (score 20 ≤ ceiling). No coarse gate needed.
   return best;
+}
+
+/**
+ * Put-in-order SCORE mirror of calculatePutInOrderScore — proportional matched/
+ * total, rounded, capped 100. Kept local so this module stays IO/dep-free.
+ */
+function putInOrderScore(matched: number, totalItems: number): number {
+  if (totalItems <= 0) return 0;
+  const raw = (clamp(matched, 0, totalItems) / totalItems) * 100;
+  return clamp(Math.round(raw), 0, 100);
 }
 
 /** Clue SCORE mirror of calculateCluesScore (max(20, 100 − index*20), 0 if wrong). */
@@ -540,14 +594,6 @@ export function decideClue(
   keys: { botId: string; matchId: string; questionId: string },
 ): { solved: boolean; index: number } {
   const maxIndex = Math.max(0, clueCount - 1);
-  const ceilScore = ceilingScoreFraction(params) * 100;
-
-  // If even the deepest reveal (maxIndex) scores above the ceiling, no reveal
-  // index is safe — gate the solve so E[score] ≤ ceiling.
-  if (clueScore(true, maxIndex) > ceilScore + 1e-9) {
-    const solved = ceilingSuccessGate(params, keys, 'clue');
-    return { solved, index: maxIndex };
-  }
 
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:clue:${params.source.batchId}`);
   let index: number;
@@ -557,16 +603,32 @@ export function decideClue(
     const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
   }
-  // Floor the reveal index so the resulting SCORE stays at/under the ceiling
-  // (index 0 → 100 pts would defeat the cap when 100 > ceiling).
-  const minIndex = Math.min(minClueIndexForCeiling(params), maxIndex);
-  return { solved: true, index: clamp(index, minIndex, maxIndex) };
+  index = clamp(index, 0, maxIndex);
+
+  // The reveal index is NOT floored: a bot solves at the same index a human does
+  // (measured: 21,618/21,619 human solves land on index 0). The ceiling is held
+  // by gating the SOLVE RATE instead — E[score] = p * clueScore(index) ≤ ceiling.
+  // Flooring the index was the robotic tell: it forced every solve to index ≥ 1,
+  // i.e. ≥10s of clue-slice offset, which no real player exhibits.
+  const solved = ceilingSuccessGate(
+    params,
+    keys,
+    'clue',
+    ceilingGateProbability(params, clueScore(true, index)),
+  );
+  return { solved, index };
 }
 
 /**
  * The smallest clue reveal index whose SCORE (calculateCluesScore = max(20,
- * 100 − index*20)) stays at/under the ceiling. Solving-instantly (index 0 →
- * 100) is disallowed when 100 exceeds the ceiling-equivalent score.
+ * 100 − index*20)) stays at/under the ceiling — i.e. the shallowest reveal that
+ * needs NO solve gate.
+ *
+ * NO LONGER a floor on the reveal index. decideClue used to clamp every solve up
+ * to this index, which forced a ≥10s clue-slice offset on every bot solve and was
+ * the robotic timing tell. The ceiling is now held by gating the solve rate
+ * (ceilingGateProbability), so index 0 is reachable. Retained as a diagnostic /
+ * threshold helper.
  */
 export function minClueIndexForCeiling(params: BotModelParams): number {
   const maxScore = ceilingScoreFraction(params) * 100;

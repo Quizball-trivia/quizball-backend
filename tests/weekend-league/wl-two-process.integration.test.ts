@@ -46,7 +46,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (!available) return;
+  if (!available) {
+    if (lockConn) {
+      await lockConn`SELECT pg_advisory_unlock(${WL_TEST_LOCK})`.catch(() => {});
+      lockConn.release();
+    }
+    return;
+  }
   await deleteAutoCreatedRealTournaments();
   if (testTournamentIds.length > 0) {
     await sql`DELETE FROM wl_tournaments WHERE id = ANY(${sql.array(testTournamentIds)}::uuid[])`;
@@ -63,10 +69,10 @@ afterAll(async () => {
   await sql.end({ timeout: 5 });
 });
 
-function spawnTicker(tournamentId: string, iterations: number, intervalMs: number): ChildProcess {
+function spawnTicker(iterations: number, intervalMs: number): ChildProcess {
   const tsx = path.resolve('node_modules/.bin/tsx');
   const script = path.resolve('tests/weekend-league/helpers/wl-ticker-child.ts');
-  return spawn(tsx, [script, tournamentId, String(iterations), String(intervalMs)], {
+  return spawn(tsx, [script, String(iterations), String(intervalMs)], {
     env: {
       ...process.env,
       NODE_ENV: 'local',
@@ -89,7 +95,7 @@ describe('WL two-process orchestration', () => {
     if (!available) skip();
 
     const now = Date.now();
-    const created = await repo.create({
+    const created = await repo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
       config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000 }),
@@ -97,6 +103,7 @@ describe('WL two-process orchestration', () => {
       entryClosesAt: new Date(now - 120_000),
       qualifierStartsAt: new Date(now - 30_000),
       finalStartsAt: new Date(now - 1_000),
+      redisTimeMs: now,
       status: 'scheduled',
     });
     if (!created) throw new Error('create failed');
@@ -114,8 +121,8 @@ describe('WL two-process orchestration', () => {
       `;
     }
 
-    const childA = spawnTicker(created.id, 60, 100);
-    const childB = spawnTicker(created.id, 60, 100);
+    const childA = spawnTicker(60, 100);
+    const childB = spawnTicker(60, 100);
     // Ungraceful death mid-run: B dies, A must finish the job alone.
     setTimeout(() => childB.kill('SIGKILL'), 700);
 

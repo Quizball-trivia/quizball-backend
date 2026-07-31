@@ -31,9 +31,10 @@ export interface WlQpRow {
 
 export const weekendLeagueRepo = {
   /**
-   * The one tournament the product surfaces: the newest non-terminal row.
-   * Real tournaments win over test rows so a forgotten staging test can never
-   * shadow the weekly event.
+   * The one tournament the product surfaces: the CHRONOLOGICALLY applicable
+   * non-terminal row — the ongoing/soonest event (earliest final), never
+   * simply the newest-created (early creation of next week's row must not
+   * shadow the event currently running). Real tournaments win over test rows.
    */
   async getCurrentTournament(): Promise<WlTournamentRow | null> {
     const [row] = await sql<WlTournamentRow[]>`
@@ -42,7 +43,7 @@ export const weekendLeagueRepo = {
              qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments
       WHERE status NOT IN ('completed', 'cancelled', 'voided')
-      ORDER BY is_test ASC, created_at DESC
+      ORDER BY is_test ASC, final_starts_at ASC NULLS LAST, created_at DESC
       LIMIT 1
     `;
     return row ?? null;

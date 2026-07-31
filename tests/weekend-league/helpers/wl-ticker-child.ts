@@ -4,7 +4,7 @@
  * emissions go to a sink — the harness asserts on the DB's delivery truth.
  */
 import { initRedisClients } from '../../../src/realtime/redis.js';
-import { wlAdvanceOneTournament } from '../../../src/modules/weekend-league/wl-orchestrator.js';
+import { wlRunLockedTick } from '../../../src/modules/weekend-league/wl-orchestrator.js';
 import type { QuizballServer } from '../../../src/realtime/socket-server.js';
 
 const sinkIo = {
@@ -13,15 +13,17 @@ const sinkIo = {
   },
 } as unknown as QuizballServer;
 
-const tournamentId = process.argv[2] ?? '';
-const iterations = Number(process.argv[3] ?? 40);
-const intervalMs = Number(process.argv[4] ?? 150);
-if (!tournamentId) throw new Error('tournamentId argv required');
+const iterations = Number(process.argv[2] ?? 40);
+const intervalMs = Number(process.argv[3] ?? 150);
 
 await initRedisClients();
 for (let i = 0; i < iterations; i += 1) {
   try {
-    await wlAdvanceOneTournament(sinkIo, tournamentId);
+    // The PRODUCTION locked entrypoint (strict Redis lock + heartbeat).
+    // createWeekly stays off: WL_ORCHESTRATION_ENABLED is false in tests, and
+    // the harness only ever owns the tournaments the parent created (the
+    // advisory file lock in the parent serializes WL test files).
+    await wlRunLockedTick(sinkIo, { createWeekly: false });
   } catch (error) {
     console.error('tick failed', error);
   }

@@ -6,6 +6,7 @@
 
 import { sql } from '../../db/index.js';
 import { wlEventsRepo } from './wl-events.repo.js';
+import { wlCanTransition } from './wl-phase.js';
 import type { WlTournamentStatus } from './weekend-league.schemas.js';
 import type { WlTournamentConfig } from './wl-config.js';
 
@@ -56,6 +57,12 @@ export const wlOrchestratorRepo = {
     setPausedFrom?: WlTournamentStatus | null;
     cancelledReason?: string;
   }): Promise<boolean> {
+    // The pure phase machine is the law — persistence refuses transitions it
+    // does not allow (ops cannot pause/cancel a completed tournament, the
+    // engine cannot skip phases).
+    if (!wlCanTransition(input.from, input.to)) {
+      throw new Error(`WL transition not allowed: ${input.from} -> ${input.to}`);
+    }
     let performed = false;
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
@@ -109,7 +116,13 @@ export const wlOrchestratorRepo = {
     return performed;
   },
 
-  async create(input: {
+  /**
+   * Row + its seq-1 creation event in ONE transaction, so a crash can never
+   * leave a durable tournament with an empty event stream. ON CONFLICT: the
+   * weekly-creation race between replicas resolves to a single row via the
+   * partial unique index on week_key (real rows only).
+   */
+  async createWithInitialEvent(input: {
     weekKey: string | null;
     isTest: boolean;
     config: WlTournamentConfig;
@@ -117,25 +130,36 @@ export const wlOrchestratorRepo = {
     entryClosesAt: Date;
     qualifierStartsAt: Date;
     finalStartsAt: Date;
+    redisTimeMs: number;
     status?: WlTournamentStatus;
   }): Promise<WlOrchestratorTournament | null> {
-    // ON CONFLICT: the weekly-creation race between replicas resolves to a
-    // single row via the partial unique index on week_key (real rows only).
-    const rows = await sql<WlOrchestratorTournament[]>`
-      INSERT INTO wl_tournaments (
-        week_key, is_test, status, config,
-        entry_opens_at, entry_closes_at, qualifier_starts_at, final_starts_at
-      )
-      VALUES (
-        ${input.weekKey}, ${input.isTest}, ${input.status ?? 'scheduled'},
-        ${sql.json(input.config as never)},
-        ${input.entryOpensAt}, ${input.entryClosesAt},
-        ${input.qualifierStartsAt}, ${input.finalStartsAt}
-      )
-      ON CONFLICT DO NOTHING
-      RETURNING ${TOURNAMENT_COLUMNS}
-    `;
-    return rows[0] ?? null;
+    let created: WlOrchestratorTournament | null = null;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const rows = await txSql<WlOrchestratorTournament[]>`
+        INSERT INTO wl_tournaments (
+          week_key, is_test, status, config,
+          entry_opens_at, entry_closes_at, qualifier_starts_at, final_starts_at
+        )
+        VALUES (
+          ${input.weekKey}, ${input.isTest}, ${input.status ?? 'scheduled'},
+          ${sql.json(input.config as never)},
+          ${input.entryOpensAt}, ${input.entryClosesAt},
+          ${input.qualifierStartsAt}, ${input.finalStartsAt}
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING ${TOURNAMENT_COLUMNS}
+      `;
+      if (rows.length === 0) return;
+      await wlEventsRepo.append(txSql, {
+        tournamentId: rows[0]!.id,
+        type: 'phase',
+        payload: { from: null, to: rows[0]!.status, created: true },
+        redisTimeMs: input.redisTimeMs,
+      });
+      created = rows[0]!;
+    });
+    return created;
   },
 
   async getById(id: string): Promise<WlOrchestratorTournament | null> {

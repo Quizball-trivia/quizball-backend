@@ -11,5 +11,6 @@ router.post('/pause', wlOpsController.pause);
 router.post('/resume', wlOpsController.resume);
 router.post('/cancel', wlOpsController.cancel);
 router.post('/force-tick', wlOpsController.forceTick);
+router.post('/skip-poison-event', wlOpsController.skipPoisonEvent);
 
 export const wlOpsRoutes = router;

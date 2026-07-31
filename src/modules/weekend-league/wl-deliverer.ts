@@ -58,6 +58,10 @@ export async function wlDeliverPending(io: QuizballServer, tournamentId: string)
     if (!event) break; // another replica holds the lease
 
     try {
+      // Renew the lease immediately before the visible side effect: a lost
+      // fence here means another claimant owns the seq — do NOT emit.
+      const renewed = await wlEventsRepo.renewLease(tournamentId, event.seq, event.claim_token);
+      if (!renewed) break;
       const redisNow = await wlRedisNowMs();
       const stamped = await wlEventsRepo.markLiveEmission(
         tournamentId, event.seq, event.claim_token, redisNow, WL_SPECTATOR_DELAY_MS
@@ -66,10 +70,11 @@ export async function wlDeliverPending(io: QuizballServer, tournamentId: string)
 
       io.to(wlPlayersRoom(tournamentId)).emit(publicEventName(event), {
         ...event.payload,
+        tournamentId,
         seq: event.seq,
         type: event.type,
         serverNowAtEmit: redisNow,
-      });
+      } as never);
 
       const done = await wlEventsRepo.markDelivered(tournamentId, event.seq, event.claim_token);
       if (!done) break; // fence lost after emit — client seq-dedup absorbs the retry
@@ -98,11 +103,12 @@ export async function wlDeliverSpectator(io: QuizballServer, tournamentId: strin
   for (const event of due) {
     io.to(wlSpectatorsRoom(tournamentId)).emit(publicEventName(event), {
       ...event.payload,
+      tournamentId,
       seq: event.seq,
       type: event.type,
       spectator: true,
       serverNowAtEmit: redisNow,
-    });
+    } as never);
     deliveredTo = event.seq;
   }
   if (deliveredTo > Number(tournament.spec_delivered_seq)) {

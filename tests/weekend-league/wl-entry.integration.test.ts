@@ -120,7 +120,10 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  if (!dbAvailable) return;
+  if (!dbAvailable) {
+    await releaseFileLock();
+    return;
+  }
   if (testTournamentIds.length > 0) {
     await sql`DELETE FROM wl_entries WHERE tournament_id = ANY(${sql.array(testTournamentIds)}::uuid[])`;
     await sql`DELETE FROM wl_tournaments WHERE id = ANY(${sql.array(testTournamentIds)}::uuid[])`;

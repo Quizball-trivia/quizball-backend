@@ -173,6 +173,17 @@ const configSchema = z.object({
   // Weekend League ops controls (pause/resume/cancel/test tournaments).
   // Unset = the WL ops surface is disabled entirely (404).
   WL_OPS_TOKEN: z.string().optional(),
+  // Master switch for WL orchestration: weekly REAL tournament creation and
+  // reconciler ticks. Default OFF — test tournaments via the ops API still
+  // work when the orchestrator loop is started manually (force-tick), so
+  // staging can exercise the flow before launch without auto-creating real
+  // Saturday events that the stub engine would farce-complete.
+  WL_ORCHESTRATION_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .pipe(z.boolean())
+    .optional()
+    .default('false'),
 
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),

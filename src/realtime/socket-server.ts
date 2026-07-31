@@ -8,6 +8,7 @@ import { socketAuthMiddleware, type SocketAuthData } from './socket-auth.js';
 import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
+import { registerWlHandlers } from './handlers/wl.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
@@ -591,6 +592,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerWarmupHandlers(io, socket);
     registerAuctionHandlers(io, socket);
     registerDevHandlers(io, socket);
+    registerWlHandlers(io, socket);
 
     socket.on('connection:ping', (payload, ack) => {
       ack?.({

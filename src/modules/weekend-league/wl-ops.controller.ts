@@ -18,7 +18,8 @@ import { logger } from '../../core/logger.js';
 import { NotFoundError, AuthenticationError, BadRequestError } from '../../core/errors.js';
 import { buildWlConfig, wlTournamentConfigSchema } from './wl-config.js';
 import { wlOrchestratorRepo } from './wl-orchestrator.repo.js';
-import { getWlOrchestratorIo, wlOrchestratorTick } from './wl-orchestrator.js';
+import { getWlOrchestratorIo, wlRunLockedTick } from './wl-orchestrator.js';
+import { wlEventsRepo } from './wl-events.repo.js';
 import { wlRedisNowMs } from './wl-redis.js';
 
 const createTestSchema = z.object({
@@ -30,9 +31,9 @@ const createTestSchema = z.object({
   final_starts_at: z.string().datetime().optional(),
   // …or a compressed schedule starting now (seconds per window).
   compressed: z.object({
-    entry_seconds: z.number().int().min(5).max(3600),
-    checkin_seconds: z.number().int().min(5).max(3600),
-    to_final_seconds: z.number().int().min(5).max(7200),
+    entry_seconds: z.number().int().min(10).max(3600),
+    checkin_seconds: z.number().int().min(10).max(3600),
+    to_final_seconds: z.number().int().min(10).max(7200),
   }).optional(),
   config: wlTournamentConfigSchema.partial().optional(),
 });
@@ -56,25 +57,26 @@ export const wlOpsController = {
       throw new BadRequestError('Test tournaments cannot be created in prod');
     }
     const input = createTestSchema.parse(req.body ?? {});
-    const now = Date.now();
+    const now = await wlRedisNowMs();
 
     let entryOpensAt: Date;
     let entryClosesAt: Date;
     let qualifierStartsAt: Date;
     let finalStartsAt: Date;
     if (input.compressed) {
-      const checkinWindowMs = Math.min(input.compressed.checkin_seconds, 60) * 1000;
+      // The check-in window IS the entry_closed→qualifier gap, exactly.
+      const checkinWindowMs = input.compressed.checkin_seconds * 1000;
       entryOpensAt = new Date(now - 1000);
       entryClosesAt = new Date(now + input.compressed.entry_seconds * 1000);
-      qualifierStartsAt = new Date(
-        entryClosesAt.getTime() + input.compressed.checkin_seconds * 1000
-      );
+      qualifierStartsAt = new Date(entryClosesAt.getTime() + checkinWindowMs);
       finalStartsAt = new Date(
         qualifierStartsAt.getTime() + input.compressed.to_final_seconds * 1000
       );
+      // Computed window wins over caller config — the schedule and the
+      // config MUST agree or check-in opens at the wrong moment.
       input.config = {
-        checkin_window_ms: checkinWindowMs,
         ...input.config,
+        checkin_window_ms: checkinWindowMs,
       };
     } else {
       if (
@@ -93,7 +95,7 @@ export const wlOpsController = {
       throw new BadRequestError('Timestamps must be ordered: entry open < close <= qualifier < final');
     }
 
-    const created = await wlOrchestratorRepo.create({
+    const created = await wlOrchestratorRepo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
       config: buildWlConfig({ launch_edition: true, ...input.config }),
@@ -101,6 +103,7 @@ export const wlOpsController = {
       entryClosesAt,
       qualifierStartsAt,
       finalStartsAt,
+      redisTimeMs: now,
       status: 'scheduled',
     });
     logger.info({ actor: input.actor, tournamentId: created?.id }, 'WL ops: test tournament created');
@@ -150,7 +153,29 @@ export const wlOpsController = {
     requireOpsToken(req);
     const io = getWlOrchestratorIo();
     if (!io) throw new BadRequestError('WL orchestrator not started');
-    await wlOrchestratorTick(io);
-    res.json({ ticked: true });
+    // Same strict lock as the loop — never an unlocked side-channel.
+    const ran = await wlRunLockedTick(io, { createWeekly: false });
+    res.json({ ticked: ran });
+  },
+
+  /**
+   * Recovery for a poison outbox head: verifies the tournament is paused and
+   * the given seq IS the current poison head, terminally skips it (audited
+   * via last_error + logs), then lets the queue drain on the next tick.
+   */
+  async skipPoisonEvent(req: Request, res: Response): Promise<void> {
+    requireOpsToken(req);
+    const input = actionSchema.extend({ seq: z.number().int().min(1) }).parse(req.body ?? {});
+    const t = await wlOrchestratorRepo.getById(input.tournament_id);
+    if (!t) throw new NotFoundError('Tournament not found');
+    if (t.status !== 'paused') {
+      throw new BadRequestError('Tournament must be paused before skipping events');
+    }
+    const skipped = await wlEventsRepo.skipPoisonHead(input.tournament_id, input.seq, input.actor);
+    logger.warn(
+      { actor: input.actor, tournamentId: input.tournament_id, seq: input.seq, skipped },
+      'WL ops: skip poison event'
+    );
+    res.json({ skipped });
   },
 };

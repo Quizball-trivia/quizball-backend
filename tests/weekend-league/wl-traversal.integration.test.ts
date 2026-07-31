@@ -87,7 +87,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (!available) return;
+  if (!available) {
+    await releaseFileLock();
+    return;
+  }
   if (testTournamentIds.length > 0) {
     await sql`DELETE FROM notifications WHERE source_event_key LIKE 'wl:%'
       AND (data->>'tournament_id') = ANY(${sql.array(testTournamentIds)})`;
@@ -103,7 +106,7 @@ afterAll(async () => {
 });
 
 async function createBackdatedTournament(now: number): Promise<string> {
-  const created = await repo.create({
+  const created = await repo.createWithInitialEvent({
     weekKey: null,
     isTest: true,
     config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000 }),
@@ -111,6 +114,7 @@ async function createBackdatedTournament(now: number): Promise<string> {
     entryClosesAt: new Date(now - 120_000),
     qualifierStartsAt: new Date(now - 30_000),
     finalStartsAt: new Date(now - 1_000),
+    redisTimeMs: now,
     status: 'scheduled',
   });
   if (!created) throw new Error('failed to create test tournament');

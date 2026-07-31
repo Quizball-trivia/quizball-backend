@@ -1,50 +1,57 @@
 /**
  * WL orchestrator — the single periodic driver of tournament state.
  *
- * One replica wins a strict Redis lock per tick (fail-closed: no Redis, no
- * tick) and, for every non-terminal tournament: applies due time-driven
- * transitions (CAS + outbox), runs kickoff/final adjudication, lets the
- * engine advance live games, drains the outbox to sockets, and delivers
- * spectator-due events. Interval: 5s while anything is in a live phase,
- * 15s otherwise — this cadence IS the durability story for PR2 (timers
- * become wake-up hints in PR3; recovery SLO p99 ≤ 10s).
+ * Gated by WL_ORCHESTRATION_ENABLED (default off): when disabled, the loop
+ * never starts and no REAL weekly tournament is ever created — test
+ * tournaments still run via the ops API's force-tick, which routes through
+ * the same strict lock as the loop.
  *
- * Weekly creation: inside the creation horizon the reconciler inserts the
- * next real tournament (Mon 00:00 GE entry open → Sat 14:00 qualifier →
- * Sun 14:00 final); the partial unique index on week_key makes the
- * replica race single-winner.
+ * One process at a time holds a STRICT Redis lock (no local fallback),
+ * renewed as a heartbeat between tournaments; losing the lock aborts the
+ * pass immediately. Each pass: applies due time-driven transitions
+ * (CAS + outbox in one tx, validated by the pure phase machine), runs
+ * kickoff/final adjudication, lets the engine advance live games, retries
+ * notification waves to exhaustion, and drains outbox work — including for
+ * TERMINAL tournaments, so a completed/cancelled event still reaches
+ * players and (30s later) spectators.
  */
 
 import { logger } from '../../core/logger.js';
-import { acquireLock, releaseLock } from '../../realtime/locks.js';
+import { config } from '../../core/config.js';
 import type { QuizballServer } from '../../realtime/socket-server.js';
-import { sql } from '../../db/index.js';
 import { wlDeliverPending, wlDeliverSpectator } from './wl-deliverer.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { buildWlConfig, wlConfigFrom } from './wl-config.js';
-import {
-  wlDueTransition,
-  type WlScheduleView,
-} from './wl-phase.js';
+import { wlDueTransition, type WlScheduleView } from './wl-phase.js';
 import { wlOrchestratorRepo, type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { wlRedis, wlRedisNowMs } from './wl-redis.js';
+import {
+  wlAcquireStrictLock,
+  wlReleaseStrictLock,
+  wlRenewStrictLock,
+  wlRedisNowMs,
+} from './wl-redis.js';
 import { wlEngine } from './wl-engine.adapter.js';
-import { weekKeyFor } from './wl-week.js';
+import { wlUpcomingEventSchedule } from './wl-week.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
+const LOCK_TTL_MS = 30_000;
 const IDLE_TICK_MS = 15_000;
 const LIVE_TICK_MS = 5_000;
 const CREATION_HORIZON_MS = 24 * 60 * 60 * 1000;
-const GE_OFFSET_MS = 4 * 60 * 60 * 1000;
 const LIVE_STATUSES = new Set(['checkin', 'game_live', 'break', 'final_checkin', 'final_live']);
 export const WL_MIN_FIELD = 2;
 
 let loopTimer: NodeJS.Timeout | null = null;
 let tickInFlight = false;
 let activeIo: QuizballServer | null = null;
+let lastTickHadLive = false;
 
 export function startWlOrchestrator(io: QuizballServer): void {
   activeIo = io;
+  if (!config.WL_ORCHESTRATION_ENABLED) {
+    logger.info('WL orchestrator disabled (WL_ORCHESTRATION_ENABLED=false); ops force-tick only');
+    return;
+  }
   scheduleNext(IDLE_TICK_MS);
   logger.info('WL orchestrator started');
 }
@@ -62,28 +69,18 @@ export function stopWlOrchestrator(): void {
 function scheduleNext(delayMs: number): void {
   if (loopTimer) clearTimeout(loopTimer);
   loopTimer = setTimeout(() => {
-    void runTick().finally(() => {
+    void loopTick().finally(() => {
       if (activeIo) scheduleNext(lastTickHadLive ? LIVE_TICK_MS : IDLE_TICK_MS);
     });
   }, delayMs);
   loopTimer.unref?.();
 }
 
-let lastTickHadLive = false;
-
-async function runTick(): Promise<void> {
+async function loopTick(): Promise<void> {
   if (tickInFlight || !activeIo) return;
   tickInFlight = true;
   try {
-    // Fail closed: no Redis ⇒ no lock, no time domain, no tick.
-    wlRedis();
-    const lock = await acquireLock(ORCHESTRATOR_LOCK_KEY, Math.max(IDLE_TICK_MS, 20_000));
-    if (!lock.acquired || !lock.token) return;
-    try {
-      await wlOrchestratorTick(activeIo);
-    } finally {
-      await releaseLock(ORCHESTRATOR_LOCK_KEY, lock.token).catch(() => {});
-    }
+    await wlRunLockedTick(activeIo, { createWeekly: true });
   } catch (error) {
     logger.warn({ err: error }, 'WL orchestrator tick skipped');
   } finally {
@@ -92,61 +89,103 @@ async function runTick(): Promise<void> {
 }
 
 /**
- * Advance + deliver a SINGLE tournament — the unit the full tick loops over.
- * Exported for the two-process harness (scoped, so harness processes can
- * never touch tournaments owned by other concurrently running tests).
+ * The ONE locked entrypoint — used by the loop, the ops force-tick and the
+ * two-process harness. Returns false when the lock was not acquired.
  */
+export async function wlRunLockedTick(
+  io: QuizballServer,
+  opts: { createWeekly?: boolean } = {}
+): Promise<boolean> {
+  const token = await wlAcquireStrictLock(ORCHESTRATOR_LOCK_KEY, LOCK_TTL_MS);
+  if (!token) return false;
+  try {
+    await wlOrchestratorTick(io, {
+      ...opts,
+      heartbeat: () => wlRenewStrictLock(ORCHESTRATOR_LOCK_KEY, token, LOCK_TTL_MS),
+    });
+    return true;
+  } finally {
+    await wlReleaseStrictLock(ORCHESTRATOR_LOCK_KEY, token);
+  }
+}
+
+/**
+ * One full reconcile pass. `heartbeat` is called between tournaments; a
+ * false return means the lock is lost and the pass MUST stop (another
+ * process owns the work now).
+ */
+export async function wlOrchestratorTick(
+  io: QuizballServer,
+  opts: { createWeekly?: boolean; heartbeat?: () => Promise<boolean> } = {}
+): Promise<void> {
+  const redisNow = await wlRedisNowMs();
+  if (opts.createWeekly && config.WL_ORCHESTRATION_ENABLED) {
+    await ensureUpcomingTournament(redisNow);
+  }
+
+  const active = await wlOrchestratorRepo.listActive();
+  for (const tournament of active) {
+    if (opts.heartbeat && !(await opts.heartbeat())) {
+      logger.warn('WL orchestrator lock lost mid-pass; aborting');
+      return;
+    }
+    try {
+      await advanceTournament(tournament, redisNow);
+    } catch (error) {
+      logger.error({ err: error, tournamentId: tournament.id }, 'WL tournament advance failed');
+    }
+  }
+
+  // Outbox drain — includes TERMINAL tournaments with outstanding work.
+  const pendingWork = await wlEventsRepo.listTournamentsWithPendingWork();
+  for (const tournamentId of pendingWork) {
+    if (opts.heartbeat && !(await opts.heartbeat())) {
+      logger.warn('WL orchestrator lock lost mid-drain; aborting');
+      return;
+    }
+    await wlDeliverPending(io, tournamentId);
+    await wlDeliverSpectator(io, tournamentId);
+  }
+
+  // Cadence from POST-processing state, so entering a live phase speeds the
+  // next pass up immediately.
+  const after = await wlOrchestratorRepo.listActive();
+  lastTickHadLive = after.some((t) => LIVE_STATUSES.has(t.status))
+    || pendingWork.length > 0;
+}
+
+/** Scoped advance+drain for one tournament (two-process harness). */
 export async function wlAdvanceOneTournament(io: QuizballServer, tournamentId: string): Promise<void> {
   const redisNow = await wlRedisNowMs();
   const t = await wlOrchestratorRepo.getById(tournamentId);
-  if (!t || ['completed', 'cancelled', 'voided'].includes(t.status)) return;
-  try {
-    await advanceTournament(io, t, redisNow);
-  } catch (error) {
-    logger.error({ err: error, tournamentId }, 'WL tournament advance failed');
+  if (!t) return;
+  if (!['completed', 'cancelled', 'voided'].includes(t.status)) {
+    try {
+      await advanceTournament(t, redisNow);
+    } catch (error) {
+      logger.error({ err: error, tournamentId }, 'WL tournament advance failed');
+    }
   }
   await wlDeliverPending(io, tournamentId);
   await wlDeliverSpectator(io, tournamentId);
 }
 
-/** One full reconcile pass — exported for tests and the ops force-tick. */
-export async function wlOrchestratorTick(io: QuizballServer): Promise<void> {
-  const redisNow = await wlRedisNowMs();
-  await ensureUpcomingTournament(redisNow);
-
-  const active = await wlOrchestratorRepo.listActive();
-  lastTickHadLive = active.some((t) => LIVE_STATUSES.has(t.status));
-
-  for (const tournament of active) {
-    try {
-      await advanceTournament(io, tournament, redisNow);
-    } catch (error) {
-      logger.error({ err: error, tournamentId: tournament.id }, 'WL tournament advance failed');
-    }
-    await wlDeliverPending(io, tournament.id);
-    await wlDeliverSpectator(io, tournament.id);
-  }
-}
-
 function scheduleView(t: WlOrchestratorTournament): WlScheduleView {
-  const config = wlConfigFrom(t.config);
+  const cfg = wlConfigFrom(t.config);
   return {
     status: t.status,
     entryOpensAtMs: t.entry_opens_at ? Date.parse(t.entry_opens_at) : null,
     entryClosesAtMs: t.entry_closes_at ? Date.parse(t.entry_closes_at) : null,
     qualifierStartsAtMs: t.qualifier_starts_at ? Date.parse(t.qualifier_starts_at) : null,
     finalStartsAtMs: t.final_starts_at ? Date.parse(t.final_starts_at) : null,
-    checkinWindowMs: config.checkin_window_ms,
+    checkinWindowMs: cfg.checkin_window_ms,
   };
 }
 
 async function advanceTournament(
-  _io: QuizballServer,
   t: WlOrchestratorTournament,
   redisNow: number
 ): Promise<void> {
-  // Content pipeline (PR3 brings the real seeder): scheduled rows move
-  // straight through content_pending to ready.
   if (t.status === 'scheduled') {
     await wlOrchestratorRepo.transition({
       tournamentId: t.id, from: 'scheduled', to: 'content_pending', redisTimeMs: redisNow,
@@ -163,31 +202,22 @@ async function advanceTournament(
     }
   }
 
-  // Time-driven phase boundaries.
   const due = wlDueTransition(scheduleView(t), redisNow);
   if (due) {
     const moved = await wlOrchestratorRepo.transition({
       tournamentId: t.id, from: t.status, to: due, redisTimeMs: redisNow,
     });
-    if (moved) {
-      if (due === 'checkin' && !t.is_test) {
-        // Everyone active hears the league is starting: entrants can join,
-        // the rest can spectate from the same tab.
-        void import('./wl-notifications.js').then(({ wlNotifyAllActiveUsers }) =>
-          wlNotifyAllActiveUsers(t.id, 'started', {
-            titleEn: 'Weekend League is starting!',
-            titleKa: 'უიქენდის ლიგა იწყება!',
-            bodyEn: 'Check in now if you are registered — or watch the games live.',
-            bodyKa: 'გაიარე ჩექინი თუ დარეგისტრირებული ხარ — ან უყურე თამაშებს ლაივში.',
-          })
-        ).catch((err) => logger.warn({ err, tournamentId: t.id }, 'WL started wave failed'));
-      }
-      t = await wlOrchestratorRepo.getById(t.id) ?? t;
-    }
+    if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
-  // Kickoff adjudication: at qualifier start, a big-enough checked-in field
-  // becomes game 1; a thin one cancels the event.
+  // Notification waves are reconciled EVERY pass (idempotent, resumable):
+  // a crash mid-wave simply continues next tick until candidate exhaustion.
+  if (t.status === 'checkin' && !t.is_test) {
+    const { wlEnsureStartedWave } = await import('./wl-notifications.js');
+    await wlEnsureStartedWave(t.id).catch((err: unknown) =>
+      logger.warn({ err, tournamentId: t.id }, 'WL started wave reconcile failed'));
+  }
+
   const view = scheduleView(t);
   if (
     t.status === 'checkin'
@@ -201,7 +231,13 @@ async function advanceTournament(
         cancelledReason: 'not_enough_players',
         eventPayload: { checked_in: checkedIn },
       });
-      await notifyCancellation(t.id);
+      const { wlNotifyEntrants } = await import('./wl-notifications.js');
+      await wlNotifyEntrants(t.id, 'cancelled', {
+        titleEn: 'Weekend League cancelled',
+        titleKa: 'უიქენდის ლიგა გაუქმდა',
+        bodyEn: 'Not enough players checked in this week. See you next Saturday!',
+        bodyKa: 'ამ კვირას საკმარისმა მოთამაშემ ვერ გაიარა ჩექინი. შეხვედრამდე მომავალ შაბათს!',
+      }).catch((err: unknown) => logger.warn({ err, tournamentId: t.id }, 'WL cancellation wave failed'));
       return;
     }
     const started = await wlEngine.startQualifier(t, redisNow);
@@ -214,14 +250,11 @@ async function advanceTournament(
     }
   }
 
-  // Engine-driven live flow (PR2 stub completes games immediately;
-  // PR3/PR4 replace the internals, not this seam).
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
     await wlEngine.advance(t, redisNow);
     return;
   }
 
-  // Sunday adjudication under dns_v1.
   if (
     t.status === 'final_checkin'
     && view.finalStartsAtMs != null
@@ -231,57 +264,30 @@ async function advanceTournament(
   }
 }
 
-async function notifyCancellation(tournamentId: string): Promise<void> {
-  // Recipient-idempotent wave — see wl-notifications.ts.
-  const { wlNotifyEntrants } = await import('./wl-notifications.js');
-  await wlNotifyEntrants(tournamentId, 'cancelled', {
-    titleEn: 'Weekend League cancelled',
-    titleKa: 'უიქენდის ლიგა გაუქმდა',
-    bodyEn: 'Not enough players checked in this week. See you next Saturday!',
-    bodyKa: 'ამ კვირას საკმარისმა მოთამაშემ ვერ გაიარა ჩექინი. შეხვედრამდე მომავალ შაბათს!',
-  }).catch((err) => logger.warn({ err, tournamentId }, 'WL cancellation wave failed'));
-}
-
 /**
- * Create next week's real tournament once its entry window is inside the
- * horizon. Georgia-time schedule: entry opens Monday 00:00, closes Friday
- * 12:00, qualifier Saturday 14:00, final Sunday 14:00 — all fixed UTC+4.
+ * Create the current-or-next applicable weekly event once its ENTRY OPEN is
+ * inside the horizon. The calendar function owns week attribution (Sunday
+ * belongs to the ongoing event; only a final that already started rolls to
+ * next Saturday) — a Thursday-evening or weekend deploy bootstraps the
+ * ongoing week instead of skipping to the next one.
  */
 async function ensureUpcomingTournament(nowMs: number): Promise<void> {
-  // The Saturday of the week whose Monday is <= now+horizon.
-  const probe = new Date(nowMs + CREATION_HORIZON_MS);
-  const weekKey = weekKeyFor(probe) ?? weekKeyFor(new Date(probe.getTime() + 3 * 24 * 3600_000));
-  if (!weekKey) return;
-  const existing = await wlOrchestratorRepo.getByWeekKey(weekKey);
+  const schedule = wlUpcomingEventSchedule(nowMs);
+  if (schedule.entryOpensAtMs > nowMs + CREATION_HORIZON_MS) return;
+  const existing = await wlOrchestratorRepo.getByWeekKey(schedule.weekKey);
   if (existing) return;
 
-  // weekKey is the GE Saturday date; GE wall-clock X = UTC X − 4h.
-  const saturdayMidnightUtc = new Date(`${weekKey}T00:00:00Z`).getTime() - GE_OFFSET_MS;
-  const DAY = 24 * 3600_000;
-  const qualifierStartsAt = new Date(saturdayMidnightUtc + 14 * 3600_000); // Sat 14:00 GE
-  const finalStartsAt = new Date(qualifierStartsAt.getTime() + DAY);        // Sun 14:00 GE
-  const entryClosesAt = new Date(saturdayMidnightUtc - DAY + 12 * 3600_000); // Fri 12:00 GE
-  const entryOpensAt = new Date(saturdayMidnightUtc - 5 * DAY);              // Mon 00:00 GE
-
-  const created = await wlOrchestratorRepo.create({
-    weekKey,
+  const created = await wlOrchestratorRepo.createWithInitialEvent({
+    weekKey: schedule.weekKey,
     isTest: false,
     config: buildWlConfig({ launch_edition: true }),
-    entryOpensAt,
-    entryClosesAt,
-    qualifierStartsAt,
-    finalStartsAt,
+    entryOpensAt: new Date(schedule.entryOpensAtMs),
+    entryClosesAt: new Date(schedule.entryClosesAtMs),
+    qualifierStartsAt: new Date(schedule.qualifierStartsAtMs),
+    finalStartsAt: new Date(schedule.finalStartsAtMs),
+    redisTimeMs: nowMs,
   });
   if (created) {
-    logger.info({ weekKey, tournamentId: created.id }, 'WL weekly tournament created');
-    const redisNow = await wlRedisNowMs();
-    await sql.begin(async (tx) => {
-      await wlEventsRepo.append(tx as unknown as typeof sql, {
-        tournamentId: created.id,
-        type: 'phase',
-        payload: { from: null, to: 'scheduled', created: true },
-        redisTimeMs: redisNow,
-      });
-    });
+    logger.info({ weekKey: schedule.weekKey, tournamentId: created.id }, 'WL weekly tournament created');
   }
 }

@@ -10,7 +10,7 @@ import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
-import { weekKeyFor } from '../weekend-league/wl-week.js';
+import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
   computeSeasonRpDelta,
@@ -271,6 +271,7 @@ export const rankedService = {
         coinsAwarded: 0, // tier normalization only — no reward
         qpAwarded: 0,
         qpWeekKey: null,
+        qpEndedAt: null,
       }]);
       profile.tier = normalizedTier;
     }
@@ -394,8 +395,40 @@ export const rankedService = {
     const existingByUser = new Map(existing.map((row) => [row.user_id, row]));
     const missingPlayers = settleEligiblePlayers.filter((p) => !existingByUser.has(p.user_id));
 
+    // WL QP repair for participants whose RP row PRE-dates this call: the live
+    // qp_award CTE only fires for newly inserted RP rows, so matches settled
+    // before the QP feature deployed (or the settled side of a partial
+    // settlement) would otherwise never earn QP on replay. Idempotent by PK.
+    const qpWeekKey = match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
+    const repairQpForSettledUsers = async (userIds: string[]): Promise<void> => {
+      if (!qpWeekKey || !match.ended_at || userIds.length === 0) return;
+      const humanIds = userIds.filter((id) => {
+        const user = byUserId.get(id);
+        return user != null && !user.is_ai;
+      });
+      try {
+        const repaired = await rankedRepo.repairQpFromLedger({
+          matchId,
+          weekKey: qpWeekKey,
+          endedAt: new Date(match.ended_at),
+          userIds: humanIds,
+          winPoints: WL_QP_WIN,
+          lossPoints: WL_QP_LOSS,
+        });
+        if (repaired > 0) {
+          logger.info({ matchId, qpWeekKey, repaired }, 'WL QP repaired from existing RP ledger');
+        }
+      } catch (error) {
+        // QP repair is best-effort on a read/replay path — never let it break
+        // settlement idempotency; the next replay retries it.
+        logger.warn({ err: error, matchId, qpWeekKey }, 'WL QP ledger repair failed');
+      }
+    };
+
     if (missingPlayers.length === 0) {
-      // Fully settled already — pure idempotent re-read, no writes, no analytics.
+      // Fully settled already — idempotent re-read, plus the QP repair above
+      // (the only write it can produce is a missing award row).
+      await repairQpForSettledUsers(settleEligiblePlayers.map((p) => p.user_id));
       const profiles = await rankedRepo.getProfilesByUserIds(settleEligiblePlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
       await invalidateUserRankCaches(profiles.map((profile) => ({
@@ -606,14 +639,20 @@ export const rankedService = {
     // WL QP accrues by the match's own ended_at (immutable), so a replayed or
     // late settlement credits the week the match was actually played in — and
     // a match outside the Mon–Fri window credits nothing.
-    const qpWeekKey = match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
+    const qpEndedAt = match.ended_at ? new Date(match.ended_at) : null;
     const applied = await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
       qpAwarded: entry.qpAwarded,
       qpWeekKey,
+      qpEndedAt,
     })), occurredAt);
+    // The already-settled side of a partial settlement never re-enters
+    // applySettlement — give it the same idempotent QP repair.
+    if (existing.length > 0) {
+      await repairQpForSettledUsers(existing.map((row) => row.user_id));
+    }
     // A writer that does not report an applied set (the burn-in writer's stub)
     // is treated as "everything landed", which is the pre-existing behaviour.
     const appliedUserIds = applied ?? new Set(settlementEntries.map((entry) => entry.outcome.userId));

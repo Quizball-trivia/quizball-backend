@@ -47,6 +47,16 @@ export const weekendLeagueRepo = {
     return row ?? null;
   },
 
+  async getTournamentById(id: string): Promise<WlTournamentRow | null> {
+    const [row] = await sql<WlTournamentRow[]>`
+      SELECT id, week_key::text, is_test, status, config,
+             entry_opens_at, entry_closes_at, qualifier_starts_at, final_starts_at
+      FROM wl_tournaments
+      WHERE id = ${id}
+    `;
+    return row ?? null;
+  },
+
   async getEntry(tournamentId: string, userId: string): Promise<WlEntryRow | null> {
     const [row] = await sql<WlEntryRow[]>`
       SELECT tournament_id, user_id, state, checked_in_at, final_checked_in_at, qp_at_entry
@@ -91,11 +101,16 @@ export const weekendLeagueRepo = {
       LEFT JOIN wl_qp q ON q.week_key = t.week_key AND q.user_id = ${userId}
       WHERE t.id = ${tournamentId}
         AND t.status = 'entry_open'
+        AND t.entry_opens_at IS NOT NULL
+        AND NOW() >= t.entry_opens_at
         AND t.entry_closes_at IS NOT NULL
         AND NOW() < t.entry_closes_at
         AND (
-          COALESCE((t.config->>'launch_edition')::boolean, false)
-          OR COALESCE(q.points, 0) >= COALESCE((t.config->>'qp_target')::int, 200)
+          COALESCE(t.config->>'launch_edition', 'false') = 'true'
+          OR COALESCE(q.points, 0) >= (
+            CASE WHEN t.config->>'qp_target' ~ '^[0-9]{1,6}$'
+                 THEN (t.config->>'qp_target')::int ELSE 200 END
+          )
         )
       ON CONFLICT (tournament_id, user_id) DO NOTHING
       RETURNING user_id

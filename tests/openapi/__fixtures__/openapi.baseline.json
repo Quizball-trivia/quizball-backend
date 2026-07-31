@@ -3793,6 +3793,13 @@
               "archived"
             ]
           },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "wl_private"
+            ]
+          },
           "prompt": {
             "$ref": "#/components/schemas/I18nField"
           },
@@ -3829,6 +3836,7 @@
           "type",
           "difficulty",
           "status",
+          "visibility",
           "prompt",
           "explanation",
           "payload",
@@ -15622,6 +15630,13 @@
                       "archived"
                     ]
                   },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "wl_private"
+                    ]
+                  },
                   "prompt": {
                     "$ref": "#/components/schemas/I18nField"
                   },
@@ -15812,6 +15827,13 @@
                       "draft",
                       "published",
                       "archived"
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "wl_private"
                     ]
                   },
                   "prompt": {

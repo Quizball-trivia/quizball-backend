@@ -1499,6 +1499,7 @@ export type Database = {
           data: Json
           id: string
           read_at: string | null
+          source_event_key: string | null
           title: Json
           type: string
           user_id: string
@@ -1509,6 +1510,7 @@ export type Database = {
           data?: Json
           id?: string
           read_at?: string | null
+          source_event_key?: string | null
           title: Json
           type: string
           user_id: string
@@ -1519,6 +1521,7 @@ export type Database = {
           data?: Json
           id?: string
           read_at?: string | null
+          source_event_key?: string | null
           title?: Json
           type?: string
           user_id?: string
@@ -3172,6 +3175,631 @@ export type Database = {
             foreignKeyName: "warmup_player_bests_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_answers: {
+        Row: {
+          answer: Json
+          attempt_id: string
+          correct: boolean
+          created_at: string
+          elapsed_ms: number
+          game_index: number
+          points: number
+          time_charge_ms: number
+          timing_source: string
+          tournament_id: string
+          user_id: string
+        }
+        Insert: {
+          answer: Json
+          attempt_id: string
+          correct: boolean
+          created_at?: string
+          elapsed_ms: number
+          game_index: number
+          points: number
+          time_charge_ms: number
+          timing_source: string
+          tournament_id: string
+          user_id: string
+        }
+        Update: {
+          answer?: Json
+          attempt_id?: string
+          correct?: boolean
+          created_at?: string
+          elapsed_ms?: number
+          game_index?: number
+          points?: number
+          time_charge_ms?: number
+          timing_source?: string
+          tournament_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_answers_attempt_id_tournament_id_game_index_fkey"
+            columns: ["attempt_id", "tournament_id", "game_index"]
+            isOneToOne: false
+            referencedRelation: "wl_question_runs"
+            referencedColumns: ["attempt_id", "tournament_id", "game_index"]
+          },
+          {
+            foreignKeyName: "wl_answers_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_award_actions: {
+        Row: {
+          action: string
+          actor_id: string
+          actor_type: string
+          award_id: string
+          created_at: string
+          id: string
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          actor_id: string
+          actor_type: string
+          award_id: string
+          created_at?: string
+          id?: string
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string
+          actor_type?: string
+          award_id?: string
+          created_at?: string
+          id?: string
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_award_actions_award_id_fkey"
+            columns: ["award_id"]
+            isOneToOne: false
+            referencedRelation: "wl_awards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_awards: {
+        Row: {
+          band: string
+          created_at: string
+          final_rank: number
+          fulfilled_at: string | null
+          fulfilled_by: string | null
+          id: string
+          notes: string | null
+          prize_type: string
+          prize_value: string | null
+          status: string
+          tournament_id: string
+          user_id: string
+        }
+        Insert: {
+          band: string
+          created_at?: string
+          final_rank: number
+          fulfilled_at?: string | null
+          fulfilled_by?: string | null
+          id?: string
+          notes?: string | null
+          prize_type: string
+          prize_value?: string | null
+          status?: string
+          tournament_id: string
+          user_id: string
+        }
+        Update: {
+          band?: string
+          created_at?: string
+          final_rank?: number
+          fulfilled_at?: string | null
+          fulfilled_by?: string | null
+          id?: string
+          notes?: string | null
+          prize_type?: string
+          prize_value?: string | null
+          status?: string
+          tournament_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_awards_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wl_awards_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_entries: {
+        Row: {
+          checked_in_at: string | null
+          eliminated_game: number | null
+          entered_at: string
+          final_checked_in_at: string | null
+          final_rank: number | null
+          qp_at_entry: number
+          state: string
+          tournament_id: string
+          user_id: string
+        }
+        Insert: {
+          checked_in_at?: string | null
+          eliminated_game?: number | null
+          entered_at?: string
+          final_checked_in_at?: string | null
+          final_rank?: number | null
+          qp_at_entry?: number
+          state?: string
+          tournament_id: string
+          user_id: string
+        }
+        Update: {
+          checked_in_at?: string | null
+          eliminated_game?: number | null
+          entered_at?: string
+          final_checked_in_at?: string | null
+          final_rank?: number | null
+          qp_at_entry?: number
+          state?: string
+          tournament_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_entries_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wl_entries_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_events: {
+        Row: {
+          aborted_at: string | null
+          attempts: number
+          claim_expires_at: string | null
+          claim_token: string | null
+          created_at: string
+          delivered_at: string | null
+          last_error: string | null
+          live_emitted_redis_ms: number | null
+          payload: Json
+          redis_time_ms: number
+          seq: number
+          skipped_at: string | null
+          tournament_id: string
+          type: string
+          visible_at_spec_ms: number | null
+        }
+        Insert: {
+          aborted_at?: string | null
+          attempts?: number
+          claim_expires_at?: string | null
+          claim_token?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          last_error?: string | null
+          live_emitted_redis_ms?: number | null
+          payload: Json
+          redis_time_ms: number
+          seq: number
+          skipped_at?: string | null
+          tournament_id: string
+          type: string
+          visible_at_spec_ms?: number | null
+        }
+        Update: {
+          aborted_at?: string | null
+          attempts?: number
+          claim_expires_at?: string | null
+          claim_token?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          last_error?: string | null
+          live_emitted_redis_ms?: number | null
+          payload?: Json
+          redis_time_ms?: number
+          seq?: number
+          skipped_at?: string | null
+          tournament_id?: string
+          type?: string
+          visible_at_spec_ms?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_events_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_game_participants: {
+        Row: {
+          game_index: number
+          tournament_id: string
+          user_id: string
+        }
+        Insert: {
+          game_index: number
+          tournament_id: string
+          user_id: string
+        }
+        Update: {
+          game_index?: number
+          tournament_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_game_participants_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wl_game_participants_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_game_results: {
+        Row: {
+          advanced: boolean
+          created_at: string
+          game_index: number
+          rank: number
+          score: number
+          time_ms_total: number
+          tournament_id: string
+          user_id: string
+          void_count: number
+        }
+        Insert: {
+          advanced: boolean
+          created_at?: string
+          game_index: number
+          rank: number
+          score: number
+          time_ms_total: number
+          tournament_id: string
+          user_id: string
+          void_count?: number
+        }
+        Update: {
+          advanced?: boolean
+          created_at?: string
+          game_index?: number
+          rank?: number
+          score?: number
+          time_ms_total?: number
+          tournament_id?: string
+          user_id?: string
+          void_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_game_results_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wl_game_results_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_qp: {
+        Row: {
+          last_match_at: string | null
+          losses: number
+          points: number
+          user_id: string
+          week_key: string
+          wins: number
+        }
+        Insert: {
+          last_match_at?: string | null
+          losses?: number
+          points?: number
+          user_id: string
+          week_key: string
+          wins?: number
+        }
+        Update: {
+          last_match_at?: string | null
+          losses?: number
+          points?: number
+          user_id?: string
+          week_key?: string
+          wins?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_qp_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_qp_awards: {
+        Row: {
+          created_at: string
+          match_id: string
+          points: number
+          result: string
+          user_id: string
+          week_key: string
+        }
+        Insert: {
+          created_at?: string
+          match_id: string
+          points: number
+          result: string
+          user_id: string
+          week_key: string
+        }
+        Update: {
+          created_at?: string
+          match_id?: string
+          points?: number
+          result?: string
+          user_id?: string
+          week_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_qp_awards_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_question_runs: {
+        Row: {
+          attempt_id: string
+          created_at: string
+          deadline_at_ms: number | null
+          dispatched_seq: number | null
+          game_index: number
+          playable_at_ms: number | null
+          question_id: string
+          question_index: number
+          revealed_seq: number | null
+          round_index: number
+          status: string
+          tournament_id: string
+          updated_at: string
+          void_reason: string | null
+        }
+        Insert: {
+          attempt_id?: string
+          created_at?: string
+          deadline_at_ms?: number | null
+          dispatched_seq?: number | null
+          game_index: number
+          playable_at_ms?: number | null
+          question_id: string
+          question_index: number
+          revealed_seq?: number | null
+          round_index: number
+          status?: string
+          tournament_id: string
+          updated_at?: string
+          void_reason?: string | null
+        }
+        Update: {
+          attempt_id?: string
+          created_at?: string
+          deadline_at_ms?: number | null
+          dispatched_seq?: number | null
+          game_index?: number
+          playable_at_ms?: number | null
+          question_id?: string
+          question_index?: number
+          revealed_seq?: number | null
+          round_index?: number
+          status?: string
+          tournament_id?: string
+          updated_at?: string
+          void_reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_question_runs_question_id_tournament_id_game_index_fkey"
+            columns: ["question_id", "tournament_id", "game_index"]
+            isOneToOne: false
+            referencedRelation: "wl_questions"
+            referencedColumns: ["question_id", "tournament_id", "game_index"]
+          },
+          {
+            foreignKeyName: "wl_question_runs_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_questions: {
+        Row: {
+          created_at: string
+          evaluation: Json
+          game_index: number
+          kind: string
+          payload: Json
+          question_id: string
+          question_index: number | null
+          reserve_ordinal: number
+          round_index: number | null
+          source_question_id: string | null
+          tournament_id: string
+        }
+        Insert: {
+          created_at?: string
+          evaluation: Json
+          game_index: number
+          kind: string
+          payload: Json
+          question_id?: string
+          question_index?: number | null
+          reserve_ordinal?: number
+          round_index?: number | null
+          source_question_id?: string | null
+          tournament_id: string
+        }
+        Update: {
+          created_at?: string
+          evaluation?: Json
+          game_index?: number
+          kind?: string
+          payload?: Json
+          question_id?: string
+          question_index?: number | null
+          reserve_ordinal?: number
+          round_index?: number | null
+          source_question_id?: string | null
+          tournament_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_questions_source_question_id_fkey"
+            columns: ["source_question_id"]
+            isOneToOne: false
+            referencedRelation: "questions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wl_questions_tournament_id_fkey"
+            columns: ["tournament_id"]
+            isOneToOne: false
+            referencedRelation: "wl_tournaments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wl_tournaments: {
+        Row: {
+          cancelled_reason: string | null
+          champion_user_id: string | null
+          config: Json
+          created_at: string
+          entry_closes_at: string | null
+          entry_opens_at: string | null
+          final_played: boolean
+          final_starts_at: string | null
+          id: string
+          is_test: boolean
+          ladder: Json | null
+          live_delivered_seq: number
+          next_event_seq: number
+          no_show_policy: string
+          paused_from_status: string | null
+          qualifier_starts_at: string | null
+          spec_delivered_seq: number
+          stage: Json | null
+          status: string
+          updated_at: string
+          week_key: string | null
+        }
+        Insert: {
+          cancelled_reason?: string | null
+          champion_user_id?: string | null
+          config?: Json
+          created_at?: string
+          entry_closes_at?: string | null
+          entry_opens_at?: string | null
+          final_played?: boolean
+          final_starts_at?: string | null
+          id?: string
+          is_test?: boolean
+          ladder?: Json | null
+          live_delivered_seq?: number
+          next_event_seq?: number
+          no_show_policy?: string
+          paused_from_status?: string | null
+          qualifier_starts_at?: string | null
+          spec_delivered_seq?: number
+          stage?: Json | null
+          status?: string
+          updated_at?: string
+          week_key?: string | null
+        }
+        Update: {
+          cancelled_reason?: string | null
+          champion_user_id?: string | null
+          config?: Json
+          created_at?: string
+          entry_closes_at?: string | null
+          entry_opens_at?: string | null
+          final_played?: boolean
+          final_starts_at?: string | null
+          id?: string
+          is_test?: boolean
+          ladder?: Json | null
+          live_delivered_seq?: number
+          next_event_seq?: number
+          no_show_policy?: string
+          paused_from_status?: string | null
+          qualifier_starts_at?: string | null
+          spec_delivered_seq?: number
+          stage?: Json | null
+          status?: string
+          updated_at?: string
+          week_key?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wl_tournaments_champion_user_id_fkey"
+            columns: ["champion_user_id"]
+            isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
           },

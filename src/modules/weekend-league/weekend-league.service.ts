@@ -10,13 +10,20 @@ import type {
 
 const COUNTS_CACHE_TTL_SECONDS = 5;
 
+// These parsers MUST stay semantically identical to the SQL predicates in
+// weekend-league.repo.enter() — the SQL authorizes, these only report. Both
+// treat launch_edition as true only for JSON true / "true", and qp_target as
+// an integer (number or all-digit string), defaulting to WL_QP_TARGET.
 function qpTargetOf(tournament: WlTournamentRow | null): number {
   const raw = tournament?.config?.['qp_target'];
-  return typeof raw === 'number' && Number.isInteger(raw) ? raw : WL_QP_TARGET;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string' && /^[0-9]{1,6}$/.test(raw)) return parseInt(raw, 10);
+  return WL_QP_TARGET;
 }
 
 function launchEditionOf(tournament: WlTournamentRow | null): boolean {
-  return tournament?.config?.['launch_edition'] === true;
+  const raw = tournament?.config?.['launch_edition'];
+  return raw === true || raw === 'true';
 }
 
 /**
@@ -103,15 +110,21 @@ export const weekendLeagueService = {
       return { entered: true, already_entered: false, reason: 'ok' };
     }
 
-    // The conditional INSERT declined — classify for the client (reporting
-    // only; the statement above is the sole authorization point).
+    // The conditional INSERT declined — classify for the client from FRESH
+    // committed state (a phase transition may have landed after our first
+    // read; reporting only, the statement above is the sole authorization
+    // point).
     const entry = await weekendLeagueRepo.getEntry(tournament.id, userId);
     if (entry) {
       return { entered: true, already_entered: true, reason: 'ok' };
     }
-    const windowOpen = tournament.status === 'entry_open'
-      && tournament.entry_closes_at != null
-      && new Date(tournament.entry_closes_at).getTime() > Date.now();
+    const fresh = await weekendLeagueRepo.getTournamentById(tournament.id) ?? tournament;
+    const now = Date.now();
+    const windowOpen = fresh.status === 'entry_open'
+      && fresh.entry_opens_at != null
+      && new Date(fresh.entry_opens_at).getTime() <= now
+      && fresh.entry_closes_at != null
+      && new Date(fresh.entry_closes_at).getTime() > now;
     if (!windowOpen) {
       return { entered: false, already_entered: false, reason: 'window_closed' };
     }
@@ -136,6 +149,7 @@ export const weekendLeagueService = {
     if (!entry) {
       return { checked_in: false, already_checked_in: false, reason: 'not_entered' };
     }
+    // Classification below reads fresh state for the same reason as enter().
     if (isFinalWindow && entry.state !== 'finalist') {
       return { checked_in: false, already_checked_in: false, reason: 'not_finalist' };
     }

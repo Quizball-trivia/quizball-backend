@@ -13,6 +13,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let rankedService: typeof import('../../src/modules/ranked/ranked.service.js').rankedService;
+let rankedRepo: typeof import('../../src/modules/ranked/ranked.repo.js').rankedRepo;
 let dbAvailable = false;
 
 const testUserIds: string[] = [];
@@ -74,6 +75,7 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     rankedService = (await import('../../src/modules/ranked/ranked.service.js')).rankedService;
+    rankedRepo = (await import('../../src/modules/ranked/ranked.repo.js')).rankedRepo;
     dbAvailable = true;
   } catch {
     console.warn('\n⚠️  Skipping WL QP settlement integration tests: DB unavailable.\n');
@@ -156,6 +158,83 @@ describe('WL QP settlement accrual', () => {
       SELECT user_id FROM ranked_rp_changes WHERE match_id = ${matchId}
     `;
     expect(rp.length).toBe(2);
+  });
+
+  it('repo-level replay of the IDENTICAL settlement input awards QP once (gate test)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    // Calls applySettlement directly twice, bypassing the service's
+    // already-settled short-circuit — this fails if the qp_award CTE loses
+    // its FROM inserted gating (a bare upsert would double-count totals).
+    const winner = await seedUser(`wlqp-gate-w-${Date.now()}`, false);
+    const loser = await seedUser(`wlqp-gate-l-${Date.now()}`, false);
+    const matchId = await seedCompletedMatch(winner, loser, IN_WINDOW);
+    await sql`
+      INSERT INTO ranked_profiles (user_id, rp, tier, placement_status, placement_required)
+      VALUES (${winner}, 1000, 'Bench', 'placed', 3), (${loser}, 1000, 'Bench', 'placed', 3)
+      ON CONFLICT (user_id) DO NOTHING
+    `;
+    const entryFor = (userId: string, result: 'win' | 'loss') => ({
+      profile: {
+        userId, rp: 1000, tier: 'Bench' as const, placementStatus: 'placed' as const,
+        placementPlayed: 3, placementWins: 1, placementSeedRp: null,
+        placementPerfSum: 0, placementPointsForSum: 0, placementPointsAgainstSum: 0,
+        currentWinStreak: 0,
+      },
+      change: {
+        matchId, userId, opponentUserId: null, opponentIsAi: false,
+        oldRp: 1000, deltaRp: 0, newRp: 1000, result, isPlacement: false,
+        placementGameNo: null, placementAnchorRp: null, placementPerfScore: null,
+        calculationMethod: 'ranked_formula' as const,
+      },
+      coinsAwarded: 0,
+      qpAwarded: result === 'win' ? 25 : 10,
+      qpWeekKey: '2026-08-01',
+      qpEndedAt: IN_WINDOW,
+    });
+
+    const first = await rankedRepo.applySettlement([entryFor(winner, 'win'), entryFor(loser, 'loss')]);
+    expect(first.size).toBe(2);
+    const second = await rankedRepo.applySettlement([entryFor(winner, 'win'), entryFor(loser, 'loss')]);
+    expect(second.size).toBe(0);
+
+    const w = await qpRows(winner);
+    expect(w.awards.length).toBe(1);
+    expect(w.totals).toEqual([{ week_key: '2026-08-01', points: 25, wins: 1, losses: 0 }]);
+  });
+
+  it('repairs QP for a match whose RP settled before the QP feature (replay path)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const winner = await seedUser(`wlqp-rep-w-${Date.now()}`, false);
+    const loser = await seedUser(`wlqp-rep-l-${Date.now()}`, false);
+    const matchId = await seedCompletedMatch(winner, loser, IN_WINDOW);
+    // Simulate a pre-deploy settlement: RP ledger rows exist, no QP rows.
+    await sql`
+      INSERT INTO ranked_rp_changes (
+        match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp,
+        new_rp, result, is_placement, calculation_method, coins_awarded
+      ) VALUES
+        (${matchId}, ${winner}, ${loser}, false, 1000, 50, 1050, 'win', false, 'ranked_formula', 0),
+        (${matchId}, ${loser}, ${winner}, false, 1000, -25, 975, 'loss', false, 'ranked_formula', 0)
+    `;
+    await sql`
+      INSERT INTO ranked_profiles (user_id, rp, tier, placement_status, placement_required)
+      VALUES (${winner}, 1050, 'Bench', 'placed', 3), (${loser}, 975, 'Reserve', 'placed', 3)
+      ON CONFLICT (user_id) DO NOTHING
+    `;
+
+    // The replay short-circuits RP (fully settled) but must repair QP.
+    await rankedService.settleCompletedRankedMatch(matchId);
+    const w = await qpRows(winner);
+    expect(w.awards).toEqual([
+      { match_id: matchId, week_key: '2026-08-01', points: 25, result: 'win' },
+    ]);
+    const l = await qpRows(loser);
+    expect(l.totals).toEqual([{ week_key: '2026-08-01', points: 10, wins: 0, losses: 1 }]);
+
+    // Replaying the replay stays exactly-once.
+    await rankedService.settleCompletedRankedMatch(matchId);
+    const w2 = await qpRows(winner);
+    expect(w2.totals).toEqual([{ week_key: '2026-08-01', points: 25, wins: 1, losses: 0 }]);
   });
 
   it('accrues nothing for bots even though their RP settles', async ({ skip }) => {

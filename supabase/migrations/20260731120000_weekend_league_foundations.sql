@@ -67,7 +67,9 @@ CREATE INDEX IF NOT EXISTS idx_questions_status_visibility
 
 CREATE TABLE IF NOT EXISTS public.wl_qp_awards (
   match_id uuid NOT NULL,
-  user_id uuid NOT NULL REFERENCES public.users(id),
+  -- CASCADE: accounts are anonymized in prod, never hard-deleted; hard deletes
+  -- (test teardown, ops cleanup) must not be blocked by QP history.
+  user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   week_key date NOT NULL,
   points integer NOT NULL CHECK (points > 0),
   result text NOT NULL CHECK (result IN ('win', 'loss')),
@@ -80,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_wl_qp_awards_week_user
 
 CREATE TABLE IF NOT EXISTS public.wl_qp (
   week_key date NOT NULL,
-  user_id uuid NOT NULL REFERENCES public.users(id),
+  user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   points integer NOT NULL DEFAULT 0 CHECK (points >= 0),
   wins integer NOT NULL DEFAULT 0,
   losses integer NOT NULL DEFAULT 0,
@@ -206,13 +208,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_wl_questions_reserve
   ON public.wl_questions (tournament_id, game_index, kind, reserve_ordinal)
   WHERE reserve_ordinal > 0;
 
+-- Composite FK target: a run referencing (question_id, tournament_id,
+-- game_index) can only point at content from ITS OWN tournament and game.
+ALTER TABLE public.wl_questions
+  ADD CONSTRAINT uq_wl_questions_id_scope UNIQUE (question_id, tournament_id, game_index);
+
 CREATE TABLE IF NOT EXISTS public.wl_question_runs (
   attempt_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id) ON DELETE CASCADE,
   game_index integer NOT NULL,
   round_index integer NOT NULL,
   question_index integer NOT NULL,
-  question_id uuid NOT NULL REFERENCES public.wl_questions(question_id),
+  question_id uuid NOT NULL,
   status text NOT NULL DEFAULT 'created' CHECK (status IN (
     'created', 'dispatched', 'frozen', 'revealed', 'voided'
   )),
@@ -222,7 +229,14 @@ CREATE TABLE IF NOT EXISTS public.wl_question_runs (
   dispatched_seq bigint,
   revealed_seq bigint,
   created_at timestamptz NOT NULL DEFAULT NOW(),
-  updated_at timestamptz NOT NULL DEFAULT NOW()
+  updated_at timestamptz NOT NULL DEFAULT NOW(),
+  CHECK (game_index >= 0 AND round_index >= 0 AND question_index >= 0),
+  CHECK (deadline_at_ms IS NULL OR playable_at_ms IS NULL OR deadline_at_ms > playable_at_ms),
+  -- Cross-row identity: the referenced content row must belong to the same
+  -- tournament and game as the run itself.
+  FOREIGN KEY (question_id, tournament_id, game_index)
+    REFERENCES public.wl_questions (question_id, tournament_id, game_index),
+  UNIQUE (attempt_id, tournament_id, game_index)
 );
 
 -- One live (non-voided) attempt per slot; voided attempts keep history.
@@ -238,18 +252,21 @@ CREATE TABLE IF NOT EXISTS public.wl_game_participants (
 );
 
 CREATE TABLE IF NOT EXISTS public.wl_answers (
-  attempt_id uuid NOT NULL REFERENCES public.wl_question_runs(attempt_id),
+  attempt_id uuid NOT NULL,
   user_id uuid NOT NULL REFERENCES public.users(id),
   tournament_id uuid NOT NULL,
   game_index integer NOT NULL,
   answer jsonb NOT NULL,
   correct boolean NOT NULL,
-  points integer NOT NULL,
-  elapsed_ms integer NOT NULL,
-  time_charge_ms integer NOT NULL,
+  points integer NOT NULL CHECK (points >= 0),
+  elapsed_ms integer NOT NULL CHECK (elapsed_ms >= 0),
+  time_charge_ms integer NOT NULL CHECK (time_charge_ms >= 0),
   timing_source text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (attempt_id, user_id)
+  PRIMARY KEY (attempt_id, user_id),
+  -- The answer's denormalized coordinates must agree with its attempt's.
+  FOREIGN KEY (attempt_id, tournament_id, game_index)
+    REFERENCES public.wl_question_runs (attempt_id, tournament_id, game_index)
 );
 
 -- Game-total recomputation (scoring repair, results, recovery).
@@ -260,9 +277,9 @@ CREATE TABLE IF NOT EXISTS public.wl_game_results (
   tournament_id uuid NOT NULL REFERENCES public.wl_tournaments(id) ON DELETE CASCADE,
   game_index integer NOT NULL,
   user_id uuid NOT NULL REFERENCES public.users(id),
-  score integer NOT NULL,
-  time_ms_total bigint NOT NULL,
-  rank integer NOT NULL,
+  score integer NOT NULL CHECK (score >= 0),
+  time_ms_total bigint NOT NULL CHECK (time_ms_total >= 0),
+  rank integer NOT NULL CHECK (rank > 0),
   advanced boolean NOT NULL,
   void_count integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT NOW(),
@@ -404,6 +421,21 @@ ALTER TABLE public.notifications
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_source_event
   ON public.notifications (user_id, source_event_key)
   WHERE source_event_key IS NOT NULL;
+
+-- House updated_at maintenance (trigger_set_updated_at from the initial schema).
+DROP TRIGGER IF EXISTS trg_wl_tournaments_set_updated_at ON public.wl_tournaments;
+CREATE TRIGGER trg_wl_tournaments_set_updated_at
+  BEFORE UPDATE ON public.wl_tournaments
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_wl_question_runs_set_updated_at ON public.wl_question_runs;
+CREATE TRIGGER trg_wl_question_runs_set_updated_at
+  BEFORE UPDATE ON public.wl_question_runs
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+
+-- Award audit lookups (fulfillment history per award).
+CREATE INDEX IF NOT EXISTS idx_wl_award_actions_award
+  ON public.wl_award_actions (award_id, created_at);
 
 -- -----------------------------------------------------------------------------
 -- RLS: deny-all (service role bypasses)

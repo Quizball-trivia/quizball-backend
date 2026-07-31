@@ -177,6 +177,89 @@ describe('nearest-RP widening', () => {
     expect(result?.bot.user_id).toBe('closest');
     expect(result?.relaxationLevel).toBe('strict');
   });
+
+  it('prefers an inner-band (±150) bot over one only inside the outer band', async () => {
+    // 'inner' is 100 below target, 'outer' 250 below. Band order is deterministic
+    // (only WITHIN-band ties shuffle), so the inner-band bot always wins.
+    repo.listEligibleBots.mockResolvedValue([
+      bot('outer', { rp: 1250 }),
+      bot('inner', { rp: 1400 }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman, // target 1500
+      lobbyId: 'lobby',
+    });
+    expect(result?.bot.user_id).toBe('inner');
+  });
+
+  it('still selects a bot inside the ±300 ceiling', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('edge', { rp: 1220 })]); // gap 280
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result?.bot.user_id).toBe('edge');
+  });
+});
+
+describe('RP-gap ceiling (parity guard)', () => {
+  it('returns null (ephemeral fallback) when the nearest bot is beyond ±300', async () => {
+    // The prod failure mode: a strong active at 2700 with the roster topping out
+    // ~2400. The old unbounded closest-first tail paired them anyway (a 300+ gap
+    // the bot won ~4.5% of). It must now fall back to ephemeral instead.
+    const strongHuman = { ...placedHuman, rp: 2700 };
+    repo.listEligibleBots.mockResolvedValue([
+      bot('nearest', { rp: 2400 }), // gap of exactly 300 → inside the inclusive ceiling
+      bot('lower', { rp: 1800 }),
+    ]);
+    const atEdge = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: strongHuman,
+      lobbyId: 'lobby',
+    });
+    // gap of exactly 300 is INSIDE the inclusive ceiling
+    expect(atEdge?.bot.user_id).toBe('nearest');
+
+    // Push the nearest bot just outside the ceiling → no pairing at all.
+    vi.clearAllMocks();
+    reservation.isEnabled.mockReturnValue(true);
+    redis.lRange.mockResolvedValue([]);
+    repo.listEligibleBots.mockResolvedValue([
+      bot('too-far', { rp: 2399 }), // gap 301
+      bot('lower', { rp: 1800 }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: strongHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result).toBeNull();
+    // Never burns an acquire on an out-of-band bot.
+    expect(reservation.acquire).not.toHaveBeenCalled();
+  });
+
+  it('does not resurrect an out-of-band bot by relaxing the eligibility ladder', async () => {
+    // The only bot is far away AND constrained. Relaxing soft constraints must
+    // never widen the RP band — the ceiling is not part of the ladder.
+    const strongHuman = { ...placedHuman, rp: 2700 };
+    repo.listEligibleBots.mockResolvedValue([
+      bot('far-and-capped', {
+        rp: 1500,
+        daily_cap: 1,
+        matches_today: 1,
+        matches_day: rosterDay(),
+      }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: strongHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result).toBeNull();
+    expect(reservation.acquire).not.toHaveBeenCalled();
+  });
 });
 
 describe('eligibility ladder order', () => {
@@ -228,12 +311,12 @@ describe('eligibility ladder order', () => {
 
 describe('one-winner acquire race', () => {
   it('falls through to the next candidate when an acquire loses the race', async () => {
-    // 'first' sits in the ±100 band (nearest), 'second' in the ±500 band. Band
-    // ordering is deterministic (only WITHIN-band ties shuffle), so 'first' is
-    // always tried before 'second'.
+    // 'first' sits in the inner ±150 band, 'second' in the outer band (gap 250,
+    // inside the ±300 ceiling). Band ordering is deterministic (only WITHIN-band
+    // ties shuffle), so 'first' is always tried before 'second'.
     repo.listEligibleBots.mockResolvedValue([
       bot('first', { rp: 1500 }),
-      bot('second', { rp: 1100 }),
+      bot('second', { rp: 1250 }),
     ]);
     reservation.acquire.mockImplementation(async ({ botUserId }: { botUserId: string }) => {
       if (botUserId === 'first') return null; // lost the race

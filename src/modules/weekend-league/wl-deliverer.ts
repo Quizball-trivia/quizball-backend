@@ -124,7 +124,9 @@ async function pauseForPoison(tournamentId: string, seq: number, attempts: numbe
     { tournamentId, seq, attempts },
     'WL outbox head is poison — pausing tournament for ops'
   );
-  const redisNow = await wlRedisNowMs().catch(() => Date.now());
+  // Fail closed: without Redis there is no clock and no pause — the poison
+  // head simply waits for the next tick to try again.
+  const redisNow = await wlRedisNowMs();
   await wlOrchestratorRepo.transition({
     tournamentId,
     from: tournament.status,

@@ -143,8 +143,12 @@ export async function wlOrchestratorTick(
       logger.warn('WL orchestrator lock lost mid-drain; aborting');
       return;
     }
-    await wlDeliverPending(io, tournamentId);
-    await wlDeliverSpectator(io, tournamentId);
+    try {
+      await wlDeliverPending(io, tournamentId);
+      await wlDeliverSpectator(io, tournamentId);
+    } catch (error) {
+      logger.error({ err: error, tournamentId }, 'WL outbox drain failed');
+    }
   }
 
   // Cadence from POST-processing state, so entering a live phase speeds the

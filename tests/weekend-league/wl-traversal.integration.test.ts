@@ -105,6 +105,11 @@ afterAll(async () => {
   await sql.end({ timeout: 5 });
 });
 
+async function redisNow(): Promise<number> {
+  const { wlRedisNowMs } = await import('../../src/modules/weekend-league/wl-redis.js');
+  return wlRedisNowMs();
+}
+
 async function createBackdatedTournament(now: number): Promise<string> {
   const created = await repo.createWithInitialEvent({
     weekKey: null,
@@ -132,7 +137,7 @@ async function runTicks(n: number): Promise<void> {
 describe('WL full lifecycle traversal (stub engine)', () => {
   it('cascades a 3-player field to a completed tournament with a champion', async ({ skip }) => {
     if (!available) skip();
-    const tid = await createBackdatedTournament(Date.now());
+    const tid = await createBackdatedTournament(await redisNow());
     const users = await Promise.all(['wlt-a', 'wlt-b', 'wlt-c'].map((n) => seedUser(`${n}-${Date.now()}`)));
     // Backdated windows are already shut, so seed entries + check-ins
     // directly (entry SQL is covered by its own tests).
@@ -180,7 +185,7 @@ describe('WL full lifecycle traversal (stub engine)', () => {
 
   it('cancels at kickoff when fewer than 2 checked in, with a wave', async ({ skip }) => {
     if (!available) skip();
-    const tid = await createBackdatedTournament(Date.now());
+    const tid = await createBackdatedTournament(await redisNow());
     const lone = await seedUser(`wlt-lone-${Date.now()}`);
     await sql`
       INSERT INTO wl_entries (tournament_id, user_id, checked_in_at)
@@ -209,7 +214,7 @@ describe('WL full lifecycle traversal (stub engine)', () => {
 
   it('dns_v1 walkover: zero final check-ins completes without a champion... unless one showed', async ({ skip }) => {
     if (!available) skip();
-    const tid = await createBackdatedTournament(Date.now());
+    const tid = await createBackdatedTournament(await redisNow());
     const a = await seedUser(`wlt-w-${Date.now()}`);
     const b = await seedUser(`wlt-x-${Date.now()}`);
     // Both check in Saturday; only A checks in for the final.

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { WL_EVENT_POISON_ATTEMPTS } from '../../src/modules/weekend-league/wl-events.repo.js';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let repo: typeof import('../../src/modules/weekend-league/wl-orchestrator.repo.js').wlOrchestratorRepo;
@@ -94,7 +95,8 @@ describe('WL two-process orchestration', () => {
   it('two racing tickers + one SIGKILL still complete the tournament exactly once', async ({ skip }) => {
     if (!available) skip();
 
-    const now = Date.now();
+    const { wlRedisNowMs } = await import('../../src/modules/weekend-league/wl-redis.js');
+    const now = await wlRedisNowMs();
     const created = await repo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
@@ -149,6 +151,6 @@ describe('WL two-process orchestration', () => {
     // Gapless from 1, every event delivered under a fence, no runaway retries.
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
     expect(events.every((e) => e.delivered)).toBe(true);
-    expect(events.every((e) => e.attempts <= 3)).toBe(true);
+    expect(events.every((e) => e.attempts < WL_EVENT_POISON_ATTEMPTS)).toBe(true);
   }, 40_000);
 });

@@ -11,6 +11,7 @@
  * actions (pause/resume/cancel/force-tick) work everywhere.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { config } from '../../core/config.js';
@@ -44,10 +45,36 @@ const actionSchema = z.object({
   reason: z.string().max(400).optional(),
 });
 
+// Mirrors the governor controller's shared-secret comparison: unequal
+// lengths are a mismatch, never a thrown length error (no timing leak).
+function secretsMatch(expected: string, actual: string | undefined): boolean {
+  if (actual === undefined) return false;
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const actualBuf = Buffer.from(actual, 'utf8');
+  if (expectedBuf.length !== actualBuf.length) return false;
+  return timingSafeEqual(expectedBuf, actualBuf);
+}
+
 function requireOpsToken(req: Request): void {
   if (!config.WL_OPS_TOKEN) throw new NotFoundError('Not found');
-  const token = req.header('x-wl-ops-token');
-  if (token !== config.WL_OPS_TOKEN) throw new AuthenticationError('Invalid ops token');
+  if (!secretsMatch(config.WL_OPS_TOKEN, req.header('x-wl-ops-token'))) {
+    throw new AuthenticationError('Invalid ops token');
+  }
+}
+
+// The repo rejects phase-machine-illegal moves with a plain Error; ops
+// callers deserve a 400 with the reason, not a 500.
+async function transitionOr400(
+  input: Parameters<typeof wlOrchestratorRepo.transition>[0]
+): Promise<boolean> {
+  try {
+    return await wlOrchestratorRepo.transition(input);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('WL transition not allowed')) {
+      throw new BadRequestError(error.message);
+    }
+    throw error;
+  }
 }
 
 export const wlOpsController = {
@@ -106,8 +133,11 @@ export const wlOpsController = {
       redisTimeMs: now,
       status: 'scheduled',
     });
-    logger.info({ actor: input.actor, tournamentId: created?.id }, 'WL ops: test tournament created');
-    res.json({ tournament_id: created?.id ?? null });
+    if (!created) {
+      throw new BadRequestError('Tournament creation returned no row (conflict?)');
+    }
+    logger.info({ actor: input.actor, tournamentId: created.id }, 'WL ops: test tournament created');
+    res.json({ tournament_id: created.id });
   },
 
   async pause(req: Request, res: Response): Promise<void> {
@@ -116,7 +146,7 @@ export const wlOpsController = {
     const t = await wlOrchestratorRepo.getById(input.tournament_id);
     if (!t) throw new NotFoundError('Tournament not found');
     const redisNow = await wlRedisNowMs();
-    const moved = await wlOrchestratorRepo.transition({
+    const moved = await transitionOr400({
       tournamentId: t.id, from: t.status, to: 'paused',
       setPausedFrom: t.status, redisTimeMs: redisNow,
       eventPayload: { reason: input.reason ?? 'ops', actor: input.actor },
@@ -128,6 +158,8 @@ export const wlOpsController = {
   async resume(req: Request, res: Response): Promise<void> {
     requireOpsToken(req);
     const input = actionSchema.parse(req.body ?? {});
+    const t = await wlOrchestratorRepo.getById(input.tournament_id);
+    if (!t) throw new NotFoundError('Tournament not found');
     const redisNow = await wlRedisNowMs();
     const moved = await wlOrchestratorRepo.resume(input.tournament_id, redisNow);
     logger.warn({ actor: input.actor, tournamentId: input.tournament_id, moved }, 'WL ops: resume');
@@ -140,7 +172,7 @@ export const wlOpsController = {
     const t = await wlOrchestratorRepo.getById(input.tournament_id);
     if (!t) throw new NotFoundError('Tournament not found');
     const redisNow = await wlRedisNowMs();
-    const moved = await wlOrchestratorRepo.transition({
+    const moved = await transitionOr400({
       tournamentId: t.id, from: t.status, to: 'cancelled', redisTimeMs: redisNow,
       cancelledReason: input.reason ?? `ops:${input.actor}`,
       eventPayload: { actor: input.actor },
@@ -151,10 +183,13 @@ export const wlOpsController = {
 
   async forceTick(req: Request, res: Response): Promise<void> {
     requireOpsToken(req);
+    const actor = z.object({ actor: z.string().min(1).max(80) })
+      .parse(req.body ?? {}).actor;
     const io = getWlOrchestratorIo();
     if (!io) throw new BadRequestError('WL orchestrator not started');
     // Same strict lock as the loop — never an unlocked side-channel.
     const ran = await wlRunLockedTick(io, { createWeekly: false });
+    logger.warn({ actor, ran }, 'WL ops: force-tick');
     res.json({ ticked: ran });
   },
 

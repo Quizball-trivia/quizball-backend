@@ -26,6 +26,12 @@ import { wlRedisNowMs } from './wl-redis.js';
 
 export const WL_SPECTATOR_DELAY_MS = 30_000;
 
+async function spectatorDelayMs(tournamentId: string): Promise<number> {
+  const t = await wlOrchestratorRepo.getById(tournamentId);
+  const { wlConfigFrom } = await import('./wl-config.js');
+  return t ? wlConfigFrom(t.config).spectator_delay_ms : WL_SPECTATOR_DELAY_MS;
+}
+
 export function wlPlayersRoom(tournamentId: string): string {
   return `wl:${tournamentId}`;
 }
@@ -141,7 +147,7 @@ export async function wlDeliverPending(
         }
       }
       const stamped = await wlEventsRepo.markLiveEmission(
-        tournamentId, event.seq, event.claim_token, emitNow, WL_SPECTATOR_DELAY_MS
+        tournamentId, event.seq, event.claim_token, emitNow, await spectatorDelayMs(tournamentId)
       );
       if (!stamped) break; // fence lost
 

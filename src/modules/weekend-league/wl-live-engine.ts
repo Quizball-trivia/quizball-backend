@@ -774,6 +774,9 @@ export interface WlSubscribeSnapshot {
   attempt: Record<string, unknown> | null;
   /** The caller's already-accepted answer on that attempt, if any. */
   your_answer: { correct: boolean; points: number; elapsedMs: number } | null;
+  /** The caller's most recent PERSISTED answer this game, attempt-identified —
+      recovers the verdict even when the attempt froze before this snapshot. */
+  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
   /** The caller's accepted points this game (persisted + in-flight). */
   score: number;
   board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
@@ -866,12 +869,31 @@ export async function wlSubscribeSnapshot(
     }
   }
 
+  const [lastPersisted] = await sql<Array<{
+    attempt_id: string; correct: boolean; points: number; elapsed_ms: number;
+  }>>`
+    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms
+    FROM wl_answers a
+    JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
+    WHERE a.tournament_id = ${tournamentId} AND a.game_index = ${gameIndex}
+      AND a.user_id = ${userId} AND a.timing_source <> 'voided_audit'
+    ORDER BY r.round_index DESC, r.question_index DESC
+    LIMIT 1
+  `;
   return {
     status: t.status,
     server_now: redisNow,
     game_index: gameIndex,
     attempt,
     your_answer: yourAnswer,
+    your_last_answer: lastPersisted
+      ? {
+          attempt_id: lastPersisted.attempt_id,
+          correct: lastPersisted.correct,
+          points: lastPersisted.points,
+          elapsedMs: lastPersisted.elapsed_ms,
+        }
+      : null,
     score: (persisted?.points ?? 0) + inFlightPoints,
     board,
   };

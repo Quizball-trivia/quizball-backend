@@ -91,40 +91,48 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
           return null;
         });
       }
-      // Close the join-window gap: events marked delivered between C0 (read
-      // before the join) and C1 (read now) may have been BROADCAST before
-      // this socket was in the room — replay them directly from the outbox
-      // (their payloads are final, dispatch stamps included). The client
-      // dedups by seq, so a double delivery is harmless; events > C1 either
-      // arrive through the room or are caught by the next subscribe.
-      const [c1] = await sql<{ live_delivered_seq: string; spec_delivered_seq: string }[]>`
-        SELECT live_delivered_seq::text, spec_delivered_seq::text
-        FROM wl_tournaments WHERE id = ${tournamentId}
-      `;
+      // Close the join-window gap. The boundary is a marker persisted BEFORE
+      // the broadcast (the deliverer runs markLiveEmission, then emits, then
+      // markDelivered): any event this socket could have missed by joining
+      // mid-broadcast already has live_emitted_redis_ms set, so replaying
+      // every emitted row above C0 covers the race regardless of when the
+      // delivered cursor advances. Payloads are final in the outbox
+      // (dispatch stamps persisted at emission); the client dedups by seq,
+      // so double delivery through the room is harmless. Aborted/skipped
+      // rows were never public and stay that way. Spectator replay is
+      // additionally gated by the persisted visibility time, so the 30s
+      // delay holds no matter what the cursors say.
+      const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
+      const nowMs = await wlRedisNowMs();
       const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
-      const hi = Number(
-        role === 'player' ? c1?.live_delivered_seq ?? '0' : c1?.spec_delivered_seq ?? '0'
-      );
-      if (hi > lo) {
-        const missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
-          SELECT seq::text, type, payload FROM wl_events
-          WHERE tournament_id = ${tournamentId} AND seq > ${lo} AND seq <= ${hi}
-          ORDER BY seq ASC
-        `;
-        if (missed.length > 0) {
-          const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
-          const nowMs = await wlRedisNowMs();
-          const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
-          for (const row of missed) {
-            rawEmit.emit(`wl:${row.type}`, {
-              ...row.payload,
-              type: row.type,
-              tournamentId,
-              seq: Number(row.seq),
-              serverNowAtEmit: nowMs,
-              ...(role === 'spectator' ? { spectator: true } : {}),
-            });
-          }
+      const missed = role === 'player'
+        ? await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
+            SELECT seq::text, type, payload FROM wl_events
+            WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+              AND live_emitted_redis_ms IS NOT NULL
+              AND aborted_at IS NULL AND skipped_at IS NULL
+            ORDER BY seq ASC
+            LIMIT 500
+          `
+        : await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
+            SELECT seq::text, type, payload FROM wl_events
+            WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+              AND visible_at_spec_ms IS NOT NULL AND visible_at_spec_ms <= ${nowMs}
+              AND aborted_at IS NULL AND skipped_at IS NULL
+            ORDER BY seq ASC
+            LIMIT 500
+          `;
+      if (missed.length > 0) {
+        const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
+        for (const row of missed) {
+          rawEmit.emit(`wl:${row.type}`, {
+            ...row.payload,
+            type: row.type,
+            tournamentId,
+            seq: Number(row.seq),
+            serverNowAtEmit: nowMs,
+            ...(role === 'spectator' ? { spectator: true } : {}),
+          });
         }
       }
       // Role-appropriate cursor: the seq this room's stream has reached

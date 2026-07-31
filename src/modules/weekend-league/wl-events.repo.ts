@@ -246,6 +246,11 @@ export const wlEventsRepo = {
     redisNowMs: number,
     limit = 50
   ): Promise<WlEventRow[]> {
+    // Contiguous prefix ONLY: the spectator stream must stay gapless and in
+    // order, so the batch is cut at the first event past the cursor that is
+    // not yet visible. Dispatches can carry an EXTENDED visibility (never
+    // spectator-visible while their live window is open); everything behind
+    // such an event waits for it — a reveal must never precede its question.
     const rows = await sql<WlEventRow[]>`
       SELECT tournament_id, seq, type, payload, redis_time_ms,
              live_emitted_redis_ms, visible_at_spec_ms, attempts, claim_token
@@ -253,12 +258,16 @@ export const wlEventsRepo = {
       WHERE tournament_id = ${tournamentId}
         AND seq > ${afterSeq}
         AND delivered_at IS NOT NULL
-        AND visible_at_spec_ms IS NOT NULL
-        AND visible_at_spec_ms <= ${redisNowMs}
       ORDER BY seq ASC
       LIMIT ${limit}
     `;
-    return rows.map((r) => ({ ...r, seq: Number(r.seq) }));
+    const due: WlEventRow[] = [];
+    for (const r of rows) {
+      const visibleAt = r.visible_at_spec_ms == null ? null : Number(r.visible_at_spec_ms);
+      if (visibleAt == null || visibleAt > redisNowMs) break;
+      due.push({ ...r, seq: Number(r.seq) });
+    }
+    return due;
   },
 
   /** Fenced spectator-cursor advance (monotonic). */

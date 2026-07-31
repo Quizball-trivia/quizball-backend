@@ -105,28 +105,44 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
       const nowMs = await wlRedisNowMs();
       const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
-      const missed = role === 'player'
-        ? await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
-            SELECT seq::text, type, payload FROM wl_events
-            WHERE tournament_id = ${tournamentId} AND seq > ${lo}
-              AND live_emitted_redis_ms IS NOT NULL
-              AND aborted_at IS NULL AND skipped_at IS NULL
-            ORDER BY seq ASC
-            LIMIT 500
-          `
-        : await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
-            SELECT seq::text, type, payload FROM wl_events
-            WHERE tournament_id = ${tournamentId} AND seq > ${lo}
-              AND visible_at_spec_ms IS NOT NULL AND visible_at_spec_ms <= ${nowMs}
-              AND aborted_at IS NULL AND skipped_at IS NULL
-            ORDER BY seq ASC
-            LIMIT 500
-          `;
+      let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
+      if (role === 'player') {
+        missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
+          SELECT seq::text, type, payload FROM wl_events
+          WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+            AND live_emitted_redis_ms IS NOT NULL
+            AND aborted_at IS NULL AND skipped_at IS NULL
+          ORDER BY seq ASC
+          LIMIT 500
+        `;
+      } else {
+        // Contiguous visible prefix only (same rule as wlDeliverSpectator):
+        // an extended-visibility dispatch holds back everything behind it,
+        // so a reveal can never be replayed before its question.
+        const rows = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown>; visible_at_spec_ms: string | null }>>`
+          SELECT seq::text, type, payload, visible_at_spec_ms::text FROM wl_events
+          WHERE tournament_id = ${tournamentId} AND seq > ${lo}
+            AND delivered_at IS NOT NULL
+            AND aborted_at IS NULL AND skipped_at IS NULL
+          ORDER BY seq ASC
+          LIMIT 500
+        `;
+        missed = [];
+        for (const r of rows) {
+          const visibleAt = r.visible_at_spec_ms == null ? null : Number(r.visible_at_spec_ms);
+          if (visibleAt == null || visibleAt > nowMs) break;
+          missed.push({ seq: r.seq, type: r.type, payload: r.payload });
+        }
+      }
       if (missed.length > 0) {
         const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
         for (const row of missed) {
+          // Spectators never get the answer key (see wlDeliverSpectator).
+          const payload = role === 'spectator' && row.type === 'dispatch'
+            ? { ...row.payload, evaluation: {} }
+            : row.payload;
           rawEmit.emit(`wl:${row.type}`, {
-            ...row.payload,
+            ...payload,
             type: row.type,
             tournamentId,
             seq: Number(row.seq),

@@ -1183,8 +1183,30 @@ export interface NotificationUnreadCountPayload {
   unreadCount: number;
 }
 
+/**
+ * Weekend League outbox events. Every payload carries the tournament-scoped
+ * seq (clients dedup + gap-detect on it) and serverNowAtEmit (regenerated on
+ * every physical emission — transport metadata, not event identity).
+ */
+export interface WlEventPayload {
+  seq: number;
+  type: 'phase' | 'dispatch' | 'clue_reveal' | 'reveal' | 'void'
+    | 'game_result' | 'final_result' | 'cancellation';
+  serverNowAtEmit: number;
+  spectator?: boolean;
+  [key: string]: unknown;
+}
+
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
+  'wl:phase': (data: WlEventPayload) => void;
+  'wl:dispatch': (data: WlEventPayload) => void;
+  'wl:clue_reveal': (data: WlEventPayload) => void;
+  'wl:reveal': (data: WlEventPayload) => void;
+  'wl:void': (data: WlEventPayload) => void;
+  'wl:game_result': (data: WlEventPayload) => void;
+  'wl:final_result': (data: WlEventPayload) => void;
+  'wl:cancellation': (data: WlEventPayload) => void;
   'presence:online_count': (data: PresenceOnlineCountPayload) => void;
   'notification:new': (data: NotificationPayload) => void;
   'notification:unread_count': (data: NotificationUnreadCountPayload) => void;

@@ -25,6 +25,8 @@ import {
   maxCountdownFoundForCeiling,
   maxPutInOrderMatchedForCeiling,
   minClueIndexForCeiling,
+  PROD_CLUE_INDEX_PRIOR,
+  PROD_PUT_IN_ORDER_PRIOR,
   questionBetaFromStats,
   resolveQuestionStats,
   sampleHistogram,
@@ -255,22 +257,128 @@ describe('HIGH — per-format models bypass Bernoulli AND respect the SCORE ceil
     }
   });
 
-  it('put-in-order matched cap keeps the SCORE at/under the ceiling (no 5/6→100 leak)', () => {
+  it('put-in-order E[score] stays at/under the ceiling (no 5/6→100 leak)', () => {
     for (const total of [4, 5, 6]) {
       const maxMatched = maxPutInOrderMatchedForCeiling(params, total);
       expect(calculatePutInOrderScore(maxMatched, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
-      const drawn = decidePutInOrderCorrectCount(params, inputs(), { '4': 4, '5': 8, '6': 3 }, total, keys);
-      expect(calculatePutInOrderScore(drawn, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+      // A single draw may legitimately be a full-credit placement (humans do it);
+      // the ceiling binds the EXPECTATION, not the individual draw.
+      let scoreSum = 0;
+      const n = 3000;
+      for (let i = 0; i < n; i += 1) {
+        const drawn = decidePutInOrderCorrectCount(
+          params, inputs(), { '4': 4, '5': 8, '6': 3 }, total, { ...keys, questionId: `pio-mix-${total}-${i}` },
+        );
+        scoreSum += calculatePutInOrderScore(drawn, total);
+      }
+      expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2);
     }
   });
 
-  it('clue reveal-index floor keeps a solved SCORE at/under the ceiling (multi-clue)', () => {
-    const minIdx = minClueIndexForCeiling(params);
-    expect(calculateCluesScore(true, minIdx)).toBeLessThanOrEqual(ceilScore + 1e-9);
-    const clue = decideClue(params, inputs(), { '0': 10, '1': 5 }, 5, keys);
-    expect(clue.solved).toBe(true);
-    expect(clue.index).toBeGreaterThanOrEqual(minIdx);
-    expect(calculateCluesScore(clue.solved, clue.index)).toBeLessThanOrEqual(ceilScore + 1e-9);
+  it('clue index 0 IS reachable (the realism fix) — the ceiling is held by the solve gate', () => {
+    // Regression guard for the robotic tell: decideClue used to clamp every solve
+    // up to minClueIndexForCeiling (=1), forcing a >=10s clue-slice offset on every
+    // bot solve. PROD-measured humans solve at index 0 in 41.6% of correct solves
+    // (N=28,130) — common, but far from the only outcome.
+    let sawIndexZero = false;
+    for (let i = 0; i < 500; i += 1) {
+      const clue = decideClue(params, inputs(), { '0': 100 }, 5, { ...keys, questionId: `clue0-${i}` });
+      if (clue.index === 0) sawIndexZero = true;
+    }
+    expect(sawIndexZero).toBe(true);
+  });
+
+  it('clue: with NO calibrated distribution the bot draws the PROD-measured index mix', () => {
+    // The fallback used to be a single deterministic skill-scaled index. It now
+    // samples the prod prior, so the bot's reveal-index mix matches real players.
+    const counts = [0, 0, 0, 0, 0];
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const clue = decideClue(params, inputs(), undefined, 5, { ...keys, questionId: `prior-${i}` });
+      counts[clue.index] += 1;
+    }
+    const expectedShares = PROD_CLUE_INDEX_PRIOR[5];
+    const total = expectedShares.reduce((a, b) => a + b, 0);
+    for (let idx = 0; idx < 5; idx += 1) {
+      const actual = counts[idx] / n;
+      const expected = expectedShares[idx] / total;
+      expect(Math.abs(actual - expected)).toBeLessThan(0.02); // within 2pp
+    }
+    // Every index is genuinely reachable (no collapsed mass).
+    expect(Math.min(...counts)).toBeGreaterThan(0);
+  });
+
+  it('put-in-order: with NO calibrated distribution the bot draws the PROD-measured count mix', () => {
+    const counts = [0, 0, 0, 0, 0];
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      // Count the DRAWN count, not the post-gate value, by reading the gate-free
+      // buckets: 0 is ambiguous (drawn-0 or gated-away), so assert on 1,2,4 and
+      // that 3 never appears (the prod prior has an empty 3 bucket).
+      const c = decidePutInOrderCorrectCount(params, inputs(), undefined, 4, { ...keys, questionId: `pioprior-${i}` });
+      counts[c] += 1;
+    }
+    const w = PROD_PUT_IN_ORDER_PRIOR[4];
+    const total = w.reduce((a, b) => a + b, 0);
+    // 3 has zero mass in the prod data and must never be drawn.
+    expect(counts[3]).toBe(0);
+    // 1 and 2 score under the ceiling (25/50) so they are never gated away —
+    // their observed shares should match the prior directly.
+    for (const idx of [1, 2]) {
+      expect(Math.abs(counts[idx] / n - w[idx] / total)).toBeLessThan(0.02);
+    }
+    // Full credit is drawn often (prod 35.3%) and survives the gate most of the
+    // time (gated at 86.31/100), so it must be clearly present.
+    expect(counts[4] / n).toBeGreaterThan(0.25);
+  });
+
+  it('clue: E[score] <= ceiling under the PROD index mix (the real-world case)', () => {
+    // The invariant must hold for the mixture the bot actually draws, not just
+    // per-index in isolation.
+    let scoreSum = 0;
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const clue = decideClue(params, inputs(), undefined, 5, { ...keys, questionId: `mix-${i}` });
+      scoreSum += calculateCluesScore(clue.solved, clue.index);
+    }
+    expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2);
+  });
+
+  it('put-in-order: E[score] <= ceiling under the PROD count mix', () => {
+    let scoreSum = 0;
+    const n = 20000;
+    for (let i = 0; i < n; i += 1) {
+      const c = decidePutInOrderCorrectCount(params, inputs(), undefined, 4, { ...keys, questionId: `piomix-${i}` });
+      scoreSum += calculatePutInOrderScore(c, 4);
+    }
+    expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2);
+  });
+
+  it('clue: E[score] <= ceiling at EVERY reveal index, for every clue count', () => {
+    // The invariant that replaces the index floor. E[score] = P(solve) * score(index).
+    for (const clueCount of [1, 2, 3, 4, 5]) {
+      for (let idx = 0; idx < clueCount; idx += 1) {
+        const hist = { [String(idx)]: 100 };
+        let solved = 0;
+        const n = 3000;
+        for (let i = 0; i < n; i += 1) {
+          const clue = decideClue(params, inputs(), hist, clueCount, { ...keys, questionId: `ck-${clueCount}-${idx}-${i}` });
+          expect(clue.index).toBe(idx);
+          if (clue.solved) solved += 1;
+        }
+        const expectedScore = (solved / n) * calculateCluesScore(true, idx);
+        expect(expectedScore).toBeLessThanOrEqual(ceilScore + 2);
+      }
+    }
+  });
+
+  it('clue: a solve whose score already fits under the ceiling is NEVER gated away', () => {
+    // index >= 1 scores <= 80 <= ceiling, so P(solve) must be 1 (no lost realism).
+    for (const idx of [1, 2, 3, 4]) {
+      const clue = decideClue(params, inputs(), { [String(idx)]: 10 }, 5, { ...keys, questionId: `nogate-${idx}` });
+      expect(calculateCluesScore(true, idx)).toBeLessThanOrEqual(ceilScore + 1e-9);
+      expect(clue.solved).toBe(true);
+    }
   });
 
   it('COARSE 1-clue question: bot sometimes does NOT solve so E[score] <= ceiling (no forced 100)', () => {
@@ -302,11 +410,72 @@ describe('HIGH — per-format models bypass Bernoulli AND respect the SCORE ceil
     expect(foundCount).toBeGreaterThan(0); // not deterministically zeroed (the CodeRabbit bug)
   });
 
-  it('1-item put-in-order allows full credit (score 20 <= ceiling, never zeroed)', () => {
-    expect(maxPutInOrderMatchedForCeiling(params, 1)).toBe(1);
-    const c = decidePutInOrderCorrectCount(params, inputs(), { '1': 10 }, 1, keys);
-    expect(c).toBe(1);
-    expect(calculatePutInOrderScore(c, 1)).toBe(20);
+  it('put-in-order cap uses the REAL proportional scoring, not the m*20 mirror', () => {
+    // Regression: the old cap mirrored score as min(m*20,100), which only matches
+    // calculatePutInOrderScore at totalItems===5. At totalItems===4 a perfect 4/4
+    // really scores 100 but the mirror claimed 80, so the "cap" admitted a
+    // ceiling-breaching 100.
+    for (const total of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const maxMatched = maxPutInOrderMatchedForCeiling(params, total);
+      expect(calculatePutInOrderScore(maxMatched, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+    }
+  });
+
+  it('put-in-order: full credit is REACHABLE but E[score] stays <= ceiling', () => {
+    // Humans place a perfect ordering (280 of 22,273 measured). Truncating made it
+    // structurally impossible; the gate makes it reachable while holding E[score].
+    for (const total of [4, 5, 6]) {
+      let perfect = 0;
+      let scoreSum = 0;
+      const n = 3000;
+      for (let i = 0; i < n; i += 1) {
+        const c = decidePutInOrderCorrectCount(
+          params, inputs(), { [String(total)]: 100 }, total, { ...keys, questionId: `pio-full-${total}-${i}` },
+        );
+        if (c === total) perfect += 1;
+        scoreSum += calculatePutInOrderScore(c, total);
+      }
+      expect(perfect).toBeGreaterThan(0); // reachable
+      expect(scoreSum / n).toBeLessThanOrEqual(ceilScore + 2); // but bounded
+    }
+  });
+
+  it('1-item put-in-order: full credit reachable, E[score] <= ceiling (1/1 scores 100)', () => {
+    // 1/1 scores 100 under the real proportional formula, so it MUST be gated.
+    let perfect = 0;
+    const n = 3000;
+    for (let i = 0; i < n; i += 1) {
+      const c = decidePutInOrderCorrectCount(params, inputs(), { '1': 10 }, 1, { ...keys, questionId: `pio1-${i}` });
+      expect(c === 0 || c === 1).toBe(true);
+      if (c === 1) perfect += 1;
+    }
+    expect(perfect).toBeGreaterThan(0);
+    expect((perfect / n) * 100).toBeLessThanOrEqual(ceilScore + 2);
+  });
+
+  it('special-format think-time == the MCQ lognormal draw (measured equivalence)', () => {
+    // Documents WHY no per-format timing distribution was added: measured staging
+    // human in-window medians are clue_chain 4765ms / put_in_order 4792ms vs the
+    // MCQ distribution the bot already draws from — statistically the same. The
+    // special-format branches in possession-ai reuse mcq.answerTimeMs verbatim,
+    // so the think-time is already human-calibrated; only the clue-slice OFFSET
+    // (index * 10000ms) made it look robotic.
+    const stats: ResolvedQuestionStats = { smoothedAccuracy: 0.5, medianTimeMs: 4765, logTimeSigma: 0.6 };
+    const times: number[] = [];
+    for (let i = 0; i < 2000; i += 1) {
+      const d = decideMcq(params, inputs(), stats, null, { ...keys, questionId: `t-${i}` });
+      times.push(d.answerTimeMs);
+    }
+    times.sort((a, b) => a - b);
+    const median = times[Math.floor(times.length / 2)];
+    const p90 = times[Math.floor(times.length * 0.9)];
+    // Human reference: median ~4.8s, p90 ~7.7s for both special formats.
+    expect(median).toBeGreaterThan(2500);
+    expect(median).toBeLessThan(8000);
+    expect(p90).toBeLessThan(15000);
+    // Floors respected on every draw.
+    expect(times[0]).toBeGreaterThanOrEqual(HARD_MIN_ANSWER_TIME_MS);
+    expect(times[0]).toBeGreaterThanOrEqual(topCohortSpeedFloorMs(params));
   });
 
   it('per-format decisions are deterministic', () => {

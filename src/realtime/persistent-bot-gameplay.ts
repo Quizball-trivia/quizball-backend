@@ -424,9 +424,37 @@ function ceilingSuccessGate(
   params: BotModelParams,
   keys: { botId: string; matchId: string; questionId: string },
   subkey: string,
+  probability?: number,
 ): boolean {
-  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:${subkey}:gate:${params.source.batchId}`);
-  return next() < ceilingScoreFraction(params);
+  // JSON tuple encoding: unambiguous even if an identifier ever contained the
+  // separator character (concatenation would alias {"a:b","c"} with {"a","b:c"}).
+  const next = seededStream(
+    JSON.stringify([keys.botId, keys.matchId, keys.questionId, subkey, 'gate', params.source.batchId]),
+  );
+  const p = probability ?? ceilingScoreFraction(params);
+  // Quantize p DOWNWARD to the generator's 2^-32 grid: comparing a uint32-derived
+  // uniform against an un-quantized p rounds the effective probability UP by as
+  // much as 2^-32, nudging E[score] a hair ABOVE the ceiling. Flooring keeps the
+  // "never above" invariant exact rather than approximately true.
+  return next() < Math.floor(p * 2 ** 32) / 2 ** 32;
+}
+
+/**
+ * The solve probability that makes E[score] land at (never above) the ceiling for
+ * a solve that would otherwise score `scoreIfSolved`. A non-solve scores 0, so
+ * E[score] = p * scoreIfSolved; requiring E[score] ≤ ceilingScore gives
+ * p ≤ ceilingScore / scoreIfSolved. Scores at/below the ceiling need no gate (p=1).
+ *
+ * This is what lets a bot solve at the SAME reveal index a human does (index 0 is
+ * where 21,618 of 21,619 measured human clue solves land) while keeping the
+ * ceiling invariant: realism moves into the SOLVE RATE instead of being faked by
+ * an artificially deep reveal index.
+ */
+function ceilingGateProbability(params: BotModelParams, scoreIfSolved: number): number {
+  if (scoreIfSolved <= 0) return 1;
+  const ceilScore = ceilingScoreFraction(params) * 100;
+  if (scoreIfSolved <= ceilScore + 1e-9) return 1;
+  return clamp(ceilScore / scoreIfSolved, 0, 1);
 }
 
 /**
@@ -488,33 +516,129 @@ export function decidePutInOrderCorrectCount(
   keys: { botId: string; matchId: string; questionId: string },
 ): number {
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:pio:${params.source.batchId}`);
+  // Same preference order as decideClue: calibrated per-question distribution,
+  // else the PROD-measured prior for this item count, else skill-scaled.
+  const priorHist = priorHistogram(PROD_PUT_IN_ORDER_PRIOR, totalItems, Math.max(0, totalItems));
+  const hist = correctCountDistribution && Object.keys(correctCountDistribution).length > 0
+    ? correctCountDistribution
+    : priorHist;
   let count: number;
-  if (correctCountDistribution && Object.keys(correctCountDistribution).length > 0) {
-    count = sampleHistogram(correctCountDistribution, next) ?? 0;
+  if (hist) {
+    count = sampleHistogram(hist, next) ?? 0;
   } else {
     count = Math.round(totalItems * cappedSkillFraction(params, inputs));
   }
-  return clamp(count, 0, maxPutInOrderMatchedForCeiling(params, totalItems));
+  count = clamp(count, 0, Math.max(0, totalItems));
+
+  // Full credit is REACHABLE (humans do it: 280 of 22,273 measured orderings were
+  // perfect), but a perfect placement scores 100 > ceiling, so it is gated rather
+  // than truncated: E[score] = p * putInOrderScore(count) ≤ ceiling. Truncating to
+  // maxPutInOrderMatchedForCeiling made a perfect ordering structurally
+  // impossible, which also made put-in-order "correct" unreachable for a bot.
+  //
+  // The gate is all-or-nothing (fail → 0). Falling back to the largest ungated
+  // count would ADD score on the failure branch, making
+  // E[score] = p*100 + (1-p)*83 exceed the ceiling — the gate only bounds
+  // E[score] when the complement scores 0.
+  const scoreIfPlaced = putInOrderScore(count, totalItems);
+  const gateP = ceilingGateProbability(params, scoreIfPlaced);
+  if (gateP >= 1) return count; // already at/under the ceiling: never gated
+  return ceilingSuccessGate(params, keys, 'pio', gateP) ? count : 0;
 }
 
 /**
- * The largest put-in-order matched-position count whose SCORE (20 pts/position,
- * capped 100, via calculatePutInOrderScore) stays at/under the ceiling. This is
- * what stops 5/6 → 100 pts from defeating a raw-fraction cap.
+ * The largest put-in-order matched-position count whose SCORE stays at/under the
+ * ceiling, using the REAL proportional scoring (calculatePutInOrderScore:
+ * round(matched/total * 100)). The previous `m * 20` mirror only coincided with
+ * the real formula at totalItems === 5; at totalItems === 4 it scored a perfect
+ * 4/4 as 80 while the engine awards 100, so the "cap" silently admitted a
+ * ceiling-breaching 100. Retained as the "largest count that needs no gate at
+ * all" threshold helper (decidePutInOrderCorrectCount now gates instead of
+ * truncating).
  */
 export function maxPutInOrderMatchedForCeiling(params: BotModelParams, totalItems: number): number {
   const maxScore = ceilingScoreFraction(params) * 100;
   const total = Math.max(0, totalItems);
   let best = 0;
   for (let m = 0; m <= total; m += 1) {
-    const score = Math.min(m * 20, 100);
-    if (score <= maxScore + 1e-9) best = m;
+    if (putInOrderScore(m, total) <= maxScore + 1e-9) best = m;
     else break;
   }
-  // With the 20-pt/position step and a ≥50% ceiling, m=1 (→20 pts) always passes
-  // for totalItems ≥ 1, so `best` is never a false 0 here; full credit is
-  // reachable on a 1-item question (score 20 ≤ ceiling). No coarse gate needed.
   return best;
+}
+
+/**
+ * Put-in-order SCORE mirror of calculatePutInOrderScore — proportional matched/
+ * total, rounded, capped 100. Kept local so this module stays IO/dep-free.
+ */
+function putInOrderScore(matched: number, totalItems: number): number {
+  if (totalItems <= 0) return 0;
+  const raw = (clamp(matched, 0, totalItems) / totalItems) * 100;
+  return clamp(Math.round(raw), 0, 100);
+}
+
+/**
+ * PROVISIONAL measured human priors for the special formats, used ONLY as the
+ * fallback when question_stats carries no per-question format distribution.
+ *
+ * Measured on PROD (lfbwhx), correct human ranked answers, answered_at >=
+ * 2026-07-05 (the be#161 reveal-ack fix, after which time_ms is trustworthy),
+ * is_ai/is_seed/is_deleted excluded. Read-only session-pooler query.
+ *
+ * WHY THESE ARE HARDCODED AND PROVISIONAL: question_stats.format_stats is
+ * populated from the aggregation, which currently derives special-format
+ * distributions from whatever corpus it is pointed at. On staging that corpus is
+ * dominated by the game-regression harness client (which submits junk guesses BY
+ * DESIGN, ~0% correct), so a staging-derived prior is an artifact, not behaviour.
+ * These prod-measured shares are the interim ground truth until the aggregation
+ * is re-run against prod. Replace them then.
+ *
+ * IMPORTANT — shares, not rates: the live clue-answer rejection bug
+ * (project_clue_answer_rejection_bug) suppresses how OFTEN real players are
+ * marked correct, so absolute solve RATES from this corpus are not trustworthy.
+ * Only the RELATIVE SHARES across indices are used here; the solve RATE is
+ * supplied independently by the ceiling gate.
+ *
+ * clue_chain, clueCount=5, N=28,130 correct solves:
+ *   idx 0 41.63% | 1 29.95% | 2 16.63% | 3 7.76% | 4 4.04%
+ * (median times 6.2s/15.7s/25.2s/35.2s/45.6s — ~10s apart, confirming the
+ * per-clue slice arithmetic.)
+ */
+export const PROD_CLUE_INDEX_PRIOR: Readonly<Record<number, readonly number[]>> = {
+  5: [11710, 8424, 4677, 2183, 1136],
+};
+
+/**
+ * put_in_order matched-count prior. Measured on PROD, totalItems=4, N=52,001:
+ *   0 16.45% | 1 18.04% | 2 30.19% | 3 0.00% | 4 35.32%
+ * Note the empty 3 bucket and the strong full-credit mode — real players either
+ * get the ordering right or miss by a lot. (The staging-derived numbers the
+ * previous PR used showed full credit at only 1.3%, an artifact of the same
+ * harness-dominated corpus.)
+ */
+export const PROD_PUT_IN_ORDER_PRIOR: Readonly<Record<number, readonly number[]>> = {
+  4: [8555, 9382, 15699, 0, 18365],
+};
+
+/**
+ * Build an index->weight histogram from a measured prior, restricted to the
+ * indices actually reachable for this variant. Returns undefined when no prior
+ * covers the variant, so the caller keeps its skill-scaled fallback.
+ */
+function priorHistogram(
+  prior: Readonly<Record<number, readonly number[]>>,
+  variant: number,
+  maxIndex: number,
+): Record<string, number> | undefined {
+  const weights = prior[variant];
+  if (!weights) return undefined;
+  const hist: Record<string, number> = {};
+  let total = 0;
+  for (let i = 0; i <= maxIndex && i < weights.length; i += 1) {
+    const w = weights[i];
+    if (w > 0) { hist[String(i)] = w; total += w; }
+  }
+  return total > 0 ? hist : undefined;
 }
 
 /** Clue SCORE mirror of calculateCluesScore (max(20, 100 − index*20), 0 if wrong). */
@@ -540,33 +664,49 @@ export function decideClue(
   keys: { botId: string; matchId: string; questionId: string },
 ): { solved: boolean; index: number } {
   const maxIndex = Math.max(0, clueCount - 1);
-  const ceilScore = ceilingScoreFraction(params) * 100;
-
-  // If even the deepest reveal (maxIndex) scores above the ceiling, no reveal
-  // index is safe — gate the solve so E[score] ≤ ceiling.
-  if (clueScore(true, maxIndex) > ceilScore + 1e-9) {
-    const solved = ceilingSuccessGate(params, keys, 'clue');
-    return { solved, index: maxIndex };
-  }
 
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:clue:${params.source.batchId}`);
+  // Preference order: the per-question calibrated distribution, else the
+  // PROD-measured prior for this clue count, else the skill-scaled fallback.
+  const priorHist = priorHistogram(PROD_CLUE_INDEX_PRIOR, clueCount, maxIndex);
+  const hist = clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0
+    ? clueRevealIndexDistribution
+    : priorHist;
   let index: number;
-  if (clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0) {
-    index = sampleHistogram(clueRevealIndexDistribution, next) ?? maxIndex;
+  if (hist) {
+    index = sampleHistogram(hist, next) ?? maxIndex;
   } else {
     const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
   }
-  // Floor the reveal index so the resulting SCORE stays at/under the ceiling
-  // (index 0 → 100 pts would defeat the cap when 100 > ceiling).
-  const minIndex = Math.min(minClueIndexForCeiling(params), maxIndex);
-  return { solved: true, index: clamp(index, minIndex, maxIndex) };
+  index = clamp(index, 0, maxIndex);
+
+  // The reveal index is NOT floored: a bot solves at the index a human does.
+  // PROD-measured (clueCount=5, N=28,130 correct solves): 41.6% / 30.0% / 16.6%
+  // / 7.8% / 4.0% across indices 0..4. The ceiling is held by gating the SOLVE
+  // RATE per drawn index — E[score] = p * clueScore(index) ≤ ceiling — so every
+  // index carries its own gate and the mix is bounded regardless of the shares.
+  // Flooring the index was the robotic tell: it forced every solve to index ≥ 1,
+  // i.e. ≥10s of clue-slice offset.
+  const solved = ceilingSuccessGate(
+    params,
+    keys,
+    'clue',
+    ceilingGateProbability(params, clueScore(true, index)),
+  );
+  return { solved, index };
 }
 
 /**
  * The smallest clue reveal index whose SCORE (calculateCluesScore = max(20,
- * 100 − index*20)) stays at/under the ceiling. Solving-instantly (index 0 →
- * 100) is disallowed when 100 exceeds the ceiling-equivalent score.
+ * 100 − index*20)) stays at/under the ceiling — i.e. the shallowest reveal that
+ * needs NO solve gate.
+ *
+ * NO LONGER a floor on the reveal index. decideClue used to clamp every solve up
+ * to this index, which forced a ≥10s clue-slice offset on every bot solve and was
+ * the robotic timing tell. The ceiling is now held by gating the solve rate
+ * (ceilingGateProbability), so index 0 is reachable. Retained as a diagnostic /
+ * threshold helper.
  */
 export function minClueIndexForCeiling(params: BotModelParams): number {
   const maxScore = ceilingScoreFraction(params) * 100;

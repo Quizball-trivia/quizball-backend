@@ -71,7 +71,7 @@ async function seedTournament(opts: SeedTournamentOptions = {}): Promise<string>
     )
     VALUES (
       ${opts.weekKey ?? null}, true, ${opts.status ?? 'entry_open'},
-      ${sql.json({ launch_edition: opts.launchEdition ?? false, qp_target: opts.qpTarget ?? 200 })},
+      ${sql.json({ launch_edition: opts.launchEdition ?? false, free_entry: opts.launchEdition ?? false, qp_target: opts.qpTarget ?? 200 })},
       ${new Date(now - 60_000)},
       ${new Date(now + (opts.entryClosesInMs ?? 60_000))},
       ${new Date(now + (opts.qualifierStartsInMs ?? 5 * 60_000))},

@@ -26,6 +26,11 @@ function launchEditionOf(tournament: WlTournamentRow | null): boolean {
   return raw === true || raw === 'true';
 }
 
+function freeEntryOf(tournament: WlTournamentRow | null): boolean {
+  const raw = tournament?.config?.['free_entry'];
+  return raw === true || raw === 'true';
+}
+
 /**
  * The week whose QP we surface: the active tournament's week when one exists,
  * else the calendar week accruing right now (null on weekends between events).
@@ -48,7 +53,7 @@ async function loadQp(
     wins,
     losses,
     target,
-    qualified: launchEditionOf(tournament) || balance >= target,
+    qualified: (tournament?.is_test === true && freeEntryOf(tournament)) || balance >= target,
   };
 }
 

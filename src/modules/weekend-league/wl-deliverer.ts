@@ -160,14 +160,18 @@ export async function wlDeliverPending(
         await scheduleWlTick(tournamentId, Number(outPayload['deadlineAt'])).catch(() => {});
       }
 
-      if (event.type === 'game_result' || event.type === 'final_result') {
-        // Eliminated players lose live-room access the moment their cut is
-        // announced — from here they belong in the 30s-delayed spectator
-        // room. Eviction rides the user rooms every socket joins at auth.
-        const eliminatedIds = Array.isArray(event.payload['eliminated_user_ids'])
-          ? (event.payload['eliminated_user_ids'] as string[])
-          : [];
-        for (const userId of eliminatedIds) {
+      {
+        // Generic live-room eviction: cut players (result events), final
+        // no-shows (phase events) and the whole field at the final result
+        // lose live access the moment the event lands — from here they
+        // belong in the delayed spectator room. Rides the user rooms every
+        // socket joins at auth (adapter-propagated across replicas).
+        const evictIds = new Set<string>();
+        for (const key of ['eliminated_user_ids', 'evicted_user_ids']) {
+          const list = event.payload[key];
+          if (Array.isArray(list)) for (const id of list as string[]) evictIds.add(id);
+        }
+        for (const userId of evictIds) {
           io.in(`user:${userId}`).socketsLeave(wlPlayersRoom(tournamentId));
         }
       }

@@ -169,6 +169,7 @@ describe('WL live game end-to-end', () => {
       isTest: true,
       config: buildWlConfig({
         launch_edition: true,
+        free_entry: true,
         question_time_ms: 1_000,
         dispatch_lead_ms: 0,
         break_ms: 2_000,

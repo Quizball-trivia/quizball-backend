@@ -208,10 +208,13 @@ export const wlOpsController = {
       week_key: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     }).parse(req.body ?? {});
     const { sql } = await import('../../db/index.js');
+    // Absolute, convergent recompute: only S2 matches NOT already in the
+    // ordinary ledger count (no double pay with PR1-era accrual), and the
+    // grant row UPSERTS so reruns after more settlements stay correct.
     const rows = await sql<{ user_id: string }[]>`
       INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
       SELECT '00000000-0000-4000-8000-00000000019b'::uuid, s.user_id, ${input.week_key}::date,
-             s.wins * 25 + s.losses * 10, 'win'
+             s.wins * 25 + s.losses * 10, 'grant'
       FROM (
         SELECT rc.user_id,
                COUNT(*) FILTER (WHERE rc.result = 'win')::int AS wins,
@@ -219,11 +222,15 @@ export const wlOpsController = {
         FROM ranked_rp_changes rc
         JOIN users u ON u.id = rc.user_id AND u.is_ai = false AND u.is_seed = false
           AND u.is_deleted = false AND u.deleted_at IS NULL
+        LEFT JOIN wl_qp_awards existing
+          ON existing.match_id = rc.match_id AND existing.user_id = rc.user_id
         WHERE rc.created_at >= ${new Date(input.since)}
+          AND existing.match_id IS NULL
         GROUP BY rc.user_id
       ) s
       WHERE s.wins * 25 + s.losses * 10 > 0
-      ON CONFLICT (match_id, user_id) DO NOTHING
+      ON CONFLICT (match_id, user_id) DO UPDATE SET
+        points = EXCLUDED.points, week_key = EXCLUDED.week_key
       RETURNING user_id
     `;
     logger.warn({ actor: input.actor, inserted: rows.length }, 'WL ops: S2 QP bootstrap');

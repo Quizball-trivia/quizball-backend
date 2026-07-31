@@ -78,7 +78,7 @@ export const weekendLeagueRepo = {
     const [row] = await sql<Array<{ balance: number; wins: number; losses: number }>>`
       SELECT COALESCE(SUM(a.points), 0)::int AS balance,
              COUNT(*) FILTER (WHERE a.result = 'win')::int AS wins,
-             COUNT(*) FILTER (WHERE a.result = 'loss')::int AS losses
+             COUNT(*) FILTER (WHERE a.result = 'loss')::int AS losses -- grants excluded
       FROM wl_qp_awards a
       WHERE a.user_id = ${userId}
         AND a.created_at > COALESCE(
@@ -117,12 +117,17 @@ export const weekendLeagueRepo = {
    * reads, which is only reporting, never authorization.
    */
   async enter(tournamentId: string, userId: string): Promise<boolean> {
-    // One transaction, one authorization point: the entry INSERT gates on
-    // the RUNNING BALANCE (awards since latest reset); a successful claim
-    // inserts the reset row alongside it — the ticket is bought, the
-    // balance is zero, the grind restarts. launch_edition=true (test
-    // tournaments) skips the balance gate but still resets.
-    const rows = await sql<{ user_id: string }[]>`
+    // Wallet serialization: the SAME users-row lock the ranked settlement
+    // transaction takes (applySettlement's FOR UPDATE) is taken here first,
+    // so entries serialize against award writers AND against concurrent
+    // entries into other tournaments — a balance can never be spent twice,
+    // and an award blocked behind a reset lands (clock_timestamp) after it.
+    // Free entry is a TEST-tournament property only; launch is not free.
+    let entered = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      await txSql`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+      const rows = await txSql<{ user_id: string }[]>`
       WITH balance AS (
         SELECT COALESCE(SUM(a.points), 0)::int AS points
         FROM wl_qp_awards a
@@ -143,7 +148,7 @@ export const weekendLeagueRepo = {
           AND t.entry_closes_at IS NOT NULL
           AND NOW() < t.entry_closes_at
           AND (
-            COALESCE(t.config->>'launch_edition', 'false') = 'true'
+            (t.is_test = true AND COALESCE(t.config->>'free_entry', 'false') = 'true')
             OR balance.points >= (
               CASE WHEN t.config->>'qp_target' ~ '^[0-9]{1,6}$'
                    THEN (t.config->>'qp_target')::int ELSE 200 END
@@ -158,7 +163,9 @@ export const weekendLeagueRepo = {
       ON CONFLICT (user_id, tournament_id) DO NOTHING
       RETURNING user_id
     `;
-    return rows.length > 0;
+      entered = rows.length > 0;
+    });
+    return entered;
   },
 
   /** Saturday check-in window: [qualifier_starts_at − config window, start). */

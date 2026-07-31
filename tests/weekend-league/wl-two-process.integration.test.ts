@@ -100,7 +100,7 @@ describe('WL two-process orchestration', () => {
     const created = await repo.createWithInitialEvent({
       weekKey: null,
       isTest: true,
-      config: buildConfig({ launch_edition: true, checkin_window_ms: 60_000, engine: 'stub' }),
+      config: buildConfig({ launch_edition: true, free_entry: true, checkin_window_ms: 60_000, engine: 'stub' }),
       entryOpensAt: new Date(now - 3600_000),
       entryClosesAt: new Date(now - 120_000),
       qualifierStartsAt: new Date(now - 30_000),

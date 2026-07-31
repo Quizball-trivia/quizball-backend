@@ -218,6 +218,19 @@ async function completeTournament(
         WHERE tournament_id = ${tournamentId} AND user_id = ${championUserId}
       `;
     }
+    // dns_v1 walkover awards: qualifier ordering among finalists, the
+    // checked-in walkover champion first.
+    const ordering = await txSql<Array<{ user_id: string; rank: number }>>`
+      SELECT e.user_id,
+             ROW_NUMBER() OVER (
+               ORDER BY (e.user_id = ${championUserId}::uuid) DESC, r.rank ASC
+             )::int AS rank
+      FROM wl_entries e
+      JOIN wl_game_results r
+        ON r.tournament_id = e.tournament_id AND r.user_id = e.user_id AND r.game_index = 2
+      WHERE e.tournament_id = ${tournamentId} AND e.state IN ('champion', 'finalist', 'no_show')
+    `;
+    await writeAwards(txSql, tournamentId, ordering);
     await wlEventsRepo.append(txSql, {
       tournamentId,
       type: 'phase',
@@ -432,9 +445,10 @@ export const wlEngineLive: WlEngine = {
         RETURNING id
       `;
       if (moved.length === 0) return;
-      await txSql`
+      const noShows = await txSql<{ user_id: string }[]>`
         UPDATE wl_entries SET state = 'no_show'
         WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NULL
+        RETURNING user_id
       `;
       const ids = checkedIn.map((c) => c.user_id);
       await txSql`
@@ -444,12 +458,48 @@ export const wlEngineLive: WlEngine = {
       `;
       await wlEventsRepo.append(txSql, {
         tournamentId: t.id, type: 'phase',
-        payload: { from: 'final_checkin', to: 'final_live', checked_in: checkedIn.length },
+        payload: {
+          from: 'final_checkin', to: 'final_live', checked_in: checkedIn.length,
+          evicted_user_ids: noShows.map((n) => n.user_id),
+        },
         redisTimeMs: redisNow,
       });
     });
   },
 };
+
+/**
+ * Award settlement shared by the played final and the dns_v1 walkover:
+ * bands map to the HUMANS-ONLY ordering with the full account predicate
+ * (bots, seed accounts and deleted accounts can never hold entitlements),
+ * cascading past excluded placements. `ordering` rows come pre-ranked.
+ */
+async function writeAwards(
+  db: typeof sql,
+  tournamentId: string,
+  ordering: Array<{ user_id: string; rank: number }>
+): Promise<void> {
+  if (ordering.length === 0) return;
+  const ids = ordering.map((o) => o.user_id);
+  const ranks = ordering.map((o) => o.rank);
+  await db`
+    INSERT INTO wl_awards (tournament_id, user_id, final_rank, band, prize_type)
+    SELECT ${tournamentId}, h.user_id, h.rank,
+           CASE h.human_rank WHEN 1 THEN 'champion' WHEN 2 THEN 'second'
+                             WHEN 3 THEN 'third' ELSE 'finalist' END,
+           CASE h.human_rank WHEN 1 THEN 'grand' WHEN 2 THEN 'runner_up'
+                             WHEN 3 THEN 'third' ELSE 'participation' END
+    FROM (
+      SELECT o.u AS user_id, o.r AS rank,
+             ROW_NUMBER() OVER (ORDER BY o.r ASC) AS human_rank
+      FROM unnest(${db.array(ids)}::uuid[], ${db.array(ranks)}::int[]) AS o(u, r)
+      JOIN users usr ON usr.id = o.u
+        AND usr.is_ai = false AND usr.is_seed = false
+        AND usr.is_deleted = false AND usr.deleted_at IS NULL
+    ) h
+    ON CONFLICT (tournament_id, user_id) DO NOTHING
+  `;
+}
 
 export const WL_FINAL_GAME_INDEX = 3;
 
@@ -542,25 +592,8 @@ async function finalizeGame(
         FROM unnest(${sql.array(idsArr)}::uuid[], ${sql.array(ranksArr)}::int[]) AS t(u, r)
         WHERE e.tournament_id = ${t.id} AND e.user_id = t.u
       `;
-      // Awards with the humans-only firewall: prize bands map to the
-      // humans-only ordering, cascading past any bot placements (PR8 fills
-      // fields with bots; a bot must never hold an entitlement row).
-      await txSql`
-        INSERT INTO wl_awards (tournament_id, user_id, final_rank, band, prize_type)
-        SELECT ${t.id}, h.user_id, h.rank,
-               CASE h.human_rank WHEN 1 THEN 'champion' WHEN 2 THEN 'second'
-                                 WHEN 3 THEN 'third' ELSE 'finalist' END,
-               CASE h.human_rank WHEN 1 THEN 'grand' WHEN 2 THEN 'runner_up'
-                                 WHEN 3 THEN 'third' ELSE 'participation' END
-        FROM (
-          SELECT r.user_id, r.rank,
-                 ROW_NUMBER() OVER (ORDER BY r.rank ASC) AS human_rank
-          FROM wl_game_results r
-          JOIN users u ON u.id = r.user_id AND u.is_ai = false
-          WHERE r.tournament_id = ${t.id} AND r.game_index = ${gameIndex}
-        ) h
-        ON CONFLICT (tournament_id, user_id) DO NOTHING
-      `;
+      await writeAwards(txSql, t.id,
+        board.map((b) => ({ user_id: b.user_id, rank: b.rank })));
     } else {
       if (isLastQualifierGame && survivors.length > 0) {
         await txSql`
@@ -598,7 +631,9 @@ async function finalizeGame(
         board: board.slice(0, WL_FINALISTS),
         field: board.length,
         advanced: advanceCount,
-        eliminated_user_ids: eliminated,
+        // The final ends the tournament: EVERYONE leaves the live room
+        // (non-champions and champion alike — the room is over).
+        eliminated_user_ids: isFinal ? board.map((b) => b.user_id) : eliminated,
         ...(isFinal ? { champion_user_id: board[0]?.user_id ?? null, final_played: true } : {}),
       },
       redisTimeMs: redisNow,

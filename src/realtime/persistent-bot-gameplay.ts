@@ -426,8 +426,17 @@ function ceilingSuccessGate(
   subkey: string,
   probability?: number,
 ): boolean {
-  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:${subkey}:gate:${params.source.batchId}`);
-  return next() < (probability ?? ceilingScoreFraction(params));
+  // JSON tuple encoding: unambiguous even if an identifier ever contained the
+  // separator character (concatenation would alias {"a:b","c"} with {"a","b:c"}).
+  const next = seededStream(
+    JSON.stringify([keys.botId, keys.matchId, keys.questionId, subkey, 'gate', params.source.batchId]),
+  );
+  const p = probability ?? ceilingScoreFraction(params);
+  // Quantize p DOWNWARD to the generator's 2^-32 grid: comparing a uint32-derived
+  // uniform against an un-quantized p rounds the effective probability UP by as
+  // much as 2^-32, nudging E[score] a hair ABOVE the ceiling. Flooring keeps the
+  // "never above" invariant exact rather than approximately true.
+  return next() < Math.floor(p * 2 ** 32) / 2 ** 32;
 }
 
 /**

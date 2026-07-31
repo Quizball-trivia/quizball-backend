@@ -20,7 +20,9 @@ async function deleteAutoCreatedRealTournaments(): Promise<void> {
   // The orchestrator's weekly auto-creation plants a REAL tournament during
   // ticks, which then shadows every test tournament (real-first resolution).
   // Local-test-DB only, by construction of tests/setup.ts — hard-guard anyway.
-  if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) return;
+  try {
+    if (!['localhost', '127.0.0.1'].includes(new URL(process.env.DATABASE_URL ?? '').hostname)) return;
+  } catch { return; }
   await sql`DELETE FROM wl_tournaments WHERE is_test = false`;
 }
 
@@ -71,7 +73,7 @@ async function seedTournament(opts: SeedTournamentOptions = {}): Promise<string>
     )
     VALUES (
       ${opts.weekKey ?? null}, true, ${opts.status ?? 'entry_open'},
-      ${sql.json({ launch_edition: opts.launchEdition ?? false, qp_target: opts.qpTarget ?? 200 })},
+      ${sql.json({ launch_edition: opts.launchEdition ?? false, free_entry: opts.launchEdition ?? false, qp_target: opts.qpTarget ?? 200 })},
       ${new Date(now - 60_000)},
       ${new Date(now + (opts.entryClosesInMs ?? 60_000))},
       ${new Date(now + (opts.qualifierStartsInMs ?? 5 * 60_000))},
@@ -84,9 +86,11 @@ async function seedTournament(opts: SeedTournamentOptions = {}): Promise<string>
 }
 
 async function seedQp(weekKey: string, userId: string, points: number): Promise<void> {
+  // QP economy v2: entry gates on the AWARD-LEDGER balance, so tests seed
+  // award rows (a synthetic match id per row keeps the PK unique).
   await sql`
-    INSERT INTO wl_qp (week_key, user_id, points, wins, losses)
-    VALUES (${weekKey}::date, ${userId}, ${points}, 0, 0)
+    INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
+    VALUES (gen_random_uuid(), ${userId}, ${weekKey}::date, ${points}, 'win')
   `;
 }
 
@@ -129,6 +133,7 @@ afterAll(async () => {
     await sql`DELETE FROM wl_tournaments WHERE id = ANY(${sql.array(testTournamentIds)}::uuid[])`;
   }
   if (testUserIds.length > 0) {
+    await sql`DELETE FROM wl_qp_awards WHERE user_id = ANY(${sql.array(testUserIds)}::uuid[])`;
     await sql`DELETE FROM wl_qp WHERE user_id = ANY(${sql.array(testUserIds)}::uuid[])`;
     await sql`DELETE FROM users WHERE id = ANY(${sql.array(testUserIds)}::uuid[])`;
   }
@@ -168,17 +173,28 @@ describe('enter', () => {
     expect(result).toEqual({ entered: false, already_entered: false, reason: 'not_qualified' });
   });
 
-  it('admits entry at/above the QP target and snapshots qp_at_entry', async ({ skip }) => {
+  it('admits entry at/above the target, snapshots the balance, and RESETS it', async ({ skip }) => {
     if (!dbAvailable) skip();
     const user = await seedUser(`wle-d-${Date.now()}`);
     const tid = await seedTournament({ launchEdition: false, qpTarget: 200, weekKey: '2026-09-12' });
     await seedQp('2026-09-12', user, 235);
+
+    const before = await weekendLeagueRepo.getQpBalance(user);
+    expect(before.balance).toBe(235);
 
     const result = await weekendLeagueService.enter(user);
     expect(result.entered).toBe(true);
 
     const entry = await weekendLeagueRepo.getEntry(tid, user);
     expect(entry?.qp_at_entry).toBe(235);
+
+    // The ticket is bought: balance resets to zero, the grind restarts —
+    // and NEW awards accrue after the reset.
+    const after = await weekendLeagueRepo.getQpBalance(user);
+    expect(after.balance).toBe(0);
+    await seedQp('2026-09-12', user, 25);
+    const regrind = await weekendLeagueRepo.getQpBalance(user);
+    expect(regrind.balance).toBe(25);
   });
 
   it('rejects entry in a non-entry phase', async ({ skip }) => {

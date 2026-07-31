@@ -34,7 +34,7 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
   registerEndpoint(registry, {
     method: 'get',
     path: '/api/v1/weekend-league/qp',
-    summary: 'Caller\'s qualification points for the active week',
+    summary: 'Caller\'s QP running balance (resets when a ticket is claimed)',
     tags: ['WeekendLeague'],
     security: [{ bearerAuth: [] }],
     responses: {

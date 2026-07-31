@@ -20,6 +20,9 @@ export const wlTournamentConfigSchema = z.object({
   /** Which engine drives this tournament. 'stub' is for orchestration tests
    *  only and is refused for real (non-test) tournaments at runtime. */
   engine: z.enum(['live', 'stub']).default('live'),
+  /** Free entry (no QP spend/gate). Honored ONLY on is_test tournaments —
+   *  real events always charge the balance. */
+  free_entry: z.boolean().default(false),
   qp_target: z.number().int().min(0).max(999_999),
   question_time_ms: z.number().int().min(1_000).max(120_000),
   dispatch_lead_ms: z.number().int().min(0).max(30_000),

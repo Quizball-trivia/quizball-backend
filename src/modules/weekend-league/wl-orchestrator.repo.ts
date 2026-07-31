@@ -17,6 +17,8 @@ export interface WlOrchestratorTournament {
   status: WlTournamentStatus;
   paused_from_status: WlTournamentStatus | null;
   config: Record<string, unknown>;
+  stage: Record<string, unknown> | null;
+  ladder: Record<string, unknown> | null;
   entry_opens_at: string | null;
   entry_closes_at: string | null;
   qualifier_starts_at: string | null;
@@ -28,7 +30,7 @@ export interface WlOrchestratorTournament {
 }
 
 const TOURNAMENT_COLUMNS = sql`
-  id, week_key::text, is_test, status, paused_from_status, config,
+  id, week_key::text, is_test, status, paused_from_status, config, stage, ladder,
   entry_opens_at::text, entry_closes_at::text,
   qualifier_starts_at::text, final_starts_at::text,
   live_delivered_seq, spec_delivered_seq, champion_user_id, final_played

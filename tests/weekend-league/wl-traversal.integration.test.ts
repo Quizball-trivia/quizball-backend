@@ -56,6 +56,9 @@ const fakeIo = {
       },
     };
   },
+  in() {
+    return { socketsLeave() { /* sink */ } };
+  },
 } as unknown as import('../../src/realtime/socket-server.js').QuizballServer;
 
 async function seedUser(nickname: string): Promise<string> {

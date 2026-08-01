@@ -173,32 +173,19 @@ async function api<T>(
   body?: unknown,
   opsToken?: string
 ): Promise<{ status: number; body: T }> {
-  // A multi-hour run WILL see transient resets — a poll must never kill the
-  // harness. Mutating calls stay at one attempt from the caller's
-  // perspective (the WL endpoints are idempotent anyway), reads retry.
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const res = await fetch(`${cfg.apiBase}${path}`, {
-        method,
-        headers: {
-          'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-          ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(20_000),
-      });
-      const text = await res.text();
-      let parsed: unknown = null;
-      try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-      return { status: res.status, body: parsed as T };
-    } catch (error) {
-      lastError = error;
-      await sleep(1_000 * (attempt + 1));
-    }
-  }
-  throw lastError;
+  const res = await fetch(`${cfg.apiBase}${path}`, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed: unknown = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+  return { status: res.status, body: parsed as T };
 }
 
 function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): unknown {
@@ -274,11 +261,11 @@ function connectPlayer(
       if (ack?.ok && typeof ack.seq === 'number') {
         state.lastSeq = Math.max(state.lastSeq, ack.seq);
       }
-      // The snapshot score is authoritative — a reconnect that lost an ack
-      // resyncs here exactly like the real client does.
+      // The snapshot score is AUTHORITATIVE in both directions — it must
+      // also resync DOWN after a void/game transition missed offline.
       const snapScore = ack?.snapshot?.score;
       if (typeof snapScore === 'number') {
-        state.score = Math.max(state.score, snapScore);
+        state.score = snapScore;
       }
     });
   });
@@ -386,6 +373,18 @@ function connectPlayer(
       gameResults.set(gameIndex, {
         field: Number(payload['field'] ?? 0),
         advanced: Number(payload['advanced'] ?? 0),
+      });
+    }
+    // The final's board gets the same ledger-vs-board integrity check.
+    const board = Array.isArray(payload['board'])
+      ? (payload['board'] as Array<{ user_id: string; points: number }>)
+      : [];
+    const mine = board.find((b) => b.user_id === state.user.userId);
+    if (mine && mine.points !== state.score) {
+      state.scoreViolations.push({
+        gameIndex: Number.isFinite(gameIndex) ? gameIndex : -1,
+        ledger: state.score,
+        board: mine.points,
       });
     }
     onFinal(typeof payload['champion_user_id'] === 'string' ? payload['champion_user_id'] : null);
@@ -568,13 +567,10 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     const deadline = Date.now() + maxMs;
     let last = 'unknown';
     while (Date.now() < deadline) {
-      const res = await api<{ tournament?: { id: string; status: string } | null }>(
-        cfg, states[0]!.user.token, 'GET', '/api/v1/weekend-league/current'
-      ).catch(() => null);
-      const tour = res?.body?.tournament;
-      if (tour?.id === tournamentId) {
-        last = tour.status;
-        if (predicate(tour.status)) return tour.status;
+      const status = await readStatus().catch(() => null);
+      if (status) {
+        last = status;
+        if (predicate(status)) return status;
       }
       await sleep(2_000);
     }
@@ -709,8 +705,14 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     }
   }
   const lastQualifier = orderedGames.filter(([gi]) => gi <= 2).at(-1)?.[1];
-  if (cfg.players >= 24 && lastQualifier && lastQualifier.advanced !== 24) {
-    ladderBreaks.push(`finalists=${lastQualifier.advanced} != 24`);
+  if (cfg.players >= 2 && orderedGames.length === 0) {
+    ladderBreaks.push('no game results observed at all');
+  }
+  if (cfg.players >= 24) {
+    if (!lastQualifier) ladderBreaks.push('no qualifier results observed');
+    else if (lastQualifier.advanced !== 24) {
+      ladderBreaks.push(`finalists=${lastQualifier.advanced} != 24`);
+    }
   }
   const eliminationViolations = states.reduce((n, s) => n + s.liveDispatchesAfterElimination, 0);
   const spectatorSeqGaps = spectators.reduce((n, s) => {
@@ -791,8 +793,9 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       detail: `post-elimination dispatches=${eliminationViolations}; ladder: ${ladderBreaks.length === 0 ? 'exact' : ladderBreaks.join('; ')}`,
     },
     spectatorNoAnswerKey: {
-      pass: summary.spectator.evaluationLeaks === 0,
-      detail: `evaluation leaks=${summary.spectator.evaluationLeaks}`,
+      pass: (cfg.spectators === 0 || summary.spectator.dispatches > 0)
+        && summary.spectator.evaluationLeaks === 0,
+      detail: `evaluation leaks=${summary.spectator.evaluationLeaks} over ${summary.spectator.dispatches} dispatches (no-data fails)`,
     },
     spectatorWindowClosed: {
       pass: summary.spectator.openWindowLeaks === 0,

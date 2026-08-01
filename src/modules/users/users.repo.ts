@@ -220,9 +220,9 @@ export const usersRepo = {
         return existingBeforeCreate[0].user_data;
       }
 
-      const avatarCustomizationJson = userData.avatarCustomization == null
-        ? null
-        : JSON.stringify(userData.avatarCustomization);
+      // Pass the OBJECT, not JSON.stringify(...): pre-stringifying double-encodes
+      // it into a jsonb STRING scalar for the $7::jsonb param (see matches.repo).
+      const avatarCustomizationJson = (userData.avatarCustomization ?? null) as Json;
       const phoneNumber = normalizeOptionalText(userData.phoneNumber);
       const result = await tx.unsafe<User[]>(
         `INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)

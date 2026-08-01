@@ -298,7 +298,9 @@ export const objectivesRepo = {
         input.objectiveId,
         toIso(input.periodStart),
         input.delta,
-        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        // Pass the OBJECT, not JSON.stringify(...): pre-stringifying double-encodes
+        // it into a jsonb STRING scalar for the $5::jsonb param (see matches.repo).
+        input.metadata === undefined ? null : (input.metadata as Json),
       ]
     );
     return row ?? null;
@@ -335,7 +337,9 @@ export const objectivesRepo = {
         input.objectiveId,
         toIso(input.periodStart),
         input.progress,
-        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        // Pass the OBJECT, not JSON.stringify(...): pre-stringifying double-encodes
+        // it into a jsonb STRING scalar for the $5::jsonb param (see matches.repo).
+        input.metadata === undefined ? null : (input.metadata as Json),
       ]
     );
     return row ?? null;

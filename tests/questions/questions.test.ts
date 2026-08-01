@@ -74,6 +74,15 @@ vi.mock('../../src/http/middleware/require-role.js', () => ({
 import { questionsRepo } from '../../src/modules/questions/questions.repo.js';
 import { categoriesRepo } from '../../src/modules/categories/categories.repo.js';
 import { translationService } from '../../src/modules/questions/translation.service.js';
+import { authMiddleware } from '../../src/http/middleware/auth.js';
+
+function authenticateAs(role: 'admin' | 'player'): void {
+  (authMiddleware as Mock).mockImplementation((req, _res, next) => {
+    req.user = { id: 'test-user-id', role };
+    req.identity = { provider: 'test', subject: 'test-sub' };
+    next();
+  });
+}
 
 const mockMcqPayload = {
   type: 'mcq_single' as const,
@@ -125,6 +134,7 @@ describe('Questions API', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    authenticateAs('admin');
     (translationService.isConfigured as Mock).mockReturnValue(true);
     (translationService.translateInBackground as Mock).mockResolvedValue(undefined);
     (translationService.getBackfillCounts as Mock).mockResolvedValue({ questions: 0, categories: 0 });
@@ -151,6 +161,29 @@ describe('Questions API', () => {
       expect(response.body.limit).toBe(20);
       expect(response.body.total).toBe(1);
       expect(response.body.total_pages).toBe(1);
+    });
+
+    it('restricts player callers to published questions and ignores CMS-only filters', async () => {
+      authenticateAs('player');
+      (questionsRepo.list as Mock).mockResolvedValue({
+        questions: [{ ...mockQuestion, status: 'published' }],
+        total: 1,
+      });
+
+      const response = await request(app)
+        .get('/api/v1/questions')
+        .query({ status: 'draft', search: 'goal', mcq_image: 'with' });
+
+      expect(response.status).toBe(200);
+      expect(questionsRepo.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'published',
+          search: undefined,
+          mcqImage: undefined,
+        }),
+        1,
+        20
+      );
     });
 
     it('should filter by category_id', async () => {
@@ -244,6 +277,24 @@ describe('Questions API', () => {
       );
     });
 
+    it('should ignore search terms shorter than three characters', async () => {
+      (questionsRepo.list as Mock).mockResolvedValue({
+        questions: [],
+        total: 0,
+      });
+
+      const response = await request(app)
+        .get('/api/v1/questions')
+        .query({ search: 'ab' });
+
+      expect(response.status).toBe(200);
+      expect(questionsRepo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ search: undefined }),
+        1,
+        20
+      );
+    });
+
     it('should respect page and limit params', async () => {
       (questionsRepo.list as Mock).mockResolvedValue({
         questions: [],
@@ -281,14 +332,21 @@ describe('Questions API', () => {
   });
 
   describe('GET /api/v1/questions/:id', () => {
-    it('should return question with payload', async () => {
-      // A non-admin caller only ever sees a published, ranked-eligible
-      // question: drafts and questions reserved for a public campaign page
-      // are 404ed so this route cannot enumerate them.
+    it('does not reveal draft questions to player callers', async () => {
+      authenticateAs('player');
+      (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
+
+      const response = await request(app).get(`/api/v1/questions/${mockQuestion.id}`);
+
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('NOT_FOUND');
+    });
+
+    it('allows player callers to retrieve published questions for solo gameplay', async () => {
+      authenticateAs('player');
       (questionsRepo.getById as Mock).mockResolvedValue({
         ...mockQuestion,
         status: 'published',
-        ranked_eligible: true,
       });
 
       const response = await request(app).get(`/api/v1/questions/${mockQuestion.id}`);
@@ -334,20 +392,6 @@ describe('Questions API', () => {
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(mockQuestion.id);
       expect(response.body.payload).toEqual(mockQuestion.payload);
-    });
-
-    it('hides a question reserved for a public campaign page', async () => {
-      (questionsRepo.getById as Mock).mockResolvedValue({
-        ...mockQuestion,
-        status: 'published',
-        ranked_eligible: false,
-      });
-
-      const response = await request(app).get(
-        `/api/v1/questions/${mockQuestion.id}`
-      );
-
-      expect(response.status).toBe(404);
     });
 
     it('should return 404 for non-existent question', async () => {

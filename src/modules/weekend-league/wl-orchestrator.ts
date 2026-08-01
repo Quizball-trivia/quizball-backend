@@ -271,12 +271,26 @@ async function advanceTournament(
     if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
+  // Roster bots can't win prizes and never touch the wallet — see wl-bots.ts.
+  const botMinField = Number((t.config as Record<string, unknown> | null)?.['bot_fill_min_field'] ?? 0);
+  if (t.status === 'final_checkin' && botMinField > 0) {
+    const { wlBotFinalCheckin } = await import('./wl-bots.js');
+    await wlBotFinalCheckin(t.id);
+  }
+
   const view = scheduleView(t);
   if (
     t.status === 'checkin'
     && view.qualifierStartsAtMs != null
     && redisNow >= view.qualifierStartsAtMs
   ) {
+    // Bot fill happens exactly ONCE, at the check-in CUTOFF: every human who
+    // is coming has checked in, so the target can't be overshot by late
+    // arrivals (bots are never removed once entered).
+    if (botMinField > 0) {
+      const { wlFillBotsToTarget } = await import('./wl-bots.js');
+      await wlFillBotsToTarget(t.id, botMinField);
+    }
     const checkedIn = await wlOrchestratorRepo.checkedInCount(t.id);
     if (checkedIn < WL_MIN_FIELD) {
       await wlOrchestratorRepo.transition({
@@ -294,6 +308,12 @@ async function advanceTournament(
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
     await getWlEngine(t).advance(t, redisNow);
+    if (botMinField > 0 && t.status !== 'break') {
+      const { wlBotAnswerTick } = await import('./wl-bots.js');
+      await wlBotAnswerTick(t.id).catch((error) => {
+        logger.warn({ err: error, tournamentId: t.id }, 'WL bot answer tick failed');
+      });
+    }
     return;
   }
 

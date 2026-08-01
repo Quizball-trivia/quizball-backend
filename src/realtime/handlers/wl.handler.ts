@@ -31,6 +31,7 @@ type SubscribeAck = (response: {
   reason?: 'not_entered' | 'not_found' | 'invalid';
   seq?: number;
   head?: number;
+  resume_granted?: boolean;
   snapshot?: import('../../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
 }) => void;
 
@@ -119,6 +120,7 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // sockets would each get a fresh allowance. Redis down = no lowered
       // floor (fail closed); the fresh-join replay path is unaffected.
       let lo = cursor;
+      let resumeGranted: boolean | undefined;
       if (typeof lastSeq === 'number' && lastSeq < cursor) {
         let granted = false;
         try {
@@ -132,6 +134,10 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
           granted = false;
         }
         if (granted) lo = Math.max(lastSeq, cursor - 200);
+        // Tells the client whether its resume request was honored (a
+        // throttled grant should be retried; a granted-but-capped one means
+        // the tail beyond the window is gone and waiting cannot recover it).
+        resumeGranted = granted;
       }
       let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
       if (role === 'player') {
@@ -185,6 +191,7 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({
         ok: true,
         seq: lo,
+        ...(resumeGranted === undefined ? {} : { resume_granted: resumeGranted }),
         // The snapshot's exact outbox boundary for its persisted component
         // (events ≤ head are fully reflected in it, events above it not at
         // all). Only meaningful WITH a snapshot — a failed or spectator

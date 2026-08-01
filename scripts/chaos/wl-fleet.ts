@@ -78,6 +78,8 @@ interface PlayerState {
   /** Set on disconnect, cleared by the next observed game boundary — a
       reconnect that lands in a LATER game taints that game too. */
   pendingGameBoundary: boolean;
+  /** Ledger-vs-board comparisons actually performed (clean games only). */
+  integrityComparisons: number;
   clockOffset: number;
   /** attempt_id -> accepted points (refunded on void). */
   scored: Map<string, number>;
@@ -101,6 +103,8 @@ interface SpectatorState {
   evaluationLeaks: number;
   openWindowLeaks: number;
   dispatches: number;
+  /** Resume requests the server granted but capped (tail unrecoverable). */
+  gapsAbandoned: number;
 }
 
 interface WlFleetSummary {
@@ -123,6 +127,7 @@ interface WlFleetSummary {
   ackLatencyMs: { p50: number; p95: number; p99: number; max: number };
   dispatchLatenessMs: { p50: number; p95: number; p99: number; max: number };
   scoreIntegrityViolations: Array<{ userId: string; gameIndex: number; ledger: number; board: number }>;
+  serverScoreAudit: { rowsChecked: number; mismatches: number } | null;
   ladderBreaks: string[];
   eliminationViolations: number;
   gameResults: Array<{ gameIndex: number; field: number; advanced: number }>;
@@ -131,6 +136,7 @@ interface WlFleetSummary {
     evaluationLeaks: number;
     openWindowLeaks: number;
     seqGaps: number;
+    gapsAbandoned: number;
   };
   flapsPerformed: number;
   errors: string[];
@@ -252,6 +258,7 @@ function connectPlayer(
   state: PlayerState,
   tournamentId: string,
   gameResults: Map<number, { field: number; advanced: number }>,
+  sharedEliminated: Set<string>,
   onFinal: (championUserId: string | null) => void
 ): void {
   const socket = io(cfg.apiBase, {
@@ -305,6 +312,10 @@ function connectPlayer(
 
   socket.on('wl:dispatch', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
+    // Elimination knowledge is SHARED across the fleet: a player who missed
+    // their own elimination game_result offline still counts stray
+    // dispatches strictly, because some connected player saw the result.
+    if (sharedEliminated.has(state.user.userId)) state.eliminated = true;
     if (state.eliminated) {
       state.liveDispatchesAfterElimination += 1;
       return;
@@ -407,9 +418,18 @@ function connectPlayer(
     const board = Array.isArray(payload['board'])
       ? (payload['board'] as Array<{ user_id: string; points: number }>)
       : [];
+    // A result arriving while the boundary flag is still up means this game
+    // was (at least partly) missed offline — taint it BEFORE comparing, or
+    // a wholly-missed game would be judged against carried-over score.
+    if (state.pendingGameBoundary && Number.isFinite(gameIndex)) {
+      state.taintedGames.add(gameIndex);
+    }
     const mine = board.find((b) => b.user_id === state.user.userId);
-    if (mine && mine.points !== state.score && !state.taintedGames.has(gameIndex)) {
-      state.scoreViolations.push({ gameIndex, ledger: state.score, board: mine.points });
+    if (mine && !state.taintedGames.has(gameIndex)) {
+      state.integrityComparisons += 1;
+      if (mine.points !== state.score) {
+        state.scoreViolations.push({ gameIndex, ledger: state.score, board: mine.points });
+      }
     }
     // Boundary observed: the ledger restarts from a known state, so a game
     // that begins after this point is clean again.
@@ -417,6 +437,7 @@ function connectPlayer(
     const eliminatedIds = Array.isArray(payload['eliminated_user_ids'])
       ? (payload['eliminated_user_ids'] as string[])
       : [];
+    for (const id of eliminatedIds) sharedEliminated.add(id);
     if (eliminatedIds.includes(state.user.userId)) state.eliminated = true;
     else state.score = 0; // survivors start the next game fresh
   });
@@ -434,16 +455,22 @@ function connectPlayer(
     const board = Array.isArray(payload['board'])
       ? (payload['board'] as Array<{ user_id: string; points: number }>)
       : [];
+    if (state.pendingGameBoundary && Number.isFinite(gameIndex)) {
+      state.taintedGames.add(gameIndex);
+    }
     const mine = board.find((b) => b.user_id === state.user.userId);
     const finalTainted = Number.isFinite(gameIndex)
       ? state.taintedGames.has(gameIndex)
       : state.taintedGames.size > 0;
-    if (mine && mine.points !== state.score && !finalTainted) {
-      state.scoreViolations.push({
-        gameIndex: Number.isFinite(gameIndex) ? gameIndex : -1,
-        ledger: state.score,
-        board: mine.points,
-      });
+    if (mine && !finalTainted) {
+      state.integrityComparisons += 1;
+      if (mine.points !== state.score) {
+        state.scoreViolations.push({
+          gameIndex: Number.isFinite(gameIndex) ? gameIndex : -1,
+          ledger: state.score,
+          board: mine.points,
+        });
+      }
     }
     onFinal(typeof payload['champion_user_id'] === 'string' ? payload['champion_user_id'] : null);
   });
@@ -464,9 +491,13 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
   // The unresolved resume floor is PINNED: live events keep advancing
   // lastSeq while a denied backfill waits out the 5s grant window, so a
   // retry recomputing its floor from lastSeq would abandon the gap. The pin
-  // holds the original position until the server honors it (ack.seq at or
-  // below the pin), then dissolves.
+  // holds the original position until the server honors the resume
+  // (resume_granted) or reports it capped beyond the replay window (the
+  // tail is unrecoverable — adopt and count the abandonment).
   let pinnedResumeFrom: number | null = null;
+  const retrySubscribe = () => {
+    setTimeout(() => { if (socket.connected) doSubscribe(); }, 5_500);
+  };
   const doSubscribe = (): void => {
     // last_seq lets the server backfill events broadcast while this socket
     // was reconnecting — without it the delayed feed has a permanent hole.
@@ -476,16 +507,32 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
       tournament_id: tournamentId,
       role: 'spectator',
       ...(sentLastSeq != null ? { last_seq: sentLastSeq } : {}),
-    }, (ack: { ok?: boolean; seq?: number }) => {
-      if (ack?.ok !== true || typeof ack.seq !== 'number' || sentLastSeq == null) return;
-      if (ack.seq > sentLastSeq) {
-        // Backfill grant throttled: pin the position and retry after the
-        // grant window so the gap actually gets replayed.
-        pinnedResumeFrom = sentLastSeq;
-        setTimeout(() => { if (socket.connected) doSubscribe(); }, 5_500);
-      } else {
-        pinnedResumeFrom = null;
+    }, (ack: { ok?: boolean; seq?: number; resume_granted?: boolean }) => {
+      if (ack?.ok !== true || typeof ack.seq !== 'number') {
+        // A dropped/failed ack must not strand a pending resume.
+        if (sentLastSeq != null) { pinnedResumeFrom = sentLastSeq; retrySubscribe(); }
+        return;
       }
+      if (sentLastSeq == null) {
+        // First subscribe: adopt the delivered cursor as the resume
+        // baseline, so an outage BEFORE the first stream event still
+        // resumes from the right position instead of joining fresh.
+        state.lastSeq = Math.max(state.lastSeq, ack.seq);
+        return;
+      }
+      if (ack.resume_granted === false) {
+        // Grant throttled: hold the pin and retry after the grant window.
+        pinnedResumeFrom = sentLastSeq;
+        retrySubscribe();
+        return;
+      }
+      if (ack.seq > sentLastSeq) {
+        // Granted but capped: events in (sentLastSeq, ack.seq] are beyond
+        // the replay window and unrecoverable — record the abandonment
+        // (they will surface as an explained seq gap).
+        state.gapsAbandoned += 1;
+      }
+      pinnedResumeFrom = null;
     });
   };
   socket.on('connect', doSubscribe);
@@ -628,7 +675,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     user, socket: null, subscribed: false, answersSent: 0, ackTimeouts: 0,
     scoreViolations: [], entered: false, checkedIn: false,
     finalCheckedIn: false, eliminated: false, lastSeq: -1, currentGame: -1,
-    taintedGames: new Set(), pendingGameBoundary: false, clockOffset: Number.NEGATIVE_INFINITY,
+    taintedGames: new Set(), pendingGameBoundary: false, integrityComparisons: 0, clockOffset: Number.NEGATIVE_INFINITY,
     scored: new Map(), answered: new Set(), score: 0, acks: [],
     lostAnswers: 0, chaosLost: 0, chaosAckTimeouts: 0,
     dispatchLatenessMs: [], liveDispatchesAfterElimination: 0, flaps: 0, errors: [],
@@ -714,15 +761,16 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   console.log(`[wl-fleet] checked in ${checkedInCount}; connecting sockets…`);
 
   const gameResults = new Map<number, { field: number; advanced: number }>();
+  const sharedEliminated = new Set<string>();
   let championUserId: string | null = null;
   let finalSeen = false;
   const onFinal = (champion: string | null) => { finalSeen = true; championUserId = champion; };
 
   for (const state of states) {
-    if (state.checkedIn) connectPlayer(cfg, state, tournamentId, gameResults, onFinal);
+    if (state.checkedIn) connectPlayer(cfg, state, tournamentId, gameResults, sharedEliminated, onFinal);
   }
   const spectators: SpectatorState[] = spectatorUsers.map((user) => ({
-    user, socket: null, seqs: [], lastSeq: -1, evaluationLeaks: 0, openWindowLeaks: 0, dispatches: 0,
+    user, socket: null, seqs: [], lastSeq: -1, evaluationLeaks: 0, openWindowLeaks: 0, dispatches: 0, gapsAbandoned: 0,
   }));
   for (const spec of spectators) connectSpectator(cfg, spec, tournamentId);
 
@@ -767,6 +815,35 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   const finalStatus = finalSeen ? 'completed' : polledStatus;
   ticking = false;
   await ticker.catch(() => {});
+  // Server-side score audit — the PRIMARY integrity check. The client
+  // ledger can only be compared for connection-clean player-games and only
+  // for players surfaced on the top-of-board rows; this covers EVERY
+  // participant of every game, flapped or not: the persisted per-game
+  // result must equal the sum of that player's non-voided answers.
+  let serverAudit: { rowsChecked: number; mismatches: number } | null = null;
+  if (dbSql) {
+    try {
+      const [row] = await dbSql<Array<{ rows_checked: number; mismatches: number }>>`
+        SELECT count(*)::int AS rows_checked,
+               count(*) FILTER (
+                 WHERE r.score IS DISTINCT FROM COALESCE(a.total, 0)
+               )::int AS mismatches
+        FROM wl_game_results r
+        LEFT JOIN (
+          SELECT tournament_id, game_index, user_id, SUM(points)::int AS total
+          FROM wl_answers
+          WHERE tournament_id = ${tournamentId} AND timing_source <> 'voided_audit'
+          GROUP BY 1, 2, 3
+        ) a USING (tournament_id, game_index, user_id)
+        WHERE r.tournament_id = ${tournamentId}
+      `;
+      serverAudit = row
+        ? { rowsChecked: Number(row.rows_checked), mismatches: Number(row.mismatches) }
+        : null;
+    } catch (err) {
+      console.error('[wl-fleet] server score audit failed:', err);
+    }
+  }
   await dbSql?.end({ timeout: 5 }).catch(() => {});
   // Give trailing spectator (delayed) events time to drain before judging.
   await sleep(Math.min(cfg.spectatorDelayMs + 10_000, 60_000));
@@ -851,6 +928,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       max: allLateness.length ? Math.max(...allLateness) : 0,
     },
     scoreIntegrityViolations: scoreViolations,
+    serverScoreAudit: serverAudit,
     eliminationViolations,
     ladderBreaks,
     gameResults: [...gameResults.entries()]
@@ -861,6 +939,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       evaluationLeaks: spectators.reduce((n, s) => n + s.evaluationLeaks, 0),
       openWindowLeaks: spectators.reduce((n, s) => n + s.openWindowLeaks, 0),
       seqGaps: spectatorSeqGaps,
+      gapsAbandoned: spectators.reduce((n, sp) => n + sp.gapsAbandoned, 0),
     },
     flapsPerformed: states.reduce((n, s) => n + s.flaps, 0),
     errors: states.flatMap((s) => s.errors).slice(0, 100),
@@ -885,9 +964,24 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       pass: answers.lost === 0 && answers.ackTimeouts === 0,
       detail: `lost=${answers.lost} ackTimeouts=${answers.ackTimeouts} chaos-attributed lost=${answers.chaosLost} timeouts=${answers.chaosAckTimeouts} (sent=${answers.sent} acked=${answers.acked})`,
     },
+    serverScoreAudit: {
+      // Primary integrity: covers every participant of every game via the
+      // DB, immune to client connection state. No-data fails on a
+      // completed run (a certification without the audit proves nothing).
+      pass: serverAudit != null && serverAudit.mismatches === 0
+        && (serverAudit.rowsChecked > 0 || finalStatus !== 'completed'),
+      detail: serverAudit
+        ? `wl_answers-vs-wl_game_results mismatches=${serverAudit.mismatches} over ${serverAudit.rowsChecked} player-games`
+        : 'audit unavailable (WL_FLEET_DB_URL unset or query failed)',
+    },
     scoreIntegrity: {
-      pass: scoreViolations.length === 0,
-      detail: `ledger-vs-board mismatches=${scoreViolations.length} `
+      // Secondary (transport honesty): live-board vs the client's own ack
+      // ledger, asserted over connection-clean player-games only. Vacuous
+      // pass (zero comparisons) fails.
+      pass: scoreViolations.length === 0
+        && states.reduce((n, s2) => n + s2.integrityComparisons, 0) > 0,
+      detail: `ledger-vs-board mismatches=${scoreViolations.length} over `
+        + `${states.reduce((n, s2) => n + s2.integrityComparisons, 0)} clean comparisons `
         + `(${states.reduce((n, s2) => n + s2.taintedGames.size, 0)} player-games exempt: reconnect-disrupted)`,
     },
     eliminationExactness: {
@@ -917,11 +1011,11 @@ function renderSummary(s: WlFleetSummary): string {
     `tournament ${s.tournamentId}`,
     `entered ${s.entered}  checked-in ${s.checkedIn}  champion ${s.championUserId ?? '—'}`,
     `answers sent=${s.answers.sent} acked=${s.answers.acked} accepted=${s.answers.accepted} rejected=${s.answers.rejected} timeouts=${s.answers.ackTimeouts} LOST=${s.answers.lost} chaos-attributed=${s.answers.chaosAckTimeouts + s.answers.chaosLost}`,
-    `score integrity: ${s.scoreIntegrityViolations.length} mismatches`,
+    `score integrity: ${s.scoreIntegrityViolations.length} client mismatches; server audit ${s.serverScoreAudit ? `${s.serverScoreAudit.mismatches}/${s.serverScoreAudit.rowsChecked}` : 'n/a'}`,
     `ack ms p50=${s.ackLatencyMs.p50} p95=${s.ackLatencyMs.p95} p99=${s.ackLatencyMs.p99} max=${s.ackLatencyMs.max}`,
     `dispatch lateness ms p50=${s.dispatchLatenessMs.p50} p95=${s.dispatchLatenessMs.p95} p99=${s.dispatchLatenessMs.p99}`,
     `games: ${s.gameResults.map((g) => `#${g.gameIndex} field=${g.field}→${g.advanced}`).join('  ')}`,
-    `spectator: dispatches=${s.spectator.dispatches} evalLeaks=${s.spectator.evaluationLeaks} openWindow=${s.spectator.openWindowLeaks} gaps=${s.spectator.seqGaps}`,
+    `spectator: dispatches=${s.spectator.dispatches} evalLeaks=${s.spectator.evaluationLeaks} openWindow=${s.spectator.openWindowLeaks} gaps=${s.spectator.seqGaps} abandoned=${s.spectator.gapsAbandoned}`,
     `flaps=${s.flapsPerformed}  errors=${s.errors.length}`,
     'SLO:',
     ...Object.entries(s.slo).map(([name, r]) => `  ${r.pass ? '✅' : '❌'} ${name}: ${r.detail}`),

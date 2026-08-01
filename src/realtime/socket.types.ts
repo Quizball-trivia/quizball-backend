@@ -1083,6 +1083,7 @@ export interface ClientToServerEvents {
       reason?: 'not_entered' | 'not_found' | 'invalid';
       seq?: number;
       head?: number;
+      resume_granted?: boolean;
       snapshot?: import('../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
     }) => void
   ) => void;

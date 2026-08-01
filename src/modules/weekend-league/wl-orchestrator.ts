@@ -271,14 +271,8 @@ async function advanceTournament(
     if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
-  // Roster bots: top the field up while check-in is open (idempotent per
-  // tick), and never let a bot finalist miss the Sunday check-in. Bots are
-  // spectators to the wallet and can't win prizes — see wl-bots.ts.
+  // Roster bots can't win prizes and never touch the wallet — see wl-bots.ts.
   const botMinField = Number((t.config as Record<string, unknown> | null)?.['bot_fill_min_field'] ?? 0);
-  if (t.status === 'checkin' && botMinField > 0) {
-    const { wlFillBotsToTarget } = await import('./wl-bots.js');
-    await wlFillBotsToTarget(t.id, botMinField);
-  }
   if (t.status === 'final_checkin' && botMinField > 0) {
     const { wlBotFinalCheckin } = await import('./wl-bots.js');
     await wlBotFinalCheckin(t.id);
@@ -290,6 +284,13 @@ async function advanceTournament(
     && view.qualifierStartsAtMs != null
     && redisNow >= view.qualifierStartsAtMs
   ) {
+    // Bot fill happens exactly ONCE, at the check-in CUTOFF: every human who
+    // is coming has checked in, so the target can't be overshot by late
+    // arrivals (bots are never removed once entered).
+    if (botMinField > 0) {
+      const { wlFillBotsToTarget } = await import('./wl-bots.js');
+      await wlFillBotsToTarget(t.id, botMinField);
+    }
     const checkedIn = await wlOrchestratorRepo.checkedInCount(t.id);
     if (checkedIn < WL_MIN_FIELD) {
       await wlOrchestratorRepo.transition({

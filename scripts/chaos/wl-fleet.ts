@@ -173,19 +173,32 @@ async function api<T>(
   body?: unknown,
   opsToken?: string
 ): Promise<{ status: number; body: T }> {
-  const res = await fetch(`${cfg.apiBase}${path}`, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: unknown = null;
-  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-  return { status: res.status, body: parsed as T };
+  // A multi-hour run WILL see transient resets — a poll must never kill the
+  // harness. Mutating calls stay at one attempt from the caller's
+  // perspective (the WL endpoints are idempotent anyway), reads retry.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const res = await fetch(`${cfg.apiBase}${path}`, {
+        method,
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const text = await res.text();
+      let parsed: unknown = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+      return { status: res.status, body: parsed as T };
+    } catch (error) {
+      lastError = error;
+      await sleep(1_000 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): unknown {
@@ -538,8 +551,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     while (Date.now() < deadline) {
       const res = await api<{ tournament?: { id: string; status: string } | null }>(
         cfg, states[0]!.user.token, 'GET', '/api/v1/weekend-league/current'
-      );
-      const tour = res.body?.tournament;
+      ).catch(() => null);
+      const tour = res?.body?.tournament;
       if (tour?.id === tournamentId) {
         last = tour.status;
         if (predicate(tour.status)) return tour.status;

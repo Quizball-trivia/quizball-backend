@@ -1077,7 +1077,7 @@ export type MatchCluesAnswerPayload =
 
 export interface ClientToServerEvents {
   'wl:subscribe': (
-    data: { tournament_id: string; role: 'player' | 'spectator' },
+    data: { tournament_id: string; role: 'player' | 'spectator'; last_seq?: number },
     ack?: (result: {
       ok: boolean;
       reason?: 'not_entered' | 'not_found' | 'invalid';

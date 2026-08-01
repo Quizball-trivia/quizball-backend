@@ -17,6 +17,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 const subscribeSchema = z.object({
   tournament_id: z.string().uuid(),
   role: z.enum(['player', 'spectator']),
+  last_seq: z.number().int().nonnegative().optional(),
 }).strict();
 
 const answerSchema = z.object({
@@ -50,7 +51,7 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({ ok: false, reason: 'invalid' });
       return;
     }
-    const { tournament_id: tournamentId, role } = parsed.data;
+    const { tournament_id: tournamentId, role, last_seq: lastSeq } = parsed.data;
     try {
       // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
       // is (for players) reflected in the snapshot built below.
@@ -104,7 +105,13 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // delay holds no matter what the cursors say.
       const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
       const nowMs = await wlRedisNowMs();
-      const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      const cursor = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      // A reconnecting client tells us the last seq it actually received;
+      // lowering the floor to it backfills everything the room broadcast
+      // while the socket was down (the global cursors keep advancing and
+      // know nothing about individual sockets). Same visibility gates as
+      // the fresh-join replay, so nothing leaks early.
+      const lo = typeof lastSeq === 'number' ? Math.min(lastSeq, cursor) : cursor;
       let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
       if (role === 'player') {
         missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`

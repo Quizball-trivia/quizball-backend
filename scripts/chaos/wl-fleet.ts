@@ -75,9 +75,13 @@ interface PlayerState {
   /** attempt_id -> accepted points (refunded on void). */
   scored: Map<string, number>;
   answered: Set<string>;
+  /** Attempts where the fleet itself flapped the socket at dispatch. */
+  flapped: Set<string>;
   score: number;
   acks: AckSample[];
   lostAnswers: number;
+  chaosLost: number;
+  chaosAckTimeouts: number;
   dispatchLatenessMs: number[];
   liveDispatchesAfterElimination: number;
   flaps: number;
@@ -88,6 +92,7 @@ interface SpectatorState {
   user: ChaosUser;
   socket: Socket | null;
   seqs: number[];
+  lastSeq: number;
   evaluationLeaks: number;
   openWindowLeaks: number;
   dispatches: number;
@@ -108,6 +113,7 @@ interface WlFleetSummary {
   answers: {
     sent: number; acked: number; accepted: number; rejected: number;
     ackTimeouts: number; lost: number;
+    chaosAckTimeouts: number; chaosLost: number;
   };
   ackLatencyMs: { p50: number; p95: number; p99: number; max: number };
   dispatchLatenessMs: { p50: number; p95: number; p99: number; max: number };
@@ -265,7 +271,11 @@ function connectPlayer(
   const serverNow = () => Date.now() + state.clockOffset;
 
   socket.on('connect', () => {
-    socket.emit('wl:subscribe', { tournament_id: tournamentId, role: 'player' }, (ack: {
+    socket.emit('wl:subscribe', {
+      tournament_id: tournamentId,
+      role: 'player',
+      ...(state.lastSeq > 0 ? { last_seq: state.lastSeq } : {}),
+    }, (ack: {
       ok: boolean; seq?: number; snapshot?: { score?: number } | null;
     }) => {
       state.subscribed = ack?.ok === true;
@@ -295,9 +305,12 @@ function connectPlayer(
     if (!attemptId || !Number.isFinite(playableAt) || !Number.isFinite(deadlineAt)) return;
     state.dispatchLatenessMs.push(Math.max(0, Date.now() + state.clockOffset - Number(payload['serverNowAtEmit'])));
 
-    // Occasional connection chaos right at the question.
+    // Occasional connection chaos right at the question. The attempt is
+    // remembered so a loss on it is attributed to the fleet's own chaos,
+    // not the server.
     if (cfg.flapRate > 0 && Math.random() < cfg.flapRate) {
       state.flaps += 1;
+      state.flapped.add(attemptId);
       socket.disconnect();
       setTimeout(() => socket.connect(), 500 + Math.random() * 1500);
     }
@@ -321,8 +334,12 @@ function connectPlayer(
         { tournament_id: tournamentId, attempt_id: attemptId, answer },
         (err: Error | null, ack?: { accepted: boolean; points?: number; reason?: string }) => {
           if (err || !ack) {
-            state.ackTimeouts += 1;
-            state.errors.push(`ack-timeout ${attemptId}`);
+            if (state.flapped.has(attemptId)) {
+              state.chaosAckTimeouts += 1;
+            } else {
+              state.ackTimeouts += 1;
+              state.errors.push(`ack-timeout ${attemptId}`);
+            }
             return;
           }
           state.acks.push({
@@ -336,8 +353,11 @@ function connectPlayer(
               state.score += ack.points ?? 0;
             }
           } else if (ack.reason === 'closed' && marginMs > 2_000) {
-            // Rejected despite ≥2s margin before the deadline — a LOST answer.
-            state.lostAnswers += 1;
+            // Rejected despite ≥2s margin before the deadline — a LOST
+            // answer, unless the fleet flapped this socket at the dispatch
+            // (the buffered emit legitimately arrives past the deadline).
+            if (state.flapped.has(attemptId)) state.chaosLost += 1;
+            else state.lostAnswers += 1;
           }
         }
       );
@@ -415,12 +435,24 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
   });
   state.socket = socket;
   socket.on('connect', () => {
-    socket.emit('wl:subscribe', { tournament_id: tournamentId, role: 'spectator' }, () => {});
+    // last_seq lets the server backfill events broadcast while this socket
+    // was reconnecting — without it the delayed feed has a permanent hole.
+    socket.emit('wl:subscribe', {
+      tournament_id: tournamentId,
+      role: 'spectator',
+      ...(state.lastSeq > 0 ? { last_seq: state.lastSeq } : {}),
+    }, () => {});
   });
+  const trackSeq = (seq: number) => {
+    if (Number.isFinite(seq)) {
+      state.seqs.push(seq);
+      state.lastSeq = Math.max(state.lastSeq, seq);
+    }
+  };
   socket.on('wl:dispatch', (payload: Record<string, unknown>) => {
     if (payload['tournamentId'] !== tournamentId) return;
     state.dispatches += 1;
-    state.seqs.push(Number(payload['seq']));
+    trackSeq(Number(payload['seq']));
     const evaluation = payload['evaluation'] as Record<string, unknown> | undefined;
     if (evaluation && Object.keys(evaluation).length > 0) state.evaluationLeaks += 1;
     const deadlineAt = Number(payload['deadlineAt']);
@@ -432,7 +464,7 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
   });
   for (const ev of ['wl:phase', 'wl:reveal', 'wl:void', 'wl:game_result', 'wl:final_result']) {
     socket.on(ev, (payload: Record<string, unknown>) => {
-      if (payload['tournamentId'] === tournamentId) state.seqs.push(Number(payload['seq']));
+      if (payload['tournamentId'] === tournamentId) trackSeq(Number(payload['seq']));
     });
   }
 }
@@ -550,7 +582,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     user, socket: null, subscribed: false, answersSent: 0, ackTimeouts: 0,
     scoreViolations: [], entered: false, checkedIn: false,
     finalCheckedIn: false, eliminated: false, lastSeq: -1, clockOffset: Number.NEGATIVE_INFINITY,
-    scored: new Map(), answered: new Set(), score: 0, acks: [], lostAnswers: 0,
+    scored: new Map(), answered: new Set(), flapped: new Set(), score: 0, acks: [],
+    lostAnswers: 0, chaosLost: 0, chaosAckTimeouts: 0,
     dispatchLatenessMs: [], liveDispatchesAfterElimination: 0, flaps: 0, errors: [],
   }));
   for (const s of states) s.clockOffset = 0;
@@ -642,7 +675,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     if (state.checkedIn) connectPlayer(cfg, state, tournamentId, gameResults, onFinal);
   }
   const spectators: SpectatorState[] = spectatorUsers.map((user) => ({
-    user, socket: null, seqs: [], evaluationLeaks: 0, openWindowLeaks: 0, dispatches: 0,
+    user, socket: null, seqs: [], lastSeq: -1, evaluationLeaks: 0, openWindowLeaks: 0, dispatches: 0,
   }));
   for (const spec of spectators) connectSpectator(cfg, spec, tournamentId);
 
@@ -673,8 +706,16 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   const playDeadline = Date.now() + cfg.runTimeoutSec * 1000;
   let polledStatus = 'unknown';
   while (Date.now() < playDeadline && !finalSeen) {
-    polledStatus = await pollUntil((s) => s === 'cancelled', 10_000);
+    polledStatus = await pollUntil((s) => s === 'cancelled' || s === 'completed', 10_000);
     if (polledStatus === 'cancelled') break;
+    if (polledStatus === 'completed') {
+      // Terminal on the server; give the final_result broadcast a short grace
+      // window instead of idling to the run deadline (championless completions
+      // never emit one to eliminated players).
+      const grace = Date.now() + 60_000;
+      while (Date.now() < grace && !finalSeen) await sleep(2_000);
+      break;
+    }
   }
   const finalStatus = finalSeen ? 'completed' : polledStatus;
   ticking = false;
@@ -700,6 +741,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     rejected: allAcks.filter((a) => !a.accepted).length,
     ackTimeouts: states.reduce((n, s) => n + s.ackTimeouts, 0),
     lost: states.reduce((n, s) => n + s.lostAnswers, 0),
+    chaosAckTimeouts: states.reduce((n, s) => n + s.chaosAckTimeouts, 0),
+    chaosLost: states.reduce((n, s) => n + s.chaosLost, 0),
   };
   const scoreViolations = states.flatMap((s) =>
     s.scoreViolations.map((v) => ({ userId: s.user.userId, ...v })));
@@ -793,7 +836,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     },
     zeroLostAnswers: {
       pass: answers.lost === 0 && answers.ackTimeouts === 0,
-      detail: `lost=${answers.lost} ackTimeouts=${answers.ackTimeouts} (sent=${answers.sent} acked=${answers.acked})`,
+      detail: `lost=${answers.lost} ackTimeouts=${answers.ackTimeouts} chaos-attributed lost=${answers.chaosLost} timeouts=${answers.chaosAckTimeouts} (sent=${answers.sent} acked=${answers.acked})`,
     },
     scoreIntegrity: {
       pass: scoreViolations.length === 0,
@@ -825,7 +868,7 @@ function renderSummary(s: WlFleetSummary): string {
     `WL FLEET ${s.players}p/${s.spectators}s flap=${s.flapRate} — ${s.finalStatus.toUpperCase()}`,
     `tournament ${s.tournamentId}`,
     `entered ${s.entered}  checked-in ${s.checkedIn}  champion ${s.championUserId ?? '—'}`,
-    `answers sent=${s.answers.sent} acked=${s.answers.acked} accepted=${s.answers.accepted} rejected=${s.answers.rejected} timeouts=${s.answers.ackTimeouts} LOST=${s.answers.lost}`,
+    `answers sent=${s.answers.sent} acked=${s.answers.acked} accepted=${s.answers.accepted} rejected=${s.answers.rejected} timeouts=${s.answers.ackTimeouts} LOST=${s.answers.lost} chaos-attributed=${s.answers.chaosAckTimeouts + s.answers.chaosLost}`,
     `score integrity: ${s.scoreIntegrityViolations.length} mismatches`,
     `ack ms p50=${s.ackLatencyMs.p50} p95=${s.ackLatencyMs.p95} p99=${s.ackLatencyMs.p99} max=${s.ackLatencyMs.max}`,
     `dispatch lateness ms p50=${s.dispatchLatenessMs.p50} p95=${s.dispatchLatenessMs.p95} p99=${s.dispatchLatenessMs.p99}`,

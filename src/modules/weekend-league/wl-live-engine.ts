@@ -779,6 +779,9 @@ export interface WlSubscribeSnapshot {
   your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
   /** The caller's accepted points this game (persisted + in-flight). */
   score: number;
+  /** Exact outbox boundary: events ≤ this seq are fully reflected in score;
+      events above it not at all (read in the same MVCC statement). */
+  snapshot_seq: number;
   board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
 }
 
@@ -802,8 +805,28 @@ export async function wlSubscribeSnapshot(
   tournamentId: string,
   userId: string
 ): Promise<WlSubscribeSnapshot | null> {
-  const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
-    SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
+  // The persisted score and the event cursor are read in ONE statement, so
+  // they see the same MVCC snapshot. Persisted-answer transitions (freeze,
+  // void, game results) commit their wl_events row + next_event_seq bump in
+  // the same transaction as the state they describe, which makes
+  // snapshot_seq an exact boundary FOR THE PERSISTED COMPONENT: such an
+  // event with seq ≤ snapshot_seq is fully reflected in the persisted sum,
+  // one above it not at all. The in-flight Redis component added below has
+  // no outbox seq — clients that reconcile against this boundary must treat
+  // your_answer / your_last_answer as the source of the in-flight attempts
+  // the score already counts.
+  const [t] = await sql<Array<{
+    status: string; stage: Record<string, unknown> | null;
+    snapshot_seq: string; my_points: number;
+  }>>`
+    SELECT status, stage, next_event_seq::text AS snapshot_seq,
+           (SELECT COALESCE(SUM(a.points), 0)::int
+            FROM wl_answers a
+            WHERE a.tournament_id = wl_tournaments.id
+              AND a.user_id = ${userId}
+              AND a.game_index = COALESCE(NULLIF(wl_tournaments.stage->>'current_game', ''), '0')::int
+           ) AS my_points
+    FROM wl_tournaments WHERE id = ${tournamentId}
   `;
   if (!t) return null;
   const stage = t.stage ?? {};
@@ -811,10 +834,7 @@ export async function wlSubscribeSnapshot(
   const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
   const redisNow = await wlRedisNowMs();
 
-  const [persisted] = await sql<Array<{ points: number }>>`
-    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
-    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
-  `;
+  const persisted = { points: t.my_points };
 
   let attempt: Record<string, unknown> | null = null;
   let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
@@ -895,6 +915,7 @@ export async function wlSubscribeSnapshot(
         }
       : null,
     score: (persisted?.points ?? 0) + inFlightPoints,
+    snapshot_seq: Number(t.snapshot_seq),
     board,
   };
 }

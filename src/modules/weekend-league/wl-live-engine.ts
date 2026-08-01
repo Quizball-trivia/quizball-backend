@@ -806,10 +806,15 @@ export async function wlSubscribeSnapshot(
   userId: string
 ): Promise<WlSubscribeSnapshot | null> {
   // The persisted score and the event cursor are read in ONE statement, so
-  // they see the same MVCC snapshot; every state change commits its wl_events
-  // row and next_event_seq bump in the same transaction (the outbox), which
-  // makes snapshot_seq an EXACT boundary: an event with seq ≤ snapshot_seq is
-  // fully reflected in this score, an event above it is not at all.
+  // they see the same MVCC snapshot. Persisted-answer transitions (freeze,
+  // void, game results) commit their wl_events row + next_event_seq bump in
+  // the same transaction as the state they describe, which makes
+  // snapshot_seq an exact boundary FOR THE PERSISTED COMPONENT: such an
+  // event with seq ≤ snapshot_seq is fully reflected in the persisted sum,
+  // one above it not at all. The in-flight Redis component added below has
+  // no outbox seq — clients that reconcile against this boundary must treat
+  // your_answer / your_last_answer as the source of the in-flight attempts
+  // the score already counts.
   const [t] = await sql<Array<{
     status: string; stage: Record<string, unknown> | null;
     snapshot_seq: string; my_points: number;

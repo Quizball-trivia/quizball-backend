@@ -654,6 +654,73 @@ function normalizeGuess(value: string): string {
     .replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ');
 }
 
+// ── Answer hot-path caches ───────────────────────────────────────────────────
+// The three PG lookups below return data that is immutable for the lifetime
+// of an attempt (run row), a question (evaluation/config) and a game
+// (participant roster) — yet at 1k concurrent answerers the per-answer
+// round-trips saturate the pool (observed ack p95 5.3s, in-time answers
+// processed past their deadline). Caching them makes the hot path
+// Redis-only. Correctness is unaffected: closure and once-only acceptance
+// are gated in the Redis accept script (closed marker + deadline), never in
+// these rows, and void/freeze both set the closed marker BEFORE anything
+// else. Per-process cache; replicas warm independently.
+const HOT_CACHE_TTL_MS = 120_000;
+const HOT_CACHE_MAX = 300;
+interface HotCacheEntry<T> { value: T; at: number }
+function hotCacheGet<T>(map: Map<string, HotCacheEntry<T>>, key: string): T | null {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > HOT_CACHE_TTL_MS) { map.delete(key); return null; }
+  return hit.value;
+}
+function hotCacheSet<T>(map: Map<string, HotCacheEntry<T>>, key: string, value: T): void {
+  if (map.size >= HOT_CACHE_MAX) {
+    const cutoff = Date.now() - HOT_CACHE_TTL_MS;
+    for (const [k, v] of map) { if (v.at < cutoff) map.delete(k); }
+    if (map.size >= HOT_CACHE_MAX) map.delete(map.keys().next().value!);
+  }
+  map.set(key, { value, at: Date.now() });
+}
+const runHotCache = new Map<string, HotCacheEntry<WlRunRow>>();
+const contentHotCache = new Map<string, HotCacheEntry<{
+  kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown>;
+}>>();
+const participantHotCache = new Map<string, HotCacheEntry<Set<string>>>();
+// In-flight coalescing: without it a fresh dispatch stampedes — every
+// answer arriving before the first query resolves misses the cache and
+// fires the identical query, defeating the fix exactly when it matters.
+// One loader per key; failures propagate to all waiters and cache nothing.
+const hotInflight = new Map<string, Promise<unknown>>();
+async function hotLoad<T>(
+  map: Map<string, HotCacheEntry<T>>,
+  namespace: string,
+  key: string,
+  loader: () => Promise<T | null>,
+  cacheable: (value: T) => boolean
+): Promise<T | null> {
+  const cached = hotCacheGet(map, key);
+  if (cached != null) return cached;
+  const inflightKey = `${namespace}:${key}`;
+  let pending = hotInflight.get(inflightKey) as Promise<T | null> | undefined;
+  if (!pending) {
+    pending = (async () => {
+      const value = await loader();
+      if (value != null && cacheable(value)) hotCacheSet(map, key, value);
+      return value;
+    })();
+    hotInflight.set(inflightKey, pending);
+    void pending.catch(() => {}).then(() => hotInflight.delete(inflightKey));
+  }
+  return pending;
+}
+
+/** Test seam for the answer hot-path cache (unit-tested coalescing). */
+export const wlAnswerHotCacheInternals = {
+  hotLoad,
+  caches: { runHotCache, contentHotCache, participantHotCache },
+  inflight: hotInflight,
+};
+
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
   tournamentId: string;
@@ -664,13 +731,19 @@ export async function wlAcceptAnswer(input: {
   | { accepted: true; correct: boolean; points: number; elapsedMs: number }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
-  const [run] = await sql<WlRunRow[]>`
-    SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
-           r.question_index, r.question_id, r.status,
-           r.playable_at_ms::text, r.deadline_at_ms::text
-    FROM wl_question_runs r
-    WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
-  `;
+  const runKey = `${input.tournamentId}:${input.attemptId}`;
+  // Cache only the live shape: window stamps are immutable, and closure is
+  // enforced by deadline + the Redis closed marker, not this status.
+  const run = await hotLoad(runHotCache, 'run', runKey, async () => {
+    const [row] = await sql<WlRunRow[]>`
+      SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
+             r.question_index, r.question_id, r.status,
+             r.playable_at_ms::text, r.deadline_at_ms::text
+      FROM wl_question_runs r
+      WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
+    `;
+    return row ?? null;
+  }, (row) => row.status === 'dispatched');
   if (!run) return { accepted: false, reason: 'unknown_attempt' };
   const playable = Number(run.playable_at_ms);
   const deadline = Number(run.deadline_at_ms);
@@ -705,19 +778,27 @@ export async function wlAcceptAnswer(input: {
     }
     return { accepted: false, reason: 'closed' };
   }
-  const [participant] = await sql<{ user_id: string }[]>`
-    SELECT user_id FROM wl_game_participants
-    WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
-      AND user_id = ${input.userId}
-  `;
-  if (!participant) return { accepted: false, reason: 'not_participant' };
+  const rosterKey = `${input.tournamentId}:${run.game_index}`;
+  // A roster is written once at game start; never cache an empty read (it
+  // could race the game-setup transaction).
+  const roster = await hotLoad(participantHotCache, 'roster', rosterKey, async () => {
+    const rows = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM wl_game_participants
+      WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
+    `;
+    return new Set(rows.map((r) => r.user_id));
+  }, (set) => set.size > 0);
+  if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
 
-  const [content] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
-    SELECT q.kind, q.evaluation, t.config
-    FROM wl_questions q
-    JOIN wl_tournaments t ON t.id = q.tournament_id
-    WHERE q.question_id = ${run.question_id}
-  `;
+  const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
+    const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
+      SELECT q.kind, q.evaluation, t.config
+      FROM wl_questions q
+      JOIN wl_tournaments t ON t.id = q.tournament_id
+      WHERE q.question_id = ${run.question_id}
+    `;
+    return row ?? null;
+  }, () => true);
   if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);

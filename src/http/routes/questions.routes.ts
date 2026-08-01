@@ -22,10 +22,17 @@ import {
 
 const router = Router();
 
+// Questions contain answer payloads and must never be anonymously accessible.
+// Read routes remain available to authenticated players for the existing solo
+// game flow; the controller restricts those callers to published questions.
+// All CMS/write routes are explicitly admin-only below.
+router.use(authMiddleware);
+
 /**
  * GET /api/v1/questions
  * List questions with pagination and filters.
- * Public endpoint.
+ * Protected endpoint. Players can only list published questions; admins can
+ * use the complete CMS filter/search surface.
  */
 router.get(
   '/',
@@ -41,7 +48,6 @@ router.get(
  */
 router.get(
   '/duplicates',
-  authMiddleware,
   requireRole('admin'),
   validate({ query: findDuplicatesQuerySchema }),
   questionsController.findDuplicates
@@ -50,7 +56,7 @@ router.get(
 /**
  * GET /api/v1/questions/:id
  * Get a single question by ID with payload.
- * Public endpoint.
+ * Protected endpoint. Players can only retrieve published questions.
  */
 router.get(
   '/:id',
@@ -66,7 +72,6 @@ router.get(
  */
 router.post(
   '/bulk',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: bulkCreateQuestionsSchema }),
   questionsController.bulkCreate
@@ -79,7 +84,6 @@ router.post(
  */
 router.post(
   '/check-duplicates',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: checkDuplicatesSchema }),
   questionsController.checkDuplicates
@@ -91,7 +95,6 @@ router.post(
  */
 router.post(
   '/sync-staging',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: syncQuestionsToStagingSchema }),
   questionsController.syncQuestionsToStaging
@@ -103,7 +106,6 @@ router.post(
  */
 router.post(
   '/image-mcq/generate-preview',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: imageMcqGeneratePreviewSchema }),
   questionsController.generateImageMcqPreview
@@ -115,7 +117,6 @@ router.post(
  */
 router.post(
   '/image-mcq/generate-preview-stream',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: imageMcqGeneratePreviewSchema }),
   questionsController.generateImageMcqPreviewStream
@@ -127,7 +128,6 @@ router.post(
  */
 router.post(
   '/image-mcq/save-drafts',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: imageMcqSaveDraftsSchema }),
   questionsController.saveImageMcqDrafts
@@ -144,7 +144,6 @@ router.post(
  */
 router.post(
   '/translate/redo-drafts',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: z.object({}).strict().optional() }),
   questionsController.translateRedoDrafts
@@ -152,7 +151,6 @@ router.post(
 
 router.post(
   '/translate/backfill',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: z.object({ scope: z.enum(['all', 'agents']).optional() }).strict().optional() }),
   questionsController.translateBackfill
@@ -165,7 +163,6 @@ router.post(
  */
 router.get(
   '/translate/status',
-  authMiddleware,
   requireRole('admin'),
   validate({ query: z.object({ cache_bust: z.coerce.number().optional(), scope: z.enum(['all', 'agents']).optional() }).strict() }),
   questionsController.translateStatus
@@ -178,7 +175,6 @@ router.get(
  */
 router.post(
   '/',
-  authMiddleware,
   requireRole('admin'),
   validate({ body: createQuestionSchema }),
   questionsController.create
@@ -191,7 +187,6 @@ router.post(
  */
 router.put(
   '/:id',
-  authMiddleware,
   requireRole('admin'),
   validate({ params: uuidParamSchema, body: updateQuestionSchema }),
   questionsController.update
@@ -204,7 +199,6 @@ router.put(
  */
 router.delete(
   '/:id',
-  authMiddleware,
   requireRole('admin'),
   validate({ params: uuidParamSchema }),
   questionsController.delete
@@ -217,7 +211,6 @@ router.delete(
  */
 router.patch(
   '/:id/status',
-  authMiddleware,
   requireRole('admin'),
   validate({ params: uuidParamSchema, body: updateStatusSchema }),
   questionsController.updateStatus

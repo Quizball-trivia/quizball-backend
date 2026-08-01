@@ -405,6 +405,7 @@ export const questionResponseSchema = z.object({
   type: questionTypeEnum,
   difficulty: difficultyEnum,
   status: statusEnum,
+  visibility: z.enum(['public', 'wl_private']),
   prompt: i18nFieldSchema,
   explanation: i18nFieldSchema.nullable(),
   payload: z.union([questionPayloadSchema, z.null()]),
@@ -426,7 +427,15 @@ export const listQuestionsQuerySchema = z.object({
   difficulty: difficultyEnum.optional(),
   type: questionTypeEnum.optional(),
   mcq_image: z.enum(['with', 'without']).optional(),
-  search: z.string().optional(),
+  // The CMS debounces every keystroke. Trigram indexes need at least three
+  // characters, so treat shorter transient values as "no search" rather than
+  // issuing an expensive full-table substring scan.
+  search: z
+    .string()
+    .trim()
+    .max(200)
+    .transform((value) => (value.length >= 3 ? value : undefined))
+    .optional(),
   page: z
     .string()
     .transform((val) => parseInt(val, 10))
@@ -451,6 +460,7 @@ export const createQuestionBaseSchema = z.object({
   type: questionTypeEnum,
   difficulty: difficultyEnum,
   status: statusEnum.optional().default('draft'),
+  visibility: z.enum(['public', 'wl_private']).optional(),
   prompt: i18nFieldSchema,
   explanation: i18nFieldSchema.nullable().optional(),
   payload: questionPayloadSchema,
@@ -479,6 +489,7 @@ export const updateQuestionSchema = z
     type: questionTypeEnum.optional(),
     difficulty: difficultyEnum.optional(),
     status: statusEnum.optional(),
+    visibility: z.enum(['public', 'wl_private']).optional(),
     prompt: i18nFieldSchema.optional(),
     explanation: i18nFieldSchema.nullable().optional(),
     payload: questionPayloadSchema.optional(),
@@ -566,6 +577,7 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
   const typeResult = questionTypeEnum.safeParse(question.type);
   const difficultyResult = difficultyEnum.safeParse(question.difficulty);
   const statusResult = statusEnum.safeParse(question.status);
+  const visibilityResult = z.enum(['public', 'wl_private']).safeParse(question.visibility);
 
   if (!typeResult.success) {
     logger.error(
@@ -589,6 +601,14 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
       'Invalid status in database'
     );
     throw new InternalError('Data integrity error: invalid status');
+  }
+
+  if (!visibilityResult.success) {
+    logger.error(
+      { questionId: question.id, visibility: question.visibility },
+      'Invalid visibility in database'
+    );
+    throw new InternalError('Data integrity error: invalid visibility');
   }
 
   const prompt = parseJsonField(question.prompt, 'prompt', true) as Record<string, string>;
@@ -622,6 +642,7 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
     type: typeResult.data,
     difficulty: difficultyResult.data,
     status: statusResult.data,
+    visibility: visibilityResult.data,
     prompt,
     explanation,
     payload: validatedPayload,

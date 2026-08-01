@@ -20,6 +20,8 @@
     "seed:cleanup": "tsx scripts/seed-cleanup/index.ts",
     "test:seed-cleanup": "vitest run tests/seed-cleanup",
     "test": "vitest run",
+    "test:ci": "vitest run --config vitest.ci.config.ts",
+    "test:wl": "vitest run --config vitest.wl.config.ts",
     "test:watch": "vitest",
     "test:burnin": "vitest run --config vitest.burnin.config.ts",
     "test:regression": "vitest run --config vitest.regression.config.ts",

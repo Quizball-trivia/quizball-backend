@@ -48,6 +48,16 @@ interface RankedSettlementEntry {
   change: RankedRpChangeInsertInput;
   /** Coin reward granted with the settlement (win/loss participation reward). */
   coinsAwarded: number;
+  /**
+   * Weekend League QP earned by this result, or 0 for non-humans. Lands only
+   * when qpWeekKey is set (the match ended inside the Mon–Fri GE accrual
+   * window — derived from matches.ended_at, never from wall-clock at
+   * settlement time, so replays of old matches credit the correct week).
+   */
+  qpAwarded: number;
+  qpWeekKey: string | null;
+  /** matches.ended_at — QP totals record when the match was PLAYED. */
+  qpEndedAt: Date | null;
 }
 
 export const rankedRepo = {
@@ -273,6 +283,33 @@ export const rankedRepo = {
                 AND $25 > 0
                 AND EXISTS (SELECT 1 FROM inserted)
               RETURNING 1
+            ),
+            -- Weekend League QP ledger. SELECT ... FROM inserted (not VALUES +
+            -- ON CONFLICT WHERE): an upsert's insert branch would fire even
+            -- when "inserted" is empty, breaking exactly-once on re-settlement.
+            qp_award AS (
+              INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
+              SELECT $1, $2, $27::date, $28::int, $8
+              FROM inserted
+              WHERE $28::int > 0 AND $27::date IS NOT NULL
+              ON CONFLICT (match_id, user_id) DO NOTHING
+              RETURNING points
+            ),
+            -- Totals read-model, advanced only by the award row this statement
+            -- actually inserted (rebuildable from the ledger at any time).
+            qp_total AS (
+              INSERT INTO wl_qp AS t (week_key, user_id, points, wins, losses, last_match_at)
+              SELECT $27::date, $2, qa.points,
+                     CASE WHEN $8 = 'win' THEN 1 ELSE 0 END,
+                     CASE WHEN $8 = 'loss' THEN 1 ELSE 0 END,
+                     COALESCE($29::timestamptz, $26::timestamptz, NOW())
+              FROM qp_award qa
+              ON CONFLICT (week_key, user_id) DO UPDATE SET
+                points = t.points + EXCLUDED.points,
+                wins = t.wins + EXCLUDED.wins,
+                losses = t.losses + EXCLUDED.losses,
+                last_match_at = GREATEST(t.last_match_at, EXCLUDED.last_match_at)
+              RETURNING 1
             )
             -- Did THIS statement insert the ledger row? Lets the caller fire the
             -- post-write side effects exactly once per settled participant.
@@ -305,6 +342,9 @@ export const rankedRepo = {
               entry.profile.userId,
               entry.coinsAwarded,
               occurredAt ?? null,
+              entry.qpWeekKey,
+              entry.qpAwarded,
+              entry.qpEndedAt ?? null,
             ]
           );
           if (appliedRows[0]?.applied === true) {
@@ -339,6 +379,88 @@ export const rankedRepo = {
     }
 
     return appliedUserIds;
+  },
+
+  /**
+   * WL QP repair: award QP from the EXISTING RP ledger for a match whose RP
+   * settled without QP (rows written before the QP feature deployed, or the
+   * already-settled side of a partial settlement — the live path's qp_award
+   * CTE only fires for newly inserted RP rows). Idempotent: the award PK
+   * makes replays no-ops, and totals advance only from rows this call
+   * actually inserted.
+   */
+  async repairQpFromLedger(input: {
+    matchId: string;
+    weekKey: string;
+    endedAt: Date;
+    userIds: string[];
+    winPoints: number;
+    lossPoints: number;
+  }): Promise<number> {
+    if (input.userIds.length === 0) return 0;
+    let repairedCount = 0;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      // Wallet-lock protocol: same sorted users-row locks the settlement and
+      // entry paths take, so a repair award can never slip behind a
+      // concurrent reset with an earlier timestamp.
+      const lockedIds = [...new Set(input.userIds)].sort();
+      await txSql`
+        SELECT id FROM users WHERE id = ANY(${sql.array(lockedIds)}::uuid[])
+        ORDER BY id FOR UPDATE
+      `;
+      const rows = await txSql<{ user_id: string }[]>`
+      WITH repaired AS (
+        INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
+        SELECT rc.match_id, rc.user_id, ${input.weekKey}::date,
+               CASE WHEN rc.result = 'win' THEN ${input.winPoints}::int ELSE ${input.lossPoints}::int END,
+               rc.result
+        FROM ranked_rp_changes rc
+        WHERE rc.match_id = ${input.matchId}
+          AND rc.user_id = ANY(${sql.array(input.userIds)}::uuid[])
+          AND rc.result IN ('win', 'loss')
+        ON CONFLICT (match_id, user_id) DO NOTHING
+        RETURNING user_id, points, result
+      )
+      INSERT INTO wl_qp AS t (week_key, user_id, points, wins, losses, last_match_at)
+      SELECT ${input.weekKey}::date, r.user_id, r.points,
+             CASE WHEN r.result = 'win' THEN 1 ELSE 0 END,
+             CASE WHEN r.result = 'loss' THEN 1 ELSE 0 END,
+             ${input.endedAt}
+      FROM repaired r
+      ON CONFLICT (week_key, user_id) DO UPDATE SET
+        points = t.points + EXCLUDED.points,
+        wins = t.wins + EXCLUDED.wins,
+        losses = t.losses + EXCLUDED.losses,
+        last_match_at = GREATEST(t.last_match_at, EXCLUDED.last_match_at)
+      RETURNING user_id
+    `;
+      repairedCount = rows.length;
+    });
+    return repairedCount;
+  },
+
+  /**
+   * QP payload for a settled match: per-user points from the award ledger
+   * joined with the player's CURRENT weekly total (post-settlement read).
+   */
+  async getQpForMatchUsers(
+    matchId: string,
+    userIds: string[]
+  ): Promise<Array<{ user_id: string; points: number; week_total: number }>> {
+    if (userIds.length === 0) return [];
+    return sql<Array<{ user_id: string; points: number; week_total: number }>>`
+      SELECT a.user_id, a.points,
+             COALESCE(
+               q.points,
+               (SELECT SUM(l.points)::int FROM wl_qp_awards l
+                WHERE l.week_key = a.week_key AND l.user_id = a.user_id)
+             ) AS week_total
+      FROM wl_qp_awards a
+      LEFT JOIN wl_qp q ON q.week_key = a.week_key AND q.user_id = a.user_id
+      WHERE a.match_id = ${matchId}
+        AND a.user_id = ANY(${sql.array(userIds)}::uuid[])
+    `;
   },
 
   /**

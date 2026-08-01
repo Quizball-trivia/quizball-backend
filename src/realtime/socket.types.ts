@@ -440,6 +440,10 @@ export interface RankedUserOutcomePayload {
   deltaRp: number;
   /** Coin participation reward granted with the ranked settlement (win/loss). */
   coinsAwarded?: number;
+  /** Weekend League QP this result earned (win 25 / loss 10; 0 outside the
+   *  Mon-Fri window or for bots) and the weekly total after it. */
+  qpAwarded?: number;
+  qpWeekTotal?: number;
   oldTier: string;
   newTier: string;
   placementStatus: 'unplaced' | 'in_progress' | 'placed';
@@ -1044,6 +1048,23 @@ export type MatchCluesAnswerPayload =
   | MatchCluesAnswerGiveUpPayload;
 
 export interface ClientToServerEvents {
+  'wl:subscribe': (
+    data: { tournament_id: string; role: 'player' | 'spectator' },
+    ack?: (result: {
+      ok: boolean;
+      reason?: 'not_entered' | 'not_found' | 'invalid';
+      seq?: number;
+      snapshot?: import('../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
+    }) => void
+  ) => void;
+  'wl:unsubscribe': () => void;
+  'wl:answer': (
+    data: { tournament_id: string; attempt_id: string; answer: unknown },
+    ack?: (result:
+      | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+      | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' | 'invalid' }
+    ) => void
+  ) => void;
   'lobby:create': (
     data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
     ack?: (result: LobbyCreateResult) => void
@@ -1155,8 +1176,53 @@ export interface NotificationUnreadCountPayload {
   unreadCount: number;
 }
 
+/**
+ * Weekend League outbox events. Every payload carries the tournament id it
+ * is scoped to, the tournament-scoped seq (clients dedup + gap-detect on
+ * it) and serverNowAtEmit (regenerated on every physical emission —
+ * transport metadata, not event identity). Type-specific fields are carried
+ * in the payload and narrow on `type`.
+ */
+interface WlEventBase {
+  tournamentId: string;
+  seq: number;
+  serverNowAtEmit: number;
+  spectator?: boolean;
+  [key: string]: unknown;
+}
+
+export interface WlPhaseEventPayload extends WlEventBase {
+  type: 'phase';
+  from?: string | null;
+  to?: string;
+}
+export interface WlDispatchEventPayload extends WlEventBase { type: 'dispatch' }
+export interface WlClueRevealEventPayload extends WlEventBase { type: 'clue_reveal' }
+export interface WlRevealEventPayload extends WlEventBase { type: 'reveal' }
+export interface WlVoidEventPayload extends WlEventBase { type: 'void' }
+export interface WlGameResultEventPayload extends WlEventBase { type: 'game_result' }
+export interface WlFinalResultEventPayload extends WlEventBase {
+  type: 'final_result';
+  champion_user_id?: string | null;
+  final_played?: boolean;
+}
+export interface WlCancellationEventPayload extends WlEventBase { type: 'cancellation' }
+
+export type WlEventPayload =
+  | WlPhaseEventPayload | WlDispatchEventPayload | WlClueRevealEventPayload
+  | WlRevealEventPayload | WlVoidEventPayload | WlGameResultEventPayload
+  | WlFinalResultEventPayload | WlCancellationEventPayload;
+
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
+  'wl:phase': (data: WlPhaseEventPayload) => void;
+  'wl:dispatch': (data: WlDispatchEventPayload) => void;
+  'wl:clue_reveal': (data: WlClueRevealEventPayload) => void;
+  'wl:reveal': (data: WlRevealEventPayload) => void;
+  'wl:void': (data: WlVoidEventPayload) => void;
+  'wl:game_result': (data: WlGameResultEventPayload) => void;
+  'wl:final_result': (data: WlFinalResultEventPayload) => void;
+  'wl:cancellation': (data: WlCancellationEventPayload) => void;
   'presence:online_count': (data: PresenceOnlineCountPayload) => void;
   'notification:new': (data: NotificationPayload) => void;
   'notification:unread_count': (data: NotificationUnreadCountPayload) => void;

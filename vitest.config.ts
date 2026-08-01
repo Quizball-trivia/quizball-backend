@@ -12,6 +12,10 @@ export default defineConfig({
     // shared DB. The pure-unit regression tests (adapter, clock) stay in.
     exclude: [
       ...configDefaults.exclude,
+      // WL DB-integration tier is serial-only (vitest.wl.config.ts,
+      // `npm run test:wl`): parallel workers shadow each other's
+      // "current tournament" against the shared local DB.
+      'tests/weekend-league/*.integration.test.ts',
       'tests/regression/match-boot.test.ts',
       'tests/regression/clean-match-invariants.test.ts',
       'tests/regression/disconnect-scenarios.test.ts',

@@ -9,6 +9,7 @@ import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
+import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
   computeSeasonRpDelta,
@@ -166,6 +167,8 @@ function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow)
     newRp: row.new_rp,
     deltaRp: row.delta_rp,
     coinsAwarded: row.coins_awarded,
+    qpAwarded: 0,
+    qpWeekTotal: 0,
     oldTier: tierFromRp(row.old_rp),
     newTier: tierFromRp(row.new_rp),
     placementStatus: profile.placement_status,
@@ -173,6 +176,30 @@ function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow)
     placementRequired: profile.placement_required,
     isPlacement: row.is_placement,
   };
+}
+
+/**
+ * Fill qpAwarded / qpWeekTotal on already-built outcomes from the durable QP
+ * tables (award ledger for this match + weekly totals) — correct for live
+ * settlements, replays and ledger-reconstructed outcomes alike.
+ */
+async function decorateOutcomesWithQp(
+  matchId: string,
+  outcomeByUser: Record<string, RankedUserOutcome>
+): Promise<void> {
+  const userIds = Object.keys(outcomeByUser);
+  if (userIds.length === 0) return;
+  try {
+    const rows = await rankedRepo.getQpForMatchUsers(matchId, userIds);
+    for (const row of rows) {
+      const outcome = outcomeByUser[row.user_id];
+      if (!outcome) continue;
+      outcome.qpAwarded = row.points;
+      outcome.qpWeekTotal = row.week_total;
+    }
+  } catch (error) {
+    logger.warn({ err: error, matchId }, 'QP outcome decoration failed');
+  }
 }
 
 export const rankedService = {
@@ -253,6 +280,9 @@ export const rankedService = {
           calculationMethod: 'ranked_formula',
         },
         coinsAwarded: 0, // tier normalization only — no reward
+        qpAwarded: 0,
+        qpWeekKey: null,
+        qpEndedAt: null,
       }]);
       profile.tier = normalizedTier;
     }
@@ -360,8 +390,40 @@ export const rankedService = {
     const existingByUser = new Map(existing.map((row) => [row.user_id, row]));
     const missingPlayers = settleEligiblePlayers.filter((p) => !existingByUser.has(p.user_id));
 
+    // WL QP repair for participants whose RP row PRE-dates this call: the live
+    // qp_award CTE only fires for newly inserted RP rows, so matches settled
+    // before the QP feature deployed (or the settled side of a partial
+    // settlement) would otherwise never earn QP on replay. Idempotent by PK.
+    const qpWeekKey = match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
+    const repairQpForSettledUsers = async (userIds: string[]): Promise<void> => {
+      if (!qpWeekKey || !match.ended_at || userIds.length === 0) return;
+      const humanIds = userIds.filter((id) => {
+        const user = byUserId.get(id);
+        return user != null && !user.is_ai;
+      });
+      try {
+        const repaired = await rankedRepo.repairQpFromLedger({
+          matchId,
+          weekKey: qpWeekKey,
+          endedAt: new Date(match.ended_at),
+          userIds: humanIds,
+          winPoints: WL_QP_WIN,
+          lossPoints: WL_QP_LOSS,
+        });
+        if (repaired > 0) {
+          logger.info({ matchId, qpWeekKey, repaired }, 'WL QP repaired from existing RP ledger');
+        }
+      } catch (error) {
+        // QP repair is best-effort on a read/replay path — never let it break
+        // settlement idempotency; the next replay retries it.
+        logger.warn({ err: error, matchId, qpWeekKey }, 'WL QP ledger repair failed');
+      }
+    };
+
     if (missingPlayers.length === 0) {
-      // Fully settled already — pure idempotent re-read, no writes, no analytics.
+      // Fully settled already — idempotent re-read, plus the QP repair above
+      // (the only write it can produce is a missing award row).
+      await repairQpForSettledUsers(settleEligiblePlayers.map((p) => p.user_id));
       const profiles = await rankedRepo.getProfilesByUserIds(settleEligiblePlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
       const outcomeByUser: Record<string, RankedUserOutcome> = {};
@@ -370,6 +432,7 @@ export const rankedService = {
         if (!profile) continue;
         outcomeByUser[row.user_id] = outcomeFromLedgerRow(row, profile);
       }
+      await decorateOutcomesWithQp(matchId, outcomeByUser);
       return {
         isPlacement: Object.values(outcomeByUser).some((entry) => entry.isPlacement),
         byUserId: outcomeByUser,
@@ -430,6 +493,7 @@ export const rankedService = {
         calculationMethod: 'placement_seed' | 'ranked_formula';
       };
       coinsAwarded: number;
+      qpAwarded: number;
       outcome: RankedUserOutcome;
     }> = [];
 
@@ -537,12 +601,15 @@ export const rankedService = {
           calculationMethod: settlement.calculationMethod,
         },
         coinsAwarded: settlement.coinsAwarded,
+        qpAwarded: settlement.qpAwarded,
         outcome: {
           userId: player.user_id,
           oldRp,
           newRp: settlement.newRp,
           deltaRp: settlement.deltaRp,
           coinsAwarded: settlement.coinsAwarded,
+          qpAwarded: settlement.qpAwarded,
+          qpWeekTotal: 0,
           oldTier: settlement.oldTier,
           newTier: settlement.newTier,
           placementStatus: settlement.placementStatus,
@@ -561,11 +628,23 @@ export const rankedService = {
     // Only the participants THIS call actually wrote. A concurrent settlement of
     // the same match loses the ON CONFLICT, and a finalized account is skipped
     // inside the transaction — neither may fire the post-write side effects below.
+    // WL QP accrues by the match's own ended_at (immutable), so a replayed or
+    // late settlement credits the week the match was actually played in — and
+    // a match outside the Mon–Fri window credits nothing.
+    const qpEndedAt = match.ended_at ? new Date(match.ended_at) : null;
     const applied = await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
+      qpAwarded: entry.qpAwarded,
+      qpWeekKey,
+      qpEndedAt,
     })), occurredAt);
+    // The already-settled side of a partial settlement never re-enters
+    // applySettlement — give it the same idempotent QP repair.
+    if (existing.length > 0) {
+      await repairQpForSettledUsers(existing.map((row) => row.user_id));
+    }
     // A writer that does not report an applied set (the burn-in writer's stub)
     // is treated as "everything landed", which is the pre-existing behaviour.
     const appliedUserIds = applied ?? new Set(settlementEntries.map((entry) => entry.outcome.userId));
@@ -616,6 +695,7 @@ export const rankedService = {
         unappliedUserIds: unappliedEntries.map((entry) => entry.outcome.userId),
       }, 'Ranked settlement reconciled participants this call did not write');
     }
+    await decorateOutcomesWithQp(matchId, byUserIdOutcome);
     const outcome = {
       isPlacement: Object.values(byUserIdOutcome).some((o) => o.isPlacement),
       byUserId: byUserIdOutcome,
@@ -675,6 +755,8 @@ export const rankedService = {
       if (!profile) continue;
       byUserId[change.user_id] = outcomeFromLedgerRow(change, profile);
     }
+    // Recovery payloads carry the same QP truth as live settlements.
+    await decorateOutcomesWithQp(matchId, byUserId);
 
     return {
       isPlacement: changes.some((change) => change.is_placement),

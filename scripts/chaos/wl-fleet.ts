@@ -532,6 +532,25 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   }));
   for (const s of states) s.clockOffset = 0;
 
+  // Status source: the DB directly when WL_FLEET_DB_URL is set (required
+  // once a real weekly tournament owns /current — the API has no by-id
+  // status read for clients), else /current filtered by id.
+  const dbUrl = process.env.WL_FLEET_DB_URL;
+  const dbSql = dbUrl ? (await import('postgres')).default(dbUrl, { max: 1 }) : null;
+  const readStatus = async (): Promise<string | null> => {
+    if (dbSql) {
+      const rows = await dbSql`
+        SELECT status FROM wl_tournaments WHERE id = ${tournamentId}
+      `.catch(() => []) as Array<{ status: string }>;
+      return rows[0]?.status ?? null;
+    }
+    const res = await api<{ tournament?: { id: string; status: string } | null }>(
+      cfg, states[0]!.user.token, 'GET', '/api/v1/weekend-league/current'
+    ).catch(() => null);
+    const tour = res?.body?.tournament;
+    return tour?.id === tournamentId ? tour.status : null;
+  };
+
   const pollUntil = async (predicate: (status: string) => boolean, maxMs: number): Promise<string> => {
     const deadline = Date.now() + maxMs;
     let last = 'unknown';
@@ -563,7 +582,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       const state = states[enterCursor]!;
       enterCursor += 1;
       const res = await api<{ entered?: boolean; already_entered?: boolean }>(
-        cfg, state.user.token, 'POST', '/api/v1/weekend-league/enter'
+        cfg, state.user.token, 'POST', '/api/v1/weekend-league/enter',
+        { tournament_id: tournamentId }
       );
       state.entered = res.body?.entered === true || res.body?.already_entered === true;
       if (!state.entered) state.errors.push(`enter HTTP ${res.status} ${JSON.stringify(res.body)}`);
@@ -584,7 +604,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       checkinCursor += 1;
       if (!state.entered) continue;
       const res = await api<{ checked_in?: boolean; already_checked_in?: boolean }>(
-        cfg, state.user.token, 'POST', '/api/v1/weekend-league/checkin'
+        cfg, state.user.token, 'POST', '/api/v1/weekend-league/checkin',
+        { tournament_id: tournamentId }
       );
       state.checkedIn = res.body?.checked_in === true || res.body?.already_checked_in === true;
     }
@@ -616,7 +637,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
         cursor += 1;
         if (state.eliminated || !state.checkedIn) continue;
         const res = await api<{ checked_in?: boolean; already_checked_in?: boolean }>(
-          cfg, state.user.token, 'POST', '/api/v1/weekend-league/checkin'
+          cfg, state.user.token, 'POST', '/api/v1/weekend-league/checkin',
+          { tournament_id: tournamentId }
         );
         state.finalCheckedIn = res.body?.checked_in === true || res.body?.already_checked_in === true;
       }
@@ -637,6 +659,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   const finalStatus = finalSeen ? 'completed' : polledStatus;
   ticking = false;
   await ticker.catch(() => {});
+  await dbSql?.end({ timeout: 5 }).catch(() => {});
   // Give trailing spectator (delayed) events time to drain before judging.
   await sleep(Math.min(cfg.spectatorDelayMs + 10_000, 60_000));
 

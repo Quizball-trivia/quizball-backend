@@ -33,7 +33,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { io, type Socket } from 'socket.io-client';
-import { provisionUsers, type ChaosUser } from './auth.js';
+import { loginChaosUser, provisionUsers, type ChaosUser } from './auth.js';
 import { assertSocketTargetSafe } from './socket-fleet.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -784,7 +784,32 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
 
   // Sunday-final check-in as the tournament reaches it.
   void (async () => {
-    const status = await pollUntil((s) => s === 'final_checkin' || s === 'completed' || s === 'cancelled', cfg.runTimeoutSec * 1000);
+    const pre = await pollUntil(
+      (s) => s === 'qualifier_done' || s === 'final_checkin' || s === 'completed' || s === 'cancelled',
+      cfg.runTimeoutSec * 1000
+    );
+    if (pre === 'completed' || pre === 'cancelled') return;
+    // Provisioning-time JWTs are ~1h old by the compressed final and Supabase
+    // access tokens expire — the first 1k run lost 19/24 finalists to 403s
+    // here. Real clients refresh sessions continuously; the fleet re-logins
+    // the candidates during the pre-final gap (paced for the Supabase /token
+    // per-IP limit) and rotates the socket auth so a post-expiry reconnect
+    // also survives.
+    const candidates = states.filter((s) => !s.eliminated && s.checkedIn).slice(0, 60);
+    for (const cand of candidates) {
+      try {
+        const fresh = await loginChaosUser(
+          { apiBase: cfg.apiBase, password: cand.user.password, bypassToken: process.env.CHAOS_BYPASS_TOKEN },
+          cand.user.email
+        );
+        cand.user.token = fresh.token;
+        if (cand.socket) cand.socket.auth = { token: fresh.token };
+      } catch { /* keep the old token; the check-in POST will report */ }
+      await sleep(1_500);
+    }
+    const status = pre === 'final_checkin'
+      ? 'final_checkin'
+      : await pollUntil((s) => s === 'final_checkin' || s === 'completed' || s === 'cancelled', cfg.runTimeoutSec * 1000);
     if (status !== 'final_checkin') return;
     let cursor = 0;
     await Promise.all(Array.from({ length: 8 }, async () => {

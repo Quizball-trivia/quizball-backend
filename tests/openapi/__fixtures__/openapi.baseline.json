@@ -13582,8 +13582,14 @@
     "/api/v1/questions": {
       "get": {
         "summary": "List questions with pagination and filters",
+        "description": "Requires authentication. Players are restricted to published questions; full filters and search require admin role. Search terms shorter than 3 characters are ignored.",
         "tags": [
           "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {
@@ -13643,7 +13649,9 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 200,
+              "description": "Admin-only substring search. Terms shorter than 3 characters are accepted but ignored."
             },
             "required": false,
             "name": "search",
@@ -13676,6 +13684,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PaginatedQuestionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -13817,8 +13835,14 @@
     "/api/v1/questions/{id}": {
       "get": {
         "summary": "Get question by ID with payload",
+        "description": "Requires authentication. Players can retrieve published questions only; admins can retrieve any status.",
         "tags": [
           "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {
@@ -13838,6 +13862,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

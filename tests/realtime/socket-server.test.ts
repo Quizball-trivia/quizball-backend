@@ -71,7 +71,12 @@ describe('realtime timer handler wiring', () => {
       11,
       12_103,
       1,
-      false
+      false,
+      // The promoted handler forwards the optional planned-answer context
+      // (unset in this fixture) — the implementation ignores absent values.
+      undefined,
+      undefined,
+      undefined
     );
   });
 });

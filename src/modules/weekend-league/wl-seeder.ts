@@ -110,6 +110,11 @@ async function drawSources(
           JOIN wl_tournaments wt ON wt.id = w.tournament_id
           WHERE w.source_question_id = q.id
             AND wt.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})
+            -- Test events must not burn the weekly pool: on staging the
+            -- harness runs many compressed tournaments a day, and with a
+            -- repeat-avoid that counted them, thin kinds (high_low!)
+            -- starve within a single afternoon of testing.
+            AND wt.is_test = false
         )
       ORDER BY (q.visibility = 'wl_private') DESC, ${order}
       LIMIT ${pageSize} OFFSET ${offset}

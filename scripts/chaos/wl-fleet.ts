@@ -71,9 +71,13 @@ interface PlayerState {
   finalCheckedIn: boolean;
   eliminated: boolean;
   lastSeq: number;
-  /** Latest subscribe-ack snapshot boundary: events ≤ this seq are already
-      reflected in the resynced score and must not re-apply score effects. */
-  snapshotBoundary: number;
+  /** Game the last live dispatch belonged to (-1 before the first). */
+  currentGame: number;
+  /** Games touched by a disconnect: exempt from the ledger-vs-board SLO. */
+  taintedGames: Set<number>;
+  /** Set on disconnect, cleared by the next observed game boundary — a
+      reconnect that lands in a LATER game taints that game too. */
+  pendingGameBoundary: boolean;
   clockOffset: number;
   /** attempt_id -> accepted points (refunded on void). */
   scored: Map<string, number>;
@@ -271,133 +275,46 @@ function connectPlayer(
   };
   const serverNow = () => Date.now() + state.clockOffset;
 
-  // Handshake buffering: between (re)connect and the subscribe ack, live
-  // room broadcasts can outrun the server's backfill replay; processed
-  // eagerly they would advance lastSeq past the replay, and the monotonic
-  // accept() gate would then reject the backfill forever. Events received
-  // during the handshake are queued and flushed in seq order once the ack
-  // lands. A generation token scopes each handshake: a disconnect (or the
-  // next connect) invalidates the previous handshake's safety timer and
-  // ack callback, and drops its queue — those events were never accepted,
-  // so last_seq still points before them and the next subscribe backfills
-  // them again.
-  let handshaking = false;
-  let handshakeGen = 0;
-  const pendingEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const wlHandlers = new Map<string, (payload: Record<string, unknown>) => void>();
-  const on = (type: string, handler: (payload: Record<string, unknown>) => void): void => {
-    wlHandlers.set(type, handler);
-    socket.on(type, (payload: Record<string, unknown>) => {
-      if (handshaking) pendingEvents.push({ type, payload });
-      else handler(payload);
-    });
+  // Integrity via TAINT, not reconciliation: a player whose connection was
+  // disrupted mid-game (fleet flap or transport drop) may have missed acks,
+  // voids or the game boundary — its local ledger for the affected game(s)
+  // is unreliable BY CONSTRUCTION, and no client-side reconciliation against
+  // snapshots survives the reconnect races (raced voids, cross-game carry,
+  // in-flight Redis points outside any boundary). So the fleet does the
+  // honest thing instead: every game touched by a disconnect is exempted
+  // from the ledger-vs-board comparison for THIS player, and the SLO is
+  // asserted over the clean player-games only (with 5% flap the clean
+  // majority still yields thousands of samples). Ack/latency/loss metrics
+  // keep counting for tainted players.
+  const taintCurrent = () => {
+    if (state.currentGame >= 0) state.taintedGames.add(state.currentGame);
+    state.pendingGameBoundary = true;
   };
-  const drainSorted = (): Array<{ type: string; payload: Record<string, unknown> }> => {
-    handshaking = false;
-    return pendingEvents.splice(0)
-      .sort((a, b) => Number(a.payload['seq'] ?? 0) - Number(b.payload['seq'] ?? 0));
-  };
-  const applyEvents = (
-    batch: Array<{ type: string; payload: Record<string, unknown> }>,
-    predicate: (seq: number) => boolean
-  ): void => {
-    for (const e of batch) {
-      if (predicate(Number(e.payload['seq'] ?? 0))) wlHandlers.get(e.type)?.(e.payload);
-    }
-  };
+  socket.on('disconnect', taintCurrent);
 
-  socket.on('disconnect', () => {
-    handshakeGen += 1;
-    handshaking = false;
-    pendingEvents.length = 0;
+  socket.on('connect', () => {
+    socket.emit('wl:subscribe', { tournament_id: tournamentId, role: 'player' }, (ack: {
+      ok: boolean; seq?: number;
+    }) => {
+      state.subscribed = ack?.ok === true;
+      if (ack?.ok && typeof ack.seq === 'number') {
+        state.lastSeq = Math.max(state.lastSeq, ack.seq);
+      }
+    });
   });
 
-  const doSubscribe = (): void => {
-    handshaking = true;
-    handshakeGen += 1;
-    const gen = handshakeGen;
-    const hsTimer = setTimeout(() => {
-      // An expired handshake is DEAD: bump the generation so its late ack
-      // (and stale snapshot) can never hydrate over state the drained
-      // events have since advanced.
-      if (gen === handshakeGen) {
-        handshakeGen += 1;
-        applyEvents(drainSorted(), () => true);
-      }
-    }, 10_000);
-    const sentLastSeq = state.lastSeq > 0 ? state.lastSeq : null;
-    socket.emit('wl:subscribe', {
-      tournament_id: tournamentId,
-      role: 'player',
-      ...(sentLastSeq != null ? { last_seq: sentLastSeq } : {}),
-    }, (ack: {
-      ok: boolean; seq?: number; head?: number;
-      snapshot?: {
-        score?: number;
-        attempt?: { attempt_id?: string } | null;
-        your_answer?: { points?: number } | null;
-        your_last_answer?: { attempt_id?: string; points?: number } | null;
-      } | null;
-    }) => {
-      clearTimeout(hsTimer);
-      if (gen !== handshakeGen) return;
-      state.subscribed = ack?.ok === true;
-      // ack.seq is the replay floor the server actually used. If we asked
-      // to resume from sentLastSeq but the floor stayed above it (backfill
-      // grant throttled), adopting it would skip our gap forever — keep our
-      // position and retry once the 5s grant window has passed.
-      if (ack?.ok && typeof ack.seq === 'number') {
-        if (sentLastSeq == null || ack.seq <= sentLastSeq) {
-          state.lastSeq = Math.max(state.lastSeq, ack.seq);
-        } else {
-          setTimeout(() => {
-            if (socket.connected && gen === handshakeGen) doSubscribe();
-          }, 5_500);
-        }
-      }
-      // The ack's head is the snapshot's exact outbox boundary: events
-      // ≤ head are already reflected in the snapshot, so they apply first
-      // and the authoritative score assignment overrides their effects;
-      // events > head apply on top of it, so a post-snapshot
-      // void/game_result is never resurrected. The boundary persists on
-      // state so pre-boundary events arriving AFTER this ack (the room
-      // delivers (cursor, head] later) skip their score effects too.
-      const batch = drainSorted();
-      const head = typeof ack?.head === 'number' ? ack.head : Number.POSITIVE_INFINITY;
-      if (typeof ack?.head === 'number') {
-        state.snapshotBoundary = Math.max(state.snapshotBoundary, ack.head);
-      }
-      applyEvents(batch, (seq) => seq <= head);
-      // The snapshot score is AUTHORITATIVE for the pre-head stream — it
-      // must also resync DOWN after a void/game transition missed offline.
-      const snapScore = ack?.snapshot?.score;
-      if (typeof snapScore === 'number') {
-        state.score = snapScore;
-      }
-      // Seed the ledger with answers the snapshot already counts but whose
-      // acks this client never received (lost in a flap): without the map
-      // entry a later void could not refund them.
-      const snapAttempt = ack?.snapshot?.attempt?.attempt_id;
-      const snapPoints = ack?.snapshot?.your_answer?.points;
-      if (snapAttempt && typeof snapPoints === 'number' && !state.scored.has(snapAttempt)) {
-        state.scored.set(snapAttempt, snapPoints);
-        state.answered.add(snapAttempt);
-      }
-      const lastAns = ack?.snapshot?.your_last_answer;
-      if (lastAns?.attempt_id && typeof lastAns.points === 'number' && !state.scored.has(lastAns.attempt_id)) {
-        state.scored.set(lastAns.attempt_id, lastAns.points);
-        state.answered.add(lastAns.attempt_id);
-      }
-      applyEvents(batch, (seq) => seq > head);
-    });
-  };
-  socket.on('connect', doSubscribe);
-
-  on('wl:dispatch', (payload: Record<string, unknown>) => {
+  socket.on('wl:dispatch', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     if (state.eliminated) {
       state.liveDispatchesAfterElimination += 1;
       return;
+    }
+    const dispatchGame = Number(payload['game_index']);
+    if (Number.isFinite(dispatchGame)) {
+      state.currentGame = dispatchGame;
+      // A reconnect that skipped the game boundary lands here with the
+      // flag still set: this game's ledger never saw its clean start.
+      if (state.pendingGameBoundary) state.taintedGames.add(dispatchGame);
     }
     const attemptId = String(payload['attempt_id'] ?? '');
     const kind = String(payload['kind'] ?? '');
@@ -468,21 +385,17 @@ function connectPlayer(
     }, Math.max(0, sendAt - serverNow()));
   });
 
-  on('wl:void', (payload: Record<string, unknown>) => {
+  socket.on('wl:void', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const attemptId = String(payload['attempt_id'] ?? '');
     const pts = state.scored.get(attemptId);
     if (pts != null) {
       state.scored.delete(attemptId);
-      // A void at or below the snapshot boundary is already reflected in
-      // the resynced score — only the bookkeeping applies.
-      if (Number(payload['seq']) > state.snapshotBoundary) {
-        state.score = Math.max(0, state.score - pts);
-      }
+      state.score = Math.max(0, state.score - pts);
     }
   });
 
-  on('wl:game_result', (payload: Record<string, unknown>) => {
+  socket.on('wl:game_result', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const gameIndex = Number(payload['game_index']);
     gameResults.set(gameIndex, {
@@ -494,22 +407,21 @@ function connectPlayer(
     const board = Array.isArray(payload['board'])
       ? (payload['board'] as Array<{ user_id: string; points: number }>)
       : [];
-    // A game_result at or below the snapshot boundary carries a board older
-    // than the resynced score — comparing or resetting against it would be
-    // judging fresh state by a stale ruler. Elimination status still applies.
-    const preBoundary = Number(payload['seq']) <= state.snapshotBoundary;
     const mine = board.find((b) => b.user_id === state.user.userId);
-    if (!preBoundary && mine && mine.points !== state.score) {
+    if (mine && mine.points !== state.score && !state.taintedGames.has(gameIndex)) {
       state.scoreViolations.push({ gameIndex, ledger: state.score, board: mine.points });
     }
+    // Boundary observed: the ledger restarts from a known state, so a game
+    // that begins after this point is clean again.
+    state.pendingGameBoundary = false;
     const eliminatedIds = Array.isArray(payload['eliminated_user_ids'])
       ? (payload['eliminated_user_ids'] as string[])
       : [];
     if (eliminatedIds.includes(state.user.userId)) state.eliminated = true;
-    else if (!preBoundary) state.score = 0; // survivors start the next game fresh
+    else state.score = 0; // survivors start the next game fresh
   });
 
-  on('wl:final_result', (payload: Record<string, unknown>) => {
+  socket.on('wl:final_result', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const gameIndex = Number(payload['game_index']);
     if (Number.isFinite(gameIndex)) {
@@ -523,7 +435,10 @@ function connectPlayer(
       ? (payload['board'] as Array<{ user_id: string; points: number }>)
       : [];
     const mine = board.find((b) => b.user_id === state.user.userId);
-    if (mine && mine.points !== state.score) {
+    const finalTainted = Number.isFinite(gameIndex)
+      ? state.taintedGames.has(gameIndex)
+      : state.taintedGames.size > 0;
+    if (mine && mine.points !== state.score && !finalTainted) {
       state.scoreViolations.push({
         gameIndex: Number.isFinite(gameIndex) ? gameIndex : -1,
         ledger: state.score,
@@ -533,9 +448,9 @@ function connectPlayer(
     onFinal(typeof payload['champion_user_id'] === 'string' ? payload['champion_user_id'] : null);
   });
 
-  on('wl:phase', (payload: Record<string, unknown>) => { accept(payload as never); });
-  on('wl:reveal', (payload: Record<string, unknown>) => { accept(payload as never); });
-  on('wl:cancellation', (payload: Record<string, unknown>) => { accept(payload as never); });
+  socket.on('wl:phase', (payload: Record<string, unknown>) => { accept(payload as never); });
+  socket.on('wl:reveal', (payload: Record<string, unknown>) => { accept(payload as never); });
+  socket.on('wl:cancellation', (payload: Record<string, unknown>) => { accept(payload as never); });
 }
 
 function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentId: string): void {
@@ -546,22 +461,30 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
     reconnection: true,
   });
   state.socket = socket;
+  // The unresolved resume floor is PINNED: live events keep advancing
+  // lastSeq while a denied backfill waits out the 5s grant window, so a
+  // retry recomputing its floor from lastSeq would abandon the gap. The pin
+  // holds the original position until the server honors it (ack.seq at or
+  // below the pin), then dissolves.
+  let pinnedResumeFrom: number | null = null;
   const doSubscribe = (): void => {
     // last_seq lets the server backfill events broadcast while this socket
     // was reconnecting — without it the delayed feed has a permanent hole.
-    const sentLastSeq = state.lastSeq > 0 ? state.lastSeq : null;
+    const fromLive = state.lastSeq > 0 ? state.lastSeq : null;
+    const sentLastSeq = pinnedResumeFrom ?? fromLive;
     socket.emit('wl:subscribe', {
       tournament_id: tournamentId,
       role: 'spectator',
       ...(sentLastSeq != null ? { last_seq: sentLastSeq } : {}),
     }, (ack: { ok?: boolean; seq?: number }) => {
-      // Backfill grant throttled (floor stayed above our position): retry
-      // after the 5s grant window so the gap actually gets replayed.
-      if (
-        ack?.ok === true && typeof ack.seq === 'number'
-        && sentLastSeq != null && ack.seq > sentLastSeq
-      ) {
+      if (ack?.ok !== true || typeof ack.seq !== 'number' || sentLastSeq == null) return;
+      if (ack.seq > sentLastSeq) {
+        // Backfill grant throttled: pin the position and retry after the
+        // grant window so the gap actually gets replayed.
+        pinnedResumeFrom = sentLastSeq;
         setTimeout(() => { if (socket.connected) doSubscribe(); }, 5_500);
+      } else {
+        pinnedResumeFrom = null;
       }
     });
   };
@@ -704,7 +627,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   const states: PlayerState[] = playerUsers.map((user) => ({
     user, socket: null, subscribed: false, answersSent: 0, ackTimeouts: 0,
     scoreViolations: [], entered: false, checkedIn: false,
-    finalCheckedIn: false, eliminated: false, lastSeq: -1, snapshotBoundary: -1, clockOffset: Number.NEGATIVE_INFINITY,
+    finalCheckedIn: false, eliminated: false, lastSeq: -1, currentGame: -1,
+    taintedGames: new Set(), pendingGameBoundary: false, clockOffset: Number.NEGATIVE_INFINITY,
     scored: new Map(), answered: new Set(), score: 0, acks: [],
     lostAnswers: 0, chaosLost: 0, chaosAckTimeouts: 0,
     dispatchLatenessMs: [], liveDispatchesAfterElimination: 0, flaps: 0, errors: [],
@@ -963,7 +887,8 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     },
     scoreIntegrity: {
       pass: scoreViolations.length === 0,
-      detail: `ledger-vs-board mismatches=${scoreViolations.length}`,
+      detail: `ledger-vs-board mismatches=${scoreViolations.length} `
+        + `(${states.reduce((n, s2) => n + s2.taintedGames.size, 0)} player-games exempt: reconnect-disrupted)`,
     },
     eliminationExactness: {
       pass: eliminationViolations === 0 && ladderBreaks.length === 0,

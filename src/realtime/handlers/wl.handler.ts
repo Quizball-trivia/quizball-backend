@@ -185,10 +185,11 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({
         ok: true,
         seq: lo,
-        // The snapshot's exact outbox boundary (events ≤ head are fully
-        // reflected in it, events above it not at all); for the snapshotless
-        // spectator role the stream head at join serves the same purpose.
-        head: snapshot ? snapshot.snapshot_seq : cursor,
+        // The snapshot's exact outbox boundary for its persisted component
+        // (events ≤ head are fully reflected in it, events above it not at
+        // all). Only meaningful WITH a snapshot — a failed or spectator
+        // subscribe carries no score state a boundary could describe.
+        ...(snapshot ? { head: snapshot.snapshot_seq } : {}),
         snapshot,
       });
     } catch (error) {

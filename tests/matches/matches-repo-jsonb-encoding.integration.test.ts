@@ -73,7 +73,7 @@ beforeAll(async () => {
 
     const [cat] = await sql<{ id: string }[]>`
       INSERT INTO categories (name, slug, is_active)
-      VALUES (${{ en: 'IntegrationTest_JsonbEncoding' }}::jsonb, 'integration-test-jsonb-encoding', true)
+      VALUES (${sql.json({ en: 'IntegrationTest_JsonbEncoding' })}, 'integration-test-jsonb-encoding', true)
       RETURNING id
     `;
     testCategoryId = cat.id;
@@ -97,8 +97,10 @@ afterAll(async () => {
 });
 
 describe('matchesRepo.createMatch (tx path) — jsonb encoding', () => {
-  it('stores ranked_context + state_payload as jsonb OBJECTS, and the pin parses', async () => {
-    if (!dbAvailable) return;
+  it('stores ranked_context + state_payload as jsonb OBJECTS, and the pin parses', async (ctx) => {
+    // Report a visible SKIP (not a false green) when the integration DB is down,
+    // so CI cannot pass this guard vacuously.
+    if (!dbAvailable) return ctx.skip();
 
     const rankedContext = buildRankedContextWithPin();
     const statePayload = { phase: 'draft', round: 1 };
@@ -148,8 +150,8 @@ describe('matchesRepo.createMatch (tx path) — jsonb encoding', () => {
     expect(freshPin?.dailyFormSeed).toBe('2026-08-01');
   });
 
-  it('a null ranked_context on the tx path stays SQL NULL (not a "null" string scalar)', async () => {
-    if (!dbAvailable) return;
+  it('a null ranked_context on the tx path stays SQL NULL (not a "null" string scalar)', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
 
     const created = await sql.begin(async (tx) =>
       matchesRepo.createMatch(

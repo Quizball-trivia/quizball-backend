@@ -12,7 +12,7 @@ describe('weekKeyFor', () => {
   });
 
   it('maps Sunday 23:59:59 GE to null (before the window)', () => {
-    expect(weekKeyFor(geDate('2026-07-26T23:59:59'))).toBeNull();
+    expect(weekKeyFor(geDate('2026-07-26T23:59:59'))).toBe('2026-08-01'); // Sunday rolls to next event
   });
 
   it('maps Friday 11:59:59 GE to that week Saturday', () => {
@@ -20,12 +20,12 @@ describe('weekKeyFor', () => {
   });
 
   it('maps Friday 12:00:00 GE (exclusive upper bound) to null', () => {
-    expect(weekKeyFor(geDate('2026-07-31T12:00:00'))).toBeNull();
+    expect(weekKeyFor(geDate('2026-07-31T12:00:00'))).toBe('2026-08-08'); // after Friday cutoff → next event
   });
 
   it('maps Saturday and Sunday to null', () => {
-    expect(weekKeyFor(geDate('2026-08-01T14:00:00'))).toBeNull();
-    expect(weekKeyFor(geDate('2026-08-02T10:00:00'))).toBeNull();
+    expect(weekKeyFor(geDate('2026-08-01T14:00:00'))).toBe('2026-08-08'); // Saturday → next event
+    expect(weekKeyFor(geDate('2026-08-02T10:00:00'))).toBe('2026-08-08'); // Sunday → next event
   });
 
   it('midweek maps to the upcoming Saturday', () => {
@@ -40,13 +40,15 @@ describe('weekKeyFor', () => {
     expect(weekKeyFor(geDate('2026-12-31T15:00:00'))).toBe('2027-01-02');
   });
 
-  it('isInQpWindow agrees with weekKeyFor nullability', () => {
-    const inside = geDate('2026-07-28T09:00:00');
-    const outside = geDate('2026-08-01T09:00:00');
+  it('every match accrues: pre-cutoff credits this event, post-cutoff the next', () => {
+    const inside = geDate('2026-07-28T09:00:00'); // Tuesday
+    const outside = geDate('2026-08-01T09:00:00'); // Saturday
     expect(isInQpWindow(inside)).toBe(true);
-    expect(weekKeyFor(inside)).not.toBeNull();
+    expect(weekKeyFor(inside)).toBe('2026-08-01');
     expect(isInQpWindow(outside)).toBe(false);
-    expect(weekKeyFor(outside)).toBeNull();
+    // Running balance: weekend grinding is never wasted — it credits the
+    // NEXT event's week instead of evaporating.
+    expect(weekKeyFor(outside)).toBe('2026-08-08');
   });
 });
 

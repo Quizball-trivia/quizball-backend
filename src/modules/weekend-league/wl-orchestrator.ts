@@ -271,6 +271,19 @@ async function advanceTournament(
     if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
+  // Roster bots: top the field up while check-in is open (idempotent per
+  // tick), and never let a bot finalist miss the Sunday check-in. Bots are
+  // spectators to the wallet and can't win prizes — see wl-bots.ts.
+  const botMinField = Number((t.config as Record<string, unknown> | null)?.['bot_fill_min_field'] ?? 0);
+  if (t.status === 'checkin' && botMinField > 0) {
+    const { wlFillBotsToTarget } = await import('./wl-bots.js');
+    await wlFillBotsToTarget(t.id, botMinField);
+  }
+  if (t.status === 'final_checkin' && botMinField > 0) {
+    const { wlBotFinalCheckin } = await import('./wl-bots.js');
+    await wlBotFinalCheckin(t.id);
+  }
+
   const view = scheduleView(t);
   if (
     t.status === 'checkin'
@@ -294,6 +307,12 @@ async function advanceTournament(
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
     await getWlEngine(t).advance(t, redisNow);
+    if (botMinField > 0 && t.status !== 'break') {
+      const { wlBotAnswerTick } = await import('./wl-bots.js');
+      await wlBotAnswerTick(t.id).catch((error) => {
+        logger.warn({ err: error, tournamentId: t.id }, 'WL bot answer tick failed');
+      });
+    }
     return;
   }
 

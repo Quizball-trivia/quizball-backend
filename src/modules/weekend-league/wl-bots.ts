@@ -61,47 +61,68 @@ function botAnswerFor(
   }
 }
 
+/** Statuses where topping the field up is meaningful and safe. */
+export const WL_BOT_FILL_STATUSES = new Set(['entry_open', 'entry_closed', 'checkin']);
+
 /**
- * Top the field up to `minField` with roster bots at check-in. Idempotent per
- * tick: counts current entries first. Bots enter pre-checked-in (a bot never
- * no-shows) and never touch the QP wallet.
+ * Top the field up to `minField` with roster bots. Called by the orchestrator
+ * AT THE CHECK-IN CUTOFF (kickoff), when every human who is coming has
+ * checked in — filling earlier would let late humans push the field past the
+ * target, since bots are never removed. The count and the insert run in ONE
+ * transaction under a per-tournament advisory lock, so a concurrent manual
+ * fill can never overshoot. Bots enter pre-checked-in (a bot never no-shows)
+ * and never touch the QP wallet.
  */
 export async function wlFillBotsToTarget(
   tournamentId: string,
-  minField: number
+  minField: number,
+  opts: { requireStatus?: boolean } = {}
 ): Promise<number> {
   if (minField <= 0) return 0;
-  const [current] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM wl_entries
-    WHERE tournament_id = ${tournamentId}
-      AND state IN ('entered', 'playing')
-      AND checked_in_at IS NOT NULL
-  `;
-  const deficit = minField - (current?.n ?? 0);
-  if (deficit <= 0) return 0;
-  const inserted = await sql<{ user_id: string }[]>`
-    INSERT INTO wl_entries (tournament_id, user_id, state, entered_at, checked_in_at)
-    SELECT ${tournamentId}, u.id, 'entered', NOW(), NOW()
-    FROM users u
-    WHERE u.is_ai = true
-      -- Persistent roster bots ONLY: ephemeral/auction bots are periodically
-      -- deleted by the AI cleanup cron, which must never collide with a WL
-      -- entry, and only the persistent roster is built to pass as human.
-      AND u.ai_kind = 'persistent'
-      AND COALESCE(u.is_deleted, false) = false
-      AND NOT EXISTS (
-        SELECT 1 FROM wl_entries e
-        WHERE e.tournament_id = ${tournamentId} AND e.user_id = u.id
-      )
-    ORDER BY md5(u.id::text || ${tournamentId})
-    LIMIT ${deficit}
-    ON CONFLICT DO NOTHING
-    RETURNING user_id
-  `;
-  if (inserted.length > 0) {
-    logger.info({ tournamentId, filled: inserted.length, minField }, 'WL bots filled field');
+  let filled = 0;
+  await sql.begin(async (tx) => {
+    const txSql = tx as unknown as typeof sql;
+    await txSql`SELECT pg_advisory_xact_lock(hashtext(${`wl-bot-fill:${tournamentId}`}))`;
+    if (opts.requireStatus !== false) {
+      const [t] = await txSql<Array<{ status: string }>>`
+        SELECT status FROM wl_tournaments WHERE id = ${tournamentId}
+      `;
+      if (!t || !WL_BOT_FILL_STATUSES.has(t.status)) {
+        logger.warn({ tournamentId, status: t?.status }, 'WL bot fill refused: phase not fillable');
+        return;
+      }
+    }
+    const inserted = await txSql<{ user_id: string }[]>`
+      INSERT INTO wl_entries (tournament_id, user_id, state, entered_at, checked_in_at)
+      SELECT ${tournamentId}, u.id, 'entered', NOW(), NOW()
+      FROM users u
+      WHERE u.is_ai = true
+        -- Persistent roster bots ONLY: ephemeral/auction bots are
+        -- periodically deleted by the AI cleanup cron, which must never
+        -- collide with a WL entry, and only the persistent roster is built
+        -- to pass as human.
+        AND u.ai_kind = 'persistent'
+        AND COALESCE(u.is_deleted, false) = false
+        AND NOT EXISTS (
+          SELECT 1 FROM wl_entries e
+          WHERE e.tournament_id = ${tournamentId} AND e.user_id = u.id
+        )
+      ORDER BY md5(u.id::text || ${tournamentId})
+      LIMIT GREATEST(0, ${minField} - (
+        SELECT COUNT(*) FROM wl_entries
+        WHERE tournament_id = ${tournamentId}
+          AND state IN ('entered', 'playing')
+          AND checked_in_at IS NOT NULL
+      ))
+      ON CONFLICT DO NOTHING
+      RETURNING user_id
+    `;
+    filled = inserted.length;
+  });
+  if (filled > 0) {
+    logger.info({ tournamentId, filled, minField }, 'WL bots filled field');
   }
-  return inserted.length;
+  return filled;
 }
 
 /** Bots never miss the Sunday final check-in. */

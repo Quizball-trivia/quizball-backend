@@ -64,7 +64,9 @@ export const progressionRepo = {
         input.sourceType,
         input.sourceKey,
         input.xpDelta,
-        JSON.stringify(input.metadata ?? null),
+        // Pass the OBJECT, not JSON.stringify(...): pre-stringifying double-encodes
+        // it into a jsonb STRING scalar for the $5::jsonb param (see matches.repo).
+        (input.metadata ?? null) as Json,
         input.occurredAt ?? null,
       ]
     );

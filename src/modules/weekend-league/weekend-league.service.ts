@@ -104,8 +104,23 @@ export const weekendLeagueService = {
     return loadQp(tournament, userId);
   },
 
-  async enter(userId: string): Promise<WlEnterResponse> {
-    const tournament = await weekendLeagueRepo.getCurrentTournament();
+  /**
+   * Resolve the tournament an enter/checkin call targets. Normally the
+   * CURRENT tournament; an explicit id is honored ONLY when it names an
+   * is_test tournament — the load/e2e harness must be able to target its
+   * compressed test event while a real weekly event owns /current, and a
+   * client can never use this to enter a real event out of band.
+   */
+  async resolveTarget(tournamentId?: string) {
+    if (tournamentId) {
+      const explicit = await weekendLeagueRepo.getTournamentById(tournamentId);
+      return explicit?.is_test ? explicit : null;
+    }
+    return weekendLeagueRepo.getCurrentTournament();
+  },
+
+  async enter(userId: string, tournamentId?: string): Promise<WlEnterResponse> {
+    const tournament = await this.resolveTarget(tournamentId);
     if (!tournament) {
       return { entered: false, already_entered: false, reason: 'no_tournament' };
     }
@@ -136,8 +151,8 @@ export const weekendLeagueService = {
     return { entered: false, already_entered: false, reason: 'not_qualified' };
   },
 
-  async checkin(userId: string): Promise<WlCheckinResponse> {
-    const tournament = await weekendLeagueRepo.getCurrentTournament();
+  async checkin(userId: string, tournamentId?: string): Promise<WlCheckinResponse> {
+    const tournament = await this.resolveTarget(tournamentId);
     if (!tournament) {
       return { checked_in: false, already_checked_in: false, reason: 'no_tournament' };
     }

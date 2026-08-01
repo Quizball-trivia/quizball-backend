@@ -187,12 +187,23 @@ describe('wlSeedTournamentContent', () => {
     expect(again).toEqual({ ok: true, inserted: 0 });
   });
 
-  it('repeat-avoidance keeps a fresh tournament off recently used sources', async ({ skip }) => {
+  it('repeat-avoidance: real-event sources block, test-event sources do not', async ({ skip }) => {
     if (!dbAvailable) skip();
+    // The previous test's consumer is a TEST tournament — its consumption
+    // must NOT starve fresh events (staging runs many compressed test
+    // events a day), so seeding succeeds on the same stock.
     const tid2 = await createTournament();
-    const result = await seed({ tournamentId: tid2, allowPublicBank: false, deterministic: true });
-    // The previous test consumed the entire stock for 35 days — a new
-    // tournament must refuse rather than repeat.
+    const asTest = await seed({ tournamentId: tid2, allowPublicBank: false, deterministic: true });
+    expect(asTest.ok).toBe(true);
+
+    // Flip the consumers to REAL events: now the stock is burned for the
+    // repeat window and a fresh tournament must refuse rather than repeat.
+    await sql`
+      UPDATE wl_tournaments SET is_test = false
+      WHERE id = ANY(${sql.array(testTournamentIds)}::uuid[])
+    `;
+    const tid3 = await createTournament();
+    const result = await seed({ tournamentId: tid3, allowPublicBank: false, deterministic: true });
     expect(result.ok).toBe(false);
   });
 });

@@ -110,8 +110,20 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // lowering the floor to it backfills everything the room broadcast
       // while the socket was down (the global cursors keep advancing and
       // know nothing about individual sockets). Same visibility gates as
-      // the fresh-join replay, so nothing leaks early.
-      const lo = typeof lastSeq === 'number' ? Math.min(lastSeq, cursor) : cursor;
+      // the fresh-join replay, so nothing leaks early. The floor is a
+      // reconnect aid, not a paging API: the resume window is capped at
+      // 200 events behind the cursor and a socket gets at most one
+      // lowered-floor backfill per 5s, so last_seq=0 spam cannot turn
+      // subscribe into a replay amplifier.
+      let lo = cursor;
+      if (typeof lastSeq === 'number') {
+        const data = socket.data as typeof socket.data & { wlBackfillAtMs?: number };
+        const nowWall = Date.now();
+        if (nowWall - (data.wlBackfillAtMs ?? 0) >= 5_000) {
+          lo = Math.max(Math.min(lastSeq, cursor), cursor - 200);
+          data.wlBackfillAtMs = nowWall;
+        }
+      }
       let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
       if (role === 'player') {
         missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`

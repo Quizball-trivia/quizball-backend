@@ -75,8 +75,6 @@ interface PlayerState {
   /** attempt_id -> accepted points (refunded on void). */
   scored: Map<string, number>;
   answered: Set<string>;
-  /** Attempts where the fleet itself flapped the socket at dispatch. */
-  flapped: Set<string>;
   score: number;
   acks: AckSample[];
   lostAnswers: number;
@@ -270,7 +268,32 @@ function connectPlayer(
   };
   const serverNow = () => Date.now() + state.clockOffset;
 
+  // Handshake buffering: between (re)connect and the subscribe ack, live
+  // room broadcasts can outrun the server's backfill replay; processed
+  // eagerly they would advance lastSeq past the replay, and the monotonic
+  // accept() gate would then reject the backfill forever. Events received
+  // during the handshake are queued and flushed in seq order once the ack
+  // lands, so the replay is always processed before newer live events.
+  let handshaking = false;
+  const pendingEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const wlHandlers = new Map<string, (payload: Record<string, unknown>) => void>();
+  const on = (type: string, handler: (payload: Record<string, unknown>) => void): void => {
+    wlHandlers.set(type, handler);
+    socket.on(type, (payload: Record<string, unknown>) => {
+      if (handshaking) pendingEvents.push({ type, payload });
+      else handler(payload);
+    });
+  };
+  const flushPending = (): void => {
+    handshaking = false;
+    const batch = pendingEvents.splice(0)
+      .sort((a, b) => Number(a.payload['seq'] ?? 0) - Number(b.payload['seq'] ?? 0));
+    for (const e of batch) wlHandlers.get(e.type)?.(e.payload);
+  };
+
   socket.on('connect', () => {
+    handshaking = true;
+    const hsTimer = setTimeout(flushPending, 10_000);
     socket.emit('wl:subscribe', {
       tournament_id: tournamentId,
       role: 'player',
@@ -282,6 +305,12 @@ function connectPlayer(
       if (ack?.ok && typeof ack.seq === 'number') {
         state.lastSeq = Math.max(state.lastSeq, ack.seq);
       }
+      clearTimeout(hsTimer);
+      // Replay + raced live events apply in seq order FIRST; the snapshot
+      // then lands last as the authoritative state, matching the
+      // pre-buffering semantics (the ack always trailed the room stream).
+      // A replayed pre-snapshot event must never rewind the resynced score.
+      flushPending();
       // The snapshot score is AUTHORITATIVE in both directions — it must
       // also resync DOWN after a void/game transition missed offline.
       const snapScore = ack?.snapshot?.score;
@@ -291,7 +320,7 @@ function connectPlayer(
     });
   });
 
-  socket.on('wl:dispatch', (payload: Record<string, unknown>) => {
+  on('wl:dispatch', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     if (state.eliminated) {
       state.liveDispatchesAfterElimination += 1;
@@ -305,12 +334,9 @@ function connectPlayer(
     if (!attemptId || !Number.isFinite(playableAt) || !Number.isFinite(deadlineAt)) return;
     state.dispatchLatenessMs.push(Math.max(0, Date.now() + state.clockOffset - Number(payload['serverNowAtEmit'])));
 
-    // Occasional connection chaos right at the question. The attempt is
-    // remembered so a loss on it is attributed to the fleet's own chaos,
-    // not the server.
+    // Occasional connection chaos right at the question.
     if (cfg.flapRate > 0 && Math.random() < cfg.flapRate) {
       state.flaps += 1;
-      state.flapped.add(attemptId);
       socket.disconnect();
       setTimeout(() => socket.connect(), 500 + Math.random() * 1500);
     }
@@ -329,12 +355,17 @@ function connectPlayer(
       state.answered.add(attemptId);
       state.answersSent += 1;
       const sentAt = Date.now();
+      // Attribution is decided by the socket's health at the actual emit:
+      // an answer buffered on a disconnected socket (fleet-inflicted flap)
+      // is the fleet's own casualty; a send over a healthy socket stays a
+      // strict server SLO regardless of any earlier flap on this attempt.
+      const offlineAtSend = !socket.connected;
       socket.timeout(8_000).emit(
         'wl:answer',
         { tournament_id: tournamentId, attempt_id: attemptId, answer },
         (err: Error | null, ack?: { accepted: boolean; points?: number; reason?: string }) => {
           if (err || !ack) {
-            if (state.flapped.has(attemptId)) {
+            if (offlineAtSend) {
               state.chaosAckTimeouts += 1;
             } else {
               state.ackTimeouts += 1;
@@ -354,9 +385,9 @@ function connectPlayer(
             }
           } else if (ack.reason === 'closed' && marginMs > 2_000) {
             // Rejected despite ≥2s margin before the deadline — a LOST
-            // answer, unless the fleet flapped this socket at the dispatch
+            // answer, unless it was emitted onto a disconnected socket
             // (the buffered emit legitimately arrives past the deadline).
-            if (state.flapped.has(attemptId)) state.chaosLost += 1;
+            if (offlineAtSend) state.chaosLost += 1;
             else state.lostAnswers += 1;
           }
         }
@@ -364,7 +395,7 @@ function connectPlayer(
     }, Math.max(0, sendAt - serverNow()));
   });
 
-  socket.on('wl:void', (payload: Record<string, unknown>) => {
+  on('wl:void', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const attemptId = String(payload['attempt_id'] ?? '');
     const pts = state.scored.get(attemptId);
@@ -374,7 +405,7 @@ function connectPlayer(
     }
   });
 
-  socket.on('wl:game_result', (payload: Record<string, unknown>) => {
+  on('wl:game_result', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const gameIndex = Number(payload['game_index']);
     gameResults.set(gameIndex, {
@@ -397,7 +428,7 @@ function connectPlayer(
     else state.score = 0; // survivors start the next game fresh (next dispatch resets too)
   });
 
-  socket.on('wl:final_result', (payload: Record<string, unknown>) => {
+  on('wl:final_result', (payload: Record<string, unknown>) => {
     if (!accept(payload as never)) return;
     const gameIndex = Number(payload['game_index']);
     if (Number.isFinite(gameIndex)) {
@@ -421,9 +452,9 @@ function connectPlayer(
     onFinal(typeof payload['champion_user_id'] === 'string' ? payload['champion_user_id'] : null);
   });
 
-  socket.on('wl:phase', (payload: Record<string, unknown>) => { accept(payload as never); });
-  socket.on('wl:reveal', (payload: Record<string, unknown>) => { accept(payload as never); });
-  socket.on('wl:cancellation', (payload: Record<string, unknown>) => { accept(payload as never); });
+  on('wl:phase', (payload: Record<string, unknown>) => { accept(payload as never); });
+  on('wl:reveal', (payload: Record<string, unknown>) => { accept(payload as never); });
+  on('wl:cancellation', (payload: Record<string, unknown>) => { accept(payload as never); });
 }
 
 function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentId: string): void {
@@ -582,7 +613,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     user, socket: null, subscribed: false, answersSent: 0, ackTimeouts: 0,
     scoreViolations: [], entered: false, checkedIn: false,
     finalCheckedIn: false, eliminated: false, lastSeq: -1, clockOffset: Number.NEGATIVE_INFINITY,
-    scored: new Map(), answered: new Set(), flapped: new Set(), score: 0, acks: [],
+    scored: new Map(), answered: new Set(), score: 0, acks: [],
     lostAnswers: 0, chaosLost: 0, chaosAckTimeouts: 0,
     dispatchLatenessMs: [], liveDispatchesAfterElimination: 0, flaps: 0, errors: [],
   }));

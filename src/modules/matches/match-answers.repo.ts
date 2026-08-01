@@ -102,7 +102,10 @@ export const matchAnswersRepo = {
         data.isCorrect,
         data.timeMs,
         data.pointsEarned,
-        JSON.stringify(data.answerPayload ?? {}),
+        // Pass the OBJECT, not JSON.stringify(...): pre-stringifying makes the
+        // driver double-encode it into a jsonb STRING scalar for a $n::jsonb param
+        // (see matches.repo createMatch). answer_payload must stay a jsonb OBJECT.
+        (data.answerPayload ?? {}) as Json,
         data.phaseKind ?? 'normal',
         data.phaseRound ?? null,
         data.shooterSeat ?? null,

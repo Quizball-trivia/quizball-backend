@@ -200,6 +200,12 @@ async function api<T>(
           'content-type': 'application/json',
           ...(token ? { authorization: `Bearer ${token}` } : {}),
           ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
+          // A 1k-player burst from one IP trips the API rate limiter
+          // (~700 allowed, the rest 429) — the whole point of the bypass
+          // token. Non-prod only; the server ignores a mismatched value.
+          ...(process.env.CHAOS_BYPASS_TOKEN
+            ? { 'x-chaos-bypass': process.env.CHAOS_BYPASS_TOKEN }
+            : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(method === 'GET' ? 20_000 : 30_000),

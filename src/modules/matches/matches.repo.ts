@@ -52,8 +52,14 @@ export const matchesRepo = {
           data.categoryAId,
           data.categoryBId,
           data.totalQuestions,
-          JSON.stringify(data.statePayload ?? null),
-          JSON.stringify(data.rankedContext ?? null),
+          // Pass the OBJECT, not JSON.stringify(...). postgres.js serialises a JS
+          // object to a jsonb OBJECT for a $n::jsonb param; pre-stringifying it
+          // makes the driver JSON-encode the text AGAIN, storing a jsonb STRING
+          // scalar ("{\"...\"}") that asRecord()/parsePersistentBotModelPin() can
+          // never read — which silently dropped every persistent bot onto the
+          // ephemeral bridge (ranked_context was written only here, on the tx path).
+          (data.statePayload ?? null) as Json,
+          (data.rankedContext ?? null) as Json,
           data.isDev ?? false,
         ],
       );

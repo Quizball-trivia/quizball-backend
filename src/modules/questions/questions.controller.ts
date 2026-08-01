@@ -51,8 +51,8 @@ export const questionsController = {
         visibility: isAdmin ? undefined : 'public',
         difficulty: query.difficulty,
         type: query.type,
-        mcqImage: query.mcq_image,
-        search: query.search,
+        mcqImage: isAdmin ? query.mcq_image : undefined,
+        search: isAdmin ? query.search : undefined,
       },
       query.page,
       query.limit

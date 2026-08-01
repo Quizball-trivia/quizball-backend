@@ -124,6 +124,7 @@ interface WlFleetSummary {
     ackTimeouts: number; lost: number;
     chaosAckTimeouts: number; chaosLost: number;
   };
+  rejectionReasons: Record<string, number>;
   ackLatencyMs: { p50: number; p95: number; p99: number; max: number };
   dispatchLatenessMs: { p50: number; p95: number; p99: number; max: number };
   scoreIntegrityViolations: Array<{ userId: string; gameIndex: number; ledger: number; board: number }>;
@@ -940,6 +941,23 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     chaosAckTimeouts: states.reduce((n, s) => n + s.chaosAckTimeouts, 0),
     chaosLost: states.reduce((n, s) => n + s.chaosLost, 0),
   };
+  const rejectionReasons = new Map<string, number>();
+  for (const a of allAcks) {
+    if (!a.accepted) {
+      const reason = a.reason ?? 'unknown';
+      rejectionReasons.set(reason, (rejectionReasons.get(reason) ?? 0) + 1);
+    }
+  }
+  // `closed` is the only rejection a healthy server hands a well-behaved
+  // client (an answer racing the deadline). Anything else — `invalid` from
+  // load shedding, `not_participant`, `duplicate`, `unknown_attempt` —
+  // means answers were REFUSED, which the accepted-set-only server audit
+  // cannot see.
+  const unexpectedRejections = [...rejectionReasons.entries()]
+    .filter(([reason]) => reason !== 'closed')
+    .reduce((n, [, count]) => n + count, 0);
+  const rejectionDetail = [...rejectionReasons.entries()]
+    .map(([r, c]) => `${r}=${c}`).join(' ') || 'none';
   const scoreViolations = states.flatMap((s) =>
     s.scoreViolations.map((v) => ({ userId: s.user.userId, ...v })));
   // Structural elimination-exactness: each game's field must be exactly the
@@ -999,6 +1017,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       p99: percentile(allLateness, 99),
       max: allLateness.length ? Math.max(...allLateness) : 0,
     },
+    rejectionReasons: Object.fromEntries(rejectionReasons),
     scoreIntegrityViolations: scoreViolations,
     serverScoreAudit: serverAudit,
     eliminationViolations,
@@ -1035,6 +1054,10 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     zeroLostAnswers: {
       pass: answers.lost === 0 && answers.ackTimeouts === 0,
       detail: `lost=${answers.lost} ackTimeouts=${answers.ackTimeouts} chaos-attributed lost=${answers.chaosLost} timeouts=${answers.chaosAckTimeouts} (sent=${answers.sent} acked=${answers.acked})`,
+    },
+    noUnexpectedRejections: {
+      pass: unexpectedRejections === 0,
+      detail: `non-closed rejections=${unexpectedRejections} (${rejectionDetail})`,
     },
     serverScoreAudit: {
       // Primary integrity: covers every participant of every game via the

@@ -686,6 +686,40 @@ const contentHotCache = new Map<string, HotCacheEntry<{
   kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown>;
 }>>();
 const participantHotCache = new Map<string, HotCacheEntry<Set<string>>>();
+// In-flight coalescing: without it a fresh dispatch stampedes — every
+// answer arriving before the first query resolves misses the cache and
+// fires the identical query, defeating the fix exactly when it matters.
+// One loader per key; failures propagate to all waiters and cache nothing.
+const hotInflight = new Map<string, Promise<unknown>>();
+async function hotLoad<T>(
+  map: Map<string, HotCacheEntry<T>>,
+  namespace: string,
+  key: string,
+  loader: () => Promise<T | null>,
+  cacheable: (value: T) => boolean
+): Promise<T | null> {
+  const cached = hotCacheGet(map, key);
+  if (cached != null) return cached;
+  const inflightKey = `${namespace}:${key}`;
+  let pending = hotInflight.get(inflightKey) as Promise<T | null> | undefined;
+  if (!pending) {
+    pending = (async () => {
+      const value = await loader();
+      if (value != null && cacheable(value)) hotCacheSet(map, key, value);
+      return value;
+    })();
+    hotInflight.set(inflightKey, pending);
+    void pending.catch(() => {}).then(() => hotInflight.delete(inflightKey));
+  }
+  return pending;
+}
+
+/** Test seam for the answer hot-path cache (unit-tested coalescing). */
+export const wlAnswerHotCacheInternals = {
+  hotLoad,
+  caches: { runHotCache, contentHotCache, participantHotCache },
+  inflight: hotInflight,
+};
 
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
@@ -698,8 +732,9 @@ export async function wlAcceptAnswer(input: {
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
   const runKey = `${input.tournamentId}:${input.attemptId}`;
-  let run = hotCacheGet(runHotCache, runKey);
-  if (!run) {
+  // Cache only the live shape: window stamps are immutable, and closure is
+  // enforced by deadline + the Redis closed marker, not this status.
+  const run = await hotLoad(runHotCache, 'run', runKey, async () => {
     const [row] = await sql<WlRunRow[]>`
       SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
              r.question_index, r.question_id, r.status,
@@ -707,12 +742,9 @@ export async function wlAcceptAnswer(input: {
       FROM wl_question_runs r
       WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
     `;
-    if (!row) return { accepted: false, reason: 'unknown_attempt' };
-    run = row;
-    // Cache only the live shape: window stamps are immutable, and closure
-    // is enforced by deadline + the Redis closed marker, not this status.
-    if (row.status === 'dispatched') hotCacheSet(runHotCache, runKey, row);
-  }
+    return row ?? null;
+  }, (row) => row.status === 'dispatched');
+  if (!run) return { accepted: false, reason: 'unknown_attempt' };
   const playable = Number(run.playable_at_ms);
   const deadline = Number(run.deadline_at_ms);
   const redisNow = await wlRedisNowMs();
@@ -747,31 +779,27 @@ export async function wlAcceptAnswer(input: {
     return { accepted: false, reason: 'closed' };
   }
   const rosterKey = `${input.tournamentId}:${run.game_index}`;
-  let roster = hotCacheGet(participantHotCache, rosterKey);
-  if (!roster) {
+  // A roster is written once at game start; never cache an empty read (it
+  // could race the game-setup transaction).
+  const roster = await hotLoad(participantHotCache, 'roster', rosterKey, async () => {
     const rows = await sql<{ user_id: string }[]>`
       SELECT user_id FROM wl_game_participants
       WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
     `;
-    roster = new Set(rows.map((r) => r.user_id));
-    // A roster is written once at game start; never cache an empty read
-    // (it could race the game-setup transaction).
-    if (roster.size > 0) hotCacheSet(participantHotCache, rosterKey, roster);
-  }
-  if (!roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
+    return new Set(rows.map((r) => r.user_id));
+  }, (set) => set.size > 0);
+  if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
 
-  let content = hotCacheGet(contentHotCache, run.question_id);
-  if (!content) {
+  const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
     const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
       SELECT q.kind, q.evaluation, t.config
       FROM wl_questions q
       JOIN wl_tournaments t ON t.id = q.tournament_id
       WHERE q.question_id = ${run.question_id}
     `;
-    if (!row) return { accepted: false, reason: 'unknown_attempt' };
-    content = row;
-    hotCacheSet(contentHotCache, run.question_id, content);
-  }
+    return row ?? null;
+  }, () => true);
+  if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);
   const { correct, points } = wlLiveEngineInternals.scoreAnswer(

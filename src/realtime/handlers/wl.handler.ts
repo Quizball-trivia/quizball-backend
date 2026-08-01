@@ -30,6 +30,7 @@ type SubscribeAck = (response: {
   ok: boolean;
   reason?: 'not_entered' | 'not_found' | 'invalid';
   seq?: number;
+  head?: number;
   snapshot?: import('../../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
 }) => void;
 
@@ -112,17 +113,25 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // know nothing about individual sockets). Same visibility gates as
       // the fresh-join replay, so nothing leaks early. The floor is a
       // reconnect aid, not a paging API: the resume window is capped at
-      // 200 events behind the cursor and a socket gets at most one
-      // lowered-floor backfill per 5s, so last_seq=0 spam cannot turn
-      // subscribe into a replay amplifier.
+      // 200 events behind the cursor and the lowered floor is granted at
+      // most once per 5s per (user, tournament, role) via a Redis NX key —
+      // socket-local state would reset on every reconnect and parallel
+      // sockets would each get a fresh allowance. Redis down = no lowered
+      // floor (fail closed); the fresh-join replay path is unaffected.
       let lo = cursor;
-      if (typeof lastSeq === 'number') {
-        const data = socket.data as typeof socket.data & { wlBackfillAtMs?: number };
-        const nowWall = Date.now();
-        if (nowWall - (data.wlBackfillAtMs ?? 0) >= 5_000) {
-          lo = Math.max(Math.min(lastSeq, cursor), cursor - 200);
-          data.wlBackfillAtMs = nowWall;
+      if (typeof lastSeq === 'number' && lastSeq < cursor) {
+        let granted = false;
+        try {
+          const { wlRedis } = await import('../../modules/weekend-league/wl-redis.js');
+          granted = (await wlRedis().set(
+            `wl:backfill:${tournamentId}:${userId}:${role}`,
+            '1',
+            { NX: true, PX: 5_000 }
+          )) === 'OK';
+        } catch {
+          granted = false;
         }
+        if (granted) lo = Math.max(lastSeq, cursor - 200);
       }
       let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
       if (role === 'player') {
@@ -176,6 +185,10 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({
         ok: true,
         seq: lo,
+        // The snapshot's exact outbox boundary (events ≤ head are fully
+        // reflected in it, events above it not at all); for the snapshotless
+        // spectator role the stream head at join serves the same purpose.
+        head: snapshot ? snapshot.snapshot_seq : cursor,
         snapshot,
       });
     } catch (error) {

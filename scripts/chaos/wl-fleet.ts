@@ -273,8 +273,13 @@ function connectPlayer(
   // eagerly they would advance lastSeq past the replay, and the monotonic
   // accept() gate would then reject the backfill forever. Events received
   // during the handshake are queued and flushed in seq order once the ack
-  // lands, so the replay is always processed before newer live events.
+  // lands. A generation token scopes each handshake: a disconnect (or the
+  // next connect) invalidates the previous handshake's safety timer and
+  // ack callback, and drops its queue — those events were never accepted,
+  // so last_seq still points before them and the next subscribe backfills
+  // them again.
   let handshaking = false;
+  let handshakeGen = 0;
   const pendingEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const wlHandlers = new Map<string, (payload: Record<string, unknown>) => void>();
   const on = (type: string, handler: (payload: Record<string, unknown>) => void): void => {
@@ -284,39 +289,61 @@ function connectPlayer(
       else handler(payload);
     });
   };
-  const flushPending = (): void => {
+  const drainSorted = (): Array<{ type: string; payload: Record<string, unknown> }> => {
     handshaking = false;
-    const batch = pendingEvents.splice(0)
+    return pendingEvents.splice(0)
       .sort((a, b) => Number(a.payload['seq'] ?? 0) - Number(b.payload['seq'] ?? 0));
-    for (const e of batch) wlHandlers.get(e.type)?.(e.payload);
   };
+  const applyEvents = (
+    batch: Array<{ type: string; payload: Record<string, unknown> }>,
+    predicate: (seq: number) => boolean
+  ): void => {
+    for (const e of batch) {
+      if (predicate(Number(e.payload['seq'] ?? 0))) wlHandlers.get(e.type)?.(e.payload);
+    }
+  };
+
+  socket.on('disconnect', () => {
+    handshakeGen += 1;
+    handshaking = false;
+    pendingEvents.length = 0;
+  });
 
   socket.on('connect', () => {
     handshaking = true;
-    const hsTimer = setTimeout(flushPending, 10_000);
+    handshakeGen += 1;
+    const gen = handshakeGen;
+    const hsTimer = setTimeout(() => {
+      if (gen === handshakeGen) applyEvents(drainSorted(), () => true);
+    }, 10_000);
     socket.emit('wl:subscribe', {
       tournament_id: tournamentId,
       role: 'player',
       ...(state.lastSeq > 0 ? { last_seq: state.lastSeq } : {}),
     }, (ack: {
-      ok: boolean; seq?: number; snapshot?: { score?: number } | null;
+      ok: boolean; seq?: number; head?: number; snapshot?: { score?: number } | null;
     }) => {
+      clearTimeout(hsTimer);
+      if (gen !== handshakeGen) return;
       state.subscribed = ack?.ok === true;
       if (ack?.ok && typeof ack.seq === 'number') {
         state.lastSeq = Math.max(state.lastSeq, ack.seq);
       }
-      clearTimeout(hsTimer);
-      // Replay + raced live events apply in seq order FIRST; the snapshot
-      // then lands last as the authoritative state, matching the
-      // pre-buffering semantics (the ack always trailed the room stream).
-      // A replayed pre-snapshot event must never rewind the resynced score.
-      flushPending();
-      // The snapshot score is AUTHORITATIVE in both directions — it must
-      // also resync DOWN after a void/game transition missed offline.
+      // The ack's head is the stream position the snapshot was built at or
+      // after: events ≤ head are already reflected in the snapshot, so they
+      // apply first and the authoritative score assignment overrides their
+      // effects; events > head (raced past the snapshot build) apply on top
+      // of it, so a post-snapshot void/game_result is never resurrected.
+      const batch = drainSorted();
+      const head = typeof ack?.head === 'number' ? ack.head : Number.POSITIVE_INFINITY;
+      applyEvents(batch, (seq) => seq <= head);
+      // The snapshot score is AUTHORITATIVE for the pre-head stream — it
+      // must also resync DOWN after a void/game transition missed offline.
       const snapScore = ack?.snapshot?.score;
       if (typeof snapScore === 'number') {
         state.score = snapScore;
       }
+      applyEvents(batch, (seq) => seq > head);
     });
   });
 

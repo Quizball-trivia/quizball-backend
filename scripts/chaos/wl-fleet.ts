@@ -269,7 +269,7 @@ function connectPlayer(
 ): void {
   const socket = io(cfg.apiBase, {
     transports: ['websocket'],
-    auth: { token: state.user.token },
+    auth: (cb) => cb({ token: state.user.token }),
     forceNew: true,
     reconnection: true,
   });
@@ -489,7 +489,7 @@ function connectPlayer(
 function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentId: string): void {
   const socket = io(cfg.apiBase, {
     transports: ['websocket'],
-    auth: { token: state.user.token },
+    auth: (cb) => cb({ token: state.user.token }),
     forceNew: true,
     reconnection: true,
   });
@@ -782,6 +782,42 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   }));
   for (const spec of spectators) connectSpectator(cfg, spec, tournamentId);
 
+  // Rolling token refresh. Supabase access tokens expire after 1h; a long
+  // run (1k provisioning alone is ~35min) crosses that mid-qualifiers, and
+  // an expired token silently kills every flap/LB reconnect (the 711-run
+  // lost 43 answers to exactly this). Once the first game result shrinks
+  // the field (or 40min elapse), alive players + spectators re-login on a
+  // rotating schedule paced for the Supabase /token per-IP limit; the
+  // socket auth callback reads the current token on every (re)connect.
+  const tokenRefreshedAt = new Map<string, number>();
+  let refreshing = true;
+  const refreshLoopStartMs = Date.now();
+  const refresher = (async () => {
+    while (refreshing && gameResults.size === 0 && Date.now() - refreshLoopStartMs < 40 * 60_000) {
+      await sleep(15_000);
+    }
+    while (refreshing) {
+      const targets = [
+        ...states.filter((s2) => s2.checkedIn && !s2.eliminated).map((s2) => s2.user),
+        ...spectators.map((s2) => s2.user),
+      ];
+      for (const user of targets) {
+        if (!refreshing) break;
+        if (Date.now() - (tokenRefreshedAt.get(user.userId) ?? 0) < 20 * 60_000) continue;
+        try {
+          const fresh = await loginChaosUser(
+            { apiBase: cfg.apiBase, password: user.password, bypassToken: process.env.CHAOS_BYPASS_TOKEN },
+            user.email
+          );
+          user.token = fresh.token;
+          tokenRefreshedAt.set(user.userId, Date.now());
+        } catch { /* retry next cycle */ }
+        await sleep(2_200);
+      }
+      await sleep(5_000);
+    }
+  })();
+
   // Sunday-final check-in as the tournament reaches it.
   void (async () => {
     const pre = await pollUntil(
@@ -797,13 +833,14 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     // also survives.
     const candidates = states.filter((s) => !s.eliminated && s.checkedIn).slice(0, 60);
     for (const cand of candidates) {
+      if (Date.now() - (tokenRefreshedAt.get(cand.user.userId) ?? 0) < 10 * 60_000) continue;
       try {
         const fresh = await loginChaosUser(
           { apiBase: cfg.apiBase, password: cand.user.password, bypassToken: process.env.CHAOS_BYPASS_TOKEN },
           cand.user.email
         );
         cand.user.token = fresh.token;
-        if (cand.socket) cand.socket.auth = { token: fresh.token };
+        tokenRefreshedAt.set(cand.user.userId, Date.now());
       } catch { /* keep the old token; the check-in POST will report */ }
       await sleep(1_500);
     }
@@ -847,7 +884,9 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   }
   const finalStatus = finalSeen ? 'completed' : polledStatus;
   ticking = false;
+  refreshing = false;
   await ticker.catch(() => {});
+  await refresher.catch(() => {});
   // Server-side score audit — the PRIMARY integrity check. The client
   // ledger can only be compared for connection-clean player-games and only
   // for players surfaced on the top-of-board rows; this covers EVERY

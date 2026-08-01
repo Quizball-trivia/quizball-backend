@@ -15,6 +15,11 @@ export const WL_QP_LOSS = 10;
 export const WL_QP_TARGET = 200;
 
 /** Accrual window: Monday 00:00 GE ≤ t < Friday 12:00 GE. */
+/**
+ * QP is a RUNNING balance — every ranked match accrues, every day (the old
+ * Mon–Fri window predates the running-balance pivot and silently zeroed
+ * weekend grinding). Retained for the entry-cutoff boundary only.
+ */
 export function isInQpWindow(endedAt: Date): boolean {
   const ge = new Date(endedAt.getTime() + GE_OFFSET_MS);
   const day = ge.getUTCDay();
@@ -23,13 +28,21 @@ export function isInQpWindow(endedAt: Date): boolean {
 }
 
 /**
- * Saturday (GE) of the week containing endedAt, as 'YYYY-MM-DD', or null when
- * the match ended outside the accrual window.
+ * The event week a match's QP arrives in time for, as 'YYYY-MM-DD' (that
+ * week's Saturday, GE). Entry closes Friday 12:00 GE, so matches played
+ * after the cutoff — late Friday, Saturday, Sunday — credit the NEXT
+ * event's week. Display context only: the balance itself sums the ledger
+ * since the player's last ticket claim, regardless of week.
  */
 export function weekKeyFor(endedAt: Date): string | null {
-  if (!isInQpWindow(endedAt)) return null;
   const ge = new Date(endedAt.getTime() + GE_OFFSET_MS);
-  const saturday = new Date(ge.getTime() + (6 - ge.getUTCDay()) * DAY_MS);
+  const day = ge.getUTCDay(); // 0 Sun … 6 Sat
+  let daysToSaturday = (6 - day + 7) % 7; // this week's Saturday
+  if (!isInQpWindow(endedAt)) {
+    // Past the Friday-noon cutoff: roll to the next event's Saturday.
+    daysToSaturday = day === 6 ? 7 : day === 0 ? 6 : daysToSaturday + 7;
+  }
+  const saturday = new Date(ge.getTime() + daysToSaturday * DAY_MS);
   return saturday.toISOString().slice(0, 10);
 }
 

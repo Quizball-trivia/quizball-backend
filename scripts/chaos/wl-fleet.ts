@@ -501,14 +501,16 @@ function connectSpectator(cfg: WlFleetConfig, state: SpectatorState, tournamentI
   const doSubscribe = (): void => {
     // last_seq lets the server backfill events broadcast while this socket
     // was reconnecting — without it the delayed feed has a permanent hole.
-    const fromLive = state.lastSeq > 0 ? state.lastSeq : null;
+    const fromLive = state.lastSeq >= 0 ? state.lastSeq : null;
     const sentLastSeq = pinnedResumeFrom ?? fromLive;
-    socket.emit('wl:subscribe', {
+    // timeout() so a dropped ack (socket.io discards plain callbacks on
+    // disconnect) still reaches the failure branch and re-pins the floor.
+    socket.timeout(8_000).emit('wl:subscribe', {
       tournament_id: tournamentId,
       role: 'spectator',
       ...(sentLastSeq != null ? { last_seq: sentLastSeq } : {}),
-    }, (ack: { ok?: boolean; seq?: number; resume_granted?: boolean }) => {
-      if (ack?.ok !== true || typeof ack.seq !== 'number') {
+    }, (err: Error | null, ack?: { ok?: boolean; seq?: number; resume_granted?: boolean }) => {
+      if (err || ack?.ok !== true || typeof ack.seq !== 'number') {
         // A dropped/failed ack must not strand a pending resume.
         if (sentLastSeq != null) { pinnedResumeFrom = sentLastSeq; retrySubscribe(); }
         return;

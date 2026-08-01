@@ -173,19 +173,30 @@ async function api<T>(
   body?: unknown,
   opsToken?: string
 ): Promise<{ status: number; body: T }> {
-  const res = await fetch(`${cfg.apiBase}${path}`, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: unknown = null;
-  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-  return { status: res.status, body: parsed as T };
+  const maxAttempts = method === 'GET' ? 3 : 1;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(`${cfg.apiBase}${path}`, {
+        method,
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(opsToken ? { 'x-wl-ops-token': opsToken } : {}),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(method === 'GET' ? 20_000 : 30_000),
+      });
+      const text = await res.text();
+      let parsed: unknown = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+      return { status: res.status, body: parsed as T };
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) await sleep(500 * attempt);
+    }
+  }
+  throw lastErr;
 }
 
 function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): unknown {

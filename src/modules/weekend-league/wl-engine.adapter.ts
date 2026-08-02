@@ -553,9 +553,24 @@ async function finalizeGame(
   const advanceCount = isFinal
     ? 0
     : Math.min(board.length, ladder.advance?.[gameIndex] ?? WL_FINALISTS);
-  const survivors = board.slice(0, advanceCount).map((b) => b.user_id);
-  const eliminated = isFinal ? [] : board.slice(advanceCount).map((b) => b.user_id);
   const isLastQualifierGame = !isFinal && gameIndex >= 2;
+  let survivors = board.slice(0, advanceCount).map((b) => b.user_id);
+  // Final seats prefer HUMANS (owner rule, 2026-08-02): roster bots keep the
+  // qualifiers lively but only occupy final seats left over when fewer than
+  // advanceCount humans survive to the cut. Earlier cuts stay purely
+  // score-based; prizes are separately humans-only via the award firewall.
+  if (isLastQualifierGame && board.length > advanceCount) {
+    const aiRows = await sql<{ id: string }[]>`
+      SELECT id FROM users
+      WHERE id = ANY(${sql.array(board.map((b) => b.user_id))}::uuid[]) AND is_ai = true
+    `;
+    const aiIds = new Set(aiRows.map((r) => r.id));
+    const humans = board.filter((b) => !aiIds.has(b.user_id)).map((b) => b.user_id);
+    const bots = board.filter((b) => aiIds.has(b.user_id)).map((b) => b.user_id);
+    survivors = [...humans.slice(0, advanceCount), ...bots].slice(0, advanceCount);
+  }
+  const survivorSet = new Set(survivors);
+  const eliminated = isFinal ? [] : board.filter((b) => !survivorSet.has(b.user_id)).map((b) => b.user_id);
   const cfg = (t.config ?? {}) as Record<string, unknown>;
   const breakMs = Number(cfg['break_ms']) >= 0 && Number.isFinite(Number(cfg['break_ms']))
     ? Number(cfg['break_ms']) : 120_000;
@@ -583,15 +598,19 @@ async function finalizeGame(
       const scores = board.map((b) => b.points);
       const times = board.map((b) => b.time_ms_total);
       const ranks = board.map((b) => b.rank);
+      // advanced = seat membership, not rank: the human-priority final cut
+      // can advance a lower-ranked human over a higher-ranked bot.
+      const advancedFlags = board.map((b) => survivorSet.has(b.user_id));
       await txSql`
         INSERT INTO wl_game_results (
           tournament_id, game_index, user_id, score, time_ms_total, rank, advanced
         )
-        SELECT ${t.id}, ${gameIndex}, u, s, tm, r, r <= ${advanceCount}
+        SELECT ${t.id}, ${gameIndex}, u, s, tm, r, adv
         FROM unnest(
           ${sql.array(userIds)}::uuid[], ${sql.array(scores)}::int[],
-          ${sql.array(times)}::bigint[], ${sql.array(ranks)}::int[]
-        ) AS t(u, s, tm, r)
+          ${sql.array(times)}::bigint[], ${sql.array(ranks)}::int[],
+          ${sql.array(advancedFlags)}::boolean[]
+        ) AS t(u, s, tm, r, adv)
         ON CONFLICT (tournament_id, game_index, user_id) DO NOTHING
       `;
     }

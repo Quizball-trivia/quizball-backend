@@ -554,11 +554,11 @@ export const wlLiveEngineInternals = {
     tournamentId: string,
     gameIndex: number,
     limit: number
-  ): Promise<Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>> {
+  ): Promise<Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>> {
     // Per-user totals with WINDOW-correct miss charges: an unanswered
     // attempt charges that attempt's full window (who_am_i = 5 clue windows),
     // never a flat constant — wrong-but-present must always beat absent.
-    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string }>>`
+    const rows = await sql<Array<{ user_id: string; nickname: string | null; points: number; time_ms: string }>>`
       WITH asked AS (
         SELECT attempt_id,
                GREATEST(1, deadline_at_ms - playable_at_ms) AS window_ms
@@ -567,6 +567,7 @@ export const wlLiveEngineInternals = {
           AND status IN ('frozen', 'revealed')
       )
       SELECT p.user_id,
+             MIN(u.nickname) AS nickname,
              COALESCE(SUM(a.points), 0)::int AS points,
              (
                COALESCE(SUM(LEAST(a.time_charge_ms, asked.window_ms)), 0)
@@ -574,6 +575,7 @@ export const wlLiveEngineInternals = {
                - COALESCE(SUM(asked.window_ms), 0)
              )::text AS time_ms
       FROM wl_game_participants p
+      JOIN users u ON u.id = p.user_id
       LEFT JOIN wl_answers a
         ON a.tournament_id = p.tournament_id AND a.game_index = p.game_index
        AND a.user_id = p.user_id
@@ -583,12 +585,16 @@ export const wlLiveEngineInternals = {
     `;
     const standings = rows.map((r) => ({
       userId: r.user_id,
+      nickname: r.nickname,
       points: r.points,
       timeMsTotal: Number(r.time_ms),
     }));
     standings.sort(wlCompareStanding);
+    // Nickname rides on every board row so clients never fall back to
+    // placeholder names; deliberately NO is_ai flag — spectators and players
+    // must not be able to tell roster bots apart.
     return standings.slice(0, limit).map((s, i) => ({
-      user_id: s.userId, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
+      user_id: s.userId, nickname: s.nickname, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
     }));
   },
 
@@ -863,7 +869,7 @@ export interface WlSubscribeSnapshot {
   /** Exact outbox boundary: events ≤ this seq are fully reflected in score;
       events above it not at all (read in the same MVCC statement). */
   snapshot_seq: number;
-  board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
+  board: Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>;
 }
 
 /**

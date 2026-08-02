@@ -34,7 +34,8 @@ export const wlAdminController = {
   /** Recent tournaments with live counts — the CMS list view. */
   async listTournaments(_req: Request, res: Response): Promise<void> {
     const rows = await sql<Array<Record<string, unknown>>>`
-      SELECT t.id, t.week_key::text, t.status, t.is_test, t.launch_edition,
+      SELECT t.id, t.week_key::text, t.status, t.is_test,
+             (t.config->>'launch_edition')::boolean AS launch_edition,
              t.entry_opens_at, t.entry_closes_at, t.qualifier_starts_at, t.final_starts_at,
              t.champion_user_id, t.cancelled_reason, t.created_at,
              (SELECT COUNT(*)::int FROM wl_entries e WHERE e.tournament_id = t.id) AS registered,

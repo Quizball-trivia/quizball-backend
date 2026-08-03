@@ -282,7 +282,7 @@ export async function wlNotifyQualifiedEntryOpen(
         FROM wl_qp_awards a
         WHERE NOT EXISTS (
           SELECT 1 FROM wl_qp_resets r
-          WHERE r.user_id = a.user_id AND r.reset_at > a.created_at
+          WHERE r.user_id = a.user_id AND r.reset_at >= a.created_at
         )
         GROUP BY a.user_id
         HAVING SUM(a.points) >= ${qpTarget}
@@ -318,7 +318,7 @@ export async function wlNotifyQualifiedEntryOpen(
       FROM wl_qp_awards a
       WHERE NOT EXISTS (
         SELECT 1 FROM wl_qp_resets r
-        WHERE r.user_id = a.user_id AND r.reset_at > a.created_at
+        WHERE r.user_id = a.user_id AND r.reset_at >= a.created_at
       )
       GROUP BY a.user_id
       HAVING SUM(a.points) >= ${qpTarget}

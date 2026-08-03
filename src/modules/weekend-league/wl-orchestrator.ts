@@ -353,11 +353,22 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
   // whose windows exist. Recipient-idempotent, so re-running is free.
   // Entry-opened announcement to QP-qualified non-entrants (real events
   // only — a sandbox event must not email the whole qualified base).
+  // Throttled to one scan per 10 minutes: the qualified-population GROUP BY
+  // over the QP ledger is too heavy for every reconciler pass, and a
+  // 10-minute lag for a newly qualified player's announcement is invisible.
+  // Late qualifiers keep getting picked up all week (no done-flag).
   if (!t.is_test && t.status === 'entry_open') {
-    const { wlNotifyQualifiedEntryOpen } = await import('./wl-notifications.js');
-    const cfg = (t.config ?? {}) as Record<string, unknown>;
-    const target = Number(cfg['qp_target']);
-    await wlNotifyQualifiedEntryOpen(t.id, Number.isFinite(target) && target > 0 ? target : 200);
+    let due = false;
+    try {
+      const { wlRedis } = await import('./wl-redis.js');
+      due = (await wlRedis().set(`wl:entrywave:${t.id}`, '1', { NX: true, PX: 600_000 })) === 'OK';
+    } catch { /* Redis down → try again next pass */ }
+    if (due) {
+      const { wlNotifyQualifiedEntryOpen } = await import('./wl-notifications.js');
+      const cfg = (t.config ?? {}) as Record<string, unknown>;
+      const target = Number(cfg['qp_target']);
+      await wlNotifyQualifiedEntryOpen(t.id, Number.isFinite(target) && target > 0 ? target : 200);
+    }
   }
   const qualifierStartMs = t.qualifier_starts_at ? Date.parse(String(t.qualifier_starts_at)) : NaN;
   const preGame = ['ready', 'entry_open', 'entry_closed', 'checkin'].includes(t.status);

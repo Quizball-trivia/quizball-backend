@@ -165,6 +165,22 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     },
   });
   registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/stock',
+    summary: 'WL question-stock levels per kind and visibility (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: 'Stock counts',
+        schema: z.object({
+          stock: z.array(z.object({ type: z.string(), visibility: z.string(), n: z.number().int() })),
+        }).openapi('WlAdminStockResponse'),
+      },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
     method: 'delete',
     path: '/api/v1/admin/wl/tournaments/{id}',
     summary: 'Delete a TEST tournament (real events must be cancelled instead)',

@@ -148,6 +148,20 @@ export const wlAdminController = {
     res.json({ cancelled: await wlCancelTournament(id, actorOf(req), reason) });
   },
 
+  /** WL question-stock levels per kind — the CMS agent panel's fuel gauge. */
+  async stock(_req: Request, res: Response): Promise<void> {
+    const rows = await sql<Array<{ type: string; visibility: string; n: number }>>`
+      SELECT q.type, q.visibility, COUNT(*)::int AS n
+      FROM questions q
+      WHERE q.status = 'published'
+        AND q.type IN ('true_false', 'high_low', 'mcq_single', 'career_path', 'clue_chain')
+        AND q.visibility IN ('public', 'wl_private')
+      GROUP BY 1, 2
+      ORDER BY 1, 2
+    `;
+    res.json({ stock: rows });
+  },
+
   async deleteTest(req: Request, res: Response): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
     const deleted = await sql<{ id: string }[]>`

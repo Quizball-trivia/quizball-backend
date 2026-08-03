@@ -6307,6 +6307,16 @@
           "tournament": {
             "$ref": "#/components/schemas/WlAdminTournamentRow"
           },
+          "registrants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
           "entry_states": {
             "type": "array",
             "items": {
@@ -6412,6 +6422,7 @@
         },
         "required": [
           "tournament",
+          "registrants",
           "entry_states",
           "current_game_index",
           "board",
@@ -8475,6 +8486,17 @@
         },
         "required": [
           "filled"
+        ]
+      },
+      "WlAdminDeleteTestResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
         ]
       },
       "WlAdminForceTickResponse": {
@@ -18983,6 +19005,60 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a TEST tournament (real events must be cancelled instead)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminDeleteTestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a test event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
             "content": {
               "application/json": {
                 "schema": {

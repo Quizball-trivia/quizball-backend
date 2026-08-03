@@ -171,9 +171,10 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
  * Email leg of a reminder wave: same audience contract as wlNotifyEntrants
  * (non-terminal entrants, human-only guards), idempotent per recipient via
  * wl_email_log. Sends are paced per pass (the orchestrator re-runs the wave
- * until candidate exhaustion) and a failed send is simply retried next pass
- * because the log row is only written after a confirmed send. When no email
- * provider is configured this is a no-op that logs nothing as sent.
+ * until candidate exhaustion). Every attempt is recorded: failures keep
+ * sent_at NULL and count attempts, retried until a cap of 5 so dead
+ * addresses leave the candidate window. When no email provider is
+ * configured this is a no-op that records nothing.
  */
 export async function wlEmailEntrants(
   tournamentId: string,

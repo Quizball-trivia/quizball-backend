@@ -8,7 +8,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { sql } from '../../db/index.js';
-import { NotFoundError } from '../../core/errors.js';
+import { BadRequestError, NotFoundError } from '../../core/errors.js';
 import { wlLiveEngineInternals } from './wl-live-engine.js';
 import { WL_FINALISTS } from './wl-rules.js';
 import {
@@ -59,6 +59,18 @@ export const wlAdminController = {
     `;
     if (!t) throw new NotFoundError('Tournament not found');
 
+    // Full registrant roster for the CMS table — humans first, oldest entry
+    // first, capped to keep the payload sane at bot-filled fields.
+    const registrants = await sql<Array<Record<string, unknown>>>`
+      SELECT u.nickname, u.is_ai, e.state, e.qp_at_entry,
+             e.entered_at, e.checked_in_at, e.final_checked_in_at, e.final_rank
+      FROM wl_entries e
+      JOIN users u ON u.id = e.user_id
+      WHERE e.tournament_id = ${id}
+      ORDER BY u.is_ai ASC, e.entered_at ASC
+      LIMIT 1500
+    `;
+
     const entryStates = await sql<Array<{ state: string; n: number; bots: number }>>`
       SELECT e.state, COUNT(*)::int AS n,
              COUNT(*) FILTER (WHERE u.is_ai)::int AS bots
@@ -99,6 +111,7 @@ export const wlAdminController = {
 
     res.json({
       tournament: t,
+      registrants,
       entry_states: entryStates,
       current_game_index: gameIndex,
       board: board.map((b) => ({
@@ -133,6 +146,19 @@ export const wlAdminController = {
     const { id } = idParamSchema.parse(req.params);
     const { reason } = actionBodySchema.parse(req.body ?? {});
     res.json({ cancelled: await wlCancelTournament(id, actorOf(req), reason) });
+  },
+
+  async deleteTest(req: Request, res: Response): Promise<void> {
+    const { id } = idParamSchema.parse(req.params);
+    const deleted = await sql<{ id: string }[]>`
+      DELETE FROM wl_tournaments
+      WHERE id = ${id} AND is_test = true
+      RETURNING id
+    `;
+    if (deleted.length === 0) {
+      throw new BadRequestError('Only TEST events can be deleted (cancel real events instead — deleting the row would make the weekly calendar recreate it)');
+    }
+    res.json({ deleted: true });
   },
 
   async forceTick(req: Request, res: Response): Promise<void> {

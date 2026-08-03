@@ -74,6 +74,7 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
   const adminList = z.object({ tournaments: z.array(adminTournamentRow) }).openapi('WlAdminTournamentsResponse');
   const adminDetail = z.object({
     tournament: adminTournamentRow,
+    registrants: z.array(z.object({}).catchall(z.unknown())),
     entry_states: z.array(z.object({ state: z.string(), n: z.number().int(), bots: z.number().int() })),
     current_game_index: z.number().int(),
     board: z.array(z.object({
@@ -160,6 +161,22 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
         description: 'Bots entered',
         schema: z.object({ filled: z.number().int() }).openapi('WlAdminFillBotsResponse'),
       },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'delete',
+    path: '/api/v1/admin/wl/tournaments/{id}',
+    summary: 'Delete a TEST tournament (real events must be cancelled instead)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: {
+      200: {
+        description: 'Deleted',
+        schema: z.object({ deleted: z.boolean() }).openapi('WlAdminDeleteTestResponse'),
+      },
+      400: { description: 'Not a test event', schema: errorResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });

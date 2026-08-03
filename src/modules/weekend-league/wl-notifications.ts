@@ -193,7 +193,7 @@ export function wlEmailHtml(subject: WlWaveContent): string {
       <p style="margin: 0 0 20px; color: #444; line-height: 1.5;">${subject.bodyKa}</p>
       <h3 style="margin: 0 0 4px; color: #888; font-weight: 600;">${subject.titleEn}</h3>
       <p style="margin: 0 0 20px; color: #888; line-height: 1.5;">${subject.bodyEn}</p>
-      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">quizball.io/events</a>
+      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">ითამაშე</a>
     </div>`;
 }
 

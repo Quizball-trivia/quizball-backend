@@ -342,9 +342,29 @@ async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
  */
 async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
   const {
-    wlEnsureStartedWave, wlNotifyEntrants,
+    wlEnsureStartedWave, wlNotifyEntrants, wlEmailEntrants,
     CHECKIN_OPEN_CONTENT, QUALIFIED_CONTENT, FINAL_CHECKIN_CONTENT,
+    REMINDER_1H_CONTENT, REMINDER_30M_CONTENT,
   } = await import('./wl-notifications.js');
+  // Kickoff reminders: T-60 and T-30 before the qualifier, to registered
+  // participants, in-app always + email when a provider is configured.
+  // Window-gated (not point-in-time) so a restart inside the window still
+  // delivers, and a compressed test event naturally fires only the waves
+  // whose windows exist. Recipient-idempotent, so re-running is free.
+  const qualifierStartMs = t.qualifier_starts_at ? Date.parse(String(t.qualifier_starts_at)) : NaN;
+  const preGame = ['ready', 'entry_open', 'entry_closed', 'checkin'].includes(t.status);
+  if (preGame && Number.isFinite(qualifierStartMs)) {
+    const untilStart = qualifierStartMs - Date.now();
+    const reminderStates = ['entered', 'playing'];
+    if (untilStart > 0 && untilStart <= 60 * 60_000) {
+      await wlNotifyEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
+      await wlEmailEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
+    }
+    if (untilStart > 0 && untilStart <= 30 * 60_000) {
+      await wlNotifyEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
+      await wlEmailEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
+    }
+  }
   const inPlay = ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
     .includes(t.status);
   if (!t.is_test && inPlay) {

@@ -19,7 +19,9 @@ const WAVE_BATCH_SIZE = 200;
 // TTL — the remainder continues next pass (waves are state-reconciled).
 const MAX_BATCHES_PER_PASS = 10;
 
-export type WlWaveKind = 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open';
+export type WlWaveKind =
+  | 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open'
+  | 'reminder_1h' | 'reminder_30m';
 
 export interface WlWaveContent {
   titleEn: string;
@@ -27,6 +29,20 @@ export interface WlWaveContent {
   bodyEn: string;
   bodyKa: string;
 }
+
+export const REMINDER_1H_CONTENT: WlWaveContent = {
+  titleEn: 'Weekend League starts in 1 hour!',
+  titleKa: 'უიქენდის ლიგა 1 საათში იწყება!',
+  bodyEn: 'You are registered — check-in opens shortly before kickoff. Get ready! 🏆',
+  bodyKa: 'დარეგისტრირებული ხარ — ჩექინი დაწყებამდე ცოტა ხნით ადრე გაიხსნება. მოემზადე! 🏆',
+};
+
+export const REMINDER_30M_CONTENT: WlWaveContent = {
+  titleEn: 'Weekend League starts in 30 minutes!',
+  titleKa: 'უიქენდის ლიგა 30 წუთში იწყება!',
+  bodyEn: 'Almost time — do not miss check-in. Good luck! ⚽',
+  bodyKa: 'თითქმის დროა — არ გამოტოვო ჩექინი. წარმატებები! ⚽',
+};
 
 export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
   titleEn: 'Check-in is open!',
@@ -148,4 +164,80 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
   }
   if (total > 0) logger.info({ tournamentId, total }, 'WL started wave inserted');
   return total;
+}
+
+
+/**
+ * Email leg of a reminder wave: same audience contract as wlNotifyEntrants
+ * (non-terminal entrants, human-only guards), idempotent per recipient via
+ * wl_email_log. Sends are paced per pass (the orchestrator re-runs the wave
+ * until candidate exhaustion). Every attempt is recorded: failures keep
+ * sent_at NULL and count attempts, retried until a cap of 5 so dead
+ * addresses leave the candidate window. When no email provider is
+ * configured this is a no-op that records nothing.
+ */
+export async function wlEmailEntrants(
+  tournamentId: string,
+  kind: WlWaveKind,
+  subject: WlWaveContent,
+  stateFilter: string[] = ['entered', 'playing', 'finalist']
+): Promise<number> {
+  const { emailEnabled, sendEmail } = await import('../../core/email.js');
+  if (!emailEnabled()) return 0;
+  const key = sourceKey(tournamentId, kind);
+  const EMAILS_PER_PASS = 40;
+  // The orchestrator holds a TTL lock across this pass: the batch is
+  // TIME-boxed (not just count-boxed) so slow provider responses can never
+  // starve the lock — leftovers go out on the next pass.
+  const passDeadline = Date.now() + 8_000;
+  const candidates = await sql<Array<{ user_id: string; email: string | null; nickname: string | null }>>`
+    SELECT e.user_id, u.email, u.nickname
+    FROM wl_entries e
+    JOIN users u ON u.id = e.user_id
+      AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+      AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+      AND u.is_banned = false
+    WHERE e.tournament_id = ${tournamentId}
+      AND e.state = ANY(${sql.array(stateFilter)})
+      AND u.email IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM wl_email_log l
+        WHERE l.user_id = e.user_id AND l.source_event_key = ${key}
+          AND (l.sent_at IS NOT NULL OR l.attempts >= 5)
+      )
+    ORDER BY e.user_id
+    LIMIT ${EMAILS_PER_PASS}
+  `;
+  let sent = 0;
+  for (const c of candidates) {
+    if (Date.now() > passDeadline) break;
+    if (!c.email) continue;
+    const ok = await sendEmail({
+      to: c.email,
+      idempotencyKey: `${key}:${c.user_id}`,
+      subject: subject.titleEn,
+      html: `
+        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
+          <h2 style="margin: 0 0 4px;">${subject.titleKa}</h2>
+          <p style="margin: 0 0 16px; color: #444;">${subject.bodyKa}</p>
+          <h3 style="margin: 0 0 4px; color: #666;">${subject.titleEn}</h3>
+          <p style="margin: 0 0 16px; color: #666;">${subject.bodyEn}</p>
+          <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 12px 22px; border-radius: 10px; text-decoration: none; font-weight: 700;">quizball.io/events</a>
+        </div>`,
+    });
+    // Success and failure BOTH leave durable state: failures count attempts
+    // (retried until the cap, then excluded), so dead addresses can never
+    // occupy the candidate window and starve later entrants.
+    await sql`
+      INSERT INTO wl_email_log (user_id, source_event_key, sent_at, attempts)
+      VALUES (${c.user_id}, ${key}, ${ok ? new Date() : null}, 1)
+      ON CONFLICT (user_id, source_event_key) DO UPDATE SET
+        sent_at = COALESCE(wl_email_log.sent_at, EXCLUDED.sent_at),
+        attempts = wl_email_log.attempts + 1,
+        last_attempt_at = now()
+    `;
+    if (ok) sent += 1;
+  }
+  if (sent > 0) logger.info({ tournamentId, kind, sent }, 'WL reminder emails sent');
+  return sent;
 }

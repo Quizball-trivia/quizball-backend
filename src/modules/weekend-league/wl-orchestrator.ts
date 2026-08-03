@@ -341,10 +341,28 @@ async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
  * tops them up to candidate exhaustion. Crash anywhere ⇒ healed next pass.
  */
 async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
-  const { wlEnsureStartedWave, wlNotifyEntrants } = await import('./wl-notifications.js');
-  if (!t.is_test && ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
-    .includes(t.status)) {
+  const {
+    wlEnsureStartedWave, wlNotifyEntrants,
+    CHECKIN_OPEN_CONTENT, QUALIFIED_CONTENT, FINAL_CHECKIN_CONTENT,
+  } = await import('./wl-notifications.js');
+  const inPlay = ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
+    .includes(t.status);
+  if (!t.is_test && inPlay) {
     await wlEnsureStartedWave(t.id);
+  }
+  // Test events notify ENTRANTS ONLY — the admin/harness sandbox must never
+  // blast the broad started audience, but a joined tester still gets the
+  // real notification experience at check-in.
+  if (t.is_test && inPlay) {
+    await wlNotifyEntrants(t.id, 'checkin_open', CHECKIN_OPEN_CONTENT, ['entered', 'playing', 'finalist']);
+  }
+  // Finalists (real and test): you're through — and when the final window
+  // opens, confirm the seat. Tiny audiences, recipient-idempotent.
+  if (['qualifier_done', 'final_checkin', 'final_live'].includes(t.status)) {
+    await wlNotifyEntrants(t.id, 'qualified', QUALIFIED_CONTENT, ['finalist']);
+  }
+  if (t.status === 'final_checkin') {
+    await wlNotifyEntrants(t.id, 'final_checkin_open', FINAL_CHECKIN_CONTENT, ['finalist']);
   }
   if (t.status === 'cancelled') {
     await wlNotifyEntrants(t.id, 'cancelled', {

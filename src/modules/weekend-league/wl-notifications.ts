@@ -28,6 +28,27 @@ export interface WlWaveContent {
   bodyKa: string;
 }
 
+export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
+  titleEn: 'Check-in is open!',
+  titleKa: 'ჩექინი გახსნილია!',
+  bodyEn: 'Confirm your spot — the games start soon.',
+  bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
+};
+
+export const QUALIFIED_CONTENT: WlWaveContent = {
+  titleEn: 'You made the final!',
+  titleKa: 'ფინალში გახვედი!',
+  bodyEn: 'Top 24 — the Sunday final awaits. Check in before it starts.',
+  bodyKa: 'საუკეთესო 24-ში ხარ — ფინალი გელოდება. გაიარე ჩექინი დაწყებამდე.',
+};
+
+export const FINAL_CHECKIN_CONTENT: WlWaveContent = {
+  titleEn: 'Final check-in is open!',
+  titleKa: 'ფინალის ჩექინი გახსნილია!',
+  bodyEn: 'Confirm your seat in the final now.',
+  bodyKa: 'დაადასტურე შენი ადგილი ფინალში ახლავე.',
+};
+
 const STARTED_CONTENT: WlWaveContent = {
   titleEn: 'Weekend League is starting!',
   titleKa: 'უიქენდის ლიგა იწყება!',

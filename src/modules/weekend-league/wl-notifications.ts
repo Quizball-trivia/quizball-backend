@@ -202,7 +202,9 @@ export async function wlEmailEntrants(
       AND NOT EXISTS (
         SELECT 1 FROM wl_email_log l
         WHERE l.user_id = e.user_id AND l.source_event_key = ${key}
+          AND (l.sent_at IS NOT NULL OR l.attempts >= 5)
       )
+    ORDER BY e.user_id
     LIMIT ${EMAILS_PER_PASS}
   `;
   let sent = 0;
@@ -222,13 +224,18 @@ export async function wlEmailEntrants(
           <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 12px 22px; border-radius: 10px; text-decoration: none; font-weight: 700;">quizball.io/events</a>
         </div>`,
     });
-    if (!ok) continue;
+    // Success and failure BOTH leave durable state: failures count attempts
+    // (retried until the cap, then excluded), so dead addresses can never
+    // occupy the candidate window and starve later entrants.
     await sql`
-      INSERT INTO wl_email_log (user_id, source_event_key)
-      VALUES (${c.user_id}, ${key})
-      ON CONFLICT DO NOTHING
+      INSERT INTO wl_email_log (user_id, source_event_key, sent_at, attempts)
+      VALUES (${c.user_id}, ${key}, ${ok ? new Date() : null}, 1)
+      ON CONFLICT (user_id, source_event_key) DO UPDATE SET
+        sent_at = COALESCE(wl_email_log.sent_at, EXCLUDED.sent_at),
+        attempts = wl_email_log.attempts + 1,
+        last_attempt_at = now()
     `;
-    sent += 1;
+    if (ok) sent += 1;
   }
   if (sent > 0) logger.info({ tournamentId, kind, sent }, 'WL reminder emails sent');
   return sent;

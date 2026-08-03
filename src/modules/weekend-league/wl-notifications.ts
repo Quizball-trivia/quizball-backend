@@ -28,6 +28,27 @@ export interface WlWaveContent {
   bodyKa: string;
 }
 
+export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
+  titleEn: 'Check-in is open!',
+  titleKa: 'ჩექინი გახსნილია!',
+  bodyEn: 'Confirm your spot — the games start soon.',
+  bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
+};
+
+export const QUALIFIED_CONTENT: WlWaveContent = {
+  titleEn: 'You made the final!',
+  titleKa: 'ფინალში გახვედი!',
+  bodyEn: 'Top 24 — the Sunday final awaits. Check in before it starts.',
+  bodyKa: 'საუკეთესო 24-ში ხარ — ფინალი გელოდება. გაიარე ჩექინი დაწყებამდე.',
+};
+
+export const FINAL_CHECKIN_CONTENT: WlWaveContent = {
+  titleEn: 'Final check-in is open!',
+  titleKa: 'ფინალის ჩექინი გახსნილია!',
+  bodyEn: 'Confirm your seat in the final now.',
+  bodyKa: 'დაადასტურე შენი ადგილი ფინალში ახლავე.',
+};
+
 const STARTED_CONTENT: WlWaveContent = {
   titleEn: 'Weekend League is starting!',
   titleKa: 'უიქენდის ლიგა იწყება!',
@@ -57,6 +78,10 @@ export async function wlNotifyEntrants(
              ${sql.json({ tournament_id: tournamentId, kind } as never)},
              ${key}
       FROM wl_entries e
+      JOIN users u ON u.id = e.user_id
+        AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+        AND u.is_banned = false
       WHERE e.tournament_id = ${tournamentId}
         AND e.state = ANY(${sql.array(stateFilter)})
         AND NOT EXISTS (

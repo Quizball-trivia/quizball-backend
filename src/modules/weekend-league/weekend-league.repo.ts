@@ -7,6 +7,7 @@ export interface WlTournamentRow {
   is_test: boolean;
   status: WlTournamentStatus;
   config: Record<string, unknown>;
+  stage: Record<string, unknown> | null;
   entry_opens_at: string | null;
   entry_closes_at: string | null;
   qualifier_starts_at: string | null;
@@ -38,7 +39,7 @@ export const weekendLeagueRepo = {
    */
   async getCurrentTournament(): Promise<WlTournamentRow | null> {
     const [row] = await sql<WlTournamentRow[]>`
-      SELECT id, week_key::text, is_test, status, config,
+      SELECT id, week_key::text, is_test, status, config, stage,
              entry_opens_at::text, entry_closes_at::text,
              qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments
@@ -51,7 +52,7 @@ export const weekendLeagueRepo = {
 
   async getTournamentById(id: string): Promise<WlTournamentRow | null> {
     const [row] = await sql<WlTournamentRow[]>`
-      SELECT id, week_key::text, is_test, status, config,
+      SELECT id, week_key::text, is_test, status, config, stage,
              entry_opens_at::text, entry_closes_at::text,
              qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments

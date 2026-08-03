@@ -6107,6 +6107,13 @@
               },
               "qp_target": {
                 "type": "integer"
+              },
+              "current_game_index": {
+                "type": "integer"
+              },
+              "break_until_ms": {
+                "type": "integer",
+                "nullable": true
               }
             },
             "required": [
@@ -6121,7 +6128,9 @@
               "registered_count",
               "checked_in_count",
               "launch_edition",
-              "qp_target"
+              "qp_target",
+              "current_game_index",
+              "break_until_ms"
             ]
           },
           "you": {

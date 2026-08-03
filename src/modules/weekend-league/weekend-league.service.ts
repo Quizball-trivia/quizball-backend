@@ -21,6 +21,18 @@ function qpTargetOf(tournament: WlTournamentRow | null): number {
   return WL_QP_TARGET;
 }
 
+function currentGameIndexOf(t: WlTournamentRow): number {
+  const n = Number((t.stage ?? {})['current_game']);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/** Break deadline for the public payload — only while it is still in the future. */
+function breakUntilMsOf(t: WlTournamentRow): number | null {
+  const ms = Number((t.stage ?? {})['break_until_ms']);
+  if (!Number.isFinite(ms) || ms <= Date.now()) return null;
+  return Math.floor(ms);
+}
+
 function launchEditionOf(tournament: WlTournamentRow | null): boolean {
   const raw = tournament?.config?.['launch_edition'];
   return raw === true || raw === 'true';
@@ -88,6 +100,8 @@ export const weekendLeagueService = {
         checked_in_count: counts.checkedIn,
         launch_edition: launchEditionOf(tournament),
         qp_target: qpTargetOf(tournament),
+        current_game_index: currentGameIndexOf(tournament),
+        break_until_ms: breakUntilMsOf(tournament),
       },
       you: {
         entered: entry != null,

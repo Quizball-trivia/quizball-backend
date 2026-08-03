@@ -15,6 +15,7 @@ router.post('/tournaments/:id/resume', wlAdminController.resume);
 router.post('/tournaments/:id/cancel', wlAdminController.cancel);
 router.post('/tournaments/:id/fill-bots', wlAdminController.fillBots);
 router.delete('/tournaments/:id', wlAdminController.deleteTest);
+router.get('/stock', wlAdminController.stock);
 router.post('/force-tick', wlAdminController.forceTick);
 
 export const adminWlRoutes = router;

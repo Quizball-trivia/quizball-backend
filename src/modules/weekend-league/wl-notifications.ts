@@ -21,7 +21,7 @@ const MAX_BATCHES_PER_PASS = 10;
 
 export type WlWaveKind =
   | 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open'
-  | 'reminder_1h' | 'reminder_30m';
+  | 'reminder_1h' | 'reminder_30m' | 'entry_open';
 
 export interface WlWaveContent {
   titleEn: string;
@@ -29,6 +29,13 @@ export interface WlWaveContent {
   bodyEn: string;
   bodyKa: string;
 }
+
+export const ENTRY_OPEN_CONTENT: WlWaveContent = {
+  titleEn: 'You qualified for the Weekend League!',
+  titleKa: 'უიქენდის ლიგაზე კვალიფიცირებული ხარ!',
+  bodyEn: 'You have enough QP — entry is open. Claim your spot for Saturday now.',
+  bodyKa: 'საკმარისი QP გაქვს — რეგისტრაცია ღიაა. დაიკავე ადგილი შაბათისთვის ახლავე.',
+};
 
 export const REMINDER_1H_CONTENT: WlWaveContent = {
   titleEn: 'Weekend League starts in 1 hour!',
@@ -176,6 +183,20 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
  * addresses leave the candidate window. When no email provider is
  * configured this is a no-op that records nothing.
  */
+/** Owner-approved layout (2026-08-03): Georgian first, English in grey
+ *  below, one green CTA into the events tab. */
+export function wlEmailHtml(subject: WlWaveContent): string {
+  return `
+    <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px 16px;">
+      <div style="font-size: 26px; margin-bottom: 8px;">🏆</div>
+      <h2 style="margin: 0 0 6px; color: #111;">${subject.titleKa}</h2>
+      <p style="margin: 0 0 20px; color: #444; line-height: 1.5;">${subject.bodyKa}</p>
+      <h3 style="margin: 0 0 4px; color: #888; font-weight: 600;">${subject.titleEn}</h3>
+      <p style="margin: 0 0 20px; color: #888; line-height: 1.5;">${subject.bodyEn}</p>
+      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">quizball.io/events</a>
+    </div>`;
+}
+
 export async function wlEmailEntrants(
   tournamentId: string,
   kind: WlWaveKind,
@@ -216,14 +237,7 @@ export async function wlEmailEntrants(
       to: c.email,
       idempotencyKey: `${key}:${c.user_id}`,
       subject: subject.titleEn,
-      html: `
-        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">
-          <h2 style="margin: 0 0 4px;">${subject.titleKa}</h2>
-          <p style="margin: 0 0 16px; color: #444;">${subject.bodyKa}</p>
-          <h3 style="margin: 0 0 4px; color: #666;">${subject.titleEn}</h3>
-          <p style="margin: 0 0 16px; color: #666;">${subject.bodyEn}</p>
-          <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 12px 22px; border-radius: 10px; text-decoration: none; font-weight: 700;">quizball.io/events</a>
-        </div>`,
+      html: wlEmailHtml(subject),
     });
     // Success and failure BOTH leave durable state: failures count attempts
     // (retried until the cap, then excluded), so dead addresses can never
@@ -240,4 +254,111 @@ export async function wlEmailEntrants(
   }
   if (sent > 0) logger.info({ tournamentId, kind, sent }, 'WL reminder emails sent');
   return sent;
+}
+
+
+/**
+ * Entry-opened announcement to QP-QUALIFIED players only (owner decision
+ * 2026-08-03): users whose current accrual balance meets the tournament's
+ * entry target and who have not already entered. In-app + email, both
+ * recipient-idempotent through the same keys as every other wave.
+ */
+export async function wlNotifyQualifiedEntryOpen(
+  tournamentId: string,
+  qpTarget: number
+): Promise<void> {
+  const key = sourceKey(tournamentId, 'entry_open');
+  const content = ENTRY_OPEN_CONTENT;
+  for (let batch = 0; batch < MAX_BATCHES_PER_PASS; batch += 1) {
+    const inserted = await sql<{ id: string }[]>`
+      INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
+      SELECT q.user_id, 'weekend_league',
+             ${sql.json({ en: content.titleEn, ka: content.titleKa } as never)},
+             ${sql.json({ en: content.bodyEn, ka: content.bodyKa } as never)},
+             ${sql.json({ tournament_id: tournamentId, kind: 'entry_open' } as never)},
+             ${key}
+      FROM (
+        SELECT a.user_id
+        FROM wl_qp_awards a
+        WHERE NOT EXISTS (
+          SELECT 1 FROM wl_qp_resets r
+          WHERE r.user_id = a.user_id AND r.reset_at > a.created_at
+        )
+        GROUP BY a.user_id
+        HAVING SUM(a.points) >= ${qpTarget}
+      ) q
+      JOIN users u ON u.id = q.user_id
+        AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+        AND u.is_banned = false
+      WHERE NOT EXISTS (
+        SELECT 1 FROM wl_entries e
+        WHERE e.tournament_id = ${tournamentId} AND e.user_id = q.user_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.user_id = q.user_id AND n.source_event_key = ${key}
+      )
+      LIMIT ${WAVE_BATCH_SIZE}
+      ON CONFLICT (user_id, source_event_key) WHERE source_event_key IS NOT NULL
+      DO NOTHING
+      RETURNING id
+    `;
+    if (inserted.length === 0) break;
+  }
+
+  // Email leg: same qualified audience, wl_email_log attempt semantics.
+  const { emailEnabled, sendEmail } = await import('../../core/email.js');
+  if (!emailEnabled()) return;
+  const passDeadline = Date.now() + 8_000;
+  const candidates = await sql<Array<{ user_id: string; email: string | null }>>`
+    SELECT q.user_id, u.email
+    FROM (
+      SELECT a.user_id
+      FROM wl_qp_awards a
+      WHERE NOT EXISTS (
+        SELECT 1 FROM wl_qp_resets r
+        WHERE r.user_id = a.user_id AND r.reset_at > a.created_at
+      )
+      GROUP BY a.user_id
+      HAVING SUM(a.points) >= ${qpTarget}
+    ) q
+    JOIN users u ON u.id = q.user_id
+      AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+      AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+      AND u.is_banned = false
+    WHERE u.email IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM wl_entries e
+        WHERE e.tournament_id = ${tournamentId} AND e.user_id = q.user_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM wl_email_log l
+        WHERE l.user_id = q.user_id AND l.source_event_key = ${key}
+          AND (l.sent_at IS NOT NULL OR l.attempts >= 5)
+      )
+    ORDER BY q.user_id
+    LIMIT 40
+  `;
+  let sent = 0;
+  for (const c of candidates) {
+    if (Date.now() > passDeadline) break;
+    if (!c.email) continue;
+    const ok = await sendEmail({
+      to: c.email,
+      idempotencyKey: `${key}:${c.user_id}`,
+      subject: content.titleEn,
+      html: wlEmailHtml(content),
+    });
+    await sql`
+      INSERT INTO wl_email_log (user_id, source_event_key, sent_at, attempts)
+      VALUES (${c.user_id}, ${key}, ${ok ? new Date() : null}, 1)
+      ON CONFLICT (user_id, source_event_key) DO UPDATE SET
+        sent_at = COALESCE(wl_email_log.sent_at, EXCLUDED.sent_at),
+        attempts = wl_email_log.attempts + 1,
+        last_attempt_at = now()
+    `;
+    if (ok) sent += 1;
+  }
+  if (sent > 0) logger.info({ tournamentId, sent }, 'WL entry-open qualified emails sent');
 }

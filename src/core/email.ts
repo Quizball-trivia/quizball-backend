@@ -21,6 +21,9 @@ export async function sendEmail(input: {
   to: string;
   subject: string;
   html: string;
+  /** Stable per-logical-send key: the provider dedupes retries of the same
+      send (crash between accept and our log write, timeout after accept). */
+  idempotencyKey?: string;
 }): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return false;
@@ -31,9 +34,10 @@ export async function sendEmail(input: {
       headers: {
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
+        ...(input.idempotencyKey ? { 'idempotency-key': input.idempotencyKey } : {}),
       },
       body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');

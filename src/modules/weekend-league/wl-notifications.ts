@@ -185,6 +185,10 @@ export async function wlEmailEntrants(
   if (!emailEnabled()) return 0;
   const key = sourceKey(tournamentId, kind);
   const EMAILS_PER_PASS = 40;
+  // The orchestrator holds a TTL lock across this pass: the batch is
+  // TIME-boxed (not just count-boxed) so slow provider responses can never
+  // starve the lock — leftovers go out on the next pass.
+  const passDeadline = Date.now() + 8_000;
   const candidates = await sql<Array<{ user_id: string; email: string | null; nickname: string | null }>>`
     SELECT e.user_id, u.email, u.nickname
     FROM wl_entries e
@@ -203,9 +207,11 @@ export async function wlEmailEntrants(
   `;
   let sent = 0;
   for (const c of candidates) {
+    if (Date.now() > passDeadline) break;
     if (!c.email) continue;
     const ok = await sendEmail({
       to: c.email,
+      idempotencyKey: `${key}:${c.user_id}`,
       subject: subject.titleEn,
       html: `
         <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto;">

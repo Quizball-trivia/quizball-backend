@@ -78,6 +78,10 @@ export async function wlNotifyEntrants(
              ${sql.json({ tournament_id: tournamentId, kind } as never)},
              ${key}
       FROM wl_entries e
+      JOIN users u ON u.id = e.user_id
+        AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+        AND u.is_banned = false
       WHERE e.tournament_id = ${tournamentId}
         AND e.state = ANY(${sql.array(stateFilter)})
         AND NOT EXISTS (

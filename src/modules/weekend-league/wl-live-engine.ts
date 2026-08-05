@@ -503,7 +503,12 @@ export const wlLiveEngineInternals = {
       gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
     });
     if (next) {
-      await this.appendDispatch(tournamentId, next, redisNow);
+      // At a ROUND boundary the next dispatch is deliberately NOT appended here:
+      // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
+      // round-end standings beat can play. Mid-round we dispatch immediately.
+      if (next.roundIndex === run.round_index) {
+        await this.appendDispatch(tournamentId, next, redisNow);
+      }
     }
   },
 

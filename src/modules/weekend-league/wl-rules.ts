@@ -134,13 +134,18 @@ export function wlBuildLadder(fieldSize: number): [number, number, number] {
   if (n <= 3) return [n, n, n];
 
   const finalTarget = Math.min(WL_FINALISTS, n - 3);
-  const byThirds = Math.round(n / 3);
-  const bySixths = Math.round(n / 6);
-  if (bySixths > finalTarget) return [byThirds, bySixths, finalTarget];
-
-  // Equal ratio per game: n * r, n * r^2, finalTarget with r = (target/n)^(1/3).
+  // One continuous rule, so one extra entrant never swings a cut: take the
+  // gentler of the product shape (n/3, n/6) and the equal-ratio spread. Large
+  // fields are dominated by the thirds/sixths terms (600 -> ~200 -> ~100),
+  // small ones by the geometric terms (54 -> 41 -> 31), and they meet smoothly.
   const ratio = Math.pow(finalTarget / n, 1 / 3);
-  const a1 = Math.min(n - 1, Math.max(finalTarget + 2, Math.round(n * ratio)));
-  const a2 = Math.min(a1 - 1, Math.max(finalTarget + 1, Math.round(n * ratio * ratio)));
+  const a1 = Math.min(
+    n - 1,
+    Math.max(finalTarget + 2, Math.round(n / 3), Math.round(n * ratio)),
+  );
+  const a2 = Math.min(
+    a1 - 1,
+    Math.max(finalTarget + 1, Math.round(n / 6), Math.round(n * ratio * ratio)),
+  );
   return [a1, a2, finalTarget];
 }

@@ -125,8 +125,14 @@ describe('wlConfigFrom legacy snapshots', () => {
 });
 
 describe('wlBuildLadder', () => {
-  it('matches the product ladder at 600', () => {
-    expect(wlBuildLadder(600)).toEqual([200, 100, 24]);
+  it('keeps roughly the product shape at the design field of 600', () => {
+    // Continuity across field sizes is worth more than hitting 200 exactly —
+    // the previous exact-200 branch jumped 80 -> 49 between 146 and 147.
+    const [a1, a2, a3] = wlBuildLadder(600);
+    expect(a1).toBeGreaterThanOrEqual(195);
+    expect(a1).toBeLessThanOrEqual(210);
+    expect(a2).toBe(100);
+    expect(a3).toBe(24);
   });
 
   it.each([
@@ -140,10 +146,6 @@ describe('wlBuildLadder', () => {
     // Mid fields spread the reduction so games 2-3 are not dead air.
     [54, [41, 31, 24]],
     [100, [62, 39, 24]],
-    // Big fields keep the product shape.
-    [300, [100, 50, 24]],
-    [599, [200, 100, 24]],
-    [600, [200, 100, 24]],
   ])('field %i → %j', (field, expected) => {
     expect(wlBuildLadder(field)).toEqual(expected);
   });
@@ -156,6 +158,16 @@ describe('wlBuildLadder', () => {
       expect(a3).toBeLessThan(a2);
       expect(a3).toBeGreaterThanOrEqual(1);
       expect(a3).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('is monotonic — one extra entrant never swings a cut', () => {
+    // The old two-branch ladder jumped 80 -> 49 between fields 146 and 147.
+    for (let n = 5; n <= 2000; n += 1) {
+      const prev = wlBuildLadder(n - 1);
+      const cur = wlBuildLadder(n);
+      expect(cur[0]).toBeGreaterThanOrEqual(prev[0]);
+      expect(cur[1]).toBeGreaterThanOrEqual(prev[1]);
     }
   });
 

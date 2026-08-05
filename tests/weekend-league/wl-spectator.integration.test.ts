@@ -108,7 +108,7 @@ describe('WL spectator delay', () => {
       })],
       ['high_low', wlSourceNeedPerKind('higher_lower'), (i) => ({
         type: 'high_low', stat_label: i18n(`h${i}`),
-        matchups: [0, 1, 2].map((m) => ({
+        matchups: [0, 1, 2, 3, 4].map((m) => ({
           id: `m${m}`, left_name: i18n('L'), left_value: 9, right_name: i18n('R'), right_value: 1,
         })),
       })],

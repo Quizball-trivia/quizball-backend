@@ -12,6 +12,12 @@ export const WL_QUESTION_TIME_MS = 10_000;
 export const WL_DISPATCH_LEAD_MS = 1200;
 export const WL_FINALISTS = 24;
 export const WL_BREAK_MS = 2 * 60 * 1000;
+/**
+ * Pause after the LAST question of a round before the next round dispatches —
+ * room for the verdict plus the round-end standings beat. Mid-round questions
+ * have no extra hold.
+ */
+export const WL_ROUND_BREATHER_MS = 6_000;
 export const WL_CHECKIN_WINDOW_MS = 10 * 60 * 1000;
 export const WL_GAMES_PER_QUALIFIER = 3;
 
@@ -27,16 +33,22 @@ export const WL_ROUND_ORDER: readonly WlRoundKind[] = [
 
 export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
   true_false: 5,
-  higher_lower: 3,
+  higher_lower: 5,
   mcq: 5,
   career_path: 5,
+  // One puzzle played across 5 clue windows — the round is still 5 beats long.
   who_am_i: 1,
 };
 
 /** Per-step maximum for the timed kinds; who_am_i scores by clue instead. */
+/**
+ * Per-question maxima. The five rounds must total WL_GAME_MAX_POINTS for a
+ * perfect game: 5x30 + 5x30 + 5x40 + 5x40 + 300 (who-am-i, one puzzle) = 1000.
+ * Changing a count here means rebalancing these.
+ */
 export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i'>, number> = {
   true_false: 30,
-  higher_lower: 50,
+  higher_lower: 30,
   mcq: 40,
   career_path: 40,
 };
@@ -104,14 +116,31 @@ export function wlCompareStanding(
 
 /**
  * Qualifier ladder for any field size: advance targets after games 1..3.
- * Shape mirrors the product ladder 600 → 200 → 100 → 24 (÷3, ÷2, cut to 24)
- * and degrades deterministically for small fields — nobody is eliminated while
- * the field is at or under the finalist count.
+ *
+ * EVERY game must eliminate someone — a game whose cut is empty is dead air
+ * for the players still in it. So:
+ *  - Big fields keep the product shape (600 -> 200 -> 100 -> 24): thirds, then
+ *    halves, then the finalist cut.
+ *  - Smaller fields, where /3 then /6 would land at or under the finalist
+ *    count and leave games 2-3 with nothing to cut, spread the reduction
+ *    geometrically instead so all three games cut a real share
+ *    (54 -> 41 -> 31 -> 24).
+ *  - Below WL_FINALISTS + 3 the arithmetic cannot produce three distinct cuts
+ *    ending at 24, so the final target drops just enough to keep every game
+ *    meaningful rather than promising a cut that cannot happen.
  */
 export function wlBuildLadder(fieldSize: number): [number, number, number] {
   const n = Math.max(0, Math.floor(fieldSize));
-  const a1 = Math.min(n, Math.max(WL_FINALISTS, Math.round(n / 3)));
-  const a2 = Math.min(a1, Math.max(WL_FINALISTS, Math.round(a1 / 2)));
-  const a3 = Math.min(a2, WL_FINALISTS);
-  return [a1, a2, a3];
+  if (n <= 3) return [n, n, n];
+
+  const finalTarget = Math.min(WL_FINALISTS, n - 3);
+  const byThirds = Math.round(n / 3);
+  const bySixths = Math.round(n / 6);
+  if (bySixths > finalTarget) return [byThirds, bySixths, finalTarget];
+
+  // Equal ratio per game: n * r, n * r^2, finalTarget with r = (target/n)^(1/3).
+  const ratio = Math.pow(finalTarget / n, 1 / 3);
+  const a1 = Math.min(n - 1, Math.max(finalTarget + 2, Math.round(n * ratio)));
+  const a2 = Math.min(a1 - 1, Math.max(finalTarget + 1, Math.round(n * ratio * ratio)));
+  return [a1, a2, finalTarget];
 }

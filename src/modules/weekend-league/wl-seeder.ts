@@ -10,7 +10,7 @@
  *    tournaments and the launch edition).
  *  - Repeat-avoidance: source ids used by any tournament created in the
  *    last WL_REPEAT_AVOID_DAYS are excluded.
- *  - Higher/Lower: one source row's matchups become the round's 3 step
+ *  - Higher/Lower: one source row's matchups become the round's step
  *    slots (each slot = one matchup), so a chain always compares within
  *    one stat.
  *  - Reserves: +WL_RESERVES_PER_KIND rows per (game, kind) for crash
@@ -66,7 +66,7 @@ function payloadFullyBilingual(prompt: unknown, payload: unknown): boolean {
 /** How many SOURCE rows a full tournament needs per kind (slots + reserves). */
 export function wlSourceNeedPerKind(kind: WlRoundKind): number {
   const perGame = kind === 'higher_lower'
-    ? 1 // one source row covers the 3-step chain
+    ? 1 // one source row covers the whole matchup chain
     : WL_QUESTIONS_PER_ROUND[kind];
   return WL_GAME_COUNT * (perGame + WL_RESERVES_PER_KIND);
 }
@@ -79,7 +79,8 @@ async function drawSources(
   pagingSeed: string
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
-  const minMatchups = kind === 'higher_lower' ? 3 : 0;
+  // A high_low source must carry one matchup per question in the round.
+  const minMatchups = kind === 'higher_lower' ? WL_QUESTIONS_PER_ROUND.higher_lower : 0;
   // Stable within one seeding pass: RANDOM() would reshuffle every page,
   // repeating and skipping rows across OFFSETs. The per-tournament seed
   // keeps selection pseudo-random ACROSS tournaments yet deterministic

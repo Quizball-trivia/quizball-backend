@@ -11,7 +11,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { WL_FINALISTS, wlBuildLadder } from './wl-rules.js';
+import { WL_FINALISTS, WL_ROUND_BREATHER_MS, wlBuildLadder } from './wl-rules.js';
 
 export interface WlEngine {
   /** Freeze/copy content for the tournament. True = ready to open entry. */
@@ -421,7 +421,22 @@ export const wlEngineLive: WlEngine = {
           return;
         }
         const next = wlNextSlot(slot);
-        if (next) await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
+        if (next) {
+          // Round boundary: hold before dispatching so the standings beat has
+          // room to play on every client. Mid-round questions continue on the
+          // normal tick cadence.
+          const crossesRound = next.roundIndex !== slot.roundIndex;
+          if (crossesRound) {
+            // The deadline IS the moment the reveal fired; hold from there so
+            // the pause is the same for everyone regardless of tick phase.
+            const revealedAt = Number(frontier.deadline_at_ms ?? 0);
+            if (Number.isFinite(revealedAt) && revealedAt > 0
+              && redisNow - revealedAt < WL_ROUND_BREATHER_MS) {
+              return;
+            }
+          }
+          await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
+        }
       }
       return;
     }

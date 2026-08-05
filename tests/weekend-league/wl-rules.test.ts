@@ -30,7 +30,7 @@ describe('point tables', () => {
 
   it('instant correct answers earn the step max (grace window)', () => {
     expect(wlStepPoints('true_false', true, 0)).toBe(30);
-    expect(wlStepPoints('higher_lower', true, 400)).toBe(50);
+    expect(wlStepPoints('higher_lower', true, 400)).toBe(30);
     expect(wlStepPoints('mcq', true, 500)).toBe(40);
     expect(wlStepPoints('career_path', true, 0)).toBe(40);
   });
@@ -38,7 +38,7 @@ describe('point tables', () => {
   it('scales down with elapsed time and floors to integers', () => {
     // 5.5s elapsed → 5s effective remaining → ranked bucket 50 → scaled.
     expect(wlStepPoints('true_false', true, 5500)).toBe(15);
-    expect(wlStepPoints('higher_lower', true, 5500)).toBe(25);
+    expect(wlStepPoints('higher_lower', true, 5500)).toBe(15);
     expect(wlStepPoints('mcq', true, 5500)).toBe(20);
   });
 
@@ -131,25 +131,46 @@ describe('wlBuildLadder', () => {
 
   it.each([
     [2, [2, 2, 2]],
-    [23, [23, 23, 23]],
-    [24, [24, 24, 24]],
-    [25, [24, 24, 24]],
-    [99, [33, 24, 24]],
-    [100, [33, 24, 24]],
-    [101, [34, 24, 24]],
+    [3, [3, 3, 3]],
+    // Tiny fields cannot produce three cuts ending at 24 — the final target
+    // drops just enough that every game still eliminates someone.
+    [25, [24, 23, 22]],
+    [26, [25, 24, 23]],
+    [27, [26, 25, 24]],
+    // Mid fields spread the reduction so games 2-3 are not dead air.
+    [54, [41, 31, 24]],
+    [100, [62, 39, 24]],
+    // Big fields keep the product shape.
+    [300, [100, 50, 24]],
     [599, [200, 100, 24]],
     [600, [200, 100, 24]],
   ])('field %i → %j', (field, expected) => {
     expect(wlBuildLadder(field)).toEqual(expected);
   });
 
-  it('is non-increasing, ends at min(field, 24), never grows the field', () => {
-    for (let n = 0; n <= 700; n += 1) {
+  it('cuts in EVERY game once the field is big enough to allow it', () => {
+    for (let n = 4; n <= 1200; n += 1) {
+      const [a1, a2, a3] = wlBuildLadder(n);
+      expect(a1).toBeLessThan(n);
+      expect(a2).toBeLessThan(a1);
+      expect(a3).toBeLessThan(a2);
+      expect(a3).toBeGreaterThanOrEqual(1);
+      expect(a3).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('ends at exactly 24 finalists whenever the field can support it', () => {
+    for (let n = 27; n <= 1200; n += 1) {
+      expect(wlBuildLadder(n)[2]).toBe(24);
+    }
+  });
+
+  it('never grows the field and stays non-increasing at any size', () => {
+    for (let n = 0; n <= 1200; n += 1) {
       const [a1, a2, a3] = wlBuildLadder(n);
       expect(a1).toBeLessThanOrEqual(n);
       expect(a2).toBeLessThanOrEqual(a1);
       expect(a3).toBeLessThanOrEqual(a2);
-      expect(a3).toBe(Math.min(n, 24));
     }
   });
 });

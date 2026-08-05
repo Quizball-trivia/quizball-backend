@@ -37,7 +37,10 @@ import { wlUpcomingEventSchedule } from './wl-week.js';
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
 const LOCK_TTL_MS = 30_000;
 const IDLE_TICK_MS = 15_000;
-const LIVE_TICK_MS = 5_000;
+// The gap between questions is bounded by this tick: at 5s a player could sit
+// on a resolved question for five seconds with nothing happening. 1.5s keeps
+// the round flowing while staying far above the engine's per-tick cost.
+const LIVE_TICK_MS = 1_500;
 const CREATION_HORIZON_MS = 24 * 60 * 60 * 1000;
 const LIVE_STATUSES = new Set(['checkin', 'game_live', 'break', 'final_checkin', 'final_live']);
 export const WL_MIN_FIELD = 2;

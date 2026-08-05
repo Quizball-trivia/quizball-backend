@@ -131,6 +131,10 @@ export function wlCompareStanding(
  */
 export function wlBuildLadder(fieldSize: number): [number, number, number] {
   const n = Math.max(0, Math.floor(fieldSize));
+  // Documented tiny-field exception: with 3 or fewer players there is no way to
+  // cut three times and still have a final, so nobody is eliminated and the
+  // games are played for seeding only. WL_MIN_FIELD (2) allows such an event to
+  // run; raising it to 4 would make "every game cuts" hold universally.
   if (n <= 3) return [n, n, n];
 
   const finalTarget = Math.min(WL_FINALISTS, n - 3);

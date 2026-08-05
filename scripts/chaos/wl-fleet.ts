@@ -36,6 +36,9 @@ import { io, type Socket } from 'socket.io-client';
 import { loginChaosUser, provisionUsers, type ChaosUser } from './auth.js';
 import { assertSocketTargetSafe } from './socket-fleet.js';
 
+/** Finalist seats — matches the backend's WL_FINALISTS. */
+const WL_FINALISTS_CAP = 24;
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 interface WlFleetConfig {
@@ -697,7 +700,38 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   const dbUrl = process.env.WL_FLEET_DB_URL;
   const dbSql = dbUrl ? (await import('postgres')).default(dbUrl, { max: 1 }) : null;
   const readStatus = async (): Promise<string | null> => {
-    if (dbSql) {
+    // Ladder truth from the DB: a client only sees games it played, so the
+  // socket view of gameResults stops at the game that eliminated it.
+  if (dbSql) {
+    try {
+      const dbGames = await dbSql<Array<{ game_index: number; field: number; advanced: number }>>`
+        SELECT game_index,
+               COUNT(*)::int AS field,
+               COUNT(*) FILTER (WHERE advanced)::int AS advanced
+        FROM wl_game_results
+        WHERE tournament_id = ${tournamentId}
+        GROUP BY game_index
+        ORDER BY game_index
+      `;
+      if (dbGames.length > 0) {
+        ladderBreaks.length = 0;
+        for (let i = 1; i < dbGames.length; i += 1) {
+          const prev = dbGames[i - 1]!;
+          const cur = dbGames[i]!;
+          if (cur.field !== prev.advanced) {
+            ladderBreaks.push(`game ${cur.game_index}: field=${cur.field} != prior advanced=${prev.advanced}`);
+          }
+        }
+        const lastQ = dbGames.filter((g) => g.game_index <= 2).at(-1);
+        if (cfg.players >= 24 && lastQ && lastQ.advanced !== 24) {
+          ladderBreaks.push(`finalists=${lastQ.advanced} != 24`);
+        }
+        console.log(`[wl-fleet] ladder (db): ${dbGames.map((g) => `${g.field}→${g.advanced}`).join(' | ')}`);
+      }
+    } catch { /* audit-only; socket-derived result stands */ }
+  }
+
+  if (dbSql) {
       const rows = await dbSql`
         SELECT status FROM wl_tournaments WHERE id = ${tournamentId}
       `.catch(() => []) as Array<{ status: string }>;
@@ -832,8 +866,16 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     // the candidates during the pre-final gap (paced for the Supabase /token
     // per-IP limit) and rotates the socket auth so a post-expiry reconnect
     // also survives.
-    const candidates = states.filter((s) => !s.eliminated && s.checkedIn).slice(0, 60);
+    // Refresh only the finalists, and STOP once the final check-in window is
+    // near: serial 1.5s pacing over 60 candidates took ~90s, which outlasted a
+    // compressed 60s window and marked every finalist a no-show.
+    const candidates = states.filter((s) => !s.eliminated && s.checkedIn).slice(0, WL_FINALISTS_CAP);
+    const refreshDeadline = Date.now() + Math.max(5_000, cfg.checkinSeconds * 1000 - 15_000);
     for (const cand of candidates) {
+      if (Date.now() > refreshDeadline) {
+        console.log('[wl-fleet] token refresh cut short to make the final check-in window');
+        break;
+      }
       if (Date.now() - (tokenRefreshedAt.get(cand.user.userId) ?? 0) < 10 * 60_000) continue;
       try {
         const fresh = await loginChaosUser(
@@ -843,7 +885,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
         cand.user.token = fresh.token;
         tokenRefreshedAt.set(cand.user.userId, Date.now());
       } catch { /* keep the old token; the check-in POST will report */ }
-      await sleep(1_500);
+      await sleep(600);
     }
     const status = pre === 'final_checkin'
       ? 'final_checkin'

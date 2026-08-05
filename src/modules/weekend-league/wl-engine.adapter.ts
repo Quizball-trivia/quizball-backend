@@ -357,9 +357,11 @@ export const wlEngineLive: WlEngine = {
         attempt_id: string; tournament_id: string; game_index: number; round_index: number;
         question_index: number; question_id: string; status: string;
         playable_at_ms: string | null; deadline_at_ms: string | null;
+        revealed_at_ms: string | null;
       }>>`
         SELECT attempt_id, tournament_id, game_index, round_index, question_index,
-               question_id, status, playable_at_ms::text, deadline_at_ms::text
+               question_id, status, playable_at_ms::text, deadline_at_ms::text,
+               revealed_at_ms::text
         FROM wl_question_runs
         WHERE tournament_id = ${t.id} AND game_index = ${gameIndex}
         ORDER BY round_index DESC, question_index DESC,
@@ -416,27 +418,24 @@ export const wlEngineLive: WlEngine = {
         // A voided frontier only progresses when its slot is exhausted (the
         // void tx would have created a reserve attempt otherwise, which
         // would BE the frontier).
+        const next = isLast ? null : wlNextSlot(slot);
+        // Hold at any ROUND boundary — including the last round of a game,
+        // where finalizeGame would otherwise replace the standings beat
+        // instantly. Anchored to the durable reveal time (not the deadline) so
+        // a reveal delayed by a restart still gets its full pause.
+        const crossesRound = isLast || (next != null && next.roundIndex !== slot.roundIndex);
+        if (crossesRound && frontier.status === 'revealed') {
+          const revealedAt = Number(frontier.revealed_at_ms ?? 0);
+          if (Number.isFinite(revealedAt) && revealedAt > 0
+            && redisNow - revealedAt < WL_ROUND_BREATHER_MS) {
+            return;
+          }
+        }
         if (isLast) {
           await finalizeGame(t, gameIndex, redisNow);
           return;
         }
-        const next = wlNextSlot(slot);
-        if (next) {
-          // Round boundary: hold before dispatching so the standings beat has
-          // room to play on every client. Mid-round questions continue on the
-          // normal tick cadence.
-          const crossesRound = next.roundIndex !== slot.roundIndex;
-          if (crossesRound) {
-            // The deadline IS the moment the reveal fired; hold from there so
-            // the pause is the same for everyone regardless of tick phase.
-            const revealedAt = Number(frontier.deadline_at_ms ?? 0);
-            if (Number.isFinite(revealedAt) && revealedAt > 0
-              && redisNow - revealedAt < WL_ROUND_BREATHER_MS) {
-              return;
-            }
-          }
-          await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
-        }
+        if (next) await wlLiveEngineInternals.appendDispatch(t.id, next, redisNow);
       }
       return;
     }

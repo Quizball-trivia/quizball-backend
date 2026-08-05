@@ -368,7 +368,13 @@ export const wlLiveEngineInternals = {
         const next = wlNextSlot({
           gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
         });
-        if (next) await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        // Same rule as revealFrozen: within the round we skip straight on, but
+        // a ROUND boundary is left to the orchestrator so the breather applies.
+        // A void has no standings beat of its own (nobody saw the question),
+        // yet the pacing must stay identical or rounds would start early.
+        if (next && next.roundIndex === run.round_index) {
+          await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        }
       }
         voided = true;
       });
@@ -476,7 +482,8 @@ export const wlLiveEngineInternals = {
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
       const revealed = await txSql`
-        UPDATE wl_question_runs SET status = 'revealed'
+        UPDATE wl_question_runs
+        SET status = 'revealed', revealed_at_ms = ${redisNow}
         WHERE attempt_id = ${run.attempt_id} AND status = 'frozen'
         RETURNING attempt_id
       `;
@@ -503,7 +510,12 @@ export const wlLiveEngineInternals = {
       gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
     });
     if (next) {
-      await this.appendDispatch(tournamentId, next, redisNow);
+      // At a ROUND boundary the next dispatch is deliberately NOT appended here:
+      // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
+      // round-end standings beat can play. Mid-round we dispatch immediately.
+      if (next.roundIndex === run.round_index) {
+        await this.appendDispatch(tournamentId, next, redisNow);
+      }
     }
   },
 

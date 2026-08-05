@@ -56,7 +56,7 @@ async function stockAllKinds(): Promise<void> {
     ['high_low', needPerKind('higher_lower'), (i) => ({
       type: 'high_low',
       stat_label: i18n(`stat${i}`),
-      matchups: [0, 1, 2].map((m) => ({
+      matchups: [0, 1, 2, 3, 4].map((m) => ({
         id: `m${m}`, left_name: i18n(`L${i}-${m}`), left_value: m + i,
         right_name: i18n(`R${i}-${m}`), right_value: m + i + 1,
       })),
@@ -164,14 +164,14 @@ describe('wlSeedTournamentContent', () => {
     const tid = await createTournament();
     const result = await seed({ tournamentId: tid, allowPublicBank: false, deterministic: true });
     expect(result.ok).toBe(true);
-    // 4 games × (19 slots + 5 kinds × 2 reserves) = 4 × 29 = 116 rows.
-    expect(result.inserted).toBe(116);
+    // 4 games × (21 slots + 5 kinds × 2 reserves) = 4 × 31 = 124 rows.
+    expect(result.inserted).toBe(124);
 
     const [slots] = await sql<{ n: number }[]>`
       SELECT COUNT(*)::int AS n FROM wl_questions
       WHERE tournament_id = ${tid} AND reserve_ordinal = 0
     `;
-    expect(slots.n).toBe(4 * 19);
+    expect(slots.n).toBe(4 * 21);
 
     // The HL chain compares within one stat: all 3 steps share a source.
     const hl = await sql<{ game_index: number; sources: number }[]>`

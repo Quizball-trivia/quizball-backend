@@ -1091,7 +1091,8 @@ export interface ClientToServerEvents {
   'wl:answer': (
     data: { tournament_id: string; attempt_id: string; answer: unknown },
     ack?: (result:
-      | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+      /** carry: money-drop only — the amount that survived this question. */
+      | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number }
       | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' | 'invalid' }
     ) => void
   ) => void;

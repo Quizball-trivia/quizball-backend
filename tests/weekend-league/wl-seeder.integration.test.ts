@@ -45,7 +45,8 @@ function mcqPayload(n: number): Record<string, unknown> {
 
 async function stockAllKinds(): Promise<void> {
   const counts: Array<[string, number, (i: number) => Record<string, unknown>]> = [
-    ['mcq_single', needPerKind('mcq'), mcqPayload],
+    // mcq + money_drop draw from the SAME bank, deduped in-pass.
+    ['mcq_single', needPerKind('mcq') + needPerKind('money_drop'), mcqPayload],
     ['true_false', needPerKind('true_false'), (i) => ({
       type: 'true_false',
       options: [
@@ -66,12 +67,6 @@ async function stockAllKinds(): Promise<void> {
       clubs: [i18n(`club${i}a`), i18n(`club${i}b`)],
       display_answer: i18n(`career-ans${i}`),
       accepted_answers: [`career answer ${i}`],
-    })],
-    ['clue_chain', needPerKind('who_am_i'), (i) => ({
-      type: 'clue_chain',
-      display_answer: i18n(`clue-ans${i}`),
-      accepted_answers: [`clue answer ${i}`],
-      clues: [1, 2, 3, 4, 5].map((c) => ({ type: 'text', content: i18n(`clue${i}-${c}`) })),
     })],
   ];
   for (const [type, need, build] of counts) {
@@ -164,14 +159,25 @@ describe('wlSeedTournamentContent', () => {
     const tid = await createTournament();
     const result = await seed({ tournamentId: tid, allowPublicBank: false, deterministic: true });
     expect(result.ok).toBe(true);
-    // 4 games × (21 slots + 5 kinds × 2 reserves) = 4 × 31 = 124 rows.
-    expect(result.inserted).toBe(124);
+    // 4 games × (25 slots + 5 kinds × 2 reserves) = 4 × 35 = 140 rows.
+    expect(result.inserted).toBe(140);
 
     const [slots] = await sql<{ n: number }[]>`
       SELECT COUNT(*)::int AS n FROM wl_questions
       WHERE tournament_id = ${tid} AND reserve_ordinal = 0
     `;
-    expect(slots.n).toBe(4 * 21);
+    expect(slots.n).toBe(4 * 25);
+
+    // One tournament never repeats a source question across mcq + money_drop
+    // (same bank, in-pass dedup).
+    const [dupes] = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM (
+        SELECT source_question_id FROM wl_questions
+        WHERE tournament_id = ${tid} AND kind IN ('mcq', 'money_drop')
+        GROUP BY source_question_id HAVING COUNT(*) > 1
+      ) d
+    `;
+    expect(dupes.n).toBe(0);
 
     // The HL chain compares within one stat: all 3 steps share a source.
     const hl = await sql<{ game_index: number; sources: number }[]>`

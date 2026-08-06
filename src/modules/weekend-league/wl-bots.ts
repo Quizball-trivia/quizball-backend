@@ -58,6 +58,19 @@ function botAnswerFor(
         ? accepted[0] : 'unknown';
       return { guess: correct ? answer : 'nobody in particular' };
     }
+    case 'money_drop': {
+      // Human-passing 70/30 hedge: main stake on the bot's pick, the rest
+      // spread elsewhere. The engine scales the sheet to the bot's real
+      // budget, so only the RATIO matters — a right pick carries 70% of the
+      // budget, a wrong one salvages the 30% hedge, and pure all-in bots
+      // (who would flatline over five chained questions) never appear.
+      // Deliberately budget-dwarfing stakes: the sanitizer only scales DOWN,
+      // so oversized amounts become exact 70/30 of whatever the bot holds.
+      const correctId = String(evaluation['correct_id'] ?? '');
+      return correct
+        ? { bets: { [correctId]: 700_000, '__wl_bot_hedge__': 300_000 } }
+        : { bets: { '__wl_bot_wrong__': 700_000, [correctId]: 300_000 } };
+    }
   }
 }
 

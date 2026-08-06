@@ -250,6 +250,13 @@ function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): un
       const guess = Array.isArray(accepted) && typeof accepted[0] === 'string' ? accepted[0] : 'unknown';
       return { guess };
     }
+    case 'money_drop': {
+      // Oversized stake on the correct option; the engine scales it to the
+      // player's real budget (dispatches are evaluation-scrubbed, so this
+      // only lands right when the eval is present — same as every kind).
+      const target = String(evaluation['correct_id'] ?? 'a');
+      return { bets: { [target]: 1_000_000 } };
+    }
     default:
       return null;
   }
@@ -262,6 +269,7 @@ function wrongAnswerFor(kind: string): unknown {
     case 'higher_lower': return 'left';
     case 'career_path': return 'nobody';
     case 'who_am_i': return { guess: 'nobody' };
+    case 'money_drop': return { bets: { 'definitely-not-an-option': 1_000_000 } };
     default: return null;
   }
 }

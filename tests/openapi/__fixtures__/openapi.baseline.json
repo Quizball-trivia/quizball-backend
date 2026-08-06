@@ -6114,6 +6114,9 @@
               "break_until_ms": {
                 "type": "integer",
                 "nullable": true
+              },
+              "spectator_delay_ms": {
+                "type": "integer"
               }
             },
             "required": [
@@ -6130,7 +6133,8 @@
               "launch_edition",
               "qp_target",
               "current_game_index",
-              "break_until_ms"
+              "break_until_ms",
+              "spectator_delay_ms"
             ]
           },
           "you": {

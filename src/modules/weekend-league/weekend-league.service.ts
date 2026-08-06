@@ -1,5 +1,6 @@
 import { getOrLoadJson } from '../../core/json-cache.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
+import { wlConfigFrom } from './wl-config.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
 import type {
   WlCheckinResponse,
@@ -26,10 +27,13 @@ function currentGameIndexOf(t: WlTournamentRow): number {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
 }
 
-/** Break deadline for the public payload — only while it is still in the future. */
-function breakUntilMsOf(t: WlTournamentRow): number | null {
+/** Break deadline for the public payload. Stays non-null through the
+ *  spectator-shifted deadline (break end + stream delay): spectators run that
+ *  far behind live, and nulling at real break end would kill their countdown
+ *  with the delay still to run. */
+function breakUntilMsOf(t: WlTournamentRow, spectatorDelayMs: number): number | null {
   const ms = Number((t.stage ?? {})['break_until_ms']);
-  if (!Number.isFinite(ms) || ms <= Date.now()) return null;
+  if (!Number.isFinite(ms) || ms + spectatorDelayMs <= Date.now()) return null;
   return Math.floor(ms);
 }
 
@@ -87,6 +91,7 @@ export const weekendLeagueService = {
       weekendLeagueRepo.getLastGameRank(tournament.id, userId),
     ]);
 
+    const spectatorDelayMs = wlConfigFrom(tournament.config).spectator_delay_ms;
     return {
       tournament: {
         id: tournament.id,
@@ -102,7 +107,8 @@ export const weekendLeagueService = {
         launch_edition: launchEditionOf(tournament),
         qp_target: qpTargetOf(tournament),
         current_game_index: currentGameIndexOf(tournament),
-        break_until_ms: breakUntilMsOf(tournament),
+        break_until_ms: breakUntilMsOf(tournament, spectatorDelayMs),
+        spectator_delay_ms: spectatorDelayMs,
       },
       you: {
         entered: entry != null,

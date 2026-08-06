@@ -210,7 +210,8 @@ describe('WL live game end-to-end', () => {
     // attempt with every alive participant, repeat until completed.
     const answeredAttempts = new Set<string>();
     let snapshotChecked = false;
-    const deadline = Date.now() + 280_000;
+    // 25 slots per game (money drop is 5 questions) + its reveal holds.
+    const deadline = Date.now() + 420_000;
     const loopStart = Date.now();
     let lastStatus = '';
     for (;;) {
@@ -233,12 +234,20 @@ describe('WL live game end-to-end', () => {
         `;
         ladderOverridden = true;
       }
-      const [run] = await sql<Array<{ attempt_id: string; question_id: string; game_index: number }>>`
-        SELECT r.attempt_id, r.question_id, r.game_index FROM wl_question_runs r
+      const [run] = await sql<Array<{ attempt_id: string; question_id: string; game_index: number; playable_at_ms: string | null }>>`
+        SELECT r.attempt_id, r.question_id, r.game_index, r.playable_at_ms::text FROM wl_question_runs r
         WHERE r.tournament_id = ${tid} AND r.status = 'dispatched'
         ORDER BY r.game_index DESC, r.round_index DESC, r.question_index DESC LIMIT 1
       `;
-      if (run && !answeredAttempts.has(run.attempt_id)) {
+      // Answer only once the window is OPEN: round-first questions carry the
+      // round-intro lead, and an accept before playable_at is (rightly)
+      // rejected — which under money drop's budget chain surfaces as carry 0.
+      // STRICTLY after the window opens (small settle margin): answering even
+      // 1ms early is rightly rejected, and under money drop a rejected
+      // round-first answer cascades into a zero budget for the whole round.
+      const playableNow = run != null
+        && Number(run.playable_at_ms ?? 0) <= Date.now() - 25;
+      if (run && playableNow && !answeredAttempts.has(run.attempt_id)) {
         answeredAttempts.add(run.attempt_id);
         const [q] = await sql<Array<{ kind: string }>>`
           SELECT kind FROM wl_questions WHERE question_id = ${run.question_id}
@@ -266,6 +275,9 @@ describe('WL live game end-to-end', () => {
             expect(outsider?.score).toBe(0);
           }
           const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
+          // The window is verifiably open — a rejection here is an admission
+          // bug, and under money drop a silent one poisons the whole round.
+          expect(aceResult.accepted).toBe(true);
           if (aceResult.accepted) expect(aceResult.correct).toBe(true);
           // ...and AFTER answering it restores the accepted answer + score.
           if (!snapshotChecked && aceResult.accepted) {
@@ -341,5 +353,5 @@ describe('WL live game end-to-end', () => {
     const gameResults = emitted.filter((e) => e.room === `wl:${tid}` && e.event === 'wl:game_result');
     expect(gameResults.length).toBe(3);
     expect((gameResults[0]!.payload['eliminated_user_ids'] as string[]).length).toBe(2);
-  }, 300_000);
+  }, 450_000);
 });

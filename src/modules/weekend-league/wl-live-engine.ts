@@ -404,15 +404,21 @@ export const wlLiveEngineInternals = {
                      jsonb_build_object('bets', '{}'::jsonb, 'carry', c.carry),
                      true, c.carry, 0, 0, 'money_drop_void_award'
               FROM (
-                SELECT DISTINCT ON (a.user_id) a.user_id,
-                       COALESCE((a.answer->>'carry')::int, 0) AS carry
-                FROM wl_answers a
-                JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
-                WHERE r.tournament_id = ${tournamentId} AND r.game_index = ${run.game_index}
-                  AND r.round_index = ${run.round_index}
-                  AND r.status IN ('frozen', 'revealed')
-                  AND a.user_id IS NOT NULL AND a.timing_source = 'redis_accept'
-                ORDER BY a.user_id, r.question_index DESC
+                -- Carry entering the skipped slot = the answer on the NEWEST
+                -- PLAYED slot of the round, exactly like the live budget
+                -- resolver. A user's newest answer anywhere in the round is
+                -- NOT it: money missed on a later played question is gone.
+                SELECT a.user_id, COALESCE((a.answer->>'carry')::int, 0) AS carry
+                FROM (
+                  SELECT attempt_id FROM wl_question_runs
+                  WHERE tournament_id = ${tournamentId} AND game_index = ${run.game_index}
+                    AND round_index = ${run.round_index}
+                    AND status IN ('frozen', 'revealed')
+                  ORDER BY question_index DESC, created_at DESC
+                  LIMIT 1
+                ) lp
+                JOIN wl_answers a ON a.attempt_id = lp.attempt_id
+                WHERE a.timing_source = 'redis_accept'
               ) c
               WHERE c.carry > 0
               ON CONFLICT (attempt_id, user_id) DO NOTHING
@@ -1017,7 +1023,7 @@ export interface WlSubscribeSnapshot {
   money_budget?: number;
   /** The caller's most recent PERSISTED answer this game, attempt-identified —
       recovers the verdict even when the attempt froze before this snapshot. */
-  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
+  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
   /** The caller's accepted points this game (persisted + in-flight). */
   score: number;
   /** Exact outbox boundary: events ≤ this seq are fully reflected in score;
@@ -1151,9 +1157,10 @@ export async function wlSubscribeSnapshot(
   }
 
   const [lastPersisted] = await sql<Array<{
-    attempt_id: string; correct: boolean; points: number; elapsed_ms: number;
+    attempt_id: string; correct: boolean; points: number; elapsed_ms: number; carry: number | null;
   }>>`
-    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms
+    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms,
+           (a.answer->>'carry')::int AS carry
     FROM wl_answers a
     JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
     WHERE a.tournament_id = ${tournamentId} AND a.game_index = ${gameIndex}
@@ -1174,6 +1181,7 @@ export async function wlSubscribeSnapshot(
           correct: lastPersisted.correct,
           points: lastPersisted.points,
           elapsedMs: lastPersisted.elapsed_ms,
+          ...(lastPersisted.carry != null ? { carry: Number(lastPersisted.carry) } : {}),
         }
       : null,
     score: (persisted?.points ?? 0) + inFlightPoints,

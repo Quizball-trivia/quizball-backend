@@ -12,6 +12,7 @@ import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
 import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, wlBuildLadder } from './wl-rules.js';
+import { wlConfigFrom } from './wl-config.js';
 
 export interface WlEngine {
   /** Freeze/copy content for the tournament. True = ready to open entry. */
@@ -427,11 +428,12 @@ export const wlEngineLive: WlEngine = {
         if (frontier.status === 'revealed') {
           // Money drop's mid-round reveal is a drop animation, not an instant
           // verdict — give it its own (shorter) hold; every other kind flows
-          // straight into the next question.
+          // straight into the next question. Capped at one base question
+          // window so compressed test tournaments stay compressed.
           const holdMs = crossesRound
             ? WL_ROUND_BREATHER_MS
             : await wlLiveEngineInternals.kindOf(frontier.question_id) === 'money_drop'
-              ? WL_MONEY_DROP_REVEAL_HOLD_MS
+              ? Math.min(WL_MONEY_DROP_REVEAL_HOLD_MS, wlConfigFrom(t.config).question_time_ms)
               : 0;
           const revealedAt = Number(frontier.revealed_at_ms ?? 0);
           if (holdMs > 0 && Number.isFinite(revealedAt) && revealedAt > 0

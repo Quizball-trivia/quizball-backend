@@ -91,7 +91,17 @@ export const weekendLeagueService = {
       weekendLeagueRepo.getLastGameRank(tournament.id, userId),
     ]);
 
-    const spectatorDelayMs = wlConfigFrom(tournament.config).spectator_delay_ms;
+    const tournamentCfg = wlConfigFrom(tournament.config);
+    const spectatorDelayMs = tournamentCfg.spectator_delay_ms;
+    // Advertise the FILLED field before the bots actually enter: the roster
+    // tops the field up to bot_fill_min_field at the check-in cutoff, so a
+    // 3-human entry screen on a 93-floor event reads "93 joined", not "3".
+    // Post-fill the real entry count includes the bots, so the max is a no-op.
+    const preFill = ['scheduled', 'content_pending', 'ready', 'entry_open', 'entry_closed', 'checkin']
+      .includes(tournament.status);
+    const advertisedRegistered = preFill
+      ? Math.max(counts.registered, tournamentCfg.bot_fill_min_field)
+      : counts.registered;
     return {
       tournament: {
         id: tournament.id,
@@ -102,7 +112,7 @@ export const weekendLeagueService = {
         entry_closes_at: tournament.entry_closes_at,
         qualifier_starts_at: tournament.qualifier_starts_at,
         final_starts_at: tournament.final_starts_at,
-        registered_count: counts.registered,
+        registered_count: advertisedRegistered,
         checked_in_count: counts.checkedIn,
         launch_edition: launchEditionOf(tournament),
         qp_target: qpTargetOf(tournament),

@@ -54,6 +54,10 @@ export const wlTournamentSchema = z.object({
   /** How far behind live the spectator stream runs — spectator countdowns
    *  must shift by this or they finish before the delayed stream catches up. */
   spectator_delay_ms: z.number().int(),
+  /** API server clock at response build — pre-game countdowns must tick
+   *  against THIS (via an offset), never the device clock, or a skewed
+   *  phone shows the wrong time to kickoff. */
+  server_now_ms: z.number().int(),
 });
 
 export const wlCurrentResponseSchema = z.object({

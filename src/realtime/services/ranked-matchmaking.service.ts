@@ -9,6 +9,12 @@ import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import { DbOverloadedError } from '../../db/admission.js';
+import {
+  isDbWriteOutage,
+  DbWriteOutageError,
+  DbWriteOutageDeferral,
+} from '../../db/readonly-breaker.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { statsService } from '../../modules/stats/stats.service.js';
 import { storeService } from '../../modules/store/store.service.js';
@@ -655,6 +661,14 @@ export async function runRankedDraftStart(
   try {
     await startDraft(io, lobbyId);
   } catch (error) {
+    // The durable timer scheduler will requeue transient admission pressure.
+    // Treating this as a terminal match-preparation failure strands a valid,
+    // committed lobby and forces both players to restart matchmaking.
+    if (error instanceof DbOverloadedError) throw error;
+    // Same reasoning for a read-only pool: rethrow so the durable scheduler
+    // re-arms this draft start instead of stranding a committed lobby and
+    // telling both players to restart matchmaking over OUR outage.
+    if (error instanceof DbWriteOutageDeferral) throw error;
     // Keep the crash guard from the previous in-process timer path: a draft
     // start failure must notify both players and never become an unhandled
     // rejection from the durable scheduler.
@@ -766,6 +780,16 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     let fallbackCount = 0;
     let fallbackFailureCount = 0;
     for (const searchId of due) {
+      // As in processPairs: a mid-loop latch must stop further claims rather
+      // than start AI matches that cannot be settled.
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.db_write_outage_mid_tick', true);
+        logger.error(
+          { startedFallbacks: fallbackCount },
+          'Ranked AI fallbacks stopped mid-tick: database write outage detected'
+        );
+        break;
+      }
       const resultRaw = await redis.eval(RANKED_MM_CLAIM_FALLBACK_SCRIPT, {
         keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY, rankedSearchKey(searchId)],
         arguments: [searchId, String(now), String(now)],
@@ -801,6 +825,14 @@ async function processPairs(io: QuizballServer): Promise<void> {
     let pairCount = 0;
     let pairFailureCount = 0;
     for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+      // Re-check every iteration: a concurrent query can latch the breaker
+      // mid-loop, and each further claim would pull players into a match whose
+      // result cannot be persisted (INC-2026-07-29 action #4).
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.db_write_outage_mid_tick', true);
+        logger.error({ claimedPairs: pairCount }, 'Ranked pair claiming stopped mid-tick: database write outage detected');
+        break;
+      }
       const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
         keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
         arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
@@ -853,6 +885,20 @@ async function rankedTick(): Promise<void> {
       const redis = getRedisClient();
       if (!redis) {
         span.setAttribute('quizball.redis_available', false);
+        return;
+      }
+
+      // INC-2026-07-29 preventive action #4: stop creating matches the moment a
+      // 25006 is seen. Gating the whole tick pauses BOTH human pairing and AI
+      // fallbacks, and deliberately claims nothing out of Redis — queued
+      // players keep their place and their ticket, and pairing resumes on the
+      // first tick after the write probe recovers.
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.db_write_outage', true);
+        logger.error(
+          { queueDepth: await redis.zCard(RANKED_MM_QUEUE_KEY) },
+          'Ranked matchmaking tick paused: database write outage in progress'
+        );
         return;
       }
 
@@ -992,6 +1038,20 @@ export const rankedMatchmakingService = {
           queueSearchId: earlySessionBlock.queueSearchId,
         });
         await userSessionGuardService.emitState(io, userId);
+        return;
+      }
+
+      // Refuse the join BEFORE the ticket preflight: entering the queue during a
+      // write outage risks spending a ticket on a match whose result cannot be
+      // persisted. Retryable so the client can simply try again after recovery.
+      if (isDbWriteOutage()) {
+        span.setAttribute('quizball.queue_block_reason', 'DB_WRITE_OUTAGE');
+        logger.error({ userId, ...queueClientContext }, 'Ranked queue join refused: database write outage');
+        io.to(`user:${userId}`).emit('error', {
+          code: 'DB_WRITE_OUTAGE',
+          message: new DbWriteOutageError().message,
+        });
+        io.to(`user:${userId}`).emit('ranked:queue_left');
         return;
       }
 

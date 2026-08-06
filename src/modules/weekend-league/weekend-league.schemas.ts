@@ -28,6 +28,9 @@ export const wlYouSchema = z.object({
   state: wlEntryStateSchema.nullable(),
   checked_in: z.boolean(),
   final_checked_in: z.boolean(),
+  /** Your rank in the most recent finished game — the board broadcast is
+      top-24 only, so players beyond the cut need this to see their number. */
+  last_game_rank: z.number().int().nullable(),
   qp: wlQpResponseSchema,
 });
 

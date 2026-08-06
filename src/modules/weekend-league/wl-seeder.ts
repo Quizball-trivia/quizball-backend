@@ -117,7 +117,14 @@ async function drawSources(
             -- starve within a single afternoon of testing.
             AND wt.is_test = false
         )
-      ORDER BY (q.visibility = 'wl_private') DESC, ${order}
+      ORDER BY (q.visibility = 'wl_private') DESC,
+               -- MCQ prefers IMAGE questions (product call: visual rounds);
+               -- text rows remain the fallback so thin image stock can never
+               -- starve seeding.
+               (${sourceType} = 'mcq_single'
+                 AND qp.payload->'image' IS NOT NULL
+                 AND qp.payload->>'image' <> 'null') DESC,
+               ${order}
       LIMIT ${pageSize} OFFSET ${offset}
     `;
     if (rows.length === 0) break;

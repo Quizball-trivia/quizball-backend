@@ -88,7 +88,19 @@ describe('money drop bet sanitizer', () => {
 
   it('floors fractional stakes and survives a zero budget', () => {
     expect(wlMoneyDropSanitizeBets({ a: 10.9 }, 300)).toEqual({ a: 10 });
-    expect(wlMoneyDropSanitizeBets({ a: 100 }, 0)).toEqual({ a: 0 });
+    expect(wlMoneyDropSanitizeBets({ a: 100 }, 0)).toEqual({});
+  });
+
+  it('never produces NaN/Infinity from adversarial numeric payloads', () => {
+    const evil = wlMoneyDropSanitizeBets(
+      { a: '1e308', b: 1e308, c: Number.MAX_SAFE_INTEGER, d: Infinity, e: 100 },
+      300,
+    );
+    const total = Object.values(evil).reduce((s, v) => s + v, 0);
+    expect(Object.values(evil).every((v) => Number.isSafeInteger(v) && v >= 0)).toBe(true);
+    expect(total).toBeLessThanOrEqual(300);
+    expect(wlMoneyDropSanitizeBets({ a: 100 }, Number.NaN as unknown as number)).toEqual({});
+    expect(wlMoneyDropSanitizeBets({ a: 100 }, Infinity)).toEqual({});
   });
 });
 

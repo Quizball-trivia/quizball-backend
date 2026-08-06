@@ -75,6 +75,9 @@ export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [300, 240, 180, 120, 6
 export const WL_MONEY_DROP_BUDGET = 300;
 /** Betting window = this many base question windows (30s at the prod 10s). */
 export const WL_MONEY_DROP_WINDOW_STEPS = 3;
+/** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
+ *  several seconds; the standard flow dispatches the next question instantly. */
+export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
 
 /**
  * Sanitize a client bet sheet against the server-known budget: non-negative
@@ -87,16 +90,23 @@ export function wlMoneyDropSanitizeBets(
   budget: number
 ): Record<string, number> {
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const safeBudget = Number.isSafeInteger(budget) && budget > 0 ? budget : 0;
+  if (safeBudget === 0) return {};
+  // Stakes are capped per entry BEFORE summing: unbounded finite numbers
+  // ("1e308") would push the sum to Infinity and turn every scaled stake —
+  // and the stored points — into NaN, which the freeze insert cannot persist.
+  const STAKE_CAP = 1_000_000_000;
   const entries = Object.entries(raw as Record<string, unknown>)
     .map(([id, v]) => [id, Math.floor(Number(v))] as const)
-    .filter(([, v]) => Number.isFinite(v) && v > 0)
+    .filter(([, v]) => Number.isSafeInteger(v) && v > 0)
+    .map(([id, v]) => [id, Math.min(v, STAKE_CAP)] as const)
     .slice(0, 8);
   const sum = entries.reduce((acc, [, v]) => acc + v, 0);
   if (sum === 0) return {};
   const bets: Record<string, number> = {};
   // (v * budget) / sum in one expression: exact in doubles at these
   // magnitudes, where a precomputed budget/sum ratio floors a cent short.
-  for (const [id, v] of entries) bets[id] = sum > budget ? Math.floor((v * budget) / sum) : v;
+  for (const [id, v] of entries) bets[id] = sum > safeBudget ? Math.floor((v * safeBudget) / sum) : v;
   return bets;
 }
 

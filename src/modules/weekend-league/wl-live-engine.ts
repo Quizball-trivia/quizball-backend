@@ -385,6 +385,40 @@ export const wlLiveEngineInternals = {
         // yet the pacing must stay identical or rounds would start early.
         if (next && next.roundIndex === run.round_index) {
           await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        } else {
+          // Skipping the LAST slot of a money-drop round would otherwise erase
+          // the whole round: only a final-step row scores, and no final step
+          // will ever exist. Everyone keeps the carry they held entering the
+          // skipped slot instead (newest played row of the round; a round
+          // whose EVERY slot voided has no rows and awards nothing).
+          const [q] = await txSql<Array<{ kind: string }>>`
+            SELECT kind FROM wl_questions WHERE question_id = ${run.question_id}
+          `;
+          if (q?.kind === 'money_drop') {
+            await txSql`
+              INSERT INTO wl_answers (
+                attempt_id, user_id, tournament_id, game_index, answer, correct,
+                points, elapsed_ms, time_charge_ms, timing_source
+              )
+              SELECT ${attemptId}, c.user_id, ${tournamentId}, ${run.game_index},
+                     jsonb_build_object('bets', '{}'::jsonb, 'carry', c.carry),
+                     true, c.carry, 0, 0, 'money_drop_void_award'
+              FROM (
+                SELECT DISTINCT ON (a.user_id) a.user_id,
+                       COALESCE((a.answer->>'carry')::int, 0) AS carry
+                FROM wl_answers a
+                JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
+                WHERE r.tournament_id = ${tournamentId} AND r.game_index = ${run.game_index}
+                  AND r.round_index = ${run.round_index}
+                  AND r.status IN ('frozen', 'revealed')
+                  AND a.user_id IS NOT NULL AND a.timing_source = 'redis_accept'
+                ORDER BY a.user_id, r.question_index DESC
+              ) c
+              WHERE c.carry > 0
+              ON CONFLICT (attempt_id, user_id) DO NOTHING
+            `;
+            logger.warn({ tournamentId, attemptId }, 'WL money-drop final slot voided: carries awarded');
+          }
         }
       }
         voided = true;
@@ -523,8 +557,11 @@ export const wlLiveEngineInternals = {
     if (next) {
       // At a ROUND boundary the next dispatch is deliberately NOT appended here:
       // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
-      // round-end standings beat can play. Mid-round we dispatch immediately.
+      // round-end standings beat can play. Mid-round we dispatch immediately —
+      // EXCEPT money drop, whose reveal is a several-second drop animation:
+      // it defers to the orchestrator's shorter mid-round hold the same way.
       if (next.roundIndex === run.round_index) {
+        if (await this.kindOf(run.question_id) === 'money_drop') return;
         await this.appendDispatch(tournamentId, next, redisNow);
       }
     }
@@ -835,12 +872,19 @@ export async function wlAcceptAnswer(input: {
       .catch(() => null);
     if (storedLate) {
       try {
-        const p = JSON.parse(storedLate) as { correct: boolean; points: number; elapsedMs: number };
-        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+        const p = JSON.parse(storedLate) as {
+          correct: boolean; points: number; elapsedMs: number;
+          answer?: { carry?: number } | null;
+        };
+        const c = Number(p.answer?.carry);
+        return {
+          accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+          ...(Number.isFinite(c) ? { carry: c } : {}),
+        };
       } catch { /* fall through to the persisted row */ }
     }
-    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number }>>`
-      SELECT correct, points, elapsed_ms FROM wl_answers
+    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number; carry: number | null }>>`
+      SELECT correct, points, elapsed_ms, (answer->>'carry')::int AS carry FROM wl_answers
       WHERE attempt_id = ${input.attemptId} AND user_id = ${input.userId}
         AND timing_source <> 'voided_audit'
     `;
@@ -850,6 +894,7 @@ export async function wlAcceptAnswer(input: {
         correct: persistedRow.correct,
         points: persistedRow.points,
         elapsedMs: persistedRow.elapsed_ms,
+        ...(persistedRow.carry != null ? { carry: Number(persistedRow.carry) } : {}),
       };
     }
     return { accepted: false, reason: 'closed' };
@@ -896,6 +941,12 @@ export async function wlAcceptAnswer(input: {
   const answerOfRecord = content.kind === 'money_drop'
     ? { bets: bets ?? {}, carry: carry ?? 0 }
     : input.answer;
+  // An EMPTY money-drop sheet is a miss that happened to hit the wire: charge
+  // the full window, or a modified client could bank a fast tie-break time on
+  // rounds it has already written off (honest clients never send one).
+  const storedElapsedMs = content.kind === 'money_drop' && bets != null && Object.keys(bets).length === 0
+    ? Math.max(elapsedMs, deadline - playable)
+    : elapsedMs;
 
   const redis = wlRedis();
   const stored = await redis.eval(ACCEPT_SCRIPT, {
@@ -905,7 +956,7 @@ export async function wlAcceptAnswer(input: {
     ],
     arguments: [
       input.userId,
-      JSON.stringify({ answer: answerOfRecord, correct, points, elapsedMs }),
+      JSON.stringify({ answer: answerOfRecord, correct, points, elapsedMs: storedElapsedMs }),
       String(deadline),
       String(REDIS_TTL_SECONDS),
     ],
@@ -919,8 +970,15 @@ export async function wlAcceptAnswer(input: {
       .catch(() => null);
     if (prior) {
       try {
-        const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
-        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+        const p = JSON.parse(prior) as {
+          correct: boolean; points: number; elapsedMs: number;
+          answer?: { carry?: number } | null;
+        };
+        const c = Number(p.answer?.carry);
+        return {
+          accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+          ...(Number.isFinite(c) ? { carry: c } : {}),
+        };
       } catch { /* unreadable → closed */ }
     }
     return { accepted: false, reason: 'closed' };
@@ -928,8 +986,15 @@ export async function wlAcceptAnswer(input: {
   if (stored === 0) {
     const prior = await redis.hGet(answersKey(input.tournamentId, input.attemptId), input.userId);
     if (prior) {
-      const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
-      return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      const p = JSON.parse(prior) as {
+        correct: boolean; points: number; elapsedMs: number;
+        answer?: { carry?: number } | null;
+      };
+      const c = Number(p.answer?.carry);
+      return {
+        accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+        ...(Number.isFinite(c) ? { carry: c } : {}),
+      };
     }
     return { accepted: false, reason: 'duplicate' };
   }
@@ -946,7 +1011,10 @@ export interface WlSubscribeSnapshot {
   /** Dispatch-shaped payload for the in-flight question (players only). */
   attempt: Record<string, unknown> | null;
   /** The caller's already-accepted answer on that attempt, if any. */
-  your_answer: { correct: boolean; points: number; elapsedMs: number } | null;
+  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
+  /** money_drop in-flight attempt only: the budget the caller carries INTO it
+      (server-derived) — a reload mid-round must not reset the client chain. */
+  money_budget?: number;
   /** The caller's most recent PERSISTED answer this game, attempt-identified —
       recovers the verdict even when the attempt froze before this snapshot. */
   your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
@@ -1012,6 +1080,7 @@ export async function wlSubscribeSnapshot(
   let attempt: Record<string, unknown> | null = null;
   let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
   let inFlightPoints = 0;
+  let moneyBudget: number | undefined;
   // No in-flight attempt outside an actually-running game: cancellation does
   // not close runs, so gate by tournament status rather than run state alone.
   const gameRunning = t.status === 'game_live' || t.status === 'final_live';
@@ -1049,16 +1118,34 @@ export async function wlSubscribeSnapshot(
       const stored = await wlRedis().hGet(answersKey(tournamentId, run.attempt_id), userId);
       if (stored) {
         try {
-          const p = JSON.parse(stored) as { correct?: boolean; points?: number; elapsedMs?: number };
+          const p = JSON.parse(stored) as {
+            correct?: boolean; points?: number; elapsedMs?: number;
+            answer?: { carry?: number } | null;
+          };
+          const storedCarry = Number(p.answer?.carry);
           yourAnswer = {
             correct: p.correct === true,
             points: Number(p.points) || 0,
             elapsedMs: Number(p.elapsedMs) || 0,
+            ...(Number.isFinite(storedCarry) ? { carry: storedCarry } : {}),
           };
           inFlightPoints = yourAnswer.points;
         } catch {
           // unreadable stored answer — treat as unanswered
         }
+      }
+      if (content.kind === 'money_drop') {
+        moneyBudget = await wlLiveEngineInternals.moneyDropBudget({
+          attempt_id: run.attempt_id,
+          tournament_id: tournamentId,
+          game_index: run.game_index,
+          round_index: run.round_index,
+          question_index: run.question_index,
+          question_id: run.question_id,
+          status: 'dispatched',
+          playable_at_ms: run.playable_at_ms,
+          deadline_at_ms: run.deadline_at_ms,
+        } as WlRunRow, userId);
       }
     }
   }
@@ -1080,6 +1167,7 @@ export async function wlSubscribeSnapshot(
     game_index: gameIndex,
     attempt,
     your_answer: yourAnswer,
+    ...(moneyBudget != null ? { money_budget: moneyBudget } : {}),
     your_last_answer: lastPersisted
       ? {
           attempt_id: lastPersisted.attempt_id,

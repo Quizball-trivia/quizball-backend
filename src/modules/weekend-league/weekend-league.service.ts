@@ -108,6 +108,9 @@ export const weekendLeagueService = {
         state: entry?.state ?? null,
         checked_in: entry?.checked_in_at != null,
         final_checked_in: entry?.final_checked_in_at != null,
+        last_game_rank: entry != null
+          ? await weekendLeagueRepo.getLastGameRank(tournament.id, userId)
+          : null,
         qp,
       },
     };

@@ -6161,6 +6161,10 @@
               "final_checked_in": {
                 "type": "boolean"
               },
+              "last_game_rank": {
+                "type": "integer",
+                "nullable": true
+              },
               "qp": {
                 "type": "object",
                 "properties": {
@@ -6199,6 +6203,7 @@
               "state",
               "checked_in",
               "final_checked_in",
+              "last_game_rank",
               "qp"
             ]
           }

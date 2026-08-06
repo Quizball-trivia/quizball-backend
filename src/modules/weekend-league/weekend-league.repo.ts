@@ -99,6 +99,17 @@ export const weekendLeagueRepo = {
     return row ?? null;
   },
 
+  /** Rank from the newest finished game — for players beyond the top-24 board. */
+  async getLastGameRank(tournamentId: string, userId: string): Promise<number | null> {
+    const [row] = await sql<Array<{ rank: number }>>`
+      SELECT rank FROM wl_game_results
+      WHERE tournament_id = ${tournamentId} AND user_id = ${userId}
+      ORDER BY game_index DESC
+      LIMIT 1
+    `;
+    return row?.rank ?? null;
+  },
+
   async getCounts(tournamentId: string): Promise<{ registered: number; checkedIn: number }> {
     const [row] = await sql<{ registered: number; checked_in: number }[]>`
       SELECT COUNT(*)::int AS registered,

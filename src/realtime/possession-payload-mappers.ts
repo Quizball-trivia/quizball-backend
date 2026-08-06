@@ -25,7 +25,7 @@ export function getUserIdByCachedSeat(players: CachedPlayer[], seat: CachedSeat)
 }
 
 export function toCachedAnswerByUserId(
-  cache: MatchCache
+  cache: Pick<MatchCache, 'answers'>
 ): Map<string, { is_correct: boolean; time_ms: number; points_earned: number }> {
   return new Map(
     Object.entries(cache.answers).map(([userId, answer]) => [

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
-import type { CachedPlayer } from '../../src/realtime/match-cache.js';
+import type { CachedAnswer, CachedPlayer, MatchCache } from '../../src/realtime/match-cache.js';
+import { toCachedAnswerByUserId } from '../../src/realtime/possession-payload-mappers.js';
 import { applyPenaltyResolution } from '../../src/realtime/possession-resolution.js';
 import type { Seat } from '../../src/realtime/possession-state.js';
 
@@ -54,7 +55,41 @@ function answers(seat1Points: number, seat2Points: number) {
   ]);
 }
 
+function cachedAnswer(userId: string, pointsEarned: number, timeMs: number): CachedAnswer {
+  return {
+    userId,
+    questionKind: 'multipleChoice',
+    selectedIndex: 0,
+    isCorrect: true,
+    timeMs,
+    pointsEarned,
+    phaseKind: 'penalty',
+    phaseRound: 1,
+    shooterSeat: 1,
+    answeredAt: null,
+  };
+}
+
 describe('penalty points resolution', () => {
+  it('uses points propagated by the cached-answer mapper', () => {
+    const cache: Pick<MatchCache, 'answers'> = {
+      answers: {
+        'seat-1': cachedAnswer('seat-1', 80, 5_000),
+        'seat-2': cachedAnswer('seat-2', 70, 500),
+      },
+    };
+    const state = penaltyState();
+    const result = applyPenaltyResolution(
+      state,
+      players(),
+      toCachedAnswerByUserId(cache),
+      1
+    );
+
+    expect(result.goalScoredByUserId).toBe('seat-1');
+    expect(state.penaltyGoals.seat1).toBe(1);
+  });
+
   it.each([
     { shooterSeat: 1 as Seat, seat1Points: 80, seat2Points: 70, scorer: 'seat-1' },
     { shooterSeat: 2 as Seat, seat1Points: 70, seat2Points: 80, scorer: 'seat-2' },

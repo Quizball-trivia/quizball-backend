@@ -171,8 +171,9 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       if (missed.length > 0) {
         const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
         for (const row of missed) {
-          // Spectators never get the answer key (see wlDeliverSpectator).
-          const payload = role === 'spectator' && row.type === 'dispatch'
+          // NOBODY gets the answer key on a dispatch — players could read it
+          // from the socket before answering (it arrives with the reveal).
+          const payload = row.type === 'dispatch'
             ? { ...row.payload, evaluation: {} }
             : row.payload;
           rawEmit.emit(`wl:${row.type}`, {

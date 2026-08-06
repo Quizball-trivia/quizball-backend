@@ -3,7 +3,7 @@ import { harnessDelayMs } from '../core/harness-timing.js';
 import type { CachedPlayer, MatchCache } from './match-cache.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
-import { nextSeat, QUESTION_TIME_MS, type Seat } from './possession-state.js';
+import { nextSeat, type Seat } from './possession-state.js';
 import { clamp } from './scoring.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
@@ -245,7 +245,7 @@ export function penaltyWinnerSeat(state: PossessionStatePayload): Seat | null {
 export function applyPenaltyResolution(
   state: PossessionStatePayload,
   players: CachedPlayer[],
-  answerByUserId: Map<string, { is_correct: boolean; time_ms: number }>,
+  answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
   shooterSeat: Seat,
   maxSuddenDeathRounds = 0,
 ): { goalScoredByUserId: string | null; forcedBySuddenDeathCap: boolean } {
@@ -260,17 +260,13 @@ export function applyPenaltyResolution(
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
   const keeperAnswer = answerByUserId.get(keeperUserId ?? '');
-  const shooterCorrect = shooterAnswer?.is_correct ?? false;
-  const keeperCorrect = keeperAnswer?.is_correct ?? false;
-  const shooterTimeMs = shooterAnswer?.time_ms ?? QUESTION_TIME_MS;
-  const keeperTimeMs = keeperAnswer?.time_ms ?? QUESTION_TIME_MS;
+  const shooterPoints = shooterAnswer?.points_earned ?? 0;
+  const keeperPoints = keeperAnswer?.points_earned ?? 0;
 
-  let isGoal = false;
-  if (shooterCorrect && !keeperCorrect) {
-    isGoal = true;
-  } else if (shooterCorrect && keeperCorrect) {
-    isGoal = shooterTimeMs < keeperTimeMs;
-  }
+  // Penalties are decided by the points earned in this duel. The shooter must
+  // beat the keeper outright; equal points are a save, so ties always favour
+  // the goalkeeper regardless of answer time or player seat.
+  const isGoal = shooterPoints > keeperPoints;
 
   let goalScoredByUserId: string | null = null;
   if (isGoal) {

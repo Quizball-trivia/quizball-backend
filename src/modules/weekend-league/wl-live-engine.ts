@@ -972,7 +972,8 @@ export async function wlSubscribeSnapshot(
         question_index: run.question_index,
         kind: content.kind,
         question: content.payload,
-        evaluation: content.evaluation,
+        // Never the answer key on an OPEN attempt (see the deliverer scrub).
+        evaluation: {},
         playableAt: Number(run.playable_at_ms),
         deadlineAt: Number(run.deadline_at_ms),
       };

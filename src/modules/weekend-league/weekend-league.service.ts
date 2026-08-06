@@ -76,7 +76,7 @@ export const weekendLeagueService = {
       return { tournament: null, you: null };
     }
 
-    const [counts, entry, qp] = await Promise.all([
+    const [counts, entry, qp, lastGameRank] = await Promise.all([
       getOrLoadJson(
         `wl:counts:${tournament.id}`,
         COUNTS_CACHE_TTL_SECONDS,
@@ -84,6 +84,7 @@ export const weekendLeagueService = {
       ),
       weekendLeagueRepo.getEntry(tournament.id, userId),
       loadQp(tournament, userId),
+      weekendLeagueRepo.getLastGameRank(tournament.id, userId),
     ]);
 
     return {
@@ -108,9 +109,7 @@ export const weekendLeagueService = {
         state: entry?.state ?? null,
         checked_in: entry?.checked_in_at != null,
         final_checked_in: entry?.final_checked_in_at != null,
-        last_game_rank: entry != null
-          ? await weekendLeagueRepo.getLastGameRank(tournament.id, userId)
-          : null,
+        last_game_rank: entry != null ? lastGameRank : null,
         qp,
       },
     };

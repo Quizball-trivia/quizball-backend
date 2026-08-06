@@ -2,7 +2,7 @@
  * Full LIVE game end-to-end against real DB + Redis: seeded wl_private
  * content, three checked-in players, compressed 1s questions. Players
  * answer through wlAcceptAnswer with different accuracy/speed; the
- * orchestrator ticks the game through all 19 dispatches to qualifier_done
+ * orchestrator ticks the game through all 21 dispatches to qualifier_done
  * and the dns_v1 settlement. Asserts real standings order, persisted
  * answers, reveal payloads (evaluation + distribution + board), and the
  * gapless delivered event stream.
@@ -121,7 +121,7 @@ async function stockContent(): Promise<void> {
     await seedSource('high_low', {
       type: 'high_low',
       stat_label: i18n(`hl${i}`),
-      matchups: [0, 1, 2].map((m) => ({
+      matchups: [0, 1, 2, 3, 4].map((m) => ({
         id: `m${m}`, left_name: i18n('L'), left_value: 10, right_name: i18n('R'), right_value: 5,
       })),
     });
@@ -292,12 +292,12 @@ describe('WL live game end-to-end', () => {
       await new Promise((r) => setTimeout(r, 120));
     }
 
-    // 4 games × 19 slots revealed, none stuck.
+    // 4 games × 21 slots revealed, none stuck.
     const runs = await sql<Array<{ status: string; game_index: number }>>`
       SELECT status, game_index FROM wl_question_runs
       WHERE tournament_id = ${tid} AND status <> 'voided'
     `;
-    expect(runs.length).toBe(4 * 19);
+    expect(runs.length).toBe(4 * 21);
     expect(runs.every((r) => r.status === 'revealed')).toBe(true);
 
     // Cuts per the overridden ladder: 6 → 4 → 3 → 2 finalists → champion.
@@ -337,8 +337,8 @@ describe('WL live game end-to-end', () => {
       FROM wl_events WHERE tournament_id = ${tid} ORDER BY wl_events.seq ASC
     `;
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
-    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 19);
-    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 19);
+    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 21);
+    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 21);
     expect(events.filter((e) => e.type === 'game_result').length).toBe(3);
     expect(events.filter((e) => e.type === 'final_result').length).toBe(1);
     expect(events.every((e) => e.delivered)).toBe(true);

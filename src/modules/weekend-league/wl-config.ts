@@ -31,6 +31,9 @@ export const wlTournamentConfigSchema = z.object({
   /** Spectator delay — how far behind live the spec room runs. Fixed 30s in
    *  production; configurable so compressed test events stay testable. */
   spectator_delay_ms: z.number().int().min(1_000).max(120_000).default(30_000),
+  /** Roster bots top the field up to this size at check-in (0 = no bots).
+   *  Bots may qualify on merit but never win prizes (awards are humans-only). */
+  bot_fill_min_field: z.number().int().min(0).max(2_000).default(0),
 });
 
 export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;

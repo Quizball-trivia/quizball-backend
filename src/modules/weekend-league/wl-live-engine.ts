@@ -368,7 +368,13 @@ export const wlLiveEngineInternals = {
         const next = wlNextSlot({
           gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
         });
-        if (next) await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        // Same rule as revealFrozen: within the round we skip straight on, but
+        // a ROUND boundary is left to the orchestrator so the breather applies.
+        // A void has no standings beat of its own (nobody saw the question),
+        // yet the pacing must stay identical or rounds would start early.
+        if (next && next.roundIndex === run.round_index) {
+          await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        }
       }
         voided = true;
       });
@@ -476,7 +482,8 @@ export const wlLiveEngineInternals = {
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
       const revealed = await txSql`
-        UPDATE wl_question_runs SET status = 'revealed'
+        UPDATE wl_question_runs
+        SET status = 'revealed', revealed_at_ms = ${redisNow}
         WHERE attempt_id = ${run.attempt_id} AND status = 'frozen'
         RETURNING attempt_id
       `;
@@ -503,7 +510,12 @@ export const wlLiveEngineInternals = {
       gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
     });
     if (next) {
-      await this.appendDispatch(tournamentId, next, redisNow);
+      // At a ROUND boundary the next dispatch is deliberately NOT appended here:
+      // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
+      // round-end standings beat can play. Mid-round we dispatch immediately.
+      if (next.roundIndex === run.round_index) {
+        await this.appendDispatch(tournamentId, next, redisNow);
+      }
     }
   },
 
@@ -554,11 +566,11 @@ export const wlLiveEngineInternals = {
     tournamentId: string,
     gameIndex: number,
     limit: number
-  ): Promise<Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>> {
+  ): Promise<Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>> {
     // Per-user totals with WINDOW-correct miss charges: an unanswered
     // attempt charges that attempt's full window (who_am_i = 5 clue windows),
     // never a flat constant — wrong-but-present must always beat absent.
-    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string }>>`
+    const rows = await sql<Array<{ user_id: string; nickname: string | null; points: number; time_ms: string }>>`
       WITH asked AS (
         SELECT attempt_id,
                GREATEST(1, deadline_at_ms - playable_at_ms) AS window_ms
@@ -567,6 +579,7 @@ export const wlLiveEngineInternals = {
           AND status IN ('frozen', 'revealed')
       )
       SELECT p.user_id,
+             MIN(u.nickname) AS nickname,
              COALESCE(SUM(a.points), 0)::int AS points,
              (
                COALESCE(SUM(LEAST(a.time_charge_ms, asked.window_ms)), 0)
@@ -574,6 +587,7 @@ export const wlLiveEngineInternals = {
                - COALESCE(SUM(asked.window_ms), 0)
              )::text AS time_ms
       FROM wl_game_participants p
+      JOIN users u ON u.id = p.user_id
       LEFT JOIN wl_answers a
         ON a.tournament_id = p.tournament_id AND a.game_index = p.game_index
        AND a.user_id = p.user_id
@@ -583,12 +597,16 @@ export const wlLiveEngineInternals = {
     `;
     const standings = rows.map((r) => ({
       userId: r.user_id,
+      nickname: r.nickname,
       points: r.points,
       timeMsTotal: Number(r.time_ms),
     }));
     standings.sort(wlCompareStanding);
+    // Nickname rides on every board row so clients never fall back to
+    // placeholder names; deliberately NO is_ai flag — spectators and players
+    // must not be able to tell roster bots apart.
     return standings.slice(0, limit).map((s, i) => ({
-      user_id: s.userId, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
+      user_id: s.userId, nickname: s.nickname, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
     }));
   },
 
@@ -654,6 +672,73 @@ function normalizeGuess(value: string): string {
     .replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ');
 }
 
+// ── Answer hot-path caches ───────────────────────────────────────────────────
+// The three PG lookups below return data that is immutable for the lifetime
+// of an attempt (run row), a question (evaluation/config) and a game
+// (participant roster) — yet at 1k concurrent answerers the per-answer
+// round-trips saturate the pool (observed ack p95 5.3s, in-time answers
+// processed past their deadline). Caching them makes the hot path
+// Redis-only. Correctness is unaffected: closure and once-only acceptance
+// are gated in the Redis accept script (closed marker + deadline), never in
+// these rows, and void/freeze both set the closed marker BEFORE anything
+// else. Per-process cache; replicas warm independently.
+const HOT_CACHE_TTL_MS = 120_000;
+const HOT_CACHE_MAX = 300;
+interface HotCacheEntry<T> { value: T; at: number }
+function hotCacheGet<T>(map: Map<string, HotCacheEntry<T>>, key: string): T | null {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > HOT_CACHE_TTL_MS) { map.delete(key); return null; }
+  return hit.value;
+}
+function hotCacheSet<T>(map: Map<string, HotCacheEntry<T>>, key: string, value: T): void {
+  if (map.size >= HOT_CACHE_MAX) {
+    const cutoff = Date.now() - HOT_CACHE_TTL_MS;
+    for (const [k, v] of map) { if (v.at < cutoff) map.delete(k); }
+    if (map.size >= HOT_CACHE_MAX) map.delete(map.keys().next().value!);
+  }
+  map.set(key, { value, at: Date.now() });
+}
+const runHotCache = new Map<string, HotCacheEntry<WlRunRow>>();
+const contentHotCache = new Map<string, HotCacheEntry<{
+  kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown>;
+}>>();
+const participantHotCache = new Map<string, HotCacheEntry<Set<string>>>();
+// In-flight coalescing: without it a fresh dispatch stampedes — every
+// answer arriving before the first query resolves misses the cache and
+// fires the identical query, defeating the fix exactly when it matters.
+// One loader per key; failures propagate to all waiters and cache nothing.
+const hotInflight = new Map<string, Promise<unknown>>();
+async function hotLoad<T>(
+  map: Map<string, HotCacheEntry<T>>,
+  namespace: string,
+  key: string,
+  loader: () => Promise<T | null>,
+  cacheable: (value: T) => boolean
+): Promise<T | null> {
+  const cached = hotCacheGet(map, key);
+  if (cached != null) return cached;
+  const inflightKey = `${namespace}:${key}`;
+  let pending = hotInflight.get(inflightKey) as Promise<T | null> | undefined;
+  if (!pending) {
+    pending = (async () => {
+      const value = await loader();
+      if (value != null && cacheable(value)) hotCacheSet(map, key, value);
+      return value;
+    })();
+    hotInflight.set(inflightKey, pending);
+    void pending.catch(() => {}).then(() => hotInflight.delete(inflightKey));
+  }
+  return pending;
+}
+
+/** Test seam for the answer hot-path cache (unit-tested coalescing). */
+export const wlAnswerHotCacheInternals = {
+  hotLoad,
+  caches: { runHotCache, contentHotCache, participantHotCache },
+  inflight: hotInflight,
+};
+
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
   tournamentId: string;
@@ -664,13 +749,19 @@ export async function wlAcceptAnswer(input: {
   | { accepted: true; correct: boolean; points: number; elapsedMs: number }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
-  const [run] = await sql<WlRunRow[]>`
-    SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
-           r.question_index, r.question_id, r.status,
-           r.playable_at_ms::text, r.deadline_at_ms::text
-    FROM wl_question_runs r
-    WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
-  `;
+  const runKey = `${input.tournamentId}:${input.attemptId}`;
+  // Cache only the live shape: window stamps are immutable, and closure is
+  // enforced by deadline + the Redis closed marker, not this status.
+  const run = await hotLoad(runHotCache, 'run', runKey, async () => {
+    const [row] = await sql<WlRunRow[]>`
+      SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
+             r.question_index, r.question_id, r.status,
+             r.playable_at_ms::text, r.deadline_at_ms::text
+      FROM wl_question_runs r
+      WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
+    `;
+    return row ?? null;
+  }, (row) => row.status === 'dispatched');
   if (!run) return { accepted: false, reason: 'unknown_attempt' };
   const playable = Number(run.playable_at_ms);
   const deadline = Number(run.deadline_at_ms);
@@ -705,19 +796,27 @@ export async function wlAcceptAnswer(input: {
     }
     return { accepted: false, reason: 'closed' };
   }
-  const [participant] = await sql<{ user_id: string }[]>`
-    SELECT user_id FROM wl_game_participants
-    WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
-      AND user_id = ${input.userId}
-  `;
-  if (!participant) return { accepted: false, reason: 'not_participant' };
+  const rosterKey = `${input.tournamentId}:${run.game_index}`;
+  // A roster is written once at game start; never cache an empty read (it
+  // could race the game-setup transaction).
+  const roster = await hotLoad(participantHotCache, 'roster', rosterKey, async () => {
+    const rows = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM wl_game_participants
+      WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
+    `;
+    return new Set(rows.map((r) => r.user_id));
+  }, (set) => set.size > 0);
+  if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
 
-  const [content] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
-    SELECT q.kind, q.evaluation, t.config
-    FROM wl_questions q
-    JOIN wl_tournaments t ON t.id = q.tournament_id
-    WHERE q.question_id = ${run.question_id}
-  `;
+  const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
+    const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
+      SELECT q.kind, q.evaluation, t.config
+      FROM wl_questions q
+      JOIN wl_tournaments t ON t.id = q.tournament_id
+      WHERE q.question_id = ${run.question_id}
+    `;
+    return row ?? null;
+  }, () => true);
   if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);
@@ -779,7 +878,10 @@ export interface WlSubscribeSnapshot {
   your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
   /** The caller's accepted points this game (persisted + in-flight). */
   score: number;
-  board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
+  /** Exact outbox boundary: events ≤ this seq are fully reflected in score;
+      events above it not at all (read in the same MVCC statement). */
+  snapshot_seq: number;
+  board: Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>;
 }
 
 /**
@@ -802,8 +904,28 @@ export async function wlSubscribeSnapshot(
   tournamentId: string,
   userId: string
 ): Promise<WlSubscribeSnapshot | null> {
-  const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
-    SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
+  // The persisted score and the event cursor are read in ONE statement, so
+  // they see the same MVCC snapshot. Persisted-answer transitions (freeze,
+  // void, game results) commit their wl_events row + next_event_seq bump in
+  // the same transaction as the state they describe, which makes
+  // snapshot_seq an exact boundary FOR THE PERSISTED COMPONENT: such an
+  // event with seq ≤ snapshot_seq is fully reflected in the persisted sum,
+  // one above it not at all. The in-flight Redis component added below has
+  // no outbox seq — clients that reconcile against this boundary must treat
+  // your_answer / your_last_answer as the source of the in-flight attempts
+  // the score already counts.
+  const [t] = await sql<Array<{
+    status: string; stage: Record<string, unknown> | null;
+    snapshot_seq: string; my_points: number;
+  }>>`
+    SELECT status, stage, next_event_seq::text AS snapshot_seq,
+           (SELECT COALESCE(SUM(a.points), 0)::int
+            FROM wl_answers a
+            WHERE a.tournament_id = wl_tournaments.id
+              AND a.user_id = ${userId}
+              AND a.game_index = COALESCE(NULLIF(wl_tournaments.stage->>'current_game', ''), '0')::int
+           ) AS my_points
+    FROM wl_tournaments WHERE id = ${tournamentId}
   `;
   if (!t) return null;
   const stage = t.stage ?? {};
@@ -811,10 +933,7 @@ export async function wlSubscribeSnapshot(
   const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
   const redisNow = await wlRedisNowMs();
 
-  const [persisted] = await sql<Array<{ points: number }>>`
-    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
-    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
-  `;
+  const persisted = { points: t.my_points };
 
   let attempt: Record<string, unknown> | null = null;
   let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
@@ -895,6 +1014,7 @@ export async function wlSubscribeSnapshot(
         }
       : null,
     score: (persisted?.points ?? 0) + inFlightPoints,
+    snapshot_seq: Number(t.snapshot_seq),
     board,
   };
 }

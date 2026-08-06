@@ -6107,6 +6107,13 @@
               },
               "qp_target": {
                 "type": "integer"
+              },
+              "current_game_index": {
+                "type": "integer"
+              },
+              "break_until_ms": {
+                "type": "integer",
+                "nullable": true
               }
             },
             "required": [
@@ -6121,7 +6128,9 @@
               "registered_count",
               "checked_in_count",
               "launch_edition",
-              "qp_target"
+              "qp_target",
+              "current_game_index",
+              "break_until_ms"
             ]
           },
           "you": {
@@ -6280,6 +6289,157 @@
           "already_checked_in"
         ]
       },
+      "WlAdminTournamentRow": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": {
+          "nullable": true
+        }
+      },
+      "WlAdminTournamentsResponse": {
+        "type": "object",
+        "properties": {
+          "tournaments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WlAdminTournamentRow"
+            }
+          }
+        },
+        "required": [
+          "tournaments"
+        ]
+      },
+      "WlAdminTournamentDetailResponse": {
+        "type": "object",
+        "properties": {
+          "tournament": {
+            "$ref": "#/components/schemas/WlAdminTournamentRow"
+          },
+          "registrants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "entry_states": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "n": {
+                  "type": "integer"
+                },
+                "bots": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "state",
+                "n",
+                "bots"
+              ]
+            }
+          },
+          "current_game_index": {
+            "type": "integer"
+          },
+          "board": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "points": {
+                  "type": "integer"
+                },
+                "time_ms_total": {
+                  "type": "number"
+                },
+                "rank": {
+                  "type": "integer"
+                },
+                "nickname": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "is_ai": {
+                  "type": "boolean",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "user_id",
+                "points",
+                "time_ms_total",
+                "rank",
+                "nickname",
+                "is_ai"
+              ]
+            }
+          },
+          "game_results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "awards": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "stream": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "head": {
+                "type": "integer",
+                "nullable": true
+              },
+              "pending": {
+                "type": "integer"
+              },
+              "poisonish": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "head",
+              "pending",
+              "poisonish"
+            ]
+          }
+        },
+        "required": [
+          "tournament",
+          "registrants",
+          "entry_states",
+          "current_game_index",
+          "board",
+          "game_results",
+          "awards",
+          "stream"
+        ]
+      },
       "Announcement": {
         "type": "object",
         "properties": {
@@ -6426,6 +6586,114 @@
         },
         "required": [
           "ok"
+        ]
+      },
+      "WlAdminCreateTestResponse": {
+        "type": "object",
+        "properties": {
+          "tournament_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "tournament_id"
+        ]
+      },
+      "WlAdminPauseResponse": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paused"
+        ]
+      },
+      "WlAdminResumeResponse": {
+        "type": "object",
+        "properties": {
+          "resumed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "resumed"
+        ]
+      },
+      "WlAdminCancelResponse": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ]
+      },
+      "WlAdminFillBotsResponse": {
+        "type": "object",
+        "properties": {
+          "filled": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filled"
+        ]
+      },
+      "WlAdminStockResponse": {
+        "type": "object",
+        "properties": {
+          "stock": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "type": "string"
+                },
+                "n": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "visibility",
+                "n"
+              ]
+            }
+          }
+        },
+        "required": [
+          "stock"
+        ]
+      },
+      "WlAdminDeleteTestResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      },
+      "WlAdminForceTickResponse": {
+        "type": "object",
+        "properties": {
+          "ticked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ticked"
         ]
       }
     },
@@ -16791,6 +17059,585 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WlCheckinResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments": {
+      "get": {
+        "summary": "Recent WL tournaments with live counts (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminTournamentsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments/{id}": {
+      "get": {
+        "summary": "One WL tournament: field, standings, awards, stream health (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminTournamentDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a TEST tournament (real events must be cancelled instead)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminDeleteTestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a test event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/create-test": {
+      "post": {
+        "summary": "Create a compressed/any-date TEST tournament (admin, non-prod)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entry_opens_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "entry_closes_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "qualifier_starts_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "final_starts_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "compressed": {
+                    "type": "object",
+                    "properties": {
+                      "entry_seconds": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 3600
+                      },
+                      "checkin_seconds": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 3600
+                      },
+                      "to_final_seconds": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 7200
+                      }
+                    },
+                    "required": [
+                      "entry_seconds",
+                      "checkin_seconds",
+                      "to_final_seconds"
+                    ]
+                  },
+                  "config": {
+                    "type": "object",
+                    "properties": {
+                      "rules_version": {
+                        "type": "number",
+                        "enum": [
+                          1
+                        ]
+                      },
+                      "launch_edition": {
+                        "type": "boolean"
+                      },
+                      "engine": {
+                        "type": "string",
+                        "enum": [
+                          "live",
+                          "stub"
+                        ],
+                        "default": "live"
+                      },
+                      "free_entry": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "qp_target": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 999999
+                      },
+                      "question_time_ms": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 120000
+                      },
+                      "dispatch_lead_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30000
+                      },
+                      "break_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1800000
+                      },
+                      "checkin_window_ms": {
+                        "type": "integer",
+                        "minimum": 10000,
+                        "maximum": 3600000
+                      },
+                      "spectator_delay_ms": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 120000,
+                        "default": 30000
+                      },
+                      "bot_fill_min_field": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 2000,
+                        "default": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminCreateTestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments/{id}/pause": {
+      "post": {
+        "summary": "pause a WL tournament (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminPauseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments/{id}/resume": {
+      "post": {
+        "summary": "resume a WL tournament (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminResumeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments/{id}/cancel": {
+      "post": {
+        "summary": "cancel a WL tournament (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminCancelResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/tournaments/{id}/fill-bots": {
+      "post": {
+        "summary": "Top the field up with roster bots (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "min_field": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "min_field"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bots entered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminFillBotsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/stock": {
+      "get": {
+        "summary": "WL question-stock levels per kind and visibility (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stock counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminStockResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/force-tick": {
+      "post": {
+        "summary": "Run one locked orchestrator tick now (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tick outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlAdminForceTickResponse"
                 }
               }
             }

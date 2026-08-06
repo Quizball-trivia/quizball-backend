@@ -44,6 +44,10 @@ export const wlTournamentSchema = z.object({
   checked_in_count: z.number().int(),
   launch_edition: z.boolean(),
   qp_target: z.number().int(),
+  /** 0-based index of the game currently running (or next to run). */
+  current_game_index: z.number().int(),
+  /** Server-clock epoch ms when the between-games break ends; null outside breaks. */
+  break_until_ms: z.number().int().nullable(),
 });
 
 export const wlCurrentResponseSchema = z.object({

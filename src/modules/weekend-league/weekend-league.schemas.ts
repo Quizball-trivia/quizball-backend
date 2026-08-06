@@ -51,6 +51,9 @@ export const wlTournamentSchema = z.object({
   current_game_index: z.number().int(),
   /** Server-clock epoch ms when the between-games break ends; null outside breaks. */
   break_until_ms: z.number().int().nullable(),
+  /** How far behind live the spectator stream runs — spectator countdowns
+   *  must shift by this or they finish before the delayed stream catches up. */
+  spectator_delay_ms: z.number().int(),
 });
 
 export const wlCurrentResponseSchema = z.object({

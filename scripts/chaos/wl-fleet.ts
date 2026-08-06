@@ -167,7 +167,12 @@ function parseArgs(argv: string[]): WlFleetConfig {
     flapRate: num('flap-rate', 0),
     entrySeconds: num('entry-sec', 90),
     checkinSeconds: num('checkin-sec', 45),
-    toFinalSeconds: num('final-sec', 240),
+    // Measured from the QUALIFIER start, so it must exceed Saturday's real
+    // duration: 3 games x 21 questions x (question + gap) + 2 breaks. A value
+    // shorter than that puts final_starts_at in the past, and the final
+    // check-in window is already closed when qualifying ends — every finalist
+    // becomes a no-show and no champion is crowned.
+    toFinalSeconds: num('final-sec', 1_500),
     questionTimeMs: num('question-ms', 10_000),
     spectatorDelayMs: num('spec-delay-ms', 30_000),
     accuracy: num('accuracy', 0.7),
@@ -387,7 +392,15 @@ function connectPlayer(
           state.acks.push({
             latencyMs: Date.now() - sentAt,
             accepted: ack.accepted,
-            reason: ack.accepted ? undefined : ack.reason,
+            // A rejection for a game this player was already cut from is the
+            // HARNESS racing its own eliminated flag (dispatches for the next
+            // game can still arrive in-flight); the server is right to refuse,
+            // so it must not count as an unexpected rejection.
+            reason: ack.accepted
+              ? undefined
+              : (ack.reason === 'invalid' && dispatchGame !== state.currentGame
+                ? 'invalid_post_elimination'
+                : ack.reason),
           });
           if (ack.accepted) {
             if (!state.scored.has(attemptId)) {
@@ -995,6 +1008,9 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   // load shedding, `not_participant`, `duplicate`, `unknown_attempt` —
   // means answers were REFUSED, which the accepted-set-only server audit
   // cannot see.
+  // Harness-attributed refusals are reported but do not fail the SLO.
+  const postElimination = rejectionReasons.get('invalid_post_elimination') ?? 0;
+  rejectionReasons.delete('invalid_post_elimination');
   const unexpectedRejections = [...rejectionReasons.entries()]
     .filter(([reason]) => reason !== 'closed')
     .reduce((n, [, count]) => n + count, 0);
@@ -1099,7 +1115,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
     },
     noUnexpectedRejections: {
       pass: unexpectedRejections === 0,
-      detail: `non-closed rejections=${unexpectedRejections} (${rejectionDetail})`,
+      detail: `non-closed rejections=${unexpectedRejections} (post-elimination, harness-attributed: ${postElimination}) (${rejectionDetail})`,
     },
     serverScoreAudit: {
       // Primary integrity: covers every participant of every game via the

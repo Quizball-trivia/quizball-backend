@@ -24,13 +24,16 @@ export function getUserIdByCachedSeat(players: CachedPlayer[], seat: CachedSeat)
   return players.find((player) => player.seat === seat)?.userId ?? null;
 }
 
-export function toCachedAnswerByUserId(cache: MatchCache): Map<string, { is_correct: boolean; time_ms: number }> {
+export function toCachedAnswerByUserId(
+  cache: Pick<MatchCache, 'answers'>
+): Map<string, { is_correct: boolean; time_ms: number; points_earned: number }> {
   return new Map(
     Object.entries(cache.answers).map(([userId, answer]) => [
       userId,
       {
         is_correct: answer.isCorrect,
         time_ms: answer.timeMs,
+        points_earned: answer.pointsEarned,
       },
     ])
   );

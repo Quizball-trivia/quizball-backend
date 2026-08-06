@@ -34,12 +34,15 @@ import { wlRedis, wlRedisNowMs } from './wl-redis.js';
 import { wlConfigFrom } from './wl-config.js';
 import {
   WL_FINALISTS,
+  WL_MONEY_DROP_BUDGET,
+  WL_MONEY_DROP_WINDOW_STEPS,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
+  wlMoneyDropSanitizeBets,
   wlStepPoints,
   wlWhoAmIPoints,
   type WlRoundKind,
@@ -222,11 +225,14 @@ export const wlLiveEngineInternals = {
     `;
     const cfg = wlConfigFrom(t?.config);
     const kind = String(eventPayload['kind'] ?? '');
-    // Who-Am-I runs one window per clue (5 clues, one puzzle); every other
-    // kind gets a single question window.
+    // Who-Am-I runs one window per clue (5 clues, one puzzle); Money Drop
+    // needs betting time (spread + confirm); every other kind gets a single
+    // question window.
     const windowMs = kind === 'who_am_i'
       ? cfg.question_time_ms * WL_WHO_AM_I_CLUE_POINTS.length
-      : cfg.question_time_ms;
+      : kind === 'money_drop'
+        ? cfg.question_time_ms * WL_MONEY_DROP_WINDOW_STEPS
+        : cfg.question_time_ms;
     // A round's FIRST question carries extra lead so the round-intro overlay
     // can play before the 3s reading grace starts.
     const questionIndex = Number(eventPayload['question_index'] ?? 0);
@@ -622,14 +628,44 @@ export const wlLiveEngineInternals = {
     return row?.kind ?? 'mcq';
   },
 
+  /**
+   * Resolve the budget a player carries INTO a money-drop question: the carry
+   * stored on their answer to the nearest prior question of the round that
+   * actually played (frozen/revealed). A played prior question with no answer
+   * row is a miss — the money is gone (daily rules: unplaced money drops).
+   * A fully-voided slot (nobody saw it) is skipped, not charged. Question 1,
+   * or a round whose every prior slot voided, starts from the full budget.
+   */
+  async moneyDropBudget(run: WlRunRow, userId: string): Promise<number> {
+    if (run.question_index <= 0) return WL_MONEY_DROP_BUDGET;
+    const rows = await sql<Array<{ question_index: number; carry: number | null }>>`
+      SELECT r.question_index,
+             (a.answer->>'carry')::int AS carry
+      FROM wl_question_runs r
+      LEFT JOIN wl_answers a
+        ON a.attempt_id = r.attempt_id AND a.user_id = ${userId}
+       AND a.timing_source = 'redis_accept'
+      WHERE r.tournament_id = ${run.tournament_id} AND r.game_index = ${run.game_index}
+        AND r.round_index = ${run.round_index} AND r.question_index < ${run.question_index}
+        AND r.status IN ('frozen', 'revealed')
+      ORDER BY r.question_index DESC
+      LIMIT 1
+    `;
+    const prior = rows[0];
+    if (!prior) return WL_MONEY_DROP_BUDGET;
+    const carry = Number(prior.carry);
+    return Number.isFinite(carry) ? Math.max(0, Math.min(carry, WL_MONEY_DROP_BUDGET)) : 0;
+  },
+
   /** Score an accepted answer server-side (authoritative). */
   scoreAnswer(
     kind: WlRoundKind,
     evaluation: Record<string, unknown>,
     answer: unknown,
     elapsedMs: number,
-    clueWindowMs = 10_000
-  ): { correct: boolean; points: number } {
+    clueWindowMs = 10_000,
+    moneyDrop?: { budget: number; isFinalStep: boolean }
+  ): { correct: boolean; points: number; bets?: Record<string, number>; carry?: number } {
     switch (kind) {
       case 'mcq':
       case 'true_false': {
@@ -658,6 +694,23 @@ export const wlLiveEngineInternals = {
           Math.floor(elapsedMs / Math.max(1, clueWindowMs))
         );
         return { correct, points: wlWhoAmIPoints(correct, clueIndex) };
+      }
+      case 'money_drop': {
+        // Daily-challenge rules, server-authoritative: only what sits on the
+        // correct option survives; the sheet is clamped to the server-known
+        // budget. Points land on the FINAL step alone — the surviving carry IS
+        // the round score, so intermediate rows record 0 and the game maximum
+        // holds.
+        const budget = moneyDrop?.budget ?? 0;
+        const parsed = answer as { bets?: unknown } | null;
+        const bets = wlMoneyDropSanitizeBets(parsed?.bets, budget);
+        const carry = bets[String(evaluation['correct_id'] ?? '')] ?? 0;
+        return {
+          correct: carry > 0,
+          points: moneyDrop?.isFinalStep ? carry : 0,
+          bets,
+          carry,
+        };
       }
     }
   },
@@ -751,7 +804,7 @@ export async function wlAcceptAnswer(input: {
   userId: string;
   answer: unknown;
 }): Promise<
-  | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
   const runKey = `${input.tournamentId}:${input.attemptId}`;
@@ -825,10 +878,24 @@ export async function wlAcceptAnswer(input: {
   if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);
-  const { correct, points } = wlLiveEngineInternals.scoreAnswer(
+  // Money drop is stateful across the round: the budget entering this question
+  // is server-derived from the prior frozen answer, never client-claimed.
+  const moneyDrop = content.kind === 'money_drop'
+    ? {
+        budget: await wlLiveEngineInternals.moneyDropBudget(run, input.userId),
+        isFinalStep: run.question_index === WL_QUESTIONS_PER_ROUND.money_drop - 1,
+      }
+    : undefined;
+  const { correct, points, bets, carry } = wlLiveEngineInternals.scoreAnswer(
     content.kind, content.evaluation, input.answer, elapsedMs,
-    wlConfigFrom(content.config).question_time_ms
+    wlConfigFrom(content.config).question_time_ms, moneyDrop
   );
+  // Persist the SANITIZED sheet + carry as the answer of record — the next
+  // question's budget read and the audit trail must reflect server truth,
+  // not the raw client sheet.
+  const answerOfRecord = content.kind === 'money_drop'
+    ? { bets: bets ?? {}, carry: carry ?? 0 }
+    : input.answer;
 
   const redis = wlRedis();
   const stored = await redis.eval(ACCEPT_SCRIPT, {
@@ -838,7 +905,7 @@ export async function wlAcceptAnswer(input: {
     ],
     arguments: [
       input.userId,
-      JSON.stringify({ answer: input.answer, correct, points, elapsedMs }),
+      JSON.stringify({ answer: answerOfRecord, correct, points, elapsedMs }),
       String(deadline),
       String(REDIS_TTL_SECONDS),
     ],
@@ -866,7 +933,9 @@ export async function wlAcceptAnswer(input: {
     }
     return { accepted: false, reason: 'duplicate' };
   }
-  return { accepted: true, correct, points, elapsedMs };
+  return carry != null
+    ? { accepted: true, correct, points, elapsedMs, carry }
+    : { accepted: true, correct, points, elapsedMs };
 }
 
 export interface WlSubscribeSnapshot {

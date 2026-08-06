@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   WL_GAME_MAX_POINTS,
+  WL_MONEY_DROP_BUDGET,
   WL_QUESTIONS_PER_ROUND,
   WL_QUESTION_TIME_MS,
   WL_ROUND_ORDER,
@@ -9,6 +10,7 @@ import {
   wlBuildLadder,
   wlCompareStanding,
   wlEncodeScore,
+  wlMoneyDropSanitizeBets,
   wlStepPoints,
   wlTimeChargeMs,
   wlWhoAmIPoints,
@@ -21,6 +23,10 @@ describe('point tables', () => {
       const steps = WL_QUESTIONS_PER_ROUND[kind];
       if (kind === 'who_am_i') {
         total += WL_WHO_AM_I_CLUE_POINTS[0]! * steps;
+      } else if (kind === 'money_drop') {
+        // The budget IS the round maximum: a perfect run carries all of it
+        // through every question and records it once, on the final step.
+        total += WL_MONEY_DROP_BUDGET;
       } else {
         total += WL_STEP_MAX_POINTS[kind] * steps;
       }
@@ -59,6 +65,30 @@ describe('point tables', () => {
     expect(wlWhoAmIPoints(true, 99)).toBe(60);
     expect(wlWhoAmIPoints(true, -1)).toBe(300);
     expect(wlWhoAmIPoints(false, 0)).toBe(0);
+  });
+});
+
+describe('money drop bet sanitizer', () => {
+  it('passes an honest within-budget sheet through unchanged', () => {
+    expect(wlMoneyDropSanitizeBets({ a: 200, b: 100 }, 300)).toEqual({ a: 200, b: 100 });
+    expect(wlMoneyDropSanitizeBets({ a: 300 }, 300)).toEqual({ a: 300 });
+  });
+
+  it('scales an over-budget sheet down proportionally (floor)', () => {
+    expect(wlMoneyDropSanitizeBets({ a: 700_000, b: 300_000 }, 300)).toEqual({ a: 210, b: 90 });
+    expect(wlMoneyDropSanitizeBets({ a: 400, b: 200 }, 300)).toEqual({ a: 200, b: 100 });
+  });
+
+  it('drops garbage: negatives, zeros, non-numbers, non-objects', () => {
+    expect(wlMoneyDropSanitizeBets({ a: -50, b: 0, c: 'x', d: NaN, e: 100 }, 300)).toEqual({ e: 100 });
+    expect(wlMoneyDropSanitizeBets(null, 300)).toEqual({});
+    expect(wlMoneyDropSanitizeBets([100], 300)).toEqual({});
+    expect(wlMoneyDropSanitizeBets('all', 300)).toEqual({});
+  });
+
+  it('floors fractional stakes and survives a zero budget', () => {
+    expect(wlMoneyDropSanitizeBets({ a: 10.9 }, 300)).toEqual({ a: 10 });
+    expect(wlMoneyDropSanitizeBets({ a: 100 }, 0)).toEqual({ a: 0 });
   });
 });
 

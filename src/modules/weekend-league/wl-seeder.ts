@@ -34,6 +34,9 @@ const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
   mcq: 'mcq_single',
   career_path: 'career_path',
   who_am_i: 'clue_chain',
+  // Money drop bets on regular MCQs — same bank as the mcq round (the two
+  // draws are deduped in-pass so one tournament never repeats a question).
+  money_drop: 'mcq_single',
 };
 
 interface SourceRow {
@@ -76,9 +79,13 @@ async function drawSources(
   need: number,
   allowPublicBank: boolean,
   deterministic: boolean,
-  pagingSeed: string
+  pagingSeed: string,
+  excludeIds?: ReadonlySet<string>
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
+  // Image preference belongs to the mcq round alone — money_drop draws from
+  // the same bank and must not consume the image stock first.
+  const preferImages = kind === 'mcq';
   // A high_low source must carry one matchup per question in the round.
   const minMatchups = kind === 'higher_lower' ? WL_QUESTIONS_PER_ROUND.higher_lower : 0;
   // Stable within one seeding pass: RANDOM() would reshuffle every page,
@@ -97,6 +104,7 @@ async function drawSources(
   // monolingual rows must not masquerade as a shortage.
   const picked: SourceRow[] = [];
   const pageSize = Math.max(need * 3, 50);
+  const skip = excludeIds ?? new Set<string>();
   for (let offset = 0; picked.length < need; offset += pageSize) {
     const rows = await sql<SourceRow[]>`
       SELECT q.id, q.prompt, qp.payload
@@ -121,7 +129,7 @@ async function drawSources(
                -- MCQ prefers IMAGE questions (product call: visual rounds);
                -- text rows remain the fallback so thin image stock can never
                -- starve seeding.
-               (${sourceType} = 'mcq_single'
+               (${preferImages}
                  AND qp.payload->'image' IS NOT NULL
                  AND qp.payload->>'image' <> 'null') DESC,
                ${order}
@@ -130,6 +138,7 @@ async function drawSources(
     if (rows.length === 0) break;
     for (const r of rows) {
       if (picked.length >= need) break;
+      if (skip.has(r.id)) continue;
       if (payloadFullyBilingual(r.prompt, r.payload)) picked.push(r);
     }
     if (rows.length < pageSize) break;
@@ -204,6 +213,19 @@ function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number
           accepted_answers: p['accepted_answers'],
         },
       };
+    case 'money_drop': {
+      // Same mcq_single source shape; no image — the betting board carries
+      // sliders and bill stacks, there is no room for artwork (and image
+      // stock is reserved for the mcq round's visual preference).
+      const options = (p['options'] as Array<Record<string, unknown>> ?? []);
+      return {
+        payload: {
+          prompt: source.prompt,
+          options: options.map((o) => ({ id: o['id'], text: o['text'] })),
+        },
+        evaluation: { correct_id: options.find((o) => o['is_correct'] === true)?.['id'] ?? null },
+      };
+    }
   }
 }
 
@@ -224,14 +246,22 @@ export async function wlSeedTournamentContent(input: {
   if ((already[0]?.n ?? 0) > 0) return { ok: true, inserted: 0 };
 
   // Draw everything first; only insert when EVERY kind is satisfiable.
+  // Kinds sharing a source bank (mcq + money_drop are both mcq_single) are
+  // deduped in-pass: the cross-tournament repeat-avoid can't see rows we
+  // haven't inserted yet, and test events are exempt from it entirely.
   const drawn = new Map<WlRoundKind, SourceRow[]>();
   const shortages: WlSeedResult['shortages'] = {};
+  const usedSourceIds = new Set<string>();
   for (const kind of WL_ROUND_ORDER) {
     const need = wlSourceNeedPerKind(kind);
-    const rows = await drawSources(kind, need, input.allowPublicBank, input.deterministic ?? false, input.tournamentId);
+    const rows = await drawSources(
+      kind, need, input.allowPublicBank, input.deterministic ?? false,
+      input.tournamentId, usedSourceIds
+    );
     if (rows.length < need) {
       shortages[kind] = { need, have: rows.length };
     }
+    for (const r of rows) usedSourceIds.add(r.id);
     drawn.set(kind, rows);
   }
   if (Object.keys(shortages).length > 0) {

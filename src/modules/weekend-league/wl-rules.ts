@@ -8,8 +8,14 @@
 import { calculatePoints } from '../../realtime/scoring.js';
 
 export const WL_QUESTION_TIME_MS = 10_000;
-/** Uniform head start stamped by the deliverer: playableAt = redisNow + LEAD. */
-export const WL_DISPATCH_LEAD_MS = 1200;
+/**
+ * Reading grace before the answer window opens: the question is on screen and
+ * the timer holds full until playableAt — the same 3s ranked gives via
+ * FRONTEND_REVEAL_MS, so nobody has to answer a question they haven't read.
+ */
+export const WL_DISPATCH_LEAD_MS = 3_000;
+/** Extra lead at ROUND starts so the round-intro overlay can play first. */
+export const WL_ROUND_INTRO_MS = 2_200;
 export const WL_FINALISTS = 24;
 export const WL_BREAK_MS = 2 * 60 * 1000;
 /**

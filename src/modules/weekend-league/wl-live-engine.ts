@@ -36,6 +36,7 @@ import {
   WL_FINALISTS,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
+  WL_ROUND_INTRO_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
@@ -226,11 +227,15 @@ export const wlLiveEngineInternals = {
     const windowMs = kind === 'who_am_i'
       ? cfg.question_time_ms * WL_WHO_AM_I_CLUE_POINTS.length
       : cfg.question_time_ms;
+    // A round's FIRST question carries extra lead so the round-intro overlay
+    // can play before the 3s reading grace starts.
+    const questionIndex = Number(eventPayload['question_index'] ?? 0);
+    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0);
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs
-      SET playable_at_ms = ${redisNow + cfg.dispatch_lead_ms},
-          deadline_at_ms = ${redisNow + cfg.dispatch_lead_ms + windowMs},
+      SET playable_at_ms = ${redisNow + leadMs},
+          deadline_at_ms = ${redisNow + leadMs + windowMs},
           status = 'dispatched'
       WHERE attempt_id = ${attemptId} AND playable_at_ms IS NULL
         AND status IN ('created', 'dispatched')

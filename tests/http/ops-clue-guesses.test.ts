@@ -6,7 +6,14 @@ import { AuthenticationError, InternalError } from '../../src/core/errors.js';
 import { clueGuessQuerySchema } from '../../src/modules/ops/ops.schemas.js';
 
 const listRecentMock = vi.hoisted(() => vi.fn());
-const configMock = vi.hoisted(() => ({ OPS_REPORT_TOKEN: 'secret-ops-token' as string | undefined }));
+const configMock = vi.hoisted(() => ({
+  OPS_REPORT_TOKEN: 'secret-ops-token' as string | undefined,
+  // ops.controller now imports the readonly breaker (→ core logger), which
+  // reads these at module init; without them a mocked config breaks pino.
+  NODE_ENV: 'local' as 'local' | 'staging' | 'prod',
+  LOG_LEVEL: 'silent' as string,
+  LOG_PRETTY: false as boolean,
+}));
 
 vi.mock('../../src/core/config.js', () => ({ config: configMock }));
 

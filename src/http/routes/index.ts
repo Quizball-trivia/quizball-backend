@@ -29,6 +29,7 @@ import { adminAgentsRoutes } from './admin-agents.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { translationRoutes } from './translation.routes.js';
 import { opsRoutes } from './ops.routes.js';
+import { systemRoutes } from './system.routes.js';
 import { botGovernorRoutes } from './bot-governor.routes.js';
 import { botTuningRoutes } from './bot-tuning.routes.js';
 import { feedbackRoutes } from './feedback.routes.js';
@@ -40,6 +41,10 @@ const router = Router();
 
 // Health check (not versioned)
 router.use(healthRoutes);
+
+// System status — unauthenticated, DB-free breaker snapshot for the client's
+// outage UX. Declares its own full /api/v1/system/status path, so mount at root.
+router.use(systemRoutes);
 
 // API documentation (controlled by DOCS_ENABLED env var)
 if (config.DOCS_ENABLED) {

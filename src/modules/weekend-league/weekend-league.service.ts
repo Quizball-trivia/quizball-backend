@@ -119,6 +119,7 @@ export const weekendLeagueService = {
         current_game_index: currentGameIndexOf(tournament),
         break_until_ms: breakUntilMsOf(tournament, spectatorDelayMs),
         spectator_delay_ms: spectatorDelayMs,
+        server_now_ms: Date.now(),
       },
       you: {
         entered: entry != null,

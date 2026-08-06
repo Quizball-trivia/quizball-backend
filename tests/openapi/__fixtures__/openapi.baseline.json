@@ -6117,6 +6117,9 @@
               },
               "spectator_delay_ms": {
                 "type": "integer"
+              },
+              "server_now_ms": {
+                "type": "integer"
               }
             },
             "required": [
@@ -6134,7 +6137,8 @@
               "qp_target",
               "current_game_index",
               "break_until_ms",
-              "spectator_delay_ms"
+              "spectator_delay_ms",
+              "server_now_ms"
             ]
           },
           "you": {

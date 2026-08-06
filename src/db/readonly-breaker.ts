@@ -66,6 +66,15 @@ export function isReadOnlyTransactionError(error: unknown): boolean {
  *    cost to their reconnect budget. Intentional: during OUR outage the fairness
  *    error must favour the player, not the broken database.
  */
+/**
+ * Fired exactly on a state EDGE — once when the breaker first trips into
+ * degraded, once when a probe clears it back to closed. Deliberately io-free:
+ * the breaker never imports the realtime layer. A consumer (the system-status
+ * service) registers a callback here and does the `io.emit('system:status')`,
+ * keeping the socket dependency out of the DB layer.
+ */
+export type BreakerStateChangeListener = (snapshot: BreakerSnapshot) => void;
+
 class ReadOnlyDbBreaker {
   private state: BreakerState = 'closed';
   private trippedAtMs: number | null = null;
@@ -73,6 +82,25 @@ class ReadOnlyDbBreaker {
   private tripCount = 0;
   private observedErrors = 0;
   private lastErrorAtMs: number | null = null;
+  private onStateChange: BreakerStateChangeListener | null = null;
+
+  /**
+   * Register the single edge listener. Overwrites any previous registration
+   * (test harnesses re-init repeatedly). Pass `null` to detach.
+   */
+  setStateChangeListener(listener: BreakerStateChangeListener | null): void {
+    this.onStateChange = listener;
+  }
+
+  private emitStateChange(): void {
+    const listener = this.onStateChange;
+    if (!listener) return;
+    try {
+      listener(this.snapshot());
+    } catch {
+      // A broken listener must never corrupt breaker bookkeeping.
+    }
+  }
 
   private get enabled(): boolean {
     return config.DB_OUTAGE_BREAKER_ENABLED !== false;
@@ -117,6 +145,9 @@ class ReadOnlyDbBreaker {
           },
           `${READ_ONLY_ALERT_MARKER}: database pool is read-only; entering degraded mode`
         );
+        // Edge only — fired inside the !wasDegraded branch so a burst of 25006s
+        // does not re-notify. Players learn matchmaking is paused immediately.
+        this.emitStateChange();
       }
     } catch {
       // Never let breaker bookkeeping break the caller's error handling.
@@ -159,6 +190,9 @@ class ReadOnlyDbBreaker {
       },
       `${READ_ONLY_ALERT_MARKER}: write probe succeeded; leaving degraded mode`
     );
+    // Edge only — fired after state='closed' so the recovery pulse ("Back
+    // online") reaches connected clients the moment writes resume.
+    this.emitStateChange();
   }
 
   /** A failed probe re-arms the window so recovery cannot happen mid-outage. */
@@ -188,6 +222,25 @@ class ReadOnlyDbBreaker {
     this.tripCount = 0;
     this.observedErrors = 0;
     this.lastErrorAtMs = null;
+  }
+
+  /**
+   * Immediately clear the latch, bypassing the probe/window recovery gate, and
+   * fire the recovery edge. This exists ONLY for the staging force-degrade
+   * demo/ops toggle — production recovery is probe-driven exclusively. Callers
+   * MUST guard this behind NODE_ENV !== 'prod'; the breaker does not (it has no
+   * business owning that policy). No-op when already closed.
+   */
+  forceRecover(): void {
+    if (this.state !== 'degraded') return;
+    this.state = 'closed';
+    this.trippedAtMs = null;
+    this.degradedUntilMs = null;
+    logger.warn(
+      { marker: READ_ONLY_ALERT_MARKER, source: 'ops_force_recover' },
+      `${READ_ONLY_ALERT_MARKER}: latch cleared by ops force-recover (non-prod only)`
+    );
+    this.emitStateChange();
   }
 }
 

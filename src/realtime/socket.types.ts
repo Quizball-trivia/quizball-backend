@@ -1189,6 +1189,24 @@ export interface ErrorPayload {
   meta?: Record<string, unknown>;
 }
 
+/**
+ * Broadcast whenever the server's read-only DB breaker changes state, and sent
+ * to each socket on connect so a client joining mid-outage learns immediately.
+ * Built purely from the in-memory breaker snapshot — no DB access.
+ */
+export interface SystemStatusPayload {
+  /** True while writes are paused (the read-only breaker is latched). */
+  degraded: boolean;
+  /** Machine reason for the degradation, or null when healthy. */
+  reason: 'db_write_outage' | null;
+  /** Whether ranked matchmaking joins are being accepted right now. */
+  matchmaking: 'available' | 'paused';
+  /** Epoch ms the current outage began, or null when healthy. */
+  sinceMs: number | null;
+  /** Server clock at emit time, so clients can reason about skew. */
+  serverTimeMs: number;
+}
+
 export interface ForceLogoutPayload {
   reason: 'account_deleted' | 'admin_revoked' | 'banned';
 }
@@ -1259,6 +1277,7 @@ export interface ServerToClientEvents {
   'notification:unread_count': (data: NotificationUnreadCountPayload) => void;
   'session:state': (data: SessionStatePayload) => void;
   'session:blocked': (data: SessionBlockedPayload) => void;
+  'system:status': (data: SystemStatusPayload) => void;
   'auth:force_logout': (data: ForceLogoutPayload) => void;
   'lobby:state': (data: LobbyState) => void;
   'lobby:challenge_created': (data: LobbyChallengeCreatedPayload) => void;

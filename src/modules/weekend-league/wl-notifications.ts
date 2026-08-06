@@ -205,6 +205,13 @@ export async function wlEmailEntrants(
 ): Promise<number> {
   const { emailEnabled, sendEmail } = await import('../../core/email.js');
   if (!emailEnabled()) return 0;
+  // Hard guard, independent of the caller: a TEST tournament must never send
+  // email. Load-test fleets create hundreds of synthetic users with real
+  // addresses, and one 500-player run exhausted a day's provider quota.
+  const [testRow] = await sql<Array<{ is_test: boolean }>>`
+    SELECT is_test FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  if (testRow?.is_test) return 0;
   const key = sourceKey(tournamentId, kind);
   const EMAILS_PER_PASS = 40;
   // The orchestrator holds a TTL lock across this pass: the batch is

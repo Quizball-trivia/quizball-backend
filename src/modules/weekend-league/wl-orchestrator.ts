@@ -378,13 +378,19 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
   if (preGame && Number.isFinite(qualifierStartMs)) {
     const untilStart = qualifierStartMs - Date.now();
     const reminderStates = ['entered', 'playing'];
+    // TEST events never send EMAIL. A load test signs up hundreds of synthetic
+    // users with real addresses, and a compressed test event fires its "1 hour
+    // to kickoff" reminder seconds after creation — one 500-player fleet run
+    // burned an entire day's Resend quota. In-app waves still fire so the
+    // notification path stays testable.
+    const mayEmail = !t.is_test;
     if (untilStart > 0 && untilStart <= 60 * 60_000) {
       await wlNotifyEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
-      await wlEmailEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
+      if (mayEmail) await wlEmailEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
     }
     if (untilStart > 0 && untilStart <= 30 * 60_000) {
       await wlNotifyEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
-      await wlEmailEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
+      if (mayEmail) await wlEmailEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
     }
   }
   const inPlay = ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']

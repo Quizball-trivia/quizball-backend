@@ -36,6 +36,7 @@ import {
   WL_FINALISTS,
   WL_MONEY_DROP_BUDGET,
   WL_MONEY_DROP_WINDOW_STEPS,
+  WL_PUT_IN_ORDER_WINDOW_STEPS,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
@@ -232,7 +233,9 @@ export const wlLiveEngineInternals = {
       ? cfg.question_time_ms * WL_WHO_AM_I_CLUE_POINTS.length
       : kind === 'money_drop'
         ? cfg.question_time_ms * WL_MONEY_DROP_WINDOW_STEPS
-        : cfg.question_time_ms;
+        : kind === 'put_in_order'
+          ? cfg.question_time_ms * WL_PUT_IN_ORDER_WINDOW_STEPS
+          : cfg.question_time_ms;
     // A round's FIRST question carries extra lead so the round-intro overlay
     // can play before the 3s reading grace starts.
     const questionIndex = Number(eventPayload['question_index'] ?? 0);
@@ -737,6 +740,17 @@ export const wlLiveEngineInternals = {
           Math.floor(elapsedMs / Math.max(1, clueWindowMs))
         );
         return { correct, points: wlWhoAmIPoints(correct, clueIndex) };
+      }
+      case 'put_in_order': {
+        // Exact sequence or nothing — partial credit would make ordering a
+        // guessing game (any 4-item guess lands ~1 position by chance).
+        const expected = Array.isArray(evaluation['order'])
+          ? (evaluation['order'] as unknown[]).map(String) : [];
+        const got = Array.isArray(answer) ? (answer as unknown[]).map(String) : [];
+        const correct = expected.length > 0
+          && got.length === expected.length
+          && expected.every((id, i) => got[i] === id);
+        return { correct, points: wlStepPoints('put_in_order', correct, elapsedMs) };
       }
       case 'money_drop': {
         // Daily-challenge rules, server-authoritative: only what sits on the

@@ -37,6 +37,7 @@ const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
   // Money drop bets on regular MCQs — same bank as the mcq round (the two
   // draws are deduped in-pass so one tournament never repeats a question).
   money_drop: 'mcq_single',
+  put_in_order: 'put_in_order',
 };
 
 interface SourceRow {
@@ -214,6 +215,24 @@ function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number
           accepted_answers: p['accepted_answers'],
         },
       };
+    case 'put_in_order': {
+      const items = (p['items'] as Array<Record<string, unknown>> ?? []);
+      const direction = p['direction'] === 'desc' ? 'desc' : 'asc';
+      const sorted = [...items].sort((a, b) => Number(a['sort_value']) - Number(b['sort_value']));
+      if (direction === 'desc') sorted.reverse();
+      // Deterministic display shuffle (id order ≠ answer order); details are
+      // deliberately DROPPED — they can carry the sort value in plain text.
+      const display = [...items].sort((a, b) => String(a['id']).localeCompare(String(b['id'])));
+      return {
+        payload: {
+          prompt: source.prompt,
+          instruction: p['instruction'] ?? null,
+          direction,
+          items: display.map((i) => ({ id: i['id'], label: i['label'], emoji: i['emoji'] ?? null })),
+        },
+        evaluation: { order: sorted.map((i) => String(i['id'])) },
+      };
+    }
     case 'money_drop': {
       // Same mcq_single source shape; no image — the betting board carries
       // sliders and bill stacks, there is no room for artwork (and image

@@ -73,9 +73,10 @@ export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [300, 240, 180, 120, 6
  * maximum stays WL_GAME_MAX_POINTS.
  */
 export const WL_MONEY_DROP_BUDGET = 300;
-/** Betting window in base question windows — owner call (2026-08-07): the
- *  same 10s as every other round; fast hands are part of the drama. */
-export const WL_MONEY_DROP_WINDOW_STEPS = 1;
+/** Betting window in base question windows — 20s at the prod 10s clock.
+ *  10s tested too tight: spreading a budget across four sliders is a slower
+ *  interaction than picking one option (playtest feedback 2026-08-07). */
+export const WL_MONEY_DROP_WINDOW_STEPS = 2;
 /** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
  *  several seconds; the standard flow dispatches the next question instantly. */
 export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;

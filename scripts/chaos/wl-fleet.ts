@@ -231,7 +231,7 @@ async function api<T>(
   throw lastErr;
 }
 
-function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): unknown {
+function correctAnswerFor(kind: string, evaluation: Record<string, unknown>, question?: Record<string, unknown>): unknown {
   switch (kind) {
     case 'mcq':
     case 'true_false':
@@ -251,25 +251,36 @@ function correctAnswerFor(kind: string, evaluation: Record<string, unknown>): un
       return { guess };
     }
     case 'money_drop': {
-      // Oversized stake on the correct option; the engine scales it to the
-      // player's real budget (dispatches are evaluation-scrubbed, so this
-      // only lands right when the eval is present — same as every kind).
-      const target = String(evaluation['correct_id'] ?? 'a');
+      // Dispatches are evaluation-scrubbed, so bet on a REAL option from the
+      // QUESTION payload (blind, like a player) — a made-up id never carries
+      // and the whole betting path goes unexercised at scale.
+      const target = String(evaluation['correct_id'] ?? question?.['first_option_id'] ?? 'a');
       return { bets: { [target]: 1_000_000 } };
+    }
+    case 'put_in_order': {
+      const order = Array.isArray(evaluation['order'])
+        ? (evaluation['order'] as unknown[]).map(String) : [];
+      if (order.length > 0) return order;
+      // Scrubbed dispatch: submit the displayed order (blind, like a player).
+      return Array.isArray(question?.['item_ids']) ? (question?.['item_ids'] as unknown[]).map(String) : [];
     }
     default:
       return null;
   }
 }
 
-function wrongAnswerFor(kind: string): unknown {
+function wrongAnswerFor(kind: string, question?: Record<string, unknown>): unknown {
   switch (kind) {
     case 'mcq': return 'definitely-not-an-option';
     case 'true_false': return 'false';
     case 'higher_lower': return 'left';
     case 'career_path': return 'nobody';
     case 'who_am_i': return { guess: 'nobody' };
-    case 'money_drop': return { bets: { 'definitely-not-an-option': 1_000_000 } };
+    case 'money_drop': return { bets: { [String(question?.['first_option_id'] ?? 'definitely-not-an-option')]: 1_000_000 } };
+    case 'put_in_order': {
+      const items = Array.isArray(question?.['item_ids']) ? (question?.['item_ids'] as unknown[]).map(String) : [];
+      return [...items].reverse();
+    }
     default: return null;
   }
 }
@@ -366,7 +377,14 @@ function connectPlayer(
     }
 
     const answersCorrectly = Math.random() < cfg.accuracy;
-    const answer = answersCorrectly ? correctAnswerFor(kind, evaluation) : wrongAnswerFor(kind);
+    const q = (payload['question'] ?? {}) as Record<string, unknown>;
+    const opts = Array.isArray(q['options']) ? (q['options'] as Array<Record<string, unknown>>) : [];
+    const pioItems = Array.isArray(q['items']) ? (q['items'] as Array<Record<string, unknown>>) : [];
+    const qDigest = {
+      first_option_id: opts[0]?.['id'],
+      item_ids: pioItems.map((i) => i['id']),
+    } as Record<string, unknown>;
+    const answer = answersCorrectly ? correctAnswerFor(kind, evaluation, qDigest) : wrongAnswerFor(kind, qDigest);
     const windowMs = deadlineAt - playableAt;
     const delay = Math.min(
       cfg.answerDelayMinMs + Math.random() * (cfg.answerDelayMaxMs - cfg.answerDelayMinMs),

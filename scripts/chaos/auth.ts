@@ -205,7 +205,9 @@ export async function loginChaosUser(
     user?: { provider_sub?: string };
   };
   if (!res.ok || !body.access_token) {
-    throw new ChaosLoginError(`login ${email} failed: ${res.status}`, res.status);
+    // 5xx is the auth stack buckling under the login storm, not a bad
+    // credential — worth the retry lane.
+    throw new ChaosLoginError(`login ${email} failed: ${res.status}`, res.status, res.status >= 500);
   }
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
@@ -415,7 +417,7 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
         const { token, userId } = await loginChaosUser(cfg, email);
         return { email, password: cfg.password, token, userId } satisfies ChaosUser;
       } catch (error) {
-        if (!(error instanceof ChaosLoginError) || !error.retryable || attempt === 4) {
+        if (!(error instanceof ChaosLoginError) || !error.retryable || attempt === 6) {
           throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));

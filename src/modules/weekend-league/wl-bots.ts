@@ -58,6 +58,12 @@ function botAnswerFor(
         ? accepted[0] : 'unknown';
       return { guess: correct ? answer : 'nobody in particular' };
     }
+    case 'put_in_order': {
+      const order = Array.isArray(evaluation['order'])
+        ? (evaluation['order'] as unknown[]).map(String) : [];
+      // Wrong = one rotation: plausibly close, never accidentally right.
+      return correct ? order : [...order.slice(1), order[0]].filter(Boolean);
+    }
     case 'money_drop': {
       // Human-passing 70/30 hedge: main stake on the bot's pick, the rest
       // spread elsewhere. The engine scales the sheet to the bot's real

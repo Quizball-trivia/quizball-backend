@@ -45,8 +45,7 @@ function mcqPayload(n: number): Record<string, unknown> {
 
 async function stockAllKinds(): Promise<void> {
   const counts: Array<[string, number, (i: number) => Record<string, unknown>]> = [
-    // mcq + money_drop draw from the SAME bank, deduped in-pass.
-    ['mcq_single', needPerKind('mcq') + needPerKind('money_drop'), mcqPayload],
+    ['mcq_single', needPerKind('mcq'), mcqPayload],
     ['true_false', needPerKind('true_false'), (i) => ({
       type: 'true_false',
       options: [
@@ -54,13 +53,19 @@ async function stockAllKinds(): Promise<void> {
         { id: 'false', text: i18n(`f${i}`), is_correct: i % 2 !== 0 },
       ],
     })],
-    ['high_low', needPerKind('higher_lower'), (i) => ({
-      type: 'high_low',
-      stat_label: i18n(`stat${i}`),
-      matchups: [0, 1, 2, 3, 4].map((m) => ({
-        id: `m${m}`, left_name: i18n(`L${i}-${m}`), left_value: m + i,
-        right_name: i18n(`R${i}-${m}`), right_value: m + i + 1,
+    ['put_in_order', needPerKind('put_in_order'), (i) => ({
+      type: 'put_in_order',
+      direction: 'asc',
+      instruction: i18n(`inst${i}`),
+      items: [0, 1, 2, 3].map((n) => ({
+        id: `it${n}`, label: i18n(`item${i}-${n}`), emoji: null, details: null, sort_value: n + 1,
       })),
+    })],
+    ['clue_chain', needPerKind('who_am_i'), (i) => ({
+      type: 'clue_chain',
+      display_answer: i18n(`clue-ans${i}`),
+      accepted_answers: [`clue answer ${i}`],
+      clues: [1, 2, 3, 4, 5].map((c) => ({ type: 'text', content: i18n(`clue${i}-${c}`) })),
     })],
     ['career_path', needPerKind('career_path'), (i) => ({
       type: 'career_path',
@@ -159,34 +164,24 @@ describe('wlSeedTournamentContent', () => {
     const tid = await createTournament();
     const result = await seed({ tournamentId: tid, allowPublicBank: false, deterministic: true });
     expect(result.ok).toBe(true);
-    // 4 games × (25 slots + 5 kinds × 2 reserves) = 4 × 35 = 140 rows.
-    expect(result.inserted).toBe(140);
+    // 4 games × (21 slots + 5 kinds × 2 reserves) = 4 × 31 = 124 rows.
+    expect(result.inserted).toBe(124);
 
     const [slots] = await sql<{ n: number }[]>`
       SELECT COUNT(*)::int AS n FROM wl_questions
       WHERE tournament_id = ${tid} AND reserve_ordinal = 0
     `;
-    expect(slots.n).toBe(4 * 25);
+    expect(slots.n).toBe(4 * 21);
 
-    // One tournament never repeats a source question across mcq + money_drop
-    // (same bank, in-pass dedup).
-    const [dupes] = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM (
-        SELECT source_question_id FROM wl_questions
-        WHERE tournament_id = ${tid} AND kind IN ('mcq', 'money_drop')
-        GROUP BY source_question_id HAVING COUNT(*) > 1
-      ) d
-    `;
-    expect(dupes.n).toBe(0);
 
-    // The HL chain compares within one stat: all 3 steps share a source.
-    const hl = await sql<{ game_index: number; sources: number }[]>`
-      SELECT game_index, COUNT(DISTINCT source_question_id)::int AS sources
-      FROM wl_questions
-      WHERE tournament_id = ${tid} AND kind = 'higher_lower' AND reserve_ordinal = 0
-      GROUP BY game_index
+
+    // Every put_in_order slot has a 4+ item chain and a full answer order.
+    const pio = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM wl_questions
+      WHERE tournament_id = ${tid} AND kind = 'put_in_order' AND reserve_ordinal = 0
+        AND jsonb_array_length(evaluation->'order') < 3
     `;
-    expect(hl.every((g) => g.sources === 1)).toBe(true);
+    expect(pio[0]!.n).toBe(0);
 
     // Idempotent: a second call inserts nothing.
     const again = await seed({ tournamentId: tid, allowPublicBank: false, deterministic: true });

@@ -2,7 +2,7 @@
  * Full LIVE game end-to-end against real DB + Redis: seeded wl_private
  * content, three checked-in players, compressed 1s questions. Players
  * answer through wlAcceptAnswer with different accuracy/speed; the
- * orchestrator ticks the game through all 25 dispatches to qualifier_done
+ * orchestrator ticks the game through all 21 dispatches to qualifier_done
  * and the dns_v1 settlement. Asserts real standings order, persisted
  * answers, reveal payloads (evaluation + distribution + board), and the
  * gapless delivered event stream.
@@ -102,8 +102,7 @@ afterAll(async () => {
 
 async function stockContent(): Promise<void> {
   const { wlSourceNeedPerKind } = await import('../../src/modules/weekend-league/wl-seeder.js');
-  // mcq + money_drop share the mcq_single bank (deduped in-pass at seeding).
-  for (let i = 0; i < wlSourceNeedPerKind('mcq') + wlSourceNeedPerKind('money_drop'); i += 1) {
+  for (let i = 0; i < wlSourceNeedPerKind('mcq'); i += 1) {
     await seedSource('mcq_single', {
       type: 'mcq_single',
       options: [0, 1, 2, 3].map((o) => ({ id: `o${o}`, text: i18n(`m${i}o${o}`), is_correct: o === 0 })),
@@ -118,13 +117,22 @@ async function stockContent(): Promise<void> {
       ],
     });
   }
-  for (let i = 0; i < wlSourceNeedPerKind('higher_lower'); i += 1) {
-    await seedSource('high_low', {
-      type: 'high_low',
-      stat_label: i18n(`hl${i}`),
-      matchups: [0, 1, 2, 3, 4].map((m) => ({
-        id: `m${m}`, left_name: i18n('L'), left_value: 10, right_name: i18n('R'), right_value: 5,
+  for (let i = 0; i < wlSourceNeedPerKind('put_in_order'); i += 1) {
+    await seedSource('put_in_order', {
+      type: 'put_in_order',
+      direction: 'asc',
+      instruction: i18n('oldest first'),
+      items: [0, 1, 2, 3].map((n) => ({
+        id: `it${n}`, label: i18n(`item ${i}-${n}`), emoji: null, details: null, sort_value: n + 1,
       })),
+    });
+  }
+  for (let i = 0; i < wlSourceNeedPerKind('who_am_i'); i += 1) {
+    await seedSource('clue_chain', {
+      type: 'clue_chain',
+      display_answer: i18n('Kaka'),
+      accepted_answers: ['kaka'],
+      clues: [1, 2, 3, 4, 5].map((c) => ({ type: 'text', content: i18n(`c${c}`) })),
     });
   }
   for (let i = 0; i < wlSourceNeedPerKind('career_path'); i += 1) {
@@ -141,7 +149,8 @@ function correctAnswerFor(kind: string): unknown {
   switch (kind) {
     case 'mcq': return 'o0';
     case 'true_false': return 'true';
-    case 'higher_lower': return 'left';
+    case 'put_in_order': return ['it0', 'it1', 'it2', 'it3'];
+    case 'who_am_i': return { guess: 'KAKA' };
     case 'career_path': return 'Zidane!';
     // Budget-dwarfing stake: the engine scales it to the caller's real
     // budget, so a perfect run carries the full 300 to the final step.
@@ -291,7 +300,8 @@ describe('WL live game end-to-end', () => {
           if (!aliveSet.has(mid)) continue;
           await wlAcceptAnswer({
             tournamentId: tid, attemptId: run.attempt_id, userId: mid,
-            answer: q!.kind === 'money_drop' ? { bets: { o3: 1_000_000 } } : 'wrong-option',
+            answer: q!.kind === 'put_in_order' ? ['it3', 'it2', 'it1', 'it0']
+              : q!.kind === 'money_drop' ? { bets: { o3: 1_000_000 } } : 'wrong-option',
           });
         }
         // idle never answers — miss charges keep ranking truthful.
@@ -299,12 +309,12 @@ describe('WL live game end-to-end', () => {
       await new Promise((r) => setTimeout(r, 120));
     }
 
-    // 4 games × 25 slots revealed, none stuck.
+    // 4 games × 21 slots revealed, none stuck.
     const runs = await sql<Array<{ status: string; game_index: number }>>`
       SELECT status, game_index FROM wl_question_runs
       WHERE tournament_id = ${tid} AND status <> 'voided'
     `;
-    expect(runs.length).toBe(4 * 25);
+    expect(runs.length).toBe(4 * 21);
     expect(runs.every((r) => r.status === 'revealed')).toBe(true);
 
     // Cuts per the overridden ladder: 6 → 4 → 3 → 2 finalists → champion.
@@ -344,8 +354,8 @@ describe('WL live game end-to-end', () => {
       FROM wl_events WHERE tournament_id = ${tid} ORDER BY wl_events.seq ASC
     `;
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
-    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 25);
-    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 25);
+    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 21);
+    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 21);
     expect(events.filter((e) => e.type === 'game_result').length).toBe(3);
     expect(events.filter((e) => e.type === 'final_result').length).toBe(1);
     expect(events.every((e) => e.delivered)).toBe(true);

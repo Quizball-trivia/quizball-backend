@@ -85,6 +85,9 @@ export const WL_MONEY_DROP_WINDOW_STEPS = 2;
 /** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
  *  several seconds; the standard flow dispatches the next question instantly. */
 export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
+/** Post-reveal hold for put-in-order: the correct-sequence comparison needs
+ *  actual reading time (playtest: the old instant advance read as a flash). */
+export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 5_000;
 
 /** Ordering four items is a slower interaction than one tap — two base
  *  windows (20s at the prod 10s clock), same reasoning as money drop. */

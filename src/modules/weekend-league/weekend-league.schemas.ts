@@ -28,6 +28,9 @@ export const wlYouSchema = z.object({
   state: wlEntryStateSchema.nullable(),
   checked_in: z.boolean(),
   final_checked_in: z.boolean(),
+  /** Your rank in the most recent finished game — the board broadcast is
+      top-24 only, so players beyond the cut need this to see their number. */
+  last_game_rank: z.number().int().nullable(),
   qp: wlQpResponseSchema,
 });
 
@@ -48,6 +51,13 @@ export const wlTournamentSchema = z.object({
   current_game_index: z.number().int(),
   /** Server-clock epoch ms when the between-games break ends; null outside breaks. */
   break_until_ms: z.number().int().nullable(),
+  /** How far behind live the spectator stream runs — spectator countdowns
+   *  must shift by this or they finish before the delayed stream catches up. */
+  spectator_delay_ms: z.number().int(),
+  /** API server clock at response build — pre-game countdowns must tick
+   *  against THIS (via an offset), never the device clock, or a skewed
+   *  phone shows the wrong time to kickoff. */
+  server_now_ms: z.number().int(),
 });
 
 export const wlCurrentResponseSchema = z.object({

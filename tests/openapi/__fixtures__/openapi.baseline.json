@@ -6114,6 +6114,12 @@
               "break_until_ms": {
                 "type": "integer",
                 "nullable": true
+              },
+              "spectator_delay_ms": {
+                "type": "integer"
+              },
+              "server_now_ms": {
+                "type": "integer"
               }
             },
             "required": [
@@ -6130,7 +6136,9 @@
               "launch_edition",
               "qp_target",
               "current_game_index",
-              "break_until_ms"
+              "break_until_ms",
+              "spectator_delay_ms",
+              "server_now_ms"
             ]
           },
           "you": {
@@ -6160,6 +6168,10 @@
               },
               "final_checked_in": {
                 "type": "boolean"
+              },
+              "last_game_rank": {
+                "type": "integer",
+                "nullable": true
               },
               "qp": {
                 "type": "object",
@@ -6199,6 +6211,7 @@
               "state",
               "checked_in",
               "final_checked_in",
+              "last_game_rank",
               "qp"
             ]
           }

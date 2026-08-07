@@ -1,5 +1,6 @@
 import { getOrLoadJson } from '../../core/json-cache.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
+import { wlConfigFrom } from './wl-config.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
 import type {
   WlCheckinResponse,
@@ -26,10 +27,13 @@ function currentGameIndexOf(t: WlTournamentRow): number {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
 }
 
-/** Break deadline for the public payload — only while it is still in the future. */
-function breakUntilMsOf(t: WlTournamentRow): number | null {
+/** Break deadline for the public payload. Stays non-null through the
+ *  spectator-shifted deadline (break end + stream delay): spectators run that
+ *  far behind live, and nulling at real break end would kill their countdown
+ *  with the delay still to run. */
+function breakUntilMsOf(t: WlTournamentRow, spectatorDelayMs: number): number | null {
   const ms = Number((t.stage ?? {})['break_until_ms']);
-  if (!Number.isFinite(ms) || ms <= Date.now()) return null;
+  if (!Number.isFinite(ms) || ms + spectatorDelayMs <= Date.now()) return null;
   return Math.floor(ms);
 }
 
@@ -76,7 +80,7 @@ export const weekendLeagueService = {
       return { tournament: null, you: null };
     }
 
-    const [counts, entry, qp] = await Promise.all([
+    const [counts, entry, qp, lastGameRank] = await Promise.all([
       getOrLoadJson(
         `wl:counts:${tournament.id}`,
         COUNTS_CACHE_TTL_SECONDS,
@@ -84,8 +88,20 @@ export const weekendLeagueService = {
       ),
       weekendLeagueRepo.getEntry(tournament.id, userId),
       loadQp(tournament, userId),
+      weekendLeagueRepo.getLastGameRank(tournament.id, userId),
     ]);
 
+    const tournamentCfg = wlConfigFrom(tournament.config);
+    const spectatorDelayMs = tournamentCfg.spectator_delay_ms;
+    // Advertise the FILLED field before the bots actually enter: the roster
+    // tops the field up to bot_fill_min_field at the check-in cutoff, so a
+    // 3-human entry screen on a 93-floor event reads "93 joined", not "3".
+    // Post-fill the real entry count includes the bots, so the max is a no-op.
+    const preFill = ['scheduled', 'content_pending', 'ready', 'entry_open', 'entry_closed', 'checkin']
+      .includes(tournament.status);
+    const advertisedRegistered = preFill
+      ? Math.max(counts.registered, tournamentCfg.bot_fill_min_field)
+      : counts.registered;
     return {
       tournament: {
         id: tournament.id,
@@ -96,18 +112,21 @@ export const weekendLeagueService = {
         entry_closes_at: tournament.entry_closes_at,
         qualifier_starts_at: tournament.qualifier_starts_at,
         final_starts_at: tournament.final_starts_at,
-        registered_count: counts.registered,
+        registered_count: advertisedRegistered,
         checked_in_count: counts.checkedIn,
         launch_edition: launchEditionOf(tournament),
         qp_target: qpTargetOf(tournament),
         current_game_index: currentGameIndexOf(tournament),
-        break_until_ms: breakUntilMsOf(tournament),
+        break_until_ms: breakUntilMsOf(tournament, spectatorDelayMs),
+        spectator_delay_ms: spectatorDelayMs,
+        server_now_ms: Date.now(),
       },
       you: {
         entered: entry != null,
         state: entry?.state ?? null,
         checked_in: entry?.checked_in_at != null,
         final_checked_in: entry?.final_checked_in_at != null,
+        last_game_rank: entry != null ? lastGameRank : null,
         qp,
       },
     };

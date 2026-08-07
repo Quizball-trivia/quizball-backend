@@ -2,7 +2,7 @@
  * Full LIVE game end-to-end against real DB + Redis: seeded wl_private
  * content, three checked-in players, compressed 1s questions. Players
  * answer through wlAcceptAnswer with different accuracy/speed; the
- * orchestrator ticks the game through all 21 dispatches to qualifier_done
+ * orchestrator ticks the game through all 25 dispatches to qualifier_done
  * and the dns_v1 settlement. Asserts real standings order, persisted
  * answers, reveal payloads (evaluation + distribution + board), and the
  * gapless delivered event stream.
@@ -102,7 +102,8 @@ afterAll(async () => {
 
 async function stockContent(): Promise<void> {
   const { wlSourceNeedPerKind } = await import('../../src/modules/weekend-league/wl-seeder.js');
-  for (let i = 0; i < wlSourceNeedPerKind('mcq'); i += 1) {
+  // mcq + money_drop share the mcq_single bank (deduped in-pass at seeding).
+  for (let i = 0; i < wlSourceNeedPerKind('mcq') + wlSourceNeedPerKind('money_drop'); i += 1) {
     await seedSource('mcq_single', {
       type: 'mcq_single',
       options: [0, 1, 2, 3].map((o) => ({ id: `o${o}`, text: i18n(`m${i}o${o}`), is_correct: o === 0 })),
@@ -134,14 +135,6 @@ async function stockContent(): Promise<void> {
       accepted_answers: ['zidane'],
     });
   }
-  for (let i = 0; i < wlSourceNeedPerKind('who_am_i'); i += 1) {
-    await seedSource('clue_chain', {
-      type: 'clue_chain',
-      display_answer: i18n('Kaka'),
-      accepted_answers: ['kaka'],
-      clues: [1, 2, 3, 4, 5].map((c) => ({ type: 'text', content: i18n(`c${c}`) })),
-    });
-  }
 }
 
 function correctAnswerFor(kind: string): unknown {
@@ -150,7 +143,9 @@ function correctAnswerFor(kind: string): unknown {
     case 'true_false': return 'true';
     case 'higher_lower': return 'left';
     case 'career_path': return 'Zidane!';
-    case 'who_am_i': return { guess: 'KAKA', clue_index: 1 };
+    // Budget-dwarfing stake: the engine scales it to the caller's real
+    // budget, so a perfect run carries the full 300 to the final step.
+    case 'money_drop': return { bets: { o0: 1_000_000 } };
     default: return null;
   }
 }
@@ -215,7 +210,8 @@ describe('WL live game end-to-end', () => {
     // attempt with every alive participant, repeat until completed.
     const answeredAttempts = new Set<string>();
     let snapshotChecked = false;
-    const deadline = Date.now() + 280_000;
+    // 25 slots per game (money drop is 5 questions) + its reveal holds.
+    const deadline = Date.now() + 420_000;
     const loopStart = Date.now();
     let lastStatus = '';
     for (;;) {
@@ -238,12 +234,20 @@ describe('WL live game end-to-end', () => {
         `;
         ladderOverridden = true;
       }
-      const [run] = await sql<Array<{ attempt_id: string; question_id: string; game_index: number }>>`
-        SELECT r.attempt_id, r.question_id, r.game_index FROM wl_question_runs r
+      const [run] = await sql<Array<{ attempt_id: string; question_id: string; game_index: number; playable_at_ms: string | null }>>`
+        SELECT r.attempt_id, r.question_id, r.game_index, r.playable_at_ms::text FROM wl_question_runs r
         WHERE r.tournament_id = ${tid} AND r.status = 'dispatched'
         ORDER BY r.game_index DESC, r.round_index DESC, r.question_index DESC LIMIT 1
       `;
-      if (run && !answeredAttempts.has(run.attempt_id)) {
+      // Answer only once the window is OPEN: round-first questions carry the
+      // round-intro lead, and an accept before playable_at is (rightly)
+      // rejected — which under money drop's budget chain surfaces as carry 0.
+      // STRICTLY after the window opens (small settle margin): answering even
+      // 1ms early is rightly rejected, and under money drop a rejected
+      // round-first answer cascades into a zero budget for the whole round.
+      const playableNow = run != null
+        && Number(run.playable_at_ms ?? 0) <= Date.now() - 25;
+      if (run && playableNow && !answeredAttempts.has(run.attempt_id)) {
         answeredAttempts.add(run.attempt_id);
         const [q] = await sql<Array<{ kind: string }>>`
           SELECT kind FROM wl_questions WHERE question_id = ${run.question_id}
@@ -271,6 +275,9 @@ describe('WL live game end-to-end', () => {
             expect(outsider?.score).toBe(0);
           }
           const aceResult = await wlAcceptAnswer({ tournamentId: tid, attemptId: run.attempt_id, userId: ace, answer });
+          // The window is verifiably open — a rejection here is an admission
+          // bug, and under money drop a silent one poisons the whole round.
+          expect(aceResult.accepted).toBe(true);
           if (aceResult.accepted) expect(aceResult.correct).toBe(true);
           // ...and AFTER answering it restores the accepted answer + score.
           if (!snapshotChecked && aceResult.accepted) {
@@ -284,7 +291,7 @@ describe('WL live game end-to-end', () => {
           if (!aliveSet.has(mid)) continue;
           await wlAcceptAnswer({
             tournamentId: tid, attemptId: run.attempt_id, userId: mid,
-            answer: q!.kind === 'who_am_i' ? { guess: 'wrong' } : 'wrong-option',
+            answer: q!.kind === 'money_drop' ? { bets: { o3: 1_000_000 } } : 'wrong-option',
           });
         }
         // idle never answers — miss charges keep ranking truthful.
@@ -292,12 +299,12 @@ describe('WL live game end-to-end', () => {
       await new Promise((r) => setTimeout(r, 120));
     }
 
-    // 4 games × 21 slots revealed, none stuck.
+    // 4 games × 25 slots revealed, none stuck.
     const runs = await sql<Array<{ status: string; game_index: number }>>`
       SELECT status, game_index FROM wl_question_runs
       WHERE tournament_id = ${tid} AND status <> 'voided'
     `;
-    expect(runs.length).toBe(4 * 21);
+    expect(runs.length).toBe(4 * 25);
     expect(runs.every((r) => r.status === 'revealed')).toBe(true);
 
     // Cuts per the overridden ladder: 6 → 4 → 3 → 2 finalists → champion.
@@ -337,8 +344,8 @@ describe('WL live game end-to-end', () => {
       FROM wl_events WHERE tournament_id = ${tid} ORDER BY wl_events.seq ASC
     `;
     expect(events.map((e) => Number(e.seq_text))).toEqual(events.map((_, i) => i + 1));
-    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 21);
-    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 21);
+    expect(events.filter((e) => e.type === 'dispatch').length).toBe(4 * 25);
+    expect(events.filter((e) => e.type === 'reveal').length).toBe(4 * 25);
     expect(events.filter((e) => e.type === 'game_result').length).toBe(3);
     expect(events.filter((e) => e.type === 'final_result').length).toBe(1);
     expect(events.every((e) => e.delivered)).toBe(true);
@@ -346,5 +353,5 @@ describe('WL live game end-to-end', () => {
     const gameResults = emitted.filter((e) => e.room === `wl:${tid}` && e.event === 'wl:game_result');
     expect(gameResults.length).toBe(3);
     expect((gameResults[0]!.payload['eliminated_user_ids'] as string[]).length).toBe(2);
-  }, 300_000);
+  }, 450_000);
 });

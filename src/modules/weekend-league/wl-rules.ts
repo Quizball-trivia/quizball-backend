@@ -8,8 +8,14 @@
 import { calculatePoints } from '../../realtime/scoring.js';
 
 export const WL_QUESTION_TIME_MS = 10_000;
-/** Uniform head start stamped by the deliverer: playableAt = redisNow + LEAD. */
-export const WL_DISPATCH_LEAD_MS = 1200;
+/**
+ * Reading grace before the answer window opens: the question is on screen and
+ * the timer holds full until playableAt — the same 3s ranked gives via
+ * FRONTEND_REVEAL_MS, so nobody has to answer a question they haven't read.
+ */
+export const WL_DISPATCH_LEAD_MS = 3_000;
+/** Extra lead at ROUND starts so the round-intro overlay can play first. */
+export const WL_ROUND_INTRO_MS = 2_200;
 export const WL_FINALISTS = 24;
 export const WL_BREAK_MS = 2 * 60 * 1000;
 /**
@@ -21,14 +27,16 @@ export const WL_ROUND_BREATHER_MS = 6_000;
 export const WL_CHECKIN_WINDOW_MS = 10 * 60 * 1000;
 export const WL_GAMES_PER_QUALIFIER = 3;
 
-export type WlRoundKind = 'true_false' | 'higher_lower' | 'mcq' | 'career_path' | 'who_am_i';
+/** who_am_i is retired from the round order (replaced by money_drop) but stays
+ *  in the type: historic tournaments hold wl_questions rows of that kind. */
+export type WlRoundKind = 'true_false' | 'higher_lower' | 'mcq' | 'career_path' | 'who_am_i' | 'money_drop';
 
 export const WL_ROUND_ORDER: readonly WlRoundKind[] = [
   'true_false',
   'higher_lower',
   'mcq',
   'career_path',
-  'who_am_i',
+  'money_drop',
 ];
 
 export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
@@ -38,6 +46,7 @@ export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
   career_path: 5,
   // One puzzle played across 5 clue windows — the round is still 5 beats long.
   who_am_i: 1,
+  money_drop: 5,
 };
 
 /** Per-step maximum for the timed kinds; who_am_i scores by clue instead. */
@@ -46,7 +55,7 @@ export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
  * perfect game: 5x30 + 5x30 + 5x40 + 5x40 + 300 (who-am-i, one puzzle) = 1000.
  * Changing a count here means rebalancing these.
  */
-export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i'>, number> = {
+export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i' | 'money_drop'>, number> = {
   true_false: 30,
   higher_lower: 30,
   mcq: 40,
@@ -54,6 +63,53 @@ export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i'>, number
 };
 
 export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [300, 240, 180, 120, 60];
+
+/**
+ * Money Drop (final round, daily-challenge rules): a 300-point budget enters
+ * question 1; each question the player spreads it across the options, keeps
+ * only what sits on the correct one, and the survivor rides into the next
+ * question. Whatever survives question 5 is the round's points — recorded on
+ * the final answer row alone, so a perfect run is exactly 300 and the game
+ * maximum stays WL_GAME_MAX_POINTS.
+ */
+export const WL_MONEY_DROP_BUDGET = 300;
+/** Betting window in base question windows — owner call (2026-08-07): the
+ *  same 10s as every other round; fast hands are part of the drama. */
+export const WL_MONEY_DROP_WINDOW_STEPS = 1;
+/** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
+ *  several seconds; the standard flow dispatches the next question instantly. */
+export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
+
+/**
+ * Sanitize a client bet sheet against the server-known budget: non-negative
+ * integers only, and a sheet that over-spends is scaled down proportionally
+ * (floor) rather than rejected — honest clients never exceed, and a modified
+ * one gains nothing.
+ */
+export function wlMoneyDropSanitizeBets(
+  raw: unknown,
+  budget: number
+): Record<string, number> {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const safeBudget = Number.isSafeInteger(budget) && budget > 0 ? budget : 0;
+  if (safeBudget === 0) return {};
+  // Stakes are capped per entry BEFORE summing: unbounded finite numbers
+  // ("1e308") would push the sum to Infinity and turn every scaled stake —
+  // and the stored points — into NaN, which the freeze insert cannot persist.
+  const STAKE_CAP = 1_000_000_000;
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .map(([id, v]) => [id, Math.floor(Number(v))] as const)
+    .filter(([, v]) => Number.isSafeInteger(v) && v > 0)
+    .map(([id, v]) => [id, Math.min(v, STAKE_CAP)] as const)
+    .slice(0, 8);
+  const sum = entries.reduce((acc, [, v]) => acc + v, 0);
+  if (sum === 0) return {};
+  const bets: Record<string, number> = {};
+  // (v * budget) / sum in one expression: exact in doubles at these
+  // magnitudes, where a precomputed budget/sum ratio floors a cent short.
+  for (const [id, v] of entries) bets[id] = sum > safeBudget ? Math.floor((v * safeBudget) / sum) : v;
+  return bets;
+}
 
 export const WL_GAME_MAX_POINTS = 1000;
 
@@ -63,7 +119,7 @@ export const WL_GAME_MAX_POINTS = 1000;
  * integer so per-game totals stay exact.
  */
 export function wlStepPoints(
-  kind: Exclude<WlRoundKind, 'who_am_i'>,
+  kind: Exclude<WlRoundKind, 'who_am_i' | 'money_drop'>,
   isCorrect: boolean,
   elapsedMs: number
 ): number {

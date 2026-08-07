@@ -257,6 +257,13 @@ function correctAnswerFor(kind: string, evaluation: Record<string, unknown>, que
       const target = String(evaluation['correct_id'] ?? question?.['first_option_id'] ?? 'a');
       return { bets: { [target]: 1_000_000 } };
     }
+    case 'put_in_order': {
+      const order = Array.isArray(evaluation['order'])
+        ? (evaluation['order'] as unknown[]).map(String) : [];
+      if (order.length > 0) return order;
+      // Scrubbed dispatch: submit the displayed order (blind, like a player).
+      return Array.isArray(question?.['item_ids']) ? (question?.['item_ids'] as unknown[]).map(String) : [];
+    }
     default:
       return null;
   }
@@ -270,6 +277,10 @@ function wrongAnswerFor(kind: string, question?: Record<string, unknown>): unkno
     case 'career_path': return 'nobody';
     case 'who_am_i': return { guess: 'nobody' };
     case 'money_drop': return { bets: { [String(question?.['first_option_id'] ?? 'definitely-not-an-option')]: 1_000_000 } };
+    case 'put_in_order': {
+      const items = Array.isArray(question?.['item_ids']) ? (question?.['item_ids'] as unknown[]).map(String) : [];
+      return [...items].reverse();
+    }
     default: return null;
   }
 }
@@ -368,7 +379,11 @@ function connectPlayer(
     const answersCorrectly = Math.random() < cfg.accuracy;
     const q = (payload['question'] ?? {}) as Record<string, unknown>;
     const opts = Array.isArray(q['options']) ? (q['options'] as Array<Record<string, unknown>>) : [];
-    const qDigest = { first_option_id: opts[0]?.['id'] } as Record<string, unknown>;
+    const pioItems = Array.isArray(q['items']) ? (q['items'] as Array<Record<string, unknown>>) : [];
+    const qDigest = {
+      first_option_id: opts[0]?.['id'],
+      item_ids: pioItems.map((i) => i['id']),
+    } as Record<string, unknown>;
     const answer = answersCorrectly ? correctAnswerFor(kind, evaluation, qDigest) : wrongAnswerFor(kind, qDigest);
     const windowMs = deadlineAt - playableAt;
     const delay = Math.min(

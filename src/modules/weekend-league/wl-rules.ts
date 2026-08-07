@@ -29,14 +29,17 @@ export const WL_GAMES_PER_QUALIFIER = 3;
 
 /** who_am_i is retired from the round order (replaced by money_drop) but stays
  *  in the type: historic tournaments hold wl_questions rows of that kind. */
-export type WlRoundKind = 'true_false' | 'higher_lower' | 'mcq' | 'career_path' | 'who_am_i' | 'money_drop';
+export type WlRoundKind = 'true_false' | 'higher_lower' | 'mcq' | 'career_path' | 'who_am_i' | 'money_drop' | 'put_in_order';
 
+/** Owner's Aug-8 lineup (2026-08-07): put-in-order replaces higher/lower,
+ *  who-am-i returns as the finale (curated puzzles). money_drop and
+ *  higher_lower stay implemented — rotated out, not removed. */
 export const WL_ROUND_ORDER: readonly WlRoundKind[] = [
   'true_false',
-  'higher_lower',
+  'put_in_order',
   'mcq',
   'career_path',
-  'money_drop',
+  'who_am_i',
 ];
 
 export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
@@ -47,6 +50,7 @@ export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
   // One puzzle played across 5 clue windows — the round is still 5 beats long.
   who_am_i: 1,
   money_drop: 5,
+  put_in_order: 5,
 };
 
 /** Per-step maximum for the timed kinds; who_am_i scores by clue instead. */
@@ -60,6 +64,7 @@ export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i' | 'money
   higher_lower: 30,
   mcq: 40,
   career_path: 40,
+  put_in_order: 30,
 };
 
 export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [300, 240, 180, 120, 60];
@@ -80,6 +85,10 @@ export const WL_MONEY_DROP_WINDOW_STEPS = 2;
 /** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
  *  several seconds; the standard flow dispatches the next question instantly. */
 export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
+
+/** Ordering four items is a slower interaction than one tap — two base
+ *  windows (20s at the prod 10s clock), same reasoning as money drop. */
+export const WL_PUT_IN_ORDER_WINDOW_STEPS = 2;
 
 /**
  * Sanitize a client bet sheet against the server-known budget: non-negative

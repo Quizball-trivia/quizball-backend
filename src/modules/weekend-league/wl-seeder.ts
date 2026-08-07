@@ -83,9 +83,11 @@ async function drawSources(
   excludeIds?: ReadonlySet<string>
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
-  // Image preference belongs to the mcq round alone — money_drop draws from
-  // the same bank and must not consume the image stock first.
+  // Owner's product call (2026-08-07): the mcq round is the VISUAL round —
+  // image questions outrank even protected text stock there. Money drop is
+  // the opposite: curated wl_private TEXT first, images left for mcq.
   const preferImages = kind === 'mcq';
+  const preferText = kind === 'money_drop';
   // A high_low source must carry one matchup per question in the round.
   const minMatchups = kind === 'higher_lower' ? WL_QUESTIONS_PER_ROUND.higher_lower : 0;
   // Stable within one seeding pass: RANDOM() would reshuffle every page,
@@ -125,13 +127,12 @@ async function drawSources(
             -- starve within a single afternoon of testing.
             AND wt.is_test = false
         )
-      ORDER BY (q.visibility = 'wl_private') DESC,
-               -- MCQ prefers IMAGE questions (product call: visual rounds);
-               -- text rows remain the fallback so thin image stock can never
-               -- starve seeding.
-               (${preferImages}
+      ORDER BY (${preferImages}
                  AND qp.payload->'image' IS NOT NULL
                  AND qp.payload->>'image' <> 'null') DESC,
+               (q.visibility = 'wl_private') DESC,
+               (${preferText}
+                 AND (qp.payload->'image' IS NULL OR qp.payload->>'image' = 'null')) DESC,
                ${order}
       LIMIT ${pageSize} OFFSET ${offset}
     `;

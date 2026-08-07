@@ -47,6 +47,9 @@ scripts/*
 # .gitignore then narrows out/ to just those three deliverables.
 !scripts/persistent-bot-roster/
 !scripts/persistent-bot-roster/**
+# One-time bot de-digit rename pass (code only; DSN + ops token come from the
+# environment at runtime).
+!scripts/bot-rename-dedigit.ts
 # Local agent instructions (not shared)
 CLAUDE.md
 game-regression/.env.local

@@ -11,7 +11,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, wlBuildLadder } from './wl-rules.js';
+import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, wlBuildLadder } from './wl-rules.js';
 import { wlConfigFrom } from './wl-config.js';
 
 export interface WlEngine {
@@ -426,15 +426,19 @@ export const wlEngineLive: WlEngine = {
         // a reveal delayed by a restart still gets its full pause.
         const crossesRound = isLast || (next != null && next.roundIndex !== slot.roundIndex);
         if (frontier.status === 'revealed') {
-          // Money drop's mid-round reveal is a drop animation, not an instant
-          // verdict — give it its own (shorter) hold; every other kind flows
-          // straight into the next question. Capped at one base question
-          // window so compressed test tournaments stay compressed.
+          // Money drop's reveal is a drop animation and put-in-order's is a
+          // correct-sequence comparison — both need real screen time; every
+          // other kind flows straight into the next question. Capped at one
+          // base question window so compressed test tournaments stay compressed.
+          const kind = crossesRound ? null : await wlLiveEngineInternals.kindOf(frontier.question_id);
+          const kindHoldMs = kind === 'money_drop'
+            ? WL_MONEY_DROP_REVEAL_HOLD_MS
+            : kind === 'put_in_order'
+              ? WL_PUT_IN_ORDER_REVEAL_HOLD_MS
+              : 0;
           const holdMs = crossesRound
             ? WL_ROUND_BREATHER_MS
-            : await wlLiveEngineInternals.kindOf(frontier.question_id) === 'money_drop'
-              ? Math.min(WL_MONEY_DROP_REVEAL_HOLD_MS, wlConfigFrom(t.config).question_time_ms)
-              : 0;
+            : Math.min(kindHoldMs, wlConfigFrom(t.config).question_time_ms);
           const revealedAt = Number(frontier.revealed_at_ms ?? 0);
           if (holdMs > 0 && Number.isFinite(revealedAt) && revealedAt > 0
             && redisNow - revealedAt < holdMs) {

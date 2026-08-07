@@ -29,4 +29,15 @@ router.get(
   opsController.listClueGuesses,
 );
 
+/**
+ * POST /api/v1/internal/ops/force-degrade
+ * POST /api/v1/internal/ops/force-recover
+ * STAGING-ONLY outage simulation for the degraded-mode UX. Same
+ * `x-ops-report-token` auth as above, PLUS a hard NODE_ENV !== 'prod' guard in
+ * the controller (403 on prod). force-degrade trips the real breaker (pauses
+ * matchmaking) via a synthetic 25006; force-recover clears the latch.
+ */
+router.post('/force-degrade', opsController.forceDegrade);
+router.post('/force-recover', opsController.forceRecover);
+
 export const opsRoutes = router;

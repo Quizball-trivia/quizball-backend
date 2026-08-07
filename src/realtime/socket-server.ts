@@ -26,6 +26,7 @@ import { userSessionGuardService } from './services/user-session-guard.service.j
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
 import { setLobbyChallengeRealtimeServer } from './services/lobby-challenge-realtime.service.js';
+import { setSystemStatusRealtimeServer, emitSystemStatusToSocket } from './services/system-status.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
@@ -551,6 +552,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // Lets the bot challenge responder (a background worker with no socket of its
   // own) deliver a decline to the challenger's room.
   setLobbyChallengeRealtimeServer(io);
+  // Lets the DB read-only breaker broadcast system:status on a state edge
+  // without importing the realtime layer (breaker fires an io-free callback).
+  setSystemStatusRealtimeServer(io);
 
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
@@ -686,6 +690,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     runSocketTask('presence_online', user.id, () => trackUserOnline(user.id));
     runSocketTask('presence_count', user.id, () => emitOnlineCount(io, socket));
     scheduleOnlineCountBroadcast(io);
+    // Tell this socket the current system status immediately, so a client that
+    // connects (or reconnects) mid-outage renders the degraded UI without
+    // waiting for the next breaker state edge. No DB access — memory snapshot.
+    emitSystemStatusToSocket((payload) => socket.emit('system:status', payload));
     runLimitedPostConnectHydration(io, socket);
   });
 

@@ -11,7 +11,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, wlBuildLadder } from './wl-rules.js';
+import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
 import { wlConfigFrom } from './wl-config.js';
 
 export interface WlEngine {
@@ -431,11 +431,13 @@ export const wlEngineLive: WlEngine = {
           // other kind flows straight into the next question. Capped at one
           // base question window so compressed test tournaments stay compressed.
           const kind = crossesRound ? null : await wlLiveEngineInternals.kindOf(frontier.question_id);
-          const kindHoldMs = kind === 'money_drop'
-            ? WL_MONEY_DROP_REVEAL_HOLD_MS
-            : kind === 'put_in_order'
-              ? WL_PUT_IN_ORDER_REVEAL_HOLD_MS
-              : 0;
+          const kindHoldMs = kind == null
+            ? 0
+            : kind === 'money_drop'
+              ? WL_MONEY_DROP_REVEAL_HOLD_MS
+              : kind === 'put_in_order'
+                ? WL_PUT_IN_ORDER_REVEAL_HOLD_MS
+                : WL_STEP_REVEAL_HOLD_MS;
           const holdMs = crossesRound
             ? WL_ROUND_BREATHER_MS
             : Math.min(kindHoldMs, wlConfigFrom(t.config).question_time_ms);

@@ -85,6 +85,10 @@ export const WL_MONEY_DROP_WINDOW_STEPS = 2;
 /** Mid-round pause after a money-drop reveal — the falling-bill theatre needs
  *  several seconds; the standard flow dispatches the next question instantly. */
 export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
+/** Mid-round reveal hold for the instant-verdict kinds (tf/mcq/hl/career):
+ *  without it the correct answer flashed for only the orchestrator-tick
+ *  latency before the next question replaced it (playtest feedback). */
+export const WL_STEP_REVEAL_HOLD_MS = 3_000;
 /** Post-reveal hold for put-in-order: the correct-sequence comparison needs
  *  actual reading time (playtest: the old instant advance read as a flash). */
 export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 5_000;
@@ -134,9 +138,13 @@ export const WL_GAME_MAX_POINTS = 1000;
 export function wlStepPoints(
   kind: Exclude<WlRoundKind, 'who_am_i' | 'money_drop'>,
   isCorrect: boolean,
-  elapsedMs: number
+  elapsedMs: number,
+  /** The attempt's REAL answer window. Defaults to the standard step, but
+   *  put-in-order runs 2 steps — scoring against 10s zeroed any correct
+   *  order submitted in the window's second half. */
+  windowMs: number = WL_QUESTION_TIME_MS
 ): number {
-  const base = calculatePoints(isCorrect, elapsedMs, WL_QUESTION_TIME_MS);
+  const base = calculatePoints(isCorrect, elapsedMs, Math.max(1_000, windowMs));
   return Math.floor((base * WL_STEP_MAX_POINTS[kind]) / 100);
 }
 

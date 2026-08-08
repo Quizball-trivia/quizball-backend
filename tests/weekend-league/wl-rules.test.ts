@@ -228,3 +228,36 @@ describe('wlBuildLadder', () => {
     }
   });
 });
+
+describe('matchesAccepted typo tolerance', async () => {
+  const { matchesAccepted } = await import('../../src/modules/weekend-league/wl-live-engine.js');
+  const ev = (...accepted: string[]) => ({ accepted_answers: accepted });
+
+  it('accepts exact and diacritic/case variants', () => {
+    expect(matchesAccepted('  N’Golo KANTÉ ', ev("N'Golo Kanté"))).toBe(true);
+    expect(matchesAccepted('modric', ev('Modrić'))).toBe(true);
+  });
+
+  it('accepts one typo on medium names and two on long names', () => {
+    expect(matchesAccepted('Halaand', ev('Haaland'))).toBe(true);
+    expect(matchesAccepted('Lewandowsky', ev('Lewandowski'))).toBe(true);
+    expect(matchesAccepted('Ibrahimovitc', ev('Ibrahimovic'))).toBe(true);
+    expect(matchesAccepted('ლევანდოვსკო', ev('ლევანდოვსკი'))).toBe(true);
+    expect(matchesAccepted('Zlatan Ibrahimovik', ev('Zlatan Ibrahimović'))).toBe(true);
+  });
+
+  it('catches adjacent transpositions', () => {
+    expect(matchesAccepted('Mdoric', ev('Modric'))).toBe(true);
+  });
+
+  it('keeps short forms exact-only', () => {
+    expect(matchesAccepted('CR8', ev('CR7'))).toBe(false);
+    expect(matchesAccepted('Sun', ev('Son'))).toBe(false);
+    expect(matchesAccepted('Kanu', ev('Kane'))).toBe(false);
+  });
+
+  it('rejects different names within budget-looking lengths', () => {
+    expect(matchesAccepted('Salah', ev('Silva'))).toBe(false);
+    expect(matchesAccepted('Robben', ev('Ronaldo'))).toBe(false);
+  });
+});

@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { logger } from '../../core/logger.js';
+import { wlLogAnswerReject, wlLogClientEvent } from '../../modules/weekend-league/wl-forensics.js';
 import { sql } from '../../db/index.js';
 import { wlPlayersRoom, wlSpectatorsRoom } from '../../modules/weekend-league/wl-deliverer.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -54,6 +55,22 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       return;
     }
     const { tournament_id: tournamentId, role, last_seq: lastSeq } = parsed.data;
+    wlLogClientEvent({
+      tournament_id: tournamentId,
+      user_id: userId,
+      kind: 'subscribe',
+      meta: { role, last_seq: lastSeq ?? null, socket_id: socket.id },
+    });
+    // Paired disconnect trace — reason distinguishes a user-closed tab
+    // ('client namespace disconnect') from a dropped transport.
+    socket.once('disconnect', (reason) => {
+      wlLogClientEvent({
+        tournament_id: tournamentId,
+        user_id: userId,
+        kind: 'disconnect',
+        meta: { role, reason, socket_id: socket.id },
+      });
+    });
     try {
       // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
       // is (for players) reflected in the snapshot built below.
@@ -236,6 +253,15 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
         userId,
         answer: parsed.data.answer ?? null,
       });
+      if (!result.accepted) {
+        wlLogAnswerReject({
+          tournament_id: parsed.data.tournament_id,
+          attempt_id: parsed.data.attempt_id,
+          user_id: userId,
+          reason: result.reason,
+          answer: parsed.data.answer ?? null,
+        });
+      }
       ack?.(result);
     } catch (error) {
       logger.warn({ err: error, userId }, 'wl:answer failed');

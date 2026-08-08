@@ -34,11 +34,17 @@ import { wlRedis, wlRedisNowMs } from './wl-redis.js';
 import { wlConfigFrom } from './wl-config.js';
 import {
   WL_FINALISTS,
+  WL_MONEY_DROP_BUDGET,
+  WL_MONEY_DROP_WINDOW_STEPS,
+  WL_PUT_IN_ORDER_WINDOW_STEPS,
+  wlPutInOrderPoints,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
+  WL_ROUND_INTRO_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
+  wlMoneyDropSanitizeBets,
   wlStepPoints,
   wlWhoAmIPoints,
   type WlRoundKind,
@@ -221,16 +227,25 @@ export const wlLiveEngineInternals = {
     `;
     const cfg = wlConfigFrom(t?.config);
     const kind = String(eventPayload['kind'] ?? '');
-    // Who-Am-I runs one window per clue (5 clues, one puzzle); every other
-    // kind gets a single question window.
+    // Who-Am-I runs one window per clue (5 clues, one puzzle); Money Drop
+    // needs betting time (spread + confirm); every other kind gets a single
+    // question window.
     const windowMs = kind === 'who_am_i'
       ? cfg.question_time_ms * WL_WHO_AM_I_CLUE_POINTS.length
-      : cfg.question_time_ms;
+      : kind === 'money_drop'
+        ? cfg.question_time_ms * WL_MONEY_DROP_WINDOW_STEPS
+        : kind === 'put_in_order'
+          ? cfg.question_time_ms * WL_PUT_IN_ORDER_WINDOW_STEPS
+          : cfg.question_time_ms;
+    // A round's FIRST question carries extra lead so the round-intro overlay
+    // can play before the 3s reading grace starts.
+    const questionIndex = Number(eventPayload['question_index'] ?? 0);
+    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0);
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs
-      SET playable_at_ms = ${redisNow + cfg.dispatch_lead_ms},
-          deadline_at_ms = ${redisNow + cfg.dispatch_lead_ms + windowMs},
+      SET playable_at_ms = ${redisNow + leadMs},
+          deadline_at_ms = ${redisNow + leadMs + windowMs},
           status = 'dispatched'
       WHERE attempt_id = ${attemptId} AND playable_at_ms IS NULL
         AND status IN ('created', 'dispatched')
@@ -368,7 +383,53 @@ export const wlLiveEngineInternals = {
         const next = wlNextSlot({
           gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
         });
-        if (next) await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        // Same rule as revealFrozen: within the round we skip straight on, but
+        // a ROUND boundary is left to the orchestrator so the breather applies.
+        // A void has no standings beat of its own (nobody saw the question),
+        // yet the pacing must stay identical or rounds would start early.
+        if (next && next.roundIndex === run.round_index) {
+          await this.appendDispatchTx(txSql, tournamentId, next, redisNow);
+        } else {
+          // Skipping the LAST slot of a money-drop round would otherwise erase
+          // the whole round: only a final-step row scores, and no final step
+          // will ever exist. Everyone keeps the carry they held entering the
+          // skipped slot instead (newest played row of the round; a round
+          // whose EVERY slot voided has no rows and awards nothing).
+          const [q] = await txSql<Array<{ kind: string }>>`
+            SELECT kind FROM wl_questions WHERE question_id = ${run.question_id}
+          `;
+          if (q?.kind === 'money_drop') {
+            await txSql`
+              INSERT INTO wl_answers (
+                attempt_id, user_id, tournament_id, game_index, answer, correct,
+                points, elapsed_ms, time_charge_ms, timing_source
+              )
+              SELECT ${attemptId}, c.user_id, ${tournamentId}, ${run.game_index},
+                     jsonb_build_object('bets', '{}'::jsonb, 'carry', c.carry),
+                     true, c.carry, 0, 0, 'money_drop_void_award'
+              FROM (
+                -- Carry entering the skipped slot = the answer on the NEWEST
+                -- PLAYED slot of the round, exactly like the live budget
+                -- resolver. A user's newest answer anywhere in the round is
+                -- NOT it: money missed on a later played question is gone.
+                SELECT a.user_id, COALESCE((a.answer->>'carry')::int, 0) AS carry
+                FROM (
+                  SELECT attempt_id FROM wl_question_runs
+                  WHERE tournament_id = ${tournamentId} AND game_index = ${run.game_index}
+                    AND round_index = ${run.round_index}
+                    AND status IN ('frozen', 'revealed')
+                  ORDER BY question_index DESC, created_at DESC
+                  LIMIT 1
+                ) lp
+                JOIN wl_answers a ON a.attempt_id = lp.attempt_id
+                WHERE a.timing_source = 'redis_accept'
+              ) c
+              WHERE c.carry > 0
+              ON CONFLICT (attempt_id, user_id) DO NOTHING
+            `;
+            logger.warn({ tournamentId, attemptId }, 'WL money-drop final slot voided: carries awarded');
+          }
+        }
       }
         voided = true;
       });
@@ -476,7 +537,8 @@ export const wlLiveEngineInternals = {
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
       const revealed = await txSql`
-        UPDATE wl_question_runs SET status = 'revealed'
+        UPDATE wl_question_runs
+        SET status = 'revealed', revealed_at_ms = ${redisNow}
         WHERE attempt_id = ${run.attempt_id} AND status = 'frozen'
         RETURNING attempt_id
       `;
@@ -503,7 +565,15 @@ export const wlLiveEngineInternals = {
       gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
     });
     if (next) {
-      await this.appendDispatch(tournamentId, next, redisNow);
+      // At a ROUND boundary the next dispatch is deliberately NOT appended here:
+      // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
+      // round-end standings beat can play. Mid-round we dispatch immediately —
+      // EXCEPT money drop, whose reveal is a several-second drop animation:
+      // it defers to the orchestrator's shorter mid-round hold the same way.
+      if (next.roundIndex === run.round_index) {
+        if (await this.kindOf(run.question_id) === 'money_drop') return;
+        await this.appendDispatch(tournamentId, next, redisNow);
+      }
     }
   },
 
@@ -554,11 +624,11 @@ export const wlLiveEngineInternals = {
     tournamentId: string,
     gameIndex: number,
     limit: number
-  ): Promise<Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>> {
+  ): Promise<Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>> {
     // Per-user totals with WINDOW-correct miss charges: an unanswered
     // attempt charges that attempt's full window (who_am_i = 5 clue windows),
     // never a flat constant — wrong-but-present must always beat absent.
-    const rows = await sql<Array<{ user_id: string; points: number; time_ms: string }>>`
+    const rows = await sql<Array<{ user_id: string; nickname: string | null; points: number; time_ms: string }>>`
       WITH asked AS (
         SELECT attempt_id,
                GREATEST(1, deadline_at_ms - playable_at_ms) AS window_ms
@@ -567,6 +637,7 @@ export const wlLiveEngineInternals = {
           AND status IN ('frozen', 'revealed')
       )
       SELECT p.user_id,
+             MIN(u.nickname) AS nickname,
              COALESCE(SUM(a.points), 0)::int AS points,
              (
                COALESCE(SUM(LEAST(a.time_charge_ms, asked.window_ms)), 0)
@@ -574,6 +645,7 @@ export const wlLiveEngineInternals = {
                - COALESCE(SUM(asked.window_ms), 0)
              )::text AS time_ms
       FROM wl_game_participants p
+      JOIN users u ON u.id = p.user_id
       LEFT JOIN wl_answers a
         ON a.tournament_id = p.tournament_id AND a.game_index = p.game_index
        AND a.user_id = p.user_id
@@ -583,12 +655,16 @@ export const wlLiveEngineInternals = {
     `;
     const standings = rows.map((r) => ({
       userId: r.user_id,
+      nickname: r.nickname,
       points: r.points,
       timeMsTotal: Number(r.time_ms),
     }));
     standings.sort(wlCompareStanding);
+    // Nickname rides on every board row so clients never fall back to
+    // placeholder names; deliberately NO is_ai flag — spectators and players
+    // must not be able to tell roster bots apart.
     return standings.slice(0, limit).map((s, i) => ({
-      user_id: s.userId, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
+      user_id: s.userId, nickname: s.nickname, points: s.points, time_ms_total: s.timeMsTotal, rank: i + 1,
     }));
   },
 
@@ -599,30 +675,60 @@ export const wlLiveEngineInternals = {
     return row?.kind ?? 'mcq';
   },
 
+  /**
+   * Resolve the budget a player carries INTO a money-drop question: the carry
+   * stored on their answer to the nearest prior question of the round that
+   * actually played (frozen/revealed). A played prior question with no answer
+   * row is a miss — the money is gone (daily rules: unplaced money drops).
+   * A fully-voided slot (nobody saw it) is skipped, not charged. Question 1,
+   * or a round whose every prior slot voided, starts from the full budget.
+   */
+  async moneyDropBudget(run: WlRunRow, userId: string): Promise<number> {
+    if (run.question_index <= 0) return WL_MONEY_DROP_BUDGET;
+    const rows = await sql<Array<{ question_index: number; carry: number | null }>>`
+      SELECT r.question_index,
+             (a.answer->>'carry')::int AS carry
+      FROM wl_question_runs r
+      LEFT JOIN wl_answers a
+        ON a.attempt_id = r.attempt_id AND a.user_id = ${userId}
+       AND a.timing_source = 'redis_accept'
+      WHERE r.tournament_id = ${run.tournament_id} AND r.game_index = ${run.game_index}
+        AND r.round_index = ${run.round_index} AND r.question_index < ${run.question_index}
+        AND r.status IN ('frozen', 'revealed')
+      ORDER BY r.question_index DESC
+      LIMIT 1
+    `;
+    const prior = rows[0];
+    if (!prior) return WL_MONEY_DROP_BUDGET;
+    const carry = Number(prior.carry);
+    return Number.isFinite(carry) ? Math.max(0, Math.min(carry, WL_MONEY_DROP_BUDGET)) : 0;
+  },
+
   /** Score an accepted answer server-side (authoritative). */
   scoreAnswer(
     kind: WlRoundKind,
     evaluation: Record<string, unknown>,
     answer: unknown,
     elapsedMs: number,
-    clueWindowMs = 10_000
-  ): { correct: boolean; points: number } {
+    clueWindowMs = 10_000,
+    moneyDrop?: { budget: number; isFinalStep: boolean }
+  ): { correct: boolean; points: number; bets?: Record<string, number>; carry?: number } {
     switch (kind) {
       case 'mcq':
       case 'true_false': {
         const correct = answer === evaluation['correct_id'];
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'higher_lower': {
         const left = Number(evaluation['left_value']);
         const right = Number(evaluation['right_value']);
         const expected = left > right ? 'left' : 'right';
         const correct = answer === expected;
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'career_path': {
         const correct = matchesAccepted(answer, evaluation);
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'who_am_i': {
         // The clue index is SERVER-derived from elapsed time (the clue the
@@ -636,23 +742,164 @@ export const wlLiveEngineInternals = {
         );
         return { correct, points: wlWhoAmIPoints(correct, clueIndex) };
       }
+      case 'put_in_order': {
+        // Ranked parity: every position that sits in its correct slot scores
+        // proportionally (4/4=30, 3/4=22, 2/4=15, 1/4=7); "correct" = the
+        // full sequence. No speed factor, as in ranked.
+        const expected = Array.isArray(evaluation['order'])
+          ? (evaluation['order'] as unknown[]).map(String) : [];
+        const got = Array.isArray(answer) ? (answer as unknown[]).map(String) : [];
+        const comparable = expected.length > 0 && got.length === expected.length;
+        const matched = comparable
+          ? expected.reduce((n, id, i) => (got[i] === id ? n + 1 : n), 0)
+          : 0;
+        const correct = comparable && matched === expected.length;
+        return { correct, points: wlPutInOrderPoints(matched, expected.length) };
+      }
+      case 'money_drop': {
+        // Daily-challenge rules, server-authoritative: only what sits on the
+        // correct option survives; the sheet is clamped to the server-known
+        // budget. Points land on the FINAL step alone — the surviving carry IS
+        // the round score, so intermediate rows record 0 and the game maximum
+        // holds.
+        const budget = moneyDrop?.budget ?? 0;
+        const parsed = answer as { bets?: unknown } | null;
+        const bets = wlMoneyDropSanitizeBets(parsed?.bets, budget);
+        const carry = bets[String(evaluation['correct_id'] ?? '')] ?? 0;
+        return {
+          correct: carry > 0,
+          points: moneyDrop?.isFinalStep ? carry : 0,
+          bets,
+          carry,
+        };
+      }
     }
   },
 };
 
-function matchesAccepted(guess: unknown, evaluation: Record<string, unknown>): boolean {
+export function matchesAccepted(guess: unknown, evaluation: Record<string, unknown>): boolean {
   if (typeof guess !== 'string' || guess.trim() === '') return false;
   const accepted = Array.isArray(evaluation['accepted_answers'])
     ? (evaluation['accepted_answers'] as unknown[]).filter((a): a is string => typeof a === 'string')
     : [];
   const normalized = normalizeGuess(guess);
-  return accepted.some((a) => normalizeGuess(a) === normalized);
+  return accepted.some((a) => {
+    const target = normalizeGuess(a);
+    return target === normalized || withinTypoDistance(normalized, target);
+  });
+}
+
+/** Typos must not cost the answer (playtest ask): small edit-distance budget,
+ *  scaled to length so short forms ("son", "cr7", "kdb") stay exact-only. */
+function typoBudget(len: number): number {
+  if (len <= 4) return 0;
+  if (len <= 8) return 1;
+  return 2;
+}
+
+function withinTypoDistance(a: string, b: string): boolean {
+  const budget = typoBudget(Math.min(a.length, b.length));
+  if (budget === 0 || Math.abs(a.length - b.length) > budget) return false;
+  return damerauLevenshtein(a, b, budget) <= budget;
+}
+
+/** Bounded optimal-string-alignment distance (substitution, insert, delete,
+ *  adjacent transposition). Returns budget+1 once the bound is exceeded. */
+function damerauLevenshtein(a: string, b: string, budget: number): number {
+  const m = a.length;
+  const n = b.length;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i += 1) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2]! + 1);
+      }
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > budget) return budget + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[n]!;
 }
 
 function normalizeGuess(value: string): string {
   return value.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
     .replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ');
 }
+
+// ── Answer hot-path caches ───────────────────────────────────────────────────
+// The three PG lookups below return data that is immutable for the lifetime
+// of an attempt (run row), a question (evaluation/config) and a game
+// (participant roster) — yet at 1k concurrent answerers the per-answer
+// round-trips saturate the pool (observed ack p95 5.3s, in-time answers
+// processed past their deadline). Caching them makes the hot path
+// Redis-only. Correctness is unaffected: closure and once-only acceptance
+// are gated in the Redis accept script (closed marker + deadline), never in
+// these rows, and void/freeze both set the closed marker BEFORE anything
+// else. Per-process cache; replicas warm independently.
+const HOT_CACHE_TTL_MS = 120_000;
+const HOT_CACHE_MAX = 300;
+interface HotCacheEntry<T> { value: T; at: number }
+function hotCacheGet<T>(map: Map<string, HotCacheEntry<T>>, key: string): T | null {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > HOT_CACHE_TTL_MS) { map.delete(key); return null; }
+  return hit.value;
+}
+function hotCacheSet<T>(map: Map<string, HotCacheEntry<T>>, key: string, value: T): void {
+  if (map.size >= HOT_CACHE_MAX) {
+    const cutoff = Date.now() - HOT_CACHE_TTL_MS;
+    for (const [k, v] of map) { if (v.at < cutoff) map.delete(k); }
+    if (map.size >= HOT_CACHE_MAX) map.delete(map.keys().next().value!);
+  }
+  map.set(key, { value, at: Date.now() });
+}
+const runHotCache = new Map<string, HotCacheEntry<WlRunRow>>();
+const contentHotCache = new Map<string, HotCacheEntry<{
+  kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown>;
+}>>();
+const participantHotCache = new Map<string, HotCacheEntry<Set<string>>>();
+// In-flight coalescing: without it a fresh dispatch stampedes — every
+// answer arriving before the first query resolves misses the cache and
+// fires the identical query, defeating the fix exactly when it matters.
+// One loader per key; failures propagate to all waiters and cache nothing.
+const hotInflight = new Map<string, Promise<unknown>>();
+async function hotLoad<T>(
+  map: Map<string, HotCacheEntry<T>>,
+  namespace: string,
+  key: string,
+  loader: () => Promise<T | null>,
+  cacheable: (value: T) => boolean
+): Promise<T | null> {
+  const cached = hotCacheGet(map, key);
+  if (cached != null) return cached;
+  const inflightKey = `${namespace}:${key}`;
+  let pending = hotInflight.get(inflightKey) as Promise<T | null> | undefined;
+  if (!pending) {
+    pending = (async () => {
+      const value = await loader();
+      if (value != null && cacheable(value)) hotCacheSet(map, key, value);
+      return value;
+    })();
+    hotInflight.set(inflightKey, pending);
+    void pending.catch(() => {}).then(() => hotInflight.delete(inflightKey));
+  }
+  return pending;
+}
+
+/** Test seam for the answer hot-path cache (unit-tested coalescing). */
+export const wlAnswerHotCacheInternals = {
+  hotLoad,
+  caches: { runHotCache, contentHotCache, participantHotCache },
+  inflight: hotInflight,
+};
 
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
@@ -661,16 +908,22 @@ export async function wlAcceptAnswer(input: {
   userId: string;
   answer: unknown;
 }): Promise<
-  | { accepted: true; correct: boolean; points: number; elapsedMs: number }
+  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
-  const [run] = await sql<WlRunRow[]>`
-    SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
-           r.question_index, r.question_id, r.status,
-           r.playable_at_ms::text, r.deadline_at_ms::text
-    FROM wl_question_runs r
-    WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
-  `;
+  const runKey = `${input.tournamentId}:${input.attemptId}`;
+  // Cache only the live shape: window stamps are immutable, and closure is
+  // enforced by deadline + the Redis closed marker, not this status.
+  const run = await hotLoad(runHotCache, 'run', runKey, async () => {
+    const [row] = await sql<WlRunRow[]>`
+      SELECT r.attempt_id, r.tournament_id, r.game_index, r.round_index,
+             r.question_index, r.question_id, r.status,
+             r.playable_at_ms::text, r.deadline_at_ms::text
+      FROM wl_question_runs r
+      WHERE r.attempt_id = ${input.attemptId} AND r.tournament_id = ${input.tournamentId}
+    `;
+    return row ?? null;
+  }, (row) => row.status === 'dispatched');
   if (!run) return { accepted: false, reason: 'unknown_attempt' };
   const playable = Number(run.playable_at_ms);
   const deadline = Number(run.deadline_at_ms);
@@ -686,12 +939,19 @@ export async function wlAcceptAnswer(input: {
       .catch(() => null);
     if (storedLate) {
       try {
-        const p = JSON.parse(storedLate) as { correct: boolean; points: number; elapsedMs: number };
-        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+        const p = JSON.parse(storedLate) as {
+          correct: boolean; points: number; elapsedMs: number;
+          answer?: { carry?: number } | null;
+        };
+        const c = Number(p.answer?.carry);
+        return {
+          accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+          ...(Number.isFinite(c) ? { carry: c } : {}),
+        };
       } catch { /* fall through to the persisted row */ }
     }
-    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number }>>`
-      SELECT correct, points, elapsed_ms FROM wl_answers
+    const [persistedRow] = await sql<Array<{ correct: boolean; points: number; elapsed_ms: number; carry: number | null }>>`
+      SELECT correct, points, elapsed_ms, (answer->>'carry')::int AS carry FROM wl_answers
       WHERE attempt_id = ${input.attemptId} AND user_id = ${input.userId}
         AND timing_source <> 'voided_audit'
     `;
@@ -701,30 +961,59 @@ export async function wlAcceptAnswer(input: {
         correct: persistedRow.correct,
         points: persistedRow.points,
         elapsedMs: persistedRow.elapsed_ms,
+        ...(persistedRow.carry != null ? { carry: Number(persistedRow.carry) } : {}),
       };
     }
     return { accepted: false, reason: 'closed' };
   }
-  const [participant] = await sql<{ user_id: string }[]>`
-    SELECT user_id FROM wl_game_participants
-    WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
-      AND user_id = ${input.userId}
-  `;
-  if (!participant) return { accepted: false, reason: 'not_participant' };
+  const rosterKey = `${input.tournamentId}:${run.game_index}`;
+  // A roster is written once at game start; never cache an empty read (it
+  // could race the game-setup transaction).
+  const roster = await hotLoad(participantHotCache, 'roster', rosterKey, async () => {
+    const rows = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM wl_game_participants
+      WHERE tournament_id = ${input.tournamentId} AND game_index = ${run.game_index}
+    `;
+    return new Set(rows.map((r) => r.user_id));
+  }, (set) => set.size > 0);
+  if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
 
-  const [content] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
-    SELECT q.kind, q.evaluation, t.config
-    FROM wl_questions q
-    JOIN wl_tournaments t ON t.id = q.tournament_id
-    WHERE q.question_id = ${run.question_id}
-  `;
+  const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
+    const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
+      SELECT q.kind, q.evaluation, t.config
+      FROM wl_questions q
+      JOIN wl_tournaments t ON t.id = q.tournament_id
+      WHERE q.question_id = ${run.question_id}
+    `;
+    return row ?? null;
+  }, () => true);
   if (!content) return { accepted: false, reason: 'unknown_attempt' };
 
   const elapsedMs = Math.max(0, redisNow - playable);
-  const { correct, points } = wlLiveEngineInternals.scoreAnswer(
+  // Money drop is stateful across the round: the budget entering this question
+  // is server-derived from the prior frozen answer, never client-claimed.
+  const moneyDrop = content.kind === 'money_drop'
+    ? {
+        budget: await wlLiveEngineInternals.moneyDropBudget(run, input.userId),
+        isFinalStep: run.question_index === WL_QUESTIONS_PER_ROUND.money_drop - 1,
+      }
+    : undefined;
+  const { correct, points, bets, carry } = wlLiveEngineInternals.scoreAnswer(
     content.kind, content.evaluation, input.answer, elapsedMs,
-    wlConfigFrom(content.config).question_time_ms
+    wlConfigFrom(content.config).question_time_ms, moneyDrop
   );
+  // Persist the SANITIZED sheet + carry as the answer of record — the next
+  // question's budget read and the audit trail must reflect server truth,
+  // not the raw client sheet.
+  const answerOfRecord = content.kind === 'money_drop'
+    ? { bets: bets ?? {}, carry: carry ?? 0 }
+    : input.answer;
+  // An EMPTY money-drop sheet is a miss that happened to hit the wire: charge
+  // the full window, or a modified client could bank a fast tie-break time on
+  // rounds it has already written off (honest clients never send one).
+  const storedElapsedMs = content.kind === 'money_drop' && bets != null && Object.keys(bets).length === 0
+    ? Math.max(elapsedMs, deadline - playable)
+    : elapsedMs;
 
   const redis = wlRedis();
   const stored = await redis.eval(ACCEPT_SCRIPT, {
@@ -734,7 +1023,7 @@ export async function wlAcceptAnswer(input: {
     ],
     arguments: [
       input.userId,
-      JSON.stringify({ answer: input.answer, correct, points, elapsedMs }),
+      JSON.stringify({ answer: answerOfRecord, correct, points, elapsedMs: storedElapsedMs }),
       String(deadline),
       String(REDIS_TTL_SECONDS),
     ],
@@ -748,8 +1037,15 @@ export async function wlAcceptAnswer(input: {
       .catch(() => null);
     if (prior) {
       try {
-        const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
-        return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+        const p = JSON.parse(prior) as {
+          correct: boolean; points: number; elapsedMs: number;
+          answer?: { carry?: number } | null;
+        };
+        const c = Number(p.answer?.carry);
+        return {
+          accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+          ...(Number.isFinite(c) ? { carry: c } : {}),
+        };
       } catch { /* unreadable → closed */ }
     }
     return { accepted: false, reason: 'closed' };
@@ -757,12 +1053,21 @@ export async function wlAcceptAnswer(input: {
   if (stored === 0) {
     const prior = await redis.hGet(answersKey(input.tournamentId, input.attemptId), input.userId);
     if (prior) {
-      const p = JSON.parse(prior) as { correct: boolean; points: number; elapsedMs: number };
-      return { accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs };
+      const p = JSON.parse(prior) as {
+        correct: boolean; points: number; elapsedMs: number;
+        answer?: { carry?: number } | null;
+      };
+      const c = Number(p.answer?.carry);
+      return {
+        accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
+        ...(Number.isFinite(c) ? { carry: c } : {}),
+      };
     }
     return { accepted: false, reason: 'duplicate' };
   }
-  return { accepted: true, correct, points, elapsedMs };
+  return carry != null
+    ? { accepted: true, correct, points, elapsedMs, carry }
+    : { accepted: true, correct, points, elapsedMs };
 }
 
 export interface WlSubscribeSnapshot {
@@ -773,13 +1078,19 @@ export interface WlSubscribeSnapshot {
   /** Dispatch-shaped payload for the in-flight question (players only). */
   attempt: Record<string, unknown> | null;
   /** The caller's already-accepted answer on that attempt, if any. */
-  your_answer: { correct: boolean; points: number; elapsedMs: number } | null;
+  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
+  /** money_drop in-flight attempt only: the budget the caller carries INTO it
+      (server-derived) — a reload mid-round must not reset the client chain. */
+  money_budget?: number;
   /** The caller's most recent PERSISTED answer this game, attempt-identified —
       recovers the verdict even when the attempt froze before this snapshot. */
-  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number } | null;
+  your_last_answer: { attempt_id: string; correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
   /** The caller's accepted points this game (persisted + in-flight). */
   score: number;
-  board: Array<{ user_id: string; points: number; time_ms_total: number; rank: number }>;
+  /** Exact outbox boundary: events ≤ this seq are fully reflected in score;
+      events above it not at all (read in the same MVCC statement). */
+  snapshot_seq: number;
+  board: Array<{ user_id: string; nickname: string | null; points: number; time_ms_total: number; rank: number }>;
 }
 
 /**
@@ -802,8 +1113,28 @@ export async function wlSubscribeSnapshot(
   tournamentId: string,
   userId: string
 ): Promise<WlSubscribeSnapshot | null> {
-  const [t] = await sql<Array<{ status: string; stage: Record<string, unknown> | null }>>`
-    SELECT status, stage FROM wl_tournaments WHERE id = ${tournamentId}
+  // The persisted score and the event cursor are read in ONE statement, so
+  // they see the same MVCC snapshot. Persisted-answer transitions (freeze,
+  // void, game results) commit their wl_events row + next_event_seq bump in
+  // the same transaction as the state they describe, which makes
+  // snapshot_seq an exact boundary FOR THE PERSISTED COMPONENT: such an
+  // event with seq ≤ snapshot_seq is fully reflected in the persisted sum,
+  // one above it not at all. The in-flight Redis component added below has
+  // no outbox seq — clients that reconcile against this boundary must treat
+  // your_answer / your_last_answer as the source of the in-flight attempts
+  // the score already counts.
+  const [t] = await sql<Array<{
+    status: string; stage: Record<string, unknown> | null;
+    snapshot_seq: string; my_points: number;
+  }>>`
+    SELECT status, stage, next_event_seq::text AS snapshot_seq,
+           (SELECT COALESCE(SUM(a.points), 0)::int
+            FROM wl_answers a
+            WHERE a.tournament_id = wl_tournaments.id
+              AND a.user_id = ${userId}
+              AND a.game_index = COALESCE(NULLIF(wl_tournaments.stage->>'current_game', ''), '0')::int
+           ) AS my_points
+    FROM wl_tournaments WHERE id = ${tournamentId}
   `;
   if (!t) return null;
   const stage = t.stage ?? {};
@@ -811,14 +1142,12 @@ export async function wlSubscribeSnapshot(
   const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
   const redisNow = await wlRedisNowMs();
 
-  const [persisted] = await sql<Array<{ points: number }>>`
-    SELECT COALESCE(SUM(points), 0)::int AS points FROM wl_answers
-    WHERE tournament_id = ${tournamentId} AND game_index = ${gameIndex} AND user_id = ${userId}
-  `;
+  const persisted = { points: t.my_points };
 
   let attempt: Record<string, unknown> | null = null;
   let yourAnswer: WlSubscribeSnapshot['your_answer'] = null;
   let inFlightPoints = 0;
+  let moneyBudget: number | undefined;
   // No in-flight attempt outside an actually-running game: cancellation does
   // not close runs, so gate by tournament status rather than run state alone.
   const gameRunning = t.status === 'game_live' || t.status === 'final_live';
@@ -848,31 +1177,51 @@ export async function wlSubscribeSnapshot(
         question_index: run.question_index,
         kind: content.kind,
         question: content.payload,
-        evaluation: content.evaluation,
+        // Never the answer key on an OPEN attempt (see the deliverer scrub).
+        evaluation: {},
         playableAt: Number(run.playable_at_ms),
         deadlineAt: Number(run.deadline_at_ms),
       };
       const stored = await wlRedis().hGet(answersKey(tournamentId, run.attempt_id), userId);
       if (stored) {
         try {
-          const p = JSON.parse(stored) as { correct?: boolean; points?: number; elapsedMs?: number };
+          const p = JSON.parse(stored) as {
+            correct?: boolean; points?: number; elapsedMs?: number;
+            answer?: { carry?: number } | null;
+          };
+          const storedCarry = Number(p.answer?.carry);
           yourAnswer = {
             correct: p.correct === true,
             points: Number(p.points) || 0,
             elapsedMs: Number(p.elapsedMs) || 0,
+            ...(Number.isFinite(storedCarry) ? { carry: storedCarry } : {}),
           };
           inFlightPoints = yourAnswer.points;
         } catch {
           // unreadable stored answer — treat as unanswered
         }
       }
+      if (content.kind === 'money_drop') {
+        moneyBudget = await wlLiveEngineInternals.moneyDropBudget({
+          attempt_id: run.attempt_id,
+          tournament_id: tournamentId,
+          game_index: run.game_index,
+          round_index: run.round_index,
+          question_index: run.question_index,
+          question_id: run.question_id,
+          status: 'dispatched',
+          playable_at_ms: run.playable_at_ms,
+          deadline_at_ms: run.deadline_at_ms,
+        } as WlRunRow, userId);
+      }
     }
   }
 
   const [lastPersisted] = await sql<Array<{
-    attempt_id: string; correct: boolean; points: number; elapsed_ms: number;
+    attempt_id: string; correct: boolean; points: number; elapsed_ms: number; carry: number | null;
   }>>`
-    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms
+    SELECT a.attempt_id, a.correct, a.points, a.elapsed_ms,
+           (a.answer->>'carry')::int AS carry
     FROM wl_answers a
     JOIN wl_question_runs r ON r.attempt_id = a.attempt_id
     WHERE a.tournament_id = ${tournamentId} AND a.game_index = ${gameIndex}
@@ -886,15 +1235,18 @@ export async function wlSubscribeSnapshot(
     game_index: gameIndex,
     attempt,
     your_answer: yourAnswer,
+    ...(moneyBudget != null ? { money_budget: moneyBudget } : {}),
     your_last_answer: lastPersisted
       ? {
           attempt_id: lastPersisted.attempt_id,
           correct: lastPersisted.correct,
           points: lastPersisted.points,
           elapsedMs: lastPersisted.elapsed_ms,
+          ...(lastPersisted.carry != null ? { carry: Number(lastPersisted.carry) } : {}),
         }
       : null,
     score: (persisted?.points ?? 0) + inFlightPoints,
+    snapshot_seq: Number(t.snapshot_seq),
     board,
   };
 }

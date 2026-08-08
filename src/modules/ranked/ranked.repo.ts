@@ -134,17 +134,25 @@ export const rankedRepo = {
     tier: RankedTier,
   ): Promise<RankedProfileRow> {
     const [updated] = await sql<RankedProfileRow[]>`
-      UPDATE ranked_profiles
-      SET tier = ${tier}
-      WHERE user_id = ${userId}
-        AND rp = ${expectedRp}
-        AND tier IS DISTINCT FROM ${tier}
-      RETURNING *
+      WITH normalized AS (
+        UPDATE ranked_profiles
+        SET tier = ${tier}
+        WHERE user_id = ${userId}
+          AND rp = ${expectedRp}
+          AND tier IS DISTINCT FROM ${tier}
+        RETURNING *
+      )
+      SELECT normalized.*, u.country
+      FROM normalized
+      JOIN users u ON u.id = normalized.user_id
     `;
     if (updated) return updated;
 
     const [existing] = await sql<RankedProfileRow[]>`
-      SELECT * FROM ranked_profiles WHERE user_id = ${userId}
+      SELECT rp.*, u.country
+      FROM ranked_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE rp.user_id = ${userId}
     `;
     if (!existing) {
       throw new AppError(

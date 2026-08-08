@@ -34,8 +34,8 @@ describe('ranked profile tier normalization', () => {
     if (!dbAvailable) skip();
 
     const [user] = await sql<{ id: string }[]>`
-      INSERT INTO users (nickname, is_ai, is_seed, coins, onboarding_complete)
-      VALUES (${`tier_repair_${Date.now()}`}, false, false, 0, true)
+      INSERT INTO users (nickname, is_ai, is_seed, coins, onboarding_complete, country)
+      VALUES (${`tier_repair_${Date.now()}`}, false, false, 0, true, 'GE')
       RETURNING id
     `;
     testUserId = user.id;
@@ -59,6 +59,7 @@ describe('ranked profile tier normalization', () => {
 
     expect(profile.rp).toBe(4035);
     expect(profile.tier).toBe('Captain');
+    expect(profile.country).toBe('GE');
 
     const [stored] = await sql<{ rp: number; tier: string; updated_at: string }[]>`
       SELECT rp, tier, updated_at

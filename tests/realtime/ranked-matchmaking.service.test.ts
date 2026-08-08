@@ -1122,21 +1122,35 @@ describe('ranked-matchmaking.service queue behavior', () => {
       .mockResolvedValueOnce(new Map([['u1', clearSnapshot], ['u2', clearSnapshot]]))
       .mockResolvedValue(new Map([['u1', committedSnapshot], ['u2', clearSnapshot]]));
 
+    // Record the destination room per emit: the shared-emitter default mock
+    // cannot prove WHICH user received the abort.
+    const roomEvents: Array<{ room: string; event: string; payload?: unknown }> = [];
+    (io.to as unknown as ReturnType<typeof vi.fn>).mockImplementation((room: string) => ({
+      emit: (event: string, payload?: unknown) => {
+        roomEvents.push({ room, event, payload });
+      },
+    }));
+
     try {
       service.start(io);
       await vi.advanceTimersByTimeAsync(120);
 
       expect(createLobbyMock).toHaveBeenCalledTimes(1);
-      const emit = (io.to as unknown as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      const abortErrors = emit.mock.calls.filter(
-        ([event, payload]) =>
+      const abortErrors = roomEvents.filter(
+        ({ event, payload }) =>
           event === 'error' &&
           (payload as { code?: string } | undefined)?.code === 'MATCH_PREPARATION_FAILED'
       );
       // u1 has a committed lobby: no contradictory abort. u2 is clear: aborted.
       expect(abortErrors).toHaveLength(1);
-      expect((abortErrors[0]?.[1] as { meta: { searchId: string } }).meta.searchId).toBe('s2');
-      expect(emit.mock.calls.filter(([event]) => event === 'ranked:queue_left')).toHaveLength(1);
+      expect(abortErrors[0]?.room).toBe('user:u2');
+      expect((abortErrors[0]?.payload as { meta: { searchId: string } }).meta.searchId).toBe('s2');
+      const queueLeft = roomEvents.filter(({ event }) => event === 'ranked:queue_left');
+      expect(queueLeft).toHaveLength(1);
+      expect(queueLeft[0]?.room).toBe('user:u2');
+      expect(
+        roomEvents.filter(({ room, event }) => room === 'user:u1' && (event === 'error' || event === 'ranked:queue_left'))
+      ).toHaveLength(0);
     } finally {
       resolveStatesSpy.mockRestore();
       // Drop any unconsumed once-rejection so it cannot leak into later tests;

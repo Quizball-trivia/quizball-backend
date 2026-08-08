@@ -773,13 +773,56 @@ export const wlLiveEngineInternals = {
   },
 };
 
-function matchesAccepted(guess: unknown, evaluation: Record<string, unknown>): boolean {
+export function matchesAccepted(guess: unknown, evaluation: Record<string, unknown>): boolean {
   if (typeof guess !== 'string' || guess.trim() === '') return false;
   const accepted = Array.isArray(evaluation['accepted_answers'])
     ? (evaluation['accepted_answers'] as unknown[]).filter((a): a is string => typeof a === 'string')
     : [];
   const normalized = normalizeGuess(guess);
-  return accepted.some((a) => normalizeGuess(a) === normalized);
+  return accepted.some((a) => {
+    const target = normalizeGuess(a);
+    return target === normalized || withinTypoDistance(normalized, target);
+  });
+}
+
+/** Typos must not cost the answer (playtest ask): small edit-distance budget,
+ *  scaled to length so short forms ("son", "cr7", "kdb") stay exact-only. */
+function typoBudget(len: number): number {
+  if (len <= 4) return 0;
+  if (len <= 8) return 1;
+  return 2;
+}
+
+function withinTypoDistance(a: string, b: string): boolean {
+  const budget = typoBudget(Math.min(a.length, b.length));
+  if (budget === 0 || Math.abs(a.length - b.length) > budget) return false;
+  return damerauLevenshtein(a, b, budget) <= budget;
+}
+
+/** Bounded optimal-string-alignment distance (substitution, insert, delete,
+ *  adjacent transposition). Returns budget+1 once the bound is exceeded. */
+function damerauLevenshtein(a: string, b: string, budget: number): number {
+  const m = a.length;
+  const n = b.length;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i += 1) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2]! + 1);
+      }
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > budget) return budget + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[n]!;
 }
 
 function normalizeGuess(value: string): string {

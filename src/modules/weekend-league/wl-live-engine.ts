@@ -37,6 +37,7 @@ import {
   WL_MONEY_DROP_BUDGET,
   WL_MONEY_DROP_WINDOW_STEPS,
   WL_PUT_IN_ORDER_WINDOW_STEPS,
+  wlPutInOrderPoints,
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
@@ -742,15 +743,18 @@ export const wlLiveEngineInternals = {
         return { correct, points: wlWhoAmIPoints(correct, clueIndex) };
       }
       case 'put_in_order': {
-        // Exact sequence or nothing — partial credit would make ordering a
-        // guessing game (any 4-item guess lands ~1 position by chance).
+        // Ranked parity: every position that sits in its correct slot scores
+        // proportionally (4/4=30, 3/4=22, 2/4=15, 1/4=7); "correct" = the
+        // full sequence. No speed factor, as in ranked.
         const expected = Array.isArray(evaluation['order'])
           ? (evaluation['order'] as unknown[]).map(String) : [];
         const got = Array.isArray(answer) ? (answer as unknown[]).map(String) : [];
-        const correct = expected.length > 0
-          && got.length === expected.length
-          && expected.every((id, i) => got[i] === id);
-        return { correct, points: wlStepPoints('put_in_order', correct, elapsedMs, clueWindowMs * WL_PUT_IN_ORDER_WINDOW_STEPS) };
+        const comparable = expected.length > 0 && got.length === expected.length;
+        const matched = comparable
+          ? expected.reduce((n, id, i) => (got[i] === id ? n + 1 : n), 0)
+          : 0;
+        const correct = comparable && matched === expected.length;
+        return { correct, points: wlPutInOrderPoints(matched, expected.length) };
       }
       case 'money_drop': {
         // Daily-challenge rules, server-authoritative: only what sits on the

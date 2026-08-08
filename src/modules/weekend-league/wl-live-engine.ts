@@ -716,18 +716,18 @@ export const wlLiveEngineInternals = {
       case 'mcq':
       case 'true_false': {
         const correct = answer === evaluation['correct_id'];
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'higher_lower': {
         const left = Number(evaluation['left_value']);
         const right = Number(evaluation['right_value']);
         const expected = left > right ? 'left' : 'right';
         const correct = answer === expected;
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'career_path': {
         const correct = matchesAccepted(answer, evaluation);
-        return { correct, points: wlStepPoints(kind, correct, elapsedMs) };
+        return { correct, points: wlStepPoints(kind, correct, elapsedMs, clueWindowMs) };
       }
       case 'who_am_i': {
         // The clue index is SERVER-derived from elapsed time (the clue the
@@ -750,7 +750,7 @@ export const wlLiveEngineInternals = {
         const correct = expected.length > 0
           && got.length === expected.length
           && expected.every((id, i) => got[i] === id);
-        return { correct, points: wlStepPoints('put_in_order', correct, elapsedMs) };
+        return { correct, points: wlStepPoints('put_in_order', correct, elapsedMs, clueWindowMs * WL_PUT_IN_ORDER_WINDOW_STEPS) };
       }
       case 'money_drop': {
         // Daily-challenge rules, server-authoritative: only what sits on the

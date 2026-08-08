@@ -122,6 +122,41 @@ export const rankedRepo = {
     return existing;
   },
 
+  /**
+   * Repair the tier derived from RP without fabricating a ranked match/ledger
+   * row. The RP predicate is an optimistic concurrency guard: if a real match
+   * settles after the caller reads the profile, its newer RP/tier pair wins and
+   * this repair falls through to the authoritative re-read.
+   */
+  async normalizeTier(
+    userId: string,
+    expectedRp: number,
+    tier: RankedTier,
+  ): Promise<RankedProfileRow> {
+    const [updated] = await sql<RankedProfileRow[]>`
+      UPDATE ranked_profiles
+      SET tier = ${tier}
+      WHERE user_id = ${userId}
+        AND rp = ${expectedRp}
+        AND tier IS DISTINCT FROM ${tier}
+      RETURNING *
+    `;
+    if (updated) return updated;
+
+    const [existing] = await sql<RankedProfileRow[]>`
+      SELECT * FROM ranked_profiles WHERE user_id = ${userId}
+    `;
+    if (!existing) {
+      throw new AppError(
+        'Failed to load ranked profile after tier normalization',
+        500,
+        ErrorCode.INTERNAL_ERROR,
+        { userId }
+      );
+    }
+    return existing;
+  },
+
   async getProfile(userId: string): Promise<RankedProfileRow | null> {
     const [row] = await sql<RankedProfileRow[]>`
       SELECT rp.*, u.country

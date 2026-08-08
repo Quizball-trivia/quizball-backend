@@ -47,6 +47,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => {
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
   rankedRepo: {
     ensureProfile: vi.fn(),
+    normalizeTier: vi.fn(),
     getProfile: vi.fn(),
     getProfilesByUserIds: vi.fn(),
     getRpChangesForMatch: vi.fn(),
@@ -222,6 +223,29 @@ describe('rankedService', () => {
     expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
     expect(profiles.get('u-1')).toBe(profileA);
     expect(profiles.get('u-2')).toBe(profileB);
+  });
+
+  it('normalizes a stale derived tier without writing a synthetic match ledger row', async () => {
+    const stale = createProfile({
+      user_id: 'u-stale-tier',
+      rp: 4035,
+      tier: 'Key Player',
+      placement_status: 'placed',
+      placement_played: 3,
+    });
+    const normalized = createProfile({
+      ...stale,
+      tier: 'Captain',
+    });
+    (rankedRepo.ensureProfile as Mock).mockResolvedValue(stale);
+    (rankedRepo.normalizeTier as Mock).mockResolvedValue(normalized);
+
+    const result = await rankedService.ensureProfile(stale.user_id);
+
+    expect(rankedRepo.normalizeTier).toHaveBeenCalledOnce();
+    expect(rankedRepo.normalizeTier).toHaveBeenCalledWith(stale.user_id, 4035, 'Captain');
+    expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
+    expect(result).toBe(normalized);
   });
 
   it('ensures only missing or stale ranked profiles after the batch read', async () => {

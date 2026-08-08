@@ -191,6 +191,54 @@ async function handleStaleRankedQueueUser(
   io.to(`user:${userId}`).emit('ranked:queue_left');
 }
 
+async function notifyClaimedSearchFailure(
+  io: QuizballServer,
+  entries: Array<{
+    userId: string;
+    searchId: string;
+    source: 'ranked_ai_fallback' | 'ranked_human_pair';
+  }>,
+): Promise<void> {
+  // A failure can be thrown AFTER preparation committed a lobby/match for the
+  // user (e.g. a post-commit Redis cleanup rejection). Telling that user to
+  // restart matchmaking would contradict the match_found they already received,
+  // so only users with no committed session state get the terminal abort. If
+  // the state read itself fails, fail open to the terminal events — a spurious
+  // abort beats an infinite spinner.
+  const snapshots = await userSessionGuardService
+    .resolveStates(entries.map((entry) => entry.userId))
+    .catch(() => null);
+  for (const entry of entries) {
+    const snapshot = snapshots?.get(entry.userId);
+    if (snapshot && (snapshot.activeMatchId || snapshot.waitingLobbyId)) continue;
+    // The claim scripts have already removed these searches from Redis. A
+    // terminal event is therefore required; otherwise the browser retains its
+    // last search_started acknowledgement and animates forever.
+    trackRankedQueueLeft({
+      userId: entry.userId,
+      source: 'server_abort',
+      searchFound: false,
+      searchId: entry.searchId,
+    });
+    io.to(`user:${entry.userId}`).emit('ranked:queue_left');
+    io.to(`user:${entry.userId}`).emit('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message: 'Match preparation failed. Please restart ranked matchmaking.',
+      meta: {
+        searchId: entry.searchId,
+        source: entry.source,
+      },
+    });
+  }
+
+  // A failure can happen after a later preparation step has created a lobby.
+  // Re-emit each authoritative state so those partial-success cases recover to
+  // the lobby/match instead of being incorrectly treated as a clean abort.
+  await Promise.allSettled(
+    entries.map((entry) => userSessionGuardService.emitState(io, entry.userId))
+  );
+}
+
 type RankedMatchmakingSessionBlock = {
   activeMatchId: string | null;
   waitingLobbyId: string | null;
@@ -588,6 +636,12 @@ export async function startHumanRankedMatch(
         await Promise.all(
           missingUserIds.map((userId) => handleStaleRankedQueueUser(io, userId, 'ranked_human_pair_user_lookup'))
         );
+        // The claim removed BOTH searches; the valid partner must not strand.
+        const validUserIds = [userA ? userAId : null, userB ? userBId : null]
+          .filter((userId): userId is string => Boolean(userId));
+        for (const userId of validUserIds) {
+          await requeueRankedSearch(io, userId);
+        }
         span.setAttribute('quizball.skipped_missing_user', true);
         return;
       }
@@ -683,6 +737,13 @@ export async function startHumanRankedMatch(
           userAState: sessionBlockA?.state ?? 'clear',
           userBState: sessionBlockB?.state ?? 'clear',
         });
+        // Both searches were claimed out of the queue. A clear partner would
+        // otherwise strand on the search animation; the blocked one just gets
+        // its authoritative state re-emitted.
+        if (!sessionBlockA) await requeueRankedSearch(io, userAId);
+        else await userSessionGuardService.emitState(io, userAId);
+        if (!sessionBlockB) await requeueRankedSearch(io, userBId);
+        else await userSessionGuardService.emitState(io, userBId);
         span.setAttribute('quizball.skipped_session_state', true);
         return;
       }
@@ -1044,6 +1105,11 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
           { err: error, searchId, userId },
           'Ranked matchmaking fallback failed for queued user'
         );
+        await notifyClaimedSearchFailure(io, [{
+          userId,
+          searchId,
+          source: 'ranked_ai_fallback',
+        }]);
       }
     }
     span.setAttribute('quizball.fallback_count', fallbackCount);
@@ -1094,6 +1160,18 @@ async function processPairs(io: QuizballServer): Promise<void> {
             },
             'Ranked matchmaking pair failed for queued users'
           );
+          await notifyClaimedSearchFailure(io, [
+            {
+              userId: pair.userAId,
+              searchId: pair.searchIdA,
+              source: 'ranked_human_pair',
+            },
+            {
+              userId: pair.userBId,
+              searchId: pair.searchIdB,
+              source: 'ranked_human_pair',
+            },
+          ]);
         }
       })();
       activeStarts.add(start);

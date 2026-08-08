@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { logger } from '../../core/logger.js';
+import { wlLogAnswerReject, wlLogClientEvent } from '../../modules/weekend-league/wl-forensics.js';
 import { sql } from '../../db/index.js';
 import { wlPlayersRoom, wlSpectatorsRoom } from '../../modules/weekend-league/wl-deliverer.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -17,6 +18,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 const subscribeSchema = z.object({
   tournament_id: z.string().uuid(),
   role: z.enum(['player', 'spectator']),
+  last_seq: z.number().int().nonnegative().optional(),
 }).strict();
 
 const answerSchema = z.object({
@@ -29,6 +31,8 @@ type SubscribeAck = (response: {
   ok: boolean;
   reason?: 'not_entered' | 'not_found' | 'invalid';
   seq?: number;
+  head?: number;
+  resume_granted?: boolean;
   snapshot?: import('../../modules/weekend-league/wl-live-engine.js').WlSubscribeSnapshot | null;
 }) => void;
 
@@ -50,7 +54,23 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({ ok: false, reason: 'invalid' });
       return;
     }
-    const { tournament_id: tournamentId, role } = parsed.data;
+    const { tournament_id: tournamentId, role, last_seq: lastSeq } = parsed.data;
+    wlLogClientEvent({
+      tournament_id: tournamentId,
+      user_id: userId,
+      kind: 'subscribe',
+      meta: { role, last_seq: lastSeq ?? null, socket_id: socket.id },
+    });
+    // Paired disconnect trace — reason distinguishes a user-closed tab
+    // ('client namespace disconnect') from a dropped transport.
+    socket.once('disconnect', (reason) => {
+      wlLogClientEvent({
+        tournament_id: tournamentId,
+        user_id: userId,
+        kind: 'disconnect',
+        meta: { role, reason, socket_id: socket.id },
+      });
+    });
     try {
       // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
       // is (for players) reflected in the snapshot built below.
@@ -104,7 +124,38 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       // delay holds no matter what the cursors say.
       const { wlRedisNowMs } = await import('../../modules/weekend-league/wl-redis.js');
       const nowMs = await wlRedisNowMs();
-      const lo = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      const cursor = Number(role === 'player' ? t.live_delivered_seq : t.spec_delivered_seq);
+      // A reconnecting client tells us the last seq it actually received;
+      // lowering the floor to it backfills everything the room broadcast
+      // while the socket was down (the global cursors keep advancing and
+      // know nothing about individual sockets). Same visibility gates as
+      // the fresh-join replay, so nothing leaks early. The floor is a
+      // reconnect aid, not a paging API: the resume window is capped at
+      // 200 events behind the cursor and the lowered floor is granted at
+      // most once per 5s per (user, tournament, role) via a Redis NX key —
+      // socket-local state would reset on every reconnect and parallel
+      // sockets would each get a fresh allowance. Redis down = no lowered
+      // floor (fail closed); the fresh-join replay path is unaffected.
+      let lo = cursor;
+      let resumeGranted: boolean | undefined;
+      if (typeof lastSeq === 'number' && lastSeq < cursor) {
+        let granted = false;
+        try {
+          const { wlRedis } = await import('../../modules/weekend-league/wl-redis.js');
+          granted = (await wlRedis().set(
+            `wl:backfill:${tournamentId}:${userId}:${role}`,
+            '1',
+            { NX: true, PX: 5_000 }
+          )) === 'OK';
+        } catch {
+          granted = false;
+        }
+        if (granted) lo = Math.max(lastSeq, cursor - 200);
+        // Tells the client whether its resume request was honored (a
+        // throttled grant should be retried; a granted-but-capped one means
+        // the tail beyond the window is gone and waiting cannot recover it).
+        resumeGranted = granted;
+      }
       let missed: Array<{ seq: string; type: string; payload: Record<string, unknown> }>;
       if (role === 'player') {
         missed = await sql<Array<{ seq: string; type: string; payload: Record<string, unknown> }>>`
@@ -137,8 +188,9 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       if (missed.length > 0) {
         const rawEmit = socket as unknown as { emit: (event: string, payload: unknown) => void };
         for (const row of missed) {
-          // Spectators never get the answer key (see wlDeliverSpectator).
-          const payload = role === 'spectator' && row.type === 'dispatch'
+          // NOBODY gets the answer key on a dispatch — players could read it
+          // from the socket before answering (it arrives with the reveal).
+          const payload = row.type === 'dispatch'
             ? { ...row.payload, evaluation: {} }
             : row.payload;
           rawEmit.emit(`wl:${row.type}`, {
@@ -157,6 +209,12 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       ack?.({
         ok: true,
         seq: lo,
+        ...(resumeGranted === undefined ? {} : { resume_granted: resumeGranted }),
+        // The snapshot's exact outbox boundary for its persisted component
+        // (events ≤ head are fully reflected in it, events above it not at
+        // all). Only meaningful WITH a snapshot — a failed or spectator
+        // subscribe carries no score state a boundary could describe.
+        ...(snapshot ? { head: snapshot.snapshot_seq } : {}),
         snapshot,
       });
     } catch (error) {
@@ -195,6 +253,15 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
         userId,
         answer: parsed.data.answer ?? null,
       });
+      if (!result.accepted) {
+        wlLogAnswerReject({
+          tournament_id: parsed.data.tournament_id,
+          attempt_id: parsed.data.attempt_id,
+          user_id: userId,
+          reason: result.reason,
+          answer: parsed.data.answer ?? null,
+        });
+      }
       ack?.(result);
     } catch (error) {
       logger.warn({ err: error, userId }, 'wl:answer failed');

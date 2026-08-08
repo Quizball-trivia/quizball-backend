@@ -37,7 +37,10 @@ import { wlUpcomingEventSchedule } from './wl-week.js';
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
 const LOCK_TTL_MS = 30_000;
 const IDLE_TICK_MS = 15_000;
-const LIVE_TICK_MS = 5_000;
+// The gap between questions is bounded by this tick: at 5s a player could sit
+// on a resolved question for five seconds with nothing happening. 1.5s keeps
+// the round flowing while staying far above the engine's per-tick cost.
+const LIVE_TICK_MS = 1_500;
 const CREATION_HORIZON_MS = 24 * 60 * 60 * 1000;
 const LIVE_STATUSES = new Set(['checkin', 'game_live', 'break', 'final_checkin', 'final_live']);
 export const WL_MIN_FIELD = 2;
@@ -271,12 +274,26 @@ async function advanceTournament(
     if (moved) t = await wlOrchestratorRepo.getById(t.id) ?? t;
   }
 
+  // Roster bots can't win prizes and never touch the wallet — see wl-bots.ts.
+  const botMinField = Number((t.config as Record<string, unknown> | null)?.['bot_fill_min_field'] ?? 0);
+  if (t.status === 'final_checkin' && botMinField > 0) {
+    const { wlBotFinalCheckin } = await import('./wl-bots.js');
+    await wlBotFinalCheckin(t.id);
+  }
+
   const view = scheduleView(t);
   if (
     t.status === 'checkin'
     && view.qualifierStartsAtMs != null
     && redisNow >= view.qualifierStartsAtMs
   ) {
+    // Bot fill happens exactly ONCE, at the check-in CUTOFF: every human who
+    // is coming has checked in, so the target can't be overshot by late
+    // arrivals (bots are never removed once entered).
+    if (botMinField > 0) {
+      const { wlFillBotsToTarget } = await import('./wl-bots.js');
+      await wlFillBotsToTarget(t.id, botMinField);
+    }
     const checkedIn = await wlOrchestratorRepo.checkedInCount(t.id);
     if (checkedIn < WL_MIN_FIELD) {
       await wlOrchestratorRepo.transition({
@@ -294,6 +311,12 @@ async function advanceTournament(
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
     await getWlEngine(t).advance(t, redisNow);
+    if (botMinField > 0 && t.status !== 'break') {
+      const { wlBotAnswerTick } = await import('./wl-bots.js');
+      await wlBotAnswerTick(t.id).catch((error) => {
+        logger.warn({ err: error, tournamentId: t.id }, 'WL bot answer tick failed');
+      });
+    }
     return;
   }
 
@@ -321,10 +344,73 @@ async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
  * tops them up to candidate exhaustion. Crash anywhere ⇒ healed next pass.
  */
 async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
-  const { wlEnsureStartedWave, wlNotifyEntrants } = await import('./wl-notifications.js');
-  if (!t.is_test && ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
-    .includes(t.status)) {
+  const {
+    wlEnsureStartedWave, wlNotifyEntrants, wlEmailEntrants,
+    CHECKIN_OPEN_CONTENT, QUALIFIED_CONTENT, FINAL_CHECKIN_CONTENT,
+    REMINDER_1H_CONTENT, REMINDER_30M_CONTENT,
+  } = await import('./wl-notifications.js');
+  // Kickoff reminders: T-60 and T-30 before the qualifier, to registered
+  // participants, in-app always + email when a provider is configured.
+  // Window-gated (not point-in-time) so a restart inside the window still
+  // delivers, and a compressed test event naturally fires only the waves
+  // whose windows exist. Recipient-idempotent, so re-running is free.
+  // Entry-opened announcement to QP-qualified non-entrants (real events
+  // only — a sandbox event must not email the whole qualified base).
+  // Throttled to one scan per 10 minutes: the qualified-population GROUP BY
+  // over the QP ledger is too heavy for every reconciler pass, and a
+  // 10-minute lag for a newly qualified player's announcement is invisible.
+  // Late qualifiers keep getting picked up all week (no done-flag).
+  if (!t.is_test && t.status === 'entry_open') {
+    let due = false;
+    try {
+      const { wlRedis } = await import('./wl-redis.js');
+      due = (await wlRedis().set(`wl:entrywave:${t.id}`, '1', { NX: true, PX: 600_000 })) === 'OK';
+    } catch { /* Redis down → try again next pass */ }
+    if (due) {
+      const { wlNotifyQualifiedEntryOpen } = await import('./wl-notifications.js');
+      const cfg = (t.config ?? {}) as Record<string, unknown>;
+      const target = Number(cfg['qp_target']);
+      await wlNotifyQualifiedEntryOpen(t.id, Number.isFinite(target) && target > 0 ? target : 200);
+    }
+  }
+  const qualifierStartMs = t.qualifier_starts_at ? Date.parse(String(t.qualifier_starts_at)) : NaN;
+  const preGame = ['ready', 'entry_open', 'entry_closed', 'checkin'].includes(t.status);
+  if (preGame && Number.isFinite(qualifierStartMs)) {
+    const untilStart = qualifierStartMs - Date.now();
+    const reminderStates = ['entered', 'playing'];
+    // TEST events never send EMAIL. A load test signs up hundreds of synthetic
+    // users with real addresses, and a compressed test event fires its "1 hour
+    // to kickoff" reminder seconds after creation — one 500-player fleet run
+    // burned an entire day's Resend quota. In-app waves still fire so the
+    // notification path stays testable.
+    const mayEmail = !t.is_test;
+    if (untilStart > 0 && untilStart <= 60 * 60_000) {
+      await wlNotifyEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
+      if (mayEmail) await wlEmailEntrants(t.id, 'reminder_1h', REMINDER_1H_CONTENT, reminderStates);
+    }
+    if (untilStart > 0 && untilStart <= 30 * 60_000) {
+      await wlNotifyEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
+      if (mayEmail) await wlEmailEntrants(t.id, 'reminder_30m', REMINDER_30M_CONTENT, reminderStates);
+    }
+  }
+  const inPlay = ['checkin', 'game_live', 'break', 'qualifier_done', 'final_checkin', 'final_live']
+    .includes(t.status);
+  if (!t.is_test && inPlay) {
     await wlEnsureStartedWave(t.id);
+  }
+  // Test events notify ENTRANTS ONLY — the admin/harness sandbox must never
+  // blast the broad started audience, but a joined tester still gets the
+  // real notification experience at check-in.
+  if (t.is_test && inPlay) {
+    await wlNotifyEntrants(t.id, 'checkin_open', CHECKIN_OPEN_CONTENT, ['entered', 'playing', 'finalist']);
+  }
+  // Finalists (real and test): you're through — and when the final window
+  // opens, confirm the seat. Tiny audiences, recipient-idempotent.
+  if (['qualifier_done', 'final_checkin', 'final_live'].includes(t.status)) {
+    await wlNotifyEntrants(t.id, 'qualified', QUALIFIED_CONTENT, ['finalist']);
+  }
+  if (t.status === 'final_checkin') {
+    await wlNotifyEntrants(t.id, 'final_checkin_open', FINAL_CHECKIN_CONTENT, ['finalist']);
   }
   if (t.status === 'cancelled') {
     await wlNotifyEntrants(t.id, 'cancelled', {

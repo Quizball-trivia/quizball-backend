@@ -165,8 +165,14 @@ export async function wlDeliverPending(
       );
       if (!stamped) break; // fence lost
 
+      // SECURITY: the answer key never rides a dispatch to ANY client — a
+      // player could read it from the socket before answering. Verdicts come
+      // from the answer ack; the key arrives with the reveal event.
+      const playerPayload = event.type === 'dispatch'
+        ? { ...outPayload, evaluation: {} }
+        : outPayload;
       io.to(wlPlayersRoom(tournamentId)).emit(publicEventName(event), {
-        ...outPayload,
+        ...playerPayload,
         tournamentId,
         seq: event.seq,
         type: event.type,

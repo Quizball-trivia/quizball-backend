@@ -10,7 +10,7 @@
  *    tournaments and the launch edition).
  *  - Repeat-avoidance: source ids used by any tournament created in the
  *    last WL_REPEAT_AVOID_DAYS are excluded.
- *  - Higher/Lower: one source row's matchups become the round's 3 step
+ *  - Higher/Lower: one source row's matchups become the round's step
  *    slots (each slot = one matchup), so a chain always compares within
  *    one stat.
  *  - Reserves: +WL_RESERVES_PER_KIND rows per (game, kind) for crash
@@ -34,6 +34,10 @@ const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
   mcq: 'mcq_single',
   career_path: 'career_path',
   who_am_i: 'clue_chain',
+  // Money drop bets on regular MCQs — same bank as the mcq round (the two
+  // draws are deduped in-pass so one tournament never repeats a question).
+  money_drop: 'mcq_single',
+  put_in_order: 'put_in_order',
 };
 
 interface SourceRow {
@@ -66,7 +70,7 @@ function payloadFullyBilingual(prompt: unknown, payload: unknown): boolean {
 /** How many SOURCE rows a full tournament needs per kind (slots + reserves). */
 export function wlSourceNeedPerKind(kind: WlRoundKind): number {
   const perGame = kind === 'higher_lower'
-    ? 1 // one source row covers the 3-step chain
+    ? 1 // one source row covers the whole matchup chain
     : WL_QUESTIONS_PER_ROUND[kind];
   return WL_GAME_COUNT * (perGame + WL_RESERVES_PER_KIND);
 }
@@ -76,10 +80,17 @@ async function drawSources(
   need: number,
   allowPublicBank: boolean,
   deterministic: boolean,
-  pagingSeed: string
+  pagingSeed: string,
+  excludeIds?: ReadonlySet<string>
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
-  const minMatchups = kind === 'higher_lower' ? 3 : 0;
+  // Owner's product call (2026-08-07): the mcq round is the VISUAL round —
+  // image questions outrank even protected text stock there. Money drop is
+  // the opposite: curated wl_private TEXT first, images left for mcq.
+  const preferImages = kind === 'mcq';
+  const preferText = kind === 'money_drop';
+  // A high_low source must carry one matchup per question in the round.
+  const minMatchups = kind === 'higher_lower' ? WL_QUESTIONS_PER_ROUND.higher_lower : 0;
   // Stable within one seeding pass: RANDOM() would reshuffle every page,
   // repeating and skipping rows across OFFSETs. The per-tournament seed
   // keeps selection pseudo-random ACROSS tournaments yet deterministic
@@ -96,6 +107,7 @@ async function drawSources(
   // monolingual rows must not masquerade as a shortage.
   const picked: SourceRow[] = [];
   const pageSize = Math.max(need * 3, 50);
+  const skip = excludeIds ?? new Set<string>();
   for (let offset = 0; picked.length < need; offset += pageSize) {
     const rows = await sql<SourceRow[]>`
       SELECT q.id, q.prompt, qp.payload
@@ -110,13 +122,25 @@ async function drawSources(
           JOIN wl_tournaments wt ON wt.id = w.tournament_id
           WHERE w.source_question_id = q.id
             AND wt.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})
+            -- Test events must not burn the weekly pool: on staging the
+            -- harness runs many compressed tournaments a day, and with a
+            -- repeat-avoid that counted them, thin kinds (high_low!)
+            -- starve within a single afternoon of testing.
+            AND wt.is_test = false
         )
-      ORDER BY (q.visibility = 'wl_private') DESC, ${order}
+      ORDER BY (${preferImages}
+                 AND qp.payload->'image' IS NOT NULL
+                 AND qp.payload->>'image' <> 'null') DESC,
+               (q.visibility = 'wl_private') DESC,
+               (${preferText}
+                 AND (qp.payload->'image' IS NULL OR qp.payload->>'image' = 'null')) DESC,
+               ${order}
       LIMIT ${pageSize} OFFSET ${offset}
     `;
     if (rows.length === 0) break;
     for (const r of rows) {
       if (picked.length >= need) break;
+      if (skip.has(r.id)) continue;
       if (payloadFullyBilingual(r.prompt, r.payload)) picked.push(r);
     }
     if (rows.length < pageSize) break;
@@ -191,6 +215,37 @@ function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number
           accepted_answers: p['accepted_answers'],
         },
       };
+    case 'put_in_order': {
+      const items = (p['items'] as Array<Record<string, unknown>> ?? []);
+      const direction = p['direction'] === 'desc' ? 'desc' : 'asc';
+      const sorted = [...items].sort((a, b) => Number(a['sort_value']) - Number(b['sort_value']));
+      if (direction === 'desc') sorted.reverse();
+      // Deterministic display shuffle (id order ≠ answer order); details are
+      // deliberately DROPPED — they can carry the sort value in plain text.
+      const display = [...items].sort((a, b) => String(a['id']).localeCompare(String(b['id'])));
+      return {
+        payload: {
+          prompt: source.prompt,
+          instruction: p['instruction'] ?? null,
+          direction,
+          items: display.map((i) => ({ id: i['id'], label: i['label'], emoji: i['emoji'] ?? null })),
+        },
+        evaluation: { order: sorted.map((i) => String(i['id'])) },
+      };
+    }
+    case 'money_drop': {
+      // Same mcq_single source shape; no image — the betting board carries
+      // sliders and bill stacks, there is no room for artwork (and image
+      // stock is reserved for the mcq round's visual preference).
+      const options = (p['options'] as Array<Record<string, unknown>> ?? []);
+      return {
+        payload: {
+          prompt: source.prompt,
+          options: options.map((o) => ({ id: o['id'], text: o['text'] })),
+        },
+        evaluation: { correct_id: options.find((o) => o['is_correct'] === true)?.['id'] ?? null },
+      };
+    }
   }
 }
 
@@ -211,14 +266,22 @@ export async function wlSeedTournamentContent(input: {
   if ((already[0]?.n ?? 0) > 0) return { ok: true, inserted: 0 };
 
   // Draw everything first; only insert when EVERY kind is satisfiable.
+  // Kinds sharing a source bank (mcq + money_drop are both mcq_single) are
+  // deduped in-pass: the cross-tournament repeat-avoid can't see rows we
+  // haven't inserted yet, and test events are exempt from it entirely.
   const drawn = new Map<WlRoundKind, SourceRow[]>();
   const shortages: WlSeedResult['shortages'] = {};
+  const usedSourceIds = new Set<string>();
   for (const kind of WL_ROUND_ORDER) {
     const need = wlSourceNeedPerKind(kind);
-    const rows = await drawSources(kind, need, input.allowPublicBank, input.deterministic ?? false, input.tournamentId);
+    const rows = await drawSources(
+      kind, need, input.allowPublicBank, input.deterministic ?? false,
+      input.tournamentId, usedSourceIds
+    );
     if (rows.length < need) {
       shortages[kind] = { need, have: rows.length };
     }
+    for (const r of rows) usedSourceIds.add(r.id);
     drawn.set(kind, rows);
   }
   if (Object.keys(shortages).length > 0) {

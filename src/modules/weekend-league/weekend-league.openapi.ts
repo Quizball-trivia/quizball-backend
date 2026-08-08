@@ -1,5 +1,6 @@
 import '../../http/openapi/zod-init.js';
 import { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import { z } from 'zod';
 import { errorResponseSchema } from '../../http/openapi/common-schemas.js';
 import { registerEndpoint } from '../../http/openapi/register-endpoint.js';
 import {
@@ -8,6 +9,7 @@ import {
   wlEnterResponseSchema,
   wlQpResponseSchema,
 } from './weekend-league.schemas.js';
+import { wlCreateTestSchema } from './wl-ops.service.js';
 
 export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
   const currentResponse = wlCurrentResponseSchema.openapi('WlCurrentResponse');
@@ -63,6 +65,148 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     security: [{ bearerAuth: [] }],
     responses: {
       200: { description: 'Check-in outcome (idempotent)', schema: checkinResponse },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  // ── Admin (CMS) surface — bearer admin role ──────────────────────────────
+  const adminTournamentRow = z.object({}).catchall(z.unknown()).openapi('WlAdminTournamentRow');
+  const adminList = z.object({ tournaments: z.array(adminTournamentRow) }).openapi('WlAdminTournamentsResponse');
+  const adminDetail = z.object({
+    tournament: adminTournamentRow,
+    registrants: z.array(z.object({}).catchall(z.unknown())),
+    entry_states: z.array(z.object({ state: z.string(), n: z.number().int(), bots: z.number().int() })),
+    current_game_index: z.number().int(),
+    board: z.array(z.object({
+      user_id: z.string(), points: z.number().int(), time_ms_total: z.number(),
+      rank: z.number().int(), nickname: z.string().nullable(), is_ai: z.boolean().nullable(),
+    })),
+    game_results: z.array(z.object({}).catchall(z.unknown())),
+    awards: z.array(z.object({}).catchall(z.unknown())),
+    stream: z.object({
+      head: z.number().int().nullable(), pending: z.number().int(), poisonish: z.number().int(),
+    }).nullable(),
+  }).openapi('WlAdminTournamentDetailResponse');
+  registry.register('WlAdminTournamentsResponse', adminList);
+  registry.register('WlAdminTournamentDetailResponse', adminDetail);
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/tournaments',
+    summary: 'Recent WL tournaments with live counts (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Tournament list', schema: adminList },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Not an admin', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/tournaments/{id}',
+    summary: 'One WL tournament: field, standings, awards, stream health (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: {
+      200: { description: 'Tournament detail', schema: adminDetail },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      404: { description: 'Not found', schema: errorResponseSchema },
+    },
+  });
+  const okFlag = (key: string, name: string) =>
+    z.object({ [key]: z.boolean() }).openapi(name);
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/create-test',
+    summary: 'Create a compressed/any-date TEST tournament (admin, non-prod)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    body: wlCreateTestSchema.omit({ actor: true }).partial(),
+    responses: {
+      200: {
+        description: 'Created',
+        schema: z.object({ tournament_id: z.string().uuid() }).openapi('WlAdminCreateTestResponse'),
+      },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  for (const [action, key] of [
+    ['pause', 'paused'], ['resume', 'resumed'], ['cancel', 'cancelled'],
+  ] as const) {
+    registerEndpoint(registry, {
+      method: 'post',
+      path: `/api/v1/admin/wl/tournaments/{id}/${action}`,
+      summary: `${action} a WL tournament (admin)`,
+      tags: ['WeekendLeagueAdmin'],
+      security: [{ bearerAuth: [] }],
+      pathParams: z.object({ id: z.string().uuid() }),
+      responses: {
+        200: { description: 'Outcome', schema: okFlag(key, `WlAdmin${action[0]!.toUpperCase()}${action.slice(1)}Response`) },
+        401: { description: 'Not authenticated', schema: errorResponseSchema },
+      },
+    });
+  }
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/tournaments/{id}/fill-bots',
+    summary: 'Top the field up with roster bots (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    body: z.object({ min_field: z.number().int().min(1) }),
+    responses: {
+      200: {
+        description: 'Bots entered',
+        schema: z.object({ filled: z.number().int() }).openapi('WlAdminFillBotsResponse'),
+      },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/stock',
+    summary: 'WL question-stock levels per kind and visibility (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: 'Stock counts',
+        schema: z.object({
+          stock: z.array(z.object({ type: z.string(), visibility: z.string(), n: z.number().int() })),
+        }).openapi('WlAdminStockResponse'),
+      },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'delete',
+    path: '/api/v1/admin/wl/tournaments/{id}',
+    summary: 'Delete a TEST tournament (real events must be cancelled instead)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: {
+      200: {
+        description: 'Deleted',
+        schema: z.object({ deleted: z.boolean() }).openapi('WlAdminDeleteTestResponse'),
+      },
+      400: { description: 'Not a test event', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/force-tick',
+    summary: 'Run one locked orchestrator tick now (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: 'Tick outcome',
+        schema: z.object({ ticked: z.boolean() }).openapi('WlAdminForceTickResponse'),
+      },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });

@@ -430,17 +430,19 @@ export const wlEngineLive: WlEngine = {
           // correct-sequence comparison — both need real screen time; every
           // other kind flows straight into the next question. Capped at one
           // base question window so compressed test tournaments stay compressed.
-          const kind = crossesRound ? null : await wlLiveEngineInternals.kindOf(frontier.question_id);
-          const kindHoldMs = kind == null
-            ? 0
-            : kind === 'money_drop'
-              ? WL_MONEY_DROP_REVEAL_HOLD_MS
-              : kind === 'put_in_order'
-                ? WL_PUT_IN_ORDER_REVEAL_HOLD_MS
-                : WL_STEP_REVEAL_HOLD_MS;
+          const kind = await wlLiveEngineInternals.kindOf(frontier.question_id);
+          const kindHoldMs = kind === 'money_drop'
+            ? WL_MONEY_DROP_REVEAL_HOLD_MS
+            : kind === 'put_in_order'
+              ? WL_PUT_IN_ORDER_REVEAL_HOLD_MS
+              : WL_STEP_REVEAL_HOLD_MS;
+          const cappedKindHoldMs = Math.min(kindHoldMs, wlConfigFrom(t.config).question_time_ms);
+          // A round boundary takes the LONGER of the breather and the kind's
+          // own hold — put-in-order's comparison must not get cut to the
+          // breather on the round's last question.
           const holdMs = crossesRound
-            ? WL_ROUND_BREATHER_MS
-            : Math.min(kindHoldMs, wlConfigFrom(t.config).question_time_ms);
+            ? Math.max(WL_ROUND_BREATHER_MS, cappedKindHoldMs)
+            : cappedKindHoldMs;
           const revealedAt = Number(frontier.revealed_at_ms ?? 0);
           if (holdMs > 0 && Number.isFinite(revealedAt) && revealedAt > 0
             && redisNow - revealedAt < holdMs) {

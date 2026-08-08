@@ -89,9 +89,10 @@ export const WL_MONEY_DROP_REVEAL_HOLD_MS = 4_000;
  *  without it the correct answer flashed for only the orchestrator-tick
  *  latency before the next question replaced it (playtest feedback). */
 export const WL_STEP_REVEAL_HOLD_MS = 3_000;
-/** Post-reveal hold for put-in-order: the correct-sequence comparison needs
- *  actual reading time (playtest: the old instant advance read as a flash). */
-export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 5_000;
+/** Post-reveal hold for put-in-order: matches ranked's post-resolve stage
+ *  (result hold + transition + celebration ≈ 9s) so the correct-sequence
+ *  comparison is actually readable (playtest: 5s still read as a flash). */
+export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 9_000;
 
 /** Ordering four items is a slower interaction than one tap — two base
  *  windows (20s at the prod 10s clock), same reasoning as money drop. */

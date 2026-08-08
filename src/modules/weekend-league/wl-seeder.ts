@@ -217,9 +217,12 @@ function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number
       };
     case 'put_in_order': {
       const items = (p['items'] as Array<Record<string, unknown>> ?? []);
-      const direction = p['direction'] === 'desc' ? 'desc' : 'asc';
+      // sort_value is a RANK (1 = first slot), not a metric: ranked's engine
+      // sorts ascending unconditionally and the instruction text carries the
+      // direction wording. Honoring the payload's direction field here
+      // REVERSED the answer key on every 'desc' question (Aug-8 launch bug —
+      // correct answers scored 0, backwards answers scored full).
       const sorted = [...items].sort((a, b) => Number(a['sort_value']) - Number(b['sort_value']));
-      if (direction === 'desc') sorted.reverse();
       // Deterministic display shuffle (id order ≠ answer order); details are
       // deliberately DROPPED — they can carry the sort value in plain text.
       const display = [...items].sort((a, b) => String(a['id']).localeCompare(String(b['id'])));
@@ -227,7 +230,6 @@ function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number
         payload: {
           prompt: source.prompt,
           instruction: p['instruction'] ?? null,
-          direction,
           items: display.map((i) => ({ id: i['id'], label: i['label'], emoji: i['emoji'] ?? null })),
         },
         evaluation: { order: sorted.map((i) => String(i['id'])) },

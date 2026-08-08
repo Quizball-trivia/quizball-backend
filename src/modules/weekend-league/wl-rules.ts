@@ -5,7 +5,7 @@
  * scores and ranks from persisted answers using exactly these functions.
  */
 
-import { calculatePoints } from '../../realtime/scoring.js';
+import { calculatePoints, calculatePutInOrderScore } from '../../realtime/scoring.js';
 
 export const WL_QUESTION_TIME_MS = 10_000;
 /**
@@ -95,7 +95,9 @@ export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 5_000;
 
 /** Ordering four items is a slower interaction than one tap — two base
  *  windows (20s at the prod 10s clock), same reasoning as money drop. */
-export const WL_PUT_IN_ORDER_WINDOW_STEPS = 2;
+// 3 steps = 30s — the SAME clock ranked's put-in-order runs
+// (PUT_IN_ORDER_QUESTION_TIME_MS), so the muscle memory transfers.
+export const WL_PUT_IN_ORDER_WINDOW_STEPS = 3;
 
 /**
  * Sanitize a client bet sheet against the server-known budget: non-negative
@@ -146,6 +148,14 @@ export function wlStepPoints(
 ): number {
   const base = calculatePoints(isCorrect, elapsedMs, Math.max(1_000, windowMs));
   return Math.floor((base * WL_STEP_MAX_POINTS[kind]) / 100);
+}
+
+/** Ranked-parity put-in-order scoring: proportional to matched positions
+ *  (calculatePutInOrderScore), scaled to the WL step maximum. No speed
+ *  factor — exactly as ranked scores the format. */
+export function wlPutInOrderPoints(matchedPositions: number, totalItems: number): number {
+  const base = calculatePutInOrderScore(matchedPositions, totalItems);
+  return Math.floor((base * WL_STEP_MAX_POINTS.put_in_order) / 100);
 }
 
 export function wlWhoAmIPoints(isCorrect: boolean, clueIndex: number): number {

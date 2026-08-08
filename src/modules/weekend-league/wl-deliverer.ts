@@ -180,10 +180,15 @@ export async function wlDeliverPending(
       } as never);
 
       if (event.type === 'dispatch' && typeof outPayload['deadlineAt'] === 'number') {
-        // Wake-up hint at the deadline; the 5s live reconciler is the
+        // Wake-up hints AFTER the deadline (+250ms, +900ms): a hint popping a
+        // hair early no-ops against Redis time and the reveal then waited for
+        // the next 1.5s tick — the launch event's p95 deadline→reveal lag was
+        // 2.2s for exactly this reason. The 5s live reconciler stays the
         // durable backstop (timers are never the source of truth).
         const { scheduleWlTick } = await import('./wl-timer.js');
-        await scheduleWlTick(tournamentId, Number(outPayload['deadlineAt'])).catch(() => {});
+        const dl = Number(outPayload['deadlineAt']);
+        await scheduleWlTick(tournamentId, dl + 250).catch(() => {});
+        await scheduleWlTick(tournamentId, dl + 900).catch(() => {});
       }
 
       {

@@ -1,4 +1,6 @@
 import { getOrLoadJson } from '../../core/json-cache.js';
+import { sql } from '../../db/index.js';
+import { tierFromRp } from '../ranked/season-rp-formula.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
 import { wlConfigFrom } from './wl-config.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
@@ -74,6 +76,62 @@ async function loadQp(
 }
 
 export const weekendLeagueService = {
+  /**
+   * Public qualifier standings for the CURRENT tournament: cumulative board
+   * of the newest game that has results (rank, points, advanced), joined with
+   * nickname/avatar/country and the ranked tier. Empty before any game ends.
+   * Feeds the Weekend League tab's standings table (it launched with a
+   * hardcoded [] — owner report the morning after).
+   */
+  async standings(): Promise<{
+    tournament_id: string | null;
+    game_index: number | null;
+    entries: Array<{
+      user_id: string; nickname: string | null; avatar_url: string | null;
+      country: string | null; tier: string; rank: number; points: number;
+      advanced: boolean;
+    }>;
+  }> {
+    const tournament = await weekendLeagueRepo.getCurrentTournament();
+    if (!tournament) return { tournament_id: null, game_index: null, entries: [] };
+    const [latest] = await sql<Array<{ game_index: number }>>`
+      SELECT max(game_index)::int AS game_index FROM wl_game_results
+      WHERE tournament_id = ${tournament.id}
+    `;
+    if (latest?.game_index == null) {
+      return { tournament_id: tournament.id, game_index: null, entries: [] };
+    }
+    const rows = await sql<Array<{
+      user_id: string; nickname: string | null; avatar_url: string | null;
+      country: string | null; rp: number | null; rank: number; score: number;
+      advanced: boolean;
+    }>>`
+      SELECT r.user_id, u.nickname, u.avatar_url, u.country,
+             p.rp::int AS rp, r.rank, r.score, r.advanced
+      FROM wl_game_results r
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN ranked_profiles p ON p.user_id = r.user_id
+      WHERE r.tournament_id = ${tournament.id} AND r.game_index = ${latest.game_index}
+      ORDER BY r.rank
+      LIMIT 100
+    `;
+    return {
+      tournament_id: tournament.id,
+      game_index: latest.game_index,
+      entries: rows.map((r) => ({
+        user_id: r.user_id,
+        nickname: r.nickname,
+        avatar_url: r.avatar_url,
+        country: r.country,
+        tier: tierFromRp(Number(r.rp ?? 0)),
+        rank: r.rank,
+        points: r.score,
+        advanced: r.advanced,
+      })),
+    };
+  },
+
+
   async current(userId: string): Promise<WlCurrentResponse> {
     const tournament = await weekendLeagueRepo.getCurrentTournament();
     if (!tournament) {

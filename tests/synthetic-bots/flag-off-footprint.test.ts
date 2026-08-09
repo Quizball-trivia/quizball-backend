@@ -28,6 +28,14 @@ const selectionService = {
   selectAndReserve: vi.fn(),
   recordRecentlyFaced: vi.fn().mockResolvedValue(undefined),
 };
+const redisState: {
+  client: null | {
+    isOpen: boolean;
+    get: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+    del: ReturnType<typeof vi.fn>;
+  };
+} = { client: null };
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({ usersRepo }));
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({ lobbiesRepo }));
@@ -50,7 +58,7 @@ vi.mock('../../src/core/analytics/game-events.js', () => ({
 }));
 vi.mock('../../src/modules/stats/stats.service.js', () => ({ statsService: { getRecentFormForUser: vi.fn().mockResolvedValue([]) } }));
 vi.mock('../redis.js', () => ({ getRedisClient: () => null }), { virtual: true } as never);
-vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => null }));
+vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => redisState.client }));
 vi.mock('../../src/realtime/lobby-utils.js', () => ({
   attachUserSocketsToLobby: vi.fn().mockResolvedValue(undefined),
   emitLobbyState: vi.fn().mockResolvedValue(undefined),
@@ -70,6 +78,8 @@ const { startRankedAiForUser } = await import('../../src/realtime/services/lobby
 beforeEach(() => {
   vi.clearAllMocks();
   callOrder.length = 0;
+  redisState.client = null;
+  emit.mockImplementation(() => undefined);
   reservationService.isEnabled.mockReturnValue(false);
   selectionService.selectAndReserve.mockResolvedValue(null);
   usersRepo.create.mockImplementation(async () => {
@@ -105,19 +115,48 @@ describe('persistent-only ranked fallback', () => {
     expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
   });
 
+  it('keeps a valid persistent lobby when the optional Redis marker write fails', async () => {
+    vi.useFakeTimers();
+    try {
+      redisState.client = {
+        isOpen: true,
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+        del: vi.fn().mockResolvedValue(1),
+      };
+      selectionService.selectAndReserve.mockResolvedValueOnce({
+        bot: { user_id: 'persistent-bot', rp: 1500, nickname: 'botname', avatar_url: null, country: 'GE', home_city: null, home_lat: null, home_lng: null, favorite_club: null },
+        reservation: { botUserId: 'persistent-bot', lobbyId: 'lobby-1', fence: 1 },
+        relaxationLevel: 'strict', targetRp: 1500,
+      });
+
+      await expect(startRankedAiForUser(io, 'human', {
+        skipSearchEmit: true,
+        searchDurationMs: 100000,
+      })).resolves.toBe(true);
+
+      expect(redisState.client.set).toHaveBeenCalled();
+      expect(reservationService.abortLobby).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('returns a terminal failure and clears the client search state when scheduling throws', async () => {
     selectionService.selectAndReserve.mockResolvedValueOnce({
       bot: { user_id: 'persistent-bot', rp: 1500, nickname: 'botname', avatar_url: null, country: 'GE', home_city: null, home_lat: null, home_lng: null, favorite_club: null },
       reservation: { botUserId: 'persistent-bot', lobbyId: 'lobby-1', fence: 1 },
       relaxationLevel: 'strict', targetRp: 1500,
     });
-    emit.mockImplementationOnce(() => {
+    emit.mockImplementation(() => {
       throw new Error('socket emit failed');
     });
 
-    const started = await startRankedAiForUser(io, 'human', { searchDurationMs: 100000 });
+    await expect(
+      startRankedAiForUser(io, 'human', { searchDurationMs: 100000 }),
+    ).resolves.toBe(false);
 
-    expect(started).toBe(false);
     expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
     expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({

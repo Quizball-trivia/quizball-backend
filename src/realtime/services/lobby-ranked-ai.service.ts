@@ -131,12 +131,20 @@ async function emitRankedPreparationFailure(params: {
     searchFound: false,
     searchId: null,
   });
-  io.to(`user:${userId}`).emit('ranked:queue_left');
-  io.to(`user:${userId}`).emit('error', {
-    code: 'MATCH_PREPARATION_FAILED',
-    message,
-    meta: { lobbyId, source },
-  });
+  try {
+    io.to(`user:${userId}`).emit('ranked:queue_left');
+  } catch (err) {
+    logger.warn({ err, userId, lobbyId, source }, 'Failed to emit ranked queue-left after AI preparation failure');
+  }
+  try {
+    io.to(`user:${userId}`).emit('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message,
+      meta: { lobbyId, source },
+    });
+  } catch (err) {
+    logger.warn({ err, userId, lobbyId, source }, 'Failed to emit ranked AI preparation error');
+  }
   await userSessionGuardService.emitState(io, userId).catch((err) => {
     logger.warn({ err, userId, lobbyId, source }, 'Failed to emit session state after ranked AI preparation failure');
   });
@@ -230,8 +238,14 @@ export async function startRankedAiForUser(
       await lobbiesRepo.addMember(lobby.id, userId, true);
       await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
       const redis = getRedisClient();
-      if (redis) {
-        await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+      if (redis?.isOpen) {
+        await redis
+          .set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC })
+          .catch((err) => {
+            // The marker is an optimization. Draft resolution can recover the
+            // persistent AI identity from the lobby members in Postgres.
+            logger.warn({ err, lobbyId: lobby.id, botUserId: aiUser.id }, 'Failed to cache ranked AI lobby marker');
+          });
       }
       await attachUserSocketsToLobby(io, userId, lobby.id);
       await emitLobbyState(io, lobby.id);
@@ -484,7 +498,9 @@ async function startRankedAiDraft(params: {
     // created a match, it no-ops (the live draft keeps the bot); only a stuck
     // no-match draft is reclaimed.
     await releasePreMatch('draft_start_error');
-    io.to(`lobby:${lobbyId}`).emit('error', {
+    // Compensation may detach every socket from the lobby room. The user's
+    // stable room remains reachable after teardown.
+    io.to(`user:${userId}`).emit('error', {
       code: 'MATCH_PREPARATION_FAILED',
       message: 'Match preparation got stuck. Please restart ranked matchmaking.',
       meta: {

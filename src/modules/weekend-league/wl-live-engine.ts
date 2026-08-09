@@ -564,17 +564,13 @@ export const wlLiveEngineInternals = {
     const next = wlNextSlot({
       gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
     });
-    if (next) {
-      // At a ROUND boundary the next dispatch is deliberately NOT appended here:
-      // the orchestrator's advance() holds it for WL_ROUND_BREATHER_MS so the
-      // round-end standings beat can play. Mid-round we dispatch immediately —
-      // EXCEPT money drop, whose reveal is a several-second drop animation:
-      // it defers to the orchestrator's shorter mid-round hold the same way.
-      if (next.roundIndex === run.round_index) {
-        if (await this.kindOf(run.question_id) === 'money_drop') return;
-        await this.appendDispatch(tournamentId, next, redisNow);
-      }
-    }
+    // The next dispatch is ALWAYS the orchestrator's job: its advance() owns
+    // the per-kind reveal holds (step 3s / money drop 4s / put-in-order 9s)
+    // and the round breather. The old mid-round immediate dispatch here
+    // BYPASSED every one of those holds — the recurring "correct answer
+    // flashes past" reports, put-in-order's comparison included, were this
+    // line, not the hold constants.
+    void next;
   },
 
   /** Recovery alias — advance() resumes a stranded frozen run through here. */

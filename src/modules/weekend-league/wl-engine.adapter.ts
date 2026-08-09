@@ -555,8 +555,12 @@ async function writeAwards(
   // Slug is always date-shaped (the frontend routes WL visuals on an exact
   // weekend-league-YYYY-MM-DD match); fall back to the final's date when a
   // test-shaped row lacks week_key.
+  // Both COALESCE branches must be TEXT: week_key is a DATE column (the driver
+  // sends it back as a Date), so mixing it with to_char()'s text fails with
+  // 42804 and rolls back final settlement — the Aug-9 final incident.
   const [day] = await db<Array<{ d: string }>>`
-    SELECT COALESCE(${t?.week_key ?? null}, to_char(final_starts_at, 'YYYY-MM-DD')) AS d
+    SELECT COALESCE(to_char(week_key, 'YYYY-MM-DD'),
+                    to_char(final_starts_at, 'YYYY-MM-DD')) AS d
     FROM wl_tournaments WHERE id = ${tournamentId}
   `;
   const slug = `weekend-league-${day?.d ?? ''}`;

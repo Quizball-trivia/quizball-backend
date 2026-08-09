@@ -544,6 +544,40 @@ async function writeAwards(
     ) h
     ON CONFLICT (tournament_id, user_id) DO NOTHING
   `;
+  // Podium badges ride the shared event-award system: the login ceremony,
+  // the profile row and the seen-ack all exist there — the WL slug just makes
+  // the frontend render the Weekend League medal instead of the World Cup one.
+  // Humans-only via the same firewall; test events never mint badges.
+  const [t] = await db<Array<{ week_key: string | null; is_test: boolean }>>`
+    SELECT week_key, is_test FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  if (t?.is_test) return;
+  // Slug is always date-shaped (the frontend routes WL visuals on an exact
+  // weekend-league-YYYY-MM-DD match); fall back to the final's date when a
+  // test-shaped row lacks week_key.
+  const [day] = await db<Array<{ d: string }>>`
+    SELECT COALESCE(${t?.week_key ?? null}, to_char(final_starts_at, 'YYYY-MM-DD')) AS d
+    FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  const slug = `weekend-league-${day?.d ?? ''}`;
+  // Untargeted DO NOTHING: BOTH unique constraints (slug+user, slug+place)
+  // must swallow — a targeted arbiter would let the other one throw inside
+  // final settlement and roll the whole completion back (review catch).
+  await db`
+    INSERT INTO event_awards (event_slug, place, user_id)
+    SELECT ${slug}, h.human_rank, h.user_id
+    FROM (
+      SELECT o.u AS user_id,
+             ROW_NUMBER() OVER (ORDER BY o.r ASC) AS human_rank
+      FROM unnest(${db.array(ids)}::uuid[], ${db.array(ranks)}::int[]) AS o(u, r)
+      JOIN users usr ON usr.id = o.u
+        AND usr.is_ai = false AND usr.is_seed = false
+        AND usr.is_deleted = false AND usr.deleted_at IS NULL
+        AND usr.pending_deletion_at IS NULL
+    ) h
+    WHERE h.human_rank <= 3
+    ON CONFLICT DO NOTHING
+  `;
 }
 
 export const WL_FINAL_GAME_INDEX = 3;
@@ -580,7 +614,11 @@ async function finalizeGame(
   const board = await wlLiveEngineInternals.topBoard(t.id, gameIndex, Number.MAX_SAFE_INTEGER);
   if (board.length === 0) return;
 
-  const isFinal = gameIndex === WL_FINAL_GAME_INDEX;
+  const cfgAll = (t.config ?? {}) as Record<string, unknown>;
+  // single_game test shape: game 0 IS the final — crowns the champion and
+  // completes the tournament straight from game_live.
+  const singleGame = t.is_test === true && cfgAll['single_game'] === true;
+  const isFinal = gameIndex === WL_FINAL_GAME_INDEX || (singleGame && gameIndex === 0);
   const ladder = (t.ladder ?? {}) as { advance?: number[] };
   const advanceCount = isFinal
     ? 0
@@ -608,7 +646,7 @@ async function finalizeGame(
     ? Number(cfg['break_ms']) : 120_000;
 
   const toStatus = isFinal ? 'completed' : (isLastQualifierGame ? 'qualifier_done' : 'break');
-  const fromStatus = isFinal ? 'final_live' : 'game_live';
+  const fromStatus = gameIndex === WL_FINAL_GAME_INDEX ? 'final_live' : 'game_live';
 
   await sql.begin(async (tx) => {
     const txSql = tx as unknown as typeof sql;

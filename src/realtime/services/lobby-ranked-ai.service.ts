@@ -500,13 +500,17 @@ async function startRankedAiDraft(params: {
     await releasePreMatch('draft_start_error');
     // Compensation may detach every socket from the lobby room. The user's
     // stable room remains reachable after teardown.
-    io.to(`user:${userId}`).emit('error', {
-      code: 'MATCH_PREPARATION_FAILED',
-      message: 'Match preparation got stuck. Please restart ranked matchmaking.',
-      meta: {
-        lobbyId,
-        source: 'ranked_ai_draft_start',
-      },
-    });
+    try {
+      io.to(`user:${userId}`).emit('error', {
+        code: 'MATCH_PREPARATION_FAILED',
+        message: 'Match preparation got stuck. Please restart ranked matchmaking.',
+        meta: {
+          lobbyId,
+          source: 'ranked_ai_draft_start',
+        },
+      });
+    } catch (emitError) {
+      logger.warn({ emitError, lobbyId, userId }, 'Failed to emit ranked AI draft-start error');
+    }
   }
 }

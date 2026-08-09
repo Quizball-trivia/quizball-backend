@@ -23,7 +23,7 @@ const FLOW: Partial<Record<WlTournamentStatus, WlTournamentStatus[]>> = {
   entry_open: ['entry_closed'],
   entry_closed: ['checkin'],
   checkin: ['game_live', 'cancelled'],
-  game_live: ['break', 'qualifier_done'],
+  game_live: ['break', 'qualifier_done', 'completed'],
   break: ['game_live'],
   qualifier_done: ['final_checkin'],
   final_checkin: ['final_live', 'completed'],

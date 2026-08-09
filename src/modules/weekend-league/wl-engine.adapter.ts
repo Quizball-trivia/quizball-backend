@@ -580,7 +580,11 @@ async function finalizeGame(
   const board = await wlLiveEngineInternals.topBoard(t.id, gameIndex, Number.MAX_SAFE_INTEGER);
   if (board.length === 0) return;
 
-  const isFinal = gameIndex === WL_FINAL_GAME_INDEX;
+  const cfgAll = (t.config ?? {}) as Record<string, unknown>;
+  // single_game test shape: game 0 IS the final — crowns the champion and
+  // completes the tournament straight from game_live.
+  const singleGame = t.is_test === true && cfgAll['single_game'] === true;
+  const isFinal = gameIndex === WL_FINAL_GAME_INDEX || (singleGame && gameIndex === 0);
   const ladder = (t.ladder ?? {}) as { advance?: number[] };
   const advanceCount = isFinal
     ? 0
@@ -608,7 +612,7 @@ async function finalizeGame(
     ? Number(cfg['break_ms']) : 120_000;
 
   const toStatus = isFinal ? 'completed' : (isLastQualifierGame ? 'qualifier_done' : 'break');
-  const fromStatus = isFinal ? 'final_live' : 'game_live';
+  const fromStatus = gameIndex === WL_FINAL_GAME_INDEX ? 'final_live' : 'game_live';
 
   await sql.begin(async (tx) => {
     const txSql = tx as unknown as typeof sql;

@@ -544,6 +544,29 @@ async function writeAwards(
     ) h
     ON CONFLICT (tournament_id, user_id) DO NOTHING
   `;
+  // Podium badges ride the shared event-award system: the login ceremony,
+  // the profile row and the seen-ack all exist there — the WL slug just makes
+  // the frontend render the Weekend League medal instead of the World Cup one.
+  // Humans-only via the same firewall; test events never mint badges.
+  const [t] = await db<Array<{ week_key: string | null; is_test: boolean }>>`
+    SELECT week_key, is_test FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  if (t?.is_test) return;
+  const slug = `weekend-league-${t?.week_key ?? tournamentId.slice(0, 8)}`;
+  await db`
+    INSERT INTO event_awards (event_slug, place, user_id)
+    SELECT ${slug}, h.human_rank, h.user_id
+    FROM (
+      SELECT o.u AS user_id,
+             ROW_NUMBER() OVER (ORDER BY o.r ASC) AS human_rank
+      FROM unnest(${db.array(ids)}::uuid[], ${db.array(ranks)}::int[]) AS o(u, r)
+      JOIN users usr ON usr.id = o.u
+        AND usr.is_ai = false AND usr.is_seed = false
+        AND usr.is_deleted = false AND usr.deleted_at IS NULL
+    ) h
+    WHERE h.human_rank <= 3
+    ON CONFLICT (event_slug, user_id) DO NOTHING
+  `;
 }
 
 export const WL_FINAL_GAME_INDEX = 3;

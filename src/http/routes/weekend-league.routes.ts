@@ -8,6 +8,7 @@ router.use(authMiddleware);
 
 router.get('/current', weekendLeagueController.current);
 router.get('/qp', weekendLeagueController.qp);
+router.get('/standings', weekendLeagueController.standings);
 router.post('/enter', weekendLeagueController.enter);
 router.post('/checkin', weekendLeagueController.checkin);
 

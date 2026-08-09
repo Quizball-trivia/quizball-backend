@@ -16,6 +16,11 @@ export const weekendLeagueController = {
     res.json(await weekendLeagueService.current(requireUserId(req)));
   },
 
+  async standings(req: Request, res: Response): Promise<void> {
+    requireUserId(req);
+    res.json(await weekendLeagueService.standings());
+  },
+
   async qp(req: Request, res: Response): Promise<void> {
     res.json(await weekendLeagueService.qp(requireUserId(req)));
   },

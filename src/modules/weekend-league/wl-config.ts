@@ -23,6 +23,10 @@ export const wlTournamentConfigSchema = z.object({
   /** Free entry (no QP spend/gate). Honored ONLY on is_test tournaments —
    *  real events always charge the balance. */
   free_entry: z.boolean().default(false),
+  /** Final-rehearsal shape: ONE game (the full 5-round lineup) that crowns a
+   *  champion at its end — no qualifier ladder, no Sunday. Honored only on
+   *  is_test tournaments. */
+  single_game: z.boolean().default(false),
   qp_target: z.number().int().min(0).max(999_999),
   question_time_ms: z.number().int().min(1_000).max(120_000),
   dispatch_lead_ms: z.number().int().min(0).max(30_000),

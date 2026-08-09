@@ -9,10 +9,10 @@ import { syntheticBotsRepo } from './synthetic-bots.repo.js';
  * Reservation lifecycle facade for the persistent-bot roster.
  *
  * Every teardown site in Appendix A routes its release through here so the
- * telemetry, flag-gating, and error isolation live in one place. All calls are
- * no-ops when PERSISTENT_BOTS_ENABLED is off OR when no reservation row exists
- * for the given lobby/match (the ephemeral case) — a release hook never has to
- * know whether the opponent was a persistent bot.
+ * telemetry, flag-gating, and error isolation live in one place. Optional
+ * persistent-bot features no-op when PERSISTENT_BOTS_ENABLED is off. Ranked can
+ * explicitly require a persistent reservation because it has no legacy bot
+ * path; cleanup calls always run regardless of the flag.
  *
  * A DB error here is always swallowed (logged): the durable match/lobby teardown
  * has already happened, and a stranded reservation is self-healed by the
@@ -86,8 +86,14 @@ export const reservationService = {
      * rules, and misclassifying either one frees a bot mid-match.
      */
     mode?: 'auction';
+    /**
+     * Ranked is persistent-only: its required roster reservation is not a
+     * rollout experiment and must not silently degrade into a legacy identity.
+     * Optional callers such as auction leave this false and honor the flag.
+     */
+    requirePersistent?: boolean;
   }): Promise<{ botUserId: string; lobbyId: string; fence: number } | null> {
-    if (!persistentBotsEnabled()) return null;
+    if (!persistentBotsEnabled() && params.requirePersistent !== true) return null;
     const expiresAt = new Date(Date.now() + params.ttlSec * 1000);
     try {
       const row = await syntheticBotsRepo.acquireReservation({

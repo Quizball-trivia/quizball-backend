@@ -1,9 +1,12 @@
 /**
  * Unit tests for persistent-bot selection (PR7) with mocked seams:
- *   - flag OFF → no selection, no repo/redis calls (inertness)
- *   - empty roster → null (ephemeral fallback), no acquire attempted
+ *   - flag OFF gates optional callers while ranked remains persistent-only
+ *   - empty roster → null, no acquire attempted
  *   - nearest-RP widening picks the closest bot to the human's target
- *   - eligibility ladder relaxes in order: recently-faced → daily cap → schedule
+ *   - ranked can fall through to the highest lower-RP persistent bot
+ *   - ranked rotates away from recent identities, then uses least-recent as a
+ *     last resort; auction retains its original soft recent-opponent rung
+ *   - eligibility ladder relaxes in order: recent → daily cap → schedule
  *   - one-winner acquire race: a lost acquire falls through to the next candidate
  *   - ladder exhausted (all acquires lost) → null
  */
@@ -12,6 +15,7 @@ import '../setup.js';
 
 const repo = {
   listEligibleBots: vi.fn(),
+  listRecentlyFacedPersistentBotIds: vi.fn().mockResolvedValue([]),
 };
 const reservation = {
   isEnabled: vi.fn(),
@@ -20,6 +24,7 @@ const reservation = {
 const redis = {
   isOpen: true,
   lRange: vi.fn().mockResolvedValue([]),
+  lRem: vi.fn().mockResolvedValue(0),
   lPush: vi.fn().mockResolvedValue(1),
   lTrim: vi.fn().mockResolvedValue('OK'),
   expire: vi.fn().mockResolvedValue(1),
@@ -132,10 +137,12 @@ beforeEach(() => {
     lobbyId: 'lobby',
     fence: 1,
   }));
+  redis.isOpen = true;
   redis.lRange.mockResolvedValue([]);
+  repo.listRecentlyFacedPersistentBotIds.mockResolvedValue([]);
 });
 
-describe('flag-off inertness', () => {
+describe('rollout flag behavior', () => {
   it('returns null and never touches the repo/redis when disabled', async () => {
     reservation.isEnabled.mockReturnValue(false);
     const result = await syntheticBotSelectionService.selectAndReserve({
@@ -146,6 +153,24 @@ describe('flag-off inertness', () => {
     expect(result).toBeNull();
     expect(repo.listEligibleBots).not.toHaveBeenCalled();
     expect(reservation.acquire).not.toHaveBeenCalled();
+  });
+
+  it('ranked persistent-only selection still reserves a roster bot when the rollout flag is off', async () => {
+    reservation.isEnabled.mockReturnValue(false);
+    repo.listEligibleBots.mockResolvedValue([bot('ranked-required', { rp: 1500 })]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('ranked-required');
+    expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({
+      botUserId: 'ranked-required',
+      requirePersistent: true,
+    }));
   });
 });
 
@@ -240,6 +265,60 @@ describe('RP-gap ceiling (parity guard)', () => {
     expect(reservation.acquire).not.toHaveBeenCalled();
   });
 
+  it('ranked fallback selects the highest lower-RP persistent bot beyond ±300', async () => {
+    const highHuman = { ...placedHuman, rp: 6080 };
+    repo.listEligibleBots.mockResolvedValue([
+      bot('mid', { rp: 3832 }),
+      bot('roster-leader', { rp: 4721 }),
+      bot('low', { rp: 2700 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: highHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('roster-leader');
+    expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({
+      botUserId: 'roster-leader',
+    }));
+  });
+
+  it('ranked still prefers an in-band bot before the out-of-band tail', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('out-of-band-stronger', { rp: 1900 }),
+      bot('in-band', { rp: 1490 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('in-band');
+  });
+
+  it('ranked fallback uses the closest higher bot when the roster has no lower bot', async () => {
+    const bottomHuman = { ...placedHuman, rp: 150 };
+    repo.listEligibleBots.mockResolvedValue([
+      bot('higher-far', { rp: 900 }),
+      bot('higher-near', { rp: 600 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: bottomHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('higher-near');
+  });
+
   it('applies the ceiling around an UNPLACED human’s placement anchor, not their hidden RP', async () => {
     // Unplaced humans are anchored near 1900 (PR2), not their hidden ~450 RP.
     // A bot next to the anchor must pair; one next to the hidden RP must not.
@@ -314,19 +393,16 @@ describe('RP-gap ceiling (parity guard)', () => {
   });
 });
 
-describe('eligibility ladder order', () => {
-  it('relaxes recently-faced before daily-cap before schedule', async () => {
-    // The only bot near target is recently-faced AND at its daily cap AND out of
-    // its schedule window. It must only be selected once the ladder relaxes all
-    // three — proving order by observing the relaxation label.
+describe('ranked recent-opponent rotation', () => {
+  it('rotates to a fresh bot even after cap and schedule relaxation', async () => {
     const nowHour = Number(
       new Date().toLocaleString('en-US', { timeZone: 'Asia/Tbilisi', hour: '2-digit', hour12: false }),
     ) % 24;
-    // schedule window that EXCLUDES the current hour (a 1-hour window elsewhere)
     const outStart = (nowHour + 2) % 24;
     const outEnd = (nowHour + 3) % 24;
     repo.listEligibleBots.mockResolvedValue([
-      bot('only', {
+      bot('recent-best', { rp: 1500 }),
+      bot('alternate', {
         rp: 1500,
         daily_cap: 3,
         matches_today: 3,
@@ -334,18 +410,104 @@ describe('eligibility ladder order', () => {
         schedule: { startHour: outStart, endHour: outEnd },
       }),
     ]);
-    redis.lRange.mockResolvedValue(['only']); // recently faced
+    redis.lRange.mockResolvedValue(['recent-best']);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
       humanProfile: placedHuman,
       lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
     });
-    expect(result?.bot.user_id).toBe('only');
-    // recently-faced + daily-cap + schedule all had to relax → the LAST rung.
+    expect(result?.bot.user_id).toBe('alternate');
     expect(result?.relaxationLevel).toBe('relax_schedule');
+    expect(reservation.acquire).not.toHaveBeenCalledWith(expect.objectContaining({
+      botUserId: 'recent-best',
+    }));
   });
 
+  it('uses the least-recent opponent as a last resort when every candidate is recent', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('newest', { rp: 1500 }),
+      bot('oldest', { rp: 1500 }),
+    ]);
+    redis.lRange.mockResolvedValue(['newest', 'oldest']);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('oldest');
+    expect(result?.relaxationLevel).toBe('relax_recently_faced');
+  });
+
+  it('uses durable recent history when the Redis list is empty', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('durable-recent', { rp: 1500 }),
+      bot('alternate', { rp: 1400 }),
+    ]);
+    repo.listRecentlyFacedPersistentBotIds.mockResolvedValue(['durable-recent']);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('alternate');
+  });
+
+  it('caps the merged Redis and durable window at five identities', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('durable-sixth', { rp: 1500 }),
+      bot('fallback', { rp: 1000 }),
+    ]);
+    redis.lRange.mockResolvedValue(['r1', 'r2', 'r3', 'r4', 'r5']);
+    repo.listRecentlyFacedPersistentBotIds.mockResolvedValue(['durable-sixth']);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('durable-sixth');
+  });
+
+  it('keeps auction recent-opponent relaxation and skips the durable ranked query', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('auction-recent', { rp: 1500 })]);
+    redis.lRange.mockResolvedValue(['auction-recent']);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'auction-seat',
+      mode: 'auction',
+    });
+
+    expect(result?.bot.user_id).toBe('auction-recent');
+    expect(result?.relaxationLevel).toBe('relax_recently_faced');
+    expect(repo.listRecentlyFacedPersistentBotIds).not.toHaveBeenCalled();
+    expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'auction',
+      requirePersistent: false,
+    }));
+  });
+
+  it('de-duplicates the Redis LRU before pushing the latest bot', async () => {
+    await syntheticBotSelectionService.recordRecentlyFaced('human', 'bot-1');
+
+    expect(redis.lRem).toHaveBeenCalledWith('ranked:persistent:recent:human', 0, 'bot-1');
+    expect(redis.lPush).toHaveBeenCalledWith('ranked:persistent:recent:human', 'bot-1');
+    expect(redis.lTrim).toHaveBeenCalledWith('ranked:persistent:recent:human', 0, 4);
+  });
+});
+
+describe('eligibility ladder order', () => {
   it('prefers a strictly-eligible bot over a constrained one at the same RP', async () => {
     repo.listEligibleBots.mockResolvedValue([
       bot('capped', { rp: 1500, daily_cap: 1, matches_today: 1, matches_day: rosterDay() }),

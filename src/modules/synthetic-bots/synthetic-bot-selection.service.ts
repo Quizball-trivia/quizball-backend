@@ -15,20 +15,25 @@ import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
  *
  * Contract (PERSISTENT-BOTS-PLAN §1.3 / §1.7):
- *   - Flag gated: caller only reaches here when PERSISTENT_BOTS_ENABLED is on.
+ *   - The rollout flag still gates optional auction use. Ranked is persistent-
+ *     only and therefore selects/reserves from the roster even when the legacy
+ *     rollout flag is off; there is no ephemeral ranked path to fall back to.
  *   - Nearest-RP to the human's SELECTION TARGET (placement anchor for unplaced,
- *     current RP for placed), widening ±150 → ±BOT_PAIRING_MAX_RP_GAP (300) and
- *     then STOPPING. There is deliberately no unbounded tail: no bot inside the
- *     ceiling → null → ephemeral fallback, rather than a lopsided pairing.
+ *     current RP for placed), widening ±150 → ±BOT_PAIRING_MAX_RP_GAP (300).
+ *     Ranked callers may then fall through to the highest lower-RP persistent
+ *     bot (or the closest higher bot when no lower bot exists). Auction keeps
+ *     the bounded band because it still owns a separate ephemeral seat fallback.
  *   - Eligibility ladder relaxes SOFT constraints in fixed order:
- *       session preference → recently-faced → daily cap → schedule window.
+ *       session preference → recently-faced → daily cap → schedule.
+ *     Ranked first removes recently-faced identities from its normal and
+ *     out-of-band pools. Only after every fresh candidate is exhausted may it
+ *     retry the least-recent opponent, so rotation never becomes an outage.
  *     HARD constraints (status='active', not reserved) are enforced in SQL and
  *     NEVER relaxed. reserved is additionally guaranteed by the acquire race.
  *   - On a hit: acquire the reservation (ON CONFLICT DO NOTHING). If the acquire
  *     loses the race (another selection grabbed the same bot), try the next
- *     candidate; exhausting candidates → null (ephemeral fallback).
- *   - Empty roster / no eligible bot / all acquires lost → null → the caller
- *     runs the unchanged ephemeral path. Matchmaking never fails here.
+ *     candidate; exhausting candidates → null. Auction may then create an
+ *     ephemeral seat; ranked reports an unavailable roster and never does.
  *
  * Telemetry: every terminal outcome increments persistentBotSelections tagged
  * with { outcome, relaxation } so PR9 can build alerting on it.
@@ -55,7 +60,7 @@ function wideningBands(): number[] {
 // Cap total acquire (ON CONFLICT DO NOTHING) attempts across the whole eligibility
 // ladder for one selection. Each attempt is a DB round-trip; under heavy
 // contention many candidates may be concurrently reserved, so bound the work and
-// fall back to ephemeral rather than hammering the DB across a large roster.
+// stop rather than hammering the DB across a large roster.
 const MAX_ACQUIRE_ATTEMPTS = 12;
 
 function recentlyFacedKey(humanUserId: string): string {
@@ -63,15 +68,26 @@ function recentlyFacedKey(humanUserId: string): string {
 }
 
 /** The human's last N persistent-bot opponents (most-recent first). Best-effort. */
-async function getRecentlyFaced(humanUserId: string): Promise<string[]> {
+async function getRecentlyFaced(humanUserId: string, includeDurable: boolean): Promise<string[]> {
   const redis = getRedisClient();
-  if (!redis?.isOpen) return [];
-  try {
-    return await redis.lRange(recentlyFacedKey(humanUserId), 0, RECENTLY_FACED_LIMIT - 1);
-  } catch (err) {
-    logger.warn({ err, humanUserId }, 'persistent-bot recently-faced read failed');
-    return [];
-  }
+  const [cached, durable] = await Promise.all([
+    redis?.isOpen
+      ? redis.lRange(recentlyFacedKey(humanUserId), 0, RECENTLY_FACED_LIMIT - 1).catch((err) => {
+          logger.warn({ err, humanUserId }, 'persistent-bot recently-faced cache read failed');
+          return [] as string[];
+        })
+      : Promise.resolve([] as string[]),
+    includeDurable
+      ? syntheticBotsRepo.listRecentlyFacedPersistentBotIds(humanUserId, RECENTLY_FACED_LIMIT).catch((err) => {
+          logger.warn({ err, humanUserId }, 'persistent-bot recently-faced durable read failed');
+          return [] as string[];
+        })
+      : Promise.resolve([] as string[]),
+  ]);
+  // Redis is the freshest source, so preserve its order and fill any remaining
+  // slots from the durable backstop. The effective window is always exactly N,
+  // never N from each source (which would silently double the exclusion pool).
+  return [...new Set([...cached, ...durable])].slice(0, RECENTLY_FACED_LIMIT);
 }
 
 /**
@@ -84,6 +100,9 @@ export async function recordRecentlyFaced(humanUserId: string, botUserId: string
   if (!redis?.isOpen) return;
   try {
     const key = recentlyFacedKey(humanUserId);
+    // Keep five DISTINCT identities. Without LREM, repeat entries consume the
+    // whole list and collapse the effective rotation window back to one bot.
+    await redis.lRem(key, 0, botUserId);
     await redis.lPush(key, botUserId);
     await redis.lTrim(key, 0, RECENTLY_FACED_LIMIT - 1);
     // No permanent memory of who a player has ever faced — only a short window.
@@ -232,6 +251,36 @@ function orderByNearestRp(bots: EligibleBotRow[], targetRp: number): EligibleBot
   return ordered;
 }
 
+/** Ranked-only tail after the bounded RP bands are exhausted. */
+function orderOutOfBandFallback(
+  bots: EligibleBotRow[],
+  targetRp: number,
+  inBandUserIds: Set<string>,
+): EligibleBotRow[] {
+  // Prefer the strongest available bot at or below the human's RP. This makes a
+  // 6080-RP human face the roster leader rather than a temporary 2700-RP
+  // identity. If the roster has no lower bot (bottom edge), use the closest
+  // higher bot so any non-empty roster can still match.
+  const lower = bots
+    .filter((bot) => !inBandUserIds.has(bot.user_id) && bot.rp <= targetRp)
+    .sort((a, b) => b.rp - a.rp);
+  const higher = bots
+    .filter((bot) => !inBandUserIds.has(bot.user_id) && bot.rp > targetRp)
+    .sort((a, b) => a.rp - b.rp);
+  return [...lower, ...higher];
+}
+
+/** Stable oldest-first ordering within an already RP-scoped candidate list. */
+function orderByLeastRecentlyFaced(
+  bots: EligibleBotRow[],
+  recentlyFacedList: readonly string[],
+): EligibleBotRow[] {
+  const recency = new Map(recentlyFacedList.map((userId, index) => [userId, index]));
+  return [...bots].sort(
+    (a, b) => (recency.get(b.user_id) ?? -1) - (recency.get(a.user_id) ?? -1),
+  );
+}
+
 export interface SelectedPersistentBot {
   bot: EligibleBotRow;
   reservation: { botUserId: string; lobbyId: string; fence: number };
@@ -245,8 +294,8 @@ export const syntheticBotSelectionService = {
 
   /**
    * Select + reserve an eligible roster bot for a human's ranked AI-fallback.
-   * Returns the selected bot (with its held reservation) or null → the caller
-   * runs the unchanged ephemeral path.
+   * Returns the selected bot (with its held reservation) or null when the roster
+   * is empty, operator-throttled, or lost every bounded acquire race.
    */
   async selectAndReserve(params: {
     humanUserId: string;
@@ -256,8 +305,11 @@ export const syntheticBotSelectionService = {
     mode?: 'auction';
     /** Bots already seated in THIS match, excluded so one match never seats the same bot twice. */
     excludeBotUserIds?: readonly string[];
+    /** Ranked-only: use a persistent bot outside the RP ceiling instead of legacy AI. */
+    allowOutOfBandFallback?: boolean;
   }): Promise<SelectedPersistentBot | null> {
-    if (!reservationService.isEnabled()) {
+    const rankedPersistentOnly = params.allowOutOfBandFallback === true;
+    if (!rankedPersistentOnly && !reservationService.isEnabled()) {
       appMetrics.persistentBotSelections.add(1, { outcome: 'flag_off', relaxation: 'none' });
       return null;
     }
@@ -265,16 +317,17 @@ export const syntheticBotSelectionService = {
     const now = new Date();
     const rosterDay = currentRosterDay(now);
     const targetRp = selectionTargetRpForHuman(params.humanProfile);
+    const unavailableOutcome = rankedPersistentOnly ? 'unavailable' : 'ephemeral_fallback';
 
     const [eligible, recentlyFacedList, tuning] = await Promise.all([
       syntheticBotsRepo.listEligibleBots(),
-      getRecentlyFaced(params.humanUserId),
+      getRecentlyFaced(params.humanUserId, rankedPersistentOnly),
       loadBotTuning(),
     ]);
 
     if (eligible.length === 0) {
-      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'empty_roster' });
-      logger.info({ humanUserId: params.humanUserId, targetRp }, 'persistent-bot selection: empty roster, ephemeral fallback');
+      appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation: 'empty_roster' });
+      logger.info({ humanUserId: params.humanUserId, targetRp, rankedPersistentOnly }, 'persistent-bot selection: empty roster');
       return null;
     }
 
@@ -284,29 +337,50 @@ export const syntheticBotSelectionService = {
     // duplicate acquire anyway, but filtering here avoids burning acquire
     // attempts (MAX_ACQUIRE_ATTEMPTS) on candidates that cannot possibly win.
     const excluded = new Set(params.excludeBotUserIds ?? []);
-    const selectable = excluded.size > 0
-      ? eligible.filter((bot) => !excluded.has(bot.user_id))
-      : eligible;
-    const ordered = orderByNearestRp(selectable, targetRp);
+    const unseated = eligible.filter((bot) => !excluded.has(bot.user_id));
+    // Ranked keeps recent identities out of both normal pools. Auction retains
+    // the original soft ladder, including relax_recently_faced.
+    const selectable = rankedPersistentOnly
+      ? unseated.filter((bot) => !recentlyFaced.has(bot.user_id))
+      : unseated;
+    const inBand = orderByNearestRp(selectable, targetRp);
+    const inBandUserIds = new Set(inBand.map((bot) => bot.user_id));
+    const outOfBand = rankedPersistentOnly
+      ? orderOutOfBandFallback(selectable, targetRp, inBandUserIds)
+      : [];
+    const recentPool = rankedPersistentOnly
+      ? unseated.filter((bot) => recentlyFaced.has(bot.user_id))
+      : [];
+    const recentInBand = orderByLeastRecentlyFaced(
+      orderByNearestRp(recentPool, targetRp),
+      recentlyFacedList,
+    );
+    const recentInBandUserIds = new Set(recentInBand.map((bot) => bot.user_id));
+    const recentOutOfBand = orderByLeastRecentlyFaced(
+      orderOutOfBandFallback(recentPool, targetRp, recentInBandUserIds),
+      recentlyFacedList,
+    );
 
-    // No bot within the pairing ceiling of this human (typically a strong active
-    // above the roster's top RP). Take the ephemeral fallback rather than pairing
-    // them down against a bot they would beat ~95% of the time.
+    // Auction remains bounded and may hand unfilled seats to its own ephemeral
+    // fallback. Ranked appends outOfBand above, so this branch means the roster
+    // is genuinely unavailable after hard exclusions (recent, seated, reserved).
     //
     // Distinguish the two ways this can happen so the metric means one thing:
     // 'all_excluded' is a multi-seat auction that already seated every in-band
     // bot (expected on a thin roster, NOT an RP-coverage hole), while
     // 'no_bot_in_rp_band' is a genuine gap in roster coverage at this RP — the
     // signal to widen BOT_PAIRING_MAX_RP_GAP or extend the roster's top end.
-    if (ordered.length === 0) {
+    if (inBand.length === 0 && outOfBand.length === 0 && recentPool.length === 0) {
       // Was the band actually populated before this match's own seats were
       // excluded? If so the roster covers this RP fine and the miss is purely
       // exclusion, not coverage.
       const inBandBeforeExclusion = excluded.size > 0
         ? orderByNearestRp(eligible, targetRp).length
         : 0;
-      const relaxation = inBandBeforeExclusion > 0 ? 'all_excluded' : 'no_bot_in_rp_band';
-      appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation });
+      const relaxation = inBandBeforeExclusion > 0
+          ? 'all_excluded'
+          : 'no_bot_in_rp_band';
+      appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation });
       logger.info(
         {
           humanUserId: params.humanUserId,
@@ -314,56 +388,114 @@ export const syntheticBotSelectionService = {
           eligibleCount: eligible.length,
           selectableCount: selectable.length,
           excludedCount: excluded.size,
+          recentlyFacedCount: recentlyFaced.size,
           maxRpGap: config.BOT_PAIRING_MAX_RP_GAP,
         },
-        'persistent-bot selection: no bot within RP band, ephemeral fallback',
+        'persistent-bot selection: no candidate available',
       );
       return null;
     }
 
     let acquireAttempts = 0;
-    for (const level of ELIGIBILITY_LADDER) {
-      const candidates = ordered.filter((bot) => passesLevel(bot, level, { recentlyFaced, rosterDay, now, tuning }));
-      for (const bot of candidates) {
-        if (acquireAttempts >= MAX_ACQUIRE_ATTEMPTS) {
-          appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'acquire_cap' });
-          logger.info(
-            { humanUserId: params.humanUserId, targetRp, acquireAttempts },
-            'persistent-bot selection: acquire attempt cap reached, ephemeral fallback',
-          );
-          return null;
-        }
-        acquireAttempts++;
-        const reservation = await reservationService.acquire({
+    const attempted = new Set<string>();
+    const acquireCandidate = async (
+      bot: EligibleBotRow,
+      level: EligibilityLevel,
+      rpScope: 'in_band' | 'out_of_band_fallback',
+    ): Promise<SelectedPersistentBot | null> => {
+      acquireAttempts++;
+      attempted.add(bot.user_id);
+      const reservation = await reservationService.acquire({
+        botUserId: bot.user_id,
+        lobbyId: params.lobbyId,
+        ttlSec: RESERVATION_TTL_SEC,
+        mode: params.mode,
+        requirePersistent: rankedPersistentOnly,
+      });
+      if (!reservation) return null;
+
+      appMetrics.persistentBotSelections.add(1, {
+        outcome: 'hit',
+        relaxation: level.relaxationLabel,
+        rp_scope: rpScope,
+      });
+      logger.info(
+        {
+          humanUserId: params.humanUserId,
           botUserId: bot.user_id,
           lobbyId: params.lobbyId,
-          ttlSec: RESERVATION_TTL_SEC,
-          mode: params.mode,
-        });
-        if (reservation) {
-          appMetrics.persistentBotSelections.add(1, { outcome: 'hit', relaxation: level.relaxationLabel });
-          logger.info(
-            {
-              humanUserId: params.humanUserId,
-              botUserId: bot.user_id,
-              lobbyId: params.lobbyId,
-              targetRp,
-              botRp: bot.rp,
-              relaxation: level.relaxationLabel,
-            },
-            'persistent-bot selected + reserved',
-          );
-          return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp };
-        }
+          targetRp,
+          botRp: bot.rp,
+          rpScope,
+          relaxation: level.relaxationLabel,
+        },
+        'persistent-bot selected + reserved',
+      );
+      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp };
+    };
+
+    const acquireCapReached = (): boolean => {
+      if (acquireAttempts < MAX_ACQUIRE_ATTEMPTS) return false;
+      appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation: 'acquire_cap' });
+      logger.info(
+        { humanUserId: params.humanUserId, targetRp, acquireAttempts },
+        'persistent-bot selection: acquire attempt cap reached',
+      );
+      return true;
+    };
+
+    // Preserve the existing realism policy inside the normal RP bands: prefer
+    // schedule/session/cap eligibility, then relax those soft constraints.
+    for (const level of ELIGIBILITY_LADDER) {
+      const candidates = inBand.filter(
+        (bot) => !attempted.has(bot.user_id) && passesLevel(bot, level, { recentlyFaced, rosterDay, now, tuning }),
+      );
+      for (const bot of candidates) {
+        if (acquireCapReached()) return null;
+        const selected = await acquireCandidate(bot, level, 'in_band');
+        if (selected) return selected;
         // Lost the acquire race — this bot is now reserved by someone else; try
         // the next candidate at this level.
       }
     }
 
-    appMetrics.persistentBotSelections.add(1, { outcome: 'ephemeral_fallback', relaxation: 'ladder_exhausted' });
+    // Outside the band, RP order is the product requirement: fully relax a
+    // candidate's soft constraints before moving down from the roster leader.
+    // Operator throttles remain hard and can skip a bot entirely.
+    for (const bot of outOfBand) {
+      const level = ELIGIBILITY_LADDER.find((candidateLevel) =>
+        passesLevel(bot, candidateLevel, { recentlyFaced, rosterDay, now, tuning }),
+      );
+      if (!level) continue;
+      if (acquireCapReached()) return null;
+      const selected = await acquireCandidate(bot, level, 'out_of_band_fallback');
+      if (selected) return selected;
+    }
+
+    // Availability wins only after rotation has been exhausted. Re-enter the RP
+    // policy with the least-recent identity first, and only at a ladder level
+    // that explicitly relaxes the recent-opponent preference. This prevents the
+    // same-bot loop without making a thin roster unmatchable.
+    for (const [rpScope, candidates] of [
+      ['in_band', recentInBand],
+      ['out_of_band_fallback', recentOutOfBand],
+    ] as const) {
+      for (const bot of candidates) {
+        const level = ELIGIBILITY_LADDER.find((candidateLevel) =>
+          !candidateLevel.respectRecentlyFaced
+          && passesLevel(bot, candidateLevel, { recentlyFaced, rosterDay, now, tuning }),
+        );
+        if (!level) continue;
+        if (acquireCapReached()) return null;
+        const selected = await acquireCandidate(bot, level, rpScope);
+        if (selected) return selected;
+      }
+    }
+
+    appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation: 'ladder_exhausted' });
     logger.info(
       { humanUserId: params.humanUserId, targetRp, eligibleCount: eligible.length },
-      'persistent-bot selection: ladder exhausted, ephemeral fallback',
+      'persistent-bot selection: ladder exhausted',
     );
     return null;
   },

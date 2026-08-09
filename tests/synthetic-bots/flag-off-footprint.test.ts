@@ -1,9 +1,4 @@
-/**
- * Flag-off footprint parity (Sol finding #5): with PERSISTENT_BOTS_ENABLED off,
- * startRankedAiForUser must create the ephemeral user BEFORE the lobby, exactly
- * as main did — so an ephemeral-user insert failure leaves NO orphan lobby, and
- * the selection/reservation machinery is never touched.
- */
+/** Ranked AI lifecycle: persistent identities are the only fallback opponent. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '../setup.js';
 
@@ -33,6 +28,14 @@ const selectionService = {
   selectAndReserve: vi.fn(),
   recordRecentlyFaced: vi.fn().mockResolvedValue(undefined),
 };
+const redisState: {
+  client: null | {
+    isOpen: boolean;
+    get: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+    del: ReturnType<typeof vi.fn>;
+  };
+} = { client: null };
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({ usersRepo }));
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({ lobbiesRepo }));
@@ -49,10 +52,13 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   },
 }));
 vi.mock('../../src/core/analytics.js', () => ({ registerAiUserId: vi.fn() }));
-vi.mock('../../src/core/analytics/game-events.js', () => ({ trackRankedMatchFound: vi.fn() }));
+vi.mock('../../src/core/analytics/game-events.js', () => ({
+  trackRankedMatchFound: vi.fn(),
+  trackRankedQueueLeft: vi.fn(),
+}));
 vi.mock('../../src/modules/stats/stats.service.js', () => ({ statsService: { getRecentFormForUser: vi.fn().mockResolvedValue([]) } }));
 vi.mock('../redis.js', () => ({ getRedisClient: () => null }), { virtual: true } as never);
-vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => null }));
+vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => redisState.client }));
 vi.mock('../../src/realtime/lobby-utils.js', () => ({
   attachUserSocketsToLobby: vi.fn().mockResolvedValue(undefined),
   emitLobbyState: vi.fn().mockResolvedValue(undefined),
@@ -64,14 +70,18 @@ vi.mock('../../src/realtime/services/lobby-draft-start.service.js', () => ({ sta
 vi.mock('../../src/core/rng.js', () => ({ getRandom: () => 0.5 }));
 vi.mock('../../src/core/harness-timing.js', () => ({ harnessDelayMs: (n: number) => n }));
 
-const io = { to: () => ({ emit: vi.fn() }), in: () => ({ fetchSockets: vi.fn().mockResolvedValue([]) }) } as never;
+const emit = vi.fn();
+const io = { to: () => ({ emit }), in: () => ({ fetchSockets: vi.fn().mockResolvedValue([]) }) } as never;
 
 const { startRankedAiForUser } = await import('../../src/realtime/services/lobby-ranked-ai.service.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
   callOrder.length = 0;
+  redisState.client = null;
+  emit.mockImplementation(() => undefined);
   reservationService.isEnabled.mockReturnValue(false);
+  selectionService.selectAndReserve.mockResolvedValue(null);
   usersRepo.create.mockImplementation(async () => {
     callOrder.push('create_user');
     return { id: 'ephemeral-ai', nickname: 'aibot', avatar_url: null };
@@ -82,25 +92,76 @@ beforeEach(() => {
   });
 });
 
-describe('flag-off footprint parity', () => {
-  it('creates the ephemeral user BEFORE the lobby (no lobby-first) and never touches selection', async () => {
-    // skipSearchEmit + a fixed short duration keeps the deferred match-found out
-    // of this synchronous assertion window.
+describe('persistent-only ranked fallback', () => {
+  it('never creates an ephemeral user when persistent selection is unavailable', async () => {
     await startRankedAiForUser(io, 'human', { skipSearchEmit: true, searchDurationMs: 100000 });
-    expect(callOrder).toEqual(['create_user', 'create_lobby']);
-    expect(reservationService.acquire).not.toHaveBeenCalled();
-    expect(selectionService.selectAndReserve).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(['create_lobby']);
+    expect(usersRepo.create).not.toHaveBeenCalled();
+    expect(selectionService.selectAndReserve).toHaveBeenCalledWith(expect.objectContaining({
+      allowOutOfBandFallback: true,
+    }));
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
+    expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({
+      code: 'MATCH_PREPARATION_FAILED',
+    }));
   });
 
-  it('leaves NO orphan lobby when the ephemeral-user insert fails', async () => {
-    usersRepo.create.mockRejectedValueOnce(new Error('insert failed'));
+  it('cleans up the reservation-anchor lobby when selection throws', async () => {
+    selectionService.selectAndReserve.mockRejectedValueOnce(new Error('selection failed'));
+
+    await startRankedAiForUser(io, 'human', { skipSearchEmit: true, searchDurationMs: 100000 });
+
+    expect(usersRepo.create).not.toHaveBeenCalled();
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
+  });
+
+  it('keeps a valid persistent lobby when the optional Redis marker write fails', async () => {
+    vi.useFakeTimers();
+    try {
+      redisState.client = {
+        isOpen: true,
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+        del: vi.fn().mockResolvedValue(1),
+      };
+      selectionService.selectAndReserve.mockResolvedValueOnce({
+        bot: { user_id: 'persistent-bot', rp: 1500, nickname: 'botname', avatar_url: null, country: 'GE', home_city: null, home_lat: null, home_lng: null, favorite_club: null },
+        reservation: { botUserId: 'persistent-bot', lobbyId: 'lobby-1', fence: 1 },
+        relaxationLevel: 'strict', targetRp: 1500,
+      });
+
+      await expect(startRankedAiForUser(io, 'human', {
+        skipSearchEmit: true,
+        searchDurationMs: 100000,
+      })).resolves.toBe(true);
+
+      expect(redisState.client.set).toHaveBeenCalled();
+      expect(reservationService.abortLobby).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns a terminal failure and clears the client search state when scheduling throws', async () => {
+    selectionService.selectAndReserve.mockResolvedValueOnce({
+      bot: { user_id: 'persistent-bot', rp: 1500, nickname: 'botname', avatar_url: null, country: 'GE', home_city: null, home_lat: null, home_lng: null, favorite_club: null },
+      reservation: { botUserId: 'persistent-bot', lobbyId: 'lobby-1', fence: 1 },
+      relaxationLevel: 'strict', targetRp: 1500,
+    });
+    emit.mockImplementation(() => {
+      throw new Error('socket emit failed');
+    });
+
     await expect(
-      startRankedAiForUser(io, 'human', { skipSearchEmit: true, searchDurationMs: 100000 }),
-    ).rejects.toThrow('insert failed');
-    // The lobby is created AFTER the user, so a user-insert failure means the
-    // lobby was never created — no orphan.
-    expect(lobbiesRepo.createLobby).not.toHaveBeenCalled();
-    expect(lobbiesRepo.deleteLobby).not.toHaveBeenCalled();
+      startRankedAiForUser(io, 'human', { searchDurationMs: 100000 }),
+    ).resolves.toBe(false);
+
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', 'match_found_cancel', undefined);
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+    expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({
+      code: 'MATCH_PREPARATION_FAILED',
+    }));
   });
 });
 

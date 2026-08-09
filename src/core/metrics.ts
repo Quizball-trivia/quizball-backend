@@ -54,7 +54,7 @@ const roundResolutionDuration = meter.createHistogram('quizball_round_resolution
 
 // ── Persistent-bot selection + reservation lifecycle (PR7) ───────────────────
 const persistentBotSelections = meter.createCounter('quizball_persistent_bot_selections_total', {
-  description: 'Ranked AI-fallback selections tagged by outcome (hit / ephemeral_fallback / flag_off) and relaxation level',
+  description: 'Persistent-bot selections tagged by outcome (hit / unavailable / ephemeral_fallback / flag_off) and relaxation level',
 });
 
 const persistentBotReservationReleases = meter.createCounter('quizball_persistent_bot_reservation_releases_total', {

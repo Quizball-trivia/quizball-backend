@@ -984,10 +984,9 @@ export async function runRankedDraftStart(
   }
 }
 
-async function startAiFallbackWithCountry(
+async function startAiFallback(
   io: QuizballServer,
   userId: string,
-  playerCountryCode: string | null | undefined,
   claimedSearchId?: string,
 ): Promise<void> {
   await withSpan('ranked.fallback_to_ai', {
@@ -1035,10 +1034,8 @@ async function startAiFallbackWithCountry(
     if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
       return;
     }
-    await startRankedAiForUser(io, userId, {
-      skipSearchEmit: true,
-      ...(playerCountryCode ? { playerCountryCode } : {}),
-    });
+    const started = await startRankedAiForUser(io, userId, { skipSearchEmit: true });
+    if (!started) return;
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
     rankedDebug('fallback_to_ai', {
       user: rankedDebugUser(userId),
@@ -1095,10 +1092,9 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       const result = toStringArray(resultRaw);
       const userId = result[0];
       if (!userId) continue;
-      const countryCode = result[1] || null;
       fallbackCount += 1;
       try {
-        await startAiFallbackWithCountry(io, userId, countryCode, searchId);
+        await startAiFallback(io, userId, searchId);
       } catch (error) {
         fallbackFailureCount += 1;
         logger.error(
@@ -1499,9 +1495,7 @@ export const rankedMatchmakingService = {
         if (redis) {
           await redis.del(rankedCancelKey(userId));
         }
-        await startRankedAiForUser(io, userId, {
-          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
-        });
+        await startRankedAiForUser(io, userId);
         return;
       }
 
@@ -1511,9 +1505,7 @@ export const rankedMatchmakingService = {
           user: rankedDebugUser(userId),
         });
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
-        await startRankedAiForUser(io, userId, {
-          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
-        });
+        await startRankedAiForUser(io, userId);
         return;
       }
 

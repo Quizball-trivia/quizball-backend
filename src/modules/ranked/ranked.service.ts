@@ -269,45 +269,25 @@ export const rankedService = {
 
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
     const profile = await rankedRepo.ensureProfile(userId);
-    if (profile.tier !== tierFromRp(profile.rp)) {
-      const normalizedTier = tierFromRp(profile.rp);
-      await rankedRepo.applySettlement([{
-        profile: {
-          userId: profile.user_id,
-          rp: profile.rp,
-          tier: normalizedTier,
-          placementStatus: profile.placement_status,
-          placementPlayed: profile.placement_played,
-          placementWins: profile.placement_wins,
-          placementSeedRp: profile.placement_seed_rp,
-          placementPerfSum: profile.placement_perf_sum,
-          placementPointsForSum: profile.placement_points_for_sum,
-          placementPointsAgainstSum: profile.placement_points_against_sum,
-          currentWinStreak: profile.current_win_streak,
-        },
-        change: {
-          matchId: `profile-normalize:${profile.user_id}`,
-          userId: profile.user_id,
-          opponentUserId: null,
-          opponentIsAi: true,
-          oldRp: profile.rp,
-          deltaRp: 0,
-          newRp: profile.rp,
-          result: 'win',
-          isPlacement: false,
-          placementGameNo: null,
-          placementAnchorRp: null,
-          placementPerfScore: null,
-          calculationMethod: 'ranked_formula',
-        },
-        coinsAwarded: 0, // tier normalization only — no reward
-        qpAwarded: 0,
-        qpWeekKey: null,
-        qpEndedAt: null,
-      }]);
-      profile.tier = normalizedTier;
-    }
-    return profile;
+    const normalizedTier = tierFromRp(profile.rp);
+    if (profile.tier === normalizedTier) return profile;
+
+    // Tier is a derived read model. Repair it directly instead of routing a
+    // zero-delta change through applySettlement: ranked_rp_changes.match_id is
+    // a UUID FK to a real match, so a synthetic "profile-normalize:<user>"
+    // identifier can never be persisted.
+    const normalizedProfile = await rankedRepo.normalizeTier(
+      profile.user_id,
+      profile.rp,
+      normalizedTier,
+    );
+    logger.info({
+      userId: profile.user_id,
+      rp: normalizedProfile.rp,
+      previousTier: profile.tier,
+      normalizedTier: normalizedProfile.tier,
+    }, 'Ranked profile tier normalized');
+    return normalizedProfile;
   },
 
   async ensureProfiles(userIds: string[]): Promise<Map<string, RankedProfileRow>> {

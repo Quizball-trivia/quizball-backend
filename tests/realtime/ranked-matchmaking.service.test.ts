@@ -960,6 +960,17 @@ describe('ranked-matchmaking.service queue behavior', () => {
       { err: fallbackError, searchId: 'search-bad', userId: 'bad-user' },
       'Ranked matchmaking fallback failed for queued user'
     );
+    const emit = (io.to as unknown as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(io.to).toHaveBeenCalledWith('user:bad-user');
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+    expect(emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message: 'Match preparation failed. Please restart ranked matchmaking.',
+      meta: {
+        searchId: 'search-bad',
+        source: 'ranked_ai_fallback',
+      },
+    });
   });
 
   it('runs human pairing when the fallback phase fails', async () => {
@@ -1053,6 +1064,99 @@ describe('ranked-matchmaking.service queue behavior', () => {
       { err: pairError, searchIdA: 's1', searchIdB: 's2', userAId: 'u1', userBId: 'u2' },
       'Ranked matchmaking pair failed for queued users'
     );
+    const emit = (io.to as unknown as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(io.to).toHaveBeenCalledWith('user:u1');
+    expect(io.to).toHaveBeenCalledWith('user:u2');
+    expect(emit.mock.calls.filter(([event]) => event === 'ranked:queue_left')).toHaveLength(2);
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+    expect(emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message: 'Match preparation failed. Please restart ranked matchmaking.',
+      meta: {
+        searchId: 's1',
+        source: 'ranked_human_pair',
+      },
+    });
+    expect(emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message: 'Match preparation failed. Please restart ranked matchmaking.',
+      meta: {
+        searchId: 's2',
+        source: 'ranked_human_pair',
+      },
+    });
+  });
+
+  it('suppresses the terminal abort for a user whose pair failure struck after lobby commit', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const pairError = new Error('post-commit cleanup failed');
+
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+    createLobbyMock.mockRejectedValueOnce(pairError);
+
+    const { userSessionGuardService } = await import(
+      '../../src/realtime/services/user-session-guard.service.js'
+    );
+    const clearSnapshot = {
+      state: 'IDLE',
+      activeMatchId: null,
+      waitingLobbyId: null,
+      queueSearchId: null,
+    } as never;
+    const committedSnapshot = {
+      state: 'IN_WAITING_LOBBY',
+      activeMatchId: null,
+      waitingLobbyId: 'lobby-commit',
+      queueSearchId: null,
+    } as never;
+    // First resolveStates call is the pre-pair preflight (must be clear so the
+    // pair proceeds to the failing lobby create); later calls are the failure
+    // notifier, which must see u1's committed lobby.
+    const resolveStatesSpy = vi.spyOn(userSessionGuardService, 'resolveStates')
+      .mockResolvedValueOnce(new Map([['u1', clearSnapshot], ['u2', clearSnapshot]]))
+      .mockResolvedValue(new Map([['u1', committedSnapshot], ['u2', clearSnapshot]]));
+
+    // Record the destination room per emit: the shared-emitter default mock
+    // cannot prove WHICH user received the abort.
+    const roomEvents: Array<{ room: string; event: string; payload?: unknown }> = [];
+    (io.to as unknown as ReturnType<typeof vi.fn>).mockImplementation((room: string) => ({
+      emit: (event: string, payload?: unknown) => {
+        roomEvents.push({ room, event, payload });
+      },
+    }));
+
+    try {
+      service.start(io);
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(createLobbyMock).toHaveBeenCalledTimes(1);
+      const abortErrors = roomEvents.filter(
+        ({ event, payload }) =>
+          event === 'error' &&
+          (payload as { code?: string } | undefined)?.code === 'MATCH_PREPARATION_FAILED'
+      );
+      // u1 has a committed lobby: no contradictory abort. u2 is clear: aborted.
+      expect(abortErrors).toHaveLength(1);
+      expect(abortErrors[0]?.room).toBe('user:u2');
+      expect((abortErrors[0]?.payload as { meta: { searchId: string } }).meta.searchId).toBe('s2');
+      const queueLeft = roomEvents.filter(({ event }) => event === 'ranked:queue_left');
+      expect(queueLeft).toHaveLength(1);
+      expect(queueLeft[0]?.room).toBe('user:u2');
+      expect(
+        roomEvents.filter(({ room, event }) => room === 'user:u1' && (event === 'error' || event === 'ranked:queue_left'))
+      ).toHaveLength(0);
+    } finally {
+      resolveStatesSpy.mockRestore();
+      // Drop any unconsumed once-rejection so it cannot leak into later tests;
+      // beforeEach reinstalls the default implementation.
+      createLobbyMock.mockReset();
+    }
   });
 
   it('keeps a bounded pool of pair starts full without over-claiming users', async () => {

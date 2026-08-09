@@ -28,6 +28,9 @@ scripts/*
 !scripts/generate-image-question-preview.ts
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
+# OpenAPI baseline regeneration — referenced by tests/openapi/spec-snapshot.test.ts
+# and the api:export npm script; must ship or the baseline rots unregenerable.
+!scripts/export-openapi.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).

@@ -40,8 +40,11 @@ export function isRankedAiLobby(lobby: { mode: string }): boolean {
 
 export async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string | null> {
   const redis = getRedisClient();
-  if (!redis) return null;
-  return redis.get(rankedAiLobbyKey(lobbyId));
+  if (!redis?.isOpen) return null;
+  return redis.get(rankedAiLobbyKey(lobbyId)).catch((err) => {
+    logger.warn({ err, lobbyId }, 'Failed to read ranked AI lobby marker; falling back to members');
+    return null;
+  });
 }
 
 /**
@@ -95,8 +98,12 @@ export async function resolveRankedAiUserIdForDraft(
   if (!aiMember) return null;
 
   const redis = getRedisClient();
-  if (redis) {
-    await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: RANKED_AI_KEY_TTL_SEC });
+  if (redis?.isOpen) {
+    await redis
+      .set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: RANKED_AI_KEY_TTL_SEC })
+      .catch((err) => {
+        logger.warn({ err, lobbyId, aiUserId: aiMember.userId }, 'Failed to cache recovered ranked AI lobby marker');
+      });
   }
   return aiMember.userId;
 }

@@ -270,7 +270,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     }));
     getWalletMock.mockResolvedValue({ coins: 0, tickets: 1 });
     startDraftMock.mockResolvedValue(undefined);
-    startRankedAiForUserMock.mockResolvedValue(undefined);
+    startRankedAiForUserMock.mockResolvedValue(true);
   });
 
   afterEach(async () => {
@@ -580,7 +580,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     });
   });
 
-  it('passes queued session country to AI fallback', async () => {
+  it('does not reuse the human country for a persistent AI opponent', async () => {
     const service = await loadService();
     const io = createIoMock();
 
@@ -596,7 +596,6 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'u-fallback', {
       skipSearchEmit: true,
-      playerCountryCode: 'MA',
     });
   });
 

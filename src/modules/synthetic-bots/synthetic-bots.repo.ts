@@ -508,6 +508,33 @@ export const syntheticBotsRepo = {
   },
 
   /**
+   * Durable backstop for the per-human recent-opponent LRU. Redis supplies the
+   * freshest cross-mode memory, while this query preserves ranked rotation
+   * across cache loss, restart, or a transient Redis outage.
+   */
+  async listRecentlyFacedPersistentBotIds(humanUserId: string, limit: number): Promise<string[]> {
+    const rows = await sql<{ bot_user_id: string }[]>`
+      SELECT opponent.user_id AS bot_user_id
+      FROM match_players human
+      JOIN matches m ON m.id = human.match_id
+      JOIN match_players opponent
+        ON opponent.match_id = m.id
+       AND opponent.user_id <> human.user_id
+      JOIN users bot
+        ON bot.id = opponent.user_id
+       AND bot.ai_kind = 'persistent'
+      WHERE human.user_id = ${humanUserId}
+        AND m.mode = 'ranked'
+        AND m.started_at IS NOT NULL
+        AND m.started_at >= NOW() - INTERVAL '7 days'
+      GROUP BY opponent.user_id
+      ORDER BY MAX(COALESCE(m.started_at, m.updated_at)) DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => row.bot_user_id);
+  },
+
+  /**
    * Roster bots that could plausibly rename right now, for the rename worker.
    *
    * HARD filters in SQL:

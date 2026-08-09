@@ -15,6 +15,7 @@ process.env.BOT_PAIRING_MAX_RP_GAP = '600';
 
 const repo = {
   listEligibleBots: vi.fn(),
+  listRecentlyFacedPersistentBotIds: vi.fn().mockResolvedValue([]),
 };
 const reservation = {
   isEnabled: vi.fn(),
@@ -23,6 +24,7 @@ const reservation = {
 const redis = {
   isOpen: true,
   lRange: vi.fn().mockResolvedValue([]),
+  lRem: vi.fn().mockResolvedValue(0),
   lPush: vi.fn().mockResolvedValue(1),
   lTrim: vi.fn().mockResolvedValue('OK'),
   expire: vi.fn().mockResolvedValue(1),

@@ -63,6 +63,16 @@ describe('flag-off: only ACQUISITION is gated; cleanup still runs (kill-switch s
     expect(await reservationService.isEnabled()).toBe(false);
     expect(repo.acquireReservation).not.toHaveBeenCalled();
   });
+  it('allows ranked persistent-only acquisition while optional features remain off', async () => {
+    const result = await reservationService.acquire({
+      botUserId: 'bot',
+      lobbyId: 'l',
+      ttlSec: 60,
+      requirePersistent: true,
+    });
+    expect(result).toEqual({ botUserId: 'bot', lobbyId: 'lobby', fence: 7 });
+    expect(repo.acquireReservation).toHaveBeenCalledOnce();
+  });
   it('releases STILL run with the flag off so leases created while on are cleaned up', async () => {
     await reservationService.abortLobby('l', 'auto_leave_lobby');
     await reservationService.releaseByMatch('m', 'completion');

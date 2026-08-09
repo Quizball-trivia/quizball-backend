@@ -14,19 +14,71 @@ const reservationService = {
 };
 // lobbiesRepo is imported by the helpers module but not used by this function now.
 const lobbiesRepo = { listMembersWithUser: vi.fn(), removeMember: vi.fn(), getById: vi.fn() };
+const usersRepo = { getByIds: vi.fn() };
+const redisState: {
+  client: null | {
+    isOpen: boolean;
+    get: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+    del: ReturnType<typeof vi.fn>;
+  };
+} = { client: null };
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({ lobbiesRepo }));
+vi.mock('../../src/modules/users/users.repo.js', () => ({ usersRepo }));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({ reservationService }));
-// Redis is DOWN — getRedisClient returns null (simulating an outage).
-vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => null }));
+vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => redisState.client }));
 
-const { releaseRankedAiLobbyMemberSafely } = await import(
+const {
+  getRankedAiUserIdForLobby,
+  releaseRankedAiLobbyMemberSafely,
+  resolveRankedAiUserIdForDraft,
+} = await import(
   '../../src/realtime/services/lobby-lifecycle.helpers.js'
 );
 
 beforeEach(() => {
   vi.clearAllMocks();
+  redisState.client = null;
   reservationService.abortLobby.mockResolvedValue({ aborted: true, botReleased: 'persistent-bot', lobbyDeleted: true, removedMemberIds: ['human', 'persistent-bot'] });
+  usersRepo.getByIds.mockResolvedValue(new Map([
+    ['human', { id: 'human', is_ai: false }],
+    ['persistent-bot', { id: 'persistent-bot', is_ai: true }],
+  ]));
+});
+
+describe('ranked AI marker resilience', () => {
+  it('does not call a closed Redis client and resolves the bot from lobby members', async () => {
+    redisState.client = {
+      isOpen: false,
+      get: vi.fn().mockRejectedValue(new Error('closed')),
+      set: vi.fn().mockRejectedValue(new Error('closed')),
+      del: vi.fn(),
+    };
+
+    await expect(getRankedAiUserIdForLobby('lobby-1')).resolves.toBeNull();
+    await expect(resolveRankedAiUserIdForDraft('lobby-1', [
+      { user_id: 'human' },
+      { user_id: 'persistent-bot' },
+    ])).resolves.toBe('persistent-bot');
+    expect(redisState.client.get).not.toHaveBeenCalled();
+    expect(redisState.client.set).not.toHaveBeenCalled();
+  });
+
+  it('falls back to members when an open Redis client rejects the marker read', async () => {
+    redisState.client = {
+      isOpen: true,
+      get: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+      set: vi.fn().mockResolvedValue('OK'),
+      del: vi.fn(),
+    };
+
+    await expect(resolveRankedAiUserIdForDraft('lobby-1', [
+      { user_id: 'human' },
+      { user_id: 'persistent-bot' },
+    ])).resolves.toBe('persistent-bot');
+    expect(redisState.client.set).toHaveBeenCalled();
+  });
 });
 
 describe('releaseRankedAiLobbyMemberSafely (Redis down)', () => {

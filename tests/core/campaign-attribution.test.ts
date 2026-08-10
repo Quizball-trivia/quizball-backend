@@ -63,6 +63,14 @@ describe('campaign attribution', () => {
       quiz_score: 16,
       quiz_total_questions: 15,
     }),
+    encode({
+      source: 'campaign_quiz',
+      quiz_slug: 'liverpool',
+      cta_placement: 'score',
+      captured_at: '2026-08-10T09:59:00.000Z',
+      campaign_conversion_id: '11111111-1111-4111-8111-111111111111',
+      unexpected: 'field',
+    }),
   ])('rejects malformed, unsafe, stale, or inconsistent payloads', (raw) => {
     expect(parseCampaignAttribution(raw, now)).toBeNull();
   });

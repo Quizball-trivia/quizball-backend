@@ -194,6 +194,32 @@ export async function startDraft(
         return 'insufficient_categories';
       }
 
+      // Flip to 'active' under the shared per-lobby advisory lock so this
+      // waiting→active transition serializes with any concurrent persistent-bot
+      // reservation ABORT (which takes the same lock). This closes the
+      // abort-vs-activate TOCTOU: an aborter either ran first (freed the bot →
+      // the later reservation transfer finds nothing → match creation rolls back)
+      // or blocks behind us and observes 'active' → no-ops.
+      //
+      // expectWaiting: PROVE ownership via the waiting→active CAS BEFORE any
+      // category write — a lost CAS must leave the winner's draft state
+      // untouched. Runs after selection (read-only) so insufficient_categories
+      // still exits with the lobby waiting. A post-CAS write failure throws
+      // into caller teardown paths that already handle an activated lobby.
+      // The bare (recovery) path keeps writes-then-unconditional-activate.
+      if (options?.expectWaiting) {
+        const activation = await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId, {
+          requireWaiting: true,
+        });
+        if (!activation.activated) {
+          // Atomic CAS lost: a competitor whose Redis lease outlived its 3s TTL
+          // activated between our under-lock status read and here. It owns the
+          // draft; a second draft:start (or a category rewrite) would corrupt it.
+          logger.info({ lobbyId }, 'Draft start skipped: activation CAS lost to a concurrent starter');
+          return 'already_active';
+        }
+      }
+
       await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
       await lobbiesRepo.clearLobbyCategories(lobbyId);
       await lobbiesRepo.insertLobbyCategories(
@@ -203,21 +229,8 @@ export async function startDraft(
           categoryId: category.id,
         }))
       );
-      // Flip to 'active' under the shared per-lobby advisory lock so this
-      // waiting→active transition serializes with any concurrent persistent-bot
-      // reservation ABORT (which takes the same lock). This closes the
-      // abort-vs-activate TOCTOU: an aborter either ran first (freed the bot →
-      // the later reservation transfer finds nothing → match creation rolls back)
-      // or blocks behind us and observes 'active' → no-ops.
-      const activation = await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId, {
-        requireWaiting: options?.expectWaiting === true,
-      });
-      if (options?.expectWaiting && !activation.activated) {
-        // Atomic CAS lost: a competitor whose Redis lease outlived its 3s TTL
-        // activated between our under-lock status read and here. It owns the
-        // draft; emitting a second draft:start would double-start the client.
-        logger.info({ lobbyId }, 'Draft start skipped: activation CAS lost to a concurrent starter');
-        return 'already_active';
+      if (!options?.expectWaiting) {
+        await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId, { requireWaiting: false });
       }
       await warmupRealtimeService.cleanupLobby(lobbyId);
 

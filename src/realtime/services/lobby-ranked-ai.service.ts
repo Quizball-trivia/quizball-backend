@@ -578,13 +578,14 @@ async function startRankedAiDraft(params: {
       // Lobby gone → free the still-lobby-keyed reservation (pre-activation).
       // The user is on the match-found modal with no draft coming; close it out
       // unless a newer session owns them.
-      await releasePreMatch('draft_start_cancel');
+      const compensation = await releasePreMatch('draft_start_cancel');
       await notifyRankedCallbackFailure({
         io,
         userId,
         lobbyId,
         source: 'ranked_ai_draft_start_lobby_missing',
         message: 'Match preparation failed. Please restart ranked matchmaking.',
+        compensation,
       });
       return;
     }

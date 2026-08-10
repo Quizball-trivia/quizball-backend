@@ -118,16 +118,35 @@ describe('startDraft expectWaiting enforcement', () => {
     expect(emit).toHaveBeenCalledWith('draft:start', expect.anything());
   });
 
-  it("returns 'already_active' WITHOUT emitting when the activation CAS is lost (expired-lease competitor)", async () => {
+  it("returns 'already_active' with NO writes and NO emit when the activation CAS is lost", async () => {
     // Both under-lock reads see 'waiting' (the slow competitor has not
     // activated yet), but its activation lands first — the CAS is the last
-    // line of defense against a double draft:start.
+    // line of defense: the loser must not emit a second draft:start NOR
+    // rewrite the winner's category rows.
     syntheticBotsRepo.activateLobbyForDraftLocked.mockResolvedValue({ activated: false, committedReservation: false });
 
     const result = await startDraft(io, 'lobby-1', { expectWaiting: true });
 
     expect(result).toBe('already_active');
     expect(emit).not.toHaveBeenCalledWith('draft:start', expect.anything());
+    expect(lobbiesRepo.clearLobbyCategoryBans).not.toHaveBeenCalled();
+    expect(lobbiesRepo.clearLobbyCategories).not.toHaveBeenCalled();
+    expect(lobbiesRepo.insertLobbyCategories).not.toHaveBeenCalled();
+  });
+
+  it('performs the CAS before any category write in expectWaiting mode', async () => {
+    const order: string[] = [];
+    syntheticBotsRepo.activateLobbyForDraftLocked.mockImplementation(async () => {
+      order.push('cas');
+      return { activated: true, committedReservation: false };
+    });
+    lobbiesRepo.clearLobbyCategories.mockImplementation(async () => {
+      order.push('clear');
+    });
+
+    await startDraft(io, 'lobby-1', { expectWaiting: true });
+
+    expect(order.indexOf('cas')).toBeLessThan(order.indexOf('clear'));
   });
 
   it('keeps the unconditional activation on the recovery path (no option)', async () => {

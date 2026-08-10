@@ -27,6 +27,7 @@ const getPublicNicknameHistoryMock = vi.fn();
 const getNicknameQuotaMock = vi.fn();
 const hasConsumedSignupNamingMock = vi.fn();
 const getIdentityDerivedNicknameMock = vi.fn();
+const trackAccountCreatedMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -35,6 +36,10 @@ vi.mock('../../src/core/index.js', () => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+}));
+
+vi.mock('../../src/core/analytics.js', () => ({
+  trackAccountCreated: (...args: unknown[]) => trackAccountCreatedMock(...args),
 }));
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
@@ -675,7 +680,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
   it('normalizes blank identity phone numbers before creating a new user', async () => {
     getCachedUserMock.mockReturnValue(null);
     getByProviderSubjectMock.mockResolvedValue(null);
-    createWithIdentityMock.mockResolvedValue(MOCK_USER);
+    createWithIdentityMock.mockResolvedValue({ user: MOCK_USER, created: true });
 
     const { usersService } = await import('../../src/modules/users/users.service.js');
     await usersService.getOrCreateFromIdentity({
@@ -695,6 +700,61 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
         provider: 'supabase',
         subject: 'provider-sub',
       })
+    );
+    expect(trackAccountCreatedMock).toHaveBeenCalledWith(
+      MOCK_USER,
+      'email',
+      undefined,
+    );
+  });
+
+  it('does not emit the new-user callback when the repository resolved a provisioning race', async () => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue(null);
+    createWithIdentityMock.mockResolvedValue({ user: MOCK_USER, created: false });
+    const onUserCreated = vi.fn();
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    }, undefined, { onUserCreated });
+
+    expect(onUserCreated).not.toHaveBeenCalled();
+    expect(trackAccountCreatedMock).not.toHaveBeenCalled();
+  });
+
+  it('passes validated campaign context to the canonical account-created event', async () => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue(null);
+    createWithIdentityMock.mockResolvedValue({ user: MOCK_USER, created: true });
+    const attribution = {
+      source: 'campaign_quiz' as const,
+      quiz_slug: 'liverpool',
+      cta_placement: 'score' as const,
+      captured_at: '2026-08-10T10:00:00.000Z',
+      anonymous_distinct_id: 'anon-123',
+      auth_method: 'google' as const,
+      quiz_score: 11,
+      quiz_total_questions: 15,
+    };
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    }, undefined, {
+      accountCreation: { method: 'google', attribution },
+    });
+
+    expect(trackAccountCreatedMock).toHaveBeenCalledWith(
+      MOCK_USER,
+      'google',
+      attribution,
     );
   });
 

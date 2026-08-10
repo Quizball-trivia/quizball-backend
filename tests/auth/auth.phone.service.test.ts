@@ -478,7 +478,7 @@ describe('authService strict provisioning', () => {
     expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
   });
 
-  it('emits account_created (not login_completed) for a brand-new social user', async () => {
+  it('classifies a brand-new social user without emitting login_completed', async () => {
     signInWithIdTokenMock.mockResolvedValue({ ...MOCK_SESSION, provider: 'google' });
     // Simulate a first-time login: the service invokes onUserCreated.
     getOrCreateFromIdentityMock.mockImplementationOnce(
@@ -490,10 +490,6 @@ describe('authService strict provisioning', () => {
 
     await authService.socialLoginToken({ provider: 'google', id_token: 'google-token' });
 
-    expect(trackEventMock).toHaveBeenCalledWith('account_created', 'new-user-1', {
-      method: 'google',
-      is_new_user: true,
-    });
     expect(trackEventMock).not.toHaveBeenCalledWith('login_completed', expect.anything(), expect.anything());
   });
 

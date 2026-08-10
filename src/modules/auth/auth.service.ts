@@ -260,16 +260,10 @@ async function getOrCreateProvisionedIdentity(
   let created = false;
 
   const user = await usersService.getOrCreateFromIdentity(identity, undefined, {
-    onUserCreated: (newUser) => {
+    onUserCreated: () => {
       created = true;
-      identifyUserProfile(newUser);
-      // Authoritative new-account signal — once per real account, attributed to
-      // the social/email method. The clean replacement for client signup_completed.
-      trackEvent('account_created', newUser.id, {
-        method,
-        is_new_user: true,
-      });
     },
+    accountCreation: { method },
   });
 
   if (!created && emitLoginAnalytics && user?.id) {

@@ -202,9 +202,9 @@ export function identifyUserProfile(user: AnalyticsUserProfile): void {
 
 /**
  * Emit the canonical signup conversion from the only authoritative point: the
- * successful application-user insert. When campaign context exists, alias the
- * original browser ID first so pre-signup quiz events remain on the same person
- * even when email confirmation completes in another browser.
+ * successful application-user insert. Campaign conversion IDs correlate an
+ * email-confirmation callback across browsers without accepting a client-
+ * supplied PostHog person ID or merging unrelated person histories.
  */
 export function trackAccountCreated(
   user: AnalyticsUserProfile,
@@ -212,10 +212,6 @@ export function trackAccountCreated(
   attribution?: CampaignAttribution | null,
 ): void {
   identifyUserProfile(user);
-
-  if (attribution?.anonymous_distinct_id && attribution.anonymous_distinct_id !== user.id) {
-    aliasUser(user.id, attribution.anonymous_distinct_id);
-  }
 
   trackEvent('account_created', user.id, {
     method,

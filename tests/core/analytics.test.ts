@@ -125,23 +125,19 @@ describe('analytics AI-user suppression', () => {
     });
   });
 
-  it('aliases the anonymous quiz visitor and captures the attributed account creation', async () => {
+  it('captures account creation with a cross-browser-safe conversion ID', async () => {
     trackAccountCreated({ id: REAL_USER, email: 'real@example.com' }, 'google', {
       source: 'campaign_quiz',
       quiz_slug: 'liverpool',
       cta_placement: 'score',
       captured_at: '2026-08-10T10:00:00.000Z',
-      anonymous_distinct_id: ANON_WEB_ID,
-      auth_method: 'google',
+      campaign_conversion_id: '33333333-3333-4333-8333-333333333333',
       quiz_score: 12,
       quiz_total_questions: 15,
     });
     await flush();
 
-    expect(aliasMock).toHaveBeenCalledWith({
-      distinctId: ANON_WEB_ID,
-      alias: REAL_USER,
-    });
+    expect(aliasMock).not.toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalledWith(expect.objectContaining({
       distinctId: REAL_USER,
       event: 'account_created',
@@ -153,7 +149,7 @@ describe('analytics AI-user suppression', () => {
         quiz_score: 12,
         quiz_total_questions: 15,
         quiz_score_percent: 80,
-        anonymous_distinct_id: ANON_WEB_ID,
+        campaign_conversion_id: '33333333-3333-4333-8333-333333333333',
       }),
     }));
   });

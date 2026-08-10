@@ -81,7 +81,6 @@ export async function authMiddleware(
     );
     const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
       accountCreation: {
-        method: attribution?.auth_method,
         attribution,
       },
     });

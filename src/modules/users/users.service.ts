@@ -222,7 +222,18 @@ async function assertAvatarCustomizationAllowed(
     if (item.product_type !== 'avatar') continue;
 
     const parsed = avatarMetadataSchema.safeParse(item.product_metadata);
-    if (!parsed.success || !parsed.data.avatarPartId || !parsed.data.slot) continue;
+    if (!parsed.success) {
+      logger.warn(
+        {
+          userId,
+          productId: item.product_id,
+          productSlug: item.product_slug,
+        },
+        'Ignoring malformed avatar inventory metadata'
+      );
+      continue;
+    }
+    if (!parsed.data.avatarPartId || !parsed.data.slot) continue;
 
     ownedParts.add(`${parsed.data.slot}:${parsed.data.avatarPartId}`);
   }

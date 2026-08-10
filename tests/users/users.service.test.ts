@@ -501,7 +501,9 @@ describe('usersService.getPublicProfile', () => {
       avatarCustomization: { hair: 'hair_leopard' },
     });
 
-    expect(updateMock).toHaveBeenCalled();
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: { hair: 'hair_leopard' },
+    });
   });
 
   it('preserves an already-equipped paid part in the same slot without inventory', async () => {

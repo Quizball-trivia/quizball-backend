@@ -5,6 +5,22 @@ import {
   userIdParamSchema,
   type PublicProfileData,
 } from '../../src/modules/users/users.schemas.js';
+import { avatarCustomizationSchema } from '../../src/modules/users/avatar-customization.js';
+
+describe('avatarCustomizationSchema', () => {
+  it('accepts bounded catalog identifiers added after backend deployment', () => {
+    expect(avatarCustomizationSchema.safeParse({ hair: 'hair_leopard' }).success).toBe(true);
+  });
+
+  it.each([
+    { hair: 'x'.repeat(65) },
+    { hair: '<script>' },
+    { jersey: 'Jersey_Uppercase' },
+    { unknownSlot: 'hair_leopard' },
+  ])('rejects invalid or unexpected avatar identifiers: %j', (value) => {
+    expect(avatarCustomizationSchema.safeParse(value).success).toBe(false);
+  });
+});
 
 describe('userIdParamSchema', () => {
   it('accepts a valid UUID', () => {

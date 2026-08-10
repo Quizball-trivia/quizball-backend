@@ -942,7 +942,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
     await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
 
-    expect(startDraftMock).toHaveBeenCalledWith(io, 'lobby-1');
+    expect(startDraftMock).toHaveBeenCalledWith(io, 'lobby-1', { expectWaiting: true });
   });
 
   it('runRankedDraftStart skips when either player cancelled the search', async () => {

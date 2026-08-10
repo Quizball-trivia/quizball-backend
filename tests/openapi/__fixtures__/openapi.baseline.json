@@ -380,61 +380,33 @@
                         "properties": {
                           "skin": {
                             "type": "string",
-                            "enum": [
-                              "skin_male_white",
-                              "skin_male_white_alt",
-                              "skin_male_dark",
-                              "skin_male_dark_alt"
-                            ]
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           },
                           "jersey": {
                             "type": "string",
-                            "enum": [
-                              "jersey_green",
-                              "jersey_blue",
-                              "jersey_yellow",
-                              "jersey_red",
-                              "jersey_violet",
-                              "jersey_pink",
-                              "jersey_real",
-                              "jersey_liverpool",
-                              "jersey_barcelona",
-                              "jersey_milan",
-                              "jersey_bayern",
-                              "jersey_brazil_retro",
-                              "jersey_argentina_retro",
-                              "jersey_france_retro",
-                              "jersey_germany_retro",
-                              "jersey_netherlands_retro",
-                              "jersey_georgia_retro",
-                              "jersey_psg_retro"
-                            ]
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           },
                           "hair": {
                             "type": "string",
-                            "enum": [
-                              "hair_boy_basic",
-                              "hair_girl_basic",
-                              "hair_hamsik",
-                              "hair_ramos",
-                              "hair_ronaldo_brazil",
-                              "hair_ronaldo_goat"
-                            ]
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           },
                           "glasses": {
                             "type": "string",
-                            "enum": [
-                              "glasses_wayfarer",
-                              "glasses_round",
-                              "glasses_aviator"
-                            ]
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           },
                           "facialHair": {
                             "type": "string",
-                            "enum": [
-                              "stache",
-                              "beard"
-                            ]
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           }
                         },
                         "additionalProperties": false
@@ -480,61 +452,33 @@
                       "properties": {
                         "skin": {
                           "type": "string",
-                          "enum": [
-                            "skin_male_white",
-                            "skin_male_white_alt",
-                            "skin_male_dark",
-                            "skin_male_dark_alt"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "jersey": {
                           "type": "string",
-                          "enum": [
-                            "jersey_green",
-                            "jersey_blue",
-                            "jersey_yellow",
-                            "jersey_red",
-                            "jersey_violet",
-                            "jersey_pink",
-                            "jersey_real",
-                            "jersey_liverpool",
-                            "jersey_barcelona",
-                            "jersey_milan",
-                            "jersey_bayern",
-                            "jersey_brazil_retro",
-                            "jersey_argentina_retro",
-                            "jersey_france_retro",
-                            "jersey_germany_retro",
-                            "jersey_netherlands_retro",
-                            "jersey_georgia_retro",
-                            "jersey_psg_retro"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "hair": {
                           "type": "string",
-                          "enum": [
-                            "hair_boy_basic",
-                            "hair_girl_basic",
-                            "hair_hamsik",
-                            "hair_ramos",
-                            "hair_ronaldo_brazil",
-                            "hair_ronaldo_goat"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "glasses": {
                           "type": "string",
-                          "enum": [
-                            "glasses_wayfarer",
-                            "glasses_round",
-                            "glasses_aviator"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "facialHair": {
                           "type": "string",
-                          "enum": [
-                            "stache",
-                            "beard"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         }
                       },
                       "additionalProperties": false
@@ -1646,61 +1590,33 @@
             "properties": {
               "skin": {
                 "type": "string",
-                "enum": [
-                  "skin_male_white",
-                  "skin_male_white_alt",
-                  "skin_male_dark",
-                  "skin_male_dark_alt"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "jersey": {
                 "type": "string",
-                "enum": [
-                  "jersey_green",
-                  "jersey_blue",
-                  "jersey_yellow",
-                  "jersey_red",
-                  "jersey_violet",
-                  "jersey_pink",
-                  "jersey_real",
-                  "jersey_liverpool",
-                  "jersey_barcelona",
-                  "jersey_milan",
-                  "jersey_bayern",
-                  "jersey_brazil_retro",
-                  "jersey_argentina_retro",
-                  "jersey_france_retro",
-                  "jersey_germany_retro",
-                  "jersey_netherlands_retro",
-                  "jersey_georgia_retro",
-                  "jersey_psg_retro"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "hair": {
                 "type": "string",
-                "enum": [
-                  "hair_boy_basic",
-                  "hair_girl_basic",
-                  "hair_hamsik",
-                  "hair_ramos",
-                  "hair_ronaldo_brazil",
-                  "hair_ronaldo_goat"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "glasses": {
                 "type": "string",
-                "enum": [
-                  "glasses_wayfarer",
-                  "glasses_round",
-                  "glasses_aviator"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "facialHair": {
                 "type": "string",
-                "enum": [
-                  "stache",
-                  "beard"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               }
             },
             "additionalProperties": false
@@ -1776,61 +1692,33 @@
             "properties": {
               "skin": {
                 "type": "string",
-                "enum": [
-                  "skin_male_white",
-                  "skin_male_white_alt",
-                  "skin_male_dark",
-                  "skin_male_dark_alt"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "jersey": {
                 "type": "string",
-                "enum": [
-                  "jersey_green",
-                  "jersey_blue",
-                  "jersey_yellow",
-                  "jersey_red",
-                  "jersey_violet",
-                  "jersey_pink",
-                  "jersey_real",
-                  "jersey_liverpool",
-                  "jersey_barcelona",
-                  "jersey_milan",
-                  "jersey_bayern",
-                  "jersey_brazil_retro",
-                  "jersey_argentina_retro",
-                  "jersey_france_retro",
-                  "jersey_germany_retro",
-                  "jersey_netherlands_retro",
-                  "jersey_georgia_retro",
-                  "jersey_psg_retro"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "hair": {
                 "type": "string",
-                "enum": [
-                  "hair_boy_basic",
-                  "hair_girl_basic",
-                  "hair_hamsik",
-                  "hair_ramos",
-                  "hair_ronaldo_brazil",
-                  "hair_ronaldo_goat"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "glasses": {
                 "type": "string",
-                "enum": [
-                  "glasses_wayfarer",
-                  "glasses_round",
-                  "glasses_aviator"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "facialHair": {
                 "type": "string",
-                "enum": [
-                  "stache",
-                  "beard"
-                ]
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
               }
             },
             "additionalProperties": false
@@ -2189,61 +2077,33 @@
                   "properties": {
                     "skin": {
                       "type": "string",
-                      "enum": [
-                        "skin_male_white",
-                        "skin_male_white_alt",
-                        "skin_male_dark",
-                        "skin_male_dark_alt"
-                      ]
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     },
                     "jersey": {
                       "type": "string",
-                      "enum": [
-                        "jersey_green",
-                        "jersey_blue",
-                        "jersey_yellow",
-                        "jersey_red",
-                        "jersey_violet",
-                        "jersey_pink",
-                        "jersey_real",
-                        "jersey_liverpool",
-                        "jersey_barcelona",
-                        "jersey_milan",
-                        "jersey_bayern",
-                        "jersey_brazil_retro",
-                        "jersey_argentina_retro",
-                        "jersey_france_retro",
-                        "jersey_germany_retro",
-                        "jersey_netherlands_retro",
-                        "jersey_georgia_retro",
-                        "jersey_psg_retro"
-                      ]
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     },
                     "hair": {
                       "type": "string",
-                      "enum": [
-                        "hair_boy_basic",
-                        "hair_girl_basic",
-                        "hair_hamsik",
-                        "hair_ramos",
-                        "hair_ronaldo_brazil",
-                        "hair_ronaldo_goat"
-                      ]
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     },
                     "glasses": {
                       "type": "string",
-                      "enum": [
-                        "glasses_wayfarer",
-                        "glasses_round",
-                        "glasses_aviator"
-                      ]
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     },
                     "facialHair": {
                       "type": "string",
-                      "enum": [
-                        "stache",
-                        "beard"
-                      ]
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     }
                   },
                   "additionalProperties": false
@@ -2383,61 +2243,33 @@
                       "properties": {
                         "skin": {
                           "type": "string",
-                          "enum": [
-                            "skin_male_white",
-                            "skin_male_white_alt",
-                            "skin_male_dark",
-                            "skin_male_dark_alt"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "jersey": {
                           "type": "string",
-                          "enum": [
-                            "jersey_green",
-                            "jersey_blue",
-                            "jersey_yellow",
-                            "jersey_red",
-                            "jersey_violet",
-                            "jersey_pink",
-                            "jersey_real",
-                            "jersey_liverpool",
-                            "jersey_barcelona",
-                            "jersey_milan",
-                            "jersey_bayern",
-                            "jersey_brazil_retro",
-                            "jersey_argentina_retro",
-                            "jersey_france_retro",
-                            "jersey_germany_retro",
-                            "jersey_netherlands_retro",
-                            "jersey_georgia_retro",
-                            "jersey_psg_retro"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "hair": {
                           "type": "string",
-                          "enum": [
-                            "hair_boy_basic",
-                            "hair_girl_basic",
-                            "hair_hamsik",
-                            "hair_ramos",
-                            "hair_ronaldo_brazil",
-                            "hair_ronaldo_goat"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "glasses": {
                           "type": "string",
-                          "enum": [
-                            "glasses_wayfarer",
-                            "glasses_round",
-                            "glasses_aviator"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "facialHair": {
                           "type": "string",
-                          "enum": [
-                            "stache",
-                            "beard"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         }
                       },
                       "additionalProperties": false
@@ -2577,61 +2409,33 @@
                       "properties": {
                         "skin": {
                           "type": "string",
-                          "enum": [
-                            "skin_male_white",
-                            "skin_male_white_alt",
-                            "skin_male_dark",
-                            "skin_male_dark_alt"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "jersey": {
                           "type": "string",
-                          "enum": [
-                            "jersey_green",
-                            "jersey_blue",
-                            "jersey_yellow",
-                            "jersey_red",
-                            "jersey_violet",
-                            "jersey_pink",
-                            "jersey_real",
-                            "jersey_liverpool",
-                            "jersey_barcelona",
-                            "jersey_milan",
-                            "jersey_bayern",
-                            "jersey_brazil_retro",
-                            "jersey_argentina_retro",
-                            "jersey_france_retro",
-                            "jersey_germany_retro",
-                            "jersey_netherlands_retro",
-                            "jersey_georgia_retro",
-                            "jersey_psg_retro"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "hair": {
                           "type": "string",
-                          "enum": [
-                            "hair_boy_basic",
-                            "hair_girl_basic",
-                            "hair_hamsik",
-                            "hair_ramos",
-                            "hair_ronaldo_brazil",
-                            "hair_ronaldo_goat"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "glasses": {
                           "type": "string",
-                          "enum": [
-                            "glasses_wayfarer",
-                            "glasses_round",
-                            "glasses_aviator"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "facialHair": {
                           "type": "string",
-                          "enum": [
-                            "stache",
-                            "beard"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         }
                       },
                       "additionalProperties": false
@@ -7522,61 +7326,33 @@
                       "properties": {
                         "skin": {
                           "type": "string",
-                          "enum": [
-                            "skin_male_white",
-                            "skin_male_white_alt",
-                            "skin_male_dark",
-                            "skin_male_dark_alt"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "jersey": {
                           "type": "string",
-                          "enum": [
-                            "jersey_green",
-                            "jersey_blue",
-                            "jersey_yellow",
-                            "jersey_red",
-                            "jersey_violet",
-                            "jersey_pink",
-                            "jersey_real",
-                            "jersey_liverpool",
-                            "jersey_barcelona",
-                            "jersey_milan",
-                            "jersey_bayern",
-                            "jersey_brazil_retro",
-                            "jersey_argentina_retro",
-                            "jersey_france_retro",
-                            "jersey_germany_retro",
-                            "jersey_netherlands_retro",
-                            "jersey_georgia_retro",
-                            "jersey_psg_retro"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "hair": {
                           "type": "string",
-                          "enum": [
-                            "hair_boy_basic",
-                            "hair_girl_basic",
-                            "hair_hamsik",
-                            "hair_ramos",
-                            "hair_ronaldo_brazil",
-                            "hair_ronaldo_goat"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "glasses": {
                           "type": "string",
-                          "enum": [
-                            "glasses_wayfarer",
-                            "glasses_round",
-                            "glasses_aviator"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "facialHair": {
                           "type": "string",
-                          "enum": [
-                            "stache",
-                            "beard"
-                          ]
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
                         }
                       },
                       "additionalProperties": false
@@ -8217,61 +7993,33 @@
                                   "properties": {
                                     "skin": {
                                       "type": "string",
-                                      "enum": [
-                                        "skin_male_white",
-                                        "skin_male_white_alt",
-                                        "skin_male_dark",
-                                        "skin_male_dark_alt"
-                                      ]
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
                                     },
                                     "jersey": {
                                       "type": "string",
-                                      "enum": [
-                                        "jersey_green",
-                                        "jersey_blue",
-                                        "jersey_yellow",
-                                        "jersey_red",
-                                        "jersey_violet",
-                                        "jersey_pink",
-                                        "jersey_real",
-                                        "jersey_liverpool",
-                                        "jersey_barcelona",
-                                        "jersey_milan",
-                                        "jersey_bayern",
-                                        "jersey_brazil_retro",
-                                        "jersey_argentina_retro",
-                                        "jersey_france_retro",
-                                        "jersey_germany_retro",
-                                        "jersey_netherlands_retro",
-                                        "jersey_georgia_retro",
-                                        "jersey_psg_retro"
-                                      ]
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
                                     },
                                     "hair": {
                                       "type": "string",
-                                      "enum": [
-                                        "hair_boy_basic",
-                                        "hair_girl_basic",
-                                        "hair_hamsik",
-                                        "hair_ramos",
-                                        "hair_ronaldo_brazil",
-                                        "hair_ronaldo_goat"
-                                      ]
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
                                     },
                                     "glasses": {
                                       "type": "string",
-                                      "enum": [
-                                        "glasses_wayfarer",
-                                        "glasses_round",
-                                        "glasses_aviator"
-                                      ]
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
                                     },
                                     "facialHair": {
                                       "type": "string",
-                                      "enum": [
-                                        "stache",
-                                        "beard"
-                                      ]
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
                                     }
                                   },
                                   "additionalProperties": false
@@ -8317,61 +8065,33 @@
                                 "properties": {
                                   "skin": {
                                     "type": "string",
-                                    "enum": [
-                                      "skin_male_white",
-                                      "skin_male_white_alt",
-                                      "skin_male_dark",
-                                      "skin_male_dark_alt"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "jersey": {
                                     "type": "string",
-                                    "enum": [
-                                      "jersey_green",
-                                      "jersey_blue",
-                                      "jersey_yellow",
-                                      "jersey_red",
-                                      "jersey_violet",
-                                      "jersey_pink",
-                                      "jersey_real",
-                                      "jersey_liverpool",
-                                      "jersey_barcelona",
-                                      "jersey_milan",
-                                      "jersey_bayern",
-                                      "jersey_brazil_retro",
-                                      "jersey_argentina_retro",
-                                      "jersey_france_retro",
-                                      "jersey_germany_retro",
-                                      "jersey_netherlands_retro",
-                                      "jersey_georgia_retro",
-                                      "jersey_psg_retro"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "hair": {
                                     "type": "string",
-                                    "enum": [
-                                      "hair_boy_basic",
-                                      "hair_girl_basic",
-                                      "hair_hamsik",
-                                      "hair_ramos",
-                                      "hair_ronaldo_brazil",
-                                      "hair_ronaldo_goat"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "glasses": {
                                     "type": "string",
-                                    "enum": [
-                                      "glasses_wayfarer",
-                                      "glasses_round",
-                                      "glasses_aviator"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "facialHair": {
                                     "type": "string",
-                                    "enum": [
-                                      "stache",
-                                      "beard"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   }
                                 },
                                 "additionalProperties": false
@@ -8776,61 +8496,33 @@
                                 "properties": {
                                   "skin": {
                                     "type": "string",
-                                    "enum": [
-                                      "skin_male_white",
-                                      "skin_male_white_alt",
-                                      "skin_male_dark",
-                                      "skin_male_dark_alt"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "jersey": {
                                     "type": "string",
-                                    "enum": [
-                                      "jersey_green",
-                                      "jersey_blue",
-                                      "jersey_yellow",
-                                      "jersey_red",
-                                      "jersey_violet",
-                                      "jersey_pink",
-                                      "jersey_real",
-                                      "jersey_liverpool",
-                                      "jersey_barcelona",
-                                      "jersey_milan",
-                                      "jersey_bayern",
-                                      "jersey_brazil_retro",
-                                      "jersey_argentina_retro",
-                                      "jersey_france_retro",
-                                      "jersey_germany_retro",
-                                      "jersey_netherlands_retro",
-                                      "jersey_georgia_retro",
-                                      "jersey_psg_retro"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "hair": {
                                     "type": "string",
-                                    "enum": [
-                                      "hair_boy_basic",
-                                      "hair_girl_basic",
-                                      "hair_hamsik",
-                                      "hair_ramos",
-                                      "hair_ronaldo_brazil",
-                                      "hair_ronaldo_goat"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "glasses": {
                                     "type": "string",
-                                    "enum": [
-                                      "glasses_wayfarer",
-                                      "glasses_round",
-                                      "glasses_aviator"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "facialHair": {
                                     "type": "string",
-                                    "enum": [
-                                      "stache",
-                                      "beard"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   }
                                 },
                                 "additionalProperties": false
@@ -10686,61 +10378,33 @@
                     "properties": {
                       "skin": {
                         "type": "string",
-                        "enum": [
-                          "skin_male_white",
-                          "skin_male_white_alt",
-                          "skin_male_dark",
-                          "skin_male_dark_alt"
-                        ]
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
                       },
                       "jersey": {
                         "type": "string",
-                        "enum": [
-                          "jersey_green",
-                          "jersey_blue",
-                          "jersey_yellow",
-                          "jersey_red",
-                          "jersey_violet",
-                          "jersey_pink",
-                          "jersey_real",
-                          "jersey_liverpool",
-                          "jersey_barcelona",
-                          "jersey_milan",
-                          "jersey_bayern",
-                          "jersey_brazil_retro",
-                          "jersey_argentina_retro",
-                          "jersey_france_retro",
-                          "jersey_germany_retro",
-                          "jersey_netherlands_retro",
-                          "jersey_georgia_retro",
-                          "jersey_psg_retro"
-                        ]
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
                       },
                       "hair": {
                         "type": "string",
-                        "enum": [
-                          "hair_boy_basic",
-                          "hair_girl_basic",
-                          "hair_hamsik",
-                          "hair_ramos",
-                          "hair_ronaldo_brazil",
-                          "hair_ronaldo_goat"
-                        ]
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
                       },
                       "glasses": {
                         "type": "string",
-                        "enum": [
-                          "glasses_wayfarer",
-                          "glasses_round",
-                          "glasses_aviator"
-                        ]
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
                       },
                       "facialHair": {
                         "type": "string",
-                        "enum": [
-                          "stache",
-                          "beard"
-                        ]
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
                       }
                     },
                     "additionalProperties": false
@@ -11425,61 +11089,33 @@
                             "properties": {
                               "skin": {
                                 "type": "string",
-                                "enum": [
-                                  "skin_male_white",
-                                  "skin_male_white_alt",
-                                  "skin_male_dark",
-                                  "skin_male_dark_alt"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "jersey": {
                                 "type": "string",
-                                "enum": [
-                                  "jersey_green",
-                                  "jersey_blue",
-                                  "jersey_yellow",
-                                  "jersey_red",
-                                  "jersey_violet",
-                                  "jersey_pink",
-                                  "jersey_real",
-                                  "jersey_liverpool",
-                                  "jersey_barcelona",
-                                  "jersey_milan",
-                                  "jersey_bayern",
-                                  "jersey_brazil_retro",
-                                  "jersey_argentina_retro",
-                                  "jersey_france_retro",
-                                  "jersey_germany_retro",
-                                  "jersey_netherlands_retro",
-                                  "jersey_georgia_retro",
-                                  "jersey_psg_retro"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "hair": {
                                 "type": "string",
-                                "enum": [
-                                  "hair_boy_basic",
-                                  "hair_girl_basic",
-                                  "hair_hamsik",
-                                  "hair_ramos",
-                                  "hair_ronaldo_brazil",
-                                  "hair_ronaldo_goat"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "glasses": {
                                 "type": "string",
-                                "enum": [
-                                  "glasses_wayfarer",
-                                  "glasses_round",
-                                  "glasses_aviator"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "facialHair": {
                                 "type": "string",
-                                "enum": [
-                                  "stache",
-                                  "beard"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               }
                             },
                             "additionalProperties": false
@@ -11643,61 +11279,33 @@
                             "properties": {
                               "skin": {
                                 "type": "string",
-                                "enum": [
-                                  "skin_male_white",
-                                  "skin_male_white_alt",
-                                  "skin_male_dark",
-                                  "skin_male_dark_alt"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "jersey": {
                                 "type": "string",
-                                "enum": [
-                                  "jersey_green",
-                                  "jersey_blue",
-                                  "jersey_yellow",
-                                  "jersey_red",
-                                  "jersey_violet",
-                                  "jersey_pink",
-                                  "jersey_real",
-                                  "jersey_liverpool",
-                                  "jersey_barcelona",
-                                  "jersey_milan",
-                                  "jersey_bayern",
-                                  "jersey_brazil_retro",
-                                  "jersey_argentina_retro",
-                                  "jersey_france_retro",
-                                  "jersey_germany_retro",
-                                  "jersey_netherlands_retro",
-                                  "jersey_georgia_retro",
-                                  "jersey_psg_retro"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "hair": {
                                 "type": "string",
-                                "enum": [
-                                  "hair_boy_basic",
-                                  "hair_girl_basic",
-                                  "hair_hamsik",
-                                  "hair_ramos",
-                                  "hair_ronaldo_brazil",
-                                  "hair_ronaldo_goat"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "glasses": {
                                 "type": "string",
-                                "enum": [
-                                  "glasses_wayfarer",
-                                  "glasses_round",
-                                  "glasses_aviator"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "facialHair": {
                                 "type": "string",
-                                "enum": [
-                                  "stache",
-                                  "beard"
-                                ]
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
                               }
                             },
                             "additionalProperties": false
@@ -11869,61 +11477,33 @@
                                 "properties": {
                                   "skin": {
                                     "type": "string",
-                                    "enum": [
-                                      "skin_male_white",
-                                      "skin_male_white_alt",
-                                      "skin_male_dark",
-                                      "skin_male_dark_alt"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "jersey": {
                                     "type": "string",
-                                    "enum": [
-                                      "jersey_green",
-                                      "jersey_blue",
-                                      "jersey_yellow",
-                                      "jersey_red",
-                                      "jersey_violet",
-                                      "jersey_pink",
-                                      "jersey_real",
-                                      "jersey_liverpool",
-                                      "jersey_barcelona",
-                                      "jersey_milan",
-                                      "jersey_bayern",
-                                      "jersey_brazil_retro",
-                                      "jersey_argentina_retro",
-                                      "jersey_france_retro",
-                                      "jersey_germany_retro",
-                                      "jersey_netherlands_retro",
-                                      "jersey_georgia_retro",
-                                      "jersey_psg_retro"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "hair": {
                                     "type": "string",
-                                    "enum": [
-                                      "hair_boy_basic",
-                                      "hair_girl_basic",
-                                      "hair_hamsik",
-                                      "hair_ramos",
-                                      "hair_ronaldo_brazil",
-                                      "hair_ronaldo_goat"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "glasses": {
                                     "type": "string",
-                                    "enum": [
-                                      "glasses_wayfarer",
-                                      "glasses_round",
-                                      "glasses_aviator"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "facialHair": {
                                     "type": "string",
-                                    "enum": [
-                                      "stache",
-                                      "beard"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   }
                                 },
                                 "additionalProperties": false
@@ -12063,61 +11643,33 @@
                                 "properties": {
                                   "skin": {
                                     "type": "string",
-                                    "enum": [
-                                      "skin_male_white",
-                                      "skin_male_white_alt",
-                                      "skin_male_dark",
-                                      "skin_male_dark_alt"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "jersey": {
                                     "type": "string",
-                                    "enum": [
-                                      "jersey_green",
-                                      "jersey_blue",
-                                      "jersey_yellow",
-                                      "jersey_red",
-                                      "jersey_violet",
-                                      "jersey_pink",
-                                      "jersey_real",
-                                      "jersey_liverpool",
-                                      "jersey_barcelona",
-                                      "jersey_milan",
-                                      "jersey_bayern",
-                                      "jersey_brazil_retro",
-                                      "jersey_argentina_retro",
-                                      "jersey_france_retro",
-                                      "jersey_germany_retro",
-                                      "jersey_netherlands_retro",
-                                      "jersey_georgia_retro",
-                                      "jersey_psg_retro"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "hair": {
                                     "type": "string",
-                                    "enum": [
-                                      "hair_boy_basic",
-                                      "hair_girl_basic",
-                                      "hair_hamsik",
-                                      "hair_ramos",
-                                      "hair_ronaldo_brazil",
-                                      "hair_ronaldo_goat"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "glasses": {
                                     "type": "string",
-                                    "enum": [
-                                      "glasses_wayfarer",
-                                      "glasses_round",
-                                      "glasses_aviator"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "facialHair": {
                                     "type": "string",
-                                    "enum": [
-                                      "stache",
-                                      "beard"
-                                    ]
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
                                   }
                                 },
                                 "additionalProperties": false

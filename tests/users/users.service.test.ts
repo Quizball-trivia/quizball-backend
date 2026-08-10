@@ -883,8 +883,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       quiz_slug: 'liverpool',
       cta_placement: 'score' as const,
       captured_at: '2026-08-10T10:00:00.000Z',
-      anonymous_distinct_id: 'anon-123',
-      auth_method: 'google' as const,
+      campaign_conversion_id: '11111111-1111-4111-8111-111111111111',
       quiz_score: 11,
       quiz_total_questions: 15,
     };

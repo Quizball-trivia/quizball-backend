@@ -7,8 +7,7 @@ const campaignAttributionSchema = z.object({
   quiz_slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(100),
   cta_placement: z.enum(['header', 'score', 'footer', 'rating', 'hero']),
   captured_at: z.string().datetime(),
-  anonymous_distinct_id: z.string().min(1).max(200),
-  auth_method: z.enum(['google', 'facebook', 'apple', 'email', 'phone']).optional(),
+  campaign_conversion_id: z.string().uuid(),
   quiz_score: z.number().int().min(0).max(1000).optional(),
   quiz_total_questions: z.number().int().min(1).max(1000).optional(),
 }).superRefine((value, ctx) => {
@@ -73,7 +72,7 @@ export function campaignAttributionProperties(
     quiz_slug: attribution.quiz_slug,
     cta_placement: attribution.cta_placement,
     campaign_captured_at: attribution.captured_at,
-    anonymous_distinct_id: attribution.anonymous_distinct_id,
+    campaign_conversion_id: attribution.campaign_conversion_id,
   };
 
   if (attribution.quiz_score !== undefined) {

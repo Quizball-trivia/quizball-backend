@@ -404,7 +404,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
   if (shouldStartDraft) {
     try {
       logger.info({ lobbyId }, 'Lobby ready -> starting draft');
-      await startDraft(io, lobbyId);
+      await startDraft(io, lobbyId, { expectWaiting: true });
     } finally {
       await releaseDraftStartGuard(lobbyId);
     }

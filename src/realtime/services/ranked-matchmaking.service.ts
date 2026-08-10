@@ -653,7 +653,7 @@ export async function runRankedDraftStart(
   const latest = await lobbiesRepo.getById(lobbyId);
   if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
   try {
-    await startDraft(io, lobbyId);
+    await startDraft(io, lobbyId, { expectWaiting: true });
   } catch (error) {
     // Keep the crash guard from the previous in-process timer path: a draft
     // start failure must notify both players and never become an unhandled

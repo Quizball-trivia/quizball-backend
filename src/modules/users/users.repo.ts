@@ -200,7 +200,7 @@ export const usersRepo = {
   async createWithIdentity(
     userData: CreateUserData,
     identityData: CreateIdentityData
-  ): Promise<User> {
+  ): Promise<{ user: User; created: boolean }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(
         `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
@@ -217,7 +217,7 @@ export const usersRepo = {
       );
 
       if (existingBeforeCreate[0]?.user_data) {
-        return existingBeforeCreate[0].user_data;
+        return { user: existingBeforeCreate[0].user_data, created: false };
       }
 
       // Pass the OBJECT, not JSON.stringify(...): pre-stringifying double-encodes
@@ -263,7 +263,7 @@ export const usersRepo = {
       );
 
       if (identityResult.length > 0) {
-        return user;
+        return { user, created: true };
       }
 
       // Defensive fallback for mixed deploys or any writer that does not take the
@@ -286,7 +286,7 @@ export const usersRepo = {
         throw new Error('Identity conflict occurred but existing user could not be loaded');
       }
 
-      return existing[0].user_data;
+      return { user: existing[0].user_data, created: false };
     });
   },
 

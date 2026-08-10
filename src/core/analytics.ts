@@ -1,6 +1,10 @@
 import { PostHog } from 'posthog-node';
 import { logger } from './logger.js';
 import { sql } from '../db/index.js';
+import {
+  campaignAttributionProperties,
+  type CampaignAttribution,
+} from './campaign-attribution.js';
 
 let posthogClient: PostHog | null = null;
 
@@ -193,6 +197,26 @@ export function identifyUserProfile(user: AnalyticsUserProfile): void {
     country: user.country ?? undefined,
     favorite_club: user.favorite_club ?? undefined,
     preferred_language: user.preferred_language ?? undefined,
+  });
+}
+
+/**
+ * Emit the canonical signup conversion from the only authoritative point: the
+ * successful application-user insert. Campaign conversion IDs correlate an
+ * email-confirmation callback across browsers without accepting a client-
+ * supplied PostHog person ID or merging unrelated person histories.
+ */
+export function trackAccountCreated(
+  user: AnalyticsUserProfile,
+  method: string,
+  attribution?: CampaignAttribution | null,
+): void {
+  identifyUserProfile(user);
+
+  trackEvent('account_created', user.id, {
+    method,
+    is_new_user: true,
+    ...(attribution ? campaignAttributionProperties(attribution) : {}),
   });
 }
 

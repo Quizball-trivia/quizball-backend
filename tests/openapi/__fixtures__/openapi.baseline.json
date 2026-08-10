@@ -19205,6 +19205,10 @@
                         "type": "boolean",
                         "default": false
                       },
+                      "single_game": {
+                        "type": "boolean",
+                        "default": false
+                      },
                       "qp_target": {
                         "type": "integer",
                         "minimum": 0,

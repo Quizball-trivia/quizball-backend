@@ -162,7 +162,7 @@ export const reservationService = {
     lobbyId: string,
     path: ReservationReleasePath,
     opts?: { draftTeardown?: boolean },
-  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
+  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[]; failed?: boolean }> {
     try {
       // draftTeardown: this flow owns the draft it is tearing down → clear the
       // commit flag in the SAME locked tx as the abort (atomic, no two-tx gap).
@@ -176,7 +176,10 @@ export const reservationService = {
       return result;
     } catch (err) {
       logger.warn({ err, lobbyId, path }, 'persistent-bot locked lobby-abort failed');
-      return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
+      // failed distinguishes "the abort ERRORED (lobby may survive as ours)"
+      // from aborted:false meaning "a committed draft won — hands off". Callers
+      // deciding whether to notify a stranded searcher need that difference.
+      return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [], failed: true };
     }
   },
 

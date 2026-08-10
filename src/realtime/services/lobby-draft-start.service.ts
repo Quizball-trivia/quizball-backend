@@ -83,10 +83,30 @@ export async function abortRankedDraftStartForTickets(
   logger.info({ lobbyId: lobby.id, humanUserIds }, 'Ranked draft start aborted: insufficient tickets');
 }
 
-export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
-  await withSpan('lobby.start_draft', {
+/**
+ * Discriminated outcome so callers that own a user-facing flow (ranked AI
+ * callbacks) can distinguish a silent no-op from a started draft. All previous
+ * callers ignored the void return, so widening the type is non-breaking.
+ */
+export type DraftStartResult = 'started' | 'lobby_missing' | 'lock_busy' | 'already_active' | 'insufficient_categories';
+
+export async function startDraft(
+  io: QuizballServer,
+  lobbyId: string,
+  options?: {
+    /**
+     * Enforce (under the lobby lock) that the lobby is still 'waiting' before
+     * starting. Queue-flow callers (ranked-AI lock-busy retry) set this so a
+     * competitor's just-committed draft is never double-started. Recovery
+     * callers must NOT set it — the post-failure draft restart legitimately
+     * runs on an already-active lobby (draft-realtime match-creation failure).
+     */
+    expectWaiting?: boolean;
+  }
+): Promise<DraftStartResult> {
+  return withSpan('lobby.start_draft', {
     'quizball.lobby_id': lobbyId,
-  }, async (span) => {
+  }, async (span): Promise<DraftStartResult> => {
     // A draft started during a write outage cannot persist its questions or its
     // match. THROW rather than return: when this runs from the durable timer a
     // clean return would mark the timer handled and delete its payload, leaving
@@ -101,7 +121,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby) {
       span.setAttribute('quizball.lobby_found', false);
-      return;
+      return 'lobby_missing';
     }
     span.setAttribute('quizball.lobby_found', true);
     span.setAttribute('quizball.lobby_mode', lobby.mode);
@@ -111,11 +131,29 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
     if (!lock.acquired || !lock.token) {
       span.setAttribute('quizball.lock_acquired', false);
       logger.warn({ lobbyId }, 'Draft start skipped: lobby lock not acquired');
-      return;
+      return 'lock_busy';
     }
 
     span.setAttribute('quizball.lock_acquired', true);
     try {
+      // Authoritative status check UNDER the lock (opt-in): a competitor that
+      // held the lock a moment ago may have activated (or deleted) this lobby
+      // between our pre-lock read and acquisition. Without this, a retrying
+      // queue-flow caller could replace the categories of a live draft and
+      // emit a second draft:start.
+      if (options?.expectWaiting) {
+        const lockedLobby = await lobbiesRepo.getById(lobbyId);
+        if (!lockedLobby) {
+          span.setAttribute('quizball.lobby_found', false);
+          return 'lobby_missing';
+        }
+        if (lockedLobby.status !== 'waiting') {
+          span.setAttribute('quizball.lobby_status', lockedLobby.status);
+          logger.info({ lobbyId, status: lockedLobby.status }, 'Draft start skipped: lobby already advanced');
+          return 'already_active';
+        }
+      }
+
       let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
       let rankedAiUserId: string | null = null;
 
@@ -153,7 +191,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           code: 'INSUFFICIENT_CATEGORIES',
           message: 'Not enough categories with questions to start the game',
         });
-        return;
+        return 'insufficient_categories';
       }
 
       await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
@@ -171,7 +209,16 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       // abort-vs-activate TOCTOU: an aborter either ran first (freed the bot →
       // the later reservation transfer finds nothing → match creation rolls back)
       // or blocks behind us and observes 'active' → no-ops.
-      await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId);
+      const activation = await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId, {
+        requireWaiting: options?.expectWaiting === true,
+      });
+      if (options?.expectWaiting && !activation.activated) {
+        // Atomic CAS lost: a competitor whose Redis lease outlived its 3s TTL
+        // activated between our under-lock status read and here. It owns the
+        // draft; emitting a second draft:start would double-start the client.
+        logger.info({ lobbyId }, 'Draft start skipped: activation CAS lost to a concurrent starter');
+        return 'already_active';
+      }
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       let turnUserId = lobby.host_user_id;
@@ -218,6 +265,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         },
         'Draft started'
       );
+      return 'started';
     } finally {
       await releaseLock(lockKey, lock.token);
     }

@@ -956,7 +956,7 @@ export async function runRankedDraftStart(
   const latest = await lobbiesRepo.getById(lobbyId);
   if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
   try {
-    await startDraft(io, lobbyId);
+    await startDraft(io, lobbyId, { expectWaiting: true });
   } catch (error) {
     // The durable timer scheduler will requeue transient admission pressure.
     // Treating this as a terminal match-preparation failure strands a valid,

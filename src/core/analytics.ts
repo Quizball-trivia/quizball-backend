@@ -1,6 +1,10 @@
 import { PostHog } from 'posthog-node';
 import { logger } from './logger.js';
 import { sql } from '../db/index.js';
+import {
+  campaignAttributionProperties,
+  type CampaignAttribution,
+} from './campaign-attribution.js';
 
 let posthogClient: PostHog | null = null;
 
@@ -193,6 +197,30 @@ export function identifyUserProfile(user: AnalyticsUserProfile): void {
     country: user.country ?? undefined,
     favorite_club: user.favorite_club ?? undefined,
     preferred_language: user.preferred_language ?? undefined,
+  });
+}
+
+/**
+ * Emit the canonical signup conversion from the only authoritative point: the
+ * successful application-user insert. When campaign context exists, alias the
+ * original browser ID first so pre-signup quiz events remain on the same person
+ * even when email confirmation completes in another browser.
+ */
+export function trackAccountCreated(
+  user: AnalyticsUserProfile,
+  method: string,
+  attribution?: CampaignAttribution | null,
+): void {
+  identifyUserProfile(user);
+
+  if (attribution?.anonymous_distinct_id && attribution.anonymous_distinct_id !== user.id) {
+    aliasUser(user.id, attribution.anonymous_distinct_id);
+  }
+
+  trackEvent('account_created', user.id, {
+    method,
+    is_new_user: true,
+    ...(attribution ? campaignAttributionProperties(attribution) : {}),
   });
 }
 

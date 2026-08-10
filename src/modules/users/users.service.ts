@@ -40,9 +40,20 @@ import {
   type AvatarCustomization,
 } from './avatar-customization.js';
 import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
+import { trackAccountCreated } from '../../core/analytics.js';
+import type { CampaignAttribution } from '../../core/campaign-attribution.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
+}
+
+function resolveIdentityAuthMethod(identity: AuthIdentity): string {
+  const appMetadata = identity.claims.app_metadata;
+  if (appMetadata && typeof appMetadata === 'object') {
+    const provider = (appMetadata as Record<string, unknown>).provider;
+    if (typeof provider === 'string' && provider.trim()) return provider.toLowerCase();
+  }
+  return identity.email ? 'email' : identity.phoneNumber ? 'phone' : identity.provider;
 }
 
 export interface AccountDeletionStatus {
@@ -328,7 +339,13 @@ export const usersService = {
   async getOrCreateFromIdentity(
     identity: AuthIdentity,
     detectedCountry?: string | null,
-    opts?: { onUserCreated?: (user: User) => void },
+    opts?: {
+      onUserCreated?: (user: User) => void;
+      accountCreation?: {
+        method?: string;
+        attribution?: CampaignAttribution | null;
+      };
+    },
   ): Promise<User> {
     // 1. Check cache first
     const cached = await getCachedUser(identity.provider, identity.subject);
@@ -411,7 +428,7 @@ export const usersService = {
       );
     }
 
-    const newUser = await usersRepo.createWithIdentity(
+    const creation = await usersRepo.createWithIdentity(
       {
         email: identity.email,
         phoneNumber,
@@ -427,6 +444,7 @@ export const usersService = {
         email: identity.email,
       }
     );
+    const newUser = creation.user;
 
     logger.info(
       { userId: newUser.id, provider: identity.provider, country: detectedCountry },
@@ -436,7 +454,17 @@ export const usersService = {
     // Authoritative new-account signal. Gated on the DB insert above, so it fires
     // exactly once per real account even though this method is called from auth,
     // middleware, and socket paths (and races on first login are idempotent).
-    opts?.onUserCreated?.(newUser);
+    if (creation.created) {
+      // This is intentionally intrinsic to the insert result, not only an auth
+      // controller callback. If socket auth and HTTP provisioning race, exactly
+      // the process that won the insert emits the canonical conversion.
+      trackAccountCreated(
+        newUser,
+        opts?.accountCreation?.method ?? resolveIdentityAuthMethod(identity),
+        opts?.accountCreation?.attribution,
+      );
+      opts?.onUserCreated?.(newUser);
+    }
 
     try {
       await setCachedUser(identity.provider, identity.subject, newUser);

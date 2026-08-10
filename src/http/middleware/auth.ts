@@ -5,6 +5,10 @@ import { detectCountryFromRequest } from '../../core/geo.js';
 import { getAuthProvider } from '../../modules/auth/index.js';
 import { usersService } from '../../modules/users/index.js';
 import { getCachedUser } from '../../modules/users/user-cache.js';
+import {
+  CAMPAIGN_ATTRIBUTION_HEADER,
+  parseCampaignAttribution,
+} from '../../core/campaign-attribution.js';
 
 /**
  * Extract bearer token from Authorization header.
@@ -72,7 +76,15 @@ export async function authMiddleware(
     // third-party HTTP call on every authenticated request
     const cached = await getCachedUser(identity.provider, identity.subject);
     const detectedCountry = cached?.country ? null : await detectCountryFromRequest(req);
-    const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
+    const attribution = parseCampaignAttribution(
+      req.headers[CAMPAIGN_ATTRIBUTION_HEADER],
+    );
+    const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
+      accountCreation: {
+        method: attribution?.auth_method,
+        attribution,
+      },
+    });
 
     // 4. Attach BOTH to request
     req.identity = identity;

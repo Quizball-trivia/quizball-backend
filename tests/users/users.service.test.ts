@@ -173,6 +173,21 @@ const MOCK_H2H = {
   lastPlayedAt: '2024-06-01T00:00:00.000Z',
 };
 
+function ownedAvatarPart(
+  slot: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair',
+  partId: string,
+) {
+  return {
+    product_slug: `avatar_${partId}`,
+    product_type: 'avatar',
+    product_metadata: {
+      avatarPartId: partId,
+      slot,
+      assetUrl: `/assets/store/${partId}.webp`,
+    },
+  };
+}
+
 describe('usersService.getPublicProfile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -322,6 +337,9 @@ describe('usersService.getPublicProfile', () => {
     })).rejects.toMatchObject({
       statusCode: 400,
       message: 'Avatar customization includes unowned items',
+      details: {
+        missingParts: [{ slot: 'hair', partId: 'hair_ramos' }],
+      },
     });
 
     expect(updateMock).not.toHaveBeenCalled();
@@ -349,7 +367,7 @@ describe('usersService.getPublicProfile', () => {
 
   it('allows avatar customization with free and owned paid items', async () => {
     listInventoryWithProductsMock.mockResolvedValue([
-      { product_slug: 'avatar_hair_ramos' },
+      ownedAvatarPart('hair', 'hair_ramos'),
     ]);
     const { usersService } = await import('../../src/modules/users/users.service.js');
 
@@ -378,8 +396,8 @@ describe('usersService.getPublicProfile', () => {
       },
     });
     listInventoryWithProductsMock.mockResolvedValue([
-      { product_slug: 'avatar_jersey_real' },
-      { product_slug: 'avatar_jersey_milan' },
+      ownedAvatarPart('jersey', 'jersey_real'),
+      ownedAvatarPart('jersey', 'jersey_milan'),
     ]);
     const { usersService } = await import('../../src/modules/users/users.service.js');
 
@@ -396,6 +414,134 @@ describe('usersService.getPublicProfile', () => {
         skin: 'skin_male_white',
         jersey: 'jersey_milan',
         hair: 'hair_ronaldo_goat',
+      },
+    });
+  });
+
+  it('allows newly cataloged owned hair, jersey, and facial-hair parts', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([
+      ownedAvatarPart('hair', 'hair_leopard'),
+      ownedAvatarPart('jersey', 'jersey_man_united'),
+      ownedAvatarPart('facialHair', 'handlebar'),
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        hair: 'hair_leopard',
+        jersey: 'jersey_man_united',
+        facialHair: 'handlebar',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        hair: 'hair_leopard',
+        jersey: 'jersey_man_united',
+        facialHair: 'handlebar',
+      },
+    });
+  });
+
+  it('rejects an owned part when it is submitted in the wrong slot', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([
+      ownedAvatarPart('hair', 'hair_leopard'),
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        jersey: 'hair_leopard',
+      },
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      details: {
+        missingParts: [{ slot: 'jersey', partId: 'hair_leopard' }],
+      },
+    });
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a legacy avatarKey-only product as an owned layered part', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([{
+      product_slug: 'avatar_ronaldo',
+      product_type: 'avatar',
+      product_metadata: {
+        avatarKey: 'ronaldo',
+        assetUrl: '/assets/avatars/ronaldo.webp',
+      },
+    }]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      avatarCustomization: { hair: 'ronaldo' },
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      details: {
+        missingParts: [{ slot: 'hair', partId: 'ronaldo' }],
+      },
+    });
+  });
+
+  it('ignores chance-card and malformed avatar inventory metadata', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([
+      {
+        product_slug: 'chance_card_5050',
+        product_type: 'chance_card',
+        product_metadata: { effect: 'fifty_fifty' },
+      },
+      {
+        product_slug: 'avatar_broken',
+        product_type: 'avatar',
+        product_metadata: { avatarPartId: 'broken_without_asset' },
+      },
+      ownedAvatarPart('hair', 'hair_leopard'),
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: { hair: 'hair_leopard' },
+    });
+
+    expect(updateMock).toHaveBeenCalled();
+  });
+
+  it('preserves an already-equipped paid part in the same slot without inventory', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      avatar_customization: { hair: 'hair_leopard' },
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        jersey: 'jersey_green',
+        hair: 'hair_leopard',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalled();
+  });
+
+  it('does not preserve an already-equipped part when moved to another slot', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      avatar_customization: { hair: 'hair_leopard' },
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        hair: 'hair_leopard',
+        jersey: 'hair_leopard',
+      },
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      details: {
+        missingParts: [{ slot: 'jersey', partId: 'hair_leopard' }],
       },
     });
   });

@@ -30,10 +30,12 @@ import { progressionService } from '../progression/progression.service.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { friendsRepo } from '../friends/friends.repo.js';
 import { storeRepo } from '../store/store.repo.js';
+import { avatarMetadataSchema } from '../store/store.schemas.js';
 import { notificationsService } from '../notifications/notifications.service.js';
 import { config } from '../../core/config.js';
 import {
-  getRequiredAvatarProductSlugs,
+  AVATAR_SLOTS,
+  FREE_AVATAR_PART_IDS,
   parseStoredAvatarCustomization,
   type AvatarCustomization,
 } from './avatar-customization.js';
@@ -216,29 +218,43 @@ async function assertAvatarCustomizationAllowed(
     return;
   }
 
-  const requiredSlugs = getRequiredAvatarProductSlugs(customization);
-  if (requiredSlugs.length === 0) {
+  const paidSelections = AVATAR_SLOTS.flatMap((slot) => {
+    const partId = customization[slot];
+    if (!partId || FREE_AVATAR_PART_IDS[slot].has(partId)) return [];
+    return [{ slot, partId }];
+  });
+  if (paidSelections.length === 0) {
     return;
   }
 
   const inventory = await storeRepo.listInventoryWithProducts(userId);
-  const ownedSlugs = new Set(inventory.map((item) => item.product_slug));
-  const missingSlugs = requiredSlugs.filter((slug) => !ownedSlugs.has(slug));
+  const ownedParts = new Set<string>();
+  for (const item of inventory) {
+    if (item.product_type !== 'avatar') continue;
 
-  if (missingSlugs.length === 0) {
+    const parsed = avatarMetadataSchema.safeParse(item.product_metadata);
+    if (!parsed.success || !parsed.data.avatarPartId || !parsed.data.slot) continue;
+
+    ownedParts.add(`${parsed.data.slot}:${parsed.data.avatarPartId}`);
+  }
+
+  const missingParts = paidSelections.filter(
+    ({ slot, partId }) => !ownedParts.has(`${slot}:${partId}`)
+  );
+
+  if (missingParts.length === 0) {
     return;
   }
 
   const currentUser = await usersRepo.getById(userId);
   const currentCustomization = parseStoredAvatarCustomization(currentUser?.avatar_customization);
-  const alreadyEquippedSlugs = new Set(
-    currentCustomization ? getRequiredAvatarProductSlugs(currentCustomization) : []
+  const newlyMissingParts = missingParts.filter(
+    ({ slot, partId }) => currentCustomization?.[slot] !== partId
   );
-  const newlyMissingSlugs = missingSlugs.filter((slug) => !alreadyEquippedSlugs.has(slug));
 
-  if (newlyMissingSlugs.length > 0) {
+  if (newlyMissingParts.length > 0) {
     throw new BadRequestError('Avatar customization includes unowned items', {
-      missingProductSlugs: newlyMissingSlugs,
+      missingParts: newlyMissingParts,
     });
   }
 }

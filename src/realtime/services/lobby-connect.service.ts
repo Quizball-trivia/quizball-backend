@@ -50,7 +50,7 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
         void (async () => {
           const latest = await lobbiesRepo.getById(newestLobby.id);
           if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
-          await startDraft(io, newestLobby.id);
+          await startDraft(io, newestLobby.id, { expectWaiting: true });
         })().catch((error) => {
           logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to recover ranked waiting lobby draft start');
         });

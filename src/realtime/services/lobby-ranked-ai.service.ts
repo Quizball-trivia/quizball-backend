@@ -101,19 +101,29 @@ async function compensateAbortLobby(
   lobbyId: string,
   path: 'match_found_cancel' | 'cleanup_superseded_lobby' | 'draft_start_cancel' | 'draft_start_error' = 'match_found_cancel',
   opts?: { draftTeardown?: boolean },
-): Promise<void> {
+): Promise<'aborted' | 'live' | 'failed'> {
   try {
     const result = await reservationService.abortLobby(lobbyId, path, opts);
+    if (result.failed) {
+      // The abort ERRORED: the lobby may survive as OUR stale waiting lobby —
+      // not because a live draft won. Callers must not read the surviving
+      // lobby as "committed elsewhere".
+      return 'failed';
+    }
     if (!result.aborted) {
       logger.info({ lobbyId }, 'compensateAbortLobby: draft committed elsewhere — not tearing down');
       // Do NOT touch Redis/sockets of a live lobby.
-      return;
+      return 'live';
     }
     const redis = getRedisClient();
     if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
     await detachAllSocketsFromLobby(io, lobbyId).catch(() => undefined);
+    return 'aborted';
   } catch (err) {
+    // The abort itself succeeded or failed inside abortLobby (which never
+    // throws); reaching here means post-abort idempotent cleanup failed.
     logger.warn({ err, lobbyId }, 'Failed to compensate-abort ranked AI lobby');
+    return 'aborted';
   }
 }
 
@@ -148,6 +158,65 @@ async function emitRankedPreparationFailure(params: {
   await userSessionGuardService.emitState(io, userId).catch((err) => {
     logger.warn({ err, userId, lobbyId, source }, 'Failed to emit session state after ranked AI preparation failure');
   });
+}
+
+/**
+ * Terminal notification for failures inside the DELAYED ranked-AI callbacks
+ * (match-found timer, draft-start timer), where the user may have moved on
+ * since the search began. The authoritative session state is the gate:
+ *   - a live match, a different lobby, or a NEW queue search → only re-emit
+ *     session state (a queue_left/error here would clear a valid new search or
+ *     contradict a match another actor committed);
+ *   - no newer session → full preparation-failure sequence, otherwise the
+ *     search/found UI spins until manual reload.
+ * If the state read itself fails, fail open to the terminal events — a
+ * spurious abort beats an infinite spinner.
+ */
+async function notifyRankedCallbackFailure(params: {
+  io: QuizballServer;
+  userId: string;
+  lobbyId: string;
+  source: string;
+  message: string;
+  /**
+   * Outcome of the compensation that preceded this notify. When it FAILED, the
+   * aborted lobby may survive in the session snapshot as OUR stale waiting
+   * lobby — not as evidence of a committed draft — so it must not suppress the
+   * terminal events (the pre-found spinner has no client watchdog).
+   */
+  compensation?: 'aborted' | 'live' | 'failed';
+}): Promise<void> {
+  const { io, userId, lobbyId, source, message, compensation } = params;
+  let snapshot: Awaited<ReturnType<typeof userSessionGuardService.resolveState>> | null = null;
+  try {
+    snapshot = await userSessionGuardService.resolveState(userId);
+  } catch (err) {
+    logger.warn({ err, userId, lobbyId, source }, 'Failed to resolve session state before ranked callback-failure notify');
+  }
+  // ANY waitingLobbyId blocks the terminal notify — including this very lobby:
+  // the session snapshot reports a committed (active-draft) lobby in
+  // waitingLobbyId too, and compensation no-ops exactly when another actor
+  // committed this lobby's draft. A genuinely deleted lobby cannot reappear
+  // here (the snapshot is an authoritative DB read). CORRUPT_MULTI_STATE can
+  // hide a different live lobby behind the primary — treat it as live.
+  // EXCEPTION: when compensation FAILED, this very lobby surviving proves
+  // nothing about commitment — only a DIFFERENT lobby/match/search suppresses.
+  const ownLobbySuppresses = compensation !== 'failed';
+  const hasNewerSession = Boolean(
+    snapshot &&
+    (snapshot.activeMatchId ||
+      (snapshot.waitingLobbyId &&
+        (ownLobbySuppresses || snapshot.waitingLobbyId !== lobbyId)) ||
+      snapshot.queueSearchId ||
+      snapshot.state === 'CORRUPT_MULTI_STATE')
+  );
+  if (hasNewerSession) {
+    await userSessionGuardService.emitState(io, userId).catch((err) => {
+      logger.warn({ err, userId, lobbyId, source }, 'Failed to re-emit session state after superseded ranked callback failure');
+    });
+    return;
+  }
+  await emitRankedPreparationFailure({ io, userId, lobbyId, source, message });
 }
 
 export async function startRankedAiForUser(
@@ -337,8 +406,8 @@ async function handleRankedAiMatchFound(params: {
 
   // Every ranked AI flow now owns a persistent reservation, so all pre-match
   // exits use the same advisory-lock-serialized compensation path.
-  const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
-    await compensateAbortLobby(io, lobbyId);
+  const releasePreMatch = async (_path: 'match_found_cancel'): Promise<'aborted' | 'live' | 'failed'> => {
+    return compensateAbortLobby(io, lobbyId);
   };
 
   try {
@@ -352,8 +421,18 @@ async function handleRankedAiMatchFound(params: {
     const latestLobby = await lobbiesRepo.getById(lobbyId);
     if (!latestLobby || latestLobby.mode !== 'ranked') {
       // Lobby genuinely gone → free the (lobby-keyed) reservation. Nothing to tear
-      // down; compensate is a no-op on a missing lobby.
-      await releasePreMatch('match_found_cancel');
+      // down; compensate is a no-op on a missing lobby. Nobody else is proven to
+      // notify the searcher (a server-side teardown emits nothing to this user),
+      // so close the search UI unless a newer session owns them.
+      const compensation = await releasePreMatch('match_found_cancel');
+      await notifyRankedCallbackFailure({
+        io,
+        userId,
+        lobbyId,
+        source: 'ranked_ai_match_found_lobby_missing',
+        message: 'Match preparation failed. Please restart ranked matchmaking.',
+        compensation,
+      });
       return;
     }
     if (latestLobby.status !== 'waiting') {
@@ -369,8 +448,18 @@ async function handleRankedAiMatchFound(params: {
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) {
       // Membership was torn down out from under us → the lobby is being abandoned;
-      // free the reservation (still lobby-keyed) and clean up.
-      await releasePreMatch('match_found_cancel');
+      // free the reservation (still lobby-keyed) and clean up. The searcher may
+      // still be staring at the spinner (an internal teardown emits nothing to
+      // them) — the session-state guard skips the abort if they left themselves.
+      const compensation = await releasePreMatch('match_found_cancel');
+      await notifyRankedCallbackFailure({
+        io,
+        userId,
+        lobbyId,
+        source: 'ranked_ai_match_found_membership_missing',
+        message: 'Match preparation failed. Please restart ranked matchmaking.',
+        compensation,
+      });
       return;
     }
 
@@ -429,10 +518,25 @@ async function handleRankedAiMatchFound(params: {
     // A throw here left the lobby wired but no draft scheduled by THIS flow.
     // Ranked is persistent-only, so compensateAbortLobby releases + tears down
     // under the lock (or no-ops if a reconnect already activated the draft).
+    // Before this notify existed, an ordinary Redis/DB rejection here left the
+    // searcher spinning forever — the last known silent-strand path (be#426).
     logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
-    await compensateAbortLobby(io, lobbyId);
+    const compensation = await compensateAbortLobby(io, lobbyId);
+    await notifyRankedCallbackFailure({
+      io,
+      userId,
+      lobbyId,
+      source: 'ranked_ai_match_found_error',
+      message: 'Match preparation failed. Please restart ranked matchmaking.',
+      compensation,
+    });
   }
 }
+
+// Longer than the 3s lobby-lock TTL: if the holder died, its lock has expired
+// by the time we retry, so persistent contention means a LIVE actor owns the
+// lobby transition — never a reason for destructive compensation.
+const DRAFT_LOCK_BUSY_RETRY_MS = 3_500;
 
 async function startRankedAiDraft(params: {
   io: QuizballServer;
@@ -442,8 +546,10 @@ async function startRankedAiDraft(params: {
   lobbiesRepo: RankedAiLobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   startDraft: typeof startDraft;
+  lockBusyRetriesLeft?: number;
 }): Promise<void> {
   const { io, lobbyId, userId, aiUserId, lobbiesRepo, logger, startDraft } = params;
+  const lockBusyRetriesLeft = params.lockBusyRetriesLeft ?? 2;
 
   // Draft-start cancel/error ENDS this flow. For a PERSISTENT bot, tear the lobby
   // down entirely under the shared advisory lock (compensateAbortLobby →
@@ -453,11 +559,11 @@ async function startRankedAiDraft(params: {
   // locked abort observes 'active' and no-ops.
   const releasePreMatch = async (
     path: 'draft_start_cancel' | 'draft_start_error',
-  ): Promise<void> => {
+  ): Promise<'aborted' | 'live' | 'failed'> => {
     // draft_start_error may fire post-activation (committed_at set) → pass
     // teardown-intent. The in-lock live-match check keeps a concurrently-created
     // match alive and reclaims only a genuinely stuck draft.
-    await compensateAbortLobby(io, lobbyId, path, { draftTeardown: path === 'draft_start_error' });
+    return compensateAbortLobby(io, lobbyId, path, { draftTeardown: path === 'draft_start_error' });
   };
 
   try {
@@ -470,7 +576,17 @@ async function startRankedAiDraft(params: {
     const readyLobby = await lobbiesRepo.getById(lobbyId);
     if (!readyLobby || readyLobby.mode !== 'ranked') {
       // Lobby gone → free the still-lobby-keyed reservation (pre-activation).
-      await releasePreMatch('draft_start_cancel');
+      // The user is on the match-found modal with no draft coming; close it out
+      // unless a newer session owns them.
+      const compensation = await releasePreMatch('draft_start_cancel');
+      await notifyRankedCallbackFailure({
+        io,
+        userId,
+        lobbyId,
+        source: 'ranked_ai_draft_start_lobby_missing',
+        message: 'Match preparation failed. Please restart ranked matchmaking.',
+        compensation,
+      });
       return;
     }
     if (readyLobby.status !== 'waiting') {
@@ -490,27 +606,70 @@ async function startRankedAiDraft(params: {
       await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
       return;
     }
-    await startDraft(io, lobbyId);
+    const draftResult = await startDraft(io, lobbyId, { expectWaiting: true });
+    if (draftResult === 'lock_busy') {
+      // Another actor holds the lobby lock RIGHT NOW — it may be committing this
+      // very draft. Retry after longer than the lock TTL; the re-entry re-runs
+      // every guard (cancel, lobby state, superseding session) before trying
+      // again, and the under-lock expectWaiting check makes a double-start
+      // impossible even if the competitor wins between guard and start.
+      if (lockBusyRetriesLeft > 0) {
+        logger.info({ lobbyId, userId, lockBusyRetriesLeft }, 'Ranked AI draft start lock-busy; retrying');
+        setTimeout(
+          () =>
+            void startRankedAiDraft({
+              ...params,
+              lockBusyRetriesLeft: lockBusyRetriesLeft - 1,
+            }),
+          harnessDelayMs(DRAFT_LOCK_BUSY_RETRY_MS)
+        );
+        return;
+      }
+      // Still contended after TTL-exceeding retries: a LIVE actor owns this
+      // lobby's transition. Destructive compensation here could tear the lobby
+      // down underneath them — do nothing; the client-side found-modal watchdog
+      // is the backstop if that actor also fails to finish.
+      logger.error({ lobbyId, userId }, 'Ranked AI draft start still lock-busy after retries; leaving lobby to the lock holder');
+      return;
+    }
+    if (draftResult === 'already_active') {
+      // A competitor committed this draft between our guard and the lock — the
+      // live flow owns it; nothing to notify.
+      logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped: draft already committed by another actor');
+      return;
+    }
+    if (draftResult === 'lobby_missing') {
+      // Vanished between our re-read and startDraft's own re-read.
+      const compensation = await releasePreMatch('draft_start_cancel');
+      await notifyRankedCallbackFailure({
+        io,
+        userId,
+        lobbyId,
+        source: 'ranked_ai_draft_start_lobby_missing',
+        message: 'Match preparation failed. Please restart ranked matchmaking.',
+        compensation,
+      });
+      return;
+    }
+    // 'insufficient_categories' already notified the lobby room and reset ready
+    // state inside startDraft; 'started' needs nothing more.
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
     // startDraft may have ACTIVATED (committed_at set) before throwing. The locked
     // abort's in-lock live-match check is the authoritative gate: if a reconnect
     // created a match, it no-ops (the live draft keeps the bot); only a stuck
     // no-match draft is reclaimed.
-    await releasePreMatch('draft_start_error');
+    const compensation = await releasePreMatch('draft_start_error');
     // Compensation may detach every socket from the lobby room. The user's
-    // stable room remains reachable after teardown.
-    try {
-      io.to(`user:${userId}`).emit('error', {
-        code: 'MATCH_PREPARATION_FAILED',
-        message: 'Match preparation got stuck. Please restart ranked matchmaking.',
-        meta: {
-          lobbyId,
-          source: 'ranked_ai_draft_start',
-        },
-      });
-    } catch (emitError) {
-      logger.warn({ emitError, lobbyId, userId }, 'Failed to emit ranked AI draft-start error');
-    }
+    // stable room remains reachable after teardown; the guarded notify also
+    // covers the case where the error emit itself would have failed silently.
+    await notifyRankedCallbackFailure({
+      io,
+      userId,
+      lobbyId,
+      source: 'ranked_ai_draft_start',
+      message: 'Match preparation got stuck. Please restart ranked matchmaking.',
+      compensation,
+    });
   }
 }

@@ -249,7 +249,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     // Activation now goes through the advisory-lock-guarded repo method.
-    expect(activateLobbyForDraftLockedMock).toHaveBeenCalledWith('lobby-1');
+    expect(activateLobbyForDraftLockedMock).toHaveBeenCalledWith('lobby-1', { requireWaiting: false });
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
       turnUserId: 'u1',

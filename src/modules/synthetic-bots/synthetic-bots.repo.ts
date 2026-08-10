@@ -179,11 +179,22 @@ export const syntheticBotsRepo = {
    */
   async activateLobbyForDraftLocked(
     lobbyId: string,
+    opts?: {
+      /**
+       * CAS mode: only flip waiting→active. `activated: false` then means a
+       * competitor already activated (or the lobby is gone) — the caller must
+       * NOT emit draft:start. Recovery restarts (already-active lobby) leave
+       * this unset and keep the unconditional update.
+       */
+      requireWaiting?: boolean;
+    },
   ): Promise<{ activated: boolean; committedReservation: boolean }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
       const rows = await tx.unsafe<{ id: string }[]>(
-        `UPDATE lobbies SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING id`,
+        opts?.requireWaiting
+          ? `UPDATE lobbies SET status = 'active', updated_at = NOW() WHERE id = $1 AND status = 'waiting' RETURNING id`
+          : `UPDATE lobbies SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING id`,
         [lobbyId],
       );
       // Commit any lobby-keyed reservation to THIS draft. No-op if none (ephemeral

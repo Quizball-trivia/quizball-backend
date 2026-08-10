@@ -23,6 +23,7 @@ VALUES
   ('sunderland', 'Sunderland Quiz — Test Your Black Cats Knowledge', 'draft')
 ON CONFLICT (slug) DO UPDATE
 SET title = EXCLUDED.title,
+    status = EXCLUDED.status,
     updated_at = NOW();
 
 INSERT INTO public.categories (slug, name, is_active)
@@ -255,7 +256,7 @@ WITH candidates AS (
     question.id AS question_id,
     question.difficulty AS source_difficulty,
     ROW_NUMBER() OVER (
-      PARTITION BY configured.quiz_slug, lower(regexp_replace(question.prompt->>'en', '[^a-z0-9]', '', 'g'))
+      PARTITION BY configured.quiz_slug, regexp_replace(lower(question.prompt->>'en'), '[^a-z0-9]', '', 'g')
       ORDER BY md5(question.id::text || configured.quiz_slug)
     ) AS duplicate_rank
   FROM existing_category_campaigns configured
@@ -286,9 +287,10 @@ WITH ranked AS (
                md5(candidate.question_id::text || candidate.quiz_slug)
     ) AS selection_order
   FROM existing_category_candidates candidate
+  WHERE candidate.source_difficulty = 'easy'
 )
 INSERT INTO public.campaign_quiz_questions (quiz_slug, question_id, difficulty, display_order)
-SELECT quiz_slug, question_id, 'easy', selection_order
+SELECT quiz_slug, question_id, source_difficulty, selection_order
 FROM ranked
 WHERE selection_order <= 5
 ON CONFLICT DO NOTHING;
@@ -308,9 +310,10 @@ WITH remaining AS (
                md5(remaining.question_id::text || remaining.quiz_slug)
     ) AS selection_order
   FROM remaining
+  WHERE remaining.source_difficulty = 'medium'
 )
 INSERT INTO public.campaign_quiz_questions (quiz_slug, question_id, difficulty, display_order)
-SELECT quiz_slug, question_id, 'medium', 5 + selection_order
+SELECT quiz_slug, question_id, source_difficulty, 5 + selection_order
 FROM ranked
 WHERE selection_order <= 5
 ON CONFLICT DO NOTHING;
@@ -330,9 +333,10 @@ WITH remaining AS (
                md5(remaining.question_id::text || remaining.quiz_slug)
     ) AS selection_order
   FROM remaining
+  WHERE remaining.source_difficulty = 'hard'
 )
 INSERT INTO public.campaign_quiz_questions (quiz_slug, question_id, difficulty, display_order)
-SELECT quiz_slug, question_id, 'hard', 10 + selection_order
+SELECT quiz_slug, question_id, source_difficulty, 10 + selection_order
 FROM ranked
 WHERE selection_order <= 5
 ON CONFLICT DO NOTHING;
@@ -347,6 +351,32 @@ WHERE EXISTS (
     AND assigned.quiz_slug IN ('arsenal', 'aston-villa', 'bournemouth', 'brentford', 'brighton', 'chelsea', 'coventry-city', 'crystal-palace', 'fulham', 'hull-city', 'ipswich-town', 'leeds-united', 'manchester-city', 'newcastle-united', 'nottingham-forest', 'sunderland')
 );
 
+-- Surface accidental ranked-pool depletion during deployment. Campaign
+-- extraction is intentional, but each established category should retain a
+-- usable ranked bank after its 15 public-only questions are reserved.
+DO $$
+DECLARE
+  pool RECORD;
+BEGIN
+  FOR pool IN
+    SELECT category.slug,
+           COUNT(question.id) FILTER (
+             WHERE question.status = 'published'
+               AND question.visibility = 'public'
+               AND question.ranked_eligible = TRUE
+           )::int AS ranked_remaining
+    FROM public.categories category
+    LEFT JOIN public.questions question ON question.category_id = category.id
+    WHERE category.slug IN ('arsenal', 'chelsea', 'manchester-city')
+    GROUP BY category.slug
+  LOOP
+    IF pool.ranked_remaining < 15 THEN
+      RAISE WARNING 'Campaign extraction left only % ranked-eligible questions for category %',
+        pool.ranked_remaining, pool.slug;
+    END IF;
+  END LOOP;
+END $$;
+
 -- The document-backed pools publish with exactly ten supplied questions. The
 -- three established category pools publish only when their 5/5/5 mix is full.
 UPDATE public.campaign_quizzes quiz
@@ -357,9 +387,15 @@ SET status = CASE
     END,
     updated_at = NOW()
 FROM (
-  SELECT quiz_slug, COUNT(*)::int AS total
-  FROM public.campaign_quiz_questions
-  WHERE quiz_slug IN ('arsenal', 'aston-villa', 'bournemouth', 'brentford', 'brighton', 'chelsea', 'coventry-city', 'crystal-palace', 'fulham', 'hull-city', 'ipswich-town', 'leeds-united', 'manchester-city', 'newcastle-united', 'nottingham-forest', 'sunderland')
-  GROUP BY quiz_slug
+  SELECT configured.quiz_slug, COUNT(assigned.question_id)::int AS total
+  FROM (VALUES
+    ('arsenal'), ('aston-villa'), ('bournemouth'), ('brentford'),
+    ('brighton'), ('chelsea'), ('coventry-city'), ('crystal-palace'),
+    ('fulham'), ('hull-city'), ('ipswich-town'), ('leeds-united'),
+    ('manchester-city'), ('newcastle-united'), ('nottingham-forest'), ('sunderland')
+  ) configured(quiz_slug)
+  LEFT JOIN public.campaign_quiz_questions assigned
+    ON assigned.quiz_slug = configured.quiz_slug
+  GROUP BY configured.quiz_slug
 ) pool
 WHERE quiz.slug = pool.quiz_slug;

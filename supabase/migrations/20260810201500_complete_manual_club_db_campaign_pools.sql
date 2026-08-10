@@ -225,7 +225,7 @@ DECLARE
 BEGIN
   FOR pool IN
     SELECT
-      quiz.slug,
+      required.slug,
       COUNT(assigned.question_id)::int AS total,
       COUNT(assigned.question_id) FILTER (
         WHERE assigned.difficulty = 'easy'
@@ -236,11 +236,16 @@ BEGIN
       COUNT(assigned.question_id) FILTER (
         WHERE assigned.difficulty = 'hard'
       )::int AS hard
-    FROM public.campaign_quizzes quiz
+    FROM (VALUES
+      ('arsenal'),
+      ('chelsea'),
+      ('manchester-city')
+    ) required(slug)
+    LEFT JOIN public.campaign_quizzes quiz
+      ON quiz.slug = required.slug
     LEFT JOIN public.campaign_quiz_questions assigned
-      ON assigned.quiz_slug = quiz.slug
-    WHERE quiz.slug IN ('arsenal', 'chelsea', 'manchester-city')
-    GROUP BY quiz.slug
+      ON assigned.quiz_slug = required.slug
+    GROUP BY required.slug
   LOOP
     IF pool.total <> 15
       OR pool.easy <> 5

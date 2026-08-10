@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Mock the PostHog client so we can assert capture/identify calls.
 const captureMock = vi.fn();
 const identifyMock = vi.fn();
+const aliasMock = vi.fn();
 const shutdownMock = vi.fn(() => Promise.resolve());
 vi.mock('posthog-node', () => ({
   PostHog: vi.fn().mockImplementation(() => ({
     capture: (...a: unknown[]) => captureMock(...a),
     identify: (...a: unknown[]) => identifyMock(...a),
-    alias: vi.fn(),
+    alias: (...a: unknown[]) => aliasMock(...a),
     shutdown: (...a: unknown[]) => shutdownMock(...a),
   })),
 }));
@@ -48,6 +49,7 @@ const ANON_WEB_ID = 'anon-session-abc123'; // NOT a user UUID — must skip the 
 let trackEvent: typeof import('../../src/core/analytics.js').trackEvent;
 let identifyUser: typeof import('../../src/core/analytics.js').identifyUser;
 let identifyUserProfile: typeof import('../../src/core/analytics.js').identifyUserProfile;
+let trackAccountCreated: typeof import('../../src/core/analytics.js').trackAccountCreated;
 let registerAiUserId: typeof import('../../src/core/analytics.js').registerAiUserId;
 let shutdownPostHog: typeof import('../../src/core/analytics.js').shutdownPostHog;
 
@@ -55,6 +57,7 @@ beforeEach(async () => {
   vi.resetModules();
   captureMock.mockClear();
   identifyMock.mockClear();
+  aliasMock.mockClear();
   shutdownMock.mockClear();
   sqlResultByUserId.clear();
   sqlCallSpy.mockClear();
@@ -67,6 +70,7 @@ beforeEach(async () => {
   trackEvent = mod.trackEvent;
   identifyUser = mod.identifyUser;
   identifyUserProfile = mod.identifyUserProfile;
+  trackAccountCreated = mod.trackAccountCreated;
   registerAiUserId = mod.registerAiUserId;
   shutdownPostHog = mod.shutdownPostHog;
 });
@@ -119,6 +123,35 @@ describe('analytics AI-user suppression', () => {
         created_at: '2026-06-07T00:00:00.000Z',
       }),
     });
+  });
+
+  it('captures account creation with a cross-browser-safe conversion ID', async () => {
+    trackAccountCreated({ id: REAL_USER, email: 'real@example.com' }, 'google', {
+      source: 'campaign_quiz',
+      quiz_slug: 'liverpool',
+      cta_placement: 'score',
+      captured_at: '2026-08-10T10:00:00.000Z',
+      campaign_conversion_id: '33333333-3333-4333-8333-333333333333',
+      quiz_score: 12,
+      quiz_total_questions: 15,
+    });
+    await flush();
+
+    expect(aliasMock).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledWith(expect.objectContaining({
+      distinctId: REAL_USER,
+      event: 'account_created',
+      properties: expect.objectContaining({
+        method: 'google',
+        source: 'campaign_quiz',
+        quiz_slug: 'liverpool',
+        cta_placement: 'score',
+        quiz_score: 12,
+        quiz_total_questions: 15,
+        quiz_score_percent: 80,
+        campaign_conversion_id: '33333333-3333-4333-8333-333333333333',
+      }),
+    }));
   });
 
   it('treats non-user-UUID distinct ids (anon web sessions) as non-AI without a DB lookup', async () => {

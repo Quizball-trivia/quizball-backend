@@ -153,10 +153,11 @@ describe('usersRepo.createWithIdentity', () => {
         ),
       ),
     );
-    const userIds = [...new Set(users.map((user) => user.id))];
+    const userIds = [...new Set(users.map(({ user }) => user.id))];
     testUserIds.push(...userIds);
 
     expect(userIds).toHaveLength(1);
+    expect(users.filter((result) => result.created)).toHaveLength(1);
 
     const identities = await sql<{ user_id: string }[]>`
       SELECT user_id FROM user_identities

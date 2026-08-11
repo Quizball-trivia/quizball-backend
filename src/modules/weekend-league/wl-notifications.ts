@@ -185,7 +185,7 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
  */
 /** Owner-approved layout (2026-08-03): Georgian first, English in grey
  *  below, one green CTA into the events tab. */
-export function wlEmailHtml(subject: WlWaveContent): string {
+export function wlEmailHtml(subject: WlWaveContent, unsubUrl?: string | null): string {
   return `
     <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px 16px;">
       <div style="font-size: 26px; margin-bottom: 8px;">🏆</div>
@@ -193,7 +193,10 @@ export function wlEmailHtml(subject: WlWaveContent): string {
       <p style="margin: 0 0 20px; color: #444; line-height: 1.5;">${subject.bodyKa}</p>
       <h3 style="margin: 0 0 4px; color: #888; font-weight: 600;">${subject.titleEn}</h3>
       <p style="margin: 0 0 20px; color: #888; line-height: 1.5;">${subject.bodyEn}</p>
-      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">ითამაშე</a>
+      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">ითამაშე</a>${
+        unsubUrl ? `
+      <p style="margin: 20px 0 0; color: #bbb; font-size: 12px;"><a href="${unsubUrl}" style="color: #bbb;">გამოწერის გაუქმება · Unsubscribe</a></p>` : ''
+      }
     </div>`;
 }
 
@@ -315,7 +318,10 @@ export async function wlNotifyQualifiedEntryOpen(
   }
 
   // Email leg: same qualified audience, wl_email_log attempt semantics.
-  const { emailEnabled, sendEmail } = await import('../../core/email.js');
+  // This wave reaches users who have NOT entered — promotional, so it honors
+  // marketing opt-outs and carries unsubscribe links, unlike the entrant
+  // reminders (transactional: the user registered for the event).
+  const { emailEnabled, sendEmail, unsubscribeUrl, marketingEmailHeaders } = await import('../../core/email.js');
   if (!emailEnabled()) return;
   const passDeadline = Date.now() + 8_000;
   const candidates = await sql<Array<{ user_id: string; email: string | null }>>`
@@ -336,6 +342,9 @@ export async function wlNotifyQualifiedEntryOpen(
       AND u.is_banned = false
     WHERE u.email IS NOT NULL
       AND NOT EXISTS (
+        SELECT 1 FROM email_unsubscribes x WHERE x.user_id = q.user_id
+      )
+      AND NOT EXISTS (
         SELECT 1 FROM wl_entries e
         WHERE e.tournament_id = ${tournamentId} AND e.user_id = q.user_id
       )
@@ -355,7 +364,8 @@ export async function wlNotifyQualifiedEntryOpen(
       to: c.email,
       idempotencyKey: `${key}:${c.user_id}`,
       subject: content.titleEn,
-      html: wlEmailHtml(content),
+      html: wlEmailHtml(content, unsubscribeUrl(c.user_id)),
+      headers: marketingEmailHeaders(c.user_id),
     });
     await sql`
       INSERT INTO wl_email_log (user_id, source_event_key, sent_at, attempts)

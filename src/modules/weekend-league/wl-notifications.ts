@@ -21,7 +21,7 @@ const MAX_BATCHES_PER_PASS = 10;
 
 export type WlWaveKind =
   | 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open'
-  | 'reminder_1h' | 'reminder_30m' | 'entry_open';
+  | 'reminder_1h' | 'reminder_30m' | 'entry_open' | 'final_reminder_30m';
 
 export interface WlWaveContent {
   titleEn: string;
@@ -58,11 +58,23 @@ export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
   bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
 };
 
+/** 2026-08-09 lesson: 6 of 28 finalists missed the Sunday final because
+ *  nothing told them a SECOND check-in was required — the copy must carry
+ *  the exact window. */
 export const QUALIFIED_CONTENT: WlWaveContent = {
-  titleEn: 'You made the final!',
-  titleKa: 'ფინალში გახვედი!',
-  bodyEn: 'Top 24 — the Sunday final awaits. Check in before it starts.',
-  bodyKa: 'საუკეთესო 24-ში ხარ — ფინალი გელოდება. გაიარე ჩექინი დაწყებამდე.',
+  titleEn: 'You made the final! Check in again Sunday 13:50–14:00',
+  titleKa: 'ფინალში გახვედი! ჩექინი კვირას 13:50–14:00',
+  bodyEn: 'The final starts Sunday at 14:00 — and you must check in AGAIN between 13:50 and 14:00. Don’t be late!',
+  bodyKa: 'ფინალი კვირას 14:00-ზეა და ჩექინი ხელახლა არის საჭირო — 13:50-დან 14:00-მდე. არ დააგვიანო!',
+};
+
+/** Absolute times, not "in 30 minutes" — the window-gated wave can first
+ *  fire mid-window after a restart. */
+export const FINAL_REMINDER_30M_CONTENT: WlWaveContent = {
+  titleEn: 'The final starts today at 14:00!',
+  titleKa: 'ფინალი დღეს 14:00-ზე იწყება!',
+  bodyEn: 'Check-in opens at 13:50. Open the app now so you don’t miss your seat. Good luck! 🍀',
+  bodyKa: 'დღეს გამოვლინდება ჩემპიონი. ჩექინი გაიხსნება 13:50-ზე — შედი აპლიკაციაში ახლავე. წარმატებები! 🍀',
 };
 
 export const FINAL_CHECKIN_CONTENT: WlWaveContent = {

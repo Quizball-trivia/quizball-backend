@@ -62,7 +62,7 @@ export const wlAdminController = {
     // Full registrant roster for the CMS table — humans first, oldest entry
     // first, capped to keep the payload sane at bot-filled fields.
     const registrants = await sql<Array<Record<string, unknown>>>`
-      SELECT u.nickname, u.email, u.is_ai, e.state, e.qp_at_entry,
+      SELECT e.user_id, u.nickname, u.email, u.is_ai, e.state, e.qp_at_entry,
              e.entered_at, e.checked_in_at, e.final_checked_in_at, e.final_rank,
              -- How far each entrant got in SATURDAY's qualifier (games 0-2):
              -- the final (game 3) is excluded so a finalist's Sunday rank can

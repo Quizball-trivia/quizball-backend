@@ -10,11 +10,57 @@
  * the provider first, e.g. "Quizball <league@quizball.io>").
  */
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 import { logger } from './logger.js';
 
 export function emailEnabled(): boolean {
   return Boolean(process.env.RESEND_API_KEY);
+}
+
+const PUBLIC_API_FALLBACK = 'https://quizball-backend-production.up.railway.app';
+
+/** First configured secret strong enough to sign with (≥32 chars — a weak
+ *  secret would let one recipient brute-force it offline from their own
+ *  (userId, token) pair and forge opt-outs). */
+function unsubSecret(): string | null {
+  return [process.env.EMAIL_UNSUB_SECRET, config.SUPABASE_JWT_SECRET]
+    .find((s) => s != null && s.length >= 32) ?? null;
+}
+
+export function emailUnsubEnabled(): boolean {
+  return unsubSecret() != null;
+}
+
+export function emailUnsubToken(userId: string): string | null {
+  const secret = unsubSecret();
+  if (!secret) return null;
+  return createHmac('sha256', secret).update(`email-unsub:${userId}`).digest('hex');
+}
+
+export function verifyEmailUnsubToken(userId: string, token: string): boolean {
+  const expectedToken = emailUnsubToken(userId);
+  if (!expectedToken) return false;
+  const expected = Buffer.from(expectedToken, 'utf8');
+  const given = Buffer.from(token, 'utf8');
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+export function unsubscribeUrl(userId: string): string | null {
+  const token = emailUnsubToken(userId);
+  if (!token) return null;
+  const base = config.API_BASE_URL ?? PUBLIC_API_FALLBACK;
+  return `${base}/api/v1/email/unsubscribe?u=${encodeURIComponent(userId)}&t=${token}`;
+}
+
+/** RFC 8058 one-click headers for marketing sends. */
+export function marketingEmailHeaders(userId: string): Record<string, string> {
+  const url = unsubscribeUrl(userId);
+  if (!url) return {};
+  return {
+    'List-Unsubscribe': `<${url}>`,
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+  };
 }
 
 export async function sendEmail(input: {
@@ -24,6 +70,7 @@ export async function sendEmail(input: {
   /** Stable per-logical-send key: the provider dedupes retries of the same
       send (crash between accept and our log write, timeout after accept). */
   idempotencyKey?: string;
+  headers?: Record<string, string>;
 }): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return false;
@@ -36,7 +83,13 @@ export async function sendEmail(input: {
         'content-type': 'application/json',
         ...(input.idempotencyKey ? { 'idempotency-key': input.idempotencyKey } : {}),
       },
-      body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html }),
+      body: JSON.stringify({
+        from,
+        to: [input.to],
+        subject: input.subject,
+        html: input.html,
+        ...(input.headers ? { headers: input.headers } : {}),
+      }),
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) {

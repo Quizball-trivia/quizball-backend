@@ -221,6 +221,12 @@ export const weekendLeagueRepo = {
    * them on the live question; everything they missed scores 0. Only game 0
    * accepts late joiners (joining mid-gauntlet is pointless for the player
    * and unfair to the frozen ladder).
+   *
+   * Not serialized against finalizeGame on purpose: the grace deadline
+   * (start + 150s) sits far inside game 0's minimum runtime (25 questions
+   * x 10s + reveals ≈ 325s), and the deadline predicate evaluates in the
+   * same statement snapshot as status/current_game — a game-0 seat can
+   * never be written after game 0 has been finalized.
    */
   async lateCheckinQualifier(tournamentId: string, userId: string): Promise<boolean> {
     let joined = false;

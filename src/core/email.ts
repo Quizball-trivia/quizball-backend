@@ -28,6 +28,10 @@ function unsubSecret(): string | null {
     .find((s) => s != null && s.length >= 32) ?? null;
 }
 
+export function emailUnsubEnabled(): boolean {
+  return unsubSecret() != null;
+}
+
 export function emailUnsubToken(userId: string): string | null {
   const secret = unsubSecret();
   if (!secret) return null;

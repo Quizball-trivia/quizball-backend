@@ -321,8 +321,12 @@ export async function wlNotifyQualifiedEntryOpen(
   // This wave reaches users who have NOT entered — promotional, so it honors
   // marketing opt-outs and carries unsubscribe links, unlike the entrant
   // reminders (transactional: the user registered for the event).
-  const { emailEnabled, sendEmail, unsubscribeUrl, marketingEmailHeaders } = await import('../../core/email.js');
+  const { emailEnabled, emailUnsubEnabled, sendEmail, unsubscribeUrl, marketingEmailHeaders } = await import('../../core/email.js');
   if (!emailEnabled()) return;
+  if (!emailUnsubEnabled()) {
+    logger.warn({ tournamentId }, 'WL entry-open emails skipped: no unsubscribe secret configured');
+    return;
+  }
   const passDeadline = Date.now() + 8_000;
   const candidates = await sql<Array<{ user_id: string; email: string | null }>>`
     SELECT q.user_id, u.email

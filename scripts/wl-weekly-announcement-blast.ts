@@ -78,7 +78,7 @@ function html(unsubUrl: string): string {
 
 function nextBatch(): Promise<Array<{ user_id: string; email: string }>> {
   return sql<Array<{ user_id: string; email: string }>>`
-    SELECT u.id AS user_id, u.email
+    SELECT DISTINCT ON (lower(u.email)) u.id AS user_id, u.email
     FROM users u
     WHERE u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
       AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
@@ -95,7 +95,7 @@ function nextBatch(): Promise<Array<{ user_id: string; email: string }>> {
         WHERE l2.source_event_key = ${BLAST_KEY} AND l2.sent_at IS NOT NULL
           AND u2.id <> u.id AND lower(u2.email) = lower(u.email)
       )
-    ORDER BY u.created_at
+    ORDER BY lower(u.email), u.created_at
     LIMIT ${BATCH_SIZE}
   `;
 }
@@ -174,6 +174,10 @@ async function main(): Promise<void> {
         console.error('unsubscribe URL generation stopped working mid-run — aborting');
         process.exit(1);
       }
+      const [optedOut] = await sql<Array<{ user_id: string }>>`
+        SELECT user_id FROM email_unsubscribes WHERE user_id = ${c.user_id}
+      `;
+      if (optedOut) continue;
       const ok = await sendEmail({
         to: c.email,
         idempotencyKey: `${BLAST_KEY}:${c.user_id}`,

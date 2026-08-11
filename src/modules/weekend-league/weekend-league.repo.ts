@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { WL_FINAL_GAME_INDEX, WL_LATE_JOIN_MS } from './wl-rules.js';
 import type { WlEntryState, WlTournamentStatus } from './weekend-league.schemas.js';
 
 export interface WlTournamentRow {
@@ -210,6 +211,93 @@ export const weekendLeagueRepo = {
       RETURNING e.user_id
     `;
     return rows.length > 0;
+  },
+
+  /**
+   * Late join into a LIVE game 0: the qualifier kicked off without this
+   * entrant, but the grace window (qualifier_starts_at + WL_LATE_JOIN_MS)
+   * is still open. One transaction: flip the entry to playing and register
+   * the participant — the existing player-subscribe snapshot then resumes
+   * them on the live question; everything they missed scores 0. Only game 0
+   * accepts late joiners (joining mid-gauntlet is pointless for the player
+   * and unfair to the frozen ladder).
+   */
+  async lateCheckinQualifier(tournamentId: string, userId: string): Promise<boolean> {
+    let joined = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const rows = await txSql<{ user_id: string }[]>`
+        UPDATE wl_entries e
+        SET checked_in_at = NOW(), state = 'playing'
+        FROM wl_tournaments t
+        WHERE t.id = e.tournament_id
+          AND e.tournament_id = ${tournamentId}
+          AND e.user_id = ${userId}
+          AND e.checked_in_at IS NULL
+          AND e.state = 'entered'
+          AND t.status = 'game_live'
+          AND COALESCE((t.stage->>'current_game')::int, 0) = 0
+          AND t.qualifier_starts_at IS NOT NULL
+          AND NOW() >= t.qualifier_starts_at
+          AND NOW() < t.qualifier_starts_at + make_interval(secs => ${WL_LATE_JOIN_MS} / 1000.0)
+        RETURNING e.user_id
+      `;
+      if (rows.length === 0) return;
+      await txSql`
+        INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+        VALUES (${tournamentId}, 0, ${userId})
+        ON CONFLICT DO NOTHING
+      `;
+      joined = true;
+    });
+    return joined;
+  },
+
+  /**
+   * Late join into the final. Two shapes share this path: the final is
+   * final_live (the adjudication already marked this finalist no_show —
+   * revert it), or it is still final_checkin past final_starts_at because
+   * fewer than two finalists were present and the walkover is being held
+   * for the grace window. The participant row is only written when the
+   * final is live; the held adjudication registers participants itself
+   * from final_checked_in_at once it proceeds.
+   */
+  async lateCheckinFinal(tournamentId: string, userId: string): Promise<boolean> {
+    let joined = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      // Serialize against the walkover: completeTournament's status CAS
+      // takes the row exclusively, so holding a share lock here means the
+      // walkover either sees this check-in committed (its in-tx recheck
+      // aborts it) or has already completed (the UPDATE below declines on
+      // status).
+      await txSql`SELECT id FROM wl_tournaments WHERE id = ${tournamentId} FOR SHARE`;
+      const rows = await txSql<{ user_id: string; status: string }[]>`
+        UPDATE wl_entries e
+        SET final_checked_in_at = NOW(), state = 'finalist'
+        FROM wl_tournaments t
+        WHERE t.id = e.tournament_id
+          AND e.tournament_id = ${tournamentId}
+          AND e.user_id = ${userId}
+          AND e.final_checked_in_at IS NULL
+          AND e.state IN ('finalist', 'no_show')
+          AND t.status IN ('final_checkin', 'final_live')
+          AND t.final_starts_at IS NOT NULL
+          AND NOW() >= t.final_starts_at
+          AND NOW() < t.final_starts_at + make_interval(secs => ${WL_LATE_JOIN_MS} / 1000.0)
+        RETURNING e.user_id, t.status
+      `;
+      if (rows.length === 0) return;
+      if (rows[0]?.status === 'final_live') {
+        await txSql`
+          INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
+          VALUES (${tournamentId}, ${WL_FINAL_GAME_INDEX}, ${userId})
+          ON CONFLICT DO NOTHING
+        `;
+      }
+      joined = true;
+    });
+    return joined;
   },
 
   /** Sunday final check-in — finalists only, same config-window shape. */

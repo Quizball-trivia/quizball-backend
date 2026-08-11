@@ -24,6 +24,15 @@ export const WL_BREAK_MS = 2 * 60 * 1000;
  * have no extra hold.
  */
 export const WL_ROUND_BREATHER_MS = 6_000;
+
+export const WL_FINAL_GAME_INDEX = 3;
+
+/** Late-join grace: a registered entrant (or marked-no_show finalist) who
+ *  missed check-in may still join this long after the scheduled start —
+ *  roughly round 1. Missed questions simply score 0 (standings are absolute
+ *  over wl_answers). 2026-08-09: 6/28 finalists were locked out, several by
+ *  seconds. */
+export const WL_LATE_JOIN_MS = 150_000;
 export const WL_CHECKIN_WINDOW_MS = 10 * 60 * 1000;
 export const WL_GAMES_PER_QUALIFIER = 3;
 

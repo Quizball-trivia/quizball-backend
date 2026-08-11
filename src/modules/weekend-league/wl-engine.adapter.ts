@@ -11,7 +11,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { WL_FINALISTS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
+import { WL_FINAL_GAME_INDEX, WL_FINALISTS, WL_LATE_JOIN_MS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
 import { wlConfigFrom } from './wl-config.js';
 
 export interface WlEngine {
@@ -193,7 +193,26 @@ export const wlEngineStub: WlEngine = {
   },
 };
 
+class WlWalkoverSuperseded extends Error {}
+
 async function completeTournament(
+  tournamentId: string,
+  redisNow: number,
+  championUserId: string | null,
+  finalPlayed: boolean
+): Promise<void> {
+  try {
+    await completeTournamentTx(tournamentId, redisNow, championUserId, finalPlayed);
+  } catch (error) {
+    if (error instanceof WlWalkoverSuperseded) {
+      logger.info({ tournamentId }, 'WL walkover aborted: late check-in restored a playable final');
+      return;
+    }
+    throw error;
+  }
+}
+
+async function completeTournamentTx(
   tournamentId: string,
   redisNow: number,
   championUserId: string | null,
@@ -209,6 +228,26 @@ async function completeTournament(
       RETURNING id
     `;
     if (moved.length === 0) return;
+    if (!finalPlayed) {
+      // The walkover decision (checked-in count, champion pick) was made
+      // from a pre-tx read; a late check-in can land in between. The CAS
+      // above holds the tournament row exclusively and lateCheckinFinal
+      // takes it FOR SHARE, so this recheck sees every committed check-in:
+      // two or more present ⇒ the final is playable after all — roll back
+      // and let the next pass start it.
+      const present = await txSql<{ user_id: string }[]>`
+        SELECT user_id FROM wl_entries
+        WHERE tournament_id = ${tournamentId}
+          AND state = 'finalist' AND final_checked_in_at IS NOT NULL
+        ORDER BY user_id ASC
+      `;
+      if (present.length >= 2) throw new WlWalkoverSuperseded();
+      championUserId = present[0]?.user_id ?? null;
+      await txSql`
+        UPDATE wl_tournaments SET champion_user_id = ${championUserId}
+        WHERE id = ${tournamentId}
+      `;
+    }
     await txSql`
       UPDATE wl_entries SET state = 'no_show'
       WHERE tournament_id = ${tournamentId} AND state = 'finalist' AND final_checked_in_at IS NULL
@@ -478,6 +517,12 @@ export const wlEngineLive: WlEngine = {
     `;
     const checkedIn = ranked.filter((r) => r.final_checked_in_at != null);
     if (checkedIn.length < 2) {
+      // Hold the walkover while the late-join grace is open: a finalist
+      // arriving minutes late can still check in (status stays
+      // final_checkin, lateCheckinFinal covers the past-start window) and
+      // the next pass re-adjudicates with a real field.
+      const finalStartMs = t.final_starts_at ? Date.parse(String(t.final_starts_at)) : NaN;
+      if (Number.isFinite(finalStartMs) && redisNow < finalStartMs + WL_LATE_JOIN_MS) return;
       await completeTournament(t.id, redisNow, checkedIn[0]?.user_id ?? null, false);
       return;
     }
@@ -495,16 +540,22 @@ export const wlEngineLive: WlEngine = {
         WHERE tournament_id = ${t.id} AND state = 'finalist' AND final_checked_in_at IS NULL
         RETURNING user_id
       `;
-      const ids = checkedIn.map((c) => c.user_id);
-      await txSql`
+      // Participant registration derives from IN-TX entry state, not the
+      // pre-tx `checkedIn` snapshot: a late check-in committing between that
+      // read and this CAS would otherwise end up checked-in with no
+      // participant row — a ghost the accept path rejects.
+      const seated = await txSql<{ user_id: string }[]>`
         INSERT INTO wl_game_participants (tournament_id, game_index, user_id)
-        SELECT ${t.id}, ${WL_FINAL_GAME_INDEX}, u FROM unnest(${sql.array(ids)}::uuid[]) AS t(u)
+        SELECT tournament_id, ${WL_FINAL_GAME_INDEX}, user_id FROM wl_entries
+        WHERE tournament_id = ${t.id} AND state = 'finalist'
+          AND final_checked_in_at IS NOT NULL
         ON CONFLICT DO NOTHING
+        RETURNING user_id
       `;
       await wlEventsRepo.append(txSql, {
         tournamentId: t.id, type: 'phase',
         payload: {
-          from: 'final_checkin', to: 'final_live', checked_in: checkedIn.length,
+          from: 'final_checkin', to: 'final_live', checked_in: seated.length,
           evicted_user_ids: noShows.map((n) => n.user_id),
         },
         redisTimeMs: redisNow,
@@ -584,7 +635,7 @@ async function writeAwards(
   `;
 }
 
-export const WL_FINAL_GAME_INDEX = 3;
+export { WL_FINAL_GAME_INDEX };
 
 async function currentGameIndex(t: WlOrchestratorTournament): Promise<number> {
   if (t.status === 'final_live') return WL_FINAL_GAME_INDEX;

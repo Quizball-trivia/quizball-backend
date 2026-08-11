@@ -302,3 +302,85 @@ describe('checkin', () => {
     expect(denied).toEqual({ checked_in: false, already_checked_in: false, reason: 'not_finalist' });
   });
 });
+
+describe('late join', () => {
+  async function entryOf(tid: string, uid: string) {
+    const [e] = await sql<Array<{ state: string; checked_in_at: string | null; final_checked_in_at: string | null }>>`
+      SELECT state, checked_in_at::text, final_checked_in_at::text
+      FROM wl_entries WHERE tournament_id = ${tid} AND user_id = ${uid}
+    `;
+    return e;
+  }
+
+  async function participant(tid: string, uid: string, game: number): Promise<boolean> {
+    const rows = await sql`
+      SELECT 1 FROM wl_game_participants
+      WHERE tournament_id = ${tid} AND user_id = ${uid} AND game_index = ${game}
+    `;
+    return rows.length > 0;
+  }
+
+  it('joins a live game 0 inside the grace window and becomes a participant', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wlj-a-${Date.now()}`);
+    const tid = await seedTournament({ status: 'game_live', qualifierStartsInMs: -60_000 });
+    await sql`INSERT INTO wl_entries (tournament_id, user_id, state) VALUES (${tid}, ${user}, 'entered')`;
+
+    const res = await weekendLeagueService.checkin(user);
+    expect(res).toEqual({ checked_in: true, already_checked_in: false, reason: 'ok' });
+    const e = await entryOf(tid, user);
+    expect(e?.state).toBe('playing');
+    expect(e?.checked_in_at).not.toBeNull();
+    expect(await participant(tid, user, 0)).toBe(true);
+  });
+
+  it('rejects a qualifier join after the grace deadline', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wlj-b-${Date.now()}`);
+    const tid = await seedTournament({ status: 'game_live', qualifierStartsInMs: -200_000 });
+    await sql`INSERT INTO wl_entries (tournament_id, user_id, state) VALUES (${tid}, ${user}, 'entered')`;
+
+    const res = await weekendLeagueService.checkin(user);
+    expect(res.checked_in).toBe(false);
+    expect((await entryOf(tid, user))?.state).toBe('entered');
+  });
+
+  it('rejects a late join once the gauntlet moved past game 0', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wlj-c-${Date.now()}`);
+    const tid = await seedTournament({ status: 'game_live', qualifierStartsInMs: -60_000 });
+    await sql`UPDATE wl_tournaments SET stage = '{"current_game": 1}'::jsonb WHERE id = ${tid}`;
+    await sql`INSERT INTO wl_entries (tournament_id, user_id, state) VALUES (${tid}, ${user}, 'entered')`;
+
+    const res = await weekendLeagueService.checkin(user);
+    expect(res.checked_in).toBe(false);
+  });
+
+  it('reverts a marked no_show into the live final within grace', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wlj-d-${Date.now()}`);
+    const tid = await seedTournament({ status: 'final_live', finalStartsInMs: -60_000 });
+    await sql`INSERT INTO wl_entries (tournament_id, user_id, state) VALUES (${tid}, ${user}, 'no_show')`;
+
+    const res = await weekendLeagueService.checkin(user);
+    expect(res).toEqual({ checked_in: true, already_checked_in: false, reason: 'ok' });
+    const e = await entryOf(tid, user);
+    expect(e?.state).toBe('finalist');
+    expect(e?.final_checked_in_at).not.toBeNull();
+    expect(await participant(tid, user, 3)).toBe(true);
+  });
+
+  it('checks a finalist into a held (past-start) final_checkin without seating them', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const user = await seedUser(`wlj-e-${Date.now()}`);
+    const tid = await seedTournament({ status: 'final_checkin', finalStartsInMs: -30_000 });
+    await sql`INSERT INTO wl_entries (tournament_id, user_id, state) VALUES (${tid}, ${user}, 'finalist')`;
+
+    const res = await weekendLeagueService.checkin(user);
+    expect(res).toEqual({ checked_in: true, already_checked_in: false, reason: 'ok' });
+    const e = await entryOf(tid, user);
+    expect(e?.state).toBe('finalist');
+    expect(e?.final_checked_in_at).not.toBeNull();
+    expect(await participant(tid, user, 3)).toBe(false);
+  });
+});

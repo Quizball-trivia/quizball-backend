@@ -62,10 +62,24 @@ export const wlAdminController = {
     // Full registrant roster for the CMS table — humans first, oldest entry
     // first, capped to keep the payload sane at bot-filled fields.
     const registrants = await sql<Array<Record<string, unknown>>>`
-      SELECT u.nickname, u.is_ai, e.state, e.qp_at_entry,
-             e.entered_at, e.checked_in_at, e.final_checked_in_at, e.final_rank
+      SELECT u.nickname, u.email, u.is_ai, e.state, e.qp_at_entry,
+             e.entered_at, e.checked_in_at, e.final_checked_in_at, e.final_rank,
+             -- How far each entrant got in SATURDAY's qualifier (games 0-2):
+             -- the final (game 3) is excluded so a finalist's Sunday rank can
+             -- never masquerade as their qualifier result (review catch).
+             q.game_index AS qualifier_game_index,
+             q.rank        AS qualifier_rank,
+             q.score       AS qualifier_score
       FROM wl_entries e
       JOIN users u ON u.id = e.user_id
+      LEFT JOIN LATERAL (
+        SELECT r.game_index, r.rank, r.score
+        FROM wl_game_results r
+        WHERE r.tournament_id = e.tournament_id AND r.user_id = e.user_id
+          AND r.game_index < 3
+        ORDER BY r.game_index DESC
+        LIMIT 1
+      ) q ON true
       WHERE e.tournament_id = ${id}
       ORDER BY u.is_ai ASC, e.entered_at ASC
       LIMIT 1500
@@ -96,7 +110,7 @@ export const wlAdminController = {
     `;
 
     const awards = await sql<Array<Record<string, unknown>>>`
-      SELECT a.user_id, u.nickname, a.final_rank, a.band, a.prize_type, a.status
+      SELECT a.user_id, u.nickname, u.email, a.final_rank, a.band, a.prize_type, a.status
       FROM wl_awards a JOIN users u ON u.id = a.user_id
       WHERE a.tournament_id = ${id}
       ORDER BY a.final_rank ASC
@@ -109,6 +123,8 @@ export const wlAdminController = {
       FROM wl_events WHERE tournament_id = ${id}
     `;
 
+    // Bulk PII (emails) — never cached by a proxy or the browser.
+    res.set('Cache-Control', 'private, no-store');
     res.json({
       tournament: t,
       registrants,

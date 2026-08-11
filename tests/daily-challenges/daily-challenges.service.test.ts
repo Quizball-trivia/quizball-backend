@@ -16,6 +16,8 @@ const grantXpMock = vi.fn();
 const deleteCompletionForUserOnDayMock = vi.fn();
 const upsertConfigMock = vi.fn();
 const listByIdsMock = vi.fn();
+const listRecentlyServedQuestionIdsMock = vi.fn();
+const recordServedQuestionsMock = vi.fn();
 
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
   dailyChallengesRepo: {
@@ -29,6 +31,8 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     countPublishedQuestionsByTypeAndCategories: (...args: unknown[]) => countPublishedQuestionsByTypeAndCategoriesMock(...args),
     deleteCompletionForUserOnDay: (...args: unknown[]) => deleteCompletionForUserOnDayMock(...args),
     upsertConfig: (...args: unknown[]) => upsertConfigMock(...args),
+    listRecentlyServedQuestionIds: (...args: unknown[]) => listRecentlyServedQuestionIdsMock(...args),
+    recordServedQuestions: (...args: unknown[]) => recordServedQuestionsMock(...args),
   },
 }));
 
@@ -41,6 +45,8 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 describe('dailyChallengesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listRecentlyServedQuestionIdsMock.mockResolvedValue([]);
+    recordServedQuestionsMock.mockResolvedValue(undefined);
     runInTransactionMock.mockImplementation(async (callback: (txRepo: {
       getCompletionForUserOnDay: typeof getCompletionForUserOnDayMock;
       createCompletion: typeof createCompletionMock;
@@ -808,6 +814,161 @@ describe('dailyChallengesService', () => {
         ],
       })
     );
+  });
+
+  const careerPathRow = (id: string, displayAnswer: Record<string, string>, acceptedAnswers: string[]) => ({
+    id,
+    category_id: '11111111-1111-1111-1111-111111111111',
+    difficulty: 'easy',
+    prompt: { en: 'Who followed this path?' },
+    explanation: null,
+    category_name: { en: 'Careers' },
+    payload: {
+      type: 'career_path',
+      clubs: [{ en: 'Club A' }, { en: 'Club B' }],
+      display_answer: displayAnswer,
+      accepted_answers: acceptedAnswers,
+    },
+  });
+
+  const careerPathConfig = (questionCount: number) => ({
+    challenge_type: 'careerPath',
+    is_active: true,
+    settings: {
+      categoryIds: [],
+      questionCount,
+      secondsPerQuestion: 25,
+    },
+  });
+
+  it('accepts localized display answers even when accepted_answers omit them', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(1));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow(
+        'career-larsson',
+        { en: 'Henrik Larsson', ka: 'ჰენრიკ ლარსონი' },
+        ['Henrik Larsson', 'Larsson']
+      ),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        questions: [
+          expect.objectContaining({
+            acceptedAnswers: ['Henrik Larsson', 'Larsson', 'ჰენრიკ ლარსონი'],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('merges localized countdown group displays into accepted answers', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'countdown',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        roundCount: 1,
+        secondsPerRound: 45,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'countdown-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: { en: 'Name Ballon d’Or winners' },
+        explanation: null,
+        category_name: { en: 'Awards' },
+        payload: {
+          type: 'countdown_list',
+          prompt: { en: 'Ballon d’Or winners' },
+          answer_groups: [
+            {
+              id: 'messi',
+              display: { en: 'Lionel Messi', ka: 'ლიონელ მესი' },
+              accepted_answers: ['Lionel Messi', 'Messi'],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'countdown');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        rounds: [
+          expect.objectContaining({
+            answerGroups: [
+              expect.objectContaining({
+                acceptedAnswers: ['Lionel Messi', 'Messi', 'ლიონელ მესი'],
+              }),
+            ],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('avoids serving two questions with the same answer in one session', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(2));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow('career-ronaldo-a', { en: 'Ronaldo Nazário' }, ['Ronaldo']),
+      careerPathRow('career-ronaldo-b', { en: 'Ronaldo Nazario' }, ['Ronaldo']),
+      careerPathRow('career-zidane', { en: 'Zinedine Zidane' }, ['Zidane']),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath') as {
+      questions: Array<{ id: string }>;
+    };
+
+    const ids = session.questions.map((question) => question.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain('career-zidane');
+    expect(ids.filter((id) => id.startsWith('career-ronaldo'))).toHaveLength(1);
+  });
+
+  it('prefers questions the user has not been served recently and records the serve', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(1));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listRecentlyServedQuestionIdsMock.mockResolvedValue(['career-seen']);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
+      careerPathRow('career-fresh', { en: 'Hernán Crespo' }, ['Crespo']),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath') as {
+      questions: Array<{ id: string }>;
+    };
+
+    expect(session.questions.map((question) => question.id)).toEqual(['career-fresh']);
+    expect(recordServedQuestionsMock).toHaveBeenCalledWith('user-1', ['career-fresh']);
+  });
+
+  it('still serves recently seen questions when the pool has nothing fresh', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(1));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listRecentlyServedQuestionIdsMock.mockResolvedValue(['career-seen']);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath') as {
+      questions: Array<{ id: string }>;
+    };
+
+    expect(session.questions.map((question) => question.id)).toEqual(['career-seen']);
   });
 
   it('builds a high low session from uploaded matchup content', async () => {

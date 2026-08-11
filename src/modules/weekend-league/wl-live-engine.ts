@@ -28,7 +28,9 @@
  */
 
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 import { logger } from '../../core/logger.js';
+import { mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { wlRedis, wlRedisNowMs } from './wl-redis.js';
 import { wlConfigFrom } from './wl-config.js';
@@ -775,9 +777,13 @@ export const wlLiveEngineInternals = {
 
 export function matchesAccepted(guess: unknown, evaluation: Record<string, unknown>): boolean {
   if (typeof guess !== 'string' || guess.trim() === '') return false;
-  const accepted = Array.isArray(evaluation['accepted_answers'])
+  const listed = Array.isArray(evaluation['accepted_answers'])
     ? (evaluation['accepted_answers'] as unknown[]).filter((a): a is string => typeof a === 'string')
     : [];
+  // Older/imported content lists accepted answers in one script only; the
+  // localized display answers are always valid guesses too (same rule as the
+  // possession clue handler and daily challenges).
+  const accepted = mergeLocalizedAcceptedAnswers(listed, evaluation['display_answer'] as Json);
   const normalized = normalizeGuess(guess);
   return accepted.some((a) => {
     const target = normalizeGuess(a);

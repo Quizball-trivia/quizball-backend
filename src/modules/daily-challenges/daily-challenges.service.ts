@@ -8,7 +8,8 @@ import {
   NotFoundError,
   ValidationError,
 } from '../../core/errors.js';
-import { getLocalizedString } from '../../lib/localization.js';
+import { logger } from '../../core/logger.js';
+import { getLocalizedString, mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
 import {
   questionPayloadSchema,
@@ -116,6 +117,88 @@ function shuffle<T>(items: T[]): T[] {
 
 function pickRandom<T>(items: T[], count: number): T[] {
   return shuffle(items).slice(0, count);
+}
+
+const RECENTLY_SERVED_WINDOW_DAYS = 14;
+
+function normalizeAnswerKey(value: Json | null | undefined): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const first = Object.values(value).find(
+    (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0
+  );
+  if (!first) return null;
+  const normalized = first
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return normalized || null;
+}
+
+// Random pick that (a) prefers questions the user hasn't been served recently
+// and (b) avoids serving two questions with the same answer in one session.
+// Both are soft preferences: when the pool is too small the pick falls back to
+// duplicates/recently-served rather than failing availability.
+function pickChallengeQuestions<T>(
+  items: T[],
+  count: number,
+  options: {
+    idOf: (item: T) => string;
+    recentlyServedIds?: Set<string>;
+    answerKeyOf?: (item: T) => string | null;
+  }
+): T[] {
+  const shuffled = shuffle(items);
+  const ordered = options.recentlyServedIds?.size
+    ? [
+        ...shuffled.filter((item) => !options.recentlyServedIds!.has(options.idOf(item))),
+        ...shuffled.filter((item) => options.recentlyServedIds!.has(options.idOf(item))),
+      ]
+    : shuffled;
+
+  const picked: T[] = [];
+  const usedAnswerKeys = new Set<string>();
+  const skipped: T[] = [];
+
+  for (const item of ordered) {
+    if (picked.length >= count) break;
+    const answerKey = options.answerKeyOf?.(item) ?? null;
+    if (answerKey && usedAnswerKeys.has(answerKey)) {
+      skipped.push(item);
+      continue;
+    }
+    if (answerKey) usedAnswerKeys.add(answerKey);
+    picked.push(item);
+  }
+
+  for (const item of skipped) {
+    if (picked.length >= count) break;
+    picked.push(item);
+  }
+
+  return shuffle(picked);
+}
+
+async function loadRecentlyServedIds(userId: string): Promise<Set<string>> {
+  try {
+    return new Set(
+      await dailyChallengesRepo.listRecentlyServedQuestionIds(userId, RECENTLY_SERVED_WINDOW_DAYS)
+    );
+  } catch (error) {
+    logger.warn({ err: error, userId }, 'Failed to load recently served daily challenge questions');
+    return new Set();
+  }
+}
+
+async function markQuestionsServed(userId: string, questionIds: string[]): Promise<void> {
+  if (questionIds.length === 0) return;
+  try {
+    await dailyChallengesRepo.recordServedQuestions(userId, questionIds);
+  } catch (error) {
+    logger.warn({ err: error, userId }, 'Failed to record served daily challenge questions');
+  }
 }
 
 function ensureEnough<T>(
@@ -566,6 +649,8 @@ export const dailyChallengesService = {
       throwAlreadyCompleted(challengeType);
     }
 
+    const recentlyServedIds = await loadRecentlyServedIds(userId);
+
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
@@ -576,10 +661,12 @@ export const dailyChallengesService = {
         { limit: settings.questionCount * 5 }
       );
       const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -614,10 +701,12 @@ export const dailyChallengesService = {
         'true_false',
         validRows
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -646,10 +735,12 @@ export const dailyChallengesService = {
         'countdown_list',
         { limit: settings.roundCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -664,7 +755,7 @@ export const dailyChallengesService = {
           answerGroups: payload.answer_groups.map((group) => ({
             id: group.id,
             display: getLocalizedText(group.display as Json, 'Answer', locale),
-            acceptedAnswers: group.accepted_answers,
+            acceptedAnswers: mergeLocalizedAcceptedAnswers(group.accepted_answers, group.display as Json),
           })),
         })),
       };
@@ -679,10 +770,16 @@ export const dailyChallengesService = {
         'clue_chain',
         { limit: settings.questionCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        {
+          idOf: ({ row }) => row.id,
+          recentlyServedIds,
+          answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
+        }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -695,7 +792,7 @@ export const dailyChallengesService = {
           category: getQuestionCategory(row, locale),
           difficulty: row.difficulty,
           displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-          acceptedAnswers: payload.accepted_answers,
+          acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
           clues: payload.clues.map((clue) => ({
             type: clue.type,
             content: getLocalizedText(clue.content as Json, 'Clue', locale),
@@ -714,10 +811,12 @@ export const dailyChallengesService = {
         { limit: settings.roundCount * 5 }
       );
       const validRounds = validRows.filter(({ payload }) => payload.items.length >= settings.itemsPerRound);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRounds, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -754,10 +853,12 @@ export const dailyChallengesService = {
         { limit: settings.questionCount * 5 }
       );
       const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -788,10 +889,16 @@ export const dailyChallengesService = {
         'career_path',
         { limit: settings.questionCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        {
+          idOf: ({ row }) => row.id,
+          recentlyServedIds,
+          answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
+        }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -808,7 +915,7 @@ export const dailyChallengesService = {
             prompt: getQuestionPromptOrFallback(row, clubs.join(' ➔ '), locale),
             clubs,
             displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-            acceptedAnswers: payload.accepted_answers,
+            acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
           };
         }),
       };
@@ -823,10 +930,12 @@ export const dailyChallengesService = {
         'high_low',
         { limit: settings.roundCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds }
       );
+      await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
       return {
         challengeType,
@@ -863,10 +972,16 @@ export const dailyChallengesService = {
       'football_logic',
       { limit: settings.questionCount * 5 }
     );
-    const selected = pickRandom(
+    const selected = pickChallengeQuestions(
       ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-      settings.questionCount
+      settings.questionCount,
+      {
+        idOf: ({ row }) => row.id,
+        recentlyServedIds,
+        answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
+      }
     );
+    await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
     return {
       challengeType,
@@ -882,7 +997,7 @@ export const dailyChallengesService = {
         imageAUrl: payload.image_a_url,
         imageBUrl: payload.image_b_url,
         displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-        acceptedAnswers: payload.accepted_answers,
+        acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
         explanation:
           payload.explanation
             ? getLocalizedText(payload.explanation as Json, '', locale)

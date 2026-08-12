@@ -963,8 +963,7 @@ export async function wlAcceptAnswer(input: {
     return { accepted: false, reason: 'closed' };
   }
   const rosterKey = `${input.tournamentId}:${run.game_index}`;
-  // A roster is written once at game start; never cache an empty read (it
-  // could race the game-setup transaction).
+  // Never cache an empty read (it could race the game-setup transaction).
   const roster = await hotLoad(participantHotCache, 'roster', rosterKey, async () => {
     const rows = await sql<{ user_id: string }[]>`
       SELECT user_id FROM wl_game_participants
@@ -972,6 +971,19 @@ export async function wlAcceptAnswer(input: {
     `;
     return new Set(rows.map((r) => r.user_id));
   }, (set) => set.size > 0);
+  if (roster && !roster.has(input.userId)) {
+    // Late join made the roster mutable mid-game: a warmed cache would
+    // reject the new participant until TTL expiry. One targeted probe on
+    // miss; a hit mutates the shared Set so the next answer is cache-only.
+    // Non-participants pay this probe per answer attempt, but they have no
+    // submit UI — only a hand-rolled client reaches here repeatedly.
+    const seat = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM wl_game_participants
+      WHERE tournament_id = ${input.tournamentId}
+        AND game_index = ${run.game_index} AND user_id = ${input.userId}
+    `;
+    if (seat.length > 0) roster.add(input.userId);
+  }
   if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
 
   const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {

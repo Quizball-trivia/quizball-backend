@@ -21,7 +21,7 @@ const MAX_BATCHES_PER_PASS = 10;
 
 export type WlWaveKind =
   | 'cancelled' | 'checkin_open' | 'started' | 'qualified' | 'final_checkin_open'
-  | 'reminder_1h' | 'reminder_30m' | 'entry_open';
+  | 'reminder_1h' | 'reminder_30m' | 'entry_open' | 'final_reminder_30m';
 
 export interface WlWaveContent {
   titleEn: string;
@@ -58,11 +58,23 @@ export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
   bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
 };
 
+/** 2026-08-09 lesson: 6 of 28 finalists missed the Sunday final because
+ *  nothing told them a SECOND check-in was required — the copy must carry
+ *  the exact window. */
 export const QUALIFIED_CONTENT: WlWaveContent = {
-  titleEn: 'You made the final!',
-  titleKa: 'ფინალში გახვედი!',
-  bodyEn: 'Top 24 — the Sunday final awaits. Check in before it starts.',
-  bodyKa: 'საუკეთესო 24-ში ხარ — ფინალი გელოდება. გაიარე ჩექინი დაწყებამდე.',
+  titleEn: 'You made the final! Check in again Sunday 13:50–14:00',
+  titleKa: 'ფინალში გახვედი! ჩექინი კვირას 13:50–14:00',
+  bodyEn: 'The final starts Sunday at 14:00 — and you must check in AGAIN between 13:50 and 14:00. Don’t be late!',
+  bodyKa: 'ფინალი კვირას 14:00-ზეა და ჩექინი ხელახლა არის საჭირო — 13:50-დან 14:00-მდე. არ დააგვიანო!',
+};
+
+/** Absolute times, not "in 30 minutes" — the window-gated wave can first
+ *  fire mid-window after a restart. */
+export const FINAL_REMINDER_30M_CONTENT: WlWaveContent = {
+  titleEn: 'The final starts today at 14:00!',
+  titleKa: 'ფინალი დღეს 14:00-ზე იწყება!',
+  bodyEn: 'Check-in opens at 13:50. Open the app now so you don’t miss your seat. Good luck! 🍀',
+  bodyKa: 'დღეს გამოვლინდება ჩემპიონი. ჩექინი გაიხსნება 13:50-ზე — შედი აპლიკაციაში ახლავე. წარმატებები! 🍀',
 };
 
 export const FINAL_CHECKIN_CONTENT: WlWaveContent = {
@@ -185,7 +197,7 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
  */
 /** Owner-approved layout (2026-08-03): Georgian first, English in grey
  *  below, one green CTA into the events tab. */
-export function wlEmailHtml(subject: WlWaveContent): string {
+export function wlEmailHtml(subject: WlWaveContent, unsubUrl?: string | null): string {
   return `
     <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px 16px;">
       <div style="font-size: 26px; margin-bottom: 8px;">🏆</div>
@@ -193,7 +205,10 @@ export function wlEmailHtml(subject: WlWaveContent): string {
       <p style="margin: 0 0 20px; color: #444; line-height: 1.5;">${subject.bodyKa}</p>
       <h3 style="margin: 0 0 4px; color: #888; font-weight: 600;">${subject.titleEn}</h3>
       <p style="margin: 0 0 20px; color: #888; line-height: 1.5;">${subject.bodyEn}</p>
-      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">ითამაშე</a>
+      <a href="https://quizball.io/events" style="display: inline-block; background: #38B60E; color: #fff; padding: 13px 26px; border-radius: 10px; text-decoration: none; font-weight: 700;">ითამაშე</a>${
+        unsubUrl ? `
+      <p style="margin: 20px 0 0; color: #bbb; font-size: 12px;"><a href="${unsubUrl}" style="color: #bbb;">გამოწერის გაუქმება · Unsubscribe</a></p>` : ''
+      }
     </div>`;
 }
 
@@ -315,8 +330,15 @@ export async function wlNotifyQualifiedEntryOpen(
   }
 
   // Email leg: same qualified audience, wl_email_log attempt semantics.
-  const { emailEnabled, sendEmail } = await import('../../core/email.js');
+  // This wave reaches users who have NOT entered — promotional, so it honors
+  // marketing opt-outs and carries unsubscribe links, unlike the entrant
+  // reminders (transactional: the user registered for the event).
+  const { emailEnabled, emailUnsubEnabled, sendEmail, unsubscribeUrl, marketingEmailHeaders } = await import('../../core/email.js');
   if (!emailEnabled()) return;
+  if (!emailUnsubEnabled()) {
+    logger.warn({ tournamentId }, 'WL entry-open emails skipped: no unsubscribe secret configured');
+    return;
+  }
   const passDeadline = Date.now() + 8_000;
   const candidates = await sql<Array<{ user_id: string; email: string | null }>>`
     SELECT q.user_id, u.email
@@ -335,6 +357,9 @@ export async function wlNotifyQualifiedEntryOpen(
       AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       AND u.is_banned = false
     WHERE u.email IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM email_unsubscribes x WHERE x.user_id = q.user_id
+      )
       AND NOT EXISTS (
         SELECT 1 FROM wl_entries e
         WHERE e.tournament_id = ${tournamentId} AND e.user_id = q.user_id
@@ -355,7 +380,8 @@ export async function wlNotifyQualifiedEntryOpen(
       to: c.email,
       idempotencyKey: `${key}:${c.user_id}`,
       subject: content.titleEn,
-      html: wlEmailHtml(content),
+      html: wlEmailHtml(content, unsubscribeUrl(c.user_id)),
+      headers: marketingEmailHeaders(c.user_id),
     });
     await sql`
       INSERT INTO wl_email_log (user_id, source_event_key, sent_at, attempts)

@@ -11,9 +11,10 @@
  * dated: the script refuses to run after entry closes for the Aug-15 event.
  *
  * Usage:
- *   npx tsx scripts/wl-weekly-announcement-blast.ts --dry-run   # count + masked sample
- *   npx tsx scripts/wl-weekly-announcement-blast.ts --limit 10  # canary
- *   npx tsx scripts/wl-weekly-announcement-blast.ts             # full send
+ *   npx tsx scripts/wl-weekly-announcement-blast.ts --dry-run          # count + masked sample
+ *   npx tsx scripts/wl-weekly-announcement-blast.ts --test-to a@b.com  # one real render to that user, no ledger
+ *   npx tsx scripts/wl-weekly-announcement-blast.ts --limit 10         # canary
+ *   npx tsx scripts/wl-weekly-announcement-blast.ts                    # full send
  *
  * Run with prod env (DATABASE_URL pooler + RESEND_API_KEY + EMAIL_FROM +
  * SUPABASE_JWT_SECRET or EMAIL_UNSUB_SECRET for unsubscribe links).
@@ -29,6 +30,8 @@ const SEND_INTERVAL_MS = 550;
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 const DRY = process.argv.includes('--dry-run');
+const testToArg = process.argv.indexOf('--test-to');
+const TEST_TO = testToArg > -1 ? process.argv[testToArg + 1] ?? null : null;
 const limitArg = process.argv.indexOf('--limit');
 let LIMIT = Infinity;
 if (limitArg > -1) {
@@ -126,6 +129,26 @@ async function main(): Promise<void> {
   if (!probeUrl) {
     console.error('No unsubscribe secret configured (SUPABASE_JWT_SECRET or EMAIL_UNSUB_SECRET, ≥32 chars) — refusing to send marketing email without an unsubscribe link.');
     process.exit(1);
+  }
+
+  if (TEST_TO) {
+    const [user] = await sql<Array<{ id: string; email: string }>>`
+      SELECT id, email FROM users WHERE lower(email) = lower(${TEST_TO}) LIMIT 1
+    `;
+    if (!user) {
+      console.error(`--test-to: no user with email ${TEST_TO}`);
+      process.exit(1);
+    }
+    const url = unsubscribeUrl(user.id);
+    const ok = await sendEmail({
+      to: user.email,
+      subject: SUBJECT,
+      html: html(url!),
+      headers: marketingEmailHeaders(user.id),
+    });
+    console.log(ok ? `test email sent to ${maskEmail(user.email)} (no ledger write)` : 'test send FAILED');
+    await sql.end();
+    process.exit(ok ? 0 : 1);
   }
 
   if (DRY) {

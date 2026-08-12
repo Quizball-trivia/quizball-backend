@@ -448,10 +448,11 @@ describe('handlePossessionCluesAnswer', () => {
         captureMode: 'full',
       });
       // The handler matches against accepted answers PLUS localized display
-      // answers; the captured set must reflect what was actually compared.
-      expect(row.acceptedAnswers).toEqual(['Roman Burki', 'Roman Burki']);
+      // answers (deduplicated); the captured set must reflect what was
+      // actually compared.
+      expect(row.acceptedAnswers).toEqual(['Roman Burki']);
       expect(row.timeMs).toBeTypeOf('number');
-      expect(row.candidateDetail).toHaveLength(2);
+      expect(row.candidateDetail).toHaveLength(1);
     });
 
     it('records an accepted guess when the sampler selects it', async () => {

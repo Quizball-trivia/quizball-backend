@@ -28,3 +28,30 @@ export function getLocalizedString(
   const fallbackValue = Object.values(record).find((val) => val && val.trim());
   return fallbackValue ?? (options.fallback ?? 'Untitled');
 }
+
+// Older/imported content often lists accepted answers in one script only, so a
+// guess typed in the other locale (e.g. Georgian) can never match. Localized
+// display values are always valid guesses; merging them in also lets whole-word
+// matching accept a localized surname from a localized full name.
+export function mergeLocalizedAcceptedAnswers(
+  acceptedAnswers: readonly string[],
+  ...localizedValues: Array<Json | null | undefined>
+): string[] {
+  const merged = [...acceptedAnswers];
+  const seen = new Set(merged.map((answer) => answer.trim().toLowerCase()));
+
+  for (const value of localizedValues) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    for (const candidate of Object.values(value)) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(trimmed);
+    }
+  }
+
+  return merged;
+}

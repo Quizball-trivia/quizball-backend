@@ -16,7 +16,7 @@ const grantXpMock = vi.fn();
 const deleteCompletionForUserOnDayMock = vi.fn();
 const upsertConfigMock = vi.fn();
 const listByIdsMock = vi.fn();
-const listRecentlyServedQuestionIdsMock = vi.fn();
+const listRecentlyServedQuestionsMock = vi.fn();
 const recordServedQuestionsMock = vi.fn();
 
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
@@ -31,7 +31,7 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     countPublishedQuestionsByTypeAndCategories: (...args: unknown[]) => countPublishedQuestionsByTypeAndCategoriesMock(...args),
     deleteCompletionForUserOnDay: (...args: unknown[]) => deleteCompletionForUserOnDayMock(...args),
     upsertConfig: (...args: unknown[]) => upsertConfigMock(...args),
-    listRecentlyServedQuestionIds: (...args: unknown[]) => listRecentlyServedQuestionIdsMock(...args),
+    listRecentlyServedQuestions: (...args: unknown[]) => listRecentlyServedQuestionsMock(...args),
     recordServedQuestions: (...args: unknown[]) => recordServedQuestionsMock(...args),
   },
 }));
@@ -45,7 +45,7 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 describe('dailyChallengesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listRecentlyServedQuestionIdsMock.mockResolvedValue([]);
+    listRecentlyServedQuestionsMock.mockResolvedValue([]);
     recordServedQuestionsMock.mockResolvedValue(undefined);
     runInTransactionMock.mockImplementation(async (callback: (txRepo: {
       getCompletionForUserOnDay: typeof getCompletionForUserOnDayMock;
@@ -940,7 +940,7 @@ describe('dailyChallengesService', () => {
   it('prefers questions the user has not been served recently and records the serve', async () => {
     getConfigMock.mockResolvedValue(careerPathConfig(1));
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    listRecentlyServedQuestionIdsMock.mockResolvedValue(['career-seen']);
+    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', display_answer: { en: 'Thierry Henry' } }]);
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
       careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
       careerPathRow('career-fresh', { en: 'Hernán Crespo' }, ['Crespo']),
@@ -955,10 +955,29 @@ describe('dailyChallengesService', () => {
     expect(recordServedQuestionsMock).toHaveBeenCalledWith('user-1', ['career-fresh']);
   });
 
+  it('deprioritizes a recently served ANSWER even under a different question id', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(1));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listRecentlyServedQuestionsMock.mockResolvedValue([
+      { question_id: 'career-zidane-old', display_answer: { en: 'Zinedine Zidane', ka: 'ზინედინ ზიდანი' } },
+    ]);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow('career-zidane-new', { en: 'Zinedine Zidane' }, ['Zidane']),
+      careerPathRow('career-crespo', { en: 'Hernán Crespo' }, ['Crespo']),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath') as {
+      questions: Array<{ id: string }>;
+    };
+
+    expect(session.questions.map((question) => question.id)).toEqual(['career-crespo']);
+  });
+
   it('still serves recently seen questions when the pool has nothing fresh', async () => {
     getConfigMock.mockResolvedValue(careerPathConfig(1));
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    listRecentlyServedQuestionIdsMock.mockResolvedValue(['career-seen']);
+    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', display_answer: { en: 'Thierry Henry' } }]);
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
       careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
     ]);

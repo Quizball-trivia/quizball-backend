@@ -113,14 +113,17 @@ export const dailyChallengesRepo = {
     `;
   },
 
-  async listRecentlyServedQuestionIds(userId: string, windowDays: number): Promise<string[]> {
-    const rows = await sql<Array<{ question_id: string }>>`
-      SELECT question_id
-      FROM daily_challenge_served_questions
-      WHERE user_id = ${userId}
-        AND served_at >= NOW() - make_interval(days => ${windowDays})
+  async listRecentlyServedQuestions(
+    userId: string,
+    windowDays: number
+  ): Promise<Array<{ question_id: string; display_answer: Json | null }>> {
+    return sql<Array<{ question_id: string; display_answer: Json | null }>>`
+      SELECT s.question_id, qp.payload->'display_answer' AS display_answer
+      FROM daily_challenge_served_questions s
+      LEFT JOIN question_payloads qp ON qp.question_id = s.question_id
+      WHERE s.user_id = ${userId}
+        AND s.served_at >= NOW() - make_interval(days => ${windowDays})
     `;
-    return rows.map((row) => row.question_id);
   },
 
   async recordServedQuestions(userId: string, questionIds: string[]): Promise<void> {

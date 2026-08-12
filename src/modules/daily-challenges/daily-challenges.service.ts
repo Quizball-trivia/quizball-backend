@@ -121,13 +121,9 @@ function pickRandom<T>(items: T[], count: number): T[] {
 
 const RECENTLY_SERVED_WINDOW_DAYS = 14;
 
-function normalizeAnswerKey(value: Json | null | undefined): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const first = Object.values(value).find(
-    (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0
-  );
-  if (!first) return null;
-  const normalized = first
+function normalizeAnswerString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
@@ -137,25 +133,48 @@ function normalizeAnswerKey(value: Json | null | undefined): string | null {
   return normalized || null;
 }
 
-// Random pick that (a) prefers questions the user hasn't been served recently
-// and (b) avoids serving two questions with the same answer in one session.
-// Both are soft preferences: when the pool is too small the pick falls back to
-// duplicates/recently-served rather than failing availability.
+function normalizeAnswerKey(value: Json | null | undefined): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  for (const candidate of Object.values(value)) {
+    const normalized = normalizeAnswerString(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function answerKeysOf(value: Json | null | undefined): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.values(value)
+    .map(normalizeAnswerString)
+    .filter((key): key is string => key !== null);
+}
+
+// Random pick that (a) prefers questions the user hasn't been served recently —
+// by question id AND by answer, so "Zidane again under a different question id"
+// counts as seen — and (b) avoids serving two questions with the same answer in
+// one session. All soft preferences: when the pool is too small the pick falls
+// back to duplicates/recently-served rather than failing availability.
 function pickChallengeQuestions<T>(
   items: T[],
   count: number,
   options: {
     idOf: (item: T) => string;
     recentlyServedIds?: Set<string>;
+    recentlyServedAnswerKeys?: Set<string>;
     answerKeyOf?: (item: T) => string | null;
   }
 ): T[] {
   const shuffled = shuffle(items);
-  const ordered = options.recentlyServedIds?.size
-    ? [
-        ...shuffled.filter((item) => !options.recentlyServedIds!.has(options.idOf(item))),
-        ...shuffled.filter((item) => options.recentlyServedIds!.has(options.idOf(item))),
-      ]
+  // tier 0: fresh question, fresh answer; tier 1: fresh question, recently
+  // served answer; tier 2: recently served question.
+  const tierOf = (item: T): number => {
+    if (options.recentlyServedIds?.has(options.idOf(item))) return 2;
+    const answerKey = options.answerKeyOf?.(item) ?? null;
+    if (answerKey && options.recentlyServedAnswerKeys?.has(answerKey)) return 1;
+    return 0;
+  };
+  const ordered = options.recentlyServedIds?.size || options.recentlyServedAnswerKeys?.size
+    ? [0, 1, 2].flatMap((tier) => shuffled.filter((item) => tierOf(item) === tier))
     : shuffled;
 
   const picked: T[] = [];
@@ -181,14 +200,20 @@ function pickChallengeQuestions<T>(
   return shuffle(picked);
 }
 
-async function loadRecentlyServedIds(userId: string): Promise<Set<string>> {
+interface RecentlyServed {
+  ids: Set<string>;
+  answerKeys: Set<string>;
+}
+
+async function loadRecentlyServed(userId: string): Promise<RecentlyServed> {
   try {
-    return new Set(
-      await dailyChallengesRepo.listRecentlyServedQuestionIds(userId, RECENTLY_SERVED_WINDOW_DAYS)
-    );
+    const rows = await dailyChallengesRepo.listRecentlyServedQuestions(userId, RECENTLY_SERVED_WINDOW_DAYS);
+    const ids = new Set(rows.map((row) => row.question_id));
+    const answerKeys = new Set(rows.flatMap((row) => answerKeysOf(row.display_answer)));
+    return { ids, answerKeys };
   } catch (error) {
     logger.warn({ err: error, userId }, 'Failed to load recently served daily challenge questions');
-    return new Set();
+    return { ids: new Set(), answerKeys: new Set() };
   }
 }
 
@@ -649,7 +674,7 @@ export const dailyChallengesService = {
       throwAlreadyCompleted(challengeType);
     }
 
-    const recentlyServedIds = await loadRecentlyServedIds(userId);
+    const recentlyServed = await loadRecentlyServed(userId);
 
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
@@ -664,7 +689,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -704,7 +729,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails),
         settings.questionCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -738,7 +763,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.roundCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -775,7 +800,8 @@ export const dailyChallengesService = {
         settings.questionCount,
         {
           idOf: ({ row }) => row.id,
-          recentlyServedIds,
+          recentlyServedIds: recentlyServed.ids,
+          recentlyServedAnswerKeys: recentlyServed.answerKeys,
           answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
         }
       );
@@ -814,7 +840,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validRounds, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.roundCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -856,7 +882,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -894,7 +920,8 @@ export const dailyChallengesService = {
         settings.questionCount,
         {
           idOf: ({ row }) => row.id,
-          recentlyServedIds,
+          recentlyServedIds: recentlyServed.ids,
+          recentlyServedAnswerKeys: recentlyServed.answerKeys,
           answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
         }
       );
@@ -933,7 +960,7 @@ export const dailyChallengesService = {
       const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.roundCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds }
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, selected.map(({ row }) => row.id));
 
@@ -977,7 +1004,8 @@ export const dailyChallengesService = {
       settings.questionCount,
       {
         idOf: ({ row }) => row.id,
-        recentlyServedIds,
+        recentlyServedIds: recentlyServed.ids,
+        recentlyServedAnswerKeys: recentlyServed.answerKeys,
         answerKeyOf: ({ payload }) => normalizeAnswerKey(payload.display_answer as Json),
       }
     );

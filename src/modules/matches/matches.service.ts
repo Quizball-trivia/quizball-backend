@@ -23,6 +23,7 @@ import { buildPersistentBotModelPin } from '../bots/persistent-bot-context.servi
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
+import { mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import type {
   ClueItemDTO,
   CountdownQuestionDTO,
@@ -208,11 +209,14 @@ function buildQuestionAssets(row: MatchQuestionWithCategory, matchId: string): {
     }
 
     case 'countdown_list': {
-      const answerGroups = parsed.data.answer_groups.map((group) => ({
-        id: group.id,
-        display: ensureI18nObject(group.display),
-        acceptedAnswers: group.accepted_answers,
-      }));
+      const answerGroups = parsed.data.answer_groups.map((group) => {
+        const display = ensureI18nObject(group.display);
+        return {
+          id: group.id,
+          display,
+          acceptedAnswers: mergeLocalizedAcceptedAnswers(group.accepted_answers, display),
+        };
+      });
 
       const question: CountdownQuestionDTO = {
         kind: 'countdown',
@@ -302,7 +306,10 @@ function buildQuestionAssets(row: MatchQuestionWithCategory, matchId: string): {
         },
         evaluation: {
           kind: 'clues',
-          acceptedAnswers: parsed.data.accepted_answers,
+          acceptedAnswers: mergeLocalizedAcceptedAnswers(
+            parsed.data.accepted_answers,
+            ensureI18nObject(parsed.data.display_answer)
+          ),
           displayAnswer: ensureI18nObject(parsed.data.display_answer),
           clues,
         },

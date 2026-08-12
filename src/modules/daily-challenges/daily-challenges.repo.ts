@@ -113,6 +113,34 @@ export const dailyChallengesRepo = {
     `;
   },
 
+  async listRecentlyServedQuestions(
+    userId: string,
+    windowDays: number
+  ): Promise<Array<{ question_id: string; answer_keys: string[] }>> {
+    return sql<Array<{ question_id: string; answer_keys: string[] }>>`
+      SELECT question_id, answer_keys
+      FROM daily_challenge_served_questions
+      WHERE user_id = ${userId}
+        AND served_at >= NOW() - make_interval(days => ${windowDays})
+    `;
+  },
+
+  async recordServedQuestions(
+    userId: string,
+    served: Array<{ id: string; answerKeys: string[] }>
+  ): Promise<void> {
+    if (served.length === 0) return;
+    await sql`
+      INSERT INTO daily_challenge_served_questions (user_id, question_id, answer_keys)
+      SELECT ${userId}::uuid,
+             (entry->>'id')::uuid,
+             COALESCE(ARRAY(SELECT jsonb_array_elements_text(entry->'answerKeys')), '{}')
+      FROM jsonb_array_elements(${sql.json(served)}::jsonb) AS entry
+      ON CONFLICT (user_id, question_id)
+        DO UPDATE SET served_at = NOW(), answer_keys = EXCLUDED.answer_keys
+    `;
+  },
+
   async getCompletionForUserOnDay(
     userId: string,
     challengeType: DailyChallengeType,

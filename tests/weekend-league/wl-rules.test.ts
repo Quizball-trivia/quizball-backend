@@ -250,6 +250,15 @@ describe('matchesAccepted typo tolerance', async () => {
     expect(matchesAccepted('Mdoric', ev('Modric'))).toBe(true);
   });
 
+  it('accepts localized display answers missing from accepted_answers', () => {
+    const evaluation = {
+      accepted_answers: ['Henrik Larsson', 'Larsson'],
+      display_answer: { en: 'Henrik Larsson', ka: 'ჰენრიკ ლარსონი' },
+    };
+    expect(matchesAccepted('ჰენრიკ ლარსონი', evaluation)).toBe(true);
+    expect(matchesAccepted('ჰენრიკ ლარსონი', ev('Henrik Larsson', 'Larsson'))).toBe(false);
+  });
+
   it('keeps short forms exact-only', () => {
     expect(matchesAccepted('CR8', ev('CR7'))).toBe(false);
     expect(matchesAccepted('Sun', ev('Son'))).toBe(false);

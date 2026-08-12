@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { mergeLocalizedAcceptedAnswers } from '../lib/localization.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import {
@@ -932,10 +933,12 @@ export async function handlePossessionCluesAnswer(
     // Localized display answers are valid guesses even when older/imported
     // content omitted them from accepted_answers. This also lets the existing
     // whole-word matcher accept a localized surname from a localized full name.
-    const acceptedAnswers = [
-      ...question.evaluation.acceptedAnswers,
-      ...Object.values(question.evaluation.displayAnswer),
-    ];
+    // Evaluations built after the matches.service merge already include these;
+    // merging again (deduped) keeps evaluations cached before that deploy safe.
+    const acceptedAnswers = mergeLocalizedAcceptedAnswers(
+      question.evaluation.acceptedAnswers,
+      question.evaluation.displayAnswer
+    );
     const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, acceptedAnswers);
     const expectedCount = getExpectedUserIds(cache).length;
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);

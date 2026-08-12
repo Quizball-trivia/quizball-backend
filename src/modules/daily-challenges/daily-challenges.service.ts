@@ -8,7 +8,8 @@ import {
   NotFoundError,
   ValidationError,
 } from '../../core/errors.js';
-import { getLocalizedString } from '../../lib/localization.js';
+import { logger } from '../../core/logger.js';
+import { getLocalizedString, mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
 import {
   questionPayloadSchema,
@@ -116,6 +117,118 @@ function shuffle<T>(items: T[]): T[] {
 
 function pickRandom<T>(items: T[], count: number): T[] {
   return shuffle(items).slice(0, count);
+}
+
+const RECENTLY_SERVED_WINDOW_DAYS = 14;
+
+function normalizeAnswerString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return normalized || null;
+}
+
+function answerKeysOf(value: Json | null | undefined): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.values(value)
+    .map(normalizeAnswerString)
+    .filter((key): key is string => key !== null);
+}
+
+// Random pick that (a) prefers questions the user hasn't been served recently —
+// by question id AND by answer, so "Zidane again under a different question id"
+// counts as seen — and (b) avoids serving two questions with the same answer in
+// one session. All soft preferences: when the pool is too small the pick falls
+// back to duplicates/recently-served rather than failing availability.
+function pickChallengeQuestions<T>(
+  items: T[],
+  count: number,
+  options: {
+    idOf: (item: T) => string;
+    recentlyServedIds?: Set<string>;
+    recentlyServedAnswerKeys?: Set<string>;
+    answerKeysOf?: (item: T) => string[];
+  }
+): T[] {
+  const shuffled = shuffle(items);
+  // tier 0: fresh question, fresh answer; tier 1: fresh question, recently
+  // served answer; tier 2: recently served question. A candidate matches on
+  // ANY of its locale keys, so differing locale coverage between history and
+  // candidate ({en} vs {en,ka}) still counts as the same answer.
+  const tierOf = (item: T): number => {
+    if (options.recentlyServedIds?.has(options.idOf(item))) return 2;
+    const answerKeys = options.answerKeysOf?.(item) ?? [];
+    if (answerKeys.some((key) => options.recentlyServedAnswerKeys?.has(key))) return 1;
+    return 0;
+  };
+  const ordered = options.recentlyServedIds?.size || options.recentlyServedAnswerKeys?.size
+    ? [0, 1, 2].flatMap((tier) => shuffled.filter((item) => tierOf(item) === tier))
+    : shuffled;
+
+  const picked: T[] = [];
+  const usedAnswerKeys = new Set<string>();
+  const skipped: T[] = [];
+
+  for (const item of ordered) {
+    if (picked.length >= count) break;
+    const answerKeys = options.answerKeysOf?.(item) ?? [];
+    if (answerKeys.some((key) => usedAnswerKeys.has(key))) {
+      skipped.push(item);
+      continue;
+    }
+    answerKeys.forEach((key) => usedAnswerKeys.add(key));
+    picked.push(item);
+  }
+
+  for (const item of skipped) {
+    if (picked.length >= count) break;
+    picked.push(item);
+  }
+
+  return shuffle(picked);
+}
+
+interface RecentlyServed {
+  ids: Set<string>;
+  answerKeys: Set<string>;
+}
+
+async function loadRecentlyServed(userId: string): Promise<RecentlyServed> {
+  try {
+    const rows = await dailyChallengesRepo.listRecentlyServedQuestions(userId, RECENTLY_SERVED_WINDOW_DAYS);
+    const ids = new Set(rows.map((row) => row.question_id));
+    const answerKeys = new Set(rows.flatMap((row) => row.answer_keys ?? []));
+    return { ids, answerKeys };
+  } catch (error) {
+    logger.warn({ err: error, userId }, 'Failed to load recently served daily challenge questions');
+    return { ids: new Set(), answerKeys: new Set() };
+  }
+}
+
+function servedEntriesOf(
+  selected: Array<{ row: { id: string }; payload: unknown }>
+): Array<{ id: string; answerKeys: string[] }> {
+  return selected.map(({ row, payload }) => ({
+    id: row.id,
+    answerKeys: answerKeysOf(((payload as { display_answer?: Json }).display_answer) ?? null),
+  }));
+}
+
+async function markQuestionsServed(
+  userId: string,
+  served: Array<{ id: string; answerKeys: string[] }>
+): Promise<void> {
+  if (served.length === 0) return;
+  try {
+    await dailyChallengesRepo.recordServedQuestions(userId, served);
+  } catch (error) {
+    logger.warn({ err: error, userId }, 'Failed to record served daily challenge questions');
+  }
 }
 
 function ensureEnough<T>(
@@ -566,6 +679,8 @@ export const dailyChallengesService = {
       throwAlreadyCompleted(challengeType);
     }
 
+    const recentlyServed = await loadRecentlyServed(userId);
+
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
@@ -576,10 +691,12 @@ export const dailyChallengesService = {
         { limit: settings.questionCount * 5 }
       );
       const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -614,10 +731,12 @@ export const dailyChallengesService = {
         'true_false',
         validRows
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -646,10 +765,12 @@ export const dailyChallengesService = {
         'countdown_list',
         { limit: settings.roundCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -664,7 +785,7 @@ export const dailyChallengesService = {
           answerGroups: payload.answer_groups.map((group) => ({
             id: group.id,
             display: getLocalizedText(group.display as Json, 'Answer', locale),
-            acceptedAnswers: group.accepted_answers,
+            acceptedAnswers: mergeLocalizedAcceptedAnswers(group.accepted_answers, group.display as Json),
           })),
         })),
       };
@@ -677,12 +798,21 @@ export const dailyChallengesService = {
       const validRows = await listTypedQuestionRows(
         settings.categoryIds,
         'clue_chain',
-        { limit: settings.questionCount * 5 }
+        // 20x: the pool holds many questions per player, so a 5x random sample
+        // can be crowded by duplicated answers before tiering ever runs
+        { limit: settings.questionCount * 20 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        {
+          idOf: ({ row }) => row.id,
+          recentlyServedIds: recentlyServed.ids,
+          recentlyServedAnswerKeys: recentlyServed.answerKeys,
+          answerKeysOf: ({ payload }) => answerKeysOf(payload.display_answer as Json),
+        }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -695,7 +825,7 @@ export const dailyChallengesService = {
           category: getQuestionCategory(row, locale),
           difficulty: row.difficulty,
           displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-          acceptedAnswers: payload.accepted_answers,
+          acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
           clues: payload.clues.map((clue) => ({
             type: clue.type,
             content: getLocalizedText(clue.content as Json, 'Clue', locale),
@@ -714,10 +844,12 @@ export const dailyChallengesService = {
         { limit: settings.roundCount * 5 }
       );
       const validRounds = validRows.filter(({ payload }) => payload.items.length >= settings.itemsPerRound);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRounds, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -754,10 +886,12 @@ export const dailyChallengesService = {
         { limit: settings.questionCount * 5 }
       );
       const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -786,12 +920,19 @@ export const dailyChallengesService = {
       const validRows = await listTypedQuestionRows(
         settings.categoryIds,
         'career_path',
-        { limit: settings.questionCount * 5 }
+        { limit: settings.questionCount * 20 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount
+        settings.questionCount,
+        {
+          idOf: ({ row }) => row.id,
+          recentlyServedIds: recentlyServed.ids,
+          recentlyServedAnswerKeys: recentlyServed.answerKeys,
+          answerKeysOf: ({ payload }) => answerKeysOf(payload.display_answer as Json),
+        }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -808,7 +949,7 @@ export const dailyChallengesService = {
             prompt: getQuestionPromptOrFallback(row, clubs.join(' ➔ '), locale),
             clubs,
             displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-            acceptedAnswers: payload.accepted_answers,
+            acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
           };
         }),
       };
@@ -823,10 +964,12 @@ export const dailyChallengesService = {
         'high_low',
         { limit: settings.roundCount * 5 }
       );
-      const selected = pickRandom(
+      const selected = pickChallengeQuestions(
         ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.roundCount
+        settings.roundCount,
+        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
+      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,
@@ -861,12 +1004,19 @@ export const dailyChallengesService = {
     const validRows = await listTypedQuestionRows(
       settings.categoryIds,
       'football_logic',
-      { limit: settings.questionCount * 5 }
+      { limit: settings.questionCount * 20 }
     );
-    const selected = pickRandom(
+    const selected = pickChallengeQuestions(
       ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-      settings.questionCount
+      settings.questionCount,
+      {
+        idOf: ({ row }) => row.id,
+        recentlyServedIds: recentlyServed.ids,
+        recentlyServedAnswerKeys: recentlyServed.answerKeys,
+        answerKeysOf: ({ payload }) => answerKeysOf(payload.display_answer as Json),
+      }
     );
+    await markQuestionsServed(userId, servedEntriesOf(selected));
 
     return {
       challengeType,
@@ -882,7 +1032,7 @@ export const dailyChallengesService = {
         imageAUrl: payload.image_a_url,
         imageBUrl: payload.image_b_url,
         displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
-        acceptedAnswers: payload.accepted_answers,
+        acceptedAnswers: mergeLocalizedAcceptedAnswers(payload.accepted_answers, payload.display_answer as Json),
         explanation:
           payload.explanation
             ? getLocalizedText(payload.explanation as Json, '', locale)

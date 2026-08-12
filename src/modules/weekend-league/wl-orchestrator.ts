@@ -347,7 +347,7 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
   const {
     wlEnsureStartedWave, wlNotifyEntrants, wlEmailEntrants,
     CHECKIN_OPEN_CONTENT, QUALIFIED_CONTENT, FINAL_CHECKIN_CONTENT,
-    REMINDER_1H_CONTENT, REMINDER_30M_CONTENT,
+    REMINDER_1H_CONTENT, REMINDER_30M_CONTENT, FINAL_REMINDER_30M_CONTENT,
   } = await import('./wl-notifications.js');
   // Kickoff reminders: T-60 and T-30 before the qualifier, to registered
   // participants, in-app always + email when a provider is configured.
@@ -405,9 +405,22 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
     await wlNotifyEntrants(t.id, 'checkin_open', CHECKIN_OPEN_CONTENT, ['entered', 'playing', 'finalist']);
   }
   // Finalists (real and test): you're through — and when the final window
-  // opens, confirm the seat. Tiny audiences, recipient-idempotent.
+  // opens, confirm the seat. Tiny audiences, recipient-idempotent. The
+  // congrats gets an EMAIL leg too (2026-08-09: 6/28 finalists no-showed the
+  // final; in-app alone doesn't reach players who close the tab Saturday).
   if (['qualifier_done', 'final_checkin', 'final_live'].includes(t.status)) {
     await wlNotifyEntrants(t.id, 'qualified', QUALIFIED_CONTENT, ['finalist']);
+    if (!t.is_test) await wlEmailEntrants(t.id, 'qualified', QUALIFIED_CONTENT, ['finalist']);
+  }
+  // T-30 before the final: window-gated like the Saturday reminders, so a
+  // restart inside the window still delivers.
+  const finalStartMs = t.final_starts_at ? Date.parse(String(t.final_starts_at)) : NaN;
+  if (['qualifier_done', 'final_checkin'].includes(t.status) && Number.isFinite(finalStartMs)) {
+    const untilFinal = finalStartMs - Date.now();
+    if (untilFinal > 0 && untilFinal <= 30 * 60_000) {
+      await wlNotifyEntrants(t.id, 'final_reminder_30m', FINAL_REMINDER_30M_CONTENT, ['finalist']);
+      if (!t.is_test) await wlEmailEntrants(t.id, 'final_reminder_30m', FINAL_REMINDER_30M_CONTENT, ['finalist']);
+    }
   }
   if (t.status === 'final_checkin') {
     await wlNotifyEntrants(t.id, 'final_checkin_open', FINAL_CHECKIN_CONTENT, ['finalist']);

@@ -33,6 +33,7 @@ scripts/*
 !scripts/export-openapi.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
+!scripts/wl-weekly-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
 # Chaos engineering harness — code only, reads secrets from .env at runtime.

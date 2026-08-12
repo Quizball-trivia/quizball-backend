@@ -74,8 +74,8 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
     try {
       // Cursor C0 BEFORE the join: every event ≤ C0 predates this socket and
       // is (for players) reflected in the snapshot built below.
-      const [t] = await sql<{ id: string; live_delivered_seq: string; spec_delivered_seq: string }[]>`
-        SELECT id, live_delivered_seq::text, spec_delivered_seq::text
+      const [t] = await sql<{ id: string; status: string; live_delivered_seq: string; spec_delivered_seq: string }[]>`
+        SELECT id, status, live_delivered_seq::text, spec_delivered_seq::text
         FROM wl_tournaments WHERE id = ${tournamentId}
       `;
       if (!t) {
@@ -85,12 +85,19 @@ export function registerWlHandlers(_io: QuizballServer, socket: QuizballSocket):
       if (role === 'player') {
         // Eliminated / no-show / withdrawn / disqualified users belong in the
         // DELAYED spectator room — the live room would leak undelayed
-        // dispatches past the 30s protection. (State-change eviction of
-        // already-joined sockets lands with the real eliminations in PR4.)
+        // dispatches past the 30s protection. Once gameplay has begun,
+        // 'entered' no longer qualifies either: an entrant who skipped
+        // check-in could otherwise subscribe live and bypass the spectator
+        // delay (they regain player access through late check-in, which
+        // flips their state).
+        const preGame = ['ready', 'entry_open', 'entry_closed', 'checkin'].includes(t.status);
+        const allowed = preGame
+          ? ['entered', 'playing', 'finalist', 'champion']
+          : ['playing', 'finalist', 'champion'];
         const [entry] = await sql<{ user_id: string }[]>`
           SELECT user_id FROM wl_entries
           WHERE tournament_id = ${tournamentId} AND user_id = ${userId}
-            AND state IN ('entered', 'playing', 'finalist', 'champion')
+            AND state = ANY(${sql.array(allowed)})
         `;
         if (!entry) {
           ack?.({ ok: false, reason: 'not_entered' });

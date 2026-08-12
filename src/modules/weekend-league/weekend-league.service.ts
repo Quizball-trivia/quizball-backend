@@ -249,9 +249,22 @@ export const weekendLeagueService = {
     }
 
     const isFinalWindow = tournament.status === 'final_checkin';
-    const updated = isFinalWindow
+    let updated = isFinalWindow
       ? await weekendLeagueRepo.finalCheckin(tournament.id, userId)
       : await weekendLeagueRepo.checkin(tournament.id, userId);
+    // Late-join grace: the scheduled window declined, but the game may have
+    // started moments ago. Deliberately NOT gated on the status read above —
+    // it can be stale across the kickoff boundary (read 'checkin', kickoff
+    // lands, checkin() declines, and a status gate would skip the very path
+    // built for that moment). Each repo call re-authorizes everything
+    // (state, status, grace deadline) in its own SQL, so blind fallthrough
+    // is safe.
+    if (!updated) {
+      updated = await weekendLeagueRepo.lateCheckinQualifier(tournament.id, userId);
+    }
+    if (!updated) {
+      updated = await weekendLeagueRepo.lateCheckinFinal(tournament.id, userId);
+    }
     if (updated) {
       return { checked_in: true, already_checked_in: false, reason: 'ok' };
     }

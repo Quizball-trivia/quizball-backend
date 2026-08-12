@@ -152,6 +152,8 @@ async function clearOwnedManualQuestions(tx: typeof sql, slug: string): Promise<
   `;
   if (!ownership?.exists) return;
 
+  await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
+
   await tx`DELETE FROM campaign_quiz_questions WHERE quiz_slug = ${slug}`;
   await tx`
     DELETE FROM questions
@@ -170,6 +172,11 @@ async function replaceManualQuestions(
   questions: AdminCampaignQuizManualQuestion[],
   userId: string,
 ): Promise<void> {
+  // A database trigger protects CMS-owned questions from the general Questions
+  // and Categories tools. This transaction-scoped flag is the only authorised
+  // path for changing that content.
+  await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
+
   const existingRows = await tx<{ id: string; prompt: string }[]>`
     SELECT question.id, COALESCE(question.prompt->>'en', '') AS prompt
     FROM campaign_quiz_manual_questions managed
@@ -776,6 +783,7 @@ export const campaignQuizzesRepo = {
       UPDATE campaign_quizzes
       SET
         status = CASE WHEN status = 'published' THEN status ELSE 'preview' END,
+        preview_token = gen_random_uuid(),
         updated_by = ${userId},
         updated_at = NOW()
       WHERE slug = ${slug}
@@ -787,6 +795,7 @@ export const campaignQuizzesRepo = {
       UPDATE campaign_quizzes
       SET
         status = 'published',
+        preview_token = gen_random_uuid(),
         scheduled_publish_at = ${scheduledAt},
         published_at = COALESCE(published_at, NOW()),
         unpublished_at = NULL,
@@ -841,6 +850,7 @@ export const campaignQuizzesRepo = {
         await tx`
           UPDATE campaign_quizzes
           SET status = 'draft', scheduled_publish_at = NULL,
+              preview_token = gen_random_uuid(),
               unpublished_at = NOW(), updated_by = ${userId}, updated_at = NOW()
           WHERE slug = ${slug}
         `;

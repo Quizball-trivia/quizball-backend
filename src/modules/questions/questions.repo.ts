@@ -69,6 +69,28 @@ export interface ListQuestionsResult {
 }
 
 export const questionsRepo = {
+  async isCampaignQuizManaged(id: string): Promise<boolean> {
+    const [result] = await sql<{ managed: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM campaign_quiz_manual_questions
+        WHERE question_id = ${id}
+      ) AS managed
+    `;
+    return result?.managed ?? false;
+  },
+
+  async countCampaignQuizManagedByCategory(categoryId: string): Promise<number> {
+    const [result] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM questions question
+      JOIN campaign_quiz_manual_questions managed
+        ON managed.question_id = question.id
+      WHERE question.category_id = ${categoryId}
+    `;
+    return Number(result?.count) || 0;
+  },
+
   async list(
     filter?: ListQuestionsFilter,
     page = 1,

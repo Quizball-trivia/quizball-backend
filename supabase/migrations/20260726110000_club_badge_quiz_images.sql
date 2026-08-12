@@ -63,6 +63,14 @@ FROM public.question_payloads
 WHERE payload->'image'->>'url' LIKE '%/storage/v1/object/public/imgs/%'
 LIMIT 1;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM club_badge_quiz_base) THEN
+    RAISE EXCEPTION 'Could not derive Supabase storage base URL for badge quiz images';
+  END IF;
+END;
+$$;
+
 UPDATE public.question_payloads qp
 SET payload = jsonb_set(
       qp.payload,
@@ -81,5 +89,4 @@ JOIN public.campaign_quiz_questions cqq
   ON cqq.question_id = img.question_id
  AND cqq.quiz_slug = 'club-badges'
 WHERE qp.question_id = img.question_id
-  AND qp.payload->>'type' = 'mcq_single'
-  AND EXISTS (SELECT 1 FROM club_badge_quiz_base);
+  AND qp.payload->>'type' = 'mcq_single';

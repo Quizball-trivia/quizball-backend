@@ -12,6 +12,10 @@ function includesPattern(html: string, pattern: RegExp): boolean {
   return pattern.test(html);
 }
 
+function escapePattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export const campaignQuizGooglebotService = {
   async inspect(page: AdminCampaignQuizPageResponse): Promise<AdminCampaignQuizGooglebotResponse> {
     let response: Response;
@@ -30,8 +34,21 @@ export const campaignQuizGooglebotService = {
     }
 
     const html = await response.text();
+    const canonical = `https://quizball.io/en/football-quiz/${page.slug}`;
+    const canonicalPattern = new RegExp(
+      `<link[^>]+(?:rel=["']canonical["'][^>]+href=["']${escapePattern(canonical)}["']|href=["']${escapePattern(canonical)}["'][^>]+rel=["']canonical["'])`,
+      'i',
+    );
+    const hasEnglishAlternate = includesPattern(html, /hreflang=["']en["']/i);
+    const hasGeorgianAlternate = includesPattern(html, /hreflang=["']ka["']/i);
     const questionMatches = html.match(/id=["']campaign-question-[^"']+["']/g) ?? [];
     const checks: AdminCampaignQuizGooglebotResponse['checks'] = [
+      {
+        key: 'http_response',
+        label: 'HTTP response',
+        passed: response.ok,
+        detail: String(response.status),
+      },
       {
         key: 'title',
         label: 'Title tag',
@@ -48,14 +65,13 @@ export const campaignQuizGooglebotService = {
       {
         key: 'canonical',
         label: 'Self-referencing canonical',
-        passed: includesPattern(html, /<link[^>]+rel=["']canonical["'][^>]+href=["']https:\/\/quizball\.io\//i)
-          || includesPattern(html, /<link[^>]+href=["']https:\/\/quizball\.io\/[^"']+["'][^>]+rel=["']canonical["']/i),
-        detail: `https://quizball.io/en/football-quiz/${page.slug}`,
+        passed: includesPattern(html, canonicalPattern),
+        detail: canonical,
       },
       {
         key: 'hreflang',
         label: 'Language alternates',
-        passed: includesPattern(html, /hreflang=["']en["']/i),
+        passed: hasEnglishAlternate && (page.locale_mode !== 'en_ka' || hasGeorgianAlternate),
         detail: page.locale_mode === 'en_ka' ? 'English and Georgian' : 'English only',
       },
       {

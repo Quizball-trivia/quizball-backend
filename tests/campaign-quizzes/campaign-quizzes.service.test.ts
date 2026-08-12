@@ -264,7 +264,7 @@ describe('campaignQuizzesService', () => {
         footer_banner_text: 'Play ranked.',
         footer_button_label: 'Sign up free',
         related_slugs: ['liverpool', 'everton', 'tottenham'],
-        hero_image_url: 'https://example.com/arsenal.webp',
+        hero_image_url: 'campaign-quizzes/arsenal.webp',
         hero_image_alt: 'Arsenal category artwork',
         seo_title: 'Arsenal Quiz | QuizBall',
         meta_description: 'Free Arsenal quiz.',
@@ -278,6 +278,8 @@ describe('campaignQuizzesService', () => {
         ka_lede: null,
       }, 'admin-id'),
     ).rejects.toMatchObject({ statusCode: 400 });
+    expect(campaignQuizzesRepo.isAttachableQuestionSet).toHaveBeenCalledWith('ranked-arsenal');
+    expect(campaignQuizzesRepo.getQuestionSetHealth).toHaveBeenCalledWith('ranked-arsenal');
     expect(campaignQuizzesRepo.createAdminPage).not.toHaveBeenCalled();
   });
 
@@ -301,7 +303,7 @@ describe('campaignQuizzesService', () => {
         footer_banner_text: 'Play ranked.',
         footer_button_label: 'Sign up free',
         related_slugs: ['liverpool', 'everton', 'tottenham'],
-        hero_image_url: 'https://example.com/arsenal.webp',
+        hero_image_url: 'campaign-quizzes/arsenal.webp',
         hero_image_alt: 'Arsenal category artwork',
         seo_title: 'Arsenal Quiz | QuizBall',
         meta_description: 'Free Arsenal quiz.',
@@ -315,6 +317,7 @@ describe('campaignQuizzesService', () => {
         ka_lede: null,
       }, 'admin-id'),
     ).rejects.toMatchObject({ statusCode: 400 });
+    expect(campaignQuizzesRepo.isAttachableQuestionSet).toHaveBeenCalledWith('manual-liverpool');
     expect(campaignQuizzesRepo.createAdminPage).not.toHaveBeenCalled();
   });
 

@@ -44,7 +44,7 @@ describe('campaignQuizGooglebotService', () => {
       }),
     }));
     expect(result.status_code).toBe(200);
-    expect(result.checks).toHaveLength(8);
+    expect(result.checks).toHaveLength(9);
     expect(result.checks.every((check) => check.passed)).toBe(true);
     expect(result.checks.at(-1)?.detail).toBe('2 of 2 question headings found');
   });

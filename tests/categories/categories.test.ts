@@ -32,6 +32,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     getByCategoryId: vi.fn(),
     deleteByCategoryId: vi.fn(),
     archiveByCategoryId: vi.fn(),
+    countCampaignQuizManagedByCategory: vi.fn().mockResolvedValue(0),
   },
 }));
 

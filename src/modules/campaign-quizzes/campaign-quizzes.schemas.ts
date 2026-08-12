@@ -347,7 +347,7 @@ export interface AdminCampaignQuizGooglebotResponse {
   status_code: number;
   html: string;
   checks: Array<{
-    key: 'title' | 'meta_description' | 'canonical' | 'hreflang' | 'webpage_schema' | 'breadcrumb_schema' | 'game_schema' | 'question_html';
+    key: 'http_response' | 'title' | 'meta_description' | 'canonical' | 'hreflang' | 'webpage_schema' | 'breadcrumb_schema' | 'game_schema' | 'question_html';
     label: string;
     passed: boolean;
     detail: string;

@@ -230,6 +230,12 @@ export const categoriesService = {
     let deletedQuestionCount = 0;
     let archivedQuestionCount = 0;
     if (options?.cascade) {
+      const managedQuestionCount = await questionsRepo.countCampaignQuizManagedByCategory(id);
+      if (managedQuestionCount > 0) {
+        throw new ConflictError(
+          'This category contains Quiz Page questions. Remove or replace them from Quiz Pages before deleting the category.'
+        );
+      }
       try {
         deletedQuestionCount = await questionsRepo.deleteByCategoryId(id);
       } catch (error) {

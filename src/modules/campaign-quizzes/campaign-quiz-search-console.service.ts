@@ -7,6 +7,7 @@ import type { AdminCampaignQuizSearchConsoleResponse } from './campaign-quizzes.
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SEARCH_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
 const API_BASE = 'https://www.googleapis.com/webmasters/v3/sites';
+const PRODUCTION_ORIGIN = 'https://quizball.io';
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 let cachedMetrics: { value: AdminCampaignQuizSearchConsoleResponse; expiresAt: number } | null = null;
@@ -77,7 +78,9 @@ async function accessToken(): Promise<string> {
 
 function slugFromPageUrl(value: string): string | null {
   try {
-    const match = new URL(value).pathname.match(/^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/);
+    const url = new URL(value);
+    if (url.origin !== PRODUCTION_ORIGIN) return null;
+    const match = url.pathname.match(/^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/);
     return match?.[1] ?? null;
   } catch {
     return null;

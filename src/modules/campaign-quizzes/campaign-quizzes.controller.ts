@@ -2,15 +2,28 @@ import type { Request, Response } from 'express';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import type {
   CampaignQuizAnswerBody,
+  CampaignQuizListQuery,
+  CampaignQuizPreviewQuery,
   CampaignQuizRatingBody,
   CampaignQuizSlugParams,
 } from './campaign-quizzes.schemas.js';
 import { campaignQuizzesService } from './campaign-quizzes.service.js';
 
 export const campaignQuizzesController = {
+  async list(req: Request, res: Response): Promise<void> {
+    const { locale } = req.validated.query as CampaignQuizListQuery;
+    res.json(await campaignQuizzesService.listPublished(locale));
+  },
+
+  async resolveRoute(req: Request, res: Response): Promise<void> {
+    const { slug } = req.validated.params as CampaignQuizSlugParams;
+    res.json(await campaignQuizzesService.resolveRoute(slug));
+  },
+
   async getQuiz(req: Request, res: Response): Promise<void> {
     const { slug } = req.validated.params as CampaignQuizSlugParams;
-    res.json(await campaignQuizzesService.getQuiz(slug));
+    const { preview } = req.validated.query as CampaignQuizPreviewQuery;
+    res.json(await campaignQuizzesService.getQuiz(slug, preview));
   },
 
   async answer(req: Request, res: Response): Promise<void> {
@@ -21,6 +34,7 @@ export const campaignQuizzesController = {
         slug,
         body.question_id,
         body.selected_option_id,
+        body.preview_token,
       ),
     );
   },

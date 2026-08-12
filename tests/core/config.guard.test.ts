@@ -121,3 +121,27 @@ describe('Supabase Auth IP forwarding configuration', () => {
     expect(parsed.SUPABASE_AUTH_IP_FORWARDING_ENABLED).toBe(true);
   });
 });
+
+describe('campaign quiz media environment configuration', () => {
+  const hostedEnv = {
+    NODE_ENV: 'staging',
+    DOCS_ENABLED: 'false',
+    SUPABASE_SMS_HOOK_SECRET: 'test-hook-secret',
+  } as const;
+
+  it('accepts a media base on the active Supabase project', () => {
+    expect(() => parseConfig(baseEnv({
+      ...hostedEnv,
+      SUPABASE_URL: 'https://staging-project.supabase.co',
+      CAMPAIGN_QUIZ_ASSET_BASE_URL: 'https://staging-project.supabase.co',
+    }))).not.toThrow();
+  });
+
+  it('rejects a media base from another environment', () => {
+    expect(() => parseConfig(baseEnv({
+      ...hostedEnv,
+      SUPABASE_URL: 'https://staging-project.supabase.co',
+      CAMPAIGN_QUIZ_ASSET_BASE_URL: 'https://production-project.supabase.co',
+    }))).toThrow(/this environment's Supabase project/);
+  });
+});

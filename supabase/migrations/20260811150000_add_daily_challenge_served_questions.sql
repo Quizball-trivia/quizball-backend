@@ -4,6 +4,9 @@
 CREATE TABLE IF NOT EXISTS daily_challenge_served_questions (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   question_id UUID NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  -- Normalized display-answer keys SNAPSHOTTED at serve time: history must not
+  -- be rewritten by later payload edits, and needs no payload join to read.
+  answer_keys TEXT[] NOT NULL DEFAULT '{}',
   served_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, question_id)
 );

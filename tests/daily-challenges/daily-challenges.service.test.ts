@@ -940,7 +940,7 @@ describe('dailyChallengesService', () => {
   it('prefers questions the user has not been served recently and records the serve', async () => {
     getConfigMock.mockResolvedValue(careerPathConfig(1));
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', display_answer: { en: 'Thierry Henry' } }]);
+    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', answer_keys: ['thierry henry'] }]);
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
       careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
       careerPathRow('career-fresh', { en: 'Hernán Crespo' }, ['Crespo']),
@@ -952,14 +952,14 @@ describe('dailyChallengesService', () => {
     };
 
     expect(session.questions.map((question) => question.id)).toEqual(['career-fresh']);
-    expect(recordServedQuestionsMock).toHaveBeenCalledWith('user-1', ['career-fresh']);
+    expect(recordServedQuestionsMock).toHaveBeenCalledWith('user-1', [{ id: 'career-fresh', answerKeys: ['hernan crespo'] }]);
   });
 
   it('deprioritizes a recently served ANSWER even under a different question id', async () => {
     getConfigMock.mockResolvedValue(careerPathConfig(1));
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     listRecentlyServedQuestionsMock.mockResolvedValue([
-      { question_id: 'career-zidane-old', display_answer: { en: 'Zinedine Zidane', ka: 'ზინედინ ზიდანი' } },
+      { question_id: 'career-zidane-old', answer_keys: ['zinedine zidane', 'ზინედინ ზიდანი'] },
     ]);
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
       careerPathRow('career-zidane-new', { en: 'Zinedine Zidane' }, ['Zidane']),
@@ -974,10 +974,29 @@ describe('dailyChallengesService', () => {
     expect(session.questions.map((question) => question.id)).toEqual(['career-crespo']);
   });
 
+  it('matches served answers across differing locale coverage', async () => {
+    getConfigMock.mockResolvedValue(careerPathConfig(1));
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listRecentlyServedQuestionsMock.mockResolvedValue([
+      { question_id: 'career-zidane-old', answer_keys: ['zinedine zidane', 'ზინედინ ზიდანი'] },
+    ]);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      careerPathRow('career-zidane-ka-only', { ka: 'ზინედინ ზიდანი' }, ['Zidane']),
+      careerPathRow('career-crespo', { en: 'Hernán Crespo' }, ['Crespo']),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath') as {
+      questions: Array<{ id: string }>;
+    };
+
+    expect(session.questions.map((question) => question.id)).toEqual(['career-crespo']);
+  });
+
   it('still serves recently seen questions when the pool has nothing fresh', async () => {
     getConfigMock.mockResolvedValue(careerPathConfig(1));
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', display_answer: { en: 'Thierry Henry' } }]);
+    listRecentlyServedQuestionsMock.mockResolvedValue([{ question_id: 'career-seen', answer_keys: ['thierry henry'] }]);
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
       careerPathRow('career-seen', { en: 'Thierry Henry' }, ['Henry']),
     ]);

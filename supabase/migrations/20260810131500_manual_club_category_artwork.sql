@@ -13,7 +13,8 @@ BEGIN
   LIMIT 1;
 
   IF category_storage_base IS NULL OR category_storage_base = '' THEN
-    RAISE EXCEPTION 'Cannot derive club artwork storage URL: Arsenal category image is missing';
+    RAISE NOTICE 'Skipping club artwork URLs until the environment asset sync has run';
+    RETURN;
   END IF;
 
   UPDATE public.categories category

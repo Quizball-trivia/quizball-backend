@@ -42,10 +42,14 @@ WHERE EXISTS (
 
 DELETE FROM public.campaign_quiz_questions;
 
+DROP TABLE IF EXISTS pg_temp.campaign_quiz_sources;
+DROP TABLE IF EXISTS pg_temp.campaign_question_candidates;
+DROP TABLE IF EXISTS pg_temp.campaign_question_blocklist;
+
 CREATE TEMP TABLE campaign_quiz_sources (
   quiz_slug TEXT PRIMARY KEY,
   priority SMALLINT NOT NULL
-);
+) ON COMMIT DROP;
 
 INSERT INTO campaign_quiz_sources (quiz_slug, priority)
 VALUES
@@ -60,7 +64,7 @@ VALUES
 
 -- Questions that must never appear on a public acquisition page, regardless of
 -- which pool they qualify for.
-CREATE TEMP TABLE campaign_question_blocklist AS
+CREATE TEMP TABLE campaign_question_blocklist ON COMMIT DROP AS
 SELECT q.id AS question_id
 FROM public.questions q
 WHERE
@@ -80,7 +84,7 @@ WHERE
     )
   );
 
-CREATE TEMP TABLE campaign_question_candidates AS
+CREATE TEMP TABLE campaign_question_candidates ON COMMIT DROP AS
 WITH raw_candidates AS (
   SELECT
     source.quiz_slug,

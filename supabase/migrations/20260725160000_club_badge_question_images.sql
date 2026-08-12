@@ -40,14 +40,6 @@ FROM public.question_payloads
 WHERE payload->'image'->>'url' LIKE '%/storage/v1/object/public/imgs/%'
 LIMIT 1;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM club_badge_base) THEN
-    RAISE EXCEPTION 'Could not derive Supabase storage base URL for club badges';
-  END IF;
-END;
-$$;
-
 -- Only touch questions still reserved by this campaign, so a re-curation that
 -- swapped a question out cannot leave a crest attached to an unrelated one.
 UPDATE public.question_payloads qp
@@ -69,4 +61,8 @@ JOIN public.campaign_quiz_questions cqq
   ON cqq.question_id = mapping.question_id
  AND cqq.quiz_slug = 'club-badges'
 WHERE qp.question_id = mapping.question_id
-  AND qp.payload->>'type' = 'mcq_single';
+  AND qp.payload->>'type' = 'mcq_single'
+  -- A fresh local database may not have an uploaded image to derive the
+  -- environment-specific storage origin from yet. In that case keep the
+  -- questions valid and let the normal asset-sync workflow add images later.
+  AND EXISTS (SELECT 1 FROM club_badge_base);

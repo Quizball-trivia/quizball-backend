@@ -95,6 +95,9 @@ export function publicCampaignQuizImageUrl(value: string | null): string | null 
     if (!parsedObjectPath) return value;
     objectPath = validateObjectPath(parsedObjectPath);
   } else {
+    if (value.startsWith('//')) {
+      throw new BadRequestError('Campaign artwork path is invalid');
+    }
     if (value.startsWith('/')) return value;
     objectPath = validateObjectPath(value);
   }

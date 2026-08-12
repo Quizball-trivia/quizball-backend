@@ -48,4 +48,16 @@ describe('campaignQuizGooglebotService', () => {
     expect(result.checks.every((check) => check.passed)).toBe(true);
     expect(result.checks.at(-1)?.detail).toBe('2 of 2 question headings found');
   });
+
+  it('rejects a non-HTML preview response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"ok":true}', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(campaignQuizGooglebotService.inspect({
+      slug: 'liverpool',
+      preview_url: 'http://localhost:3011/en/football-quiz/liverpool?preview=token',
+    } as AdminCampaignQuizPageResponse)).rejects.toThrow(/did not return HTML/);
+  });
 });

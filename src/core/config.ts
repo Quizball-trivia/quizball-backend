@@ -15,8 +15,18 @@ const configSchema = z.object({
     .transform((val) => val === "true" || val === "1"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   DEFAULT_LOCALE: z.string().default("en"),
-  CAMPAIGN_QUIZ_PREVIEW_BASE_URL: z.string().url().default("https://staging.quizball.io"),
-  CAMPAIGN_QUIZ_ASSET_BASE_URL: z.string().url().optional(),
+  PUBLIC_SITE_ORIGIN: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_PREVIEW_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://staging.quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_ASSET_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().optional(),
+  ),
   GOOGLE_SEARCH_CONSOLE_SITE_URL: z.preprocess(
     (value) => value === '' ? undefined : value,
     z.string().min(1).optional(),

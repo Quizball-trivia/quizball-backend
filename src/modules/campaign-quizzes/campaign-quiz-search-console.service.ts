@@ -7,7 +7,6 @@ import type { AdminCampaignQuizSearchConsoleResponse } from './campaign-quizzes.
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SEARCH_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
 const API_BASE = 'https://www.googleapis.com/webmasters/v3/sites';
-const PRODUCTION_ORIGIN = 'https://quizball.io';
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 let cachedMetrics: { value: AdminCampaignQuizSearchConsoleResponse; expiresAt: number } | null = null;
@@ -79,7 +78,7 @@ async function accessToken(): Promise<string> {
 function slugFromPageUrl(value: string): string | null {
   try {
     const url = new URL(value);
-    if (url.origin !== PRODUCTION_ORIGIN) return null;
+    if (url.origin !== new URL(config.PUBLIC_SITE_ORIGIN).origin) return null;
     const match = url.pathname.match(/^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/);
     return match?.[1] ?? null;
   } catch {
@@ -140,6 +139,7 @@ export const campaignQuizSearchConsoleService = {
     }
 
     const bySlug = new Map<string, AdminCampaignQuizSearchConsoleResponse['pages'][number]>();
+    const positionImpressionsBySlug = new Map<string, number>();
     for (const row of payload?.rows ?? []) {
       const slug = row.keys?.[0] ? slugFromPageUrl(row.keys[0]) : null;
       if (!slug) continue;
@@ -148,12 +148,16 @@ export const campaignQuizSearchConsoleService = {
       const impressions = Number(row.impressions) || 0;
       const combinedImpressions = (previous?.impressions ?? 0) + impressions;
       const rowPosition = Number.isFinite(Number(row.position)) ? Number(row.position) : null;
-      const weightedPosition = combinedImpressions > 0
+      const previousPositionImpressions = positionImpressionsBySlug.get(slug) ?? 0;
+      const positionImpressions = previousPositionImpressions
+        + (rowPosition === null ? 0 : impressions);
+      const weightedPosition = positionImpressions > 0
         ? (
-            ((previous?.position ?? 0) * (previous?.impressions ?? 0))
-            + ((rowPosition ?? 0) * impressions)
-          ) / combinedImpressions
-        : rowPosition;
+            ((previous?.position ?? 0) * previousPositionImpressions)
+            + ((rowPosition ?? 0) * (rowPosition === null ? 0 : impressions))
+          ) / positionImpressions
+        : null;
+      positionImpressionsBySlug.set(slug, positionImpressions);
       bySlug.set(slug, {
         slug,
         clicks: (previous?.clicks ?? 0) + clicks,

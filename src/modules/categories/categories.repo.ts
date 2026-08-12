@@ -92,7 +92,18 @@ export const categoriesRepo = {
     // window to run the WHERE clause for ALL matching rows on every request,
     // ignoring LIMIT; splitting lets the page query stop at `limit` and the
     // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
-    const whereClause = sql`WHERE 1=1 ${parentIdFilter} ${isActiveFilter} ${minQuestionsFilter}`;
+    const whereClause = sql`
+      WHERE 1=1
+        ${parentIdFilter}
+        ${isActiveFilter}
+        ${minQuestionsFilter}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM campaign_quiz_manual_questions managed
+          JOIN questions question ON question.id = managed.question_id
+          WHERE question.category_id = categories.id
+        )
+    `;
 
     const pageQuery = sql<Category[]>`
       SELECT *

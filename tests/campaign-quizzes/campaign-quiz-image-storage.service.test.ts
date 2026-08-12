@@ -38,4 +38,9 @@ describe('campaign quiz image environment isolation', () => {
       'https://example.com/arsenal.webp',
     )).toThrow(/uploaded through this CMS/);
   });
+
+  it('rejects protocol-relative image references when rendering', () => {
+    expect(() => publicCampaignQuizImageUrl('//example.com/arsenal.webp'))
+      .toThrow(/path is invalid/);
+  });
 });

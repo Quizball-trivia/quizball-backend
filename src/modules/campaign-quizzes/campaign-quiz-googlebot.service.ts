@@ -1,3 +1,4 @@
+import { config } from '../../core/config.js';
 import { ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import type {
@@ -6,6 +7,35 @@ import type {
 } from './campaign-quizzes.schemas.js';
 
 const GOOGLEBOT_USER_AGENT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+const MAX_PREVIEW_HTML_BYTES = 2 * 1024 * 1024;
+
+async function readPreviewHtml(response: Response): Promise<string> {
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+    throw new ExternalServiceError('The server-rendered preview did not return HTML');
+  }
+
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_PREVIEW_HTML_BYTES) {
+    throw new ExternalServiceError('The server-rendered preview is too large to inspect');
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_PREVIEW_HTML_BYTES) {
+      await reader.cancel();
+      throw new ExternalServiceError('The server-rendered preview is too large to inspect');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 function includesPattern(html: string, pattern: RegExp): boolean {
   pattern.lastIndex = 0;
@@ -33,8 +63,8 @@ export const campaignQuizGooglebotService = {
       throw new ExternalServiceError('The server-rendered preview could not be fetched');
     }
 
-    const html = await response.text();
-    const canonical = `https://quizball.io/en/football-quiz/${page.slug}`;
+    const html = await readPreviewHtml(response);
+    const canonical = `${config.PUBLIC_SITE_ORIGIN.replace(/\/+$/, '')}/en/football-quiz/${page.slug}`;
     const canonicalPattern = new RegExp(
       `<link[^>]+(?:rel=["']canonical["'][^>]+href=["']${escapePattern(canonical)}["']|href=["']${escapePattern(canonical)}["'][^>]+rel=["']canonical["'])`,
       'i',

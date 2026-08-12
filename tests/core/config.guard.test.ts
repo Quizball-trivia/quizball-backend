@@ -151,6 +151,17 @@ describe('campaign quiz media environment configuration', () => {
     }))).not.toThrow();
   });
 
+  it('treats blank optional URLs as unset and keeps the preview default', () => {
+    const parsed = parseConfig(baseEnv({
+      CAMPAIGN_QUIZ_ASSET_BASE_URL: '',
+      CAMPAIGN_QUIZ_PREVIEW_BASE_URL: '',
+      PUBLIC_SITE_ORIGIN: '',
+    }));
+    expect(parsed.CAMPAIGN_QUIZ_ASSET_BASE_URL).toBeUndefined();
+    expect(parsed.CAMPAIGN_QUIZ_PREVIEW_BASE_URL).toBe('https://staging.quizball.io');
+    expect(parsed.PUBLIC_SITE_ORIGIN).toBe('https://quizball.io');
+  });
+
   it('rejects a media base from another environment', () => {
     expect(() => parseConfig(baseEnv({
       ...hostedEnv,

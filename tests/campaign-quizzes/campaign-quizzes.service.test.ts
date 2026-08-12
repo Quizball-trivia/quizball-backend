@@ -2,9 +2,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
   campaignQuizzesRepo: {
+    getVisibleQuiz: vi.fn(),
+    getQuestionSet: vi.fn(),
+    getRelatedPages: vi.fn(),
+    getAdminPage: vi.fn(),
+    listAdminRelatedSlugs: vi.fn(),
+    listManualQuestions: vi.fn(),
+    getQuestionSetHealth: vi.fn(),
+    isAttachableQuestionSet: vi.fn(),
+    countQuestionSetConsumers: vi.fn(),
+    slugExists: vi.fn(),
+    createAdminPage: vi.fn(),
+    updateAdminPage: vi.fn(),
+    listAdminPages: vi.fn(),
+    updateHubOrder: vi.fn(),
+    createRevision: vi.fn(),
+    listRevisions: vi.fn(),
+    getRevision: vi.fn(),
+    publish: vi.fn(),
     getPublishedQuiz: vi.fn(),
-    getPublishedQuestions: vi.fn(),
-    getPublishedQuestion: vi.fn(),
     getRating: vi.fn(),
     upsertRating: vi.fn(),
     upsertGuestRating: vi.fn(),
@@ -31,19 +47,55 @@ const question = {
   },
 };
 
+const quizRow = {
+  slug: 'liverpool',
+  title: 'Liverpool Quiz',
+  internal_name: 'Liverpool Quiz',
+  page_category: 'team' as const,
+  status: 'published' as const,
+  question_source: 'existing' as const,
+  question_set_slug: 'liverpool',
+  h1: 'Liverpool Quiz',
+  lede: null,
+  about_heading: null,
+  about_blocks: [],
+  score_cta: null,
+  footer_banner_text: null,
+  footer_button_label: 'Play Ranked',
+  hero_image_url: null,
+  hero_image_alt: null,
+  seo_title: 'Liverpool Quiz',
+  meta_description: null,
+  og_image_url: null,
+  og_image_alt: null,
+  breadcrumb_label: 'Liverpool Quiz',
+  locale_mode: 'en_only' as const,
+  ka_seo_title: null,
+  ka_meta_description: null,
+  ka_h1: null,
+  ka_lede: null,
+  scheduled_publish_at: null,
+  published_at: new Date().toISOString(),
+  unpublished_at: null,
+  preview_token: 'de6bd11f-27ee-4721-9586-7f561bfd27e2',
+  hub_order: 1,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
 describe('campaignQuizzesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(campaignQuizzesRepo.getPublishedQuiz).mockResolvedValue({
-      slug: 'liverpool',
-      title: 'Liverpool Quiz',
-    });
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue([question]);
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestion).mockResolvedValue(question);
+    vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue(quizRow);
+    vi.mocked(campaignQuizzesRepo.getPublishedQuiz).mockResolvedValue(quizRow);
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue([question]);
+    vi.mocked(campaignQuizzesRepo.getRelatedPages).mockResolvedValue([]);
     vi.mocked(campaignQuizzesRepo.getRating).mockResolvedValue({
       average: '4.75',
       count: 12,
     });
+    vi.mocked(campaignQuizzesRepo.isAttachableQuestionSet).mockResolvedValue(true);
+    vi.mocked(campaignQuizzesRepo.countQuestionSetConsumers).mockResolvedValue(0);
   });
 
   it('returns crawlable prompts and options without leaking the answer key', async () => {
@@ -68,10 +120,256 @@ describe('campaignQuizzesService', () => {
     ]);
     expect(JSON.stringify(quiz)).not.toContain('is_correct');
     expect(quiz.rating).toEqual({ average: 4.75, count: 12 });
+    expect(quiz.difficulty_counts).toEqual({ easy: 1, medium: 0, hard: 0 });
+  });
+
+  it('returns managed SSR content and derives the verified count from the attached set', async () => {
+    vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue({
+      ...quizRow,
+      lede: 'Play {count} verified questions.',
+      about_heading: 'About this Liverpool quiz',
+      about_blocks: [{ id: 'one', type: 'paragraph', text: 'Checked {count} football questions.' }],
+      score_cta: 'You scored {score} from {count}.',
+      footer_banner_text: 'Ready for ranked?',
+      hero_image_url: 'categories/liverpool-v2.webp',
+      hero_image_alt: 'Liverpool category artwork',
+      meta_description: 'A free quiz with {count} verified questions.',
+    });
+
+    const quiz = await campaignQuizzesService.getQuiz('liverpool');
+
+    expect(quiz.page).toMatchObject({
+      lede: 'Play 1 verified questions.',
+      meta_description: 'A free quiz with 1 verified questions.',
+      hero_image_alt: 'Liverpool category artwork',
+      about_blocks: [{ id: 'one', type: 'paragraph', text: 'Checked 1 football questions.' }],
+    });
+    expect(quiz.page?.hero_image_url).toContain('/storage/v1/object/public/imgs/categories/liverpool-v2.webp');
+  });
+
+  it('hard-blocks publishing when an attached set contains a ranked-eligible question', async () => {
+    vi.mocked(campaignQuizzesRepo.getAdminPage).mockResolvedValue({
+      ...quizRow,
+      lede: 'A complete lede with enough copy for the page.',
+      about_heading: 'About this quiz',
+      about_blocks: [{ id: 'one', type: 'paragraph', text: 'About copy.' }],
+      score_cta: 'You scored {score}.',
+      footer_banner_text: 'Play ranked.',
+      hero_image_url: 'categories/liverpool-v2.webp',
+      hero_image_alt: 'Liverpool artwork',
+      meta_description: 'Free Liverpool quiz.',
+      question_count: 10,
+    });
+    vi.mocked(campaignQuizzesRepo.getQuestionSetHealth).mockResolvedValue({
+      count: 10,
+      public_only_count: 9,
+    });
+
+    await expect(
+      campaignQuizzesService.publish('liverpool', { scheduled_publish_at: null }, 'admin-id'),
+    ).rejects.toMatchObject({ statusCode: 422 });
+    expect(campaignQuizzesRepo.publish).not.toHaveBeenCalled();
+  });
+
+  it('does not persist an invalid edit over a published quiz', async () => {
+    vi.mocked(campaignQuizzesRepo.getAdminPage).mockResolvedValue({
+      ...quizRow,
+      question_count: 10,
+    });
+    vi.mocked(campaignQuizzesRepo.getQuestionSetHealth).mockResolvedValue({
+      count: 10,
+      public_only_count: 10,
+    });
+
+    await expect(
+      campaignQuizzesService.updateAdmin('liverpool', {
+        internal_name: 'Liverpool Quiz',
+        slug: 'liverpool',
+        category: 'team',
+        h1: 'Liverpool Quiz',
+        lede: 'Play a complete Liverpool football quiz with verified public questions covering famous players, managers, trophies and memorable matches from across the club history. Get your score instantly, compare your knowledge and keep playing more QuizBall challenges when you finish today.',
+        question_source: 'existing',
+        question_set_slug: 'liverpool',
+        manual_questions: [],
+        about_heading: 'About this Liverpool quiz',
+        about_blocks: [{ id: 'intro', type: 'paragraph', text: 'Verified Liverpool football questions.' }],
+        score_cta: 'You scored {score}.',
+        footer_banner_text: 'Play ranked.',
+        footer_button_label: 'Sign up free',
+        related_slugs: [],
+        hero_image_url: null,
+        hero_image_alt: '',
+        seo_title: 'Liverpool Quiz | QuizBall',
+        meta_description: 'Free Liverpool football quiz with {count} verified questions.',
+        og_image_url: null,
+        og_image_alt: null,
+        breadcrumb_label: 'Liverpool Quiz',
+        locale_mode: 'en_only',
+        ka_seo_title: null,
+        ka_meta_description: null,
+        ka_h1: null,
+        ka_lede: null,
+      }, 'admin-id'),
+    ).rejects.toMatchObject({ statusCode: 422 });
+
+    expect(campaignQuizzesRepo.updateAdminPage).not.toHaveBeenCalled();
+  });
+
+  it('returns manually managed answers only to the authenticated admin editor', async () => {
+    vi.mocked(campaignQuizzesRepo.getAdminPage).mockResolvedValue({
+      ...quizRow,
+      question_source: 'manual',
+      question_count: 1,
+    });
+    vi.mocked(campaignQuizzesRepo.listAdminRelatedSlugs).mockResolvedValue([]);
+    vi.mocked(campaignQuizzesRepo.listManualQuestions).mockResolvedValue([question]);
+    vi.mocked(campaignQuizzesRepo.getQuestionSetHealth).mockResolvedValue({
+      count: 1,
+      public_only_count: 1,
+    });
+
+    const page = await campaignQuizzesService.getAdmin('liverpool');
+
+    expect(page).toMatchObject({
+      question_source: 'manual',
+      manual_questions: [{
+        id: question.id,
+        prompt: 'Who managed Liverpool?',
+        difficulty: 'easy',
+        options: ['Rafael Benítez', 'Jürgen Klopp', 'Brendan Rodgers', 'Steven Gerrard'],
+        correct_option: 'b',
+        explanation: 'Jürgen Klopp managed Liverpool.',
+      }],
+    });
+  });
+
+  it('does not allow a ranked-pool question set to be attached to a draft', async () => {
+    vi.mocked(campaignQuizzesRepo.slugExists).mockResolvedValue(false);
+    vi.mocked(campaignQuizzesRepo.getQuestionSetHealth).mockResolvedValue({
+      count: 10,
+      public_only_count: 9,
+    });
+
+    await expect(
+      campaignQuizzesService.createAdmin({
+        internal_name: 'Arsenal Quiz',
+        slug: 'arsenal',
+        category: 'team',
+        h1: 'Arsenal Quiz',
+        lede: 'A complete Arsenal quiz lede.',
+        question_set_slug: 'ranked-arsenal',
+        about_heading: 'About this Arsenal quiz',
+        about_blocks: [{ id: 'intro', type: 'paragraph', text: 'About copy.' }],
+        score_cta: 'You scored {score}.',
+        footer_banner_text: 'Play ranked.',
+        footer_button_label: 'Sign up free',
+        related_slugs: ['liverpool', 'everton', 'tottenham'],
+        hero_image_url: 'campaign-quizzes/arsenal.webp',
+        hero_image_alt: 'Arsenal category artwork',
+        seo_title: 'Arsenal Quiz | QuizBall',
+        meta_description: 'Free Arsenal quiz.',
+        og_image_url: null,
+        og_image_alt: null,
+        breadcrumb_label: 'Arsenal Quiz',
+        locale_mode: 'en_only',
+        ka_seo_title: null,
+        ka_meta_description: null,
+        ka_h1: null,
+        ka_lede: null,
+      }, 'admin-id'),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(campaignQuizzesRepo.isAttachableQuestionSet).toHaveBeenCalledWith('ranked-arsenal');
+    expect(campaignQuizzesRepo.getQuestionSetHealth).toHaveBeenCalledWith('ranked-arsenal');
+    expect(campaignQuizzesRepo.createAdminPage).not.toHaveBeenCalled();
+  });
+
+  it('does not expose a manually owned set for reuse by another page', async () => {
+    vi.mocked(campaignQuizzesRepo.slugExists).mockResolvedValue(false);
+    vi.mocked(campaignQuizzesRepo.isAttachableQuestionSet).mockResolvedValue(false);
+
+    await expect(
+      campaignQuizzesService.createAdmin({
+        internal_name: 'Arsenal Quiz',
+        slug: 'arsenal',
+        category: 'team',
+        h1: 'Arsenal Quiz',
+        lede: 'A complete Arsenal quiz lede.',
+        question_source: 'existing',
+        question_set_slug: 'manual-liverpool',
+        manual_questions: [],
+        about_heading: 'About this Arsenal quiz',
+        about_blocks: [{ id: 'intro', type: 'paragraph', text: 'About copy.' }],
+        score_cta: 'You scored {score}.',
+        footer_banner_text: 'Play ranked.',
+        footer_button_label: 'Sign up free',
+        related_slugs: ['liverpool', 'everton', 'tottenham'],
+        hero_image_url: 'campaign-quizzes/arsenal.webp',
+        hero_image_alt: 'Arsenal category artwork',
+        seo_title: 'Arsenal Quiz | QuizBall',
+        meta_description: 'Free Arsenal quiz.',
+        og_image_url: null,
+        og_image_alt: null,
+        breadcrumb_label: 'Arsenal Quiz',
+        locale_mode: 'en_only',
+        ka_seo_title: null,
+        ka_meta_description: null,
+        ka_h1: null,
+        ka_lede: null,
+      }, 'admin-id'),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(campaignQuizzesRepo.isAttachableQuestionSet).toHaveBeenCalledWith('manual-liverpool');
+    expect(campaignQuizzesRepo.createAdminPage).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a self-owned question set while another page consumes it', async () => {
+    vi.mocked(campaignQuizzesRepo.getAdminPage).mockResolvedValue({
+      ...quizRow,
+      question_count: 10,
+    });
+    vi.mocked(campaignQuizzesRepo.countQuestionSetConsumers).mockResolvedValue(1);
+
+    await expect(
+      campaignQuizzesService.updateAdmin('liverpool', {
+        internal_name: 'Liverpool Quiz',
+        slug: 'liverpool',
+        category: 'team',
+        h1: 'Liverpool Quiz',
+        lede: 'A complete Liverpool quiz lede.',
+        question_source: 'manual',
+        question_set_slug: 'liverpool',
+        manual_questions: [{
+          prompt: 'Who managed Liverpool?',
+          difficulty: 'easy',
+          options: ['Rafael Benítez', 'Jürgen Klopp', 'Brendan Rodgers', 'Steven Gerrard'],
+          correct_option: 'b',
+          explanation: 'Jürgen Klopp managed Liverpool.',
+        }],
+        about_heading: 'About this Liverpool quiz',
+        about_blocks: [{ id: 'intro', type: 'paragraph', text: 'About copy.' }],
+        score_cta: 'You scored {score}.',
+        footer_banner_text: 'Play ranked.',
+        footer_button_label: 'Sign up free',
+        related_slugs: [],
+        hero_image_url: 'categories/liverpool-v2.webp',
+        hero_image_alt: 'Liverpool category artwork',
+        seo_title: 'Liverpool Quiz | QuizBall',
+        meta_description: 'Free Liverpool quiz.',
+        og_image_url: null,
+        og_image_alt: null,
+        breadcrumb_label: 'Liverpool Quiz',
+        locale_mode: 'en_only',
+        ka_seo_title: null,
+        ka_meta_description: null,
+        ka_h1: null,
+        ka_lede: null,
+      }, 'admin-id'),
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(campaignQuizzesRepo.updateAdminPage).not.toHaveBeenCalled();
   });
 
   it('skips a malformed campaign question without failing the whole quiz', async () => {
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue([
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue([
       {
         ...question,
         id: '6c6b8d10-8b8e-4d12-9a10-000000000002',
@@ -114,7 +412,7 @@ describe('campaignQuizzesService', () => {
         ],
       },
     };
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue([
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue([
       trueFalseQuestion,
     ]);
 
@@ -145,7 +443,7 @@ describe('campaignQuizzesService', () => {
         },
       }),
     );
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue(clueRows);
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue(clueRows);
 
     const quiz = await campaignQuizzesService.getQuiz('guess-the-player');
     expect(quiz.questions[0]).toMatchObject({
@@ -190,7 +488,7 @@ describe('campaignQuizzesService', () => {
         accepted_answers: [entry.answer],
       },
     }));
-    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue(careerRows);
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue(careerRows);
 
     const quiz = await campaignQuizzesService.getQuiz('career-path');
 
@@ -254,5 +552,56 @@ describe('campaignQuizzesService', () => {
       'user-1',
       5,
     );
+  });
+
+  it('only allows published pages in the hub merchandising order', async () => {
+    vi.mocked(campaignQuizzesRepo.listAdminPages).mockResolvedValue([
+      { ...quizRow, question_count: 15, is_hub_pinned: false },
+    ]);
+
+    await expect(campaignQuizzesService.updateHubOrder({
+      items: [{ slug: 'draft-page', hub_order: 1, is_hub_pinned: true }],
+    }, 'admin-id')).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(campaignQuizzesRepo.updateHubOrder).not.toHaveBeenCalled();
+  });
+
+  it('returns a private revision timeline without exposing snapshots', async () => {
+    vi.mocked(campaignQuizzesRepo.getAdminPage).mockResolvedValue({
+      ...quizRow,
+      question_count: 15,
+      is_hub_pinned: false,
+    });
+    vi.mocked(campaignQuizzesRepo.listRevisions).mockResolvedValue([{
+      id: '7',
+      quiz_slug: 'liverpool',
+      revision_number: 2,
+      action: 'saved',
+      snapshot: {
+        internal_name: 'Liverpool Quiz',
+        h1: 'Liverpool Quiz — Test Your LFC Knowledge',
+        status: 'published',
+        question_count: 15,
+        manual_questions: [{ correct_option: 'b' }],
+      },
+      created_by: 'admin-id',
+      created_at: '2026-08-12T08:00:00.000Z',
+      editor_name: 'Admin',
+    }]);
+
+    await expect(campaignQuizzesService.listRevisions('liverpool')).resolves.toEqual([{
+      id: 7,
+      revision_number: 2,
+      action: 'saved',
+      created_at: '2026-08-12T08:00:00.000Z',
+      created_by: 'admin-id',
+      editor_name: 'Admin',
+      summary: {
+        internal_name: 'Liverpool Quiz',
+        h1: 'Liverpool Quiz — Test Your LFC Knowledge',
+        status: 'published',
+        question_count: 15,
+      },
+    }]);
   });
 });

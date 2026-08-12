@@ -15,6 +15,30 @@ const configSchema = z.object({
     .transform((val) => val === "true" || val === "1"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   DEFAULT_LOCALE: z.string().default("en"),
+  PUBLIC_SITE_ORIGIN: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_PREVIEW_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://staging.quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_ASSET_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_SITE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().email().optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
 
   // Database
   DATABASE_URL: z.string().optional(),
@@ -271,6 +295,26 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
         dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
       },
     );
+  }
+
+  if (
+    result.data.NODE_ENV !== "local"
+    && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL
+  ) {
+    if (!result.data.SUPABASE_URL) {
+      throw new ConfigError(
+        "Invalid configuration: SUPABASE_URL is required when CAMPAIGN_QUIZ_ASSET_BASE_URL is set outside local.",
+        { nodeEnv: result.data.NODE_ENV },
+      );
+    }
+    const assetOrigin = new URL(result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL).origin;
+    const storageOrigin = new URL(result.data.SUPABASE_URL).origin;
+    if (assetOrigin !== storageOrigin) {
+      throw new ConfigError(
+        "Invalid configuration: campaign quiz assets must use this environment's Supabase project.",
+        { nodeEnv: result.data.NODE_ENV, assetOrigin, storageOrigin },
+      );
+    }
   }
 
   // Auto-disable docs in production unless explicitly enabled

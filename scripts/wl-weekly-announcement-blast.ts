@@ -58,7 +58,7 @@ function html(unsubUrl: string): string {
       საუკეთესო სამეული ჩემპიონის მედლებს იღებს, რომლებიც პროფილზე სამუდამოდ რჩება.
     </p>
     <div style="background: #f6f8f6; border-radius: 12px; padding: 14px 16px; margin: 0 0 18px;">
-      <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">1.</b>&nbsp; ითამაშე რანკედი კვირის განმავლობაში და დააგროვე <b>200 QP</b></p>
+      <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">1.</b>&nbsp; ითამაშე რეიტინგული კვირის განმავლობაში და დააგროვე <b>200 QP</b></p>
       <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">2.</b>&nbsp; დარეგისტრირდი ივენთების გვერდზე — რეგისტრაცია იხურება <b>პარასკევს 12:00-ზე</b></p>
       <p style="margin: 0; color: #111; line-height: 1.5;"><b style="color:#38B60E;">3.</b>&nbsp; შაბათ-კვირას გაიარე ჩექინი <b>13:50–14:00</b> და ითამაშე ⚽</p>
     </div>

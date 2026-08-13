@@ -48,7 +48,7 @@ export const questionsController = {
         rankedEligible: isAdmin ? undefined : true,
         // Weekend League competition content is server-only: players must not
         // be able to enumerate it (payloads carry answers for the solo flow).
-        visibility: isAdmin ? undefined : 'public',
+        visibility: isAdmin ? query.visibility : 'public',
         difficulty: query.difficulty,
         type: query.type,
         mcqImage: isAdmin ? query.mcq_image : undefined,

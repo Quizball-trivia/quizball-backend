@@ -233,6 +233,9 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
       status: z.enum(['draft', 'published', 'archived']).optional(),
       difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
       type: questionTypeEnum.optional(),
+      visibility: z.enum(['public', 'wl_private']).optional().openapi({
+        description: 'Admin-only pool filter; players are always pinned to public.',
+      }),
       search: z.string().max(200).optional().openapi({
         description: 'Admin-only substring search. Terms shorter than 3 characters are accepted but ignored.',
       }),

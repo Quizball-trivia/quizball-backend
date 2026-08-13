@@ -427,6 +427,9 @@ export const listQuestionsQuerySchema = z.object({
   difficulty: difficultyEnum.optional(),
   type: questionTypeEnum.optional(),
   mcq_image: z.enum(['with', 'without']).optional(),
+  // Admin-only (non-admins are pinned to 'public' in the controller): lets
+  // the CMS editor isolate the protected WL pool for review.
+  visibility: z.enum(['public', 'wl_private']).optional(),
   // The CMS debounces every keystroke. Trigram indexes need at least three
   // characters, so treat shorter transient values as "no search" rather than
   // issuing an expensive full-table substring scan.

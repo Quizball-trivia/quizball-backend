@@ -116,10 +116,10 @@ describe('computeParticipantSettlement', () => {
     })).coinsAwarded).toBe(0);
     expect(computeParticipantSettlement(input({
       isHumanForCoins: true,
-    })).coinsAwarded).toBe(300);
+    })).coinsAwarded).toBe(700);
     expect(computeParticipantSettlement(input({
       isWin: false,
       isHumanForCoins: true,
-    })).coinsAwarded).toBe(100);
+    })).coinsAwarded).toBe(250);
   });
 });

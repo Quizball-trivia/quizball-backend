@@ -34,8 +34,8 @@ export const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a
 export const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
-const RANKED_WIN_COINS = 300;
-const RANKED_LOSS_COINS = 100;
+const RANKED_WIN_COINS = 700;
+const RANKED_LOSS_COINS = 250;
 
 // Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
 // Signed margin: bonus only when the player was AHEAD (margin > 0). A winner who

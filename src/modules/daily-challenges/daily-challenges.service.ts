@@ -311,25 +311,27 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
  * Coins paid per score point for each challenge type. Score semantics:
  * number of correct answers (trueFalse/imposter/careerPath/highLow),
  * answers found (countdown), or leftover budget (moneyDrop — paid 1:1,
- * capped at the 1000 starting budget).
+ * capped at MONEY_DROP_COIN_CAP).
  */
 const COINS_PER_SCORE_POINT: Record<DailyChallengeType, number> = {
   moneyDrop: 1, // leftover budget paid 1:1 (capped below)
   trueFalse: 200,
-  countdown: 50,
+  countdown: 75,
   imposter: 500,
-  careerPath: 250,
-  highLow: 100,
+  careerPath: 300,
+  highLow: 400,
   clues: 20,
   putInOrder: 20,
   footballLogic: 20,
 };
 
+const MONEY_DROP_COIN_CAP = 1500;
+
 function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: number): number {
   const normalizedScore = Math.max(0, Math.floor(score));
 
   if (challengeType === 'moneyDrop') {
-    return Math.min(normalizedScore, 1000);
+    return Math.min(normalizedScore, MONEY_DROP_COIN_CAP);
   }
 
   return normalizedScore * COINS_PER_SCORE_POINT[challengeType];

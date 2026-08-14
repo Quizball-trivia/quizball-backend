@@ -15361,6 +15361,19 @@
           {
             "schema": {
               "type": "string",
+              "enum": [
+                "public",
+                "wl_private"
+              ],
+              "description": "Admin-only pool filter; players are always pinned to public."
+            },
+            "required": false,
+            "name": "visibility",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
               "maxLength": 200,
               "description": "Admin-only substring search. Terms shorter than 3 characters are accepted but ignored."
             },

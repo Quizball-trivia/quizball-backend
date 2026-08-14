@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type {
   AdminCampaignQuizImageBody,
+  AdminCampaignQuizImageGenerateBody,
   AdminCampaignQuizHubOrderBody,
   AdminCampaignQuizListQuery,
   AdminCampaignQuizPageBody,
@@ -121,6 +122,14 @@ export const adminCampaignQuizzesController = {
     res.status(201).json(
       await campaignQuizzesService.uploadImage(
         req.validated.body as AdminCampaignQuizImageBody,
+      ),
+    );
+  },
+
+  async generateImage(req: Request, res: Response): Promise<void> {
+    res.json(
+      await campaignQuizzesService.generateImage(
+        req.validated.body as AdminCampaignQuizImageGenerateBody,
       ),
     );
   },

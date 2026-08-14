@@ -15,6 +15,7 @@ import {
   normalizeCampaignQuizImageReference,
   publicCampaignQuizImageUrl,
 } from './campaign-quiz-image-storage.service.js';
+import { campaignQuizImageGenerationService } from './campaign-quiz-image-generation.service.js';
 import { campaignQuizSearchConsoleService } from './campaign-quiz-search-console.service.js';
 import {
   campaignQuizzesRepo,
@@ -25,6 +26,7 @@ import {
 } from './campaign-quizzes.repo.js';
 import type {
   AdminCampaignQuizImageBody,
+  AdminCampaignQuizImageGenerateBody,
   AdminCampaignQuizGooglebotResponse,
   AdminCampaignQuizHubOrderBody,
   AdminCampaignQuizListItemResponse,
@@ -782,5 +784,9 @@ export const campaignQuizzesService = {
       slug: input.slug,
       kind: input.kind,
     });
+  },
+
+  async generateImage(input: AdminCampaignQuizImageGenerateBody) {
+    return campaignQuizImageGenerationService.generate(input);
   },
 };

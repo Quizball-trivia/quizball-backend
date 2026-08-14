@@ -146,6 +146,10 @@ export const adminCampaignQuizImageBodySchema = z.object({
   slug: campaignQuizSlugParamsSchema.shape.slug,
 });
 
+export const adminCampaignQuizImageGenerateBodySchema = z.object({
+  prompt: z.string().trim().min(40).max(4_000),
+});
+
 export const adminCampaignQuizHubOrderBodySchema = z
   .object({
     items: z.array(z.object({
@@ -179,6 +183,7 @@ export type AdminCampaignQuizListQuery = z.infer<typeof adminCampaignQuizListQue
 export type AdminCampaignQuizPublishBody = z.infer<typeof adminCampaignQuizPublishBodySchema>;
 export type AdminCampaignQuizRetireBody = z.infer<typeof adminCampaignQuizRetireBodySchema>;
 export type AdminCampaignQuizImageBody = z.infer<typeof adminCampaignQuizImageBodySchema>;
+export type AdminCampaignQuizImageGenerateBody = z.infer<typeof adminCampaignQuizImageGenerateBodySchema>;
 export type AdminCampaignQuizHubOrderBody = z.infer<typeof adminCampaignQuizHubOrderBodySchema>;
 export type AdminCampaignQuizRevisionParams = z.infer<typeof adminCampaignQuizRevisionParamsSchema>;
 export type CampaignQuizAboutBlock = z.infer<typeof campaignQuizAboutBlockSchema>;

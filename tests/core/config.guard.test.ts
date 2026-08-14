@@ -170,3 +170,16 @@ describe('campaign quiz media environment configuration', () => {
     }))).toThrow(/this environment's Supabase project/);
   });
 });
+
+describe('campaign quiz artwork generation configuration', () => {
+  it('defaults to the current square-image model and medium quality', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.OPENAI_IMAGE_MODEL).toBe('gpt-image-2');
+    expect(parsed.OPENAI_IMAGE_QUALITY).toBe('medium');
+  });
+
+  it('treats a blank server key as unconfigured and rejects unsupported quality values', () => {
+    expect(parseConfig(baseEnv({ OPENAI_API_KEY: '' })).OPENAI_API_KEY).toBeUndefined();
+    expect(() => parseConfig(baseEnv({ OPENAI_IMAGE_QUALITY: 'ultra' }))).toThrow(/OPENAI_IMAGE_QUALITY/);
+  });
+});

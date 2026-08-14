@@ -4,6 +4,7 @@ import { requireRole } from '../middleware/require-role.js';
 import { validate } from '../middleware/validate.js';
 import {
   adminCampaignQuizImageBodySchema,
+  adminCampaignQuizImageGenerateBodySchema,
   adminCampaignQuizHubOrderBodySchema,
   adminCampaignQuizListQuerySchema,
   adminCampaignQuizPageBodySchema,
@@ -37,6 +38,12 @@ router.post(
   '/images',
   validate({ body: adminCampaignQuizImageBodySchema }),
   adminCampaignQuizzesController.uploadImage,
+);
+
+router.post(
+  '/images/generate',
+  validate({ body: adminCampaignQuizImageGenerateBodySchema }),
+  adminCampaignQuizzesController.generateImage,
 );
 
 router.post(

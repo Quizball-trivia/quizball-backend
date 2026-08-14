@@ -228,6 +228,14 @@ const configSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default("google/gemini-2.0-flash-001"),
 
+  // OpenAI (CMS campaign artwork generation)
+  OPENAI_API_KEY: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
+  OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-2'),
+  OPENAI_IMAGE_QUALITY: z.enum(['low', 'medium', 'high']).default('medium'),
+
   // Stripe (Store payments)
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

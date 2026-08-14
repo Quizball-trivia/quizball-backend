@@ -4,6 +4,7 @@ export { campaignQuizzesService } from './campaign-quizzes.service.js';
 export { campaignQuizzesRepo } from './campaign-quizzes.repo.js';
 export {
   adminCampaignQuizImageBodySchema,
+  adminCampaignQuizImageGenerateBodySchema,
   adminCampaignQuizHubOrderBodySchema,
   adminCampaignQuizListQuerySchema,
   adminCampaignQuizPageBodySchema,

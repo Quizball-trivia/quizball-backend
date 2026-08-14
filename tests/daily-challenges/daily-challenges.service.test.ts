@@ -1121,15 +1121,15 @@ describe('dailyChallengesService', () => {
 
   it.each([
     ['trueFalse', 3, 600],
-    ['countdown', 3, 150],
+    ['countdown', 3, 225],
     ['imposter', 3, 1500],
-    ['careerPath', 3, 750],
-    ['highLow', 3, 300],
+    ['careerPath', 3, 900],
+    ['highLow', 3, 1200],
     ['clues', 3, 60],
     ['putInOrder', 3, 60],
     ['footballLogic', 3, 60],
     ['moneyDrop', 900, 900],
-    ['moneyDrop', 1200, 1000], // leftover budget capped at 1000
+    ['moneyDrop', 1800, 1500], // leftover budget capped at 1500
   ] as const)(
     'pays the per-game multiplier: %s with score %d awards %d coins',
     async (challengeType, score, expectedCoins) => {
@@ -1181,11 +1181,11 @@ describe('dailyChallengesService', () => {
         userId: 'user-1',
         challengeType: 'countdown',
         score: 4,
-        coinsAwarded: 200,
+        coinsAwarded: 300,
         xpAwarded: 15,
       })
     );
-    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 200);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 300);
     expect(grantXpMock).toHaveBeenCalledWith({
       userId: 'user-1',
       sourceType: 'daily_challenge_completion',
@@ -1199,7 +1199,7 @@ describe('dailyChallengesService', () => {
     expect(result).toEqual({
       challengeType: 'countdown',
       completedToday: true,
-      coinsAwarded: 200,
+      coinsAwarded: 300,
       xpAwarded: 15,
       wallet: {
         coins: 1080,
@@ -1261,7 +1261,7 @@ describe('dailyChallengesService', () => {
     }
   });
 
-  it('awards money drop leftover coins capped at 1000', async () => {
+  it('awards money drop leftover coins capped at 1500', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'moneyDrop',
       is_active: true,
@@ -1282,17 +1282,17 @@ describe('dailyChallengesService', () => {
     });
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
-    const result = await dailyChallengesService.completeChallenge('user-1', 'moneyDrop', 1200);
+    const result = await dailyChallengesService.completeChallenge('user-1', 'moneyDrop', 1800);
 
     expect(createCompletionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         challengeType: 'moneyDrop',
-        score: 1200,
-        coinsAwarded: 1000,
+        score: 1800,
+        coinsAwarded: 1500,
       })
     );
-    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 1000);
-    expect(result.coinsAwarded).toBe(1000);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 1500);
+    expect(result.coinsAwarded).toBe(1500);
   });
 
   it('returns already completed if completion insert hits the unique constraint', async () => {

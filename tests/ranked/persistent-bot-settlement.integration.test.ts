@@ -28,8 +28,8 @@ let dbAvailable = false;
 // Coin participation rewards (source of truth: ranked.service.ts
 // RANKED_WIN_COINS / RANKED_LOSS_COINS). Not exported, mirrored here for exact
 // balance assertions.
-const RANKED_WIN_COINS = 300;
-const RANKED_LOSS_COINS = 100;
+const RANKED_WIN_COINS = 700;
+const RANKED_LOSS_COINS = 250;
 const STARTER_COINS = 500;
 
 const testUserIds: string[] = [];

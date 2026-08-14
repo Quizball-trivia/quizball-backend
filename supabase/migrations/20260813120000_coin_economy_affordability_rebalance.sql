@@ -116,3 +116,20 @@ WHERE slug IN (
 )
   AND type = 'avatar'
   AND currency = 'coins';
+
+-- Advertised daily-challenge rewards. daily_challenge_configs.coin_reward is
+-- what the challenge list shows BEFORE a user completes a challenge (after
+-- completion the actual coins_awarded is shown instead), so leaving these at
+-- the old values would advertise a smaller reward than the code now pays.
+-- Mirrors COINS_PER_SCORE_POINT in daily-challenges.service.ts, expressed as
+-- the per-session headline the list already used: per-point value times the
+-- questions per session for fixed-length games, and the cap for moneyDrop.
+UPDATE public.daily_challenge_configs
+SET coin_reward = CASE challenge_type
+  WHEN 'moneyDrop' THEN 1500
+  WHEN 'countdown' THEN 75
+  WHEN 'careerPath' THEN 300
+  WHEN 'highLow' THEN 400
+  ELSE coin_reward
+END
+WHERE challenge_type IN ('moneyDrop', 'countdown', 'careerPath', 'highLow');

@@ -84,4 +84,15 @@ UPDATE public.store_products SET price_cents = 999, currency = 'usd', is_active 
 UPDATE public.store_products SET price_cents = 4000, currency = 'coins', is_active = true WHERE slug = 'ticket_pack_3';
 UPDATE public.store_products SET price_cents = 5000, currency = 'coins', is_active = true WHERE slug = 'ticket_pack_5';
 
+-- Advertised daily-challenge rewards (pre-migration values).
+UPDATE public.daily_challenge_configs
+SET coin_reward = CASE challenge_type
+  WHEN 'moneyDrop' THEN 1000
+  WHEN 'countdown' THEN 50
+  WHEN 'careerPath' THEN 250
+  WHEN 'highLow' THEN 100
+  ELSE coin_reward
+END
+WHERE challenge_type IN ('moneyDrop', 'countdown', 'careerPath', 'highLow');
+
 COMMIT;

@@ -34,7 +34,7 @@ function buildState(options: {
   highestBidderSeatId?: string | null;
   budget?: number;
 }): AuctionMatchState {
-  const formation = '4-3-3';
+  const formation = '2-2-2';
   return {
     matchId: 'm1',
     version: 1,
@@ -193,7 +193,7 @@ describe('budget discipline', () => {
   it('can still OPEN a round it can afford, however disciplined', () => {
     // Discipline scales the wallet ceiling down, but must never scale it below
     // the minimum bid — that would silently thin the field and stall rounds.
-    // Budget is the default (comfortably above the 11-slot reserve), so the only
+    // Budget is the default (comfortably above the 7-slot reserve), so the only
     // thing that could suppress the bid here is over-aggressive discipline.
     for (let seed = 0; seed < 25; seed++) {
       const state = buildState({ botProfile: SKILLED });

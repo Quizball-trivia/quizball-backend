@@ -7,6 +7,14 @@ import {
   type AuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
 
+const INT32_MIN = -2_147_483_648;
+const INT32_MAX = 2_147_483_647;
+
+/** Keep a value within the signed int32 range of the total_points column. */
+function clampInt32(value: number): number {
+  return Math.max(INT32_MIN, Math.min(INT32_MAX, value));
+}
+
 // Coin participation rewards, granted once per settled auction match to each
 // real human who reaches the finish (a forfeiter's seat is gone by then, so
 // they get nothing). Win (1st place) pays more; any other finish still pays.
@@ -105,7 +113,11 @@ export async function persistFinishedAuctionMatch(
         return {
           userId,
           seat: index + 1,
-          totalPoints: Math.round(ranking.totalTrueValue),
+          // The per-match score = the value players are ranked on (chemistry-
+          // adjusted profit; can be negative). Clamped to the signed int32 range
+          // of match_players.total_points so a pathologically valuable squad
+          // can't overflow the column and abort persistence.
+          totalPoints: clampInt32(Math.round(ranking.adjustedProfit)),
           placement: ranking.rank,
           isBot,
           forfeited: Boolean(ranking.player?.forfeited),

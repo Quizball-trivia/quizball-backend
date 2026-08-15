@@ -59,7 +59,7 @@ describe('registerAuctionHandlers', () => {
     const io = {} as QuizballServer;
 
     registerAuctionHandlers(io, socket);
-    await handlers.get('auction:start_ai_match')?.({ formation: '4-3-3' });
+    await handlers.get('auction:start_ai_match')?.({ formation: '2-2-2' });
 
     expect(socket.on).toHaveBeenCalledWith('auction:start_ai_match', expect.any(Function));
     expect(socket.on).toHaveBeenCalledWith('auction:bid', expect.any(Function));
@@ -70,7 +70,7 @@ describe('registerAuctionHandlers', () => {
     expect(auctionRealtimeServiceMock.handleStartAiMatch).toHaveBeenCalledWith(
       io,
       socket,
-      { formation: '4-3-3', locale: 'en' }
+      { formation: '2-2-2', locale: 'en' }
     );
   });
 
@@ -79,7 +79,7 @@ describe('registerAuctionHandlers', () => {
     const io = {} as QuizballServer;
 
     registerAuctionHandlers(io, socket);
-    await handlers.get('auction:search_start')?.({ formation: '4-3-3' });
+    await handlers.get('auction:search_start')?.({ formation: '2-2-2' });
     await handlers.get('auction:search_cancel')?.();
     await handlers.get('auction:bid')?.({ matchId: 'match-1', amount: 30_000_000 });
     await handlers.get('auction:fold')?.({ matchId: 'match-1' });
@@ -88,7 +88,7 @@ describe('registerAuctionHandlers', () => {
     expect(auctionMatchmakingServiceMock.handleSearchStart).toHaveBeenCalledWith(
       io,
       socket,
-      { formation: '4-3-3', locale: 'en' }
+      { formation: '2-2-2', locale: 'en' }
     );
     expect(auctionMatchmakingServiceMock.handleSearchCancel).toHaveBeenCalledWith(io, socket);
     expect(auctionTurnServiceMock.handleAuctionBid).toHaveBeenCalledWith(

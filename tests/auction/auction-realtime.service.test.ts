@@ -123,7 +123,7 @@ describe('auctionRealtimeService', () => {
     await auctionRealtimeService.handleStartAiMatch(
       io,
       socket,
-      { locale: 'en', formation: '4-3-3' },
+      { locale: 'en', formation: '2-2-2' },
       { context: deterministicContext }
     );
 

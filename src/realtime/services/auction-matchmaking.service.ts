@@ -13,6 +13,7 @@ import {
 } from '../../modules/auction/index.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
+import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
   startAuctionMatchForHumans,
   rejoinAuctionMatch,
@@ -599,9 +600,5 @@ function isAuctionLocale(value: string | undefined): value is AuctionContentLoca
 }
 
 function isFormationName(value: string | undefined): value is FormationName {
-  return value === '4-3-3'
-    || value === '4-4-2'
-    || value === '3-5-2'
-    || value === '4-2-3-1'
-    || value === '3-4-3';
+  return value !== undefined && value in FORMATION_BY_NAME;
 }

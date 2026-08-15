@@ -3,7 +3,9 @@ import {
   MIN_BID_INCREMENT,
   MIN_PLAYER_COST,
   POSITION_GROUPS,
+  STARTING_BUDGET,
 } from './auction.constants.js';
+import { chemistryMultiplier, computeSquadChemistry } from './auction-chemistry.js';
 import type {
   AuctionBidValidationInput,
   AuctionFormation,
@@ -57,6 +59,20 @@ export function getTotalTeamValue(team: AuctionTeam): number {
   );
 }
 
+/** Profit = the squad's "sell" value minus what was paid (starting budget less
+ *  what's left). Negative if the player overpaid. `trueValue` is the sell value
+ *  server-side (there are no season snapshots here, so it's the current value —
+ *  the web client's getFutureValue falls back to the same). */
+export function getSquadProfit(player: AuctionPlayer): number {
+  return getTotalTeamValue(player.team) - (STARTING_BUDGET - player.budget);
+}
+
+/** Profit scaled by chemistry — the score the winner is decided on. Matches the
+ *  web client's getAdjustedProfit exactly. */
+export function getAdjustedProfit(player: AuctionPlayer): number {
+  return Math.round(getSquadProfit(player) * chemistryMultiplier(computeSquadChemistry(player.team).total));
+}
+
 export function getMaxBid(budget: number, emptySlots: number): number {
   if (emptySlots <= 1) return Math.max(0, budget);
   return Math.max(0, budget - (emptySlots - 1) * MIN_PLAYER_COST);
@@ -102,6 +118,9 @@ export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPl
       player,
       isComplete: isTeamComplete(player.team),
       totalTrueValue: getTotalTeamValue(player.team),
+      chemistry: computeSquadChemistry(player.team).total,
+      profit: getSquadProfit(player),
+      adjustedProfit: getAdjustedProfit(player),
     }))
     .sort((a, b) => {
       // Forfeiters (quit / disconnect-timeout) always rank below every
@@ -111,10 +130,12 @@ export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPl
       const bForfeited = Boolean(b.player.forfeited);
       if (aForfeited !== bForfeited) return aForfeited ? 1 : -1;
       if (a.isComplete !== b.isComplete) return a.isComplete ? -1 : 1;
-      if (a.totalTrueValue !== b.totalTrueValue) return b.totalTrueValue - a.totalTrueValue;
+      // Winner = most chemistry-adjusted profit (value growth × chemistry). This
+      // mirrors the web client's results ordering exactly.
+      if (a.adjustedProfit !== b.adjustedProfit) return b.adjustedProfit - a.adjustedProfit;
       return a.index - b.index;
     })
-    .map(({ player, isComplete, totalTrueValue }, index) => {
+    .map(({ player, isComplete, totalTrueValue, chemistry, profit, adjustedProfit }, index) => {
       // Rankings are emitted to clients verbatim (auction:match_finished), so the
       // embedded seat must not carry the server-only bidding profile.
       const { botProfile: _botProfile, ...publicPlayer } = player;
@@ -126,6 +147,9 @@ export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPl
         rank: index + 1,
         isComplete,
         totalTrueValue,
+        chemistry,
+        profit,
+        adjustedProfit,
         budgetRemaining: player.budget,
         player: publicPlayer,
       };

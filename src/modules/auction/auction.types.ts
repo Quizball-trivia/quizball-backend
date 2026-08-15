@@ -3,7 +3,7 @@ import type { AuctionBotProfile } from '../../realtime/services/auction-bot-prof
 export type { AuctionBotProfile };
 
 export type PositionGroup = 'GK' | 'DEF' | 'MID' | 'FWD';
-export type FormationName = '4-3-3' | '4-4-2' | '3-5-2' | '4-2-3-1' | '3-4-3';
+export type FormationName = '2-2-2';
 
 export type PositionNeeds = Record<PositionGroup, number>;
 
@@ -29,6 +29,10 @@ export interface AuctionFootballer {
   imageUrl?: string | null;
   currentClub?: string | null;
   nationality?: string | null;
+  /** Competition the player's club plays in — a chemistry dimension. Not yet
+   *  populated by content (the public contract omits it too), so league links
+   *  don't form today; present so chemistry mirrors the web client 1:1. */
+  league?: string | null;
 }
 
 export type AuctionTeamSlots = Record<PositionGroup, AuctionFootballer[]>;
@@ -86,6 +90,13 @@ export interface AuctionPlayerRanking {
   rank: number;
   isComplete: boolean;
   totalTrueValue: number;
+  /** Squad chemistry total (0…MAX_SQUAD_CHEMISTRY). */
+  chemistry: number;
+  /** Squad value minus what was spent (later-season "sell" value − amount paid).
+   *  Can be negative. */
+  profit: number;
+  /** Profit scaled by chemistry — the score players are RANKED on. */
+  adjustedProfit: number;
   budgetRemaining: number;
   player: AuctionPlayer;
 }

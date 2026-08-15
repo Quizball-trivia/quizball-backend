@@ -39,7 +39,7 @@ describe('realtime auction engine context', () => {
       matchId: 'match-1',
       humanUserId: 'user-1',
       humanDisplayName: 'Human',
-      formation: '4-3-3',
+      formation: '2-2-2',
       context,
     });
     const footballer = {

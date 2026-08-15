@@ -147,7 +147,7 @@ const startMatchMock = vi.hoisted(() => ({
   startAuctionMatchForHumans: vi.fn(async (_io: unknown, input: { formation?: string }) => {
     return {
       matchId: 'match-found',
-      formation: input.formation ?? '4-3-3',
+      formation: input.formation ?? '2-2-2',
     };
   }),
   rejoinAuctionMatch: vi.fn(async () => true),

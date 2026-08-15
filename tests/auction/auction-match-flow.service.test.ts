@@ -9,6 +9,7 @@ import {
 } from '../../src/modules/auction/auction-engine.js';
 import { AuctionContentUnavailableError } from '../../src/modules/auction/auction.errors.js';
 import { createEmptyTeam, needsPosition } from '../../src/modules/auction/auction-rules.js';
+import { AUCTION_SQUAD_SIZE, STARTING_BUDGET } from '../../src/modules/auction/auction.constants.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer, PositionGroup } from '../../src/modules/auction/auction.types.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
@@ -108,23 +109,25 @@ function card(id: string, positionGroup: PositionGroup, trueValue = 100_000_000)
 }
 
 function completeTeamPlayer(seatId: string, totalValue: number, isBot = false): AuctionPlayer {
-  const team = createEmptyTeam('4-3-3');
-  const values = Array.from({ length: 11 }, (_, index) => (
-    index === 0 ? totalValue - 10 : 1
+  const team = createEmptyTeam('2-2-2');
+  // 7-a-side: seat 0 carries the remainder so the squad's true value sums to
+  // exactly totalValue (the other AUCTION_SQUAD_SIZE-1 seats are worth 1 each).
+  const values = Array.from({ length: AUCTION_SQUAD_SIZE }, (_, index) => (
+    index === 0 ? totalValue - (AUCTION_SQUAD_SIZE - 1) : 1
   ));
   return {
     seatId,
     userId: isBot ? null : `${seatId}-user`,
     displayName: seatId,
     isBot,
-    budget: 1_000_000_000,
+    budget: STARTING_BUDGET,
     team: {
       ...team,
       slots: {
         GK: [card(`${seatId}-gk`, 'GK', values[0])],
-        DEF: [1, 2, 3, 4].map((index) => card(`${seatId}-def-${index}`, 'DEF', values[index])),
-        MID: [5, 6, 7].map((index) => card(`${seatId}-mid-${index}`, 'MID', values[index])),
-        FWD: [8, 9, 10].map((index) => card(`${seatId}-fwd-${index}`, 'FWD', values[index])),
+        DEF: [1, 2].map((index) => card(`${seatId}-def-${index}`, 'DEF', values[index])),
+        MID: [3, 4].map((index) => card(`${seatId}-mid-${index}`, 'MID', values[index])),
+        FWD: [5, 6].map((index) => card(`${seatId}-fwd-${index}`, 'FWD', values[index])),
       },
     },
     isEliminated: false,
@@ -155,7 +158,7 @@ function startInitialState(): AuctionMatchState {
     matchId: 'match-1',
     humanUserId: 'user-1',
     humanDisplayName: 'Human',
-    formation: '4-3-3',
+    formation: '2-2-2',
     locale: 'en',
     context,
   });
@@ -733,8 +736,8 @@ describe('auction match flow service', () => {
           ...startInitialState().seats[0],
           seatId: 'incomplete',
           team: {
-            ...createEmptyTeam('4-3-3'),
-            slots: { ...createEmptyTeam('4-3-3').slots, FWD: [card('goat', 'FWD', 500_000_000)] },
+            ...createEmptyTeam('2-2-2'),
+            slots: { ...createEmptyTeam('2-2-2').slots, FWD: [card('goat', 'FWD', 500_000_000)] },
           },
         },
         completeTeamPlayer('complete-low', 100_000_000),

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import '../setup.js';
 
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
+import { STARTING_BUDGET } from '../../src/modules/auction/auction.constants.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer } from '../../src/modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
@@ -107,8 +108,8 @@ function seat(seatId: string, userId: string | null, isBot = false): AuctionPlay
     userId,
     displayName: isBot ? `Bot ${seatId}` : `User ${seatId}`,
     isBot,
-    budget: 1_000_000_000,
-    team: createEmptyTeam('4-3-3'),
+    budget: STARTING_BUDGET,
+    team: createEmptyTeam('2-2-2'),
     isEliminated: false,
   };
 }
@@ -118,7 +119,7 @@ function biddingState(overrides: Partial<AuctionMatchState> = {}): AuctionMatchS
     matchId: 'match-1',
     version: 3,
     phase: 'bidding',
-    formation: '4-3-3',
+    formation: '2-2-2',
     locale: 'en',
     seats: [
       seat('seat-human', 'user-1'),

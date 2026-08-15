@@ -1,9 +1,11 @@
 import type { AuctionFormation, FormationName, PositionGroup, PositionNeeds } from './auction.types.js';
 
 export const AUCTION_SEAT_COUNT = 3;
-export const AUCTION_SQUAD_SIZE = 11;
+export const AUCTION_SQUAD_SIZE = 7;
 
-export const STARTING_BUDGET = 1_000_000_000;
+// 7-a-side squads: 350M forces trade-offs (a couple of premiums + cheap fills)
+// rather than buying every star like the old 1B budget allowed.
+export const STARTING_BUDGET = 350_000_000;
 // Every raise is exactly one increment — the bidding UI offers a single
 // "+10M" button, so the minimum raise and the only raise are the same value.
 export const MIN_BID_INCREMENT = 10_000_000;
@@ -17,55 +19,15 @@ export const CLUE_STUDY_MS = 10_000;
 
 export const POSITION_GROUPS = ['GK', 'DEF', 'MID', 'FWD'] as const satisfies readonly PositionGroup[];
 
+// Fixed 7-a-side shape: 2 FWD · 2 MID · 2 DEF · 1 GK (sums to AUCTION_SQUAD_SIZE).
 export const FORMATIONS = [
   {
-    name: '4-3-3',
-    required: { GK: 1, DEF: 4, MID: 3, FWD: 3 },
-    rows: [
-      { pos: 'FWD', count: 3 },
-      { pos: 'MID', count: 3 },
-      { pos: 'DEF', count: 4 },
-      { pos: 'GK', count: 1 },
-    ],
-  },
-  {
-    name: '4-4-2',
-    required: { GK: 1, DEF: 4, MID: 4, FWD: 2 },
+    name: '2-2-2',
+    required: { GK: 1, DEF: 2, MID: 2, FWD: 2 },
     rows: [
       { pos: 'FWD', count: 2 },
-      { pos: 'MID', count: 4 },
-      { pos: 'DEF', count: 4 },
-      { pos: 'GK', count: 1 },
-    ],
-  },
-  {
-    name: '3-5-2',
-    required: { GK: 1, DEF: 3, MID: 5, FWD: 2 },
-    rows: [
-      { pos: 'FWD', count: 2 },
-      { pos: 'MID', count: 5 },
-      { pos: 'DEF', count: 3 },
-      { pos: 'GK', count: 1 },
-    ],
-  },
-  {
-    name: '4-2-3-1',
-    required: { GK: 1, DEF: 4, MID: 5, FWD: 1 },
-    rows: [
-      { pos: 'FWD', count: 1 },
-      { pos: 'MID', count: 3 },
       { pos: 'MID', count: 2 },
-      { pos: 'DEF', count: 4 },
-      { pos: 'GK', count: 1 },
-    ],
-  },
-  {
-    name: '3-4-3',
-    required: { GK: 1, DEF: 3, MID: 4, FWD: 3 },
-    rows: [
-      { pos: 'FWD', count: 3 },
-      { pos: 'MID', count: 4 },
-      { pos: 'DEF', count: 3 },
+      { pos: 'DEF', count: 2 },
       { pos: 'GK', count: 1 },
     ],
   },

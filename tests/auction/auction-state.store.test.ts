@@ -106,7 +106,7 @@ function seat(seatId: string, userId: string | null, isBot = false): AuctionPlay
     displayName: isBot ? `Bot ${seatId}` : `User ${seatId}`,
     isBot,
     budget: 1_000_000_000,
-    team: createEmptyTeam('4-3-3'),
+    team: createEmptyTeam('2-2-2'),
     isEliminated: false,
   };
 }
@@ -116,7 +116,7 @@ function matchState(overrides: Partial<AuctionMatchState> = {}): AuctionMatchSta
     matchId: 'match-1',
     version: 0,
     phase: 'clue_reveal',
-    formation: '4-3-3',
+    formation: '2-2-2',
     seats: [
       seat('seat-human', 'user-1'),
       seat('seat-bot-a', null, true),

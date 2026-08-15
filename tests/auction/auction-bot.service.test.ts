@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '../setup.js';
 
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
+import { STARTING_BUDGET } from '../../src/modules/auction/auction.constants.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer } from '../../src/modules/auction/auction.types.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
@@ -74,14 +75,14 @@ function randomSequence(values: number[]): () => number {
   return () => values[Math.min(index++, values.length - 1)] ?? 0;
 }
 
-function seat(seatId: string, userId: string | null, isBot = false, budget = 1_000_000_000): AuctionPlayer {
+function seat(seatId: string, userId: string | null, isBot = false, budget = STARTING_BUDGET): AuctionPlayer {
   return {
     seatId,
     userId,
     displayName: isBot ? `Bot ${seatId}` : `User ${seatId}`,
     isBot,
     budget,
-    team: createEmptyTeam('4-3-3'),
+    team: createEmptyTeam('2-2-2'),
     isEliminated: false,
   };
 }
@@ -91,7 +92,7 @@ function biddingState(overrides: Partial<AuctionMatchState> = {}): AuctionMatchS
     matchId: 'match-1',
     version: 3,
     phase: 'bidding',
-    formation: '4-3-3',
+    formation: '2-2-2',
     seats: [
       seat('seat-human', 'user-1'),
       seat('seat-bot-a', null, true),
@@ -236,10 +237,13 @@ describe('auction bot service', () => {
   it('bot bid never exceeds max bid', async () => {
     const { io } = createIo();
     const { runAuctionBotActionTimer } = await import('../../src/realtime/services/auction-bot.service.js');
+    // 220M over 7 empty slots reserves 6 × MIN_PLAYER_COST (120M), so the wallet
+    // ceiling getMaxBid(220M, 7) = 100M — low enough to bind the bid below the
+    // jump the bot would otherwise make.
     stateStoreMock.load.mockResolvedValue(biddingState({
       seats: [
         seat('seat-human', 'user-1'),
-        seat('seat-bot-a', null, true, 300_000_000),
+        seat('seat-bot-a', null, true, 220_000_000),
         seat('seat-bot-b', null, true),
       ],
       currentRound: {

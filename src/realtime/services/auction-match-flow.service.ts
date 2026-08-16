@@ -670,7 +670,9 @@ function emitMatchFinished(
 
   io.to(`match:${state.matchId}`).emit('auction:match_finished', {
     matchId: state.matchId,
-    rankings: state.rankings,
+    // Public rankings only: the raw entries embed the internal seat (isBot,
+    // botProfile) which clients must never see.
+    rankings: publicState.rankings ?? [],
     winnerSeatId: state.rankings[0]?.seatId ?? null,
     state: publicState,
     stateVersion: state.version,

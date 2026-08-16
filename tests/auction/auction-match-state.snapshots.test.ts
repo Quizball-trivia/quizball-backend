@@ -24,16 +24,27 @@ const footballer: AuctionFootballer = {
 };
 
 describe('snapshot exposure over the wire', () => {
-  it('hidden lots redact the scoring season value and the current league', () => {
+  it('hidden lots carry only the scout season plus a blank value-season stub', () => {
     const hidden = toHiddenFootballer(footballer, ['Goals']);
 
     expect(hidden.name).toBeUndefined();
     expect(hidden.league).toBeUndefined();
-    // Early seasons travel intact — they are the clue content.
-    expect(hidden.snapshots![0].valueEur).toBe(5_000_000);
-    // The final season's value is the answer to the gamble: zeroed until reveal,
-    // but its season label survives for the "value in 2025/26" hook.
-    expect(hidden.snapshots!.at(-1)).toMatchObject({ season: '2025/26', valueEur: 0 });
+    // Exactly two entries pre-reveal: the scout season and the value stub.
+    // Middle seasons never travel — a full career fingerprint would let a
+    // devtools reader identify the player and look up the hidden value.
+    expect(hidden.snapshots).toHaveLength(2);
+    // The scout (earliest) season travels intact — it is the clue content.
+    expect(hidden.snapshots![0]).toMatchObject({ season: '2020/21', league: 'La Liga', valueEur: 5_000_000 });
+    // The value-season stub keeps only the label for the "value in 2025/26"
+    // hook: stats, league and value are all blanked.
+    expect(hidden.snapshots!.at(-1)).toMatchObject({
+      season: '2025/26',
+      valueEur: 0,
+      league: '',
+      apps: 0,
+      goals: 0,
+      age: null,
+    });
   });
 
   it('revealed footballers carry full snapshots and league', () => {

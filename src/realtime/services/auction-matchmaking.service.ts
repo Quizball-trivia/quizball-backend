@@ -600,5 +600,5 @@ function isAuctionLocale(value: string | undefined): value is AuctionContentLoca
 }
 
 function isFormationName(value: string | undefined): value is FormationName {
-  return value !== undefined && value in FORMATION_BY_NAME;
+  return value !== undefined && Object.hasOwn(FORMATION_BY_NAME, value);
 }

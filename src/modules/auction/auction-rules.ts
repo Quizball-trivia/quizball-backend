@@ -64,13 +64,23 @@ export function getTotalTeamValue(team: AuctionTeam): number {
  *  server-side (there are no season snapshots here, so it's the current value —
  *  the web client's getFutureValue falls back to the same). */
 export function getSquadProfit(player: AuctionPlayer): number {
-  return getTotalTeamValue(player.team) - (STARTING_BUDGET - player.budget);
+  // Spend is reconstructed from the seat's RECORDED starting budget (falling
+  // back to the current constant for legacy states) and clamped at 0 — a state
+  // created under an older, larger economy must never yield negative spend
+  // (which would fabricate profit) after a deploy shrinks STARTING_BUDGET.
+  const startingBudget = player.startingBudget ?? STARTING_BUDGET;
+  const spent = Math.max(0, startingBudget - player.budget);
+  return getTotalTeamValue(player.team) - spent;
 }
 
 /** Profit scaled by chemistry — the score the winner is decided on. Matches the
- *  web client's getAdjustedProfit exactly. */
+ *  web client's getAdjustedProfit exactly. Chemistry is a BONUS: it amplifies
+ *  gains but never deepens a loss (multiplying a negative profit would rank a
+ *  better-linked squad below a worse one whenever both overpaid). */
 export function getAdjustedProfit(player: AuctionPlayer): number {
-  return Math.round(getSquadProfit(player) * chemistryMultiplier(computeSquadChemistry(player.team).total));
+  const profit = getSquadProfit(player);
+  if (profit <= 0) return Math.round(profit);
+  return Math.round(profit * chemistryMultiplier(computeSquadChemistry(player.team).total));
 }
 
 export function getMaxBid(budget: number, emptySlots: number): number {

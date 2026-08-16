@@ -82,6 +82,12 @@ export interface AuctionPlayer {
   rp?: number | null;
   isBot: boolean;
   /**
+   * The budget this seat STARTED with. Ranking reconstructs spend from it, so
+   * a state created under an older economy (e.g. the €1B era) keeps scoring
+   * correctly after a deploy changes STARTING_BUDGET. Absent on legacy states.
+   */
+  startingBudget?: number;
+  /**
    * Bidding personality for a PERSISTENT roster bot, copied onto the seat at
    * seating time so the decision function stays pure and the match's behaviour is
    * pinned for its whole life (a roster refresh mid-match cannot alter it).

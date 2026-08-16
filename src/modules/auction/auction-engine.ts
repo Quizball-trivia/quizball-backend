@@ -100,6 +100,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       rp: player.rp ?? null,
       isBot: false,
       budget: STARTING_BUDGET,
+      startingBudget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
       isEliminated: false,
     })),
@@ -116,6 +117,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       rp: input.bots?.[index]?.rp ?? null,
       isBot: true,
       budget: STARTING_BUDGET,
+      startingBudget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
       isEliminated: false,
     })),
@@ -245,14 +247,25 @@ export function selectSoloPickOption(
   }
 
   const selected = option === 'A' ? state.soloPick.optionA : state.soloPick.optionB;
+  // Solo picks are not free: under profit scoring a zero-cost card would count
+  // its whole value as profit — a match-deciding subsidy for whoever lands the
+  // uncontested rounds. Charge the opening price, capped at what the seat can
+  // afford while still filling its remaining slots (same cap as a normal bid).
+  const soloSeat = state.seats.find((seat) => seat.seatId === playerSeatId);
+  const soloPrice = soloSeat
+    ? Math.max(0, Math.min(
+        selected.footballer.startingPrice,
+        getMaxBid(soloSeat.budget, getEmptySlots(soloSeat.team))
+      ))
+    : 0;
   const players = assignFootballerToSquad(
     state.seats,
     playerSeatId,
     selected.footballer,
-    0,
+    soloPrice,
     state.soloPick.positionGroup
   );
-  const completedRound = createCompletedSoloPickRound(state, selected, context);
+  const completedRound = createCompletedSoloPickRound(state, selected, context, soloPrice);
 
   return touch({
     ...state,
@@ -703,7 +716,8 @@ function getNextBidderSeatId(round: AuctionRoundState, players: readonly Auction
 function createCompletedSoloPickRound(
   state: AuctionMatchState,
   selected: AuctionSoloPickOptionState,
-  context: ResolvedAuctionEngineContext
+  context: ResolvedAuctionEngineContext,
+  price: number
 ): AuctionRoundState {
   if (!state.soloPick) throw new AuctionInvalidActionError('No active solo pick');
   const now = context.nowIso();
@@ -715,12 +729,12 @@ function createCompletedSoloPickRound(
     positionGroup: state.soloPick.positionGroup,
     footballer,
     clueRevealIndex: footballer.clues?.length ?? 0,
-    bids: [{ seatId, amount: 0, placedAt: now }],
+    bids: [{ seatId, amount: price, placedAt: now }],
     highestBidderSeatId: seatId,
-    highestBid: 0,
+    highestBid: price,
     startingPrice: footballer.startingPrice,
     winnerSeatId: seatId,
-    winningBid: 0,
+    winningBid: price,
     revealed: true,
     turnOrder: [seatId],
     currentTurnSeatId: null,

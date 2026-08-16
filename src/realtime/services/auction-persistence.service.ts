@@ -116,8 +116,18 @@ export async function persistFinishedAuctionMatch(
           // The per-match score = the value players are ranked on (chemistry-
           // adjusted profit; can be negative). Clamped to the signed int32 range
           // of match_players.total_points so a pathologically valuable squad
-          // can't overflow the column and abort persistence.
-          totalPoints: clampInt32(Math.round(ranking.adjustedProfit)),
+          // can't overflow the column and abort persistence. A state started on
+          // pre-adjustedProfit code and finished after a deploy lacks the field
+          // — fall back to raw profit (then 0) instead of persisting NaN.
+          totalPoints: clampInt32(
+            Math.round(
+              Number.isFinite(ranking.adjustedProfit)
+                ? ranking.adjustedProfit
+                : Number.isFinite(ranking.profit)
+                  ? ranking.profit
+                  : 0
+            )
+          ),
           placement: ranking.rank,
           isBot,
           forfeited: Boolean(ranking.player?.forfeited),

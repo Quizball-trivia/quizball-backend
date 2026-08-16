@@ -3,10 +3,11 @@ import type { I18nField } from '../db/types.js';
 import type {
   PublicAuctionMatchState,
   PublicAuctionPlayer,
+  PublicAuctionPlayerRanking,
   PublicAuctionRoundState,
   PublicAuctionSoloPickState,
 } from '../modules/auction/auction-match-state.js';
-import type { AuctionPlayerRanking, FormationName } from '../modules/auction/auction.types.js';
+import type { FormationName } from '../modules/auction/auction.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode =
@@ -891,7 +892,7 @@ export interface AuctionSquadUpdatedPayload {
 
 export interface AuctionMatchFinishedPayload {
   matchId: string;
-  rankings: AuctionPlayerRanking[];
+  rankings: PublicAuctionPlayerRanking[];
   winnerSeatId: string | null;
   state: PublicAuctionMatchState;
   stateVersion: number;

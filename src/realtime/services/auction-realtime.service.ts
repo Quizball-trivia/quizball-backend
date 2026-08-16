@@ -40,7 +40,7 @@ import {
   getAiNicknamePool,
 } from '../ai-ranked.constants.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { AUCTION_SEAT_COUNT } from '../../modules/auction/auction.constants.js';
 import {
   armAuctionDisconnectGrace,
@@ -282,9 +282,11 @@ async function resolveHumanAvatars(
           const user = await usersRepo.getById(player.userId);
           resolved = { ...resolved, avatarCustomization: user?.avatar_customization ?? null };
         }
-        // Ranked identity dresses the showdown card (tier frame + RP).
+        // Ranked identity dresses the showdown card (tier frame + RP). The
+        // SERVICE (not repo) path also repairs tier/RP drift, so auction never
+        // shows a tier ranked itself would normalize away.
         if (resolved.tier == null) {
-          const profile = await rankedRepo.ensureProfile(player.userId);
+          const profile = await rankedService.ensureProfile(player.userId);
           resolved = { ...resolved, tier: profile.tier ?? null, rp: profile.rp ?? null };
         }
       } catch (error) {

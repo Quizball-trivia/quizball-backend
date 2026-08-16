@@ -353,7 +353,7 @@ describe('auction engine transitions', () => {
     expect(state.completedRounds.at(-1)?.winnerSeatId).toBeNull();
   });
 
-  it('starts solo-pick when exactly one active player needs the position and selection costs no money', () => {
+  it('starts solo-pick when exactly one active player needs the position and selection costs the opening price', () => {
     const initial = createMatch();
     const soloReady = {
       ...initial,
@@ -371,10 +371,11 @@ describe('auction engine transitions', () => {
 
     const selected = selectSoloPickOption(solo, 'seat-human', 'B', context());
     const human = selected.seats.find((seat) => seat.seatId === 'seat-human')!;
-    // Solo pick costs no money, so the budget is untouched.
-    expect(human.budget).toBe(STARTING_BUDGET);
+    // Solo picks charge the opening price (a free card would count its whole
+    // value as pure profit under profit scoring).
+    expect(human.budget).toBe(STARTING_BUDGET - 10_000_000);
     expect(human.team.slots.FWD[0].id).toBe('mystery-option');
-    expect(selected.completedRounds.at(-1)?.winningBid).toBe(0);
+    expect(selected.completedRounds.at(-1)?.winningBid).toBe(10_000_000);
   });
 
   it('advances after reveal, avoids used clue cards, and starts another available round', () => {

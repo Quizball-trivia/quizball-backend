@@ -161,7 +161,7 @@ describe('campaign quiz artwork generation configuration', () => {
   it('defaults to the current square-image model and medium quality', () => {
     const parsed = parseConfig(baseEnv());
     expect(parsed.OPENAI_IMAGE_MODEL).toBe('gpt-image-2');
-    expect(parsed.OPENAI_IMAGE_QUALITY).toBe('medium');
+    expect(parsed.OPENAI_IMAGE_QUALITY).toBe('high');
   });
 
   it('treats a blank server key as unconfigured and rejects unsupported quality values', () => {

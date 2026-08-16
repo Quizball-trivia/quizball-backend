@@ -130,6 +130,19 @@ const usablePricePredicate = sql`
   AND starting_price_eur IS NOT NULL
 `;
 
+// Snapshot lots only: every served player must have enough valued season
+// history to run the scouting-snapshot reveal (product rule — no text-clue
+// lots). Mirrors MIN_SNAPSHOT_SEASONS in auction-content.service.
+const snapshotReadyPredicate = sql`
+  football_player_id IN (
+    SELECT football_player_id
+    FROM player_season_snapshots
+    WHERE value_eur IS NOT NULL
+    GROUP BY football_player_id
+    HAVING count(*) >= 3
+  )
+`;
+
 function parseCount(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
   return typeof value === 'number' ? value : Number.parseInt(value, 10);
@@ -217,6 +230,7 @@ export const auctionContentRepo = {
       FROM player_clue_card_content_view
       WHERE ${publishedEligiblePredicate}
         AND ${usablePricePredicate}
+        AND ${snapshotReadyPredicate}
         AND locale = ${options.locale}
         ${positionFilter}
         ${fameFilter}

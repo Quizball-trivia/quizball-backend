@@ -134,6 +134,8 @@ export const usersRepo = {
         AND is_deleted = false
         AND deleted_at IS NULL
         AND pending_deletion_at IS NULL
+        AND nickname IS NOT NULL
+        AND length(nickname) > 0
       LIMIT 1
     `;
     return rows[0] ?? null;

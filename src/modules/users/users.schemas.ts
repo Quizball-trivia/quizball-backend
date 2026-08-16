@@ -23,9 +23,10 @@ export const userIdParamSchema = z.object({
 export type UserIdParam = z.infer<typeof userIdParamSchema>;
 
 export const nicknameParamSchema = z.object({
-  // Raw handle from the URL — length-bounded only; matching is done
+  // Raw handle from the URL — length-bounded only (identity-derived
+  // nicknames can exceed the 50-char profile cap); matching is done
   // case-insensitively against the claimable-nickname unique index.
-  nickname: z.string().min(1).max(40),
+  nickname: z.string().min(1).max(100),
 });
 
 export const resolveNicknameResponseSchema = z.object({

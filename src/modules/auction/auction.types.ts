@@ -73,6 +73,13 @@ export interface AuctionPlayer {
    * rendering). Null for bots — the client generates a random avatar for those.
    */
   avatarCustomization?: unknown | null;
+  /**
+   * Ranked identity for the showdown/lineup cards: humans get their real
+   * tier + RP; bots get a fabricated-but-stable pair (players must never be
+   * able to tell a seat is a bot from its card).
+   */
+  tier?: string | null;
+  rp?: number | null;
   isBot: boolean;
   /**
    * Bidding personality for a PERSISTENT roster bot, copied onto the seat at

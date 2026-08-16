@@ -43,7 +43,13 @@ export interface CreateInitialAuctionMatchInput {
   matchId?: string;
   humanUserId: string;
   humanDisplayName: string;
-  humanPlayers?: readonly { userId: string; displayName: string; avatarCustomization?: unknown | null }[];
+  humanPlayers?: readonly {
+    userId: string;
+    displayName: string;
+    avatarCustomization?: unknown | null;
+    tier?: string | null;
+    rp?: number | null;
+  }[];
   // AI bidder profiles (name + avatar) for the seats not filled by humans.
   // Picked by the realtime layer from the shared AI pool so bots look like
   // real people; falls back to `Bot N` when not supplied (e.g. pure-engine tests).
@@ -56,6 +62,8 @@ export interface CreateInitialAuctionMatchInput {
     displayName: string;
     avatarUrl?: string | null;
     botProfile?: AuctionBotProfile | null;
+    tier?: string | null;
+    rp?: number | null;
   }[];
   formation?: FormationName;
   locale?: 'en' | 'ka';
@@ -88,6 +96,8 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       userId: player.userId,
       displayName: player.displayName,
       avatarCustomization: player.avatarCustomization ?? null,
+      tier: player.tier ?? null,
+      rp: player.rp ?? null,
       isBot: false,
       budget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
@@ -102,6 +112,8 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       displayName: input.bots?.[index]?.displayName ?? `Bot ${index + 1}`,
       avatarUrl: input.bots?.[index]?.avatarUrl ?? null,
       botProfile: input.bots?.[index]?.botProfile ?? null,
+      tier: input.bots?.[index]?.tier ?? null,
+      rp: input.bots?.[index]?.rp ?? null,
       isBot: true,
       budget: STARTING_BUDGET,
       team: createEmptyTeam(formation),

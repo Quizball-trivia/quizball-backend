@@ -234,7 +234,7 @@ const configSchema = z.object({
     z.string().min(1).optional(),
   ),
   OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-2'),
-  OPENAI_IMAGE_QUALITY: z.enum(['low', 'medium', 'high']).default('medium'),
+  OPENAI_IMAGE_QUALITY: z.enum(['low', 'medium', 'high']).default('high'),
 
   // Stripe (Store payments)
   STRIPE_SECRET_KEY: z.string().optional(),

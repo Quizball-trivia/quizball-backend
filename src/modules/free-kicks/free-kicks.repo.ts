@@ -156,4 +156,89 @@ export const freeKicksRepo = {
     `;
     return rows.map((row) => row.id);
   },
+
+  /** Live "playing now": active rounds with a heartbeat in the last 90s. */
+  async countPlayingNow(): Promise<number> {
+    const [row] = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count FROM free_kicks_rounds
+      WHERE status = 'active' AND last_seen_at > now() - interval '90 seconds'
+    `;
+    return Number(row?.count ?? 0);
+  },
+
+  /** Latest profitable cashouts for the live-wins ticker. */
+  async getRecentWins(limit: number): Promise<
+    Array<{ nickname: string; payout_coins: number; stake_coins: number; settled_at: string }>
+  > {
+    return sql<Array<{ nickname: string; payout_coins: number; stake_coins: number; settled_at: string }>>`
+      SELECT u.nickname, r.payout_coins, r.stake_coins, r.settled_at
+      FROM free_kicks_rounds r
+      JOIN users u ON u.id = r.user_id
+      WHERE r.status = 'cashed' AND r.payout_coins > r.stake_coins
+      ORDER BY r.settled_at DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  /** Best run multipliers (payout/stake) cashed in the last 24h, per user. */
+  async getTopRuns(limit: number): Promise<Array<{ nickname: string; run_mult: number }>> {
+    return sql<Array<{ nickname: string; run_mult: number }>>`
+      SELECT u.nickname, MAX(r.payout_coins::float / r.stake_coins)::float AS run_mult
+      FROM free_kicks_rounds r
+      JOIN users u ON u.id = r.user_id
+      WHERE r.status = 'cashed'
+        AND r.payout_coins > r.stake_coins
+        AND r.settled_at > now() - interval '24 hours'
+      GROUP BY u.id, u.nickname
+      ORDER BY run_mult DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  /**
+   * Idle roster bots eligible to start a Free Kicks session: active profile,
+   * not frozen, not reserved for a match, no active round. Schedule filtering
+   * happens in JS (isWithinScheduleWindow).
+   */
+  async pickIdleBots(limit: number): Promise<
+    Array<{
+      user_id: string;
+      base_skill: number;
+      consistency: number;
+      personality_seed: number;
+      schedule: unknown;
+      coins: number;
+    }>
+  > {
+    return sql<
+      Array<{
+        user_id: string;
+        base_skill: number;
+        consistency: number;
+        personality_seed: number;
+        schedule: unknown;
+        coins: number;
+      }>
+    >`
+      SELECT p.user_id, p.base_skill, p.consistency, p.personality_seed, p.schedule, u.coins
+      FROM synthetic_player_profiles p
+      JOIN users u ON u.id = p.user_id
+      LEFT JOIN synthetic_bot_reservations res ON res.bot_user_id = p.user_id
+      LEFT JOIN free_kicks_rounds fr ON fr.user_id = p.user_id AND fr.status = 'active'
+      WHERE p.status = 'active'
+        AND NOT p.selection_frozen
+        AND res.bot_user_id IS NULL
+        AND fr.id IS NULL
+      ORDER BY random()
+      LIMIT ${limit}
+    `;
+  },
+
+  /** House-side top-up so roster bots always have coins to stake. */
+  async topUpBotWallet(userId: string, amount: number): Promise<void> {
+    await sql`
+      UPDATE users SET coins = coins + ${amount}, updated_at = now()
+      WHERE id = ${userId}
+    `;
+  },
 };

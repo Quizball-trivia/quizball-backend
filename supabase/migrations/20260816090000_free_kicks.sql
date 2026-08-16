@@ -117,6 +117,11 @@ CREATE INDEX IF NOT EXISTS idx_free_kicks_rounds_stale
   ON public.free_kicks_rounds (last_seen_at)
   WHERE status = 'active';
 
+-- Live stats: recent cashouts / daily top runs.
+CREATE INDEX IF NOT EXISTS idx_free_kicks_rounds_cashed
+  ON public.free_kicks_rounds (settled_at DESC)
+  WHERE status = 'cashed';
+
 -- updated_at is load-bearing for staleness decisions — enforce it in the DB.
 CREATE OR REPLACE FUNCTION public.free_kicks_rounds_touch_updated_at()
 RETURNS trigger

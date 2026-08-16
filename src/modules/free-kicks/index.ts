@@ -2,6 +2,7 @@ export { freeKicksService } from './free-kicks.service.js';
 export { freeKicksController } from './free-kicks.controller.js';
 export { freeKicksRepo } from './free-kicks.repo.js';
 export { startFreeKicksSweeper, stopFreeKicksSweeper } from './free-kicks.sweeper.js';
+export { startFreeKicksBots, stopFreeKicksBots } from './free-kicks-bots.worker.js';
 export {
   startRoundSchema,
   dealQuestionSchema,

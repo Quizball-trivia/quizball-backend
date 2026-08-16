@@ -112,6 +112,13 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Roster bots playing Free Kicks for real (real stakes/ledger/events) so the
+  // stats layer has genuine numbers before humans arrive.
+  FREE_KICKS_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
   // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
   // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
   // must gate on this flag. The manual `npm run bot:refresh-question-stats`

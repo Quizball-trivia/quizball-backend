@@ -76,6 +76,11 @@ export const freeKicksController = {
     res.json(await freeKicksService.cashout(req.user!.id, body.expected_version));
   },
 
+  /** Live stats for the social strip/leaderboard — real rows, small cache. */
+  async stats(_req: Request, res: Response): Promise<void> {
+    res.json(await freeKicksService.getStats());
+  },
+
   /** Heartbeat + sendBeacon target: cheap, never throws to the client. */
   async heartbeat(req: Request, res: Response): Promise<void> {
     await freeKicksService.heartbeat(req.user!.id);

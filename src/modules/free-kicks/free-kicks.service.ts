@@ -268,6 +268,16 @@ function assertVersion(row: FreeKicksRoundRow, expectedVersion: number): void {
   }
 }
 
+
+let statsCache: { at: number; value: FreeKicksStats } | null = null;
+const STATS_CACHE_MS = 10_000;
+
+export interface FreeKicksStats {
+  playing_now: number;
+  recent_wins: Array<{ nickname: string; amount: number; run_mult: number; settled_at: string }>;
+  top_runs: Array<{ nickname: string; run_mult: number }>;
+}
+
 export const freeKicksService = {
   async startRound(
     userId: string,
@@ -596,6 +606,31 @@ export const freeKicksService = {
       const updated = await settleCashout(tx, row, 'cashout');
       return toPublicState(updated);
     });
+  },
+
+  /** Real social-layer numbers (10s cache): live players, recent wins, top runs. */
+  async getStats(): Promise<FreeKicksStats> {
+    if (statsCache && Date.now() - statsCache.at < STATS_CACHE_MS) return statsCache.value;
+    const [playingNow, recentWins, topRuns] = await Promise.all([
+      freeKicksRepo.countPlayingNow(),
+      freeKicksRepo.getRecentWins(6),
+      freeKicksRepo.getTopRuns(5),
+    ]);
+    const value: FreeKicksStats = {
+      playing_now: playingNow,
+      recent_wins: recentWins.map((win) => ({
+        nickname: win.nickname,
+        amount: win.payout_coins,
+        run_mult: Math.round((win.payout_coins / win.stake_coins) * 100) / 100,
+        settled_at: win.settled_at,
+      })),
+      top_runs: topRuns.map((run) => ({
+        nickname: run.nickname,
+        run_mult: Math.round(run.run_mult * 100) / 100,
+      })),
+    };
+    statsCache = { at: Date.now(), value };
+    return value;
   },
 
   async heartbeat(userId: string): Promise<void> {

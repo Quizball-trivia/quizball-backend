@@ -41,5 +41,6 @@ router.post(
 );
 router.post('/rounds/cashout', validate({ body: cashoutSchema }), freeKicksController.cashout);
 router.post('/rounds/heartbeat', freeKicksController.heartbeat);
+router.get('/stats', freeKicksController.stats);
 
 export { router as freeKicksRoutes };

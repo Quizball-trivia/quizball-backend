@@ -22,6 +22,7 @@ const schedulerMock = vi.hoisted(() => ({
 
 const contentServiceMock = vi.hoisted(() => ({
   getRandomPublishedAuctionCard: vi.fn(),
+    getSeasonSnapshots: vi.fn(async () => []),
 }));
 
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {

@@ -208,12 +208,73 @@ async function findRandomPublishedAuctionCard(
       ...options,
       fameTier,
     });
-    if (tiered) return mapPublishedAuctionCard(tiered);
+    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered));
     // The rolled tier is exhausted for this position/exclusion set — fall
     // through to the unrestricted pool rather than failing the round.
   }
   const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
-  return row ? mapPublishedAuctionCard(row) : null;
+  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row)) : null;
+}
+
+// The web client's LEAGUES catalogue uses display names; the snapshot table
+// stores Transfermarkt competition slugs. Map the leagues the client knows,
+// title-case the rest (display-only there; chemistry matches on raw strings).
+const LEAGUE_DISPLAY_NAMES: Record<string, string> = {
+  'premier-league': 'Premier League',
+  laliga: 'La Liga',
+  'serie-a': 'Serie A',
+  bundesliga: 'Bundesliga',
+  'ligue-1': 'Ligue 1',
+  eredivisie: 'Eredivisie',
+  'liga-portugal': 'Primeira Liga',
+  'liga-portugal-bwin': 'Primeira Liga',
+  'campeonato-brasileiro-serie-a': 'Brasileirão',
+  'scottish-premiership': 'Scottish Premiership',
+  'primera-division-de-argentina': 'Primera División',
+};
+
+export function displayLeagueName(slug: string): string {
+  const known = LEAGUE_DISPLAY_NAMES[slug.toLowerCase()];
+  if (known) return known;
+  return slug
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Reveal-step labels for snapshot lots. Content is rendered client-side from
+// the snapshot; these keep the reveal cadence at five steps and read sensibly
+// on any client that falls back to plain clue text.
+const SNAPSHOT_FACETS = ['Goals', 'Assists', 'Market value', 'Age', 'League'] as const;
+const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'Age', 'League'] as const;
+
+/** A snapshot lot needs history to hide in and a value arc to gamble on. */
+const MIN_SNAPSHOT_SEASONS = 3;
+
+async function attachSeasonSnapshots(card: PublishedAuctionCard): Promise<PublishedAuctionCard> {
+  const rows = await auctionContentRepo.getSeasonSnapshots(card.footballPlayerId);
+  if (rows.length < MIN_SNAPSHOT_SEASONS) return card;
+
+  const snapshots = rows.map((row, index) => ({
+    season: row.season_label,
+    league: displayLeagueName(row.league_name),
+    age: row.age,
+    apps: row.apps,
+    goals: row.goals,
+    assists: row.assists ?? undefined,
+    cleanSheets: row.clean_sheets ?? undefined,
+    conceded: row.goals_conceded ?? undefined,
+    // The final season is the scoring season: pin its value to the server's
+    // trueValue so client profit math and server rankings can never disagree.
+    valueEur: index === rows.length - 1 ? card.trueValue : Number(row.value_eur),
+  }));
+
+  card.snapshots = snapshots;
+  card.league = snapshots[snapshots.length - 1]?.league ?? null;
+  card.clues = [
+    ...(card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS),
+  ];
+  return card;
 }
 
 export type { AuctionContentLocale };

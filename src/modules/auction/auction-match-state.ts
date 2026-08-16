@@ -90,7 +90,8 @@ export type PublicAuctionFootballer = Pick<
   'positionGroup' | 'startingPrice'
 > & Partial<Pick<
   AuctionFootballer,
-  'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'imageUrl' | 'currentClub' | 'nationality'
+  | 'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'imageUrl'
+  | 'currentClub' | 'nationality' | 'league' | 'snapshots'
 >>;
 
 export type PublicAuctionTeam = Omit<AuctionTeam, 'slots'> & {
@@ -174,6 +175,15 @@ export function toHiddenFootballer(
     positionGroup: footballer.positionGroup,
     startingPrice: footballer.startingPrice,
     clues: [...revealedClues],
+    // Snapshots are the clue content, so they travel pre-reveal — but the
+    // final season's value IS the answer to the bidding gamble, so it is
+    // zeroed until the reveal (a devtools reader learns nothing). The season
+    // label stays: the UI shows "value in 2025/26" as the hook.
+    snapshots: footballer.snapshots?.map((snapshot, index, all) =>
+      index === all.length - 1 ? { ...snapshot, valueEur: 0 } : snapshot
+    ),
+    // Current league is withheld pre-reveal: the snapshot's league facet is
+    // the clue-season league, and leaking today's league narrows the guess.
   };
 }
 
@@ -189,6 +199,8 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
     imageUrl: footballer.imageUrl,
     currentClub: footballer.currentClub,
     nationality: footballer.nationality,
+    league: footballer.league,
+    snapshots: footballer.snapshots ? [...footballer.snapshots] : undefined,
   };
 }
 

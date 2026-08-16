@@ -18,6 +18,23 @@ export interface AuctionFormation {
   rows: readonly AuctionFormationRow[];
 }
 
+/**
+ * One season of a player's career, served anonymised during bidding as the
+ * "scouting snapshot" (replaces text clues when available). Field names match
+ * the web client's SeasonSnapshot 1:1.
+ */
+export interface AuctionSeasonSnapshot {
+  season: string;
+  league: string;
+  age: number | null;
+  apps: number;
+  goals: number;
+  assists?: number;
+  cleanSheets?: number;
+  conceded?: number;
+  valueEur: number;
+}
+
 export interface AuctionFootballer {
   id: string;
   clueCardId?: string;
@@ -29,10 +46,14 @@ export interface AuctionFootballer {
   imageUrl?: string | null;
   currentClub?: string | null;
   nationality?: string | null;
-  /** Competition the player's club plays in — a chemistry dimension. Not yet
-   *  populated by content (the public contract omits it too), so league links
-   *  don't form today; present so chemistry mirrors the web client 1:1. */
+  /** Competition the player's club plays in — a chemistry dimension. */
   league?: string | null;
+  /**
+   * Career seasons, chronological. First entry = the anonymised clue season;
+   * last entry = the scoring season, whose valueEur is forced equal to
+   * trueValue so client-side profit math agrees with the server ranking.
+   */
+  snapshots?: readonly AuctionSeasonSnapshot[];
 }
 
 export type AuctionTeamSlots = Record<PositionGroup, AuctionFootballer[]>;

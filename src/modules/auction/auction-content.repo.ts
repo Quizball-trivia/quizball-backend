@@ -26,6 +26,18 @@ const PROMPT_VERSION_PATTERN_BY_DIFFICULTY: Record<AuctionPreferredDifficulty, s
  */
 export const AUCTION_CARD_HISTORY_WINDOW_DAYS = 14;
 
+export interface SeasonSnapshotRow {
+  season_label: string;
+  league_name: string;
+  age: number | null;
+  apps: number;
+  goals: number;
+  assists: number | null;
+  clean_sheets: number | null;
+  goals_conceded: number | null;
+  value_eur: number | string;
+}
+
 export interface PublishedAuctionCardRow {
   clue_card_id: string;
   football_player_id: string;
@@ -231,6 +243,22 @@ export const auctionContentRepo = {
    * Best-effort by contract: callers use the ordered result as a hard exclusion
    * first, then as an oldest-first fallback ranking if the fresh pool is empty.
    */
+  /**
+   * Career seasons for the scouting-snapshot lot, chronological, valued rows
+   * only (a season without a market value can't anchor the price gamble).
+   */
+  async getSeasonSnapshots(footballPlayerId: string): Promise<SeasonSnapshotRow[]> {
+    return sql<SeasonSnapshotRow[]>`
+      SELECT season_label, league_name, age, apps, goals, assists,
+             clean_sheets, goals_conceded, value_eur
+      FROM player_season_snapshots
+      WHERE football_player_id = ${footballPlayerId}
+        AND value_eur IS NOT NULL
+      ORDER BY season_start_year ASC
+      LIMIT 10
+    `;
+  },
+
   async getRecentlySeenFootballPlayerIds(
     userIds: string[],
     withinDays = AUCTION_CARD_HISTORY_WINDOW_DAYS

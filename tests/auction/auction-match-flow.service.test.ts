@@ -18,6 +18,7 @@ import { installAuctionStateStoreMutationMock } from './auction-state-store-mock
 
 const contentServiceMock = vi.hoisted(() => ({
   getRandomPublishedAuctionCard: vi.fn(),
+    getSeasonSnapshots: vi.fn(async () => []),
   findRandomPublishedAuctionCard: vi.fn(),
   // Cross-match no-repeat pick used by the round flow. Delegates to
   // findRandomPublishedAuctionCard so existing per-test card scripting (and its
@@ -312,7 +313,7 @@ describe('auction match flow service', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       expect.any(String),
-      new Date('2026-06-20T10:00:05.000Z'),
+      new Date('2026-06-20T10:00:03.000Z'),
       expect.objectContaining({ kind: 'auction_clue_reveal', stateVersion: 2 })
     );
     expect(contentServiceMock.findRandomPublishedAuctionCard).toHaveBeenCalledWith(

@@ -10,6 +10,7 @@ import {
   type CreateQuestionRequest,
   type UpdateQuestionRequest,
   type UpdateStatusRequest,
+  type CheckAnswerRequest,
   type ListQuestionsQuery,
   type UuidParam,
   type BulkCreateQuestionsRequest,
@@ -21,6 +22,7 @@ import type {
   ImageMcqGeneratePreviewRequest,
   ImageMcqSaveDraftsRequest,
 } from './image-mcq.schemas.js';
+import { sanitizeQuestionResponse } from './questions.sanitize.js';
 import type { Json } from '../../db/types.js';
 import { logger } from '../../core/logger.js';
 
@@ -60,7 +62,11 @@ export const questionsController = {
 
     res.json(
       toPaginatedResponse(
-        questions.map(toQuestionResponse),
+        // Players never receive answer keys — they verify via POST /:id/check.
+        questions.map((question) => {
+          const response = toQuestionResponse(question);
+          return isAdmin ? response : sanitizeQuestionResponse(response);
+        }),
         query.page,
         query.limit,
         total
@@ -104,7 +110,19 @@ export const questionsController = {
       payloadSummary,
     });
 
-    res.json(toQuestionResponse(question));
+    const response = toQuestionResponse(question);
+    res.json(req.user?.role === 'admin' ? response : sanitizeQuestionResponse(response));
+  },
+
+  /**
+   * POST /api/v1/questions/:id/check
+   * Solo-mode server-side answer verification: sanitized payloads no longer
+   * carry is_correct, so clients submit one option for one question per call.
+   */
+  async checkAnswer(req: Request, res: Response): Promise<void> {
+    const { id } = req.validated.params as UuidParam;
+    const { option_id } = req.validated.body as CheckAnswerRequest;
+    res.json(await questionsService.checkAnswer(id, option_id));
   },
 
   /**

@@ -82,6 +82,42 @@ export const questionsService = {
   },
 
   /**
+   * Solo-mode answer verification. Player payloads are sanitized (no
+   * is_correct), so correctness is checked here — one option, one question
+   * per call, published/public questions only. Option-based types only.
+   */
+  async checkAnswer(
+    id: string,
+    optionId: string
+  ): Promise<{ correct: boolean; correct_option_ids: string[] }> {
+    const question = await questionsRepo.getById(id);
+    if (
+      !question
+      || question.status !== 'published'
+      || question.ranked_eligible === false
+      || question.visibility !== 'public'
+    ) {
+      throw new NotFoundError('Question not found');
+    }
+
+    const response = toQuestionResponse(question);
+    const payload = response.payload as
+      | { type?: string; options?: Array<{ id: string; is_correct: boolean }> }
+      | null;
+    if (!payload || !Array.isArray(payload.options)) {
+      throw new BadRequestError('Answer check is not supported for this question type');
+    }
+
+    const correctIds = payload.options
+      .filter((option) => option.is_correct)
+      .map((option) => option.id);
+    return {
+      correct: correctIds.includes(optionId),
+      correct_option_ids: correctIds,
+    };
+  },
+
+  /**
    * Create a new question with optional payload.
    * Uses transaction to ensure atomicity.
    * Validates category existence.

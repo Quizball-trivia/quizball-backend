@@ -24,6 +24,8 @@ export const STORE_TX_EVENT_TYPES = [
   'admin_ticket_window_reset',
   'admin_account_ban',
   'admin_account_unban',
+  'free_kicks_stake',
+  'free_kicks_payout',
 ] as const;
 
 export type StoreTxEventType = typeof STORE_TX_EVENT_TYPES[number];

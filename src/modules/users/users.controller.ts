@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
+import { usersRepo } from './users.repo.js';
+import { NotFoundError } from '../../core/errors.js';
 import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
 import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type AdminBanUserBody, type AdminSetProgressionBody, type AdminUsersListQuery, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
@@ -76,6 +78,13 @@ export const usersController = {
     const { userId } = req.validated.params as UserIdParam;
     const profile = await usersService.getPublicProfile(userId, req.user!.id);
     res.json(toPublicProfileResponse(profile));
+  },
+
+  async resolveNickname(req: Request, res: Response): Promise<void> {
+    const { nickname } = req.validated.params as { nickname: string };
+    const user = await usersRepo.findClaimableByNickname(nickname);
+    if (!user) throw new NotFoundError('No user with that nickname');
+    res.json({ user_id: user.id, nickname: user.nickname });
   },
 
   async getMyAchievements(req: Request, res: Response): Promise<void> {

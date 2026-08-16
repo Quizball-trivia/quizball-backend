@@ -120,6 +120,26 @@ export const usersRepo = {
   },
 
   /**
+   * Resolve a nickname to its owner among CLAIMABLE users — the same
+   * population the unique lower(nickname) index covers (real users and
+   * persistent roster bots, not deleted), so at most one row can match.
+   */
+  async findClaimableByNickname(nickname: string): Promise<{ id: string; nickname: string } | null> {
+    const trimmed = nickname.trim();
+    if (trimmed.length === 0) return null;
+    const rows = await sql<Array<{ id: string; nickname: string }>>`
+      SELECT id, nickname FROM users
+      WHERE lower(nickname) = lower(${trimmed})
+        AND (is_ai = false OR ai_kind = 'persistent')
+        AND is_deleted = false
+        AND deleted_at IS NULL
+        AND pending_deletion_at IS NULL
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  },
+
+  /**
    * Freed-name reservation: a nickname another user vacated within
    * NICKNAME_RESERVATION_DAYS is not immediately claimable.
    *

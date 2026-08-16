@@ -14,6 +14,8 @@ import {
   publicProfileResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
+  nicknameParamSchema,
+  resolveNicknameResponseSchema,
   userResponseSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
@@ -79,6 +81,20 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Account deletion scheduled', schema: accountDeletionResponseOpenApiSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/users/by-nickname/{nickname}',
+    summary: 'Resolve a nickname to a user id',
+    tags: ['Users'],
+    security: [{ bearerAuth: [] }],
+    pathParams: nicknameParamSchema,
+    responses: {
+      200: { description: 'Owner of the nickname', schema: resolveNicknameResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      404: { description: 'No user with that nickname', schema: errorResponseSchema },
     },
   });
 

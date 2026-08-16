@@ -3,6 +3,8 @@ export { identitiesRepo, type CreateIdentityData, type IdentityWithUser } from '
 export { usersService } from './users.service.js';
 export { usersController } from './users.controller.js';
 export {
+  nicknameParamSchema,
+  resolveNicknameResponseSchema,
   userResponseSchema,
   accountDeletionResponseSchema,
   publicProfileResponseSchema,

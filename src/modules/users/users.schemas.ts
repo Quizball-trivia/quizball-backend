@@ -22,6 +22,17 @@ export const userIdParamSchema = z.object({
 
 export type UserIdParam = z.infer<typeof userIdParamSchema>;
 
+export const nicknameParamSchema = z.object({
+  // Raw handle from the URL — length-bounded only; matching is done
+  // case-insensitively against the claimable-nickname unique index.
+  nickname: z.string().min(1).max(40),
+});
+
+export const resolveNicknameResponseSchema = z.object({
+  user_id: z.string().uuid(),
+  nickname: z.string(),
+});
+
 /**
  * User response schema.
  */

@@ -3,7 +3,7 @@ import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import { config } from '../../core/config.js';
-import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema } from '../../modules/users/index.js';
+import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema, nicknameParamSchema } from '../../modules/users/index.js';
 import { eventAwardsController, awardIdParamSchema } from '../../modules/event-awards/event-awards.controller.js';
 
 const router = Router();
@@ -19,6 +19,16 @@ router.get(
   '/search',
   validate({ query: userSearchQuerySchema }),
   usersController.searchUsers
+);
+
+/**
+ * GET /api/v1/users/by-nickname/:nickname
+ * Resolve a nickname to a user id (profile URLs use nicknames).
+ */
+router.get(
+  '/by-nickname/:nickname',
+  validate({ params: nicknameParamSchema }),
+  usersController.resolveNickname
 );
 
 /**

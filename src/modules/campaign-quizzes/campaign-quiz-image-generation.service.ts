@@ -90,7 +90,16 @@ export async function generateCampaignQuizImage(
     throw providerError(response.status);
   }
 
-  const payload = await response.json() as OpenAiImageGenerationResponse;
+  let payload: OpenAiImageGenerationResponse;
+  try {
+    payload = await response.json() as OpenAiImageGenerationResponse;
+  } catch (error) {
+    logger.error(
+      { error, model, durationMs: Date.now() - startedAt },
+      'Campaign artwork generation returned malformed JSON',
+    );
+    throw new ExternalServiceError('Image generation returned no artwork. Please try again.');
+  }
   const encoded = payload.data?.[0]?.b64_json;
   if (!encoded) {
     logger.error({ model, durationMs: Date.now() - startedAt }, 'Campaign artwork generation returned no image');
@@ -109,7 +118,11 @@ export async function generateCampaignQuizImage(
     logger.error({ error, model }, 'Campaign artwork generation returned invalid image bytes');
     throw new ExternalServiceError('Generated artwork could not be processed');
   }
-  if (!metadata.width || !metadata.height) {
+  if (!metadata.width || !metadata.height || metadata.format !== 'webp') {
+    logger.error(
+      { model, format: metadata.format ?? null },
+      'Campaign artwork generation returned an unexpected image format',
+    );
     throw new ExternalServiceError('Generated artwork could not be processed');
   }
 

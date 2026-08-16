@@ -60,4 +60,38 @@ describe('campaign quiz image generation', () => {
       { apiKey: 'test-key', fetchImpl: fetchImpl as typeof fetch },
     )).rejects.toThrow(/busy/);
   });
+
+  it('maps malformed successful JSON to the provider response error', async () => {
+    const fetchImpl = vi.fn(async () => new Response('<html>upstream failure</html>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    }));
+
+    await expect(generateCampaignQuizImage(
+      { prompt: 'Create a square premium football illustration with a central original cannon.' },
+      { apiKey: 'test-key', fetchImpl: fetchImpl as typeof fetch },
+    )).rejects.toThrow(/returned no artwork/);
+  });
+
+  it('rejects valid image bytes when the provider does not return WebP', async () => {
+    const png = await sharp({
+      create: {
+        width: 1024,
+        height: 1024,
+        channels: 3,
+        background: '#2155ff',
+      },
+    }).png().toBuffer();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ b64_json: png.toString('base64') }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(generateCampaignQuizImage(
+      { prompt: 'Create a square premium football illustration with a central original cannon.' },
+      { apiKey: 'test-key', fetchImpl: fetchImpl as typeof fetch },
+    )).rejects.toThrow(/could not be processed/);
+  });
 });

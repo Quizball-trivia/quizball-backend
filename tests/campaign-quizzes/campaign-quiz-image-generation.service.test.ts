@@ -15,14 +15,14 @@ async function generatedWebp(): Promise<string> {
 }
 
 describe('campaign quiz image generation', () => {
-  it('requests one square medium-quality WebP and returns a preview data URL', async () => {
+  it('requests one square high-quality WebP and returns a preview data URL', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body).toMatchObject({
         model: 'gpt-image-2',
         n: 1,
         size: '1024x1024',
-        quality: 'medium',
+        quality: 'high',
         output_format: 'webp',
         background: 'opaque',
       });

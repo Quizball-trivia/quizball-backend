@@ -7,6 +7,7 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedCardAvailability: vi.fn(),
     getRandomPublishedAuctionCard: vi.fn(),
     getSeasonSnapshots: vi.fn(async () => []),
+    getSeenFootballPlayerCount: vi.fn(async () => 0),
     getPublishedAuctionCardById: vi.fn(),
     getRecentlySeenFootballPlayerIds: vi.fn(),
     recordSeenClueCards: vi.fn(),
@@ -351,6 +352,36 @@ describe('auctionContentService', () => {
     expect(high!.snapshots).toHaveLength(3);
     expect(high!.snapshots![0].season).toBe('2020/21');
     expect(high!.snapshots!.at(-1)).toMatchObject({ season: '2025/26', valueEur: high!.trueValue });
+  });
+
+  it('cycles the scout season per human without repeats until every season is shown', async () => {
+    const fiveSeasons = [
+      { season_label: '2018/19', league_name: 'laliga', age: 17, apps: 12, goals: 1, assists: 0, clean_sheets: null, goals_conceded: null, value_eur: '2000000' },
+      { season_label: '2019/20', league_name: 'laliga', age: 18, apps: 22, goals: 4, assists: 2, clean_sheets: null, goals_conceded: null, value_eur: '4000000' },
+      ...snapshotRows,
+    ];
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(fiveSeasons);
+
+    const userIds = ['44444444-4444-4444-4444-444444444444'];
+    const scoutSeasonAtSeenCount = async (seenCount: number) => {
+      (auctionContentRepo.getSeenFootballPlayerCount as Mock).mockResolvedValue(seenCount);
+      const card = await auctionContentService.findRandomPublishedAuctionCard(
+        { locale: 'en', fameTier: 'well_known', scoutCycleUserIds: userIds },
+        // RNG must be ignored on the cycling path — a varying roll proves it.
+        () => 0.42
+      );
+      return card!.snapshots![0].season;
+    };
+
+    // 3 eligible scout seasons → 3 consecutive encounters show 3 DISTINCT
+    // seasons, then the cycle wraps to the first one again.
+    const first = await scoutSeasonAtSeenCount(0);
+    const second = await scoutSeasonAtSeenCount(1);
+    const third = await scoutSeasonAtSeenCount(2);
+    expect(new Set([first, second, third]).size).toBe(3);
+    expect(await scoutSeasonAtSeenCount(3)).toBe(first);
+    expect(auctionContentRepo.getSeenFootballPlayerCount).toHaveBeenCalledWith(userIds, PLAYER_ID);
   });
 
   it('keeps text clues when a player has too little season history', async () => {

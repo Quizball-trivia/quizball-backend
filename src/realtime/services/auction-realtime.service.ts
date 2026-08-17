@@ -178,6 +178,7 @@ export async function startAuctionMatchForHumans(
 
     const firstCard = await auctionContentService.getRandomPublishedAuctionCard({
       locale: input.locale,
+      scoutCycleUserIds: input.humanPlayers.map((player) => player.userId),
     });
     const needers = initial.seats.filter((seat) => needsPosition(seat, firstCard.positionGroup));
     const withRound = startBiddingRound(

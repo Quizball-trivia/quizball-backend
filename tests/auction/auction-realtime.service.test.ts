@@ -129,7 +129,11 @@ describe('auctionRealtimeService', () => {
     );
 
     expect(auctionContentServiceMock.assertPublishedAuctionContentAvailable).toHaveBeenCalledWith('en');
-    expect(auctionContentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith({ locale: 'en' });
+    expect(auctionContentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith({
+      locale: 'en',
+      // The seated humans drive the scout-season rotation for the first card.
+      scoutCycleUserIds: ['user-1'],
+    });
     expect(auctionStateStoreMock.save).toHaveBeenCalledTimes(1);
     expect(clueTimerMock.scheduleAuctionClueRevealTimer).not.toHaveBeenCalled();
     expect(socket.join).toHaveBeenCalledWith('match:match-id');

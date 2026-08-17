@@ -90,6 +90,12 @@ export interface RandomPublishedAuctionCardOptions {
    */
   excludeRecentlySeenFootballPlayerIds?: string[];
   /**
+   * Humans whose seen-history drives the scout-season rotation: each repeat
+   * encounter of the same player advances to the next career season, so no
+   * season repeats until all of them have been shown (ranked-style no-repeat).
+   */
+  scoutCycleUserIds?: string[];
+  /**
    * Exhausted-pool fallback, ordered least-recently-seen first. This preserves
    * recency as a ranking signal instead of reverting to an unweighted repeat.
    */
@@ -284,6 +290,30 @@ export const auctionContentRepo = {
       ) recent
       ORDER BY season_start_year ASC
     `;
+  },
+
+  /**
+   * How many times these humans have been served this player before (max over
+   * the users, so the most-exposed human's rotation never repeats a season
+   * early). All-time on purpose: the scout-season cycle should only wrap after
+   * every season has been shown, not reset with the recency window.
+   */
+  async getSeenFootballPlayerCount(
+    userIds: string[],
+    footballPlayerId: string
+  ): Promise<number> {
+    if (userIds.length === 0) return 0;
+    const [row] = await sql<{ max_count: string | number | null }[]>`
+      SELECT MAX(cnt)::text AS max_count FROM (
+        SELECT count(*) AS cnt
+        FROM auction_seen_cards seen
+        JOIN player_clue_cards pcc ON pcc.id = seen.clue_card_id
+        WHERE seen.user_id = ANY(${sql.array(userIds)}::uuid[])
+          AND pcc.football_player_id = ${footballPlayerId}
+        GROUP BY seen.user_id
+      ) per_user
+    `;
+    return parseCount(row?.max_count);
   },
 
   async getRecentlySeenFootballPlayerIds(

@@ -414,7 +414,8 @@ async function createNextStepState(
       locale,
       position,
       state.usedClueCardIds,
-      recentlySeenFootballPlayerIds
+      recentlySeenFootballPlayerIds,
+      humanUserIds
     );
     if (!optionA) continue;
 
@@ -426,7 +427,8 @@ async function createNextStepState(
         locale,
         position,
         optionBExcludeIds,
-        recentlySeenFootballPlayerIds
+        recentlySeenFootballPlayerIds,
+        humanUserIds
       );
       // Both solo-pick options are shown to the picking human, so both count as seen.
       recordSeenAuctionCards(state.matchId, humanUserIds, [optionA, optionB ?? optionA]);
@@ -515,7 +517,8 @@ async function getNextPublishedCard(
   locale: AuctionContentLocale,
   positionGroup: PositionGroup,
   excludeClueCardIds: readonly string[],
-  excludeRecentlySeenFootballPlayerIds: readonly string[] = []
+  excludeRecentlySeenFootballPlayerIds: readonly string[] = [],
+  scoutCycleUserIds: readonly string[] = []
 ): Promise<AuctionFootballer | null> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= AUCTION_CONTENT_FETCH_ATTEMPTS; attempt += 1) {
@@ -528,6 +531,7 @@ async function getNextPublishedCard(
           excludeRecentlySeenFootballPlayerIds.length > 0
           ? [...excludeRecentlySeenFootballPlayerIds]
           : undefined,
+        scoutCycleUserIds: scoutCycleUserIds.length > 0 ? [...scoutCycleUserIds] : undefined,
       });
     } catch (error) {
       lastError = error;

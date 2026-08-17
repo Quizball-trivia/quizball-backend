@@ -277,20 +277,26 @@ async function resolveHumanAvatars(
   return Promise.all(
     players.map(async (player) => {
       let resolved = player;
+      // Independent best-effort enrichments: a failed avatar lookup must not
+      // also cost the player their tier frame (and vice versa).
       try {
         if (resolved.avatarCustomization == null) {
           const user = await usersRepo.getById(player.userId);
           resolved = { ...resolved, avatarCustomization: user?.avatar_customization ?? null };
         }
+      } catch (error) {
+        logger.warn({ error, userId: player.userId }, 'Auction: failed to load human avatar');
+      }
+      try {
         // Ranked identity dresses the showdown card (tier frame + RP). The
         // SERVICE (not repo) path also repairs tier/RP drift, so auction never
         // shows a tier ranked itself would normalize away.
-        if (resolved.tier == null) {
+        if (resolved.tier == null || resolved.rp == null) {
           const profile = await rankedService.ensureProfile(player.userId);
           resolved = { ...resolved, tier: profile.tier ?? null, rp: profile.rp ?? null };
         }
       } catch (error) {
-        logger.warn({ error, userId: player.userId }, 'Auction: failed to load human avatar/tier');
+        logger.warn({ error, userId: player.userId }, 'Auction: failed to load ranked identity');
       }
       return resolved;
     })

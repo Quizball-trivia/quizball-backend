@@ -36,6 +36,7 @@ import type {
   StoreProductRow,
   StoreTransactionLogRow,
   StoreWalletResponse,
+  WalletRow,
 } from './store.types.js';
 
 const manualAdjustmentLogMetadataSchema = z.object({
@@ -887,6 +888,17 @@ export const storeService = {
     ]);
     const cooldown = buildTicketPurchaseCooldown(purchaseWindow.ticketCount, now);
     return buildWalletResponse(wallet, cooldown);
+  },
+
+  async getRankedTicketWallets(userIds: string[]): Promise<Map<string, WalletRow>> {
+    const wallets = await storeRepo.getWallets(userIds);
+    return new Map([...wallets].map(([userId, wallet]) => {
+      const hydrated = resolveHydratedTicketState(wallet);
+      return [userId, {
+        coins: wallet.coins,
+        tickets: hydrated.tickets,
+      }];
+    }));
   },
 
   async consumeRankedTickets(

@@ -6,7 +6,7 @@ import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 
 export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('ranked:queue_join', async (payload) => {
-    logger.info({ userId: socket.data.user.id }, 'Received ranked:queue_join');
+    logger.debug({ userId: socket.data.user.id }, 'Received ranked:queue_join');
     rankedDebug('queue_join_received', {
       user: rankedDebugUser(socket.data.user.id),
       socket: socket.id,

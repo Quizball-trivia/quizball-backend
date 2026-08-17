@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { config } from '../core/config.js';
 import { harnessDelayMs } from '../core/harness-timing.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { getRedisClient } from './redis.js';
@@ -15,7 +16,9 @@ const TIMER_BATCH_SIZE = 100;
 // entire 100-member Redis batch with Promise.all can instantly overflow the DB
 // admission queue even when every query is fast. Keep each replica below the
 // 12-slot DB bulkhead while still allowing independent replicas to share work.
-const TIMER_HANDLER_CONCURRENCY = 4;
+// configurable so a replica with a measured DB budget can drain synchronized
+// gameplay kickoffs without weakening the admission bulkhead.
+const TIMER_HANDLER_CONCURRENCY = config.REALTIME_TIMER_HANDLER_CONCURRENCY;
 
 export type RealtimeTimerKind =
   | 'auction_bot_action'

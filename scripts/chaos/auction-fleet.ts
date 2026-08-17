@@ -360,7 +360,7 @@ async function main(): Promise<void> {
     emailPrefix: 'chaos',
     emailDomain: 'quizball.io',
     concurrency: 10,
-    loginIntervalMs: TARGET === 'staging' ? 2_200 : 0,
+    loginIntervalMs: 2_200,
     bypassToken,
   });
   console.log(`  → ${users.length} users authenticated.`);

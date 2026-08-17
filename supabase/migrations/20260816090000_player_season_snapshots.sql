@@ -14,14 +14,14 @@ CREATE TABLE IF NOT EXISTS public.player_season_snapshots (
   league_name text NOT NULL,
   club_name text,
   -- Age at the end of that season.
-  age int,
-  apps int NOT NULL,
-  goals int NOT NULL DEFAULT 0,
-  assists int NOT NULL DEFAULT 0,
-  minutes int NOT NULL DEFAULT 0,
+  age int CHECK (age IS NULL OR age > 0),
+  apps int NOT NULL CHECK (apps >= 0),
+  goals int NOT NULL DEFAULT 0 CHECK (goals >= 0),
+  assists int NOT NULL DEFAULT 0 CHECK (assists >= 0),
+  minutes int NOT NULL DEFAULT 0 CHECK (minutes >= 0),
   -- Goalkeeper facets; null for outfield players.
-  clean_sheets int,
-  goals_conceded int,
+  clean_sheets int CHECK (clean_sheets IS NULL OR clean_sheets >= 0),
+  goals_conceded int CHECK (goals_conceded IS NULL OR goals_conceded >= 0),
   -- Last Transfermarkt valuation recorded within (or shortly after) the season.
   value_eur bigint CHECK (value_eur IS NULL OR value_eur > 0),
   value_date date,

@@ -158,7 +158,7 @@ describe('campaign quiz media environment configuration', () => {
 });
 
 describe('campaign quiz artwork generation configuration', () => {
-  it('defaults to the current square-image model and medium quality', () => {
+  it('defaults to the current square-image model and high quality', () => {
     const parsed = parseConfig(baseEnv());
     expect(parsed.OPENAI_IMAGE_MODEL).toBe('gpt-image-2');
     expect(parsed.OPENAI_IMAGE_QUALITY).toBe('high');
@@ -167,5 +167,21 @@ describe('campaign quiz artwork generation configuration', () => {
   it('treats a blank server key as unconfigured and rejects unsupported quality values', () => {
     expect(parseConfig(baseEnv({ OPENAI_API_KEY: '' })).OPENAI_API_KEY).toBeUndefined();
     expect(() => parseConfig(baseEnv({ OPENAI_IMAGE_QUALITY: 'ultra' }))).toThrow(/OPENAI_IMAGE_QUALITY/);
+  });
+});
+
+describe('Google Search Console configuration', () => {
+  it('requires all service-account values together', () => {
+    expect(() => parseConfig(baseEnv({
+      GOOGLE_SEARCH_CONSOLE_SITE_URL: 'sc-domain:quizball.io',
+    }))).toThrow(/must be configured together/);
+  });
+
+  it('accepts a complete service-account configuration', () => {
+    expect(() => parseConfig(baseEnv({
+      GOOGLE_SEARCH_CONSOLE_SITE_URL: 'sc-domain:quizball.io',
+      GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL: 'seo@quizball.iam.gserviceaccount.com',
+      GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n',
+    }))).not.toThrow();
   });
 });

@@ -53,6 +53,7 @@ export interface ListCategoriesFilter {
   parentId?: string;
   isActive?: boolean;
   minQuestions?: number;
+  excludeCampaignManaged?: boolean;
 }
 
 export interface ListCategoriesResult {
@@ -87,6 +88,26 @@ export const categoriesRepo = {
       filter?.minQuestions !== undefined
         ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]})`
         : sql``;
+    const campaignManagedFilter = filter?.excludeCampaignManaged
+      ? sql`
+          AND NOT (
+            EXISTS (
+              SELECT 1
+              FROM campaign_quiz_manual_questions managed
+              JOIN questions question ON question.id = managed.question_id
+              WHERE question.category_id = categories.id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM questions question
+              LEFT JOIN campaign_quiz_manual_questions managed
+                ON managed.question_id = question.id
+              WHERE question.category_id = categories.id
+                AND managed.question_id IS NULL
+            )
+          )
+        `
+      : sql``;
 
     // Split the page fetch from the total count. `COUNT(*) OVER()` forced the
     // window to run the WHERE clause for ALL matching rows on every request,
@@ -97,12 +118,7 @@ export const categoriesRepo = {
         ${parentIdFilter}
         ${isActiveFilter}
         ${minQuestionsFilter}
-        AND NOT EXISTS (
-          SELECT 1
-          FROM campaign_quiz_manual_questions managed
-          JOIN questions question ON question.id = managed.question_id
-          WHERE question.category_id = categories.id
-        )
+        ${campaignManagedFilter}
     `;
 
     const pageQuery = sql<Category[]>`

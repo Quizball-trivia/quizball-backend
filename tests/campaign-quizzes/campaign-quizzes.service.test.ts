@@ -79,6 +79,7 @@ const quizRow = {
   unpublished_at: null,
   preview_token: 'de6bd11f-27ee-4721-9586-7f561bfd27e2',
   hub_order: 1,
+  is_hub_pinned: false,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -560,7 +561,7 @@ describe('campaignQuizzesService', () => {
     ]);
 
     await expect(campaignQuizzesService.updateHubOrder({
-      items: [{ slug: 'draft-page', hub_order: 1, is_hub_pinned: true }],
+      items: [{ slug: 'draft-page', hub_order: 1, is_pinned: true }],
     }, 'admin-id')).rejects.toMatchObject({ statusCode: 400 });
 
     expect(campaignQuizzesRepo.updateHubOrder).not.toHaveBeenCalled();

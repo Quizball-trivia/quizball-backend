@@ -3,6 +3,7 @@ import { config } from '../../core/config.js';
 import {
   BadRequestError,
   ConflictError,
+  ExternalServiceError,
   NotFoundError,
   ValidationError,
 } from '../../core/errors.js';
@@ -95,6 +96,9 @@ function stableHash(value: string): string {
 }
 
 function guestRatingKey(slug: string, clientIp: string): string {
+  if (!config.SUPABASE_JWT_SECRET) {
+    throw new ExternalServiceError('Guest ratings are unavailable');
+  }
   return stableHash(`campaign-rating:${config.SUPABASE_JWT_SECRET}:${slug}:${clientIp}`);
 }
 
@@ -329,7 +333,12 @@ async function recordRevision(
 ): Promise<void> {
   const page = await campaignQuizzesRepo.getAdminPage(slug);
   if (!page) return;
-  const snapshot = await toAdminPage(page);
+  const rendered = await toAdminPage(page);
+  const snapshot = {
+    ...rendered,
+    hero_image_url: page.hero_image_url,
+    og_image_url: page.og_image_url,
+  };
   await campaignQuizzesRepo.createRevision(
     slug,
     action,

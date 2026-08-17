@@ -10,6 +10,11 @@ const GOOGLEBOT_USER_AGENT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://ww
 const MAX_PREVIEW_HTML_BYTES = 2 * 1024 * 1024;
 
 async function readPreviewHtml(response: Response): Promise<string> {
+  if (!response.ok) {
+    throw new ExternalServiceError(
+      `The server-rendered preview returned HTTP ${response.status}`,
+    );
+  }
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
     throw new ExternalServiceError('The server-rendered preview did not return HTML');
@@ -44,6 +49,14 @@ function includesPattern(html: string, pattern: RegExp): boolean {
 
 function escapePattern(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasSchemaType(html: string, type: string): boolean {
+  const escapedType = escapePattern(type);
+  return includesPattern(
+    html,
+    new RegExp(`"@type"\\s*:\\s*(?:"${escapedType}"|\\[[^\\]]*"${escapedType}"[^\\]]*\\])`, 'i'),
+  );
 }
 
 export const campaignQuizGooglebotService = {
@@ -107,19 +120,19 @@ export const campaignQuizGooglebotService = {
       {
         key: 'webpage_schema',
         label: 'WebPage schema',
-        passed: html.includes('"@type":"WebPage"'),
+        passed: hasSchemaType(html, 'WebPage'),
         detail: 'JSON-LD graph',
       },
       {
         key: 'breadcrumb_schema',
         label: 'Breadcrumb schema',
-        passed: html.includes('"@type":"BreadcrumbList"'),
+        passed: hasSchemaType(html, 'BreadcrumbList'),
         detail: page.breadcrumb_label,
       },
       {
         key: 'game_schema',
         label: 'Game schema',
-        passed: html.includes('"@type":"Game"'),
+        passed: hasSchemaType(html, 'Game'),
         detail: 'Free single-player quiz',
       },
       {

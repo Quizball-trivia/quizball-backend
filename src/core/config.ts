@@ -252,6 +252,19 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
+  const searchConsoleValues = [
+    result.data.GOOGLE_SEARCH_CONSOLE_SITE_URL,
+    result.data.GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL,
+    result.data.GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY,
+  ];
+  const configuredSearchConsoleValues = searchConsoleValues.filter(Boolean).length;
+  if (configuredSearchConsoleValues > 0 && configuredSearchConsoleValues < searchConsoleValues.length) {
+    throw new ConfigError(
+      'Invalid configuration: Google Search Console credentials must be configured together.',
+      { configuredSearchConsoleValues },
+    );
+  }
+
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking
   // delays for the test harness. They MUST never run outside local — in
   // staging/prod they would change real gameplay (deterministic questions, near-

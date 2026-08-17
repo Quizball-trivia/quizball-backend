@@ -69,8 +69,7 @@ export async function generateCampaignQuizImage(
         n: 1,
         size: '1024x1024',
         quality,
-        output_format: 'webp',
-        output_compression: 86,
+        output_format: 'png',
         background: 'opaque',
         moderation: 'auto',
       }),
@@ -111,14 +110,24 @@ export async function generateCampaignQuizImage(
     throw new ExternalServiceError('Generated artwork could not be processed');
   }
 
-  let metadata: sharp.Metadata;
+  let webp: Buffer;
+  let metadata: sharp.OutputInfo;
   try {
-    metadata = await sharp(buffer, { failOn: 'error' }).metadata();
+    const converted = await sharp(buffer, { failOn: 'error' })
+      .webp({ quality: 86, effort: 5 })
+      .toBuffer({ resolveWithObject: true });
+    webp = converted.data;
+    metadata = converted.info;
   } catch (error) {
     logger.error({ error, model }, 'Campaign artwork generation returned invalid image bytes');
     throw new ExternalServiceError('Generated artwork could not be processed');
   }
-  if (!metadata.width || !metadata.height || metadata.format !== 'webp') {
+  if (
+    !metadata.width
+    || !metadata.height
+    || metadata.format !== 'webp'
+    || webp.length > MAX_GENERATED_IMAGE_BYTES
+  ) {
     logger.error(
       { model, format: metadata.format ?? null },
       'Campaign artwork generation returned an unexpected image format',
@@ -132,14 +141,14 @@ export async function generateCampaignQuizImage(
       quality,
       width: metadata.width,
       height: metadata.height,
-      bytes: buffer.length,
+      bytes: webp.length,
       durationMs: Date.now() - startedAt,
     },
     'Campaign artwork generation completed',
   );
 
   return {
-    data_url: `data:image/webp;base64,${encoded}`,
+    data_url: `data:image/webp;base64,${webp.toString('base64')}`,
     prompt: input.prompt,
     model,
     quality,

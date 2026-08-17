@@ -36,6 +36,10 @@ const AUCTION_MM_USER_MAP_KEY = 'auction:mm:user';
 const AUCTION_MM_SEARCH_KEY_PREFIX = 'auction:mm:search:';
 const AUCTION_MM_LOCK_KEY = 'lock:auction:mm';
 const AUCTION_MM_LOCK_TTL_MS = 5_000;
+// A claimed search whose match failed to start is requeued this soon; after
+// this many consecutive failures it is dropped with a client-visible error.
+const AUCTION_MM_START_RETRY_MS = 3_000;
+const AUCTION_MM_MAX_START_FAILURES = 3;
 const AUCTION_MM_SEARCH_TTL_SEC = 120;
 // First AI bidder is staged after this long alone (the initial wait for a
 // second real player before any bot fill begins).
@@ -59,6 +63,9 @@ interface QueuedAuctionSearch {
   fallbackAt: number;
   /** How many AI bidders have been staged into this search so far (0..2). */
   botFillCount?: number;
+  /** Transient match-start failures while this search was claimed — the search
+   *  is requeued (not dropped) until AUCTION_MM_MAX_START_FAILURES. */
+  startFailures?: number;
 }
 
 export interface AuctionSearchStartServiceInput {
@@ -289,7 +296,7 @@ export const auctionMatchmakingService = {
     const redis = getRedisClient();
     if (!redis?.isOpen) return;
 
-    await withAuctionMatchmakingLock(async () => {
+    const completed = await withAuctionMatchmakingLock(async () => {
       const anchor = await readSearch(redis, payload.searchId);
       if (!anchor) return;
 
@@ -334,7 +341,27 @@ export const auctionMatchmakingService = {
 
       // Seats are full (humans + staged bots) — start the match.
       await startMatchFromQueuedSearches(io, redis, fillGroup);
+      return true;
     });
+
+    // Lock still busy after the bounded wait (a burst of match starts holds it
+    // for a while): this timer firing is the search's ONLY fill signal, so it
+    // must re-arm rather than be consumed — a dropped fill strands the
+    // searcher in the queue forever.
+    if (completed === null) {
+      const stillQueued = await readSearch(redis, payload.searchId).catch(() => null);
+      if (!stillQueued) return;
+      logger.warn(
+        { searchId: payload.searchId },
+        'Auction fill timer could not take the matchmaking lock; rescheduling'
+      );
+      await scheduleRealtimeTimer(
+        'auction_matchmaking_fill',
+        fillTimerKey(payload.searchId),
+        new Date(Date.now() + 2_000),
+        { kind: 'auction_matchmaking_fill', searchId: payload.searchId }
+      );
+    }
   },
 };
 
@@ -348,7 +375,10 @@ async function tryStartFullHumanMatchesLocked(
   while (true) {
     const queued = await listQueuedSearches(redis, locale);
     if (queued.length < 3) return;
-    await startMatchFromQueuedSearches(io, redis, queued.slice(0, 3));
+    const started = await startMatchFromQueuedSearches(io, redis, queued.slice(0, 3));
+    // A failed start requeues its searches — looping here would re-pick the
+    // same trio in a tight loop. Their fill timers own the retry cadence.
+    if (!started) return;
   }
 }
 
@@ -356,7 +386,7 @@ async function startMatchFromQueuedSearches(
   io: QuizballServer,
   redis: NonNullable<ReturnType<typeof getRedisClient>>,
   searches: readonly QueuedAuctionSearch[]
-): Promise<void> {
+): Promise<boolean> {
   const oldest = searches[0];
   const humans = searches.map((search) => ({
     userId: search.userId,
@@ -380,18 +410,51 @@ async function startMatchFromQueuedSearches(
       },
       'Auction matchmaking started match'
     );
+    return true;
   } catch (error) {
+    // Transient start failures (DB admission shed under a burst, content
+    // retries exhausted) must NOT eject users from the queue — the searches
+    // were already claimed, so REQUEUE them with a fresh fill timer and only
+    // give up (with a client-visible error) after repeated failures.
+    const droppedSearches: QueuedAuctionSearch[] = [];
+    for (const search of searches) {
+      const startFailures = (search.startFailures ?? 0) + 1;
+      if (startFailures >= AUCTION_MM_MAX_START_FAILURES) {
+        droppedSearches.push(search);
+        continue;
+      }
+      const requeued: QueuedAuctionSearch = {
+        ...search,
+        startFailures,
+        fallbackAt: Date.now() + harnessDelayMs(AUCTION_MM_START_RETRY_MS, 1_000),
+      };
+      await writeSearch(redis, requeued).catch(() => droppedSearches.push(search));
+      await scheduleRealtimeTimer(
+        'auction_matchmaking_fill',
+        fillTimerKey(requeued.searchId),
+        new Date(requeued.fallbackAt),
+        { kind: 'auction_matchmaking_fill', searchId: requeued.searchId }
+      ).catch(() => {});
+    }
+
     const payload = toAuctionErrorPayload(error, {
       fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
       fallbackMessage: 'Auction matchmaking failed',
     });
-    for (const search of searches) {
+    for (const search of droppedSearches) {
       io.to(`user:${search.userId}`).emit('auction:error', payload);
     }
     logger.warn(
-      { error, humanUserIds: humans.map((human) => human.userId), code: payload.code },
+      {
+        error,
+        humanUserIds: humans.map((human) => human.userId),
+        requeuedCount: searches.length - droppedSearches.length,
+        droppedCount: droppedSearches.length,
+        code: payload.code,
+      },
       'Auction matchmaking failed to start match'
     );
+    return false;
   }
 }
 
@@ -581,14 +644,28 @@ async function removeQueuedSearchForUser(
   return search;
 }
 
+/**
+ * Bounded-WAIT lock (not a bare try-lock): under a queue burst the lock is held
+ * for seconds at a time by match starts, and a caller that silently no-ops on
+ * busy loses its one shot (a consumed fill timer = a stranded searcher). Waits
+ * up to ~AUCTION_MM_LOCK_TTL_MS in short retries before giving up; callers that
+ * still get null must reschedule themselves, never drop.
+ */
 async function withAuctionMatchmakingLock<T>(work: () => Promise<T>): Promise<T | null> {
-  const lock = await acquireLock(AUCTION_MM_LOCK_KEY, AUCTION_MM_LOCK_TTL_MS);
-  if (!lock.acquired || !lock.token) return null;
-  try {
-    return await work();
-  } finally {
-    await releaseLock(AUCTION_MM_LOCK_KEY, lock.token).catch(() => {});
+  const attempts = 12;
+  const delayMs = 400;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const lock = await acquireLock(AUCTION_MM_LOCK_KEY, AUCTION_MM_LOCK_TTL_MS);
+    if (lock.acquired && lock.token) {
+      try {
+        return await work();
+      } finally {
+        await releaseLock(AUCTION_MM_LOCK_KEY, lock.token).catch(() => {});
+      }
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
   }
+  return null;
 }
 
 function searchKey(searchId: string): string {

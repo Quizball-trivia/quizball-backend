@@ -304,12 +304,16 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
-  if (result.data.REALTIME_TIMER_HANDLER_CONCURRENCY > result.data.DB_INFLIGHT_LIMIT) {
+  // The admission layer clamps the real budget to min(DB_INFLIGHT_LIMIT,
+  // DB_POOL_MAX) — validate against what will actually be enforced.
+  const effectiveDbLimit = Math.min(result.data.DB_INFLIGHT_LIMIT, result.data.DB_POOL_MAX);
+  if (result.data.REALTIME_TIMER_HANDLER_CONCURRENCY > effectiveDbLimit) {
     throw new ConfigError(
-      "Invalid configuration: REALTIME_TIMER_HANDLER_CONCURRENCY cannot exceed DB_INFLIGHT_LIMIT.",
+      "Invalid configuration: REALTIME_TIMER_HANDLER_CONCURRENCY cannot exceed the effective DB limit (min of DB_INFLIGHT_LIMIT and DB_POOL_MAX).",
       {
         realtimeTimerHandlerConcurrency: result.data.REALTIME_TIMER_HANDLER_CONCURRENCY,
         dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
+        dbPoolMax: result.data.DB_POOL_MAX,
       },
     );
   }

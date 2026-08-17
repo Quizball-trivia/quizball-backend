@@ -35,7 +35,7 @@ const AUCTION_MM_QUEUE_KEY = 'auction:mm:queue';
 const AUCTION_MM_USER_MAP_KEY = 'auction:mm:user';
 const AUCTION_MM_SEARCH_KEY_PREFIX = 'auction:mm:search:';
 const AUCTION_MM_LOCK_KEY = 'lock:auction:mm';
-const AUCTION_MM_LOCK_TTL_MS = 5_000;
+const AUCTION_MM_LOCK_TTL_MS = 30_000;
 // A claimed search whose match failed to start is requeued this soon; after
 // this many consecutive failures it is dropped with a client-visible error.
 const AUCTION_MM_START_RETRY_MS = 3_000;
@@ -182,7 +182,18 @@ export const auctionMatchmakingService = {
           return;
         }
 
-        await withAuctionMatchmakingLock(async () => {
+        const lockOutcome = await withAuctionMatchmakingLock(async () => {
+          // The pre-lock guards are STALE by now (the bounded wait can be
+          // seconds; a previous search may have committed into a match in the
+          // meantime) — recheck the live-match index inside the lock or a
+          // duplicate search sneaks in behind the user's own match.
+          const activeNow = await auctionStateStore
+            .getActiveMatchIdForUser(user.id)
+            .catch(() => null);
+          if (activeNow && (await isUserInLiveAuctionMatch(activeNow, user.id))) {
+            await rejoinAuctionMatch(io, socket, activeNow).catch(() => {});
+            return true;
+          }
           const existingSearchId = await redis.hGet(AUCTION_MM_USER_MAP_KEY, user.id);
           if (existingSearchId) {
             const existing = await readSearch(redis, existingSearchId);
@@ -198,7 +209,7 @@ export const auctionMatchmakingService = {
               await writeSearch(redis, rearmed);
               await scheduleAuctionMatchmakingFill(rearmed);
               emitSearchStarted(io, rearmed, await countQueuedByLocale(redis, rearmed.locale));
-              return;
+              return true;
             }
             await redis.hDel(AUCTION_MM_USER_MAP_KEY, user.id);
           }
@@ -217,7 +228,16 @@ export const auctionMatchmakingService = {
           await scheduleAuctionMatchmakingFill(search);
           emitSearchStarted(io, search, await countQueuedByLocale(redis, search.locale));
           await tryStartFullHumanMatchesLocked(io, search.locale);
+          return true;
         });
+        // Lock still busy after the bounded wait: the client got NOTHING —
+        // surface a retryable error instead of a silent non-search.
+        if (lockOutcome === null) {
+          emitAuctionError(socket, {
+            code: 'AUCTION_SEARCH_BUSY',
+            message: 'Auction matchmaking is busy. Please retry.',
+          });
+        }
       },
       {
         code: 'AUCTION_SEARCH_BUSY',
@@ -282,14 +302,24 @@ export const auctionMatchmakingService = {
     const otherSockets = await io.in(`user:${user.id}`).fetchSockets().catch(() => []);
     if (otherSockets.some((entry) => entry.id !== socket.id)) return;
 
-    await withAuctionMatchmakingLock(async () => {
+    const cleaned = await withAuctionMatchmakingLock(async () => {
       const removed = await removeQueuedSearchForUser(redis, user.id);
-      if (!removed) return;
+      if (!removed) return true;
       io.to(`user:${user.id}`).emit('auction:search_cancelled', {
         searchId: removed.searchId,
         reason: 'disconnect',
       } satisfies AuctionSearchCancelledPayload);
+      return true;
     });
+    // Lock busy through the whole bounded wait: retry once shortly after —
+    // an unremoved search would otherwise match a user who is gone.
+    if (cleaned === null) {
+      setTimeout(() => {
+        void withAuctionMatchmakingLock(async () => {
+          await removeQueuedSearchForUser(redis, user.id);
+        }).catch(() => {});
+      }, 3_000);
+    }
   },
 
   async runFillTimer(io: QuizballServer, payload: AuctionMatchmakingFillPayload): Promise<void> {
@@ -299,6 +329,10 @@ export const auctionMatchmakingService = {
     const completed = await withAuctionMatchmakingLock(async () => {
       const anchor = await readSearch(redis, payload.searchId);
       if (!anchor) return;
+      // A concurrent handler already requeued/re-armed this search (its
+      // fallbackAt moved into the future) — this stale firing must not retry
+      // the same group again in the same wave.
+      if (anchor.fallbackAt > Date.now() + 500) return;
 
       const queued = await listQueuedSearches(redis, anchor.locale);
       const fillGroup = queued.slice(0, 3);
@@ -418,6 +452,14 @@ async function startMatchFromQueuedSearches(
     // give up (with a client-visible error) after repeated failures.
     const droppedSearches: QueuedAuctionSearch[] = [];
     for (const search of searches) {
+      // The failure may have happened AFTER the match was durably saved and
+      // indexed (socket attach, timers): those users are seated in a live
+      // match — requeueing them would fork a duplicate match.
+      const activeMatchId = await auctionStateStore
+        .getActiveMatchIdForUser(search.userId)
+        .catch(() => null);
+      if (activeMatchId) continue;
+
       const startFailures = (search.startFailures ?? 0) + 1;
       if (startFailures >= AUCTION_MM_MAX_START_FAILURES) {
         droppedSearches.push(search);
@@ -428,13 +470,20 @@ async function startMatchFromQueuedSearches(
         startFailures,
         fallbackAt: Date.now() + harnessDelayMs(AUCTION_MM_START_RETRY_MS, 1_000),
       };
-      await writeSearch(redis, requeued).catch(() => droppedSearches.push(search));
-      await scheduleRealtimeTimer(
-        'auction_matchmaking_fill',
-        fillTimerKey(requeued.searchId),
-        new Date(requeued.fallbackAt),
-        { kind: 'auction_matchmaking_fill', searchId: requeued.searchId }
-      ).catch(() => {});
+      try {
+        await writeSearch(redis, requeued);
+        // A requeued search without a fill timer is stranded — treat a failed
+        // schedule as a drop so the user at least gets the error.
+        await scheduleRealtimeTimer(
+          'auction_matchmaking_fill',
+          fillTimerKey(requeued.searchId),
+          new Date(requeued.fallbackAt),
+          { kind: 'auction_matchmaking_fill', searchId: requeued.searchId }
+        );
+      } catch {
+        await removeQueuedSearchForUser(redis, search.userId).catch(() => {});
+        droppedSearches.push(search);
+      }
     }
 
     const payload = toAuctionErrorPayload(error, {
@@ -565,6 +614,7 @@ async function writeSearch(
       queuedAt: String(search.queuedAt),
       fallbackAt: String(search.fallbackAt),
       botFillCount: String(search.botFillCount ?? 0),
+      startFailures: String(search.startFailures ?? 0),
     })
     .expire(searchKey(search.searchId), AUCTION_MM_SEARCH_TTL_SEC)
     .zAdd(AUCTION_MM_QUEUE_KEY, { score: search.queuedAt, value: search.searchId })
@@ -592,6 +642,7 @@ async function readSearch(
     queuedAt,
     fallbackAt,
     botFillCount: Number.isFinite(Number(row.botFillCount)) ? Number(row.botFillCount) : 0,
+    startFailures: Number.isFinite(Number(row.startFailures)) ? Number(row.startFailures) : 0,
   };
 }
 

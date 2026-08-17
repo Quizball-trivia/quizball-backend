@@ -178,6 +178,7 @@ export async function startAuctionMatchForHumans(
 
     const firstCard = await auctionContentService.getRandomPublishedAuctionCard({
       locale: input.locale,
+      scoutCycleUserIds: input.humanPlayers.map((player) => player.userId),
     });
     const needers = initial.seats.filter((seat) => needsPosition(seat, firstCard.positionGroup));
     const withRound = startBiddingRound(
@@ -198,6 +199,19 @@ export async function startAuctionMatchForHumans(
     throw error;
   }
   const publicState = toPublicAuctionMatchState(saved);
+
+  // The OPENING card counts as seen too (later rounds record in the match-flow
+  // step): without this the 30-day cross-match no-repeat skipped round 1. The
+  // scout-season rotation needs nothing here — selection claims its cursor.
+  {
+    const humanUserIds = input.humanPlayers.map((player) => player.userId);
+    const openingCard = saved.currentRound?.footballer ?? null;
+    if (openingCard?.clueCardId) {
+      void auctionContentService.recordSeenClueCards(humanUserIds, [openingCard.clueCardId]).catch((error) => {
+        logger.warn({ error, matchId: saved.matchId }, 'Failed to record opening auction clue card');
+      });
+    }
+  }
 
   for (const player of input.humanPlayers) {
     await attachUserSocketsToAuctionMatch(io, player.userId, saved.matchId, input.sourceSocket);

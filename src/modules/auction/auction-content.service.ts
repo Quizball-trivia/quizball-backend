@@ -208,12 +208,12 @@ async function findRandomPublishedAuctionCard(
       ...options,
       fameTier,
     });
-    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered));
+    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered), random, options.scoutCycleUserIds);
     // The rolled tier is exhausted for this position/exclusion set — fall
     // through to the unrestricted pool rather than failing the round.
   }
   const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
-  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row)) : null;
+  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row), random, options.scoutCycleUserIds) : null;
 }
 
 // The web client's LEAGUES catalogue uses display names; the snapshot table
@@ -251,9 +251,62 @@ const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'A
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
 
-async function attachSeasonSnapshots(card: PublishedAuctionCard): Promise<PublishedAuctionCard> {
-  const rows = await auctionContentRepo.getSeasonSnapshots(card.footballPlayerId);
-  if (rows.length < MIN_SNAPSHOT_SEASONS) return card;
+/** Stable per-player offset so all players don't start their season rotation
+ *  at the same career point. Salted server-side: player UUIDs are public after
+ *  reveal, and an unsalted offset would let players precompute (and
+ *  crowd-source) which season a first encounter shows. */
+const SCOUT_CYCLE_SALT = process.env.AUCTION_SCOUT_CYCLE_SALT?.trim() || 'qb-scout-cycle-v1';
+
+function scoutCycleOffset(footballPlayerId: string): number {
+  let hash = 0;
+  for (const char of `${footballPlayerId}:${SCOUT_CYCLE_SALT}`) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
+async function attachSeasonSnapshots(
+  card: PublishedAuctionCard,
+  random: () => number = getRandom,
+  scoutCycleUserIds?: string[]
+): Promise<PublishedAuctionCard> {
+  const allRows = await auctionContentRepo.getSeasonSnapshots(card.footballPlayerId);
+  if (allRows.length < MIN_SNAPSHOT_SEASONS) return card;
+
+  // Vary the SCOUT season instead of always showing the earliest one: the same
+  // player then presents different numbers across matches, so repeat
+  // encounters can't be memorised. Any season with at least two later seasons
+  // is eligible (keeps a real gap to gamble across); the final season always
+  // stays the scoring season.
+  //
+  // With human context, rotate ranked-style: every repeat encounter advances
+  // one season, so NO season repeats until all of them have been shown (then
+  // the cycle wraps). Without context (previews, tooling), fall back to a
+  // uniform roll.
+  const maxScoutIndex = allRows.length - MIN_SNAPSHOT_SEASONS;
+  const cycleLength = maxScoutIndex + 1;
+  let scoutIndex: number;
+  if (scoutCycleUserIds?.length) {
+    // Claim-on-read: the upsert both increments and returns the cursor in one
+    // statement, so overlapping selections can never serve the same season.
+    const claimed = await auctionContentRepo
+      .claimScoutEncounter(scoutCycleUserIds, card.footballPlayerId)
+      .catch((error) => {
+        // Degraded, not broken: selection proceeds at the player's fixed
+        // initial season — but SAY so, or a failing counter would silently
+        // turn the whole rotation into permanent repeats.
+        logger.warn(
+          { error, footballPlayerId: card.footballPlayerId },
+          'Auction scout-encounter claim failed; serving initial scout season'
+        );
+        return 0;
+      });
+    const seenCount = Math.max(0, claimed - 1);
+    scoutIndex = (scoutCycleOffset(card.footballPlayerId) + seenCount) % cycleLength;
+  } else {
+    scoutIndex = Math.min(maxScoutIndex, Math.floor(random() * cycleLength));
+  }
+  const rows = allRows.slice(scoutIndex);
 
   const snapshots = rows.map((row, index) => ({
     season: row.season_label,

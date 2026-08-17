@@ -90,6 +90,12 @@ export interface RandomPublishedAuctionCardOptions {
    */
   excludeRecentlySeenFootballPlayerIds?: string[];
   /**
+   * Humans whose seen-history drives the scout-season rotation: each repeat
+   * encounter of the same player advances to the next career season, so no
+   * season repeats until all of them have been shown (ranked-style no-repeat).
+   */
+  scoutCycleUserIds?: string[];
+  /**
    * Exhausted-pool fallback, ordered least-recently-seen first. This preserves
    * recency as a ranking signal instead of reverting to an unweighted repeat.
    */
@@ -284,6 +290,32 @@ export const auctionContentRepo = {
       ) recent
       ORDER BY season_start_year ASC
     `;
+  },
+
+  /**
+   * Atomically CLAIM one encounter of this player for these humans and return
+   * the highest post-claim count (max over users: the most-exposed human's
+   * rotation never repeats a season early; a shared lot can only follow one
+   * cursor). Claiming at selection time — a single upsert-returning statement —
+   * means two overlapping selections can never read the same cursor, which a
+   * separate read-then-record pair could. Backed by the dedicated per-(user,
+   * player) counter: auction_seen_cards can't count encounters (it dedupes per
+   * card and varies with locale variants). All-time on purpose — the
+   * scout-season cycle only wraps after every season was shown.
+   */
+  async claimScoutEncounter(
+    userIds: string[],
+    footballPlayerId: string
+  ): Promise<number> {
+    if (userIds.length === 0) return 0;
+    const rows = await sql<{ encounters: string | number }[]>`
+      INSERT INTO auction_scout_encounters (user_id, football_player_id)
+      SELECT unnest(${sql.array(userIds)}::uuid[]), ${footballPlayerId}
+      ON CONFLICT (user_id, football_player_id)
+      DO UPDATE SET encounters = auction_scout_encounters.encounters + 1, last_seen_at = NOW()
+      RETURNING encounters
+    `;
+    return rows.reduce((max, row) => Math.max(max, parseCount(row.encounters)), 0);
   },
 
   async getRecentlySeenFootballPlayerIds(

@@ -67,7 +67,9 @@ const AUCTION_CONTENT_FETCH_ATTEMPTS = 3;
 const AUCTION_CONTENT_FETCH_RETRY_MS = 100;
 // A human's solo pick auto-resolves after this long (bots pick instantly).
 // Without a deadline a frozen tab / silent drop froze the whole match forever.
-const AUCTION_SOLO_PICK_TIMEOUT_MS = 30_000;
+// Solo picks are a single binary choice; 10s keeps the match moving and the
+// countdown is now shown to every seat.
+const AUCTION_SOLO_PICK_TIMEOUT_MS = 10_000;
 // Auto-selection on timeout matches the bot default.
 const AUCTION_SOLO_PICK_DEFAULT_OPTION = 'B' as const;
 
@@ -668,7 +670,9 @@ function emitMatchFinished(
 
   io.to(`match:${state.matchId}`).emit('auction:match_finished', {
     matchId: state.matchId,
-    rankings: state.rankings,
+    // Public rankings only: the raw entries embed the internal seat (isBot,
+    // botProfile) which clients must never see.
+    rankings: publicState.rankings ?? [],
     winnerSeatId: state.rankings[0]?.seatId ?? null,
     state: publicState,
     stateVersion: state.version,

@@ -481,7 +481,7 @@ describe('lobby auction mode', () => {
       version: 4,
       locale: 'en',
       phase: 'bidding',
-      formation: '4-3-3',
+      formation: '2-2-2',
       seats: input.humanPlayers.map((player, index) => ({
         seatId: `seat-human-${index + 1}`,
         userId: player.userId,
@@ -489,7 +489,7 @@ describe('lobby auction mode', () => {
         isBot: false,
         forfeited: false,
         budget: 100,
-        team: { formation: '4-3-3', slots: { GK: [], DEF: [], MID: [], FWD: [] } },
+        team: { formation: '2-2-2', slots: { GK: [], DEF: [], MID: [], FWD: [] } },
         isEliminated: false,
       })),
       currentRound: null,

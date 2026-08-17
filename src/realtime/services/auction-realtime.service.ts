@@ -40,13 +40,14 @@ import {
   getAiNicknamePool,
 } from '../ai-ranked.constants.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { AUCTION_SEAT_COUNT } from '../../modules/auction/auction.constants.js';
 import {
   armAuctionDisconnectGrace,
   resumeAuctionUserIfDisconnected,
 } from './auction-disconnect.service.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
-import { reserveAuctionPersistentBots } from './auction-bot-selection.service.js';
+import { fabricatedRankedIdentity, reserveAuctionPersistentBots } from './auction-bot-selection.service.js';
 import { releaseAuctionReservations } from './auction-bot-reservation.service.js';
 
 export interface AuctionStartAiMatchServiceInput {
@@ -62,6 +63,9 @@ export interface AuctionMatchHumanPlayer {
   userId: string;
   displayName: string;
   avatarCustomization?: unknown | null;
+  /** Ranked identity for the pre-match showdown cards. */
+  tier?: string | null;
+  rp?: number | null;
 }
 
 export interface StartAuctionMatchForHumansInput {
@@ -253,7 +257,11 @@ async function generateAuctionBotProfiles(
   return Array.from({ length: count }, () => {
     const displayName = generateRankedAiUsernameAvoiding(used);
     used.add(displayName.toLowerCase());
-    return { displayName, avatarUrl: generateRankedAiAvatarUrl(96) };
+    return {
+      displayName,
+      avatarUrl: generateRankedAiAvatarUrl(96),
+      ...fabricatedRankedIdentity(displayName),
+    };
   });
 }
 
@@ -268,14 +276,29 @@ async function resolveHumanAvatars(
 ): Promise<AuctionMatchHumanPlayer[]> {
   return Promise.all(
     players.map(async (player) => {
-      if (player.avatarCustomization != null) return player;
+      let resolved = player;
+      // Independent best-effort enrichments: a failed avatar lookup must not
+      // also cost the player their tier frame (and vice versa).
       try {
-        const user = await usersRepo.getById(player.userId);
-        return { ...player, avatarCustomization: user?.avatar_customization ?? null };
+        if (resolved.avatarCustomization == null) {
+          const user = await usersRepo.getById(player.userId);
+          resolved = { ...resolved, avatarCustomization: user?.avatar_customization ?? null };
+        }
       } catch (error) {
         logger.warn({ error, userId: player.userId }, 'Auction: failed to load human avatar');
-        return player;
       }
+      try {
+        // Ranked identity dresses the showdown card (tier frame + RP). The
+        // SERVICE (not repo) path also repairs tier/RP drift, so auction never
+        // shows a tier ranked itself would normalize away.
+        if (resolved.tier == null || resolved.rp == null) {
+          const profile = await rankedService.ensureProfile(player.userId);
+          resolved = { ...resolved, tier: profile.tier ?? null, rp: profile.rp ?? null };
+        }
+      } catch (error) {
+        logger.warn({ error, userId: player.userId }, 'Auction: failed to load ranked identity');
+      }
+      return resolved;
     })
   );
 }

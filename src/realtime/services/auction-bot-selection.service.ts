@@ -4,6 +4,7 @@ import { syntheticBotSelectionService } from '../../modules/synthetic-bots/synth
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
 import { generateRankedAiAvatarUrl } from '../ai-ranked.constants.js';
+import { tierFromRp } from '../../modules/ranked/season-rp-formula.js';
 import { auctionReservationKey, releaseAuctionReservations } from './auction-bot-reservation.service.js';
 import type { AuctionBotProfile } from './auction-bot-profile.js';
 
@@ -16,6 +17,22 @@ export interface AuctionBotSeatProfile {
   displayName: string;
   avatarUrl: string | null;
   botProfile?: AuctionBotProfile | null;
+  tier?: string | null;
+  rp?: number | null;
+}
+
+/**
+ * Plausible ranked identity for a bot's showdown card, deterministic per name
+ * so the same bot always shows the same tier/RP. Bots must read as ordinary
+ * players (product rule), so an empty frame is not an option.
+ */
+export function fabricatedRankedIdentity(displayName: string): { tier: string; rp: number } {
+  let hash = 0;
+  for (const char of displayName) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  const rp = 350 + (hash % 1400);
+  return { tier: tierFromRp(rp), rp };
 }
 
 /**
@@ -86,6 +103,10 @@ export async function reserveAuctionPersistentBots(params: {
           consistency: bot.consistency,
           personalitySeed: Number(bot.personality_seed) || 0,
         },
+        // Stable card identity; roster bots have real ranked presence but the
+        // fabricated pair avoids an extra profile query per seat and stays
+        // consistent for the same bot across matches.
+        ...fabricatedRankedIdentity(bot.nickname ?? bot.user_id),
       });
 
       // Daily-cap accounting is SHARED with ranked: an auction seating consumes

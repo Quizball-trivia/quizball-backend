@@ -90,14 +90,15 @@ export type PublicAuctionFootballer = Pick<
   'positionGroup' | 'startingPrice'
 > & Partial<Pick<
   AuctionFootballer,
-  'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'imageUrl' | 'currentClub' | 'nationality'
+  | 'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'imageUrl'
+  | 'currentClub' | 'nationality' | 'league' | 'snapshots'
 >>;
 
 export type PublicAuctionTeam = Omit<AuctionTeam, 'slots'> & {
   slots: Record<PositionGroup, PublicAuctionFootballer[]>;
 };
 
-export type PublicAuctionPlayer = Omit<AuctionPlayer, 'team'> & {
+export type PublicAuctionPlayer = Omit<AuctionPlayer, 'team' | 'botProfile' | 'isBot'> & {
   team: PublicAuctionTeam;
 };
 
@@ -118,15 +119,33 @@ export type PublicAuctionSoloPickState = Omit<
   optionB: PublicAuctionSoloPickOptionState;
 };
 
+/** Ranking entry as clients see it: no isBot flag, and the embedded seat is
+ *  the PUBLIC one (the raw ranking carries the internal seat incl. botProfile). */
+export type PublicAuctionPlayerRanking = Omit<AuctionPlayerRanking, 'isBot' | 'player'> & {
+  /** Absent on rankings computed by pre-player-embedding code (legacy states). */
+  player?: PublicAuctionPlayer;
+};
+
 export type PublicAuctionMatchState = Omit<
   AuctionMatchState,
-  'seats' | 'currentRound' | 'completedRounds' | 'soloPick'
+  'seats' | 'currentRound' | 'completedRounds' | 'soloPick' | 'rankings'
 > & {
   seats: PublicAuctionPlayer[];
   currentRound: PublicAuctionRoundState | null;
   completedRounds: PublicAuctionRoundState[];
   soloPick: PublicAuctionSoloPickState | null;
+  rankings: PublicAuctionPlayerRanking[] | null;
 };
+
+export function toPublicAuctionRankings(
+  rankings: AuctionPlayerRanking[] | null
+): PublicAuctionPlayerRanking[] | null {
+  if (!rankings) return null;
+  return rankings.map(({ isBot: _isBot, player, ...rest }) => ({
+    ...rest,
+    player: player ? toPublicAuctionPlayer(player) : undefined,
+  }));
+}
 
 /**
  * Origin of a match, defaulting to 'queue'. In-flight matches created before
@@ -156,6 +175,7 @@ export function toPublicAuctionMatchState(state: AuctionMatchState): PublicAucti
   return {
     ...state,
     seats: state.seats.map(toPublicAuctionPlayer),
+    rankings: toPublicAuctionRankings(state.rankings),
     currentRound: state.currentRound ? toPublicAuctionRound(state.currentRound) : null,
     completedRounds: state.completedRounds.map((round) => toPublicAuctionRound({
       ...round,
@@ -166,6 +186,22 @@ export function toPublicAuctionMatchState(state: AuctionMatchState): PublicAucti
   };
 }
 
+/** Pre-reveal snapshot set: [scout season, value-season stub]. The stub keeps
+ *  only the season label (the "value in 2025/26" hook) — its stats, league and
+ *  value are zeroed so nothing about the player's later career leaks early. */
+function minimizeHiddenSnapshots(
+  snapshots: AuctionFootballer['snapshots']
+): AuctionFootballer['snapshots'] {
+  if (!snapshots || snapshots.length === 0) return snapshots;
+  const scout = snapshots[0];
+  if (snapshots.length === 1) return [scout];
+  const last = snapshots[snapshots.length - 1];
+  return [
+    scout,
+    { season: last.season, league: '', age: null, apps: 0, goals: 0, valueEur: 0 },
+  ];
+}
+
 export function toHiddenFootballer(
   footballer: AuctionFootballer,
   revealedClues: readonly string[] = []
@@ -174,6 +210,14 @@ export function toHiddenFootballer(
     positionGroup: footballer.positionGroup,
     startingPrice: footballer.startingPrice,
     clues: [...revealedClues],
+    // Only what the pre-reveal UI actually renders travels: the SCOUT season
+    // (earliest) plus a stub carrying the value season's label. Middle seasons,
+    // the final season's stats/league, and every historical value beyond the
+    // scout year stay server-side — a devtools reader can no longer fingerprint
+    // the career and look up the hidden current value.
+    snapshots: minimizeHiddenSnapshots(footballer.snapshots),
+    // Current league is withheld pre-reveal: the snapshot's league facet is
+    // the clue-season league, and leaking today's league narrows the guess.
   };
 }
 
@@ -189,13 +233,15 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
     imageUrl: footballer.imageUrl,
     currentClub: footballer.currentClub,
     nationality: footballer.nationality,
+    league: footballer.league,
+    snapshots: footballer.snapshots ? [...footballer.snapshots] : undefined,
   };
 }
 
 function toPublicAuctionPlayer(player: AuctionPlayer): PublicAuctionPlayer {
-  // botProfile is server-only: leaking a seat's skill parameters would let a
-  // client tell bots from humans, which the product rule forbids.
-  const { botProfile: _botProfile, ...publicFields } = player;
+  // botProfile AND isBot are server-only: leaking either would let a client
+  // tell bots from humans, which the product rule forbids.
+  const { botProfile: _botProfile, isBot: _isBot, ...publicFields } = player;
   return {
     ...publicFields,
     team: {

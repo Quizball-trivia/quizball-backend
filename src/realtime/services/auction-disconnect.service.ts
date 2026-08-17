@@ -512,7 +512,8 @@ function emitAuctionMatchFinishedReplay(socket: QuizballSocket, state: AuctionMa
   });
   socket.emit('auction:match_finished', {
     matchId: state.matchId,
-    rankings,
+    // Public rankings only — the raw entries embed the internal seat.
+    rankings: publicState.rankings ?? [],
     winnerSeatId: rankings[0]?.seatId ?? null,
     state: publicState,
     stateVersion: state.version,

@@ -43,7 +43,13 @@ export interface CreateInitialAuctionMatchInput {
   matchId?: string;
   humanUserId: string;
   humanDisplayName: string;
-  humanPlayers?: readonly { userId: string; displayName: string; avatarCustomization?: unknown | null }[];
+  humanPlayers?: readonly {
+    userId: string;
+    displayName: string;
+    avatarCustomization?: unknown | null;
+    tier?: string | null;
+    rp?: number | null;
+  }[];
   // AI bidder profiles (name + avatar) for the seats not filled by humans.
   // Picked by the realtime layer from the shared AI pool so bots look like
   // real people; falls back to `Bot N` when not supplied (e.g. pure-engine tests).
@@ -56,6 +62,8 @@ export interface CreateInitialAuctionMatchInput {
     displayName: string;
     avatarUrl?: string | null;
     botProfile?: AuctionBotProfile | null;
+    tier?: string | null;
+    rp?: number | null;
   }[];
   formation?: FormationName;
   locale?: 'en' | 'ka';
@@ -88,8 +96,11 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       userId: player.userId,
       displayName: player.displayName,
       avatarCustomization: player.avatarCustomization ?? null,
+      tier: player.tier ?? null,
+      rp: player.rp ?? null,
       isBot: false,
       budget: STARTING_BUDGET,
+      startingBudget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
       isEliminated: false,
     })),
@@ -102,8 +113,11 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       displayName: input.bots?.[index]?.displayName ?? `Bot ${index + 1}`,
       avatarUrl: input.bots?.[index]?.avatarUrl ?? null,
       botProfile: input.bots?.[index]?.botProfile ?? null,
+      tier: input.bots?.[index]?.tier ?? null,
+      rp: input.bots?.[index]?.rp ?? null,
       isBot: true,
       budget: STARTING_BUDGET,
+      startingBudget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
       isEliminated: false,
     })),
@@ -233,14 +247,25 @@ export function selectSoloPickOption(
   }
 
   const selected = option === 'A' ? state.soloPick.optionA : state.soloPick.optionB;
+  // Solo picks are not free: under profit scoring a zero-cost card would count
+  // its whole value as profit — a match-deciding subsidy for whoever lands the
+  // uncontested rounds. Charge the opening price, capped at what the seat can
+  // afford while still filling its remaining slots (same cap as a normal bid).
+  const soloSeat = state.seats.find((seat) => seat.seatId === playerSeatId);
+  const soloPrice = soloSeat
+    ? Math.max(0, Math.min(
+        selected.footballer.startingPrice,
+        getMaxBid(soloSeat.budget, getEmptySlots(soloSeat.team))
+      ))
+    : 0;
   const players = assignFootballerToSquad(
     state.seats,
     playerSeatId,
     selected.footballer,
-    0,
+    soloPrice,
     state.soloPick.positionGroup
   );
-  const completedRound = createCompletedSoloPickRound(state, selected, context);
+  const completedRound = createCompletedSoloPickRound(state, selected, context, soloPrice);
 
   return touch({
     ...state,
@@ -691,7 +716,8 @@ function getNextBidderSeatId(round: AuctionRoundState, players: readonly Auction
 function createCompletedSoloPickRound(
   state: AuctionMatchState,
   selected: AuctionSoloPickOptionState,
-  context: ResolvedAuctionEngineContext
+  context: ResolvedAuctionEngineContext,
+  price: number
 ): AuctionRoundState {
   if (!state.soloPick) throw new AuctionInvalidActionError('No active solo pick');
   const now = context.nowIso();
@@ -703,12 +729,12 @@ function createCompletedSoloPickRound(
     positionGroup: state.soloPick.positionGroup,
     footballer,
     clueRevealIndex: footballer.clues?.length ?? 0,
-    bids: [{ seatId, amount: 0, placedAt: now }],
+    bids: [{ seatId, amount: price, placedAt: now }],
     highestBidderSeatId: seatId,
-    highestBid: 0,
+    highestBid: price,
     startingPrice: footballer.startingPrice,
     winnerSeatId: seatId,
-    winningBid: 0,
+    winningBid: price,
     revealed: true,
     turnOrder: [seatId],
     currentTurnSeatId: null,

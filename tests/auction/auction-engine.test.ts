@@ -19,9 +19,11 @@ import {
   type AuctionEngineContext,
 } from '../../src/modules/auction/auction-engine.js';
 import {
+  AUCTION_SQUAD_SIZE,
   CLUE_STUDY_MS,
   OPENING_TURN_MS,
   RAISE_TURN_MS,
+  STARTING_BUDGET,
 } from '../../src/modules/auction/auction.constants.js';
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
@@ -61,7 +63,7 @@ function createMatch(ctx = context()): AuctionMatchState {
     matchId: 'match-1',
     humanUserId: 'user-1',
     humanDisplayName: 'Human',
-    formation: '4-3-3',
+    formation: '2-2-2',
     context: ctx,
   });
 }
@@ -91,15 +93,17 @@ function withBudget(state: AuctionMatchState, seatId: string, budget: number): A
 }
 
 function completeTeamPlayer(seatId: string, totalValue: number, isBot = false): AuctionPlayer {
-  const team = createEmptyTeam('4-3-3');
-  const values = Array.from({ length: 11 }, (_, index) => (
-    index === 0 ? totalValue - 10 : 1
+  const team = createEmptyTeam('2-2-2');
+  // 2-2-2 squad = 7 slots. One big card carries the value; the rest are 1 each,
+  // so the squad's true value still sums to exactly `totalValue`.
+  const values = Array.from({ length: AUCTION_SQUAD_SIZE }, (_, index) => (
+    index === 0 ? totalValue - (AUCTION_SQUAD_SIZE - 1) : 1
   ));
   const filled = {
     GK: [card(`${seatId}-gk`, 'GK', values[0])],
-    DEF: [1, 2, 3, 4].map((index) => card(`${seatId}-def-${index}`, 'DEF', values[index])),
-    MID: [5, 6, 7].map((index) => card(`${seatId}-mid-${index}`, 'MID', values[index])),
-    FWD: [8, 9, 10].map((index) => card(`${seatId}-fwd-${index}`, 'FWD', values[index])),
+    DEF: [1, 2].map((index) => card(`${seatId}-def-${index}`, 'DEF', values[index])),
+    MID: [3, 4].map((index) => card(`${seatId}-mid-${index}`, 'MID', values[index])),
+    FWD: [5, 6].map((index) => card(`${seatId}-fwd-${index}`, 'FWD', values[index])),
   };
   return {
     seatId,
@@ -120,8 +124,8 @@ describe('auction engine transitions', () => {
     expect(state.phase).toBe('created');
     expect(state.seats).toHaveLength(3);
     expect(state.seats.filter((seat) => seat.isBot)).toHaveLength(2);
-    expect(state.seats.every((seat) => seat.budget === 1_000_000_000)).toBe(true);
-    expect(state.seats.every((seat) => seat.team.formation.name === '4-3-3')).toBe(true);
+    expect(state.seats.every((seat) => seat.budget === STARTING_BUDGET)).toBe(true);
+    expect(state.seats.every((seat) => seat.team.formation.name === '2-2-2')).toBe(true);
     expect(state).not.toHaveProperty('totalRounds');
   });
 
@@ -135,7 +139,7 @@ describe('auction engine transitions', () => {
         { userId: 'user-2', displayName: 'Two' },
         { userId: 'user-3', displayName: 'Three' },
       ],
-      formation: '4-3-3',
+      formation: '2-2-2',
       context: context(),
     });
 
@@ -143,7 +147,7 @@ describe('auction engine transitions', () => {
     expect(state.seats.filter((seat) => seat.isBot)).toHaveLength(0);
     expect(state.seats.map((seat) => seat.userId)).toEqual(['user-1', 'user-2', 'user-3']);
     expect(state.seats.map((seat) => seat.seatId)).toEqual(['seat-human-1', 'seat-human-2', 'seat-human-3']);
-    expect(state.seats.every((seat) => seat.budget === 1_000_000_000)).toBe(true);
+    expect(state.seats.every((seat) => seat.budget === STARTING_BUDGET)).toBe(true);
   });
 
   it('picks only positions that active players still need and that have available cards', () => {
@@ -316,7 +320,8 @@ describe('auction engine transitions', () => {
     expect(state.phase).toBe('reveal');
     expect(state.currentRound?.revealed).toBe(true);
     expect(state.currentRound?.winnerSeatId).toBe('seat-human');
-    expect(human.budget).toBe(970_000_000);
+    // 350M starting budget − 30M winning bid.
+    expect(human.budget).toBe(STARTING_BUDGET - 30_000_000);
     expect(human.team.slots.FWD).toHaveLength(1);
     expect(human.team.slots.FWD[0].trueValue).toBe(120_000_000);
   });
@@ -348,7 +353,7 @@ describe('auction engine transitions', () => {
     expect(state.completedRounds.at(-1)?.winnerSeatId).toBeNull();
   });
 
-  it('starts solo-pick when exactly one active player needs the position and selection costs no money', () => {
+  it('starts solo-pick when exactly one active player needs the position and selection costs the opening price', () => {
     const initial = createMatch();
     const soloReady = {
       ...initial,
@@ -366,9 +371,11 @@ describe('auction engine transitions', () => {
 
     const selected = selectSoloPickOption(solo, 'seat-human', 'B', context());
     const human = selected.seats.find((seat) => seat.seatId === 'seat-human')!;
-    expect(human.budget).toBe(1_000_000_000);
+    // Solo picks charge the opening price (a free card would count its whole
+    // value as pure profit under profit scoring).
+    expect(human.budget).toBe(STARTING_BUDGET - 10_000_000);
     expect(human.team.slots.FWD[0].id).toBe('mystery-option');
-    expect(selected.completedRounds.at(-1)?.winningBid).toBe(0);
+    expect(selected.completedRounds.at(-1)?.winningBid).toBe(10_000_000);
   });
 
   it('advances after reveal, avoids used clue cards, and starts another available round', () => {
@@ -401,8 +408,8 @@ describe('auction engine transitions', () => {
       ...createMatch().seats[0],
       seatId: 'incomplete',
       team: {
-        ...createEmptyTeam('4-3-3'),
-        slots: { ...createEmptyTeam('4-3-3').slots, FWD: [card('goat', 'FWD', 500_000_000)] },
+        ...createEmptyTeam('2-2-2'),
+        slots: { ...createEmptyTeam('2-2-2').slots, FWD: [card('goat', 'FWD', 500_000_000)] },
       },
     };
     const completeLow = completeTeamPlayer('complete-low', 100_000_000);

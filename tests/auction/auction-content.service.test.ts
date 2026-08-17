@@ -6,6 +6,7 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedCardCount: vi.fn(),
     getPublishedCardAvailability: vi.fn(),
     getRandomPublishedAuctionCard: vi.fn(),
+    getSeasonSnapshots: vi.fn(async () => []),
     getPublishedAuctionCardById: vi.fn(),
     getRecentlySeenFootballPlayerIds: vi.fn(),
     recordSeenClueCards: vi.fn(),
@@ -301,5 +302,36 @@ describe('auctionContentService', () => {
 
     expect(result.startingPrice).toBe(10_000_000);
     expect(result.trueValue).toBe(180_000_000);
+  });
+
+  const snapshotRows = [
+    { season_label: '2020/21', league_name: 'laliga', age: 19, apps: 20, goals: 3, assists: 1, clean_sheets: null, goals_conceded: null, value_eur: '5000000' },
+    { season_label: '2021/22', league_name: 'laliga', age: 20, apps: 30, goals: 8, assists: 4, clean_sheets: null, goals_conceded: null, value_eur: '20000000' },
+    { season_label: '2025/26', league_name: 'liga-portugal', age: 24, apps: 31, goals: 3, assists: 9, clean_sheets: null, goals_conceded: null, value_eur: '29000000' },
+  ];
+
+  it('attaches season snapshots: 5 facet clues, display league, last value pinned to trueValue', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(snapshotRows);
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(result.snapshots).toHaveLength(3);
+    expect(result.snapshots![0]).toMatchObject({ season: '2020/21', league: 'La Liga', valueEur: 5_000_000 });
+    // The scoring season's value is pinned to the server trueValue so client
+    // profit math can never diverge from the ranked score.
+    expect(result.snapshots!.at(-1)).toMatchObject({ season: '2025/26', league: 'Primeira Liga', valueEur: result.trueValue });
+    expect(result.league).toBe('Primeira Liga');
+    expect(result.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+  });
+
+  it('keeps text clues when a player has too little season history', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(snapshotRows.slice(0, 2));
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(result.snapshots).toBeUndefined();
+    expect(result.clues).toHaveLength(3);
   });
 });

@@ -4,6 +4,7 @@ import '../setup.js';
 const auctionContentServiceMock = vi.hoisted(() => ({
   assertPublishedAuctionContentAvailable: vi.fn(),
   getRandomPublishedAuctionCard: vi.fn(),
+    getSeasonSnapshots: vi.fn(async () => []),
 }));
 
 const auctionStateStoreMock = vi.hoisted(() => ({
@@ -123,7 +124,7 @@ describe('auctionRealtimeService', () => {
     await auctionRealtimeService.handleStartAiMatch(
       io,
       socket,
-      { locale: 'en', formation: '4-3-3' },
+      { locale: 'en', formation: '2-2-2' },
       { context: deterministicContext }
     );
 

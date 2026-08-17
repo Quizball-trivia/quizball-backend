@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '../setup.js';
 
+import { STARTING_BUDGET } from '../../src/modules/auction/auction.constants.js';
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer } from '../../src/modules/auction/auction.types.js';
@@ -60,8 +61,8 @@ function seat(seatId: string, userId: string | null, isBot = false): AuctionPlay
     userId,
     displayName: isBot ? `Bot ${seatId}` : `User ${seatId}`,
     isBot,
-    budget: 1_000_000_000,
-    team: createEmptyTeam('4-3-3'),
+    budget: STARTING_BUDGET,
+    team: createEmptyTeam('2-2-2'),
     isEliminated: false,
   };
 }
@@ -71,7 +72,7 @@ function matchState(overrides: Partial<AuctionMatchState> = {}): AuctionMatchSta
     matchId: 'match-1',
     version: 0,
     phase: 'clue_reveal',
-    formation: '4-3-3',
+    formation: '2-2-2',
     seats: [
       seat('seat-human', 'user-1'),
       seat('seat-bot-a', null, true),
@@ -138,7 +139,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       auctionClueRevealTimerKey('match-1', 'round-1', 1),
-      new Date('2026-06-20T10:00:05.000Z'),
+      new Date('2026-06-20T10:00:03.000Z'),
       {
         kind: 'auction_clue_reveal',
         matchId: 'match-1',
@@ -183,7 +184,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       'match-1:round-1:2',
-      new Date('2026-06-20T10:00:05.000Z'),
+      new Date('2026-06-20T10:00:03.000Z'),
       expect.objectContaining({ expectedClueIndex: 2, stateVersion: 1 })
     );
 

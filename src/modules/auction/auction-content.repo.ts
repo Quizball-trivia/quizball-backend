@@ -26,6 +26,18 @@ const PROMPT_VERSION_PATTERN_BY_DIFFICULTY: Record<AuctionPreferredDifficulty, s
  */
 export const AUCTION_CARD_HISTORY_WINDOW_DAYS = 14;
 
+export interface SeasonSnapshotRow {
+  season_label: string;
+  league_name: string;
+  age: number | null;
+  apps: number;
+  goals: number;
+  assists: number | null;
+  clean_sheets: number | null;
+  goals_conceded: number | null;
+  value_eur: number | string;
+}
+
 export interface PublishedAuctionCardRow {
   clue_card_id: string;
   football_player_id: string;
@@ -118,6 +130,19 @@ const usablePricePredicate = sql`
   AND starting_price_eur IS NOT NULL
 `;
 
+// Snapshot lots only: every served player must have enough valued season
+// history to run the scouting-snapshot reveal (product rule — no text-clue
+// lots). Mirrors MIN_SNAPSHOT_SEASONS in auction-content.service.
+const snapshotReadyPredicate = sql`
+  football_player_id IN (
+    SELECT football_player_id
+    FROM player_season_snapshots
+    WHERE value_eur IS NOT NULL
+    GROUP BY football_player_id
+    HAVING count(*) >= 3
+  )
+`;
+
 function parseCount(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
   return typeof value === 'number' ? value : Number.parseInt(value, 10);
@@ -125,11 +150,15 @@ function parseCount(value: string | number | null | undefined): number {
 
 export const auctionContentRepo = {
   async getPublishedCardCount(locale: AuctionContentLocale): Promise<number> {
+    // Mirrors EVERY hard filter of the selection query (incl. snapshot
+    // readiness) — an availability gate that passes cards selection would
+    // reject lets matchmaking start unfillable matches.
     const [row] = await sql<{ count: string | number }[]>`
       SELECT COUNT(*)::text AS count
       FROM player_clue_card_content_view
       WHERE ${publishedEligiblePredicate}
         AND ${usablePricePredicate}
+        AND ${snapshotReadyPredicate}
         AND locale = ${locale}
     `;
 
@@ -146,6 +175,7 @@ export const auctionContentRepo = {
         COUNT(*)::text AS base_count,
         COUNT(*) FILTER (
           WHERE ${usablePricePredicate}
+            AND ${snapshotReadyPredicate}
         )::text AS usable_count,
         COUNT(*) FILTER (
           WHERE NOT (${usablePricePredicate})
@@ -205,6 +235,7 @@ export const auctionContentRepo = {
       FROM player_clue_card_content_view
       WHERE ${publishedEligiblePredicate}
         AND ${usablePricePredicate}
+        AND ${snapshotReadyPredicate}
         AND locale = ${options.locale}
         ${positionFilter}
         ${fameFilter}
@@ -231,6 +262,30 @@ export const auctionContentRepo = {
    * Best-effort by contract: callers use the ordered result as a hard exclusion
    * first, then as an oldest-first fallback ranking if the fresh pool is empty.
    */
+  /**
+   * Career seasons for the scouting-snapshot lot, chronological, valued rows
+   * only (a season without a market value can't anchor the price gamble).
+   */
+  async getSeasonSnapshots(footballPlayerId: string): Promise<SeasonSnapshotRow[]> {
+    // Window = the NEWEST 10 valued seasons (a plain ASC LIMIT would drop the
+    // latest seasons for long careers, pinning "future value" to an old year),
+    // returned chronologically for the scout-earliest / value-latest contract.
+    return sql<SeasonSnapshotRow[]>`
+      SELECT season_label, league_name, age, apps, goals, assists,
+             clean_sheets, goals_conceded, value_eur
+      FROM (
+        SELECT season_label, league_name, age, apps, goals, assists,
+               clean_sheets, goals_conceded, value_eur, season_start_year
+        FROM player_season_snapshots
+        WHERE football_player_id = ${footballPlayerId}
+          AND value_eur IS NOT NULL
+        ORDER BY season_start_year DESC
+        LIMIT 10
+      ) recent
+      ORDER BY season_start_year ASC
+    `;
+  },
+
   async getRecentlySeenFootballPlayerIds(
     userIds: string[],
     withinDays = AUCTION_CARD_HISTORY_WINDOW_DAYS

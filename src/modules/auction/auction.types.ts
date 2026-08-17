@@ -3,7 +3,7 @@ import type { AuctionBotProfile } from '../../realtime/services/auction-bot-prof
 export type { AuctionBotProfile };
 
 export type PositionGroup = 'GK' | 'DEF' | 'MID' | 'FWD';
-export type FormationName = '4-3-3' | '4-4-2' | '3-5-2' | '4-2-3-1' | '3-4-3';
+export type FormationName = '2-2-2';
 
 export type PositionNeeds = Record<PositionGroup, number>;
 
@@ -18,6 +18,23 @@ export interface AuctionFormation {
   rows: readonly AuctionFormationRow[];
 }
 
+/**
+ * One season of a player's career, served anonymised during bidding as the
+ * "scouting snapshot" (replaces text clues when available). Field names match
+ * the web client's SeasonSnapshot 1:1.
+ */
+export interface AuctionSeasonSnapshot {
+  season: string;
+  league: string;
+  age: number | null;
+  apps: number;
+  goals: number;
+  assists?: number;
+  cleanSheets?: number;
+  conceded?: number;
+  valueEur: number;
+}
+
 export interface AuctionFootballer {
   id: string;
   clueCardId?: string;
@@ -29,6 +46,14 @@ export interface AuctionFootballer {
   imageUrl?: string | null;
   currentClub?: string | null;
   nationality?: string | null;
+  /** Competition the player's club plays in — a chemistry dimension. */
+  league?: string | null;
+  /**
+   * Career seasons, chronological. First entry = the anonymised clue season;
+   * last entry = the scoring season, whose valueEur is forced equal to
+   * trueValue so client-side profit math agrees with the server ranking.
+   */
+  snapshots?: readonly AuctionSeasonSnapshot[];
 }
 
 export type AuctionTeamSlots = Record<PositionGroup, AuctionFootballer[]>;
@@ -48,7 +73,20 @@ export interface AuctionPlayer {
    * rendering). Null for bots — the client generates a random avatar for those.
    */
   avatarCustomization?: unknown | null;
+  /**
+   * Ranked identity for the showdown/lineup cards: humans get their real
+   * tier + RP; bots get a fabricated-but-stable pair (players must never be
+   * able to tell a seat is a bot from its card).
+   */
+  tier?: string | null;
+  rp?: number | null;
   isBot: boolean;
+  /**
+   * The budget this seat STARTED with. Ranking reconstructs spend from it, so
+   * a state created under an older economy (e.g. the €1B era) keeps scoring
+   * correctly after a deploy changes STARTING_BUDGET. Absent on legacy states.
+   */
+  startingBudget?: number;
   /**
    * Bidding personality for a PERSISTENT roster bot, copied onto the seat at
    * seating time so the decision function stays pure and the match's behaviour is
@@ -86,6 +124,13 @@ export interface AuctionPlayerRanking {
   rank: number;
   isComplete: boolean;
   totalTrueValue: number;
+  /** Squad chemistry total (0…MAX_SQUAD_CHEMISTRY). */
+  chemistry: number;
+  /** Squad value minus what was spent (later-season "sell" value − amount paid).
+   *  Can be negative. */
+  profit: number;
+  /** Profit scaled by chemistry — the score players are RANKED on. */
+  adjustedProfit: number;
   budgetRemaining: number;
   player: AuctionPlayer;
 }

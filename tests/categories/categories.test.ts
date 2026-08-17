@@ -32,6 +32,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     getByCategoryId: vi.fn(),
     deleteByCategoryId: vi.fn(),
     archiveByCategoryId: vi.fn(),
+    countCampaignQuizManagedByCategory: vi.fn().mockResolvedValue(0),
   },
 }));
 
@@ -129,6 +130,8 @@ describe('Categories API', () => {
         {
           parentId: parentId,
           isActive: undefined,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         1,
         50,
@@ -148,6 +151,8 @@ describe('Categories API', () => {
         {
           parentId: undefined,
           isActive: true,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         1,
         50,
@@ -167,6 +172,8 @@ describe('Categories API', () => {
         {
           parentId: undefined,
           isActive: undefined,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         2,
         10,

@@ -3,6 +3,8 @@ import { validate } from '../middleware/validate.js';
 import { optionalAuthMiddleware } from '../middleware/auth.js';
 import {
   campaignQuizAnswerBodySchema,
+  campaignQuizListQuerySchema,
+  campaignQuizPreviewQuerySchema,
   campaignQuizRatingBodySchema,
   campaignQuizSlugParamsSchema,
   campaignQuizzesController,
@@ -13,8 +15,23 @@ const router = Router();
 // Public read/play routes. Correct answers are never included in the initial
 // quiz response; the answer endpoint reveals one only after a selection.
 router.get(
-  '/:slug',
+  '/',
+  validate({ query: campaignQuizListQuerySchema }),
+  campaignQuizzesController.list,
+);
+
+router.get(
+  '/routes/:slug',
   validate({ params: campaignQuizSlugParamsSchema }),
+  campaignQuizzesController.resolveRoute,
+);
+
+router.get(
+  '/:slug',
+  validate({
+    params: campaignQuizSlugParamsSchema,
+    query: campaignQuizPreviewQuerySchema,
+  }),
   campaignQuizzesController.getQuiz,
 );
 

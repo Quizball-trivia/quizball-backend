@@ -481,7 +481,11 @@ async function loadCategories(request: ImageMcqGeneratePreviewRequest): Promise<
   if (request.category_ids?.length) {
     return categoriesRepo.listByIds(request.category_ids);
   }
-  const { categories } = await categoriesRepo.list({ isActive: true }, 1, request.limit_categories);
+  const { categories } = await categoriesRepo.list(
+    { isActive: true, excludeCampaignManaged: true },
+    1,
+    request.limit_categories,
+  );
   return categories;
 }
 

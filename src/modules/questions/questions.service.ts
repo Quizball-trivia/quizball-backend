@@ -42,6 +42,14 @@ const normalizePayload = (payload: Json | undefined, context: string): Json | un
   return normalized as Json;
 };
 
+async function assertQuestionIsNotCampaignManaged(id: string): Promise<void> {
+  if (await questionsRepo.isCampaignQuizManaged(id)) {
+    throw new BadRequestError(
+      'This question belongs to a Quiz Page. Edit it from Quiz Pages so publication checks and revision history are preserved.'
+    );
+  }
+}
+
 /**
  * Questions service.
  * Contains ALL business logic for question operations.
@@ -128,6 +136,7 @@ export const questionsService = {
     data: UpdateQuestionData & { payload?: Json },
     userId?: string
   ): Promise<QuestionWithPayload> {
+    await assertQuestionIsNotCampaignManaged(id);
     // Check question exists
     const existing = await questionsRepo.getById(id);
     if (!existing) {
@@ -230,6 +239,7 @@ export const questionsService = {
    * Update question status only.
    */
   async updateStatus(id: string, status: Status, userId?: string): Promise<QuestionWithPayload> {
+    await assertQuestionIsNotCampaignManaged(id);
     // Check question exists + get old status for audit
     const existing = await questionsRepo.getById(id);
     if (!existing) {
@@ -274,6 +284,7 @@ export const questionsService = {
    * Payload will be deleted via CASCADE.
    */
   async delete(id: string, userId?: string): Promise<DeleteQuestionResult> {
+    await assertQuestionIsNotCampaignManaged(id);
     // Fetch question details for audit before deleting
     const existing = await questionsRepo.getById(id);
     if (!existing) {

@@ -15,6 +15,30 @@ const configSchema = z.object({
     .transform((val) => val === "true" || val === "1"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   DEFAULT_LOCALE: z.string().default("en"),
+  PUBLIC_SITE_ORIGIN: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_PREVIEW_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().default('https://staging.quizball.io'),
+  ),
+  CAMPAIGN_QUIZ_ASSET_BASE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().url().optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_SITE_URL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().email().optional(),
+  ),
+  GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
 
   // Database
   DATABASE_URL: z.string().optional(),
@@ -176,6 +200,14 @@ const configSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default("google/gemini-2.0-flash-001"),
 
+  // OpenAI (CMS campaign artwork generation)
+  OPENAI_API_KEY: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
+  OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-2'),
+  OPENAI_IMAGE_QUALITY: z.enum(['low', 'medium', 'high']).default('high'),
+
   // Stripe (Store payments)
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
@@ -220,6 +252,19 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
+  const searchConsoleValues = [
+    result.data.GOOGLE_SEARCH_CONSOLE_SITE_URL,
+    result.data.GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL,
+    result.data.GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY,
+  ];
+  const configuredSearchConsoleValues = searchConsoleValues.filter(Boolean).length;
+  if (configuredSearchConsoleValues > 0 && configuredSearchConsoleValues < searchConsoleValues.length) {
+    throw new ConfigError(
+      'Invalid configuration: Google Search Console credentials must be configured together.',
+      { configuredSearchConsoleValues },
+    );
+  }
+
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking
   // delays for the test harness. They MUST never run outside local — in
   // staging/prod they would change real gameplay (deterministic questions, near-
@@ -235,6 +280,25 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
+  if (
+    result.data.NODE_ENV !== "local"
+    && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL
+  ) {
+    if (!result.data.SUPABASE_URL) {
+      throw new ConfigError(
+        "Invalid configuration: SUPABASE_URL is required when CAMPAIGN_QUIZ_ASSET_BASE_URL is set outside local.",
+        { nodeEnv: result.data.NODE_ENV },
+      );
+    }
+    const assetOrigin = new URL(result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL).origin;
+    const storageOrigin = new URL(result.data.SUPABASE_URL).origin;
+    if (assetOrigin !== storageOrigin) {
+      throw new ConfigError(
+        "Invalid configuration: campaign quiz assets must use this environment's Supabase project.",
+        { nodeEnv: result.data.NODE_ENV, assetOrigin, storageOrigin },
+      );
+    }
+  }
   // Auto-disable docs in production unless explicitly enabled
   // Parse DOCS_ENABLED: true/1 = enabled, false/0 = disabled, undefined = auto (enabled except prod)
   const docsEnabled =

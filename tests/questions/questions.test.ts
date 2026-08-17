@@ -27,6 +27,8 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     exists: vi.fn(),
     findByPrompts: vi.fn(),
     findDuplicateGroups: vi.fn(),
+    isCampaignQuizManaged: vi.fn().mockResolvedValue(false),
+    countCampaignQuizManagedByCategory: vi.fn().mockResolvedValue(0),
   },
 }));
 
@@ -518,6 +520,18 @@ describe('Questions API', () => {
   });
 
   describe('PUT /api/v1/questions/:id', () => {
+    it('blocks edits to questions owned by the Quiz Pages CMS', async () => {
+      (questionsRepo.isCampaignQuizManaged as Mock).mockResolvedValueOnce(true);
+
+      const response = await request(app)
+        .put(`/api/v1/questions/${mockQuestion.id}`)
+        .send({ difficulty: 'hard' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.message).toContain('Edit it from Quiz Pages');
+      expect(questionsRepo.update).not.toHaveBeenCalled();
+    });
+
     it('should update question and payload', async () => {
       (questionsRepo.getById as Mock)
         .mockResolvedValueOnce(mockQuestion) // exists check

@@ -28,6 +28,7 @@ export const categoriesController = {
         parentId: query.parent_id,
         isActive: query.is_active,
         minQuestions: query.min_questions,
+        excludeCampaignManaged: query.min_questions !== undefined,
       },
       query.page,
       query.limit

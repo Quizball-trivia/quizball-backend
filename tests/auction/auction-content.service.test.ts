@@ -325,6 +325,34 @@ describe('auctionContentService', () => {
     expect(result.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
   });
 
+  it('rolls the scout season across the career window (final season always scores)', async () => {
+    const fiveSeasons = [
+      { season_label: '2018/19', league_name: 'laliga', age: 17, apps: 12, goals: 1, assists: 0, clean_sheets: null, goals_conceded: null, value_eur: '2000000' },
+      { season_label: '2019/20', league_name: 'laliga', age: 18, apps: 22, goals: 4, assists: 2, clean_sheets: null, goals_conceded: null, value_eur: '4000000' },
+      ...snapshotRows,
+    ];
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(fiveSeasons);
+
+    // fameTier pinned so the injected RNG is consumed by the scout roll only.
+    const low = await auctionContentService.findRandomPublishedAuctionCard(
+      { locale: 'en', fameTier: 'well_known' },
+      () => 0
+    );
+    expect(low!.snapshots).toHaveLength(5);
+    expect(low!.snapshots![0].season).toBe('2018/19');
+
+    const high = await auctionContentService.findRandomPublishedAuctionCard(
+      { locale: 'en', fameTier: 'well_known' },
+      () => 0.99
+    );
+    // Highest roll starts the window at the latest eligible scout season —
+    // always leaving MIN_SNAPSHOT_SEASONS in the served arc.
+    expect(high!.snapshots).toHaveLength(3);
+    expect(high!.snapshots![0].season).toBe('2020/21');
+    expect(high!.snapshots!.at(-1)).toMatchObject({ season: '2025/26', valueEur: high!.trueValue });
+  });
+
   it('keeps text clues when a player has too little season history', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
     (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(snapshotRows.slice(0, 2));

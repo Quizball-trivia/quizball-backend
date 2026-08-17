@@ -208,12 +208,12 @@ async function findRandomPublishedAuctionCard(
       ...options,
       fameTier,
     });
-    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered));
+    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered), random);
     // The rolled tier is exhausted for this position/exclusion set — fall
     // through to the unrestricted pool rather than failing the round.
   }
   const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
-  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row)) : null;
+  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row), random) : null;
 }
 
 // The web client's LEAGUES catalogue uses display names; the snapshot table
@@ -251,9 +251,21 @@ const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'A
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
 
-async function attachSeasonSnapshots(card: PublishedAuctionCard): Promise<PublishedAuctionCard> {
-  const rows = await auctionContentRepo.getSeasonSnapshots(card.footballPlayerId);
-  if (rows.length < MIN_SNAPSHOT_SEASONS) return card;
+async function attachSeasonSnapshots(
+  card: PublishedAuctionCard,
+  random: () => number = getRandom
+): Promise<PublishedAuctionCard> {
+  const allRows = await auctionContentRepo.getSeasonSnapshots(card.footballPlayerId);
+  if (allRows.length < MIN_SNAPSHOT_SEASONS) return card;
+
+  // Roll the SCOUT season instead of always showing the earliest one: the same
+  // player then presents different numbers across matches, so repeat
+  // encounters can't be memorised. Any season with at least two later seasons
+  // is eligible (keeps a real gap to gamble across); the final season always
+  // stays the scoring season.
+  const maxScoutIndex = allRows.length - MIN_SNAPSHOT_SEASONS;
+  const scoutIndex = Math.min(maxScoutIndex, Math.floor(random() * (maxScoutIndex + 1)));
+  const rows = allRows.slice(scoutIndex);
 
   const snapshots = rows.map((row, index) => ({
     season: row.season_label,

@@ -154,6 +154,32 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
       });
       socket.on('disconnect', (reason: string) => { bump(metrics.disconnects, reason); });
 
+      // Chaos identities are shared across harness runs: a stale RANKED match
+      // or lobby from an old capacity test makes the session guard block the
+      // auction queue. Self-heal: clean up whatever the guard reports, retry.
+      let blockedRetries = 0;
+      socket.on('session:blocked', (payload: {
+        reason?: string;
+        stateSnapshot?: { activeMatchId?: string | null; waitingLobbyId?: string | null };
+      }) => {
+        touch();
+        const snapshot = payload.stateSnapshot ?? {};
+        if (snapshot.activeMatchId) {
+          socket.emit('match:forfeit', { matchId: snapshot.activeMatchId });
+          socket.emit('auction:forfeit', { matchId: snapshot.activeMatchId });
+          metrics.forfeitedCleanups += 1;
+        }
+        if (snapshot.waitingLobbyId) {
+          socket.emit('lobby:leave', { lobbyId: snapshot.waitingLobbyId });
+          metrics.forfeitedCleanups += 1;
+        }
+        blockedRetries += 1;
+        if (blockedRetries > 4) { finish('failed', 'session_blocked_unrecoverable'); return; }
+        setTimeout(() => {
+          if (phase === 'searching' || phase === 'connecting') startSearch();
+        }, 2_500);
+      });
+
       // Stale session from a previous crashed run: forfeit it, then search.
       socket.on('auction:rejoin_available', (payload: { matchId: string }) => {
         touch();
@@ -334,7 +360,7 @@ async function main(): Promise<void> {
     emailPrefix: 'chaos',
     emailDomain: 'quizball.io',
     concurrency: 10,
-    loginIntervalMs: TARGET === 'staging' ? 2_200 : 0,
+    loginIntervalMs: 2_200,
     bypassToken,
   });
   console.log(`  → ${users.length} users authenticated.`);

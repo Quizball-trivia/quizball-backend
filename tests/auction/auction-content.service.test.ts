@@ -7,7 +7,8 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedCardAvailability: vi.fn(),
     getRandomPublishedAuctionCard: vi.fn(),
     getSeasonSnapshots: vi.fn(async () => []),
-    getSeenFootballPlayerCount: vi.fn(async () => 0),
+    getScoutEncounterCount: vi.fn(async () => 0),
+    recordScoutEncounters: vi.fn(async () => {}),
     getPublishedAuctionCardById: vi.fn(),
     getRecentlySeenFootballPlayerIds: vi.fn(),
     recordSeenClueCards: vi.fn(),
@@ -365,7 +366,7 @@ describe('auctionContentService', () => {
 
     const userIds = ['44444444-4444-4444-4444-444444444444'];
     const scoutSeasonAtSeenCount = async (seenCount: number) => {
-      (auctionContentRepo.getSeenFootballPlayerCount as Mock).mockResolvedValue(seenCount);
+      (auctionContentRepo.getScoutEncounterCount as Mock).mockResolvedValue(seenCount);
       const card = await auctionContentService.findRandomPublishedAuctionCard(
         { locale: 'en', fameTier: 'well_known', scoutCycleUserIds: userIds },
         // RNG must be ignored on the cycling path — a varying roll proves it.
@@ -381,7 +382,7 @@ describe('auctionContentService', () => {
     const third = await scoutSeasonAtSeenCount(2);
     expect(new Set([first, second, third]).size).toBe(3);
     expect(await scoutSeasonAtSeenCount(3)).toBe(first);
-    expect(auctionContentRepo.getSeenFootballPlayerCount).toHaveBeenCalledWith(userIds, PLAYER_ID);
+    expect(auctionContentRepo.getScoutEncounterCount).toHaveBeenCalledWith(userIds, PLAYER_ID);
   });
 
   it('keeps text clues when a player has too little season history', async () => {

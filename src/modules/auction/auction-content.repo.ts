@@ -293,27 +293,43 @@ export const auctionContentRepo = {
   },
 
   /**
-   * How many times these humans have been served this player before (max over
+   * How many times these humans have ENCOUNTERED this player before (max over
    * the users, so the most-exposed human's rotation never repeats a season
-   * early). All-time on purpose: the scout-season cycle should only wrap after
-   * every season has been shown, not reset with the recency window.
+   * early; a shared lot can only follow one cursor). Backed by the dedicated
+   * per-(user, player) counter — auction_seen_cards can't count encounters
+   * (it dedupes per card and varies with locale variants). All-time on
+   * purpose: the scout-season cycle only wraps after every season was shown.
    */
-  async getSeenFootballPlayerCount(
+  async getScoutEncounterCount(
     userIds: string[],
     footballPlayerId: string
   ): Promise<number> {
     if (userIds.length === 0) return 0;
     const [row] = await sql<{ max_count: string | number | null }[]>`
-      SELECT MAX(cnt)::text AS max_count FROM (
-        SELECT count(*) AS cnt
-        FROM auction_seen_cards seen
-        JOIN player_clue_cards pcc ON pcc.id = seen.clue_card_id
-        WHERE seen.user_id = ANY(${sql.array(userIds)}::uuid[])
-          AND pcc.football_player_id = ${footballPlayerId}
-        GROUP BY seen.user_id
-      ) per_user
+      SELECT MAX(encounters)::text AS max_count
+      FROM auction_scout_encounters
+      WHERE user_id = ANY(${sql.array(userIds)}::uuid[])
+        AND football_player_id = ${footballPlayerId}
     `;
     return parseCount(row?.max_count);
+  },
+
+  /** Bump the encounter counter for every (user, player) pair — one increment
+   *  per serve, regardless of card variant. */
+  async recordScoutEncounters(
+    userIds: string[],
+    footballPlayerIds: string[]
+  ): Promise<void> {
+    if (userIds.length === 0 || footballPlayerIds.length === 0) return;
+    const uniquePlayerIds = [...new Set(footballPlayerIds)];
+    const rows = userIds.flatMap((userId) => (
+      uniquePlayerIds.map((footballPlayerId) => ({ user_id: userId, football_player_id: footballPlayerId }))
+    ));
+    await sql`
+      INSERT INTO auction_scout_encounters ${sql(rows)}
+      ON CONFLICT (user_id, football_player_id)
+      DO UPDATE SET encounters = auction_scout_encounters.encounters + 1, last_seen_at = NOW()
+    `;
   },
 
   async getRecentlySeenFootballPlayerIds(

@@ -4,7 +4,9 @@ import '../setup.js';
 const auctionContentServiceMock = vi.hoisted(() => ({
   assertPublishedAuctionContentAvailable: vi.fn(),
   getRandomPublishedAuctionCard: vi.fn(),
-    getSeasonSnapshots: vi.fn(async () => []),
+  getSeasonSnapshots: vi.fn(async () => []),
+  recordSeenClueCards: vi.fn(async () => {}),
+  recordScoutEncounters: vi.fn(async () => {}),
 }));
 
 const auctionStateStoreMock = vi.hoisted(() => ({

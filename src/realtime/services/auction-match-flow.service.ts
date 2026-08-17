@@ -511,16 +511,8 @@ function recordSeenAuctionCards(
   void auctionContentService.recordSeenClueCards(humanUserIds, clueCardIds).catch((error) => {
     logger.warn({ error, matchId, clueCardIds }, 'Failed to record seen auction clue cards');
   });
-
-  // Scout-season rotation cursor: one increment per ENCOUNTER, keyed by the
-  // football player (the seen-cards log dedupes per card so it can't count).
-  const footballPlayerIds = [...new Set(
-    cards.flatMap((card) => (card?.id ? [card.id] : []))
-  )];
-  if (footballPlayerIds.length === 0) return;
-  void auctionContentService.recordScoutEncounters(humanUserIds, footballPlayerIds).catch((error) => {
-    logger.warn({ error, matchId, footballPlayerIds }, 'Failed to record auction scout encounters');
-  });
+  // The scout-season rotation cursor is NOT recorded here: card selection
+  // claims it atomically (claimScoutEncounter) at pick time.
 }
 
 async function getNextPublishedCard(

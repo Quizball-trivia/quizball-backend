@@ -201,19 +201,14 @@ export async function startAuctionMatchForHumans(
   const publicState = toPublicAuctionMatchState(saved);
 
   // The OPENING card counts as seen too (later rounds record in the match-flow
-  // step): without this the seen-history and the scout-season rotation both
-  // skip round 1, so an opener player repeats their scout season forever.
+  // step): without this the 30-day cross-match no-repeat skipped round 1. The
+  // scout-season rotation needs nothing here — selection claims its cursor.
   {
     const humanUserIds = input.humanPlayers.map((player) => player.userId);
     const openingCard = saved.currentRound?.footballer ?? null;
     if (openingCard?.clueCardId) {
       void auctionContentService.recordSeenClueCards(humanUserIds, [openingCard.clueCardId]).catch((error) => {
         logger.warn({ error, matchId: saved.matchId }, 'Failed to record opening auction clue card');
-      });
-    }
-    if (openingCard?.id) {
-      void auctionContentService.recordScoutEncounters(humanUserIds, [openingCard.id]).catch((error) => {
-        logger.warn({ error, matchId: saved.matchId }, 'Failed to record opening auction scout encounter');
       });
     }
   }

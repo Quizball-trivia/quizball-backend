@@ -177,7 +177,6 @@ export const auctionContentService = {
 
   getRecentlySeenFootballPlayerIds: auctionContentRepo.getRecentlySeenFootballPlayerIds,
   recordSeenClueCards: auctionContentRepo.recordSeenClueCards,
-  recordScoutEncounters: auctionContentRepo.recordScoutEncounters,
 
   async getPublishedAuctionCardById(clueCardId: string): Promise<PublishedAuctionCard> {
     const row = await auctionContentRepo.getPublishedAuctionCardById(clueCardId);
@@ -256,7 +255,7 @@ const MIN_SNAPSHOT_SEASONS = 3;
  *  at the same career point. Salted server-side: player UUIDs are public after
  *  reveal, and an unsalted offset would let players precompute (and
  *  crowd-source) which season a first encounter shows. */
-const SCOUT_CYCLE_SALT = process.env.AUCTION_SCOUT_CYCLE_SALT ?? 'qb-scout-cycle-v1';
+const SCOUT_CYCLE_SALT = process.env.AUCTION_SCOUT_CYCLE_SALT?.trim() || 'qb-scout-cycle-v1';
 
 function scoutCycleOffset(footballPlayerId: string): number {
   let hash = 0;
@@ -288,18 +287,21 @@ async function attachSeasonSnapshots(
   const cycleLength = maxScoutIndex + 1;
   let scoutIndex: number;
   if (scoutCycleUserIds?.length) {
-    const seenCount = await auctionContentRepo
-      .getScoutEncounterCount(scoutCycleUserIds, card.footballPlayerId)
+    // Claim-on-read: the upsert both increments and returns the cursor in one
+    // statement, so overlapping selections can never serve the same season.
+    const claimed = await auctionContentRepo
+      .claimScoutEncounter(scoutCycleUserIds, card.footballPlayerId)
       .catch((error) => {
         // Degraded, not broken: selection proceeds at the player's fixed
         // initial season — but SAY so, or a failing counter would silently
         // turn the whole rotation into permanent repeats.
         logger.warn(
           { error, footballPlayerId: card.footballPlayerId },
-          'Auction scout-encounter count failed; serving initial scout season'
+          'Auction scout-encounter claim failed; serving initial scout season'
         );
         return 0;
       });
+    const seenCount = Math.max(0, claimed - 1);
     scoutIndex = (scoutCycleOffset(card.footballPlayerId) + seenCount) % cycleLength;
   } else {
     scoutIndex = Math.min(maxScoutIndex, Math.floor(random() * cycleLength));

@@ -28,7 +28,6 @@ const contentServiceMock = vi.hoisted(() => ({
   ),
   getRecentlySeenFootballPlayerIds: vi.fn(async () => [] as string[]),
   recordSeenClueCards: vi.fn(async () => {}),
-  recordScoutEncounters: vi.fn(async () => {}),
 }));
 
 const stateStoreMock = vi.hoisted(() => ({
@@ -401,12 +400,6 @@ describe('auction match flow service', () => {
     const startedClueCardId = next.currentRound?.footballer.clueCardId;
     expect(startedClueCardId).toBeTruthy();
     expect(contentServiceMock.recordSeenClueCards).toHaveBeenCalledWith(['user-1'], [startedClueCardId]);
-    // The encounter counter (scout-season rotation cursor) advances too, keyed
-    // by the football player rather than the card variant.
-    expect(contentServiceMock.recordScoutEncounters).toHaveBeenCalledWith(
-      ['user-1'],
-      [next.currentRound?.footballer.id]
-    );
   });
 
   it('starts the round anyway when the history lookup fails', async () => {

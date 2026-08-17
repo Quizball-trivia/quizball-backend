@@ -109,6 +109,12 @@ async function main() {
   });
 
   try {
+    // postgres.js omits a zero-valued startup option, so the database role's
+    // 30-second statement timeout otherwise remains active. Set these on the
+    // migration session explicitly before any schema work begins.
+    await migrationSql.unsafe('SET statement_timeout = 0');
+    await migrationSql.unsafe('SET idle_in_transaction_session_timeout = 0');
+
     const files = (await readdir(MIGRATIONS_DIR))
       .filter((f) => f.endsWith('.sql'))
       .sort();

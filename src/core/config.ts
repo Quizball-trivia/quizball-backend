@@ -43,10 +43,15 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
-  // Per-process budget. Aggregate this across all application replicas and
-  // leave headroom for Supabase services and operational connections.
+  // Per-process budget. With two Railway replicas the default permits at most
+  // 24 app connections, leaving headroom below the small-tier Postgres limit
+  // for Auth, Storage, PostgREST, Realtime, observability, and administration.
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),
   DB_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(12),
+  // Keep this finite so a database outage still sheds instead of accumulating
+  // unbounded promises. Streamer-scale bursts can safely need more than 100
+  // waiters while millisecond queries drain; the acquire deadline remains the
+  // hard time bound.
   DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1_000).default(12),
   DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
@@ -57,9 +62,23 @@ const configSchema = z.object({
   DB_WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
   DB_WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(4_000),
   DB_WATCHDOG_FAILURES: z.coerce.number().int().min(1).max(10).default(3),
+  // INC-2026-07-29: a pooled connection contaminated with
+  // default_transaction_read_only=on let reads succeed while every write failed
+  // with SQLSTATE 25006. Kill switch in case the breaker ever misfires.
+  DB_OUTAGE_BREAKER_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  // Minimum time to stay degraded after a 25006. Recovery additionally requires
+  // a successful rollback-only write probe, so this is a floor, not a timer.
+  DB_OUTAGE_BREAKER_WINDOW_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
 
   // Redis
   REDIS_URL: z.string().url().optional(),
+  // Maximum durable realtime timers handled concurrently by each replica.
+  // Keep the default conservative for small/local pools; large synchronized
+  // gameplay starts can raise this explicitly after sizing the DB bulkhead.
+  REALTIME_TIMER_HANDLER_CONCURRENCY: z.coerce.number().int().min(1).max(30).default(4),
   RANKED_HUMAN_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -69,6 +88,10 @@ const configSchema = z.object({
     .default("true")
     .transform((val) => val === "true" || val === "1"),
   RANKED_MM_RESPECT_RP: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  RANKED_DEBUG_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
@@ -141,8 +164,9 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-  // Separate per-process bulkhead for hosted Auth, whose work sits outside the
-  // application's postgres.js pool.
+  // Per-process bulkhead for hosted Auth, whose DB connections are outside the
+  // application pool. With two replicas the default permits eight concurrent
+  // upstream Auth operations while preserving the shared 60-connection tier.
   AUTH_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(4),
   AUTH_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1000).default(16),
   AUTH_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2000),
@@ -277,6 +301,20 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     throw new ConfigError(
       `Invalid configuration: ${regressionFlag} may only be set in the local environment (it is a regression-harness-only flag).`,
       { nodeEnv: result.data.NODE_ENV, flag: regressionFlag },
+    );
+  }
+
+  // The admission layer clamps the real budget to min(DB_INFLIGHT_LIMIT,
+  // DB_POOL_MAX) — validate against what will actually be enforced.
+  const effectiveDbLimit = Math.min(result.data.DB_INFLIGHT_LIMIT, result.data.DB_POOL_MAX);
+  if (result.data.REALTIME_TIMER_HANDLER_CONCURRENCY > effectiveDbLimit) {
+    throw new ConfigError(
+      "Invalid configuration: REALTIME_TIMER_HANDLER_CONCURRENCY cannot exceed the effective DB limit (min of DB_INFLIGHT_LIMIT and DB_POOL_MAX).",
+      {
+        realtimeTimerHandlerConcurrency: result.data.REALTIME_TIMER_HANDLER_CONCURRENCY,
+        dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
+        dbPoolMax: result.data.DB_POOL_MAX,
+      },
     );
   }
 

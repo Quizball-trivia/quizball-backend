@@ -9,6 +9,12 @@ vi.mock('../../src/core/logger.js', () => ({
   },
 }));
 
+const deleteJsonCacheKeysMock = vi.fn();
+vi.mock('../../src/core/json-cache.js', () => ({
+  deleteJsonCacheKeys: (keys: string[]) => deleteJsonCacheKeysMock(keys),
+  getOrLoadJson: <T>(_key: string, _ttlSeconds: number, loader: () => Promise<T>) => loader(),
+}));
+
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: vi.fn(),
@@ -68,6 +74,7 @@ function createProfile(overrides: Partial<RankedProfileRow> & {
 }): RankedProfileRow {
   return {
     user_id: overrides.user_id,
+    country: overrides.country ?? null,
     rp: overrides.rp,
     tier: overrides.tier,
     placement_status: overrides.placement_status ?? 'unplaced',
@@ -204,6 +211,20 @@ describe('rankedService', () => {
     expect(rankedService.isPlacementRequired(placedComplete)).toBe(false);
   });
 
+  it('batch-loads existing ranked profiles without per-user ensure queries', async () => {
+    const profileA = createProfile({ user_id: 'u-1', rp: 1500, tier: 'Rotation' });
+    const profileB = createProfile({ user_id: 'u-2', rp: 2200, tier: 'Starting11' });
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([profileA, profileB]);
+
+    const profiles = await rankedService.ensureProfiles(['u-1', 'u-2', 'u-1']);
+
+    expect(rankedRepo.getProfilesByUserIds).toHaveBeenCalledOnce();
+    expect(rankedRepo.getProfilesByUserIds).toHaveBeenCalledWith(['u-1', 'u-2']);
+    expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(profiles.get('u-1')).toBe(profileA);
+    expect(profiles.get('u-2')).toBe(profileB);
+  });
+
   it('normalizes a stale derived tier without writing a synthetic match ledger row', async () => {
     const stale = createProfile({
       user_id: 'u-stale-tier',
@@ -225,6 +246,26 @@ describe('rankedService', () => {
     expect(rankedRepo.normalizeTier).toHaveBeenCalledWith(stale.user_id, 4035, 'Captain');
     expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
     expect(result).toBe(normalized);
+  });
+
+  it('ensures only missing or stale ranked profiles after the batch read', async () => {
+    const current = createProfile({ user_id: 'u-1', rp: 1500, tier: 'Rotation' });
+    const stale = createProfile({ user_id: 'u-2', rp: 1500, tier: 'Bench' });
+    const normalized = createProfile({ user_id: 'u-2', rp: 1500, tier: 'Rotation' });
+    const created = createProfile({ user_id: 'u-3', rp: 1500, tier: 'Rotation' });
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([current, stale]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => (
+      userId === 'u-2' ? normalized : created
+    ));
+
+    const profiles = await rankedService.ensureProfiles(['u-1', 'u-2', 'u-3']);
+
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledTimes(2);
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledWith('u-2');
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledWith('u-3');
+    expect(profiles.get('u-1')).toBe(current);
+    expect(profiles.get('u-2')).toBe(normalized);
+    expect(profiles.get('u-3')).toBe(created);
   });
 
   it('builds progressive placement AI context (harder after wins, easier after losses)', () => {
@@ -680,6 +721,7 @@ describe('rankedService', () => {
     (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([
       createProfile({
         user_id: 'u-1',
+        country: 'US',
         rp: 1225,
         tier: rankedService.tierFromRp(1225),
         placement_status: 'placed',
@@ -687,6 +729,7 @@ describe('rankedService', () => {
       }),
       createProfile({
         user_id: 'u-2',
+        country: 'GE',
         rp: 1175,
         tier: rankedService.tierFromRp(1175),
         placement_status: 'placed',
@@ -702,5 +745,11 @@ describe('rankedService', () => {
     expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-25);
     expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
     expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(deleteJsonCacheKeysMock).toHaveBeenCalledWith([
+      'ranked:user-rank:v2:global:u-1',
+      'ranked:user-rank:v2:country:US:u-1',
+      'ranked:user-rank:v2:global:u-2',
+      'ranked:user-rank:v2:country:GE:u-2',
+    ]);
   });
 });

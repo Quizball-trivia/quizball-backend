@@ -247,6 +247,18 @@ export const storeRepo = {
     return row ?? null;
   },
 
+  async getWallets(userIds: string[]): Promise<Map<string, WalletStateRow>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const rows = await sql<Array<WalletStateRow & { user_id: string }>>`
+      SELECT id AS user_id, coins, tickets, tickets_refill_started_at
+      FROM users
+      WHERE id = ANY(${sql.array(uniqueUserIds)}::uuid[])
+    `;
+    return new Map(rows.map(({ user_id, ...wallet }) => [user_id, wallet]));
+  },
+
   async getWalletInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
     const [row] = await tx.unsafe<WalletStateRow[]>(
       `

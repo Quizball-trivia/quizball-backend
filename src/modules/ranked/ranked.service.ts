@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { deleteJsonCacheKeys, getOrLoadJson } from '../../core/json-cache.js';
 import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
@@ -28,6 +29,26 @@ import type {
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
+const LIVE_LEADERBOARD_CACHE_TTL_SECONDS = 5;
+// Rank is expensive to derive because it compares a player with the eligible
+// leaderboard. Keep read traffic off Postgres during active sessions, then
+// invalidate the affected player's exact global/country keys after settlement
+// so the post-match response is still fresh.
+const USER_RANK_CACHE_TTL_SECONDS = 300;
+
+function userRankCacheKey(userId: string, country?: string | null): string {
+  const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
+  return `ranked:user-rank:v2:${scope}:${userId}`;
+}
+
+async function invalidateUserRankCaches(
+  users: Array<{ userId: string; country?: string | null }>
+): Promise<void> {
+  await deleteJsonCacheKeys(users.flatMap(({ userId, country }) => [
+    userRankCacheKey(userId),
+    ...(country ? [userRankCacheKey(userId, country)] : []),
+  ]));
+}
 
 // ── Placement seed range ─────────────────────────────────────────────────────
 // The best possible placement run lands at the TOP OF RESERVE (875 RP) — every
@@ -269,6 +290,22 @@ export const rankedService = {
     return normalizedProfile;
   },
 
+  async ensureProfiles(userIds: string[]): Promise<Map<string, RankedProfileRow>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const existing = await rankedRepo.getProfilesByUserIds(uniqueUserIds);
+    const profilesByUserId = new Map(existing.map((profile) => [profile.user_id, profile]));
+    const needsEnsure = uniqueUserIds.filter((userId) => {
+      const profile = profilesByUserId.get(userId);
+      return !profile || profile.tier !== tierFromRp(profile.rp);
+    });
+
+    const ensured = await Promise.all(needsEnsure.map((userId) => rankedService.ensureProfile(userId)));
+    for (const profile of ensured) profilesByUserId.set(profile.user_id, profile);
+    return profilesByUserId;
+  },
+
   async getProfile(userId: string): Promise<RankedProfileRow | null> {
     return rankedRepo.getProfile(userId);
   },
@@ -406,6 +443,10 @@ export const rankedService = {
       await repairQpForSettledUsers(settleEligiblePlayers.map((p) => p.user_id));
       const profiles = await rankedRepo.getProfilesByUserIds(settleEligiblePlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
+      await invalidateUserRankCaches(profiles.map((profile) => ({
+        userId: profile.user_id,
+        country: profile.country,
+      })));
       const outcomeByUser: Record<string, RankedUserOutcome> = {};
       for (const row of existing) {
         const profile = profileByUser.get(row.user_id);
@@ -446,6 +487,7 @@ export const rankedService = {
     const settlementEntries: Array<{
       profile: {
         userId: string;
+        country: string | null;
         rp: number;
         tier: RankedTier;
         placementStatus: PlacementStatus;
@@ -554,6 +596,7 @@ export const rankedService = {
       settlementEntries.push({
         profile: {
           userId: player.user_id,
+          country: profile.country,
           rp: settlement.newRp,
           tier: settlement.newTier,
           placementStatus: settlement.placementStatus,
@@ -629,6 +672,10 @@ export const rankedService = {
     // is treated as "everything landed", which is the pre-existing behaviour.
     const appliedUserIds = applied ?? new Set(settlementEntries.map((entry) => entry.outcome.userId));
     const appliedEntries = settlementEntries.filter((entry) => appliedUserIds.has(entry.outcome.userId));
+    await invalidateUserRankCaches(appliedEntries.map((entry) => ({
+      userId: entry.outcome.userId,
+      country: entry.profile.country,
+    })));
     logger.info({
       matchId,
       entryCount: settlementEntries.length,
@@ -745,7 +792,11 @@ export const rankedService = {
   },
 
   async getLeaderboard(limit: number, offset: number, country?: string) {
-    return rankedRepo.listLeaderboard(limit, offset, country);
+    const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
+    const key = `ranked:leaderboard:v1:${scope}:${limit}:${offset}`;
+    return getOrLoadJson(key, LIVE_LEADERBOARD_CACHE_TTL_SECONDS, () =>
+      rankedRepo.listLeaderboard(limit, offset, country)
+    );
   },
 
   async listSeasons() {
@@ -761,7 +812,11 @@ export const rankedService = {
   },
 
   async getUserRank(userId: string, country?: string) {
-    return rankedRepo.getUserRank(userId, country);
+    return getOrLoadJson(
+      userRankCacheKey(userId, country),
+      USER_RANK_CACHE_TTL_SECONDS,
+      () => rankedRepo.getUserRank(userId, country)
+    );
   },
 
   tierFromRp,

@@ -5,7 +5,8 @@ import { AppError } from '../../src/core/errors.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
-  RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_PAIR_TWO_OLDEST_SCRIPT,
+  RANKED_MM_STALE_RESULT,
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
 import '../setup.js';
 
@@ -13,20 +14,38 @@ type RedisMultiOp = () => void | Promise<void>;
 
 class FakeRedis {
   private kv = new Map<string, string>();
+  private kvExpiresAt = new Map<string, number>();
   private hashes = new Map<string, Map<string, string>>();
   private zsets = new Map<string, Map<string, number>>();
+  private failAssignedLobbyWrites = false;
+
+  rejectAssignedLobbyWrites(): void {
+    this.failAssignedLobbyWrites = true;
+  }
 
   async set(
     key: string,
     value: string,
     options?: { NX?: boolean; EX?: number; PX?: number }
   ): Promise<'OK' | null> {
+    if (this.failAssignedLobbyWrites && key.startsWith('ranked:mm:assigned-lobby:')) {
+      throw new Error('assigned-lobby marker unavailable');
+    }
+    this.expireKvIfDue(key);
     if (options?.NX && this.kv.has(key)) return null;
     this.kv.set(key, value);
+    if (typeof options?.EX === 'number') {
+      this.kvExpiresAt.set(key, Date.now() + options.EX * 1_000);
+    } else if (typeof options?.PX === 'number') {
+      this.kvExpiresAt.set(key, Date.now() + options.PX);
+    } else {
+      this.kvExpiresAt.delete(key);
+    }
     return 'OK';
   }
 
   async get(key: string): Promise<string | null> {
+    this.expireKvIfDue(key);
     return this.kv.get(key) ?? null;
   }
 
@@ -34,7 +53,9 @@ class FakeRedis {
     const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
     let removed = 0;
     for (const key of keys) {
+      this.expireKvIfDue(key);
       if (this.kv.delete(key)) removed += 1;
+      this.kvExpiresAt.delete(key);
       if (this.hashes.delete(key)) removed += 1;
       if (this.zsets.delete(key)) removed += 1;
     }
@@ -42,6 +63,7 @@ class FakeRedis {
   }
 
   async exists(key: string): Promise<number> {
+    this.expireKvIfDue(key);
     return this.kv.has(key) || this.hashes.has(key) || this.zsets.has(key) ? 1 : 0;
   }
 
@@ -162,6 +184,21 @@ class FakeRedis {
     return this.hashes.get('ranked:mm:user')?.get(userId) ?? null;
   }
 
+  seedExpiredSearch(searchId: string, score = Date.now() - 60_000): void {
+    this.getOrCreateZset('ranked:mm:queue').set(searchId, score);
+    this.getOrCreateZset('ranked:mm:timeouts').set(searchId, score);
+    // Deliberately omit ranked:mm:search:<id>, exactly as Redis looks after the
+    // hash TTL expires while its sorted-set members survive.
+  }
+
+  hasQueueMember(searchId: string): boolean {
+    return this.zsets.get('ranked:mm:queue')?.has(searchId) ?? false;
+  }
+
+  hasTimeoutMember(searchId: string): boolean {
+    return this.zsets.get('ranked:mm:timeouts')?.has(searchId) ?? false;
+  }
+
   async eval(
     script: string,
     data: {
@@ -169,12 +206,14 @@ class FakeRedis {
       arguments: string[];
     }
   ): Promise<string[]> {
-    if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) {
+    if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) {
       const queueKey = data.keys[0];
       const timeoutKey = data.keys[1];
       const userMapKey = data.keys[2];
       const searchPrefix = data.arguments[0] ?? 'ranked:mm:search:';
       const matchedAt = data.arguments[1] ?? String(Date.now());
+      const pairingPrefix = data.arguments[2] ?? 'ranked:mm:pairing:';
+      const pairingTtlSec = Number(data.arguments[3] ?? 30);
 
       const queue = this.zsets.get(queueKey);
       if (!queue || queue.size < 2) return [];
@@ -190,11 +229,26 @@ class FakeRedis {
       const searchKeyB = `${searchPrefix}${searchIdB}`;
       const statusA = await this.hGet(searchKeyA, 'status');
       const statusB = await this.hGet(searchKeyB, 'status');
-      if (statusA !== 'queued' || statusB !== 'queued') return [];
+      if (statusA !== 'queued') {
+        queue.delete(searchIdA);
+        this.zsets.get(timeoutKey)?.delete(searchIdA);
+        return [RANKED_MM_STALE_RESULT];
+      }
+      if (statusB !== 'queued') {
+        queue.delete(searchIdB);
+        this.zsets.get(timeoutKey)?.delete(searchIdB);
+        return [RANKED_MM_STALE_RESULT];
+      }
 
       const userIdA = await this.hGet(searchKeyA, 'userId');
       const userIdB = await this.hGet(searchKeyB, 'userId');
-      if (!userIdA || !userIdB) return [];
+      if (!userIdA || !userIdB) {
+        queue.delete(searchIdA);
+        queue.delete(searchIdB);
+        this.zsets.get(timeoutKey)?.delete(searchIdA);
+        this.zsets.get(timeoutKey)?.delete(searchIdB);
+        return [RANKED_MM_STALE_RESULT];
+      }
 
       await this.hSet(searchKeyA, { status: 'matched', matchedAt });
       await this.hSet(searchKeyB, { status: 'matched', matchedAt });
@@ -203,6 +257,8 @@ class FakeRedis {
       this.zsets.get(timeoutKey)?.delete(searchIdA);
       this.zsets.get(timeoutKey)?.delete(searchIdB);
       await this.hDel(userMapKey, userIdA, userIdB);
+      await this.set(`${pairingPrefix}${userIdA}`, '1', { EX: pairingTtlSec });
+      await this.set(`${pairingPrefix}${userIdB}`, '1', { EX: pairingTtlSec });
       return [searchIdA, userIdA, searchIdB, userIdB];
     }
 
@@ -216,7 +272,11 @@ class FakeRedis {
       const fallbackAt = data.arguments[2] ?? String(Date.now());
 
       const status = await this.hGet(searchKey, 'status');
-      if (status !== 'queued') return [];
+      if (status !== 'queued') {
+        this.zsets.get(queueKey)?.delete(searchId);
+        this.zsets.get(timeoutKey)?.delete(searchId);
+        return [];
+      }
       const deadlineAt = Number(await this.hGet(searchKey, 'deadlineAt'));
       if (!Number.isFinite(deadlineAt) || deadlineAt > nowMs) return [];
 
@@ -263,6 +323,13 @@ class FakeRedis {
     }
 
     return [];
+  }
+
+  private expireKvIfDue(key: string): void {
+    const expiresAt = this.kvExpiresAt.get(key);
+    if (expiresAt === undefined || expiresAt > Date.now()) return;
+    this.kv.delete(key);
+    this.kvExpiresAt.delete(key);
   }
 
   private getOrCreateHash(key: string): Map<string, string> {
@@ -458,6 +525,17 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
         resolvedAt: new Date().toISOString(),
       };
     }),
+    resolveStates: vi.fn(async (userIds: string[]) => new Map(userIds.map((userId) => {
+      const queueSearchId = fakeRedis?.getUserSearchId(userId) ?? null;
+      return [userId, {
+        state: queueSearchId ? 'IN_QUEUE' : 'IDLE',
+        activeMatchId: null,
+        waitingLobbyId: null,
+        queueSearchId,
+        openLobbyIds: [],
+        resolvedAt: new Date().toISOString(),
+      }];
+    }))),
     runWithUserTransitionLock: vi.fn(async (_io: QuizballServer, _socket: QuizballSocket, work: () => Promise<void>) => {
       await work();
       return true;
@@ -509,49 +587,37 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
       placement_played: 3,
       placement_wins: 2,
     })),
+    ensureProfiles: vi.fn(async (userIds: string[]) => new Map(userIds.map((userId) => [userId, {
+      user_id: userId,
+      rp: 1200,
+      tier: 'Rotation',
+      placement_status: 'placed',
+      placement_required: 3,
+      placement_played: 3,
+      placement_wins: 2,
+    }]))),
   },
 }));
 
 vi.mock('../../src/modules/store/store.service.js', () => ({
   storeService: {
     getWallet: (...args: unknown[]) => mockGetWallet(...args),
+    getRankedTicketWallets: async (userIds: string[]) => new Map(
+      await Promise.all(userIds.map(async (userId) => [userId, await mockGetWallet(userId)] as const))
+    ),
   },
 }));
 
-vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
-  lobbiesRepo: {
-    createLobby: vi.fn(async ({ hostUserId }: { hostUserId: string }) => {
-      lobbyCounter += 1;
-      const id = `lobby-${lobbyCounter}`;
-      lobbyMembers.set(id, [hostUserId]);
-      return {
-        id,
-        mode: 'ranked',
-        status: 'waiting',
-        host_user_id: hostUserId,
-        invite_code: null,
-        display_name: null,
-        is_public: false,
-        game_mode: 'ranked_sim',
-        friendly_random: true,
-        friendly_category_a_id: null,
-        friendly_category_b_id: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    }),
-    addMember: vi.fn(async (lobbyId: string, userId: string) => {
-      const members = lobbyMembers.get(lobbyId) ?? [];
-      if (!members.includes(userId)) {
-        members.push(userId);
-      }
-      lobbyMembers.set(lobbyId, members);
-    }),
-    getById: vi.fn(async (lobbyId: string) => ({
-      id: lobbyId,
+vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => {
+  const createLobby = async ({ hostUserId }: { hostUserId: string }) => {
+    lobbyCounter += 1;
+    const id = `lobby-${lobbyCounter}`;
+    lobbyMembers.set(id, [hostUserId]);
+    return {
+      id,
       mode: 'ranked',
       status: 'waiting',
-      host_user_id: lobbyMembers.get(lobbyId)?.[0] ?? 'u1',
+      host_user_id: hostUserId,
       invite_code: null,
       display_name: null,
       is_public: false,
@@ -561,9 +627,45 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
       friendly_category_b_id: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    })),
-  },
-}));
+    };
+  };
+
+  return {
+    lobbiesRepo: {
+      createLobby: vi.fn(createLobby),
+      createLobbyWithMembers: vi.fn(async (
+        data: { hostUserId: string },
+        members: Array<{ userId: string }>,
+      ) => {
+        const lobby = await createLobby(data);
+        lobbyMembers.set(lobby.id, members.map((member) => member.userId));
+        return lobby;
+      }),
+      addMember: vi.fn(async (lobbyId: string, userId: string) => {
+        const members = lobbyMembers.get(lobbyId) ?? [];
+        if (!members.includes(userId)) {
+          members.push(userId);
+        }
+        lobbyMembers.set(lobbyId, members);
+      }),
+      getById: vi.fn(async (lobbyId: string) => ({
+        id: lobbyId,
+        mode: 'ranked',
+        status: 'waiting',
+        host_user_id: lobbyMembers.get(lobbyId)?.[0] ?? 'u1',
+        invite_code: null,
+        display_name: null,
+        is_public: false,
+        game_mode: 'ranked_sim',
+        friendly_random: true,
+        friendly_category_a_id: null,
+        friendly_category_b_id: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })),
+    },
+  };
+});
 
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
@@ -674,6 +776,55 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
   });
 
+  it('keeps a committed human match when the assigned-lobby marker write fails', async () => {
+    const userA = createSocket('marker-a');
+    const userB = createSocket('marker-b');
+    fakeRedis.rejectAssignedLobbyWrites();
+
+    const userAMatch = waitForEvent<{ lobbyId: string; opponent: { id: string } }>(
+      userA,
+      'ranked:match_found'
+    );
+    const userBMatch = waitForEvent<{ lobbyId: string; opponent: { id: string } }>(
+      userB,
+      'ranked:match_found'
+    );
+
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    const [aMatch, bMatch] = await Promise.all([userAMatch, userBMatch]);
+    expect(aMatch.lobbyId).toBe(bMatch.lobbyId);
+    expect(aMatch.opponent.id).toBe('marker-b');
+    expect(bMatch.opponent.id).toBe('marker-a');
+    expect(lobbyMembers.get(aMatch.lobbyId)).toEqual(['marker-a', 'marker-b']);
+  });
+
+  it('expires atomic pairing reservations using the Lua-provided TTL', async () => {
+    rankedMatchmakingService.stop();
+    const userA = createSocket('ttl-a');
+    const userB = createSocket('ttl-b');
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    vi.useFakeTimers();
+    try {
+      const result = await fakeRedis.eval(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT, {
+        keys: ['ranked:mm:queue', 'ranked:mm:timeouts', 'ranked:mm:user'],
+        arguments: ['ranked:mm:search:', String(Date.now()), 'ranked:mm:pairing:', '30'],
+      });
+      expect(result).toHaveLength(4);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-a')).toBe(1);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-b')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-a')).toBe(0);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-b')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('treats adapter lookup errors as inconclusive and keeps a healthy pairing', async () => {
     const userA = createSocket('u1');
     const userB = createSocket('u2');
@@ -703,6 +854,27 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(results).toHaveLength(4);
     expect(results.every((entry) => entry.opponent.id.startsWith('u'))).toBe(true);
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
+  it('cleans expired queue hashes without letting them block fresh human pairs', async () => {
+    for (let index = 0; index < 20; index += 1) {
+      fakeRedis.seedExpiredSearch(`expired-${index}`);
+    }
+    const userA = createSocket('fresh-a');
+    const userB = createSocket('fresh-b');
+    const userAMatch = waitForEvent<{ opponent: { id: string } }>(userA, 'ranked:match_found', 1_000);
+    const userBMatch = waitForEvent<{ opponent: { id: string } }>(userB, 'ranked:match_found', 1_000);
+
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    const [aMatch, bMatch] = await Promise.all([userAMatch, userBMatch]);
+    expect(aMatch.opponent.id).toBe('fresh-b');
+    expect(bMatch.opponent.id).toBe('fresh-a');
+    for (let index = 0; index < 20; index += 1) {
+      expect(fakeRedis.hasQueueMember(`expired-${index}`)).toBe(false);
+      expect(fakeRedis.hasTimeoutMember(`expired-${index}`)).toBe(false);
+    }
   });
 
   it('matches four and falls back remaining fifth user to AI', async () => {
@@ -739,6 +911,23 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     const result = await matchFound;
     expect(result.opponent.id).toBe('ai-solo');
     expect(mockStartRankedAiForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans more than one fallback batch of expired hashes and reaches a fresh due user', async () => {
+    for (let index = 0; index < 60; index += 1) {
+      fakeRedis.seedExpiredSearch(`expired-timeout-${index}`, index);
+    }
+    const user = createSocket('fresh-solo');
+    const matchFound = waitForEvent<{ opponent: { id: string } }>(user, 'ranked:match_found', 1_500);
+    await user.trigger('ranked:queue_join', {});
+    fakeRedis.forceAllTimeoutsDue(Date.now());
+
+    const result = await matchFound;
+    expect(result.opponent.id).toBe('ai-fresh-solo');
+    for (let index = 0; index < 60; index += 1) {
+      expect(fakeRedis.hasQueueMember(`expired-timeout-${index}`)).toBe(false);
+      expect(fakeRedis.hasTimeoutMember(`expired-timeout-${index}`)).toBe(false);
+    }
   });
 
   it('removes user from queue on ranked:queue_leave', async () => {

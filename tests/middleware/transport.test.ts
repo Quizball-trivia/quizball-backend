@@ -53,6 +53,15 @@ describe('HTTP transport (compression + CORS preflight caching)', () => {
       return testApp;
     };
 
+    it('prefers Brotli when the client accepts it', async () => {
+      const response = await request(buildApp())
+        .get('/big')
+        .set('Accept-Encoding', 'br, gzip');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-encoding']).toBe('br');
+    });
+
     it('compresses JSON responses above the threshold', async () => {
       const response = await request(buildApp())
         .get('/big')

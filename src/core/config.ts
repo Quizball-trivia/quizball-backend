@@ -105,6 +105,20 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+  // Free Kicks (real-coins solo mode). Ships DISABLED; the kill switch blocks
+  // only NEW rounds — resume/cashout/sweeper keep running while liabilities
+  // exist so no player pot is ever stranded.
+  FREE_KICKS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Roster bots playing Free Kicks for real (real stakes/ledger/events) so the
+  // stats layer has genuine numbers before humans arrive.
+  FREE_KICKS_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
   // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
   // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
   // must gate on this flag. The manual `npm run bot:refresh-question-stats`

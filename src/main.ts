@@ -24,6 +24,13 @@ const app = createApp();
 const httpServer = createServer(app);
 const io = await initSocketServer(httpServer);
 
+// Node's 5s keep-alive default is shorter than the Railway edge proxy's
+// connection-reuse window: the proxy can send a request down a connection the
+// app is simultaneously closing, surfacing as sporadic 502/ECONNRESET at the
+// edge. Outlive the proxy's idle timeout so the proxy always closes first.
+httpServer.keepAliveTimeout = 75_000;
+httpServer.headersTimeout = 80_000;
+
 const server = httpServer.listen(config.PORT, () => {
   logger.info(
     {

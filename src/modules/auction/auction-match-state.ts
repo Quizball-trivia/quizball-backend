@@ -190,14 +190,44 @@ export function toPublicAuctionMatchState(state: AuctionMatchState): PublicAucti
   };
 }
 
-/** Pre-reveal snapshot set: [scout season, value-season stub]. The stub keeps
- *  only the season label (the "value in 2025/26" hook) — its stats, league and
- *  value are zeroed so nothing about the player's later career leaks early. */
+/**
+ * The scout season's facets, paced to the server's reveal cadence: a facet's
+ * real value only travels once its clue index is revealed. Facet order mirrors
+ * SNAPSHOT_FACETS in auction-content.service — outfield: goals, assists,
+ * value, age, league; GK: clean sheets, conceded, value, age, league. Before
+ * this, the whole scout season shipped at round start and a devtools reader
+ * saw all five facets ~15s early.
+ */
+function paceScoutFacets(
+  scout: NonNullable<AuctionFootballer['snapshots']>[number],
+  revealedCount: number,
+  positionGroup: AuctionFootballer['positionGroup']
+): NonNullable<AuctionFootballer['snapshots']>[number] {
+  const isGoalkeeper = positionGroup === 'GK';
+  return {
+    season: scout.season,
+    apps: scout.apps,
+    goals: !isGoalkeeper && revealedCount > 0 ? scout.goals : 0,
+    assists: !isGoalkeeper && revealedCount > 1 ? scout.assists : undefined,
+    cleanSheets: isGoalkeeper && revealedCount > 0 ? scout.cleanSheets : undefined,
+    conceded: isGoalkeeper && revealedCount > 1 ? scout.conceded : undefined,
+    valueEur: revealedCount > 2 ? scout.valueEur : 0,
+    age: revealedCount > 3 ? scout.age : null,
+    league: revealedCount > 4 ? scout.league : '',
+  };
+}
+
+/** Pre-reveal snapshot set: [paced scout season, value-season stub]. The stub
+ *  keeps only the season label (the "value in 2025/26" hook) — its stats,
+ *  league and value are zeroed so nothing about the player's later career
+ *  leaks early. */
 function minimizeHiddenSnapshots(
-  snapshots: AuctionFootballer['snapshots']
+  snapshots: AuctionFootballer['snapshots'],
+  revealedCount: number,
+  positionGroup: AuctionFootballer['positionGroup']
 ): AuctionFootballer['snapshots'] {
   if (!snapshots || snapshots.length === 0) return snapshots;
-  const scout = snapshots[0];
+  const scout = paceScoutFacets(snapshots[0], revealedCount, positionGroup);
   if (snapshots.length === 1) return [scout];
   const last = snapshots[snapshots.length - 1];
   return [
@@ -219,7 +249,7 @@ export function toHiddenFootballer(
     // the final season's stats/league, and every historical value beyond the
     // scout year stay server-side — a devtools reader can no longer fingerprint
     // the career and look up the hidden current value.
-    snapshots: minimizeHiddenSnapshots(footballer.snapshots),
+    snapshots: minimizeHiddenSnapshots(footballer.snapshots, revealedClues.length, footballer.positionGroup),
     // Current league is withheld pre-reveal: the snapshot's league facet is
     // the clue-season league, and leaking today's league narrows the guess.
   };

@@ -518,6 +518,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     cors: {
       origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
       credentials: true,
+      // Only matters for the HTTP polling fallback (clients are websocket-only
+      // today): cache preflight verdicts instead of the 5s browser default.
+      maxAge: 7200,
     },
     // Balance: disconnect feedback within ~12.5s worst case (opponent then
     // sees the grace overlay) vs. NOT killing sockets on routine mobile

@@ -1,6 +1,8 @@
 import 'express-async-errors';
 import express, { Express } from 'express';
 import helmet from 'helmet';
+import compression from 'compression';
+import { constants as zlibConstants } from 'node:zlib';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { pinoHttp, type Options } from 'pino-http';
@@ -19,6 +21,11 @@ import {
 } from './http/middleware/index.js';
 import { routes } from './http/routes/index.js';
 
+export const COMPRESSION_OPTIONS: compression.CompressionOptions = {
+  threshold: 1024,
+  brotli: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } },
+};
+
 /**
  * Create and configure the Express application.
  */
@@ -33,6 +40,12 @@ export function createApp(): Express {
 
   // Security headers
   app.use(helmet());
+
+  // Railway's edge served our JSON uncompressed to gzip/br-accepting clients
+  // (measured against staging 2026-08-18), so without this the 10-30KB list
+  // endpoints ship raw. Streaming responses opt out via their existing
+  // Cache-Control: no-transform header.
+  app.use(compression(COMPRESSION_OPTIONS));
 
   // CORS with multi-origin support
   const allowedOrigins = (config.CORS_ORIGINS ?? '')
@@ -50,6 +63,10 @@ export function createApp(): Express {
         }
       },
       credentials: true,
+      // Cache preflight verdicts client-side. Without this browsers fall back
+      // to the spec default of 5 seconds, so nearly every authorized API call
+      // pays an extra OPTIONS round trip. 7200s is Chromium's hard cap.
+      maxAge: 7200,
     })
   );
 

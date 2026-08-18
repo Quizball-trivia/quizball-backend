@@ -61,6 +61,7 @@ import {
   openAuctionUiReadyGate,
 } from './auction-ui-ready.service.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
+import { decideAuctionBotSoloPick } from './auction-bot-profile.js';
 
 const AUCTION_REVEAL_UI_READY_CEILING_MS = 6_000;
 const AUCTION_CONTENT_FETCH_ATTEMPTS = 3;
@@ -121,6 +122,7 @@ export async function scheduleAuctionSoloPickTimeoutTimer(
       matchId: state.matchId,
       seatId: soloPick.playerSeatId,
       startedAt: soloPick.startedAt,
+      nonce: soloPick.timerNonce ?? 0,
     },
   );
 }
@@ -139,6 +141,10 @@ export async function runAuctionSoloPickTimeoutTimer(
   if (!state || state.phase !== 'solo_pick' || !state.soloPick) return;
   if (state.soloPick.playerSeatId !== payload.seatId) return;
   if (state.soloPick.startedAt !== payload.startedAt) return;
+  // A pause/resume re-arm bumps the nonce in state: a stale timer copy that was
+  // already executing (or deferred) carries the old nonce and must not
+  // auto-select right after the resume instead of granting the fresh window.
+  if ((payload.nonce ?? 0) !== (state.soloPick.timerNonce ?? 0)) return;
   if (state.soloPick.selectedOption) return;
 
   // Player is in their disconnect grace window: NEVER auto-select for them —
@@ -319,7 +325,11 @@ export async function emitAuctionStepStarted(
 
     const soloSeat = state.seats.find((seat) => seat.seatId === state.soloPick?.playerSeatId);
     if (soloSeat?.isBot) {
-      return handleAuctionSoloPickSelection(io, state, soloSeat.seatId, AUCTION_SOLO_PICK_DEFAULT_OPTION, options);
+      // Bots compare the known option's profit (incl. marginal chemistry)
+      // against the mystery's expected value instead of blindly taking B.
+      const context = resolveRealtimeAuctionContext(options);
+      const botChoice = decideAuctionBotSoloPick(state, soloSeat.seatId, context.random);
+      return handleAuctionSoloPickSelection(io, state, soloSeat.seatId, botChoice, options);
     }
     // Human pick: arm the durable deadline so an absent player can't freeze
     // the match — auto-resolves to the default option on expiry.

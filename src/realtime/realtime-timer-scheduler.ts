@@ -52,7 +52,7 @@ export type RealtimeTimerPayload =
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
   | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
-  | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string }
+  | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string; nonce?: number }
   | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }

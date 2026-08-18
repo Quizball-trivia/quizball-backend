@@ -12,6 +12,7 @@ import {
   type AuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
 import { getEmptySlots, getMaxBid, getMinBid, needsPosition } from '../../modules/auction/auction-rules.js';
+import { chemistryGainIfAdded } from '../../modules/auction/auction-chemistry.js';
 import {
   auctionStateStore,
   saveAuctionMatchMutation,
@@ -119,8 +120,9 @@ export async function runAuctionBotActionTimer(
  * same decision.
  *
  * A seat with no profile (human-facing ephemeral bot, or the flag-off path) uses
- * EPHEMERAL_AUCTION_BOT_BEHAVIOUR, whose constants reproduce the original
- * heuristic exactly — flag-off behaviour is unchanged, including RNG draw order.
+ * EPHEMERAL_AUCTION_BOT_BEHAVIOUR. All behaviours are tuned for the 350M
+ * profit×chemistry economy: willingness bands centre BELOW effective value
+ * (profit margin) and marginal chemistry is priced into the card.
  */
 export function decideAuctionBotAction(
   state: AuctionMatchState,
@@ -149,8 +151,16 @@ export function decideAuctionBotAction(
   // can afford (that would silently shrink the field and stall bidding).
   const maxBid = Math.max(minBid, Math.floor(hardMaxBid * behaviour.budgetDiscipline));
 
+  // A card is worth more TO THIS BOT when it links with the squad: each squad
+  // chemistry point multiplies final profit by ~+10%, so marginal chemistry is
+  // priced straight into the card's effective value, scaled by how chem-aware
+  // this personality is.
+  const chemGain = chemistryGainIfAdded(player.team, round.footballer, round.positionGroup);
+  const effectiveValue = Math.floor(
+    round.footballer.trueValue * (1 + 0.1 * chemGain * behaviour.chemWeight)
+  );
   const willingness = Math.floor(
-    round.footballer.trueValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
+    effectiveValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
   );
   if (round.highestBidderSeatId && minBid > willingness) {
     return { kind: 'fold' };

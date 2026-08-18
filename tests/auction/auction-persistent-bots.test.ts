@@ -107,13 +107,15 @@ describe('auction reservation release', () => {
 });
 
 describe('profile-driven bidding behaviour', () => {
-  it('falls back to the exact legacy heuristic when a seat has no profile', () => {
-    // Flag-off / ephemeral parity: same constants the original code used.
+  it('falls back to the profit-economy ephemeral defaults when a seat has no profile', () => {
+    // 350M profit economy (2026-08-18 retune): band 0.60-1.10 of effective
+    // value — centred BELOW break-even so ephemeral bots seek margin.
     const behaviour = resolveAuctionBotBehaviour(null);
     expect(behaviour).toEqual(EPHEMERAL_AUCTION_BOT_BEHAVIOUR);
-    expect(behaviour.willingnessFloor).toBe(0.75);
-    expect(behaviour.willingnessSpread).toBe(0.55);
+    expect(behaviour.willingnessFloor).toBe(0.6);
+    expect(behaviour.willingnessSpread).toBe(0.5);
     expect(behaviour.jumpThreshold).toBe(0.8);
+    expect(behaviour.budgetDiscipline).toBeLessThan(1);
   });
 
   it('tightens the willingness spread as base_skill rises', () => {
@@ -122,11 +124,16 @@ describe('profile-driven bidding behaviour', () => {
     expect(high.willingnessSpread).toBeLessThan(low.willingnessSpread);
   });
 
-  it('keeps the willingness band centred on TRUE value, so skill changes precision not generosity', () => {
+  it('centres the willingness band BELOW effective value, deeper margins for sharper bots', () => {
+    // Profit scoring: paying full value is a zero-profit move, so every skill
+    // level targets a margin — and the margin GROWS with skill (0.88 → 0.78).
+    let previousMidpoint = Infinity;
     for (const baseSkill of [0.1, 0.5, 0.9]) {
       const b = resolveAuctionBotBehaviour({ baseSkill, consistency: 0.5, personalitySeed: 3 });
       const midpoint = b.willingnessFloor + b.willingnessSpread / 2;
-      expect(midpoint).toBeCloseTo(1, 10);
+      expect(midpoint).toBeLessThan(1);
+      expect(midpoint).toBeLessThan(previousMidpoint);
+      previousMidpoint = midpoint;
     }
   });
 

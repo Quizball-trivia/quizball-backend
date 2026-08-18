@@ -397,7 +397,24 @@ export async function runAuctionResumeCountdownTimer(
   } else if (freshState.phase === 'clue_reveal') {
     await scheduleAuctionClueRevealTimer(freshState, options);
   } else if (freshState.phase === 'solo_pick') {
-    await scheduleAuctionSoloPickTimeoutTimer(freshState, { fromNow: true });
+    // Bump the timer nonce IN STATE first: a pre-pause timeout copy that is
+    // already executing then fails validation instead of auto-selecting the
+    // moment the pause clears (the resumed player gets their full window).
+    const rearmed = await auctionStateStore
+      .mutate(matchId, (current) => {
+        if (current.phase !== 'solo_pick' || !current.soloPick || current.soloPick.selectedOption) {
+          return saveAuctionMatchMutation(current, (saved) => saved);
+        }
+        return saveAuctionMatchMutation({
+          ...current,
+          soloPick: {
+            ...current.soloPick,
+            timerNonce: (current.soloPick.timerNonce ?? 0) + 1,
+          },
+        }, (saved) => saved);
+      }, { now: () => new Date() })
+      .catch(() => freshState);
+    await scheduleAuctionSoloPickTimeoutTimer(rearmed ?? freshState, { fromNow: true });
   } else if (freshState.phase === 'reveal') {
     // Re-open the reveal gate (its advance was deferred during the pause).
     await advanceAuctionMatchFlowAfterMutation(io, freshState, options);

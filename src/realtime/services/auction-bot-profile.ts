@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { getRandom } from '../../core/rng.js';
+import { chemistryGainIfAdded } from '../../modules/auction/auction-chemistry.js';
+import type { AuctionMatchState } from '../../modules/auction/auction-match-state.js';
 
 /**
  * Bidding personality for one auction bot seat, derived from its persistent
@@ -17,13 +20,22 @@ export interface AuctionBotProfile {
   personalitySeed: number;
 }
 
-/** Heuristic defaults reproducing the pre-persistent ephemeral behaviour exactly. */
-export const EPHEMERAL_AUCTION_BOT_WILLINGNESS_FLOOR = 0.75;
-export const EPHEMERAL_AUCTION_BOT_WILLINGNESS_SPREAD = 0.55;
+/**
+ * Ephemeral defaults, retuned 2026-08-18 for the 350M profit×chemistry economy.
+ * Scoring is (squad value − spend) × chemistry multiplier, so paying full
+ * trueValue is a ZERO-profit move: the willingness band is centred BELOW
+ * effective value (centre 0.85, ±0.25 → 0.60–1.10), leaving room for
+ * human-like overpays at the top of the band without the systematic
+ * value-or-above bidding of the old 1B-era constants.
+ */
+export const EPHEMERAL_AUCTION_BOT_WILLINGNESS_FLOOR = 0.6;
+export const EPHEMERAL_AUCTION_BOT_WILLINGNESS_SPREAD = 0.5;
 export const EPHEMERAL_AUCTION_BOT_JUMP_THRESHOLD = 0.8;
+export const EPHEMERAL_AUCTION_BOT_CHEM_WEIGHT = 0.5;
 
 export interface AuctionBotBehaviour {
-  /** Willingness = trueValue * (floor + random() * spread). */
+  /** Willingness = effectiveValue * (floor + random() * spread), where
+   *  effectiveValue folds in the card's marginal chemistry (see chemWeight). */
   willingnessFloor: number;
   willingnessSpread: number;
   /** random() >= this ⇒ jump-bid. Higher threshold = rarer jumps. */
@@ -36,6 +48,12 @@ export interface AuctionBotBehaviour {
    * single player. Disciplined (high-skill) bots hold more back for later slots.
    */
   budgetDiscipline: number;
+  /**
+   * 0..1 — how fully the bot prices in a card's marginal chemistry. Each squad
+   * chemistry point is worth ~+10% of profit (multiplier = 1 + chem/10), so a
+   * fully chem-aware bot values a +2-chem card ~20% above its raw trueValue.
+   */
+  chemWeight: number;
 }
 
 // Think-time band shared with the ephemeral defaults (auction-bot.service.ts).
@@ -48,7 +66,10 @@ export const EPHEMERAL_AUCTION_BOT_BEHAVIOUR: AuctionBotBehaviour = Object.freez
   jumpThreshold: EPHEMERAL_AUCTION_BOT_JUMP_THRESHOLD,
   minThinkMs: THINK_MIN_MS,
   maxThinkMs: THINK_MAX_MS,
-  budgetDiscipline: 1,
+  // Never the whole wallet on one name: with 350M across 7 slots, an
+  // undisciplined early splurge is unrecoverable.
+  budgetDiscipline: 0.8,
+  chemWeight: EPHEMERAL_AUCTION_BOT_CHEM_WEIGHT,
 });
 
 function clamp01(value: number): number {
@@ -85,11 +106,16 @@ export function resolveAuctionBotBehaviour(profile: AuctionBotProfile | null | u
   const skill = clamp01(profile.baseSkill);
   const consistency = clamp01(profile.consistency);
 
-  // Half-width of the willingness band around true value. Widest (±0.40) for an
-  // unskilled, erratic bot; tightest (±0.08) for a skilled, consistent one.
+  // Profit-economy pricing (2026-08-18 retune): the score is profit ×
+  // chemistry, so a rational buyer pays a MARGIN below effective value. The
+  // band CENTRE drops with skill — a sharp bot hunts ~22% margins, a weak bot
+  // hovers near break-even — and the WIDTH narrows with skill/consistency, so
+  // weak bots still overpay at the top of their band (human-like mistakes)
+  // while sharp bots almost never do.
+  const centre = 0.88 - 0.10 * skill; // 0.88 (weak) … 0.78 (sharp)
   const skillWidth = 0.40 - 0.24 * skill;
   const halfWidth = skillWidth * (1 - 0.4 * consistency);
-  const willingnessFloor = 1 - halfWidth;
+  const willingnessFloor = centre - halfWidth;
   const willingnessSpread = 2 * halfWidth;
 
   // Jump-bid propensity: 10%..40% of turns, fixed per bot by its seed.
@@ -103,7 +129,50 @@ export function resolveAuctionBotBehaviour(profile: AuctionBotProfile | null | u
   const minThinkMs = Math.round(1_200 + 1_800 * pace);
   const maxThinkMs = Math.round(minThinkMs + 1_200 + 1_800 * (1 - pace));
 
-  const budgetDiscipline = 0.55 + 0.45 * skill;
+  const budgetDiscipline = 0.55 + 0.35 * skill;
 
-  return { willingnessFloor, willingnessSpread, jumpThreshold, minThinkMs, maxThinkMs, budgetDiscipline };
+  // Chemistry awareness rises with skill: sharp bots build linked squads (they
+  // will outbid for a card that completes a club/league/nation stack), weak
+  // bots mostly chase names.
+  const chemWeight = 0.3 + 0.7 * skill;
+
+  return { willingnessFloor, willingnessSpread, jumpThreshold, minThinkMs, maxThinkMs, budgetDiscipline, chemWeight };
+}
+
+// The mystery option's expected worth to a bot that does NOT peek at the
+// hidden trueValue (bots must gamble like humans): roughly the pool's fame-mix
+// average. Deliberately a constant — reading the concealed value would make
+// solo-pick bots omniscient.
+export const AUCTION_BOT_MYSTERY_EXPECTED_VALUE_EUR = 35_000_000;
+
+/**
+ * Bot solo pick: compare the KNOWN option's profit (trueValue + its marginal
+ * chemistry, minus its opening price) against the mystery's expected profit.
+ * Pure like decideAuctionBotAction; noise makes weak bots occasionally take
+ * the worse side.
+ */
+export function decideAuctionBotSoloPick(
+  state: AuctionMatchState,
+  seatId: string,
+  random: () => number = getRandom
+): 'A' | 'B' {
+  const pick = state.soloPick;
+  const player = state.seats.find((seat) => seat.seatId === seatId);
+  if (!pick || !player) return 'B';
+  const behaviour = resolveAuctionBotBehaviour(player.botProfile);
+
+  const optionProfit = (option: typeof pick.optionA, concealed: boolean): number => {
+    const footballer = option.footballer;
+    const chemGain = chemistryGainIfAdded(player.team, footballer, pick.positionGroup);
+    const baseValue = concealed ? AUCTION_BOT_MYSTERY_EXPECTED_VALUE_EUR : footballer.trueValue;
+    const effective = baseValue * (1 + 0.1 * chemGain * behaviour.chemWeight);
+    return effective - footballer.startingPrice;
+  };
+
+  const profitA = optionProfit(pick.optionA, pick.optionA.type === 'mystery');
+  const profitB = optionProfit(pick.optionB, pick.optionB.type === 'mystery');
+  // Personality noise: the wider the bot's willingness band (weaker bot), the
+  // more its comparison wobbles — up to ±25M of judgement error.
+  const wobble = (random() - 0.5) * behaviour.willingnessSpread * 100_000_000;
+  return profitA + wobble > profitB ? 'A' : 'B';
 }

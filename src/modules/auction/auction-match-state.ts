@@ -57,6 +57,10 @@ export interface AuctionSoloPickState {
   optionB: AuctionSoloPickOptionState;
   selectedOption: 'A' | 'B' | null;
   startedAt: string;
+  /** Bumped when the timeout timer is re-armed (pause/resume): an
+   *  already-executing stale timer copy then fails validation instead of
+   *  auto-selecting moments after the resume. */
+  timerNonce?: number;
 }
 
 /**
@@ -113,7 +117,7 @@ export type PublicAuctionSoloPickOptionState = Omit<AuctionSoloPickOptionState, 
 
 export type PublicAuctionSoloPickState = Omit<
   AuctionSoloPickState,
-  'optionA' | 'optionB'
+  'optionA' | 'optionB' | 'timerNonce'
 > & {
   optionA: PublicAuctionSoloPickOptionState;
   optionB: PublicAuctionSoloPickOptionState;
@@ -271,8 +275,9 @@ function toPublicAuctionRound(round: AuctionRoundState): PublicAuctionRoundState
 }
 
 function toPublicSoloPick(option: AuctionSoloPickState): PublicAuctionSoloPickState {
+  const { timerNonce: _timerNonce, ...publicPick } = option;
   return {
-    ...option,
+    ...publicPick,
     optionA: {
       ...option.optionA,
       footballer: toRevealedFootballer(option.optionA.footballer),

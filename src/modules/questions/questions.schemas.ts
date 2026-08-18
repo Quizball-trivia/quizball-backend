@@ -520,6 +520,15 @@ export const updateStatusSchema = z.object({
 export type UpdateStatusRequest = z.infer<typeof updateStatusSchema>;
 
 /**
+ * Solo-mode answer check: one option for one question per call.
+ */
+export const checkAnswerSchema = z.object({
+  option_id: z.string().min(1).max(64),
+});
+
+export type CheckAnswerRequest = z.infer<typeof checkAnswerSchema>;
+
+/**
  * UUID param schema.
  */
 export const uuidParamSchema = z.object({

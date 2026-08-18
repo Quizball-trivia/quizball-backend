@@ -11,6 +11,7 @@ import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
 import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
+import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
 import {
   startBotChallengeResponder,
   stopBotChallengeResponder,
@@ -20,6 +21,13 @@ import { startBotRenameWorker, stopBotRenameWorker } from './modules/bots/bot-re
 const app = createApp();
 const httpServer = createServer(app);
 const io = await initSocketServer(httpServer);
+
+// Node's 5s keep-alive default is shorter than the Railway edge proxy's
+// connection-reuse window: the proxy can send a request down a connection the
+// app is simultaneously closing, surfacing as sporadic 502/ECONNRESET at the
+// edge. Outlive the proxy's idle timeout so the proxy always closes first.
+httpServer.keepAliveTimeout = 75_000;
+httpServer.headersTimeout = 80_000;
 
 const server = httpServer.listen(config.PORT, () => {
   logger.info(
@@ -31,6 +39,8 @@ const server = httpServer.listen(config.PORT, () => {
   );
 });
 startAiFriendResponder();
+startFreeKicksSweeper();
+startFreeKicksBots();
 // Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).
 startBotChallengeResponder();
 startBotRenameWorker();
@@ -92,6 +102,7 @@ writeProbeTimer.unref?.();
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
+  stopFreeKicksBots();
   clearInterval(writeProbeTimer);
   // Stop responder ticks immediately (server.close waits for open connections,
   // during which the interval could still fire) and drain the in-flight tick
@@ -100,6 +111,7 @@ const shutdown = async (signal: string) => {
     stopAiFriendResponder(),
     stopBotChallengeResponder(),
     stopBotRenameWorker(),
+    stopFreeKicksSweeper(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

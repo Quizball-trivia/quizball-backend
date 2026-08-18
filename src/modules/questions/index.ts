@@ -29,6 +29,8 @@ export {
   statusEnum,
   toQuestionResponse,
   toPaginatedResponse,
+  checkAnswerSchema,
+  type CheckAnswerRequest,
   type QuestionResponse,
   type ListQuestionsQuery,
   type CreateQuestionRequest,

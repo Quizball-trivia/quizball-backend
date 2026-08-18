@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { getRandom } from '../../core/rng.js';
 import { chemistryGainIfAdded } from '../../modules/auction/auction-chemistry.js';
+import { getEmptySlots, getMaxBid } from '../../modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../modules/auction/auction-match-state.js';
 
 /**
@@ -147,14 +147,18 @@ export const AUCTION_BOT_MYSTERY_EXPECTED_VALUE_EUR = 35_000_000;
 
 /**
  * Bot solo pick: compare the KNOWN option's profit (trueValue + its marginal
- * chemistry, minus its opening price) against the mystery's expected profit.
- * Pure like decideAuctionBotAction; noise makes weak bots occasionally take
- * the worse side.
+ * chemistry, minus the price it would ACTUALLY be charged) against the
+ * mystery's expected profit. Pure AND state-deterministic: the personality
+ * wobble is hash-derived from the pick itself, so every concurrent transition
+ * driver computes the same choice for the same persisted solo state.
+ *
+ * The mystery side deliberately uses NO attribute of the concealed card — not
+ * its value, club, league or nationality (chemistry expectation is zero): the
+ * bot must gamble on exactly the information a human has.
  */
 export function decideAuctionBotSoloPick(
   state: AuctionMatchState,
-  seatId: string,
-  random: () => number = getRandom
+  seatId: string
 ): 'A' | 'B' {
   const pick = state.soloPick;
   const player = state.seats.find((seat) => seat.seatId === seatId);
@@ -163,16 +167,26 @@ export function decideAuctionBotSoloPick(
 
   const optionProfit = (option: typeof pick.optionA, concealed: boolean): number => {
     const footballer = option.footballer;
-    const chemGain = chemistryGainIfAdded(player.team, footballer, pick.positionGroup);
+    const chemGain = concealed ? 0 : chemistryGainIfAdded(player.team, footballer, pick.positionGroup);
     const baseValue = concealed ? AUCTION_BOT_MYSTERY_EXPECTED_VALUE_EUR : footballer.trueValue;
     const effective = baseValue * (1 + 0.1 * chemGain * behaviour.chemWeight);
-    return effective - footballer.startingPrice;
+    // Selection charges min(startingPrice, per-slot budget cap) — a
+    // budget-constrained bot must not reject a bargain it would actually get
+    // cheaply (auction-engine selectSoloPickOption uses the same cap).
+    const charged = Math.max(0, Math.min(
+      footballer.startingPrice,
+      getMaxBid(player.budget, getEmptySlots(player.team))
+    ));
+    return effective - charged;
   };
 
   const profitA = optionProfit(pick.optionA, pick.optionA.type === 'mystery');
   const profitB = optionProfit(pick.optionB, pick.optionB.type === 'mystery');
-  // Personality noise: the wider the bot's willingness band (weaker bot), the
-  // more its comparison wobbles — up to ±25M of judgement error.
-  const wobble = (random() - 0.5) * behaviour.willingnessSpread * 100_000_000;
+  // Personality wobble, hash-derived from stable pick identity (never RNG):
+  // wider-band (weaker) bots wobble up to ~+-25M of judgement error, and every
+  // replica/replay reaches the same verdict for the same state.
+  const seed = player.botProfile?.personalitySeed ?? 0;
+  const wobbleTrait = seedTrait(seed, `solo:${pick.startedAt}:${pick.optionA.footballer.id}:${pick.optionB.footballer.id}`);
+  const wobble = (wobbleTrait - 0.5) * behaviour.willingnessSpread * 100_000_000;
   return profitA + wobble > profitB ? 'A' : 'B';
 }

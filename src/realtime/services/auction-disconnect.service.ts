@@ -357,6 +357,29 @@ export async function runAuctionResumeCountdownTimer(
   if (reDisconnected) return;
 
   const pause = await getAuctionPause(matchId);
+  // A paused SOLO PICK: invalidate any executing pre-pause timeout BEFORE the
+  // pause becomes observable as cleared — the nonce must already be bumped in
+  // state, or the old timer copy passes both checks in the gap and steals the
+  // resumed player's choice. Skip (never save) when there is nothing to bump,
+  // so a racing manual selection is not version-bumped out from under its own
+  // follow-up transition.
+  if (pause?.userId === userId && state.phase === 'solo_pick') {
+    const context = resolveRealtimeAuctionContext(options);
+    await auctionStateStore
+      .mutate(matchId, (current) => {
+        if (current.phase !== 'solo_pick' || !current.soloPick || current.soloPick.selectedOption) {
+          return skipAuctionMatchMutation(null);
+        }
+        return saveAuctionMatchMutation({
+          ...current,
+          soloPick: {
+            ...current.soloPick,
+            timerNonce: (current.soloPick.timerNonce ?? 0) + 1,
+          },
+        }, (saved) => saved);
+      }, { now: context.now })
+      .catch(() => null);
+  }
   if (pause?.userId === userId) {
     await clearAuctionPause(matchId);
     // Keep the match paused for any OTHER human still in their grace window.
@@ -397,24 +420,10 @@ export async function runAuctionResumeCountdownTimer(
   } else if (freshState.phase === 'clue_reveal') {
     await scheduleAuctionClueRevealTimer(freshState, options);
   } else if (freshState.phase === 'solo_pick') {
-    // Bump the timer nonce IN STATE first: a pre-pause timeout copy that is
-    // already executing then fails validation instead of auto-selecting the
-    // moment the pause clears (the resumed player gets their full window).
-    const rearmed = await auctionStateStore
-      .mutate(matchId, (current) => {
-        if (current.phase !== 'solo_pick' || !current.soloPick || current.soloPick.selectedOption) {
-          return saveAuctionMatchMutation(current, (saved) => saved);
-        }
-        return saveAuctionMatchMutation({
-          ...current,
-          soloPick: {
-            ...current.soloPick,
-            timerNonce: (current.soloPick.timerNonce ?? 0) + 1,
-          },
-        }, (saved) => saved);
-      }, { now: () => new Date() })
-      .catch(() => freshState);
-    await scheduleAuctionSoloPickTimeoutTimer(rearmed ?? freshState, { fromNow: true });
+    // The timer nonce was already bumped BEFORE the pause cleared (above), and
+    // freshState was reloaded after that bump — so this re-arm carries the
+    // current nonce.
+    await scheduleAuctionSoloPickTimeoutTimer(freshState, { fromNow: true });
   } else if (freshState.phase === 'reveal') {
     // Re-open the reveal gate (its advance was deferred during the pause).
     await advanceAuctionMatchFlowAfterMutation(io, freshState, options);

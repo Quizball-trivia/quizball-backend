@@ -285,20 +285,39 @@ describe('bot solo picks (profit comparison, no peeking)', () => {
     return state;
   }
 
-  it('takes the revealed bargain over an expensive mystery', () => {
+  it('takes the revealed bargain over an expensive mystery, deterministically', () => {
     // Known: 80M for 10M (=70M profit). Mystery: ~35M expected for 50M (=-15M).
-    // The 85M gap dwarfs personality wobble, so every seed picks A — proving
-    // the bot compares profits rather than blindly gambling, and does NOT peek
-    // at the mystery's absurd hidden trueValue.
-    for (let seed = 1; seed <= 40; seed += 1) {
-      expect(decideAuctionBotSoloPick(soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 }), 'seat-bot', seededRandom(seed))).toBe('A');
-    }
+    // The 85M gap dwarfs personality wobble → A. No RNG parameter exists any
+    // more: the same persisted pick must yield the same verdict on every
+    // replica (the wobble is hash-derived from the pick itself).
+    const state = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe('A');
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe(decideAuctionBotSoloPick(state, 'seat-bot'));
   });
 
   it('takes the mystery when the revealed option is clearly overpriced', () => {
     // Known: 20M for 50M (=-30M). Mystery: ~35M expected for 10M (=+25M).
-    for (let seed = 1; seed <= 40; seed += 1) {
-      expect(decideAuctionBotSoloPick(soloState({ value: 20_000_000, price: 50_000_000 }, { price: 10_000_000 }), 'seat-bot', seededRandom(seed))).toBe('B');
-    }
+    expect(decideAuctionBotSoloPick(soloState({ value: 20_000_000, price: 50_000_000 }, { price: 10_000_000 }), 'seat-bot')).toBe('B');
+  });
+
+  it('mystery judgement ignores the concealed card entirely (no peeking)', () => {
+    // Two mysteries identical to a HUMAN (same price) but with wildly
+    // different hidden values/links must produce the same choice.
+    const modest = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    const jackpot = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    jackpot.soloPick!.optionB.footballer.trueValue = 500_000_000;
+    jackpot.soloPick!.optionB.footballer.currentClub = 'Real Madrid';
+    jackpot.soloPick!.optionB.footballer.nationality = 'Spain';
+    expect(decideAuctionBotSoloPick(jackpot, 'seat-bot')).toBe(decideAuctionBotSoloPick(modest, 'seat-bot'));
+  });
+
+  it('uses the CAPPED charge for a budget-constrained bot, not the sticker price', () => {
+    // Sticker 120M known bargain vs cheap mystery — but the bot only has 30M
+    // left, so selection would charge it far less than sticker. It must still
+    // see option A as a bargain (120M value for a <=30M real charge).
+    const state = soloState({ value: 120_000_000, price: 120_000_000 }, { price: 10_000_000 });
+    const bot = state.seats.find((seat) => seat.seatId === 'seat-bot')!;
+    bot.budget = 30_000_000;
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe('A');
   });
 });

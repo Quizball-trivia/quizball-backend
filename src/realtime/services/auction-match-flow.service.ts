@@ -154,7 +154,14 @@ export async function runAuctionSoloPickTimeoutTimer(
   if (pause?.seatId === payload.seatId) {
     const pauseUntilMs = Date.parse(pause.pauseUntil);
     const dueAt = new Date(Math.max(Number.isFinite(pauseUntilMs) ? pauseUntilMs : 0, Date.now()) + 2_000);
-    await scheduleRealtimeTimer('auction_solo_pick_timeout', payload.matchId, dueAt, payload);
+    // Re-arm with the CURRENT state nonce, not the captured payload's: this
+    // deferred write can land AFTER a resume re-arm on the same timer key, and
+    // an old-nonce overwrite would fire, fail validation, and leave the pick
+    // with no deadline at all.
+    await scheduleRealtimeTimer('auction_solo_pick_timeout', payload.matchId, dueAt, {
+      ...payload,
+      nonce: state.soloPick.timerNonce ?? 0,
+    });
     logger.debug({ matchId: payload.matchId, seatId: payload.seatId }, 'Auction solo-pick timeout deferred (player paused)');
     return;
   }
@@ -327,8 +334,9 @@ export async function emitAuctionStepStarted(
     if (soloSeat?.isBot) {
       // Bots compare the known option's profit (incl. marginal chemistry)
       // against the mystery's expected value instead of blindly taking B.
-      const context = resolveRealtimeAuctionContext(options);
-      const botChoice = decideAuctionBotSoloPick(state, soloSeat.seatId, context.random);
+      // State-deterministic (hash wobble, no RNG): concurrent transition
+      // drivers compute the same choice for the same persisted pick.
+      const botChoice = decideAuctionBotSoloPick(state, soloSeat.seatId);
       return handleAuctionSoloPickSelection(io, state, soloSeat.seatId, botChoice, options);
     }
     // Human pick: arm the durable deadline so an absent player can't freeze

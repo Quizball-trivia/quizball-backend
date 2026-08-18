@@ -152,15 +152,20 @@ export function decideAuctionBotAction(
   const maxBid = Math.max(minBid, Math.floor(hardMaxBid * behaviour.budgetDiscipline));
 
   // A card is worth more TO THIS BOT when it links with the squad: each squad
-  // chemistry point multiplies final profit by ~+10%, so marginal chemistry is
-  // priced straight into the card's effective value, scaled by how chem-aware
-  // this personality is.
+  // chemistry point multiplies final PROFIT by ~+10%. Chemistry therefore
+  // raises willingness WITHIN the profit region but is hard-capped at
+  // trueValue — the multiplier amplifies gains only (auction-rules
+  // getAdjustedProfit never amplifies losses), so any bid above value is a
+  // guaranteed unamplified loss no link can justify. Without the cap, humans
+  // could bait chem-hungry bots past value and dump the loss on them.
   const chemGain = chemistryGainIfAdded(player.team, round.footballer, round.positionGroup);
-  const effectiveValue = Math.floor(
-    round.footballer.trueValue * (1 + 0.1 * chemGain * behaviour.chemWeight)
+  const baseWillingness = Math.floor(
+    round.footballer.trueValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
   );
-  const willingness = Math.floor(
-    effectiveValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
+  const chemBoosted = Math.floor(baseWillingness * (1 + 0.1 * chemGain * behaviour.chemWeight));
+  const willingness = Math.max(
+    baseWillingness,
+    Math.min(round.footballer.trueValue, chemBoosted)
   );
   if (round.highestBidderSeatId && minBid > willingness) {
     return { kind: 'fold' };

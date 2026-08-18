@@ -36,9 +36,15 @@ export function startFreeKicksSweeper(): void {
   timer.unref?.();
 }
 
-export function stopFreeKicksSweeper(): void {
+/** Stops the interval AND waits (bounded) for an in-flight sweep to finish,
+ *  so a settlement transaction is never cut off by DB pool shutdown. */
+export async function stopFreeKicksSweeper(): Promise<void> {
   if (timer) {
     clearInterval(timer);
     timer = null;
+  }
+  const deadline = Date.now() + 5_000;
+  while (inFlight && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

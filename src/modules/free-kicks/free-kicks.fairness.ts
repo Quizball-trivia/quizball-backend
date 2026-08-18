@@ -32,6 +32,9 @@ export function keeperHmacInput(
 }
 
 function uniformIndex(seed: string, input: string, modulo: number): number {
+  if (!Number.isInteger(modulo) || modulo < 1 || modulo > 64) {
+    throw new Error(`Invalid modulo for keeper derivation: ${modulo}`);
+  }
   let digest = createHmac('sha256', seed).update(input).digest();
   const limit = Math.floor(0x1_0000_0000 / modulo) * modulo;
   let counter = 0;

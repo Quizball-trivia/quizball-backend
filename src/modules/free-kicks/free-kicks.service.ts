@@ -26,7 +26,7 @@ import {
 import type { DealtQuestionSnapshot, FreeKicksRoundRow } from './free-kicks.types.js';
 import { AppError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import type { I18nField, Json } from '../../db/types.js';
+import type { I18nField } from '../../db/types.js';
 
 interface McqOptionShape {
   id: string;
@@ -389,12 +389,11 @@ export const freeKicksService = {
         dealt_at: new Date().toISOString(),
       };
 
-      const updated = await freeKicksRepo.updateRoundState(tx, row.id, row.state_version, {
-        phase: 'question',
-        question_id: picked.id,
-        question_payload: JSON.stringify(snapshot) as unknown as Json,
-        question_correct_option: correct.id,
-        question_deadline_at: new Date(Date.now() + QUESTION_WINDOW_MS).toISOString(),
+      const updated = await freeKicksRepo.setQuestionSnapshot(tx, row.id, row.state_version, {
+        questionId: picked.id,
+        snapshot,
+        correctOption: correct.id,
+        deadlineAt: new Date(Date.now() + QUESTION_WINDOW_MS).toISOString(),
       });
       if (!updated) throw new ConflictError('Round state changed');
 

@@ -42,14 +42,12 @@ ALTER TABLE public.store_transaction_logs
       'free_kicks_stake',
       'free_kicks_payout'
     )
-  );
-
--- Retried settlements must lose the insert race instead of double-crediting.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_store_tx_free_kicks_idempotency
-  ON public.store_transaction_logs (event_type, idempotency_key)
-  WHERE idempotency_key IS NOT NULL
-    AND outcome = 'success'
-    AND event_type IN ('free_kicks_stake', 'free_kicks_payout');
+  ) NOT VALID;
+-- NOT VALID: the ledger is append-only and large; a validating ADD CONSTRAINT
+-- takes ACCESS EXCLUSIVE while scanning every row. Existing rows satisfied the
+-- previous (stricter) constraint, so validation (next migration) is a formality.
+-- The unique idempotency index is built CONCURRENTLY in the follow-up migration
+-- for the same reason.
 
 -- ── 2. Rounds ────────────────────────────────────────────────────────────────
 

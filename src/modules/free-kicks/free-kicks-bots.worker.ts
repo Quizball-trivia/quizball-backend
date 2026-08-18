@@ -157,6 +157,10 @@ async function tick(): Promise<void> {
     .filter((bot) => isWithinScheduleWindow(bot.schedule))
     .slice(0, deficit);
 
+  // NOTE: activeSessions is per-process. With multiple replicas two workers
+  // can pick the same bot; the unique active-round index makes the second
+  // startRound fail (409) and that session aborts — the only waste is a
+  // possible duplicate house-side top-up, which is bounded and audited.
   for (const bot of eligible) {
     if (activeSessions.has(bot.user_id)) continue;
     activeSessions.add(bot.user_id);
@@ -174,7 +178,14 @@ async function tick(): Promise<void> {
 }
 
 export function startFreeKicksBots(): void {
-  if (!config.FREE_KICKS_BOTS_ENABLED || timer) return;
+  // Bots are an amplifier for the mode, never a bypass of its kill switch:
+  // both flags must be on, so FREE_KICKS_ENABLED=false always means "no new
+  // rounds from anyone", bots included.
+  if (timer || !config.FREE_KICKS_BOTS_ENABLED) return;
+  if (!config.FREE_KICKS_ENABLED) {
+    logger.warn('FREE_KICKS_BOTS_ENABLED is set without FREE_KICKS_ENABLED — bots stay off');
+    return;
+  }
   stopping = false;
   timer = setInterval(() => {
     void tick().catch((error) => logger.error({ error }, 'free-kicks bots tick failed'));

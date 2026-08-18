@@ -47,10 +47,12 @@ describe('free-kicks fairness', () => {
       const zones = openZones(k);
       expect([...counts.keys()].sort()).toEqual([...zones].sort());
       const expected = trials / k;
+      // 6 standard deviations of a Binomial(trials, 1/k) count — vanishingly
+      // unlikely to trip for a uniform sampler at any k.
+      const sigma = Math.sqrt(trials * (1 / k) * (1 - 1 / k));
       for (const zone of zones) {
         const observed = counts.get(zone) ?? 0;
-        // ±6% of expected is ~8 sigma at these sample sizes.
-        expect(Math.abs(observed - expected)).toBeLessThan(expected * 0.06);
+        expect(Math.abs(observed - expected)).toBeLessThan(6 * sigma);
       }
     }
   });

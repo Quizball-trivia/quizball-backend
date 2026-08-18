@@ -1,4 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { storeRepo } from '../store/store.repo.js';
 import type { QuestionWithPayload } from '../../db/types.js';
 import { QUESTION_CANDIDATES, RECENT_QUESTION_WINDOW, STALE_AFTER_MS } from './free-kicks.constants.js';
 import type { FreeKicksEventInput, FreeKicksRoundRow } from './free-kicks.types.js';
@@ -234,11 +235,46 @@ export const freeKicksRepo = {
     `;
   },
 
-  /** House-side top-up so roster bots always have coins to stake. */
+  /** House-side top-up so roster bots always have coins to stake — goes
+   *  through the wallet primitive AND writes an audited ledger row, so bot
+   *  coin creation is visible in reconciliation like any other adjustment. */
   async topUpBotWallet(userId: string, amount: number): Promise<void> {
-    await sql`
-      UPDATE users SET coins = coins + ${amount}, updated_at = now()
-      WHERE id = ${userId}
+    await sql.begin(async (tx) => {
+      const wallet = await storeRepo.adjustWalletInTx(tx, userId, amount, 0);
+      if (!wallet) throw new Error('Bot wallet top-up failed');
+      await storeRepo.insertTransactionLogInTx(tx, {
+        eventType: 'manual_adjustment_succeeded',
+        outcome: 'success',
+        userId,
+        coinsDelta: amount,
+        reason: 'free_kicks_bot_topup',
+      });
+    });
+  },
+
+  /**
+   * Persist the dealt-question snapshot. Dedicated statement (not the generic
+   * patch helper) so postgres.js serializes the snapshot to jsonb exactly once
+   * — JSON.stringify through a parameter double-encodes.
+   */
+  async setQuestionSnapshot(
+    tx: TransactionSql,
+    roundId: string,
+    expectedVersion: number,
+    data: { questionId: string; snapshot: unknown; correctOption: string; deadlineAt: string }
+  ): Promise<FreeKicksRoundRow | null> {
+    const [row] = await exec(tx)<FreeKicksRoundRow[]>`
+      UPDATE free_kicks_rounds
+      SET phase = 'question',
+          question_id = ${data.questionId},
+          question_payload = ${exec(tx).json(data.snapshot as never)},
+          question_correct_option = ${data.correctOption},
+          question_deadline_at = ${data.deadlineAt},
+          state_version = state_version + 1,
+          last_seen_at = now()
+      WHERE id = ${roundId} AND state_version = ${expectedVersion} AND status = 'active'
+      RETURNING *
     `;
+    return row ?? null;
   },
 };

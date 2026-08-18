@@ -89,7 +89,7 @@ export const questionsService = {
   async checkAnswer(
     id: string,
     optionId: string
-  ): Promise<{ correct: boolean; correct_option_ids: string[] }> {
+  ): Promise<{ correct: boolean }> {
     const question = await questionsRepo.getById(id);
     if (
       !question
@@ -111,10 +111,10 @@ export const questionsService = {
     const correctIds = payload.options
       .filter((option) => option.is_correct)
       .map((option) => option.id);
-    return {
-      correct: correctIds.includes(optionId),
-      correct_option_ids: correctIds,
-    };
+    // Deliberately does NOT return the correct option ids: with them, a client
+    // could harvest the answer key one call at a time. Brute force is bounded
+    // by the per-user rate limit at the route layer.
+    return { correct: correctIds.includes(optionId) };
   },
 
   /**

@@ -95,7 +95,6 @@ writeProbeTimer.unref?.();
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
-  stopFreeKicksSweeper();
   stopFreeKicksBots();
   clearInterval(writeProbeTimer);
   // Stop responder ticks immediately (server.close waits for open connections,
@@ -105,6 +104,7 @@ const shutdown = async (signal: string) => {
     stopAiFriendResponder(),
     stopBotChallengeResponder(),
     stopBotRenameWorker(),
+    stopFreeKicksSweeper(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

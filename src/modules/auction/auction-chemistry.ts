@@ -1,5 +1,5 @@
 import { AUCTION_SQUAD_SIZE, POSITION_GROUPS } from './auction.constants.js';
-import type { AuctionFootballer, AuctionTeam } from './auction.types.js';
+import type { AuctionFootballer, AuctionTeam, PositionGroup } from './auction.types.js';
 
 // ── Squad chemistry (authoritative; the web client mirrors this exactly) ─────
 // FC-style chemistry on three dimensions — club, league and nation. Each player
@@ -86,6 +86,26 @@ export function computeSquadChemistry(team: AuctionTeam): SquadChemistry {
   }
 
   return { total: Math.min(MAX_SQUAD_CHEMISTRY, total), perPlayer };
+}
+
+/**
+ * How much the squad's TOTAL chemistry would rise if `footballer` were signed
+ * into `positionGroup`. Counts both the newcomer's own links and the points
+ * existing squadmates gain from the new shared club/league/nation.
+ */
+export function chemistryGainIfAdded(
+  team: AuctionTeam,
+  footballer: AuctionFootballer,
+  positionGroup: PositionGroup
+): number {
+  const hypothetical: AuctionTeam = {
+    ...team,
+    slots: {
+      ...team.slots,
+      [positionGroup]: [...team.slots[positionGroup], footballer],
+    },
+  };
+  return computeSquadChemistry(hypothetical).total - computeSquadChemistry(team).total;
 }
 
 /** Chemistry → multiplier, a BONUS not a gate: 1 + chem/10, so no chemistry is

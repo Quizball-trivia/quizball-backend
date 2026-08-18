@@ -14,7 +14,7 @@ import '../setup.js';
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import { MIN_BID_INCREMENT } from '../../src/modules/auction/auction.constants.js';
 import { decideAuctionBotAction } from '../../src/realtime/services/auction-bot.service.js';
-import type { AuctionBotProfile } from '../../src/realtime/services/auction-bot-profile.js';
+import { decideAuctionBotSoloPick, type AuctionBotProfile } from '../../src/realtime/services/auction-bot-profile.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 
 const TRUE_VALUE = 100_000_000;
@@ -150,13 +150,19 @@ describe('determinism', () => {
 });
 
 describe('skill → precision', () => {
-  it('a high-skill bot values players CLOSER to true value than a low-skill bot', () => {
+  it('a high-skill bot hunts a profit margin: willingness stays BELOW true value', () => {
+    // Profit economy: the score is (value - spend) x chemistry, so a sharp bot
+    // pays a margin under value on every sample, while a weak bot's wide band
+    // still overpays at its top end (human-like mistakes).
     const seeds = Array.from({ length: 60 }, (_, i) => i * 7919 + 1);
-    const skilledError = seeds.map((s) => Math.abs(willingnessFor(SKILLED, s) - TRUE_VALUE));
-    const wildError = seeds.map((s) => Math.abs(willingnessFor(UNSKILLED, s) - TRUE_VALUE));
+    const skilled = seeds.map((s) => willingnessFor(SKILLED, s));
+    const wild = seeds.map((s) => willingnessFor(UNSKILLED, s));
 
+    for (const willingness of skilled) {
+      expect(willingness).toBeLessThan(TRUE_VALUE);
+    }
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-    expect(mean(skilledError)).toBeLessThan(mean(wildError));
+    expect(mean(skilled)).toBeLessThan(mean(wild) + MIN_BID_INCREMENT);
   });
 
   it('a high-skill bot has a TIGHTER willingness distribution over N samples', () => {
@@ -169,8 +175,9 @@ describe('skill → precision', () => {
 });
 
 describe('ephemeral parity', () => {
-  it('a seat with NO profile reproduces the legacy heuristic band exactly', () => {
-    // Legacy: willingness = trueValue * (0.75 + rand*0.55) ⇒ within [0.75, 1.30].
+  it('a seat with NO profile uses the profit-economy ephemeral band exactly', () => {
+    // Profit-economy ephemeral band: willingness = value * (0.60 + rand*0.50)
+    // ⇒ within [0.60, 1.10].
     //
     // The measured quantity is the highest STANDING bid the bot will still raise
     // over, and a raise costs MIN_BID_INCREMENT, so the fold boundary sits one
@@ -178,8 +185,8 @@ describe('ephemeral parity', () => {
     const seeds = Array.from({ length: 40 }, (_, i) => i * 104729 + 3);
     for (const seed of seeds) {
       const boundary = willingnessFor(null, seed);
-      expect(boundary).toBeGreaterThanOrEqual(Math.floor(TRUE_VALUE * 0.75) - MIN_BID_INCREMENT - 2);
-      expect(boundary).toBeLessThanOrEqual(Math.ceil(TRUE_VALUE * 1.30) + 2);
+      expect(boundary).toBeGreaterThanOrEqual(Math.floor(TRUE_VALUE * 0.6) - MIN_BID_INCREMENT - 2);
+      expect(boundary).toBeLessThanOrEqual(Math.ceil(TRUE_VALUE * 1.1) + 2);
     }
   });
 
@@ -209,5 +216,108 @@ describe('budget discipline', () => {
       const decision = decideAuctionBotAction(state, 'seat-bot', seededRandom(seed));
       if (decision.kind === 'bid') expect(decision.amount).toBeLessThanOrEqual(budget);
     }
+  });
+});
+
+describe('chemistry-aware valuation (350M profit economy)', () => {
+  const CHEM_PROFILE: AuctionBotProfile = { baseSkill: 0.9, consistency: 0.9, personalitySeed: 21 };
+
+  function stateWithSquadmate(cardClub: string | null): AuctionMatchState {
+    const state = buildState({ botProfile: CHEM_PROFILE, highestBid: 85_000_000, highestBidderSeatId: 'seat-human' });
+    const bot = state.seats.find((seat) => seat.seatId === 'seat-bot')!;
+    // The bot already owns a Real Madrid defender; the lot either links to it
+    // (same club → +chemistry for both) or does not.
+    bot.team.slots.DEF.push({
+      id: 'owned-def', name: 'Owned Defender', positionGroup: 'DEF',
+      trueValue: 40_000_000, startingPrice: 10_000_000, clues: [],
+      currentClub: 'Real Madrid', nationality: 'Spain',
+    });
+    state.currentRound!.footballer.currentClub = cardClub;
+    return state;
+  }
+
+  it('chemistry can flip a fold into a raise, and never the reverse', () => {
+    // 85M standing bid vs a 100M-value card: raising costs 95M, above the sharp
+    // bot's whole margin band on raw value (tops out ~91M) — the UNLINKED card
+    // is always a fold. A same-club link (+2 squad chemistry ≈ +18% effective
+    // value at high chemWeight) lifts the band top past 107M, so a healthy
+    // share of seeds flip to a raise. Chemistry may only ever raise
+    // willingness, never lower it.
+    // The LCG's FIRST draw barely varies across small consecutive seeds — warm
+    // it so the willingness draw actually sweeps the band.
+    const warmedRandom = (seed: number) => {
+      const rng = seededRandom(seed * 2654435761 + 97);
+      rng(); rng(); rng();
+      return rng;
+    };
+    let flippedToBid = 0;
+    for (let seed = 1; seed <= 120; seed += 1) {
+      const unlinked = decideAuctionBotAction(stateWithSquadmate('Chelsea'), 'seat-bot', warmedRandom(seed));
+      const linked = decideAuctionBotAction(stateWithSquadmate('Real Madrid'), 'seat-bot', warmedRandom(seed));
+      expect(unlinked.kind).toBe('fold');
+      if (linked.kind === 'bid') flippedToBid += 1;
+    }
+    expect(flippedToBid).toBeGreaterThan(10);
+  });
+});
+
+describe('bot solo picks (profit comparison, no peeking)', () => {
+  const PROFILE: AuctionBotProfile = { baseSkill: 0.9, consistency: 0.9, personalitySeed: 31 };
+
+  function soloState(optionA: { value: number; price: number }, optionB: { price: number }): AuctionMatchState {
+    const state = buildState({ botProfile: PROFILE });
+    state.phase = 'solo_pick' as AuctionMatchState['phase'];
+    state.currentRound = null;
+    state.soloPick = {
+      playerSeatId: 'seat-bot',
+      positionGroup: 'FWD',
+      optionA: {
+        type: 'revealed',
+        footballer: { id: 'a', name: 'Known', positionGroup: 'FWD', trueValue: optionA.value, startingPrice: optionA.price, clues: [] },
+      },
+      optionB: {
+        type: 'mystery',
+        footballer: { id: 'b', name: 'Mystery', positionGroup: 'FWD', trueValue: 999_000_000, startingPrice: optionB.price, clues: [] },
+      },
+      selectedOption: null,
+      startedAt: new Date().toISOString(),
+    } as AuctionMatchState['soloPick'];
+    return state;
+  }
+
+  it('takes the revealed bargain over an expensive mystery, deterministically', () => {
+    // Known: 80M for 10M (=70M profit). Mystery: ~35M expected for 50M (=-15M).
+    // The 85M gap dwarfs personality wobble → A. No RNG parameter exists any
+    // more: the same persisted pick must yield the same verdict on every
+    // replica (the wobble is hash-derived from the pick itself).
+    const state = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe('A');
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe(decideAuctionBotSoloPick(state, 'seat-bot'));
+  });
+
+  it('takes the mystery when the revealed option is clearly overpriced', () => {
+    // Known: 20M for 50M (=-30M). Mystery: ~35M expected for 10M (=+25M).
+    expect(decideAuctionBotSoloPick(soloState({ value: 20_000_000, price: 50_000_000 }, { price: 10_000_000 }), 'seat-bot')).toBe('B');
+  });
+
+  it('mystery judgement ignores the concealed card entirely (no peeking)', () => {
+    // Two mysteries identical to a HUMAN (same price) but with wildly
+    // different hidden values/links must produce the same choice.
+    const modest = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    const jackpot = soloState({ value: 80_000_000, price: 10_000_000 }, { price: 50_000_000 });
+    jackpot.soloPick!.optionB.footballer.trueValue = 500_000_000;
+    jackpot.soloPick!.optionB.footballer.currentClub = 'Real Madrid';
+    jackpot.soloPick!.optionB.footballer.nationality = 'Spain';
+    expect(decideAuctionBotSoloPick(jackpot, 'seat-bot')).toBe(decideAuctionBotSoloPick(modest, 'seat-bot'));
+  });
+
+  it('uses the CAPPED charge for a budget-constrained bot, not the sticker price', () => {
+    // Sticker 120M known bargain vs cheap mystery — but the bot only has 30M
+    // left, so selection would charge it far less than sticker. It must still
+    // see option A as a bargain (120M value for a <=30M real charge).
+    const state = soloState({ value: 120_000_000, price: 120_000_000 }, { price: 10_000_000 });
+    const bot = state.seats.find((seat) => seat.seatId === 'seat-bot')!;
+    bot.budget = 30_000_000;
+    expect(decideAuctionBotSoloPick(state, 'seat-bot')).toBe('A');
   });
 });

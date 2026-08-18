@@ -24,7 +24,7 @@ const footballer: AuctionFootballer = {
 };
 
 describe('snapshot exposure over the wire', () => {
-  it('hidden lots carry only the scout season plus a blank value-season stub', () => {
+  it('hidden lots carry only the scout season plus a blank value-season stub, facets paced to the reveal', () => {
     const hidden = toHiddenFootballer(footballer, ['Goals']);
 
     expect(hidden.name).toBeUndefined();
@@ -33,8 +33,16 @@ describe('snapshot exposure over the wire', () => {
     // Middle seasons never travel — a full career fingerprint would let a
     // devtools reader identify the player and look up the hidden value.
     expect(hidden.snapshots).toHaveLength(2);
-    // The scout (earliest) season travels intact — it is the clue content.
-    expect(hidden.snapshots![0]).toMatchObject({ season: '2020/21', league: 'La Liga', valueEur: 5_000_000 });
+    // ONE clue revealed → only the goals facet travels; assists, value, age
+    // and league of the scout season stay blank until their clue lands.
+    expect(hidden.snapshots![0]).toMatchObject({
+      season: '2020/21',
+      goals: 3,
+      assists: undefined,
+      valueEur: 0,
+      age: null,
+      league: '',
+    });
     // The value-season stub keeps only the label for the "value in 2025/26"
     // hook: stats, league and value are all blanked.
     expect(hidden.snapshots!.at(-1)).toMatchObject({
@@ -45,6 +53,19 @@ describe('snapshot exposure over the wire', () => {
       goals: 0,
       age: null,
     });
+  });
+
+  it('a fully-revealed clue list restores every scout facet', () => {
+    const hidden = toHiddenFootballer(footballer, ['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    expect(hidden.snapshots![0]).toMatchObject({
+      season: '2020/21',
+      goals: 3,
+      valueEur: 5_000_000,
+      age: 19,
+      league: 'La Liga',
+    });
+    // The scoring season's value stays hidden regardless of clue progress.
+    expect(hidden.snapshots!.at(-1)!.valueEur).toBe(0);
   });
 
   it('revealed footballers carry full snapshots and league', () => {

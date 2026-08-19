@@ -173,8 +173,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ggt_sessions_nonce
 CREATE INDEX IF NOT EXISTS idx_ggt_sessions_user
   ON public.guess_the_goal_sessions (user_id, created_at DESC);
 
--- "Has this user seen this goal before?" (max_points clamp) — and the daily
--- coin-cap sum scans the same (user, day) slice.
+-- "Has this user seen this goal before?" (max_points clamp). The daily
+-- coin-cap sum reads store_transaction_logs via its existing
+-- idx_store_transaction_logs_user_created index, not this table.
 CREATE INDEX IF NOT EXISTS idx_ggt_sessions_user_goal
   ON public.guess_the_goal_sessions (user_id, goal_id);
 

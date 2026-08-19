@@ -90,7 +90,6 @@ try {
         ${goal.schema_version}, 'seed'
       )
       ON CONFLICT (slug) DO UPDATE SET
-        status = EXCLUDED.status,
         difficulty = EXCLUDED.difficulty,
         title = EXCLUDED.title,
         options = EXCLUDED.options,
@@ -108,7 +107,9 @@ try {
     if (rows[0]?.inserted) inserted += 1;
     else updated += 1;
   }
-  console.log(`Done: ${inserted} inserted, ${updated} updated, status='${status}'.`);
+  console.log(
+    `Done: ${inserted} inserted (status='${status}'), ${updated} updated (existing status preserved).`
+  );
 } finally {
   await sql.end();
 }

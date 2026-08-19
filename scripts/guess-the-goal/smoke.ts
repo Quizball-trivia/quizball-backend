@@ -16,15 +16,20 @@ import { sql } from '../../src/db/index.js';
 import { guessTheGoalService } from '../../src/modules/guess-the-goal/guess-the-goal.service.js';
 
 function assert(cond: unknown, msg: string): asserts cond {
-  if (!cond) {
-    console.error(`✗ ${msg}`);
-    process.exit(1);
-  }
+  // Throw (never process.exit): the finally-block cleanup must run even — and
+  // especially — when an assertion fails.
+  if (!cond) throw new Error(`ASSERTION FAILED: ${msg}`);
   console.log(`✓ ${msg}`);
 }
 
-const url = process.env.DATABASE_URL ?? '';
-if (!/127\.0\.0\.1|localhost/.test(url)) {
+const hostname = (() => {
+  try {
+    return new URL(process.env.DATABASE_URL ?? '').hostname;
+  } catch {
+    return '';
+  }
+})();
+if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
   console.error('Refusing to run: DATABASE_URL must point at a local database.');
   process.exit(1);
 }
@@ -86,12 +91,26 @@ try {
     assert(Number(w2.coins) === 35, `wallet 35 after bonus (got ${w2.coins})`);
   }
 
-  // Second session: repeat-solve of the same goal must never pay again, and a
-  // re-served goal is clamped to the floor. (Loop sessions until the same goal
-  // comes back or the pool is exhausted — bounded by pool size.)
   const stats = await guessTheGoalService.getStats(userId);
   assert(stats.solved === 1, 'stats count 1 solve');
   console.log(`pool: ${stats.solved}/${stats.total}, coins today ${stats.coins_today}`);
+
+  // Repeat play of the SAME goal (forced): clamped to the floor and never paid
+  // again — the two core anti-farm invariants.
+  const [replayRow] = await sql<Array<{ id: string }>>`
+    INSERT INTO guess_the_goal_sessions (user_id, goal_id, goal_snapshot, max_points)
+    SELECT user_id, goal_id, goal_snapshot, 40 FROM guess_the_goal_sessions
+    WHERE id = ${session.session_id}
+    RETURNING id
+  `;
+  const replaySession = replayRow.id;
+  const replayOutcome = await guessTheGoalService.guess(userId, replaySession, correctId);
+  assert(replayOutcome.correct, 'repeat solve recognized as correct');
+  assert(replayOutcome.points === 40, `repeat view clamped to floor (got ${replayOutcome.points})`);
+  assert(!replayOutcome.awards.first_solve, 'repeat solve is not a first solve');
+  assert(replayOutcome.awards.coins === 0 && replayOutcome.awards.xp === 0, 'repeat solve pays nothing');
+  const [wallet3] = await sql<Array<{ coins: number }>>`SELECT coins FROM users WHERE id = ${userId}`;
+  assert(Number(wallet3.coins) === 35, `wallet unchanged after repeat solve (got ${wallet3.coins})`);
 
   console.log('\nSMOKE PASSED');
 } finally {

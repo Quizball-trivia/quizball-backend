@@ -90,6 +90,8 @@ export interface GgtSessionRow {
   first_solve: boolean;
   coins_awarded: number;
   xp_awarded: number;
+  bonus_coins_awarded: number;
+  bonus_xp_awarded: number;
   client_nonce: string | null;
   created_at: Date;
   updated_at: Date;

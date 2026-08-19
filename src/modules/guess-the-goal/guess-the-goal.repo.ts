@@ -7,6 +7,12 @@ import { GGT_REWARD_EVENT } from './guess-the-goal.constants.js';
 const exec = (tx: TransactionSql): typeof sql => tx as unknown as typeof sql;
 
 export const guessTheGoalRepo = {
+  /** Serialize all session-starting work for one user (advisory xact lock):
+   *  parallel starts otherwise race the nonce check and the abandon step. */
+  async acquireUserStartLock(tx: TransactionSql, userId: string): Promise<void> {
+    await exec(tx)`SELECT pg_advisory_xact_lock(hashtextextended(${'ggt:' + userId}, 0))`;
+  },
+
   async getPublishedGoal(goalId: string): Promise<GoalChoreographyRow | null> {
     const [row] = await sql<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies
@@ -20,8 +26,8 @@ export const guessTheGoalRepo = {
    * never seen in any prior session. Falls back to any published goal when the
    * user has solved the whole pool (replay for fun, no rewards).
    */
-  async pickNextGoal(userId: string): Promise<GoalChoreographyRow | null> {
-    const [row] = await sql<GoalChoreographyRow[]>`
+  async pickNextGoal(tx: TransactionSql, userId: string): Promise<GoalChoreographyRow | null> {
+    const [row] = await exec(tx)<GoalChoreographyRow[]>`
       SELECT g.* FROM goal_choreographies g
       WHERE g.status = 'published'
         AND NOT EXISTS (
@@ -37,7 +43,7 @@ export const guessTheGoalRepo = {
       LIMIT 1
     `;
     if (row) return row;
-    const [fallback] = await sql<GoalChoreographyRow[]>`
+    const [fallback] = await exec(tx)<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies
       WHERE status = 'published'
       ORDER BY random()
@@ -46,8 +52,8 @@ export const guessTheGoalRepo = {
     return fallback ?? null;
   },
 
-  async hasSeenGoal(userId: string, goalId: string): Promise<boolean> {
-    const [row] = await sql<Array<{ seen: boolean }>>`
+  async hasSeenGoal(tx: TransactionSql, userId: string, goalId: string): Promise<boolean> {
+    const [row] = await exec(tx)<Array<{ seen: boolean }>>`
       SELECT EXISTS (
         SELECT 1 FROM guess_the_goal_sessions
         WHERE user_id = ${userId} AND goal_id = ${goalId}
@@ -66,8 +72,12 @@ export const guessTheGoalRepo = {
     return row?.solved ?? false;
   },
 
-  async getSessionByNonce(userId: string, clientNonce: string): Promise<GgtSessionRow | null> {
-    const [row] = await sql<GgtSessionRow[]>`
+  async getSessionByNonce(
+    tx: TransactionSql,
+    userId: string,
+    clientNonce: string
+  ): Promise<GgtSessionRow | null> {
+    const [row] = await exec(tx)<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
       WHERE user_id = ${userId} AND client_nonce = ${clientNonce}
     `;
@@ -75,8 +85,12 @@ export const guessTheGoalRepo = {
   },
 
   /** Finished (guessed/complete) session lookup — mutation-retry replay. */
-  async getFinishedSession(userId: string, sessionId: string): Promise<GgtSessionRow | null> {
-    const [row] = await sql<GgtSessionRow[]>`
+  async getFinishedSession(
+    tx: TransactionSql,
+    userId: string,
+    sessionId: string
+  ): Promise<GgtSessionRow | null> {
+    const [row] = await exec(tx)<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
       WHERE id = ${sessionId} AND user_id = ${userId} AND state IN ('guessed', 'complete')
     `;

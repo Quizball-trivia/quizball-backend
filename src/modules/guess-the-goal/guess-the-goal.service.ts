@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { sql, type TransactionSql } from '../../db/index.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { storeRepo } from '../store/store.repo.js';
@@ -13,12 +13,13 @@ import {
   GGT_MAX_POINTS,
   GGT_MIN_POINTS,
   GGT_REWARD_EVENT,
-  GGT_SESSION_STALE_MS,
   GGT_XP_PER_POINT,
   GGT_XP_SOURCE,
 } from './guess-the-goal.constants.js';
 import type {
   ChoreographyOption,
+  ChoreographyPlayer,
+  ChoreographyStep,
   GoalChoreographyRow,
   GoalSnapshot,
   GgtSessionRow,
@@ -57,7 +58,8 @@ interface AwardSummary {
   coins: number;
   xp: number;
   daily_cap_reached: boolean;
-  /** Authoritative balances after settlement, for client reconciliation. */
+  /** Authoritative balances after settlement, for client reconciliation.
+   *  Null on replays — the client keeps its already-reconciled values. */
   wallet_coins: number | null;
   total_xp: number | null;
 }
@@ -90,53 +92,89 @@ const NO_AWARDS: AwardSummary = {
   total_xp: null,
 };
 
+function fisherYates<T>(arr: T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = randomInt(i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /**
- * Build the immutable per-session snapshot with ANONYMIZED player ids: content
- * rows use meaningful ids ('maradona') that would leak the answer straight
- * through the diagram payload.
+ * Anonymize an option set at SNAPSHOT time: shuffled once, re-keyed to
+ * position-based ids. Authored ids/order (e.g. correct answers always written
+ * first as 'a') must never be observable — a stable authored id would let a
+ * client answer without ever watching the replay.
+ */
+function anonymizeOptions(options: ChoreographyOption[], prefix: string): ChoreographyOption[] {
+  return fisherYates(options).map((o, i) => ({
+    id: `${prefix}${i + 1}`,
+    text: { en: o.text.en, ka: o.text.ka ?? null },
+    is_correct: o.is_correct,
+  }));
+}
+
+/**
+ * Build the immutable per-session snapshot with EXPLICIT field construction —
+ * spreading DB rows would fail open and leak any extra authored fields.
+ * Meaningful player ids ('maradona') become p1..pN; a step referencing an
+ * unknown player aborts the start loudly rather than leaking the id.
  */
 function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
   const idMap = new Map<string, string>();
-  goal.players.forEach((p, i) => idMap.set(p.id, `p${i + 1}`));
+  const players: ChoreographyPlayer[] = goal.players.map((p, i) => {
+    const anon = `p${i + 1}`;
+    idMap.set(p.id, anon);
+    return { id: anon, team: p.team, at: [p.at[0], p.at[1]] };
+  });
+  const steps: ChoreographyStep[] = goal.steps.map((s, i) => {
+    const anon = idMap.get(s.player);
+    if (!anon) {
+      throw new ConflictError(`Choreography ${goal.slug} step ${i} references unknown player`);
+    }
+    const step: ChoreographyStep = {
+      kind: s.kind,
+      player: anon,
+      to: [s.to[0], s.to[1]],
+      duration: s.duration,
+    };
+    if (s.via) step.via = [s.via[0], s.via[1]];
+    if (s.loft !== undefined) step.loft = s.loft;
+    if (s.withPrev !== undefined) step.withPrev = s.withPrev;
+    return step;
+  });
   return {
     difficulty: goal.difficulty,
-    title: goal.title,
-    fun_fact: goal.fun_fact,
-    players: goal.players.map((p) => ({ ...p, id: idMap.get(p.id)! })),
-    steps: goal.steps.map((s) => ({ ...s, player: idMap.get(s.player) ?? s.player })),
-    options: goal.options,
-    bonus: goal.bonus,
+    title: { en: goal.title.en, ka: goal.title.ka ?? null },
+    fun_fact: goal.fun_fact ? { en: goal.fun_fact.en, ka: goal.fun_fact.ka ?? null } : null,
+    players,
+    steps,
+    options: anonymizeOptions(goal.options, 'o'),
+    bonus: goal.bonus
+      ? {
+          question: { en: goal.bonus.question.en, ka: goal.bonus.question.ka ?? null },
+          options: anonymizeOptions(goal.bonus.options, 'b'),
+        }
+      : null,
   };
 }
 
-/** Stable per-session option order so retries and resumes always agree. */
-function shuffledOptions(seed: string, options: ChoreographyOption[]): ChoreographyOption[] {
-  return [...options].sort((a, b) => {
-    const ha = createHash('sha1').update(`${seed}:${a.id}`).digest('hex');
-    const hb = createHash('sha1').update(`${seed}:${b.id}`).digest('hex');
-    return ha.localeCompare(hb);
-  });
+/** Snapshot order is already randomized — serving strips correctness only. */
+function stripOptions(options: ChoreographyOption[]): PublicOption[] {
+  return options.map((o) => ({ id: o.id, text: o.text }));
 }
 
-function sanitizeOptions(seed: string, options: ChoreographyOption[]): PublicOption[] {
-  return shuffledOptions(seed, options).map((o) => ({ id: o.id, text: o.text }));
-}
-
-function bonusPayload(session: GgtSessionRow): { question: I18nText; options: PublicOption[] } | undefined {
+function bonusPayload(
+  session: GgtSessionRow
+): { question: I18nText; options: PublicOption[] } | undefined {
   const bonus = session.goal_snapshot.bonus;
   if (!bonus) return undefined;
-  return {
-    question: bonus.question,
-    options: sanitizeOptions(`${session.id}:bonus`, bonus.options),
-  };
+  return { question: bonus.question, options: stripOptions(bonus.options) };
 }
 
 function elapsedSeconds(session: GgtSessionRow, at: Date): number {
   return Math.max(0, (at.getTime() - new Date(session.started_at).getTime() - GGT_GRACE_MS) / 1000);
-}
-
-function isStale(session: GgtSessionRow): boolean {
-  return Date.now() - new Date(session.started_at).getTime() > GGT_SESSION_STALE_MS;
 }
 
 async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
@@ -159,7 +197,7 @@ async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
       difficulty: snapshot.difficulty,
       players: snapshot.players,
       steps: snapshot.steps,
-      options: sanitizeOptions(session.id, snapshot.options),
+      options: stripOptions(snapshot.options),
       main_moves: timings.mainStarts.length,
       duration_seconds: Math.round(timings.duration * 10) / 10,
     },
@@ -232,11 +270,22 @@ async function grantRewards(
   };
 }
 
-function storedAwards(session: GgtSessionRow, bonusShare: boolean): AwardSummary {
+function mainAwards(session: GgtSessionRow): AwardSummary {
   return {
     first_solve: session.first_solve,
-    coins: bonusShare ? 0 : session.coins_awarded,
-    xp: bonusShare ? 0 : session.xp_awarded,
+    coins: session.coins_awarded,
+    xp: session.xp_awarded,
+    daily_cap_reached: false,
+    wallet_coins: null,
+    total_xp: null,
+  };
+}
+
+function bonusAwards(session: GgtSessionRow): AwardSummary {
+  return {
+    first_solve: session.first_solve,
+    coins: session.bonus_coins_awarded,
+    xp: session.bonus_xp_awarded,
     daily_cap_reached: false,
     wallet_coins: null,
     total_xp: null,
@@ -259,7 +308,7 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
     revealed_moves: session.revealed_moves ?? 0,
     title: snapshot.title,
     fun_fact: snapshot.fun_fact,
-    awards: storedAwards(session, false),
+    awards: mainAwards(session),
     session_state: session.state === 'guessed' ? 'guessed' : 'complete',
   };
   if (session.state === 'guessed') outcome.bonus = bonusPayload(session);
@@ -268,19 +317,22 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
 
 export const guessTheGoalService = {
   async startSession(userId: string, clientNonce: string | null): Promise<PublicSession> {
-    // Nonce lookup BEFORE any mutation: a retried request must return the
-    // session it already created, never abandon it and mint a second one.
-    if (clientNonce) {
-      const existing = await guessTheGoalRepo.getSessionByNonce(userId, clientNonce);
-      if (existing) {
-        if (existing.state === 'active' || existing.state === 'guessed') {
-          return toPublicSession(existing);
-        }
-        throw new ConflictError('Session for this nonce already finished');
-      }
-    }
-
     const session = await sql.begin(async (tx) => {
+      // Serialize per-user starts: without this, two parallel starts race the
+      // nonce lookup and the abandon step (one could abandon the other's
+      // freshly created session and still 201 both).
+      await guessTheGoalRepo.acquireUserStartLock(tx, userId);
+
+      if (clientNonce) {
+        const existing = await guessTheGoalRepo.getSessionByNonce(tx, userId, clientNonce);
+        if (existing) {
+          if (existing.state === 'active' || existing.state === 'guessed') return existing;
+          // Nonce exists but the session already finished — treat the retry
+          // as satisfied rather than silently starting a fresh session.
+          throw new ConflictError('Session for this nonce already finished');
+        }
+      }
+
       const open = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
       if (open) {
         // Starting a new goal forfeits the previous one (including a pending
@@ -289,27 +341,19 @@ export const guessTheGoalService = {
         await guessTheGoalRepo.abandonSession(tx, open.id);
       }
 
-      const goal = await guessTheGoalRepo.pickNextGoal(userId);
+      const goal = await guessTheGoalRepo.pickNextGoal(tx, userId);
       if (!goal) throw new NotFoundError('No goals available');
 
-      const seen = await guessTheGoalRepo.hasSeenGoal(userId, goal.id);
+      const seen = await guessTheGoalRepo.hasSeenGoal(tx, userId, goal.id);
       const maxPoints = seen ? GGT_MIN_POINTS : GGT_MAX_POINTS;
 
-      try {
-        return await guessTheGoalRepo.insertSession(tx, {
-          userId,
-          goalId: goal.id,
-          goalSnapshot: buildSnapshot(goal),
-          maxPoints,
-          clientNonce,
-        });
-      } catch (err) {
-        // Unique-violation on the one-open-session index: a parallel start won.
-        if ((err as { code?: string }).code === '23505') {
-          throw new ConflictError('A session is already starting');
-        }
-        throw err;
-      }
+      return guessTheGoalRepo.insertSession(tx, {
+        userId,
+        goalId: goal.id,
+        goalSnapshot: buildSnapshot(goal),
+        maxPoints,
+        clientNonce,
+      });
     });
 
     return toPublicSession(session);
@@ -317,9 +361,7 @@ export const guessTheGoalService = {
 
   async getCurrent(userId: string): Promise<PublicSession> {
     const session = await guessTheGoalRepo.getOpenSession(userId);
-    if (!session || (session.state === 'active' && isStale(session))) {
-      throw new NotFoundError('No active session');
-    }
+    if (!session) throw new NotFoundError('No active session');
     return toPublicSession(session);
   },
 
@@ -329,7 +371,7 @@ export const guessTheGoalService = {
       if (!session || session.id !== sessionId) {
         // The session may have completed on a previous attempt whose response
         // was lost — replay the stored result instead of stranding the client.
-        const finished = await guessTheGoalRepo.getFinishedSession(userId, sessionId);
+        const finished = await guessTheGoalRepo.getFinishedSession(tx, userId, sessionId);
         if (finished && finished.guess_option_id === optionId) return replayGuessOutcome(finished);
         if (finished) throw new ConflictError('Session already guessed with a different option');
         throw new NotFoundError('No such active session');
@@ -409,13 +451,13 @@ export const guessTheGoalService = {
     return sql.begin(async (tx) => {
       const session = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
       if (!session || session.id !== sessionId) {
-        const finished = await guessTheGoalRepo.getFinishedSession(userId, sessionId);
+        const finished = await guessTheGoalRepo.getFinishedSession(tx, userId, sessionId);
         if (finished?.bonus_option_id === optionId && finished.goal_snapshot.bonus) {
           return {
             correct: finished.bonus_correct ?? false,
             correct_option_id: correctOptionOf(finished.goal_snapshot.bonus.options).id,
             bonus_points: finished.bonus_points,
-            awards: storedAwards(finished, true),
+            awards: bonusAwards(finished),
           };
         }
         if (finished?.bonus_option_id) {
@@ -423,7 +465,19 @@ export const guessTheGoalService = {
         }
         throw new NotFoundError('No such active session');
       }
-      if (session.state !== 'guessed') throw new ConflictError('No bonus pending');
+      if (session.state !== 'guessed') {
+        if (session.bonus_option_id === optionId) {
+          return {
+            correct: session.bonus_correct ?? false,
+            correct_option_id: session.goal_snapshot.bonus
+              ? correctOptionOf(session.goal_snapshot.bonus.options).id
+              : optionId,
+            bonus_points: session.bonus_points,
+            awards: bonusAwards(session),
+          };
+        }
+        throw new ConflictError('No bonus pending');
+      }
 
       const bonus = session.goal_snapshot.bonus;
       if (!bonus) throw new ConflictError('No bonus pending');
@@ -451,8 +505,8 @@ export const guessTheGoalService = {
         bonus_option_id: optionId,
         bonus_correct: correct,
         bonus_points: bonusPoints,
-        coins_awarded: session.coins_awarded + awards.coins,
-        xp_awarded: session.xp_awarded + awards.xp,
+        bonus_coins_awarded: awards.coins,
+        bonus_xp_awarded: awards.xp,
       });
       if (!updated) throw new ConflictError('Session update failed');
 

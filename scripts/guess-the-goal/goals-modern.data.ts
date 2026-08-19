@@ -121,7 +121,7 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     bonus: {
       question: t('What award did this goal win?', 'რომელი ჯილდო მოუტანა ამ გოლმა?'),
       options: [
-        opt('a', 'FIFA Puskás Award', 'ФИФА "პუშკაშის" ჯილდო', true),
+        opt('a', 'FIFA Puskás Award', 'ფიფას "პუშკაშის" ჯილდო', true),
         opt('b', "Ballon d'Or", '"ოქროს ბურთი"'),
         opt('c', 'Golden Glove', 'ოქროს ხელთათმანი'),
         opt('d', 'Nothing — it was disallowed', 'არაფერი — გოლი გაუქმდა'),
@@ -240,11 +240,11 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     slug: 'son-burnley-2020',
     difficulty: 'medium',
     title: t(
-      'Son Heung-min — Tottenham vs Burnley, 2020 (70-metre solo)',
-      'სონ ჰიუნ-მინი — ტოტენჰემი ბერნლისთან, 2020 (70-მეტრიანი სოლო)'
+      'Son Heung-min — Tottenham vs Burnley, 2019 (70-metre solo)',
+      'სონ ჰიუნ-მინი — ტოტენჰემი ბერნლისთან, 2019 (70-მეტრიანი სოლო)'
     ),
     options: [
-      opt('a', 'Son Heung-min — Tottenham vs Burnley, 2020', 'სონ ჰიუნ-მინი — ტოტენჰემი ბერნლისთან, 2020', true),
+      opt('a', 'Son Heung-min — Tottenham vs Burnley, 2019', 'სონ ჰიუნ-მინი — ტოტენჰემი ბერნლისთან, 2019', true),
       opt('b', 'Gareth Bale — Tottenham vs Inter, 2010', 'გარეთ ბეილი — ტოტენჰემი ინტერთან, 2010'),
       opt('c', 'George Weah — AC Milan vs Verona, 1996', 'ჯორჯ ვეა — მილანი ვერონასთან, 1996'),
       opt('d', 'Mohamed Salah — Liverpool vs Everton, 2018', 'მოჰამედ სალაჰი — ლივერპული ევერტონთან, 2018'),
@@ -256,7 +256,7 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     bonus: {
       question: t('What award did this run win?', 'რომელი ჯილდო მოუტანა ამ სოლომ?'),
       options: [
-        opt('a', 'FIFA Puskás Award', 'ФИФА "პუშკაშის" ჯილდო', true),
+        opt('a', 'FIFA Puskás Award', 'ფიფას "პუშკაშის" ჯილდო', true),
         opt('b', 'PFA Goal of the Month only', 'მხოლოდ თვის გოლი'),
         opt('c', "Ballon d'Or", '"ოქროს ბურთი"'),
         opt('d', 'None', 'არცერთი'),
@@ -279,7 +279,7 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     ],
     scorer: 'Son Heung-min',
     match_label: 'Tottenham vs Burnley, Premier League',
-    year: 2020,
+    year: 2019,
     goal_ordinal: 1,
     schema_version: 1,
   },
@@ -393,7 +393,7 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     bonus: {
       question: t('This goal won the first-ever…', 'ამ გოლმა მოიგო პირველი…'),
       options: [
-        opt('a', 'FIFA Puskás Award', 'ФИФА "პუშკაშის" ჯილდო', true),
+        opt('a', 'FIFA Puskás Award', 'ფიფას "პუშკაშის" ჯილდო', true),
         opt('b', 'UEFA Goal of the Season', 'UEFA სეზონის გოლი'),
         opt('c', 'BBC Goal of the Month', 'BBC თვის გოლი'),
         opt('d', "Ballon d'Or", '"ოქროს ბურთი"'),

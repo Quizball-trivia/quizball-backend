@@ -23,7 +23,7 @@ export const CLASSIC_GOALS: ChoreographyContent[] = [
     ),
     options: [
       opt('a', 'Carlos Alberto — Brazil vs Italy, 1970 World Cup final', 'კარლოს ალბერტო — ბრაზილია იტალიასთან, 1970 მუნდიალის ფინალი', true),
-      opt('b', 'Esteban Cambiasso — Argentina vs Serbia, 2006 World Cup', 'ესტებან კამბიასო — არგენტინა სერბეთთან, 2006 მუნდიალი'),
+      opt('b', 'Esteban Cambiasso — Argentina vs Serbia & Montenegro, 2006 World Cup', 'ესტებან კამბიასო — არგენტინა სერბეთი და მონტენეგროსთან, 2006 მუნდიალი'),
       opt('c', 'Jack Wilshere — Arsenal vs Norwich, 2013', 'ჯეკ უილშერი — არსენალი ნორვიჩთან, 2013'),
       opt('d', 'Dennis Bergkamp — Arsenal vs Newcastle, 2002', 'დენის ბერგკამპი — არსენალი ნიუკასლთან, 2002'),
     ],
@@ -183,7 +183,7 @@ export const CLASSIC_GOALS: ChoreographyContent[] = [
     ],
     fun_fact: t(
       '89th-minute winner in the quarter-final: a 60-yard De Boer diagonal killed with one touch, Ayala beaten with the second, finished with the third.',
-      '89-ე წუთის გადამწყვეტი გოლი მეოთხედფინალში: დე бурის 60-იარდიანი დიაგონალი ერთი შეხებით დამუშავდა, მეორეთი აიალა აცდა, მესამეთი კი ბადეში აღმოჩნდა.'
+      '89-ე წუთის გადამწყვეტი გოლი მეოთხედფინალში: დე ბურის 60-იარდიანი დიაგონალი ერთი შეხებით დამუშავდა, მეორეთი აიალა აცდა, მესამეთი კი ბადეში აღმოჩნდა.'
     ),
     bonus: {
       question: t('Who hit the 60-yard pass Bergkamp plucked out of the air?', 'ვინ გააწოდა 60-იარდიანი პასი, რომელიც ბერგკამპმა ჰაერში დაიმორჩილა?'),
@@ -221,18 +221,18 @@ export const CLASSIC_GOALS: ChoreographyContent[] = [
     slug: 'cambiasso-serbia-2006',
     difficulty: 'medium',
     title: t(
-      'Esteban Cambiasso — Argentina vs Serbia, 2006 World Cup',
-      'ესტებან კამბიასო — არგენტინა სერბეთთან, 2006 მუნდიალი'
+      'Esteban Cambiasso — Argentina vs Serbia & Montenegro, 2006 World Cup',
+      'ესტებან კამბიასო — არგენტინა სერბეთი და მონტენეგროსთან, 2006 მუნდიალი'
     ),
     options: [
-      opt('a', 'Esteban Cambiasso — Argentina vs Serbia, 2006 World Cup', 'ესტებან კამბიასო — არგენტინა სერბეთთან, 2006 მუნდიალი', true),
+      opt('a', 'Esteban Cambiasso — Argentina vs Serbia & Montenegro, 2006 World Cup', 'ესტებან კამბიასო — არგენტინა სერბეთი და მონტენეგროსთან, 2006 მუნდიალი', true),
       opt('b', 'Carlos Alberto — Brazil vs Italy, 1970 World Cup final', 'კარლოს ალბერტო — ბრაზილია იტალიასთან, 1970 მუნდიალის ფინალი'),
       opt('c', 'Jack Wilshere — Arsenal vs Norwich, 2013', 'ჯეკ უილშერი — არსენალი ნორვიჩთან, 2013'),
       opt('d', 'Dennis Bergkamp — Arsenal vs Newcastle, 2002', 'დენის ბერგკამპი — არსენალი ნიუკასლთან, 2002'),
     ],
     fun_fact: t(
-      "The climax of a 24-pass move — Crespo's blind backheel returned Cambiasso's pass, and the finish flew in off the crossbar.",
-      '24-პასიანი კომბინაციის კულმინაცია — კრესპოს ბრმა უკუქუსლმა კამბიასოს პასი დაუბრუნა და დარტყმა ძელს მოხვედრით შევიდა ბადეში.'
+      "The climax of a 24-pass move — Crespo's blind backheel returned Cambiasso's pass, and Cambiasso lashed it high past Jevrić.",
+      '24-პასიანი კომბინაციის კულმინაცია — კრესპოს ბრმა უკუქუსლმა კამბიასოს პასი დაუბრუნა და კამბიასომ ზემო კუთხეში ჩააწვინა.'
     ),
     bonus: {
       question: t('Roughly how many passes did Argentina string together first?', 'დაახლოებით რამდენი პასი გააკეთა არგენტინამ ამ გოლამდე?'),

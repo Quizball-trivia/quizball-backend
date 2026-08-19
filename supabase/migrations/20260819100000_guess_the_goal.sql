@@ -11,8 +11,11 @@
 -- 3. guess_the_goal_solves: first-ever correct solve per (user, goal) — the
 --    reward gate. Coins/XP are granted only when this insert wins.
 -- 4. Ledger: rewards flow through store_transaction_logs
---    ('guess_the_goal_reward') with a real idempotency index (follow-up
---    migration, CONCURRENTLY) — same money pattern free_kicks established.
+--    ('guess_the_goal_reward') with a real idempotency index — same money
+--    pattern free_kicks established. Unlike free_kicks we build the partial
+--    index in-transaction (no concurrent build): it matches zero existing
+--    rows, so the scan is one pass and we avoid the invalid-index-left-behind
+--    failure mode of concurrent builds under IF NOT EXISTS.
 -- 5. XP source enum gains 'guess_the_goal_solve' (user_xp_events is already
 --    idempotent on (user_id, source_type, source_key)).
 -- 6. RLS deny-all on all three tables: backend service-role access only.
@@ -61,7 +64,16 @@ ALTER TABLE public.user_xp_events
       'objective_reward',
       'guess_the_goal_solve'
     )
-  );
+  ) NOT VALID;
+-- NOT VALID for the same reason: no full-table scan while this batch holds
+-- earlier exclusive locks. Validated in 20260819100001.
+
+-- Retried settlements must lose the insert race instead of double-crediting.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_store_tx_guess_the_goal_idempotency
+  ON public.store_transaction_logs (event_type, idempotency_key)
+  WHERE idempotency_key IS NOT NULL
+    AND outcome = 'success'
+    AND event_type = 'guess_the_goal_reward';
 
 -- ── 2. Content library ───────────────────────────────────────────────────────
 
@@ -137,8 +149,12 @@ CREATE TABLE IF NOT EXISTS public.guess_the_goal_sessions (
   bonus_correct boolean,
   bonus_points integer NOT NULL DEFAULT 0 CHECK (bonus_points >= 0),
   first_solve boolean NOT NULL DEFAULT false,
+  -- Main-guess awards and bonus awards are recorded SEPARATELY so a retried
+  -- mutation can replay its exact original response.
   coins_awarded integer NOT NULL DEFAULT 0 CHECK (coins_awarded >= 0),
   xp_awarded integer NOT NULL DEFAULT 0 CHECK (xp_awarded >= 0),
+  bonus_coins_awarded integer NOT NULL DEFAULT 0 CHECK (bonus_coins_awarded >= 0),
+  bonus_xp_awarded integer NOT NULL DEFAULT 0 CHECK (bonus_xp_awarded >= 0),
   client_nonce text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

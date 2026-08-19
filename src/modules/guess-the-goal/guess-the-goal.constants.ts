@@ -16,8 +16,5 @@ export const GGT_XP_PER_POINT = 0.5;
  *  solves still pay XP but no coins. */
 export const GGT_DAILY_COIN_CAP = 300;
 
-/** A session with no guess after this long can be replaced by a new one. */
-export const GGT_SESSION_STALE_MS = 30 * 60 * 1000;
-
 export const GGT_REWARD_EVENT = 'guess_the_goal_reward';
 export const GGT_XP_SOURCE = 'guess_the_goal_solve';

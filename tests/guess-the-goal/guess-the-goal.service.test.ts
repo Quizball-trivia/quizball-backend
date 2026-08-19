@@ -19,6 +19,7 @@ const countPublishedMock = vi.fn();
 
 vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
   guessTheGoalRepo: {
+    acquireUserStartLock: vi.fn(),
     getPublishedGoal: (...a: unknown[]) => getPublishedGoalMock(...a),
     pickNextGoal: (...a: unknown[]) => pickNextGoalMock(...a),
     hasSeenGoal: (...a: unknown[]) => hasSeenGoalMock(...a),
@@ -148,6 +149,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     first_solve: false,
     coins_awarded: 0,
     xp_awarded: 0,
+    bonus_coins_awarded: 0,
+    bonus_xp_awarded: 0,
     client_nonce: null,
     created_at: new Date(),
     updated_at: new Date(),
@@ -188,6 +191,11 @@ describe('startSession', () => {
     expect(state.goal.players.map((p) => p.id)).toEqual(['p1', 'p2']);
     expect(state.goal.steps.every((s) => s.player.startsWith('p'))).toBe(true);
     expect(state.goal.options).toHaveLength(4);
+    // Authored option ids ('a' = always correct in seed data) must never
+    // survive into the served payload.
+    expect(new Set(state.goal.options.map((o) => o.id))).toEqual(
+      new Set(['o1', 'o2', 'o3', 'o4'])
+    );
     expect(state.max_points).toBe(100);
     expect(state.goal.main_moves).toBe(4);
   });
@@ -211,6 +219,12 @@ describe('startSession', () => {
     expect(state.session_id).toBe('session-1');
     expect(insertSessionMock).not.toHaveBeenCalled();
     expect(abandonSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('a nonce whose session already finished conflicts instead of restarting', async () => {
+    getSessionByNonceMock.mockResolvedValue(makeSession({ state: 'complete', client_nonce: 'n1' }));
+    await expect(guessTheGoalService.startSession(USER, 'n1')).rejects.toThrow(/already finished/);
+    expect(insertSessionMock).not.toHaveBeenCalled();
   });
 
   it('abandons a previous open session before starting a new one', async () => {
@@ -344,6 +358,33 @@ describe('answerBonus', () => {
       {},
       expect.objectContaining({ sourceKey: 'goal-1:bonus' })
     );
+    expect(updateSessionMock).toHaveBeenCalledWith(
+      {},
+      'session-1',
+      expect.objectContaining({ bonus_coins_awarded: 10, bonus_xp_awarded: 20 })
+    );
+  });
+
+  it('a bonus retry with the same option replays the original bonus awards', async () => {
+    getOpenSessionForUpdateMock.mockResolvedValue(
+      makeSession({
+        state: 'complete',
+        guess_correct: true,
+        first_solve: true,
+        bonus_option_id: 'a',
+        bonus_correct: true,
+        bonus_points: 40,
+        coins_awarded: 25,
+        xp_awarded: 50,
+        bonus_coins_awarded: 10,
+        bonus_xp_awarded: 20,
+      })
+    );
+    const outcome = await guessTheGoalService.answerBonus(USER, 'session-1', 'a');
+    expect(outcome.bonus_points).toBe(40);
+    expect(outcome.awards.coins).toBe(10);
+    expect(outcome.awards.xp).toBe(20);
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
   });
 
   it('bonus on a non-first-solve session pays nothing', async () => {

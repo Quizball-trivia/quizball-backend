@@ -90,6 +90,7 @@ try {
         ${goal.schema_version}, 'seed'
       )
       ON CONFLICT (slug) DO UPDATE SET
+        status = EXCLUDED.status,
         difficulty = EXCLUDED.difficulty,
         title = EXCLUDED.title,
         options = EXCLUDED.options,

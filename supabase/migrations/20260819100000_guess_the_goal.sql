@@ -12,10 +12,9 @@
 --    reward gate. Coins/XP are granted only when this insert wins.
 -- 4. Ledger: rewards flow through store_transaction_logs
 --    ('guess_the_goal_reward') with a real idempotency index — same money
---    pattern free_kicks established. Unlike free_kicks we build the partial
---    index in-transaction (no concurrent build): it matches zero existing
---    rows, so the scan is one pass and we avoid the invalid-index-left-behind
---    failure mode of concurrent builds under IF NOT EXISTS.
+--    pattern free_kicks established. The index and both constraint
+--    validations live in 20260819100001 so their locks never stack on this
+--    file's table DDL.
 -- 5. XP source enum gains 'guess_the_goal_solve' (user_xp_events is already
 --    idempotent on (user_id, source_type, source_key)).
 -- 6. RLS deny-all on all three tables: backend service-role access only.
@@ -50,7 +49,7 @@ ALTER TABLE public.store_transaction_logs
   ) NOT VALID;
 -- NOT VALID for the same reason as 20260818110000_free_kicks.sql: the ledger is
 -- append-only and large; existing rows satisfied the previous stricter list.
--- Validated in 20260819100002.
+-- Validated in 20260819100001.
 
 ALTER TABLE public.user_xp_events
   DROP CONSTRAINT IF EXISTS user_xp_events_source_type_check;
@@ -67,13 +66,6 @@ ALTER TABLE public.user_xp_events
   ) NOT VALID;
 -- NOT VALID for the same reason: no full-table scan while this batch holds
 -- earlier exclusive locks. Validated in 20260819100001.
-
--- Retried settlements must lose the insert race instead of double-crediting.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_store_tx_guess_the_goal_idempotency
-  ON public.store_transaction_logs (event_type, idempotency_key)
-  WHERE idempotency_key IS NOT NULL
-    AND outcome = 'success'
-    AND event_type = 'guess_the_goal_reward';
 
 -- ── 2. Content library ───────────────────────────────────────────────────────
 

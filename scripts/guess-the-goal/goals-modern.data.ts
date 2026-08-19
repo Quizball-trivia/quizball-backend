@@ -237,7 +237,7 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     schema_version: 1,
   },
   {
-    slug: 'son-burnley-2020',
+    slug: 'son-burnley-2019',
     difficulty: 'medium',
     title: t(
       'Son Heung-min — Tottenham vs Burnley, 2019 (70-metre solo)',

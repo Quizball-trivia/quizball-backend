@@ -429,6 +429,58 @@ describe('roadToGoalService', () => {
     expect(storeRepo.adjustWalletMinorInTx).not.toHaveBeenCalled();
   });
 
+  it('pages past malformed legacy candidates without using full-pool JSON filters', async () => {
+    const malformed = {
+      ...candidate(99, 'easy'),
+      payload: { options: [{ id: 'only-one' }] },
+    };
+    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
+      .mockResolvedValueOnce([malformed])
+      .mockResolvedValueOnce(candidates);
+    (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
+      ...commitment({ server_seed: data.serverSeed }),
+      round_id: data.roundId,
+      user_id: data.userId,
+      request_nonce: data.requestNonce,
+      stake_coins: data.stakeCoins,
+      auto_cashout_zone: data.autoCashoutZone,
+      calibration_version_id: data.calibrationVersionId,
+      commitment_version: data.commitmentVersion,
+      server_seed: data.serverSeed,
+      run_questions: data.runQuestions,
+      question_set_hash: data.questionSetHash,
+      commit_hash: data.commitHash,
+      rules_manifest: data.rulesManifest,
+      rules_manifest_hash: data.rulesManifestHash,
+    }));
+
+    await roadToGoalService.prepareCommitment(USER_ID, {
+      stakeCoins: 25,
+      requestNonce: COMMITMENT_NONCE,
+      autoCashoutZone: null,
+    });
+
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      1,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      []
+    );
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      2,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      [malformed.id]
+    );
+    const [, insertedCommitment] = (roadToGoalRepo.insertCommitment as Mock).mock.calls[0]!;
+    expect(insertedCommitment.runQuestions).toHaveLength(11);
+    expect(insertedCommitment.runQuestions.map((question: { question_id: string }) => (
+      question.question_id
+    ))).not.toContain(malformed.id);
+  });
+
   it('replays a start nonce without another query or debit', async () => {
     (roadToGoalRepo.getRoundByNonceForUpdate as Mock).mockResolvedValue(lockedRound);
 

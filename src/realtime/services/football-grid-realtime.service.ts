@@ -2,6 +2,11 @@ import { createHmac } from 'node:crypto';
 import { AppError, ConflictError } from '../../core/errors.js';
 import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
+import {
+  trackFootballGridMatchCompleted,
+  trackFootballGridMatchStarted,
+  trackFootballGridMissingAnswerReported,
+} from '../../core/analytics/game-events.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
@@ -165,10 +170,51 @@ async function processTerminalDeliveries(
     return;
   }
 
-  const [samples, rematch] = await Promise.all([
+  const [samples, rematch, analyticsFacts] = await Promise.all([
     footballGridRepo.getCuratedResultSamples(state.matchId),
     footballGridRepo.getRematchInfo(state.matchId),
+    footballGridRepo.getCompletionAnalyticsFacts(state.matchId),
   ]);
+  if (analyticsFacts) {
+    for (const participant of analyticsFacts.participants.filter((candidate) => !candidate.isBot)) {
+      const opponent = analyticsFacts.participants.find((candidate) => candidate.userId !== participant.userId);
+      const reward = rewards.get(participant.userId) ?? {
+        xp: 0,
+        coins: 0,
+        eligibilityReason: 'settlement_not_ready',
+      };
+      const result = analyticsFacts.winnerUserId === null
+        ? 'draw'
+        : analyticsFacts.winnerUserId === participant.userId
+          ? 'win'
+          : 'loss';
+      trackFootballGridMatchCompleted({
+        userId: participant.userId,
+        matchId: analyticsFacts.matchId,
+        origin: analyticsFacts.origin,
+        opponentType: opponent?.isBot ? 'bot' : 'human',
+        result,
+        completionReason: analyticsFacts.completionReason,
+        startedAt: analyticsFacts.startedAt,
+        endedAt: analyticsFacts.endedAt,
+        boardId: analyticsFacts.boardId,
+        boardVersion: analyticsFacts.boardVersion,
+        boardDifficulty: analyticsFacts.boardDifficulty,
+        turns: analyticsFacts.turns,
+        claimCount: participant.claimCount,
+        correctAnswers: participant.correctAnswers,
+        wrongAnswers: participant.wrongAnswers,
+        ambiguousAnswers: participant.ambiguousAnswers,
+        alreadyUsedAnswers: participant.alreadyUsedAnswers,
+        passes: participant.passes,
+        noActionTimeouts: participant.noActionTimeouts,
+        averageResponseMs: participant.averageResponseMs,
+        xpEarned: reward.xp,
+        coinsEarned: reward.coins,
+        rewardEligibilityReason: reward.eligibilityReason,
+      });
+    }
+  }
   const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString() };
   for (const delivery of humanDeliveries) {
     try {
@@ -461,15 +507,27 @@ export const footballGridRealtimeService = {
     socket: QuizballSocket,
     input: FootballGridVersionedCommandPayload,
   ): Promise<void> {
-    await footballGridService.getState(input.matchId, socket.data.user.id);
+    const previous = await footballGridService.getState(input.matchId, socket.data.user.id);
     await footballGridPresenceService.touch(input.matchId, socket.data.user.id, socket.id);
     await footballGridService.markReconnected(input.matchId, socket.data.user.id);
-    await applyAndBroadcast(io, () => footballGridService.markReady({
+    const state = await applyAndBroadcast(io, () => footballGridService.markReady({
       matchId: input.matchId,
       userId: socket.data.user.id,
       commandId: input.commandId,
       expectedStateVersion: input.expectedStateVersion,
     }));
+    if (previous.phase !== 'countdown' && state.phase === 'countdown') {
+      for (const participant of state.players.filter((candidate) => !candidate.isBot)) {
+        const opponent = state.players.find((candidate) => candidate.userId !== participant.userId);
+        trackFootballGridMatchStarted({
+          userId: participant.userId,
+          matchId: state.matchId,
+          opponentType: opponent?.isBot ? 'bot' : 'human',
+          boardId: state.board.boardId,
+          boardVersion: state.board.boardVersion,
+        });
+      }
+    }
   },
 
   async handleAnswer(
@@ -615,6 +673,20 @@ export const footballGridRealtimeService = {
 
   async handleReport(socket: QuizballSocket, attemptId: string): Promise<void> {
     const reportId = await footballGridService.reportMissingAnswer(attemptId, socket.data.user.id);
+    const analyticsFacts = await footballGridRepo.getMissingAnswerAnalyticsFacts(
+      attemptId,
+      socket.data.user.id,
+    );
+    if (analyticsFacts) {
+      trackFootballGridMissingAnswerReported({
+        userId: socket.data.user.id,
+        matchId: analyticsFacts.matchId,
+        attemptId,
+        boardId: analyticsFacts.boardId,
+        cellIndex: analyticsFacts.cellIndex,
+        attemptOutcome: analyticsFacts.outcome,
+      });
+    }
     socket.emit('grid:report_received', { reportId, attemptId });
   },
 

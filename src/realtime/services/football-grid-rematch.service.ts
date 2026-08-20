@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { ConflictError } from '../../core/errors.js';
+import {
+  trackFootballGridMatchFound,
+  trackFootballGridRematchResponse,
+} from '../../core/analytics/game-events.js';
 import { logger } from '../../core/logger.js';
 import { footballGridRepo, footballGridService, type FootballGridState } from '../../modules/football-grid/index.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
@@ -100,6 +104,12 @@ export const footballGridRematchService = {
         gridCode: 'REMATCH_TRANSITION_IN_PROGRESS',
       });
     }
+    trackFootballGridRematchResponse({
+      userId,
+      matchId: input.matchId,
+      seriesId: accepted.seriesId,
+      response: 'accepted',
+    });
     const userIds = accepted.players.map((player) => player.userId);
     emitState(io, userIds, {
       seriesId: accepted.seriesId,
@@ -202,6 +212,18 @@ export const footballGridRematchService = {
       acceptedUserIds: userIds,
       expiresAt: null,
     });
+    const matchedAt = new Date();
+    for (const participant of state.players.filter((player) => !player.isBot)) {
+      trackFootballGridMatchFound({
+        userId: participant.userId,
+        matchId: state.matchId,
+        origin: accepted.origin,
+        opponentType: 'human',
+        boardId: state.board.boardId,
+        boardVersion: state.board.boardVersion,
+        occurredAt: matchedAt,
+      });
+    }
     await footballGridRealtimeService.emitMatchFound(io, state).catch((error) => {
       logger.warn({ error, matchId: state.matchId }, 'Football Grid rematch handoff deferred to recovery');
     });
@@ -213,6 +235,12 @@ export const footballGridRematchService = {
   }): Promise<void> {
     const state = await footballGridService.getState(input.matchId, socket.data.user.id);
     const declined = await footballGridRepo.declineRematch({ ...input, userId: socket.data.user.id });
+    trackFootballGridRematchResponse({
+      userId: socket.data.user.id,
+      matchId: input.matchId,
+      seriesId: declined.seriesId,
+      response: 'declined',
+    });
     if (declined.pairingToken) {
       await userSessionGuardService.releaseActivityFences(declined.userIds, declined.pairingToken);
     }

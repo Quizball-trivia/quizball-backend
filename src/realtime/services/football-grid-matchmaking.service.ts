@@ -3,6 +3,11 @@ import { config } from '../../core/config.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
+import {
+  trackFootballGridMatchFound,
+  trackFootballGridQueueJoined,
+  trackFootballGridQueueLeft,
+} from '../../core/analytics/game-events.js';
 import { footballGridRepo, footballGridService, type FootballGridState } from '../../modules/football-grid/index.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
@@ -204,6 +209,12 @@ function emitSearchState(
 
 async function expireSearch(io: QuizballServer, search: QueuedGridSearch): Promise<void> {
   await removeSearch(search);
+  trackFootballGridQueueLeft({
+    userId: search.userId,
+    searchId: search.searchId,
+    reason: 'expired',
+    queuedAt: new Date(search.queuedAt),
+  });
   emitSearchState(io, search.userId, { state: 'idle', searchId: search.searchId });
   await userSessionGuardService.emitState(io, search.userId);
 }
@@ -320,6 +331,28 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
             ],
             openerUserId,
           })).state;
+          const matchedAt = new Date();
+          for (const search of [a, b]) {
+            trackFootballGridQueueLeft({
+              userId: search.userId,
+              searchId: search.searchId,
+              reason: 'matched',
+              queuedAt: new Date(search.queuedAt),
+              leftAt: matchedAt,
+              opponentType: 'human',
+            });
+            trackFootballGridMatchFound({
+              userId: search.userId,
+              matchId: state.matchId,
+              searchId: search.searchId,
+              origin: 'random',
+              opponentType: 'human',
+              queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
+              boardId: state.board.boardId,
+              boardVersion: state.board.boardVersion,
+              occurredAt: matchedAt,
+            });
+          }
         } catch (error) {
           logger.error({ error, pairingToken, userIds: [a.userId, b.userId] }, 'Football Grid human pairing failed');
           await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
@@ -424,6 +457,26 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
             await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, selected.bot.user_id);
           },
         })).state;
+        const matchedAt = new Date();
+        trackFootballGridQueueLeft({
+          userId: search.userId,
+          searchId: search.searchId,
+          reason: 'matched',
+          queuedAt: new Date(search.queuedAt),
+          leftAt: matchedAt,
+          opponentType: 'bot',
+        });
+        trackFootballGridMatchFound({
+          userId: search.userId,
+          matchId: state.matchId,
+          searchId: search.searchId,
+          origin: 'random',
+          opponentType: 'bot',
+          queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
+          boardId: state.board.boardId,
+          boardVersion: state.board.boardVersion,
+          occurredAt: matchedAt,
+        });
       } catch (error) {
         logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
         await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
@@ -566,6 +619,12 @@ export const footballGridMatchmakingService = {
         };
         await writeSearch(search);
         await scheduleFallback(search);
+        trackFootballGridQueueJoined({
+          userId,
+          searchId: search.searchId,
+          locale: search.locale,
+          queuedAt: new Date(search.queuedAt),
+        });
         emitSearchState(io, userId, {
           state: 'searching', searchId: search.searchId,
           queuedAt: new Date(search.queuedAt).toISOString(),
@@ -602,7 +661,15 @@ export const footballGridMatchmakingService = {
           return true;
         }
         const search = searchId ? await readSearch(searchId) : null;
-        if (search) await removeSearch(search);
+        if (search) {
+          await removeSearch(search);
+          trackFootballGridQueueLeft({
+            userId,
+            searchId: search.searchId,
+            reason: 'cancelled',
+            queuedAt: new Date(search.queuedAt),
+          });
+        }
         emitSearchState(io, userId, { state: 'idle', searchId: expectedSearchId });
         await userSessionGuardService.emitState(io, userId);
         return true;

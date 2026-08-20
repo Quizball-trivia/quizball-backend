@@ -86,7 +86,13 @@ describe('football-grid-rematch.service', () => {
     ownsActivityFencesMock.mockResolvedValue(true);
     renewActivityFencesMock.mockResolvedValue(true);
     createPairingMock.mockResolvedValue(undefined);
-    createMatchMock.mockResolvedValue({ state: { matchId: 'next-grid-match' } });
+    createMatchMock.mockResolvedValue({
+      state: {
+        matchId: 'next-grid-match',
+        players: readyOffer.players.map((player) => ({ ...player, isBot: false })),
+        board: { boardId: 'board-1', boardVersion: 1 },
+      },
+    });
     markPairingFailedMock.mockResolvedValue(undefined);
     closeRematchAfterFailureMock.mockResolvedValue(readyOffer.seriesVersion + 1);
     releaseActivityFencesMock.mockResolvedValue(undefined);
@@ -122,7 +128,7 @@ describe('football-grid-rematch.service', () => {
     expect(createPairingMock.mock.invocationCallOrder[0]).toBeLessThan(
       createMatchMock.mock.invocationCallOrder[0],
     );
-    expect(emitMatchFoundMock).toHaveBeenCalledWith(io, { matchId: 'next-grid-match' });
+    expect(emitMatchFoundMock).toHaveBeenCalledWith(io, expect.objectContaining({ matchId: 'next-grid-match' }));
   });
 
   it('fails closed if either activity fence expired before the locked create', async () => {

@@ -79,7 +79,12 @@ const state = vi.hoisted(() => ({
   markPairingFailed: vi.fn(),
   createPairing: vi.fn(),
   createMatch: vi.fn(async (input: { players: Array<{ userId: string }> }) => ({
-    state: { matchId: 'grid-match', players: input.players, phase: 'handoff' },
+    state: {
+      matchId: 'grid-match',
+      players: input.players,
+      phase: 'handoff',
+      board: { boardId: 'board-1', boardVersion: 1 },
+    },
     created: true,
   })),
   emitMatchFound: vi.fn(),

@@ -1,5 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
+import { trackFootballGridMatchFound } from '../../core/analytics/game-events.js';
 import { logger } from '../../core/logger.js';
 import { footballGridRepo, footballGridService } from '../../modules/football-grid/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
@@ -88,6 +89,18 @@ export async function startFootballGridMatchFromLobby(
   // Everything below is post-commit delivery. A transient socket or warmup
   // cleanup failure must not relabel the already-created match as failed; the
   // handoff reconciler will redeliver it from Postgres.
+  const matchedAt = new Date();
+  for (const member of members) {
+    trackFootballGridMatchFound({
+      userId: member.user_id,
+      matchId: createdState.matchId,
+      origin,
+      opponentType: 'human',
+      boardId: createdState.board.boardId,
+      boardVersion: createdState.board.boardVersion,
+      occurredAt: matchedAt,
+    });
+  }
   await emitLobbyState(io, input.lobbyId).catch((error) => {
     logger.warn({ error, lobbyId: input.lobbyId }, 'Football Grid active lobby state delivery failed');
   });

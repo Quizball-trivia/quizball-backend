@@ -107,6 +107,31 @@ export interface FootballGridResultDeliveryRow {
   ack_token: string;
 }
 
+export interface FootballGridCompletionAnalyticsFacts {
+  matchId: string;
+  origin: FootballGridOrigin;
+  winnerUserId: string | null;
+  completionReason: string;
+  startedAt: string;
+  endedAt: string;
+  boardId: string;
+  boardVersion: number;
+  boardDifficulty: 'easy' | 'normal' | 'hard';
+  turns: number;
+  participants: Array<{
+    userId: string;
+    isBot: boolean;
+    claimCount: number;
+    correctAnswers: number;
+    wrongAnswers: number;
+    ambiguousAnswers: number;
+    alreadyUsedAnswers: number;
+    passes: number;
+    noActionTimeouts: number;
+    averageResponseMs: number | null;
+  }>;
+}
+
 function toCriterionView(row: GridCriterionRow): FootballGridCriterionView {
   return {
     id: row.id,
@@ -1953,6 +1978,128 @@ export const footballGridRepo = {
     `;
     if (!rows[0]) throw new Error('ATTEMPT_NOT_REPORTABLE');
     return rows[0].id;
+  },
+
+  async getMissingAnswerAnalyticsFacts(
+    attemptId: string,
+    reportingUserId: string,
+  ): Promise<{
+    matchId: string;
+    boardId: string;
+    cellIndex: number | null;
+    outcome: string;
+  } | null> {
+    const rows = await sql<Array<{
+      match_id: string;
+      board_id: string;
+      cell_index: number | null;
+      outcome: string;
+    }>>`
+      SELECT a.match_id, gm.board_id, a.cell_index, a.outcome
+        FROM football_grid_attempts a
+        JOIN football_grid_matches gm ON gm.match_id = a.match_id
+       WHERE a.id = ${attemptId} AND a.actor_user_id = ${reportingUserId}
+       LIMIT 1
+    `;
+    const row = rows[0];
+    return row ? {
+      matchId: row.match_id,
+      boardId: row.board_id,
+      cellIndex: row.cell_index,
+      outcome: row.outcome,
+    } : null;
+  },
+
+  async getCompletionAnalyticsFacts(
+    matchId: string,
+  ): Promise<FootballGridCompletionAnalyticsFacts | null> {
+    const rows = await sql<Array<{
+      match_id: string;
+      origin: FootballGridOrigin;
+      winner_user_id: string | null;
+      completion_reason: string | null;
+      started_at: string;
+      ended_at: string | null;
+      board_id: string;
+      board_version: number;
+      board_difficulty: 'easy' | 'normal' | 'hard';
+      turns: number;
+      user_id: string;
+      is_bot: boolean;
+      no_action_timeout_count: number;
+      claim_count: number;
+      correct_answers: number;
+      wrong_answers: number;
+      ambiguous_answers: number;
+      already_used_answers: number;
+      passes: number;
+      average_response_ms: number | null;
+    }>>`
+      SELECT gm.match_id, gm.origin, gm.winner_user_id, gm.completion_reason,
+             gm.created_at AS started_at, gm.ended_at,
+             gm.board_id, board.version AS board_version,
+             board.difficulty AS board_difficulty, gm.turn_number AS turns,
+             participant.user_id, participant.is_bot,
+             participant.no_action_timeout_count,
+             COALESCE(claims.claim_count, 0)::int AS claim_count,
+             COALESCE(attempts.correct_answers, 0)::int AS correct_answers,
+             COALESCE(attempts.wrong_answers, 0)::int AS wrong_answers,
+             COALESCE(attempts.ambiguous_answers, 0)::int AS ambiguous_answers,
+             COALESCE(attempts.already_used_answers, 0)::int AS already_used_answers,
+             COALESCE(attempts.passes, 0)::int AS passes,
+             attempts.average_response_ms
+        FROM football_grid_matches gm
+        JOIN football_grid_boards board ON board.id = gm.board_id
+        JOIN football_grid_participants participant ON participant.match_id = gm.match_id
+        LEFT JOIN LATERAL (
+          SELECT count(*)::int AS claim_count
+            FROM football_grid_claims claim
+           WHERE claim.match_id = gm.match_id
+             AND claim.claimant_user_id = participant.user_id
+        ) claims ON true
+        LEFT JOIN LATERAL (
+          SELECT count(*) FILTER (WHERE attempt.outcome = 'correct')::int AS correct_answers,
+                 count(*) FILTER (WHERE attempt.outcome = 'wrong')::int AS wrong_answers,
+                 count(*) FILTER (WHERE attempt.outcome = 'ambiguous')::int AS ambiguous_answers,
+                 count(*) FILTER (WHERE attempt.outcome = 'already_used')::int AS already_used_answers,
+                 count(*) FILTER (WHERE attempt.outcome = 'pass')::int AS passes,
+                 round(avg(
+                   extract(epoch FROM (attempt.resolved_at - attempt.admitted_at)) * 1000
+                 ) FILTER (WHERE attempt.cell_index IS NOT NULL))::int AS average_response_ms
+            FROM football_grid_attempts attempt
+           WHERE attempt.match_id = gm.match_id
+             AND attempt.actor_user_id = participant.user_id
+        ) attempts ON true
+       WHERE gm.match_id = ${matchId}
+         AND gm.phase = 'terminal'
+       ORDER BY participant.seat
+    `;
+    const first = rows[0];
+    if (!first?.ended_at || !first.completion_reason) return null;
+    return {
+      matchId: first.match_id,
+      origin: first.origin,
+      winnerUserId: first.winner_user_id,
+      completionReason: first.completion_reason,
+      startedAt: first.started_at,
+      endedAt: first.ended_at,
+      boardId: first.board_id,
+      boardVersion: first.board_version,
+      boardDifficulty: first.board_difficulty,
+      turns: first.turns,
+      participants: rows.map((row) => ({
+        userId: row.user_id,
+        isBot: row.is_bot,
+        claimCount: row.claim_count,
+        correctAnswers: row.correct_answers,
+        wrongAnswers: row.wrong_answers,
+        ambiguousAnswers: row.ambiguous_answers,
+        alreadyUsedAnswers: row.already_used_answers,
+        passes: row.passes,
+        noActionTimeouts: row.no_action_timeout_count,
+        averageResponseMs: row.average_response_ms,
+      })),
+    };
   },
 
   async getCuratedResultSamples(matchId: string): Promise<Array<{

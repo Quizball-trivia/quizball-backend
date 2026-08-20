@@ -153,6 +153,58 @@ Accepting a report also requires a newer published release whose reviewed alias
 and memberships uniquely resolve the submitted answer against both original
 cell criteria; an arbitrary release ID is rejected.
 
+## Product analytics (PostHog)
+
+Football Grid uses named, low-volume events. Global click autocapture and
+full-app session replay remain disabled. Never add submitted answer text,
+normalized answer text, player email, IP address, device identity, or risk
+hashes to PostHog. Answer behavior is aggregated from authoritative database
+rows when the match reaches a terminal state.
+
+The launch funnel is:
+
+1. `football_grid_viewed` — unique people who saw the mode.
+2. `football_grid_play_started` — people who intentionally started the demo or
+   entered the play flow.
+3. `football_grid_queue_joined` — server-confirmed random queue entry.
+4. `football_grid_match_found` — server-created opponent pairing, including
+   queue wait, human/bot type, origin, and board version.
+5. `match_started` filtered to `mode = football_grid` — both clients became
+   ready and the authoritative countdown began.
+6. `match_completed` filtered to `mode = football_grid` — a real result. Loading
+   no-shows, simultaneous disconnects, and administrative cancellations emit
+   `match_abandoned` instead so they do not inflate completion conversion.
+
+Supporting events are `football_grid_queue_left`,
+`football_grid_engagement_ended`, `football_grid_rematch_response`, and
+`football_grid_missing_answer_reported`. The demo additionally emits
+`football_grid_demo_completed`; it must not be combined with authoritative
+online completions.
+
+`football_grid_engagement_ended` carries elapsed and foreground-active seconds
+plus aggregate visit counters. `match_completed` carries duration, result,
+completion reason, origin, human/bot opponent, board/version/difficulty, turns,
+claims, answer-outcome counts, pass/timeout counts, average response time, XP,
+coins, and reward eligibility reason. Retried server events use a deterministic
+UUID and stable occurrence timestamp so PostHog eventually deduplicates them.
+
+Create the staging PostHog dashboard only after the first staging events are
+visible in the data schema. Include:
+
+- unique viewers, play starters, queue joiners, starters, and completers;
+- view → play → queue → found → started → completed conversion and median time
+  between steps;
+- p50/p95 queue wait split by human/bot and locale;
+- p50/p95 active engagement and authoritative match duration;
+- completion, abandonment, rematch acceptance, and D1/D7 return rates;
+- result/completion-reason distribution split by origin and opponent type;
+- answer accuracy, wrong/ambiguous/already-used/pass/timeout rates and response
+  time split by board difficulty/version;
+- missing-answer report rate by board/cell and reward eligibility distribution.
+
+Keep staging and production on their separate PostHog project tokens. Local
+development has no token by default and must not pollute either project.
+
 ## Monitoring and SLO alerts
 
 Dashboard these metrics split by origin/opponent/outcome where available:

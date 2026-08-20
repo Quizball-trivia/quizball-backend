@@ -34,6 +34,9 @@ scripts/*
 !scripts/wl-weekly-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
+# Guess the Goal content seeds + local smoke — code only, no secrets.
+!scripts/guess-the-goal/
+!scripts/guess-the-goal/**
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**

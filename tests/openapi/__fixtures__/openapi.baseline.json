@@ -1188,7 +1188,8 @@
               "free_kicks_stake",
               "free_kicks_payout",
               "road_to_goal_stake",
-              "road_to_goal_payout"
+              "road_to_goal_payout",
+              "guess_the_goal_reward"
             ]
           },
           "outcome": {
@@ -1335,7 +1336,8 @@
                     "free_kicks_stake",
                     "free_kicks_payout",
                     "road_to_goal_stake",
-                    "road_to_goal_payout"
+                    "road_to_goal_payout",
+                    "guess_the_goal_reward"
                   ]
                 },
                 "outcome": {
@@ -13140,7 +13142,8 @@
                 "free_kicks_stake",
                 "free_kicks_payout",
                 "road_to_goal_stake",
-                "road_to_goal_payout"
+                "road_to_goal_payout",
+                "guess_the_goal_reward"
               ]
             },
             "required": false,
@@ -13236,7 +13239,8 @@
                               "free_kicks_stake",
                               "free_kicks_payout",
                               "road_to_goal_stake",
-                              "road_to_goal_payout"
+                              "road_to_goal_payout",
+                              "guess_the_goal_reward"
                             ]
                           },
                           "outcome": {

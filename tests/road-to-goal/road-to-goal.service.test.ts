@@ -9,7 +9,15 @@ const dbMocks = vi.hoisted(() => {
   return { sql, tx };
 });
 
+const analyticsMocks = vi.hoisted(() => ({
+  trackRoadToGoalRunStarted: vi.fn(),
+  trackRoadToGoalQuestionResolved: vi.fn(),
+  trackRoadToGoalRunSettled: vi.fn(),
+}));
+
 vi.mock('../../src/db/index.js', () => ({ sql: dbMocks.sql }));
+
+vi.mock('../../src/modules/road-to-goal/road-to-goal.analytics.js', () => analyticsMocks);
 
 vi.mock('../../src/modules/road-to-goal/road-to-goal.repo.js', () => ({
   roadToGoalRepo: {
@@ -264,6 +272,9 @@ let lockedRound: RoadToGoalRoundRow;
 describe('roadToGoalService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMocks.sql.begin.mockImplementation(
+      async (callback: (transaction: unknown) => unknown) => callback(dbMocks.tx)
+    );
     lockedRound = round();
     (roadToGoalRepo.getRoundByNonceForUpdate as Mock).mockResolvedValue(null);
     (roadToGoalRepo.getActiveRoundForUpdate as Mock).mockImplementation(() => null);
@@ -359,6 +370,21 @@ describe('roadToGoalService', () => {
       dbMocks.tx,
       expect.objectContaining({ coinsDeltaMinor: -2_500 })
     );
+    expect(analyticsMocks.trackRoadToGoalRunStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ROUND_ID })
+    );
+  });
+
+  it('does not emit authoritative analytics when the transaction commit fails', async () => {
+    dbMocks.sql.begin.mockImplementationOnce(async (callback) => {
+      await callback(dbMocks.tx);
+      throw new Error('simulated commit failure');
+    });
+
+    await expect(roadToGoalService.startRound(USER_ID, startInput()))
+      .rejects.toThrow('simulated commit failure');
+
+    expect(analyticsMocks.trackRoadToGoalRunStarted).not.toHaveBeenCalled();
   });
 
   it('prepares the server commitment before accepting any player seed', async () => {

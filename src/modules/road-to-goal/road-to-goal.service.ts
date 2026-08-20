@@ -182,6 +182,21 @@ interface AttemptResolution {
   result: Omit<RoadToGoalAnswerResult, 'state'>;
 }
 
+type DeferredAnalytics = Array<() => void>;
+const ROAD_TO_GOAL_SWEEP_BUDGET_MS = 5_000;
+const ROAD_TO_GOAL_MAX_SWEEP_ATTEMPTS = 1_000;
+
+/** PostHog is intentionally outside the database transaction. A failed commit
+ * must never produce an authoritative gameplay or economy event. */
+async function withRoadToGoalAnalytics<T>(
+  callback: (tx: TransactionSql, analytics: DeferredAnalytics) => Promise<T>
+): Promise<T> {
+  const analytics: DeferredAnalytics = [];
+  const result = await sql.begin(async (tx) => callback(tx, analytics)) as T;
+  for (const emit of analytics) emit();
+  return result;
+}
+
 function safeJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -464,6 +479,7 @@ async function insertPayout(
 async function settleWithPayout(
   tx: TransactionSql,
   row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics,
   options: {
     status: 'cashed' | 'completed';
     clearedZones: number;
@@ -499,7 +515,7 @@ async function settleWithPayout(
     requestNonce: options.requestNonce ?? null,
   });
   if (!options.deferSettlementAnalytics) {
-    trackRoadToGoalRunSettled(updated);
+    analytics.push(() => trackRoadToGoalRunSettled(updated));
   }
   return updated;
 }
@@ -517,6 +533,7 @@ function requireFairnessSeeds(row: RoadToGoalRoundRow): {
 async function resolveAttempt(
   tx: TransactionSql,
   row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics,
   input: {
     answerOption: string | null;
     correct: boolean;
@@ -552,7 +569,7 @@ async function resolveAttempt(
       decision_deadline_at: null,
     });
   } else if (zone === ROAD_TO_GOAL_ZONES) {
-    updated = await settleWithPayout(tx, row, {
+    updated = await settleWithPayout(tx, row, analytics, {
       status: 'completed',
       clearedZones: ROAD_TO_GOAL_ZONES,
       eventType: 'complete',
@@ -560,7 +577,7 @@ async function resolveAttempt(
       deferSettlementAnalytics: true,
     });
   } else if (row.auto_cashout_zone === zone) {
-    updated = await settleWithPayout(tx, row, {
+    updated = await settleWithPayout(tx, row, analytics, {
       status: 'cashed',
       clearedZones: zone,
       eventType: 'auto_cashout',
@@ -601,7 +618,7 @@ async function resolveAttempt(
     survived,
   });
 
-  trackRoadToGoalQuestionResolved({
+  analytics.push(() => trackRoadToGoalQuestionResolved({
     row: updated,
     question,
     zone,
@@ -614,9 +631,9 @@ async function resolveAttempt(
     wrongSurvivalBp: odds.wrongSurvivalBp,
     appliedSurvivalBp,
     rollBp,
-  });
+  }));
   if (updated.status !== 'active') {
-    trackRoadToGoalRunSettled(updated);
+    analytics.push(() => trackRoadToGoalRunSettled(updated));
   }
 
   return {
@@ -638,9 +655,10 @@ async function resolveAttempt(
 async function settleTimedOutQuestion(
   tx: TransactionSql,
   row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics,
   requestNonce: string | null = null
 ): Promise<AttemptResolution> {
-  return resolveAttempt(tx, row, {
+  return resolveAttempt(tx, row, analytics, {
     answerOption: null,
     correct: false,
     outcome: 'late',
@@ -652,9 +670,10 @@ async function settleTimedOutQuestion(
 async function settleExpiredDecision(
   tx: TransactionSql,
   row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics,
   requestNonce: string | null = null
 ): Promise<RoadToGoalRoundRow> {
-  return settleWithPayout(tx, row, {
+  return settleWithPayout(tx, row, analytics, {
     status: 'cashed',
     clearedZones: row.cleared_zones,
     eventType: 'auto_cashout',
@@ -665,16 +684,18 @@ async function settleExpiredDecision(
 
 async function resolveExpiredRound(
   tx: TransactionSql,
-  row: RoadToGoalRoundRow
+  row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics
 ): Promise<RoadToGoalRoundRow> {
-  if (questionExpired(row)) return (await settleTimedOutQuestion(tx, row)).row;
-  if (decisionExpired(row)) return settleExpiredDecision(tx, row);
+  if (questionExpired(row)) return (await settleTimedOutQuestion(tx, row, analytics)).row;
+  if (decisionExpired(row)) return settleExpiredDecision(tx, row, analytics);
   return row;
 }
 
 async function resolveStartNonceReplay(
   tx: TransactionSql,
   row: RoadToGoalRoundRow,
+  analytics: DeferredAnalytics,
   input: { commitmentId: string; clientNonce: string; clientSeed: string }
 ): Promise<RoadToGoalRoundRow> {
   if (
@@ -684,7 +705,7 @@ async function resolveStartNonceReplay(
   ) {
     throw new ConflictError('Client nonce was already used with a different commitment');
   }
-  return row.status === 'active' ? resolveExpiredRound(tx, row) : row;
+  return row.status === 'active' ? resolveExpiredRound(tx, row, analytics) : row;
 }
 
 function commitmentExpired(row: RoadToGoalCommitmentRow): boolean {
@@ -934,14 +955,14 @@ export const roadToGoalService = {
     }
   ): Promise<RoadToGoalPublicState> {
     try {
-      return await sql.begin(async (tx) => {
+      return await withRoadToGoalAnalytics(async (tx, analytics) => {
         const replay = await roadToGoalRepo.getRoundByNonceForUpdate(
           tx,
           userId,
           input.clientNonce
         );
         if (replay) {
-          return toPublicState(await resolveStartNonceReplay(tx, replay, input));
+          return toPublicState(await resolveStartNonceReplay(tx, replay, analytics, input));
         }
 
         const commitment = await roadToGoalRepo.getCommitmentForUpdate(
@@ -957,7 +978,9 @@ export const roadToGoalService = {
             input.commitmentId
           );
           if (consumedRound) {
-            return toPublicState(await resolveStartNonceReplay(tx, consumedRound, input));
+            return toPublicState(
+              await resolveStartNonceReplay(tx, consumedRound, analytics, input)
+            );
           }
           throw new ConflictError('Commitment is already consumed');
         }
@@ -968,7 +991,7 @@ export const roadToGoalService = {
 
         const active = await roadToGoalRepo.getActiveRoundForUpdate(tx, userId);
         if (active) {
-          const resolved = await resolveExpiredRound(tx, active);
+          const resolved = await resolveExpiredRound(tx, active, analytics);
           if (resolved.status === 'active') {
             throw new ConflictError('An active round already exists');
           }
@@ -1030,21 +1053,21 @@ export const roadToGoalService = {
           eventType: 'question_dealt',
           questionId: firstQuestion.question_id,
         });
-        trackRoadToGoalRunStarted(round);
+        analytics.push(() => trackRoadToGoalRunStarted(round));
         return toPublicState(round);
       });
     } catch (error) {
       const nonceConflict = uniqueViolation(error, 'uq_road_to_goal_user_nonce');
       const activeConflict = uniqueViolation(error, 'uq_road_to_goal_active_round');
       if (nonceConflict || activeConflict) {
-        return sql.begin(async (tx) => {
+        return withRoadToGoalAnalytics(async (tx, analytics) => {
           const replay = await roadToGoalRepo.getRoundByNonceForUpdate(
             tx,
             userId,
             input.clientNonce
           );
           if (replay) {
-            return toPublicState(await resolveStartNonceReplay(tx, replay, input));
+            return toPublicState(await resolveStartNonceReplay(tx, replay, analytics, input));
           }
           if (activeConflict) throw new ConflictError('An active round already exists');
           throw new ConflictError('Client nonce was already used with a different commitment');
@@ -1055,18 +1078,20 @@ export const roadToGoalService = {
   },
 
   async getCurrentState(userId: string): Promise<RoadToGoalPublicState> {
-    return sql.begin(async (tx) => {
+    return withRoadToGoalAnalytics(async (tx, analytics) => {
       const row = await roadToGoalRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active Road to Goal round');
-      return toPublicState(await resolveExpiredRound(tx, row));
+      return toPublicState(await resolveExpiredRound(tx, row, analytics));
     });
   },
 
   async getRoundState(userId: string, roundId: string): Promise<RoadToGoalPublicState> {
-    return sql.begin(async (tx) => {
+    return withRoadToGoalAnalytics(async (tx, analytics) => {
       const row = await roadToGoalRepo.getRoundForUserForUpdate(tx, userId, roundId);
       if (!row) throw new NotFoundError('Road to Goal round not found');
-      return toPublicState(row.status === 'active' ? await resolveExpiredRound(tx, row) : row);
+      return toPublicState(
+        row.status === 'active' ? await resolveExpiredRound(tx, row, analytics) : row
+      );
     });
   },
 
@@ -1080,7 +1105,7 @@ export const roadToGoalService = {
       requestNonce: string;
     }
   ): Promise<RoadToGoalAnswerResult> {
-    return sql.begin(async (tx) => {
+    return withRoadToGoalAnalytics(async (tx, analytics) => {
       const row = await roadToGoalRepo.getRoundForUserForUpdate(tx, userId, input.roundId);
       if (!row) throw new NotFoundError('Road to Goal round not found');
       const replay = await roadToGoalRepo.getEventByRequestNonce(
@@ -1109,7 +1134,7 @@ export const roadToGoalService = {
 
       const late = questionExpired(row);
       const correct = !late && input.optionId === question.correct_option_id;
-      const resolved = await resolveAttempt(tx, row, {
+      const resolved = await resolveAttempt(tx, row, analytics, {
         answerOption: input.optionId,
         correct,
         outcome: late ? 'late' : correct ? 'correct' : 'wrong',
@@ -1124,7 +1149,7 @@ export const roadToGoalService = {
     userId: string,
     input: { roundId: string; expectedVersion: number; requestNonce: string }
   ): Promise<RoadToGoalPublicState> {
-    return sql.begin(async (tx) => {
+    return withRoadToGoalAnalytics(async (tx, analytics) => {
       const row = await roadToGoalRepo.getRoundForUserForUpdate(tx, userId, input.roundId);
       if (!row) throw new NotFoundError('Road to Goal round not found');
       const replay = await roadToGoalRepo.getEventByRequestNonce(
@@ -1145,7 +1170,9 @@ export const roadToGoalService = {
         throw new ConflictError('Round cannot continue now');
       }
       if (decisionExpired(row)) {
-        return toPublicState(await settleExpiredDecision(tx, row, input.requestNonce));
+        return toPublicState(
+          await settleExpiredDecision(tx, row, analytics, input.requestNonce)
+        );
       }
       if (row.cleared_zones >= ROAD_TO_GOAL_ZONES) {
         throw new ConflictError('All zones are already cleared');
@@ -1186,7 +1213,7 @@ export const roadToGoalService = {
     userId: string,
     input: { roundId: string; expectedVersion: number; requestNonce: string }
   ): Promise<RoadToGoalPublicState> {
-    return sql.begin(async (tx) => {
+    return withRoadToGoalAnalytics(async (tx, analytics) => {
       const row = await roadToGoalRepo.getRoundForUserForUpdate(tx, userId, input.roundId);
       if (!row) throw new NotFoundError('Road to Goal round not found');
       const replay = await roadToGoalRepo.getEventByRequestNonce(
@@ -1208,7 +1235,7 @@ export const roadToGoalService = {
       }
       const expired = decisionExpired(row);
       return toPublicState(
-        await settleWithPayout(tx, row, {
+        await settleWithPayout(tx, row, analytics, {
           status: 'cashed',
           clearedZones: row.cleared_zones,
           eventType: expired ? 'auto_cashout' : 'cashout',
@@ -1316,11 +1343,18 @@ export const roadToGoalService = {
 
   async sweepStaleRounds(): Promise<{ settled: number }> {
     let settled = 0;
+    let attempts = 0;
+    let drained = false;
     const failedRoundIds: string[] = [];
-    for (let attempt = 0; attempt < 50; attempt += 1) {
+    const deadline = performance.now() + ROAD_TO_GOAL_SWEEP_BUDGET_MS;
+    while (
+      attempts < ROAD_TO_GOAL_MAX_SWEEP_ATTEMPTS
+      && performance.now() < deadline
+    ) {
+      attempts += 1;
       let claimedRoundId: string | null = null;
       try {
-        const didSettle = await sql.begin(async (tx) => {
+        const didSettle = await withRoadToGoalAnalytics(async (tx, analytics) => {
           const row = await roadToGoalRepo.getNextExpiredRoundForUpdateSkipLocked(
             tx,
             failedRoundIds
@@ -1328,22 +1362,31 @@ export const roadToGoalService = {
           if (!row) return false;
           claimedRoundId = row.id;
           if (questionExpired(row)) {
-            await settleTimedOutQuestion(tx, row);
+            await settleTimedOutQuestion(tx, row, analytics);
             return true;
           }
           if (decisionExpired(row)) {
-            await settleExpiredDecision(tx, row);
+            await settleExpiredDecision(tx, row, analytics);
             return true;
           }
           return false;
         });
-        if (!didSettle) break;
+        if (!didSettle) {
+          drained = true;
+          break;
+        }
         settled += 1;
       } catch (error) {
         logger.error({ roundId: claimedRoundId, error }, 'road-to-goal expiry sweep failed');
         if (!claimedRoundId) break;
         failedRoundIds.push(claimedRoundId);
       }
+    }
+    if (!drained) {
+      logger.warn(
+        { settled, attempts, failedRounds: failedRoundIds.length },
+        'road-to-goal expiry sweep budget exhausted before backlog drained'
+      );
     }
     return { settled };
   },

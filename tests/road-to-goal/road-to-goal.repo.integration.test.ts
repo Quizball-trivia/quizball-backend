@@ -145,6 +145,25 @@ describe('Road to Goal question selection SQL', () => {
         `;
       }
 
+      const malformedId = questionId(99);
+      await tx`
+        INSERT INTO questions (
+          id, category_id, status, type, ranked_eligible, visibility, difficulty, prompt
+        ) VALUES (
+          ${malformedId}, ${CATEGORY_ID}, 'published', 'mcq_single', true, 'public',
+          'easy', ${tx.json({ en: 'Malformed legacy question' })}
+        )
+      `;
+      await tx`
+        INSERT INTO question_payloads (question_id, payload)
+        VALUES (${malformedId}, ${tx.json({ options: [{ id: 'only-one' }] })})
+      `;
+      await tx`
+        INSERT INTO road_to_goal_zone_question_calibrations (
+          version_id, question_id, zone, difficulty
+        ) VALUES (${CALIBRATION_ID}, ${malformedId}, 1, 'easy')
+      `;
+
       const unseenCandidates = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         USER_ID,
@@ -156,6 +175,7 @@ describe('Road to Goal question selection SQL', () => {
         unseenCandidates
       );
       expect(unseen).toHaveLength(14);
+      expect(unseen.map((candidate) => candidate.id)).not.toContain(malformedId);
       expect(unseen.some((candidate) => {
         const value = candidate.payload as { image?: { url?: string } };
         return value.image?.url === 'https://cdn.example.com/integration.jpg';

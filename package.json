@@ -64,7 +64,9 @@
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "road-to-goal:bench": "tsx scripts/bench/road-to-goal-question-query.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",
-    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts"
+    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts",
+    "ggt:seed": "tsx scripts/guess-the-goal/seed.ts",
+    "ggt:smoke": "tsx scripts/guess-the-goal/smoke.ts"
   },
   "keywords": [],
   "author": "",

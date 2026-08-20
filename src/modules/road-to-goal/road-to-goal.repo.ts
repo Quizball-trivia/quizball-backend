@@ -33,6 +33,68 @@ const databaseClockProjection = sql`
   ) AS decision_expired
 `;
 
+// Keep malformed legacy payloads out of the bounded selection window. The
+// application parser remains the final authority, while this predicate makes
+// the indexed LIMIT count structurally usable MCQs rather than arbitrary rows.
+const validRoadToGoalMcqShape = sql`
+  CASE WHEN jsonb_typeof(q.prompt) = 'object' THEN
+    EXISTS (SELECT 1 FROM jsonb_each(q.prompt))
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_each(q.prompt) AS prompt_entry(locale, value)
+      WHERE char_length(prompt_entry.locale) > 10
+        OR jsonb_typeof(prompt_entry.value) <> 'string'
+        OR prompt_entry.value = '""'::jsonb
+    )
+  ELSE false END
+  AND CASE WHEN jsonb_typeof(qp.payload -> 'options') = 'array' THEN
+    jsonb_array_length(qp.payload -> 'options') = 4
+    AND (
+      SELECT count(*)
+      FROM jsonb_array_elements(qp.payload -> 'options') AS item(option)
+      WHERE jsonb_typeof(item.option) = 'object'
+        AND jsonb_typeof(item.option -> 'id') = 'string'
+        AND char_length(item.option ->> 'id') BETWEEN 1 AND 64
+        AND jsonb_typeof(item.option -> 'is_correct') = 'boolean'
+        AND CASE WHEN jsonb_typeof(item.option -> 'text') = 'object' THEN
+          EXISTS (SELECT 1 FROM jsonb_each(item.option -> 'text'))
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_each(item.option -> 'text') AS option_text(locale, value)
+            WHERE char_length(option_text.locale) > 10
+              OR jsonb_typeof(option_text.value) <> 'string'
+              OR option_text.value = '""'::jsonb
+          )
+        ELSE false END
+    ) = 4
+    AND (
+      SELECT count(DISTINCT item.option ->> 'id')
+      FROM jsonb_array_elements(qp.payload -> 'options') AS item(option)
+    ) = 4
+    AND (
+      SELECT count(*)
+      FROM jsonb_array_elements(qp.payload -> 'options') AS item(option)
+      WHERE item.option ->> 'is_correct' = 'true'
+    ) = 1
+  ELSE false END
+  AND CASE
+    WHEN NOT (qp.payload ? 'image') OR qp.payload -> 'image' = 'null'::jsonb THEN true
+    WHEN jsonb_typeof(qp.payload -> 'image') = 'object' THEN
+      coalesce(qp.payload -> 'image' ->> 'url', '') ~ '^https?://'
+      AND jsonb_typeof(qp.payload -> 'image' -> 'width') = 'number'
+      AND (qp.payload -> 'image' ->> 'width')::numeric > 0
+      AND mod((qp.payload -> 'image' ->> 'width')::numeric, 1) = 0
+      AND jsonb_typeof(qp.payload -> 'image' -> 'height') = 'number'
+      AND (qp.payload -> 'image' ->> 'height')::numeric > 0
+      AND mod((qp.payload -> 'image' ->> 'height')::numeric, 1) = 0
+      AND (
+        NOT (qp.payload -> 'image' ? 'aspect_ratio')
+        OR jsonb_typeof(qp.payload -> 'image' -> 'aspect_ratio') = 'string'
+      )
+    ELSE false
+  END
+`;
+
 export const roadToGoalRepo = {
   async getRoundByNonceForUpdate(
     tx: TransactionSql,
@@ -390,6 +452,7 @@ export const roadToGoalRepo = {
             JOIN categories category
               ON category.id = q.category_id
              AND category.is_active = true
+            JOIN question_payloads qp ON qp.question_id = q.id
             LEFT JOIN road_to_goal_question_exposures exposure
               ON exposure.user_id = ${userId}
              AND exposure.question_id = q.id
@@ -398,6 +461,7 @@ export const roadToGoalRepo = {
               AND q.ranked_eligible = true
               AND q.visibility = 'public'
               AND q.difficulty = target.difficulty
+              AND ${validRoadToGoalMcqShape}
             ORDER BY selection_priority
             LIMIT ${ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY}
           ) picked
@@ -429,11 +493,13 @@ export const roadToGoalRepo = {
               JOIN categories category
                 ON category.id = q.category_id
                AND category.is_active = true
+              JOIN question_payloads qp ON qp.question_id = q.id
               WHERE q.status = 'published'
                 AND q.type = 'mcq_single'
                 AND q.ranked_eligible = true
                 AND q.visibility = 'public'
                 AND q.difficulty = p.difficulty
+                AND ${validRoadToGoalMcqShape}
                 AND q.id >= p.pivot
                 AND NOT EXISTS (
                   SELECT 1
@@ -451,11 +517,13 @@ export const roadToGoalRepo = {
               JOIN categories category
                 ON category.id = q.category_id
                AND category.is_active = true
+              JOIN question_payloads qp ON qp.question_id = q.id
               WHERE q.status = 'published'
                 AND q.type = 'mcq_single'
                 AND q.ranked_eligible = true
                 AND q.visibility = 'public'
                 AND q.difficulty = p.difficulty
+                AND ${validRoadToGoalMcqShape}
                 AND q.id < p.pivot
                 AND NOT EXISTS (
                   SELECT 1

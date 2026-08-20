@@ -2,7 +2,11 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { trackFootballGridMatchFound } from '../../core/analytics/game-events.js';
 import { logger } from '../../core/logger.js';
-import { footballGridRepo, footballGridService } from '../../modules/football-grid/index.js';
+import {
+  footballGridRepo,
+  footballGridService,
+  FOOTBALL_GRID_HANDOFF_MS,
+} from '../../modules/football-grid/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbyChallengeInvitationsRepo } from '../../modules/lobbies/lobby-challenge-invitations.repo.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -89,7 +93,9 @@ export async function startFootballGridMatchFromLobby(
   // Everything below is post-commit delivery. A transient socket or warmup
   // cleanup failure must not relabel the already-created match as failed; the
   // handoff reconciler will redeliver it from Postgres.
-  const matchedAt = new Date();
+  const matchedAt = new Date(
+    Date.parse(createdState.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS,
+  );
   for (const member of members) {
     trackFootballGridMatchFound({
       userId: member.user_id,

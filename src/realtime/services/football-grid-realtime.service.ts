@@ -15,6 +15,7 @@ import {
   footballGridService,
   footballGridBotService,
   footballGridSettlementService,
+  FOOTBALL_GRID_COUNTDOWN_MS,
   type FootballGridState,
 } from '../../modules/football-grid/index.js';
 import type { FootballGridResultDeliveryRow } from '../../modules/football-grid/football-grid.repo.js';
@@ -517,6 +518,12 @@ export const footballGridRealtimeService = {
       expectedStateVersion: input.expectedStateVersion,
     }));
     if (previous.phase !== 'countdown' && state.phase === 'countdown') {
+      const countdownDeadlineMs = Date.parse(state.phaseDeadlineAt ?? '');
+      if (!Number.isFinite(countdownDeadlineMs)) {
+        logger.warn({ matchId: state.matchId }, 'Football Grid countdown is missing its durable analytics timestamp');
+        return;
+      }
+      const gameplayStartedAt = new Date(countdownDeadlineMs - FOOTBALL_GRID_COUNTDOWN_MS).toISOString();
       for (const participant of state.players.filter((candidate) => !candidate.isBot)) {
         const opponent = state.players.find((candidate) => candidate.userId !== participant.userId);
         trackFootballGridMatchStarted({
@@ -525,6 +532,7 @@ export const footballGridRealtimeService = {
           opponentType: opponent?.isBot ? 'bot' : 'human',
           boardId: state.board.boardId,
           boardVersion: state.board.boardVersion,
+          occurredAt: gameplayStartedAt,
         });
       }
     }
@@ -685,6 +693,7 @@ export const footballGridRealtimeService = {
         boardId: analyticsFacts.boardId,
         cellIndex: analyticsFacts.cellIndex,
         attemptOutcome: analyticsFacts.outcome,
+        occurredAt: analyticsFacts.reportedAt,
       });
     }
     socket.emit('grid:report_received', { reportId, attemptId });

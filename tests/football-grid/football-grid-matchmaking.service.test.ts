@@ -115,6 +115,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
   cancelRealtimeTimer: vi.fn(),
 }));
 vi.mock('../../src/modules/football-grid/index.js', () => ({
+  FOOTBALL_GRID_HANDOFF_MS: 15_000,
   footballGridRepo: {
     getActiveMatchIdForUser: vi.fn(async () => null),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>

@@ -52,6 +52,7 @@ AS $$
 DECLARE
   updated_count integer;
   has_remaining boolean;
+  stalled_rounds integer := 0;
 BEGIN
   LOOP
     WITH batch AS (
@@ -96,7 +97,13 @@ BEGIN
       EXIT WHEN NOT has_remaining;
       -- A zero-row SKIP LOCKED batch can mean the remaining candidates are
       -- temporarily locked, not that the backfill is complete.
+      stalled_rounds := stalled_rounds + 1;
+      IF stalled_rounds > 240 THEN
+        RAISE EXCEPTION 'football_grid_backfill_game_variants stalled: candidate rows stayed locked for 60 seconds';
+      END IF;
       PERFORM pg_sleep(0.25);
+    ELSE
+      stalled_rounds := 0;
     END IF;
   END LOOP;
 END;

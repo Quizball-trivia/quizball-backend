@@ -5,7 +5,12 @@ import {
   trackFootballGridRematchResponse,
 } from '../../core/analytics/game-events.js';
 import { logger } from '../../core/logger.js';
-import { footballGridRepo, footballGridService, type FootballGridState } from '../../modules/football-grid/index.js';
+import {
+  footballGridRepo,
+  footballGridService,
+  FOOTBALL_GRID_HANDOFF_MS,
+  type FootballGridState,
+} from '../../modules/football-grid/index.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { emitLobbyState } from '../lobby-utils.js';
@@ -109,6 +114,7 @@ export const footballGridRematchService = {
       matchId: input.matchId,
       seriesId: accepted.seriesId,
       response: 'accepted',
+      occurredAt: accepted.decisionAt,
     });
     const userIds = accepted.players.map((player) => player.userId);
     emitState(io, userIds, {
@@ -212,7 +218,7 @@ export const footballGridRematchService = {
       acceptedUserIds: userIds,
       expiresAt: null,
     });
-    const matchedAt = new Date();
+    const matchedAt = new Date(Date.parse(state.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS);
     for (const participant of state.players.filter((player) => !player.isBot)) {
       trackFootballGridMatchFound({
         userId: participant.userId,
@@ -240,6 +246,7 @@ export const footballGridRematchService = {
       matchId: input.matchId,
       seriesId: declined.seriesId,
       response: 'declined',
+      occurredAt: declined.decisionAt,
     });
     if (declined.pairingToken) {
       await userSessionGuardService.releaseActivityFences(declined.userIds, declined.pairingToken);

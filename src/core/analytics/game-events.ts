@@ -471,9 +471,8 @@ export function trackFootballGridMatchStarted(params: {
   boardId: string;
   boardVersion: number;
   boardDifficulty?: 'easy' | 'normal' | 'hard' | null;
-  occurredAt?: string | Date;
+  occurredAt: string | Date;
 }): void {
-  const occurredAt = params.occurredAt ?? new Date();
   trackEvent('match_started', params.userId, {
     match_id: params.matchId,
     mode: 'football_grid',
@@ -485,7 +484,7 @@ export function trackFootballGridMatchStarted(params: {
     board_difficulty: params.boardDifficulty ?? null,
   }, {
     uuid: stableAnalyticsEventUuid(`football-grid:match-started:${params.matchId}:${params.userId}`),
-    occurredAt,
+    occurredAt: params.occurredAt,
   });
 }
 
@@ -568,6 +567,7 @@ export function trackFootballGridMissingAnswerReported(params: {
   boardId: string;
   cellIndex: number | null;
   attemptOutcome: string;
+  occurredAt: string | Date;
 }): void {
   trackEvent('football_grid_missing_answer_reported', params.userId, {
     match_id: params.matchId,
@@ -577,6 +577,7 @@ export function trackFootballGridMissingAnswerReported(params: {
     attempt_outcome: params.attemptOutcome,
   }, {
     uuid: stableAnalyticsEventUuid(`football-grid:missing-answer:${params.attemptId}:${params.userId}`),
+    occurredAt: params.occurredAt,
   });
 }
 
@@ -585,6 +586,7 @@ export function trackFootballGridRematchResponse(params: {
   matchId: string;
   seriesId: string;
   response: 'accepted' | 'declined';
+  occurredAt: string | Date;
 }): void {
   trackEvent('football_grid_rematch_response', params.userId, {
     match_id: params.matchId,
@@ -592,5 +594,6 @@ export function trackFootballGridRematchResponse(params: {
     response: params.response,
   }, {
     uuid: stableAnalyticsEventUuid(`football-grid:rematch:${params.matchId}:${params.userId}:${params.response}`),
+    occurredAt: params.occurredAt,
   });
 }

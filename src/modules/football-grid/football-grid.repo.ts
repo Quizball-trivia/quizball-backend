@@ -646,6 +646,7 @@ export const footballGridRepo = {
     players: Array<{ userId: string; seat: 1 | 2 }>;
     origin: Exclude<FootballGridOrigin, 'random'>;
     lobbyId: string | null;
+    decisionAt: string;
   }> {
     return this.runInTransaction(async (tx) => {
       const rows = await tx.unsafe<Array<{
@@ -686,8 +687,8 @@ export const footballGridRepo = {
         throw new Error('REMATCH_EXPIRED');
       }
       const nextIndex = series.rematch_index + 1;
-      const existing = await tx.unsafe<Array<{ command_id: string; decision: string }>>(
-        `SELECT command_id, decision FROM football_grid_series_acceptances
+      const existing = await tx.unsafe<Array<{ command_id: string; decision: string; created_at: string }>>(
+        `SELECT command_id, decision, created_at FROM football_grid_series_acceptances
           WHERE series_id = $1 AND rematch_index = $2 AND user_id = $3`,
         [series.id, nextIndex, input.userId],
       );
@@ -702,8 +703,8 @@ export const footballGridRepo = {
           [series.id, nextIndex, input.userId, input.commandId, input.expectedSeriesVersion],
         );
       }
-      const accepted = await tx.unsafe<Array<{ user_id: string }>>(
-        `SELECT user_id FROM football_grid_series_acceptances
+      const accepted = await tx.unsafe<Array<{ user_id: string; created_at: string }>>(
+        `SELECT user_id, created_at FROM football_grid_series_acceptances
           WHERE series_id = $1 AND rematch_index = $2 AND decision = 'accept'
           ORDER BY user_id`,
         [series.id, nextIndex],
@@ -722,6 +723,8 @@ export const footballGridRepo = {
               WHERE id = $1 RETURNING state_version`,
             [series.id, expiresAt, pairingToken],
           ))[0].state_version;
+      const decisionAt = accepted.find((entry) => entry.user_id === input.userId)?.created_at;
+      if (!decisionAt) throw new Error('REMATCH_DECISION_MISSING');
       return {
         seriesId: series.id,
         seriesVersion: updatedVersion,
@@ -734,6 +737,7 @@ export const footballGridRepo = {
         players: players.map((player) => ({ userId: player.user_id, seat: player.seat })),
         origin: series.origin,
         lobbyId: series.lobby_id,
+        decisionAt,
       };
     });
   },
@@ -743,6 +747,7 @@ export const footballGridRepo = {
     pairingToken: string | null;
     userIds: string[];
     lobbyId: string | null;
+    decisionAt: string;
   }> {
     return this.runInTransaction(async (tx) => {
       const rows = await tx.unsafe<Array<{ id: string; state_version: number; next_pairing_token: string | null; lobby_id: string | null }>>(
@@ -761,10 +766,10 @@ export const footballGridRepo = {
         [input.matchId, input.userId],
       );
       if (!member[0]?.found) throw new Error('NOT_PARTICIPANT');
-      await tx.unsafe(
+      const closed = await tx.unsafe<Array<{ updated_at: string }>>(
         `UPDATE football_grid_series SET status = 'closed', rematch_expires_at = null,
                 next_pairing_token = null, state_version = state_version + 1, updated_at = now()
-          WHERE id = $1`,
+          WHERE id = $1 RETURNING updated_at`,
         [series.id],
       );
       if (series.lobby_id) {
@@ -784,6 +789,7 @@ export const footballGridRepo = {
         pairingToken: series.next_pairing_token,
         userIds: participants.map((participant) => participant.user_id),
         lobbyId: series.lobby_id,
+        decisionAt: closed[0].updated_at,
       };
     });
   },
@@ -1561,8 +1567,16 @@ export const footballGridRepo = {
     if (!terminal) {
       // Generic session cleanup uses the base match activity clock. Keep it in
       // lockstep with the Grid-owned row so a legitimately long game is never
-      // mistaken for a 15-minute orphan.
-      await tx.unsafe(`UPDATE matches SET updated_at = now() WHERE id = $1`, [next.matchId]);
+      // mistaken for a 15-minute orphan. The loading -> countdown boundary is
+      // also the durable start of gameplay for analytics; creation time still
+      // covers queue handoff and asset loading before this point.
+      await tx.unsafe(
+        `UPDATE matches
+            SET updated_at = now(),
+                started_at = CASE WHEN $2 THEN now() ELSE started_at END
+          WHERE id = $1`,
+        [next.matchId, previous.phase === 'loading' && next.phase === 'countdown'],
+      );
     }
     if (terminal) {
       const baseStatus = next.status === 'cancelled' ? 'abandoned' : 'completed';
@@ -1988,16 +2002,21 @@ export const footballGridRepo = {
     boardId: string;
     cellIndex: number | null;
     outcome: string;
+    reportedAt: string;
   } | null> {
     const rows = await sql<Array<{
       match_id: string;
       board_id: string;
       cell_index: number | null;
       outcome: string;
+      reported_at: string;
     }>>`
-      SELECT a.match_id, gm.board_id, a.cell_index, a.outcome
+      SELECT a.match_id, gm.board_id, a.cell_index, a.outcome,
+             report.created_at AS reported_at
         FROM football_grid_attempts a
         JOIN football_grid_matches gm ON gm.match_id = a.match_id
+        JOIN football_grid_missing_answer_reports report
+          ON report.attempt_id = a.id AND report.reporting_user_id = ${reportingUserId}
        WHERE a.id = ${attemptId} AND a.actor_user_id = ${reportingUserId}
        LIMIT 1
     `;
@@ -2007,6 +2026,7 @@ export const footballGridRepo = {
       boardId: row.board_id,
       cellIndex: row.cell_index,
       outcome: row.outcome,
+      reportedAt: row.reported_at,
     } : null;
   },
 
@@ -2036,7 +2056,7 @@ export const footballGridRepo = {
       average_response_ms: number | null;
     }>>`
       SELECT gm.match_id, gm.origin, gm.winner_user_id, gm.completion_reason,
-             gm.created_at AS started_at, gm.ended_at,
+             base_match.started_at, gm.ended_at,
              gm.board_id, board.version AS board_version,
              board.difficulty AS board_difficulty, gm.turn_number AS turns,
              participant.user_id, participant.is_bot,
@@ -2049,6 +2069,7 @@ export const footballGridRepo = {
              COALESCE(attempts.passes, 0)::int AS passes,
              attempts.average_response_ms
         FROM football_grid_matches gm
+        JOIN matches base_match ON base_match.id = gm.match_id
         JOIN football_grid_boards board ON board.id = gm.board_id
         JOIN football_grid_participants participant ON participant.match_id = gm.match_id
         LEFT JOIN LATERAL (

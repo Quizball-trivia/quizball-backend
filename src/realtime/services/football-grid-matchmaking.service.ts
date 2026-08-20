@@ -8,7 +8,12 @@ import {
   trackFootballGridQueueJoined,
   trackFootballGridQueueLeft,
 } from '../../core/analytics/game-events.js';
-import { footballGridRepo, footballGridService, type FootballGridState } from '../../modules/football-grid/index.js';
+import {
+  footballGridRepo,
+  footballGridService,
+  FOOTBALL_GRID_HANDOFF_MS,
+  type FootballGridState,
+} from '../../modules/football-grid/index.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotSelectionService } from '../../modules/synthetic-bots/synthetic-bot-selection.service.js';
@@ -331,28 +336,6 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
             ],
             openerUserId,
           })).state;
-          const matchedAt = new Date();
-          for (const search of [a, b]) {
-            trackFootballGridQueueLeft({
-              userId: search.userId,
-              searchId: search.searchId,
-              reason: 'matched',
-              queuedAt: new Date(search.queuedAt),
-              leftAt: matchedAt,
-              opponentType: 'human',
-            });
-            trackFootballGridMatchFound({
-              userId: search.userId,
-              matchId: state.matchId,
-              searchId: search.searchId,
-              origin: 'random',
-              opponentType: 'human',
-              queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
-              boardId: state.board.boardId,
-              boardVersion: state.board.boardVersion,
-              occurredAt: matchedAt,
-            });
-          }
         } catch (error) {
           logger.error({ error, pairingToken, userIds: [a.userId, b.userId] }, 'Football Grid human pairing failed');
           await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
@@ -378,6 +361,32 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
           ]);
         } catch (error) {
           logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human handoff deferred to recovery');
+        }
+        try {
+          const matchedAt = new Date(Date.parse(state.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS);
+          for (const search of [a, b]) {
+            trackFootballGridQueueLeft({
+              userId: search.userId,
+              searchId: search.searchId,
+              reason: 'matched',
+              queuedAt: new Date(search.queuedAt),
+              leftAt: matchedAt,
+              opponentType: 'human',
+            });
+            trackFootballGridMatchFound({
+              userId: search.userId,
+              matchId: state.matchId,
+              searchId: search.searchId,
+              origin: 'random',
+              opponentType: 'human',
+              queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
+              boardId: state.board.boardId,
+              boardVersion: state.board.boardVersion,
+              occurredAt: matchedAt,
+            });
+          }
+        } catch (error) {
+          logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human pairing analytics failed');
         }
         return true;
       } finally {
@@ -457,7 +466,26 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
             await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, selected.bot.user_id);
           },
         })).state;
-        const matchedAt = new Date();
+      } catch (error) {
+        logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
+        await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
+        await reservationService.abortLobby(search.searchId, 'match_found_cancel');
+        await restoreSearchOrIdle(io, search);
+        return false;
+      }
+
+      try {
+        await syntheticBotSelectionService.recordRecentlyFaced(search.userId, selected.bot.user_id);
+        emitSearchState(io, search.userId, { state: 'matched', searchId: search.searchId });
+        await footballGridRealtimeService.emitMatchFound(io, state);
+        appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: 'random' });
+        appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
+        await userSessionGuardService.emitState(io, search.userId);
+      } catch (error) {
+        logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot handoff deferred to recovery');
+      }
+      try {
+        const matchedAt = new Date(Date.parse(state.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS);
         trackFootballGridQueueLeft({
           userId: search.userId,
           searchId: search.searchId,
@@ -478,22 +506,7 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
           occurredAt: matchedAt,
         });
       } catch (error) {
-        logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
-        await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
-        await reservationService.abortLobby(search.searchId, 'match_found_cancel');
-        await restoreSearchOrIdle(io, search);
-        return false;
-      }
-
-      try {
-        await syntheticBotSelectionService.recordRecentlyFaced(search.userId, selected.bot.user_id);
-        emitSearchState(io, search.userId, { state: 'matched', searchId: search.searchId });
-        await footballGridRealtimeService.emitMatchFound(io, state);
-        appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: 'random' });
-        appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
-        await userSessionGuardService.emitState(io, search.userId);
-      } catch (error) {
-        logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot handoff deferred to recovery');
+        logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot pairing analytics failed');
       }
       return true;
     } finally {

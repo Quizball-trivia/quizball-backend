@@ -21,6 +21,7 @@ vi.mock('../../src/core/logger.js', () => ({
 }));
 
 vi.mock('../../src/modules/football-grid/index.js', () => ({
+  FOOTBALL_GRID_HANDOFF_MS: 15_000,
   footballGridRepo: {
     offerRematch: (...args: unknown[]) => offerRematchMock(...args),
     createPairing: (...args: unknown[]) => createPairingMock(...args),
@@ -73,6 +74,7 @@ const readyOffer = {
     '00000000-0000-4000-8000-000000000002',
   ],
   expiresAt: new Date(Date.now() + 30_000).toISOString(),
+  decisionAt: '2026-08-20T12:00:00.000Z',
   readyToCreate: true,
 };
 
@@ -91,6 +93,7 @@ describe('football-grid-rematch.service', () => {
         matchId: 'next-grid-match',
         players: readyOffer.players.map((player) => ({ ...player, isBot: false })),
         board: { boardId: 'board-1', boardVersion: 1 },
+        phaseDeadlineAt: '2026-08-20T12:00:15.000Z',
       },
     });
     markPairingFailedMock.mockResolvedValue(undefined);

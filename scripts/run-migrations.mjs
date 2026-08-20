@@ -85,16 +85,28 @@ async function main() {
     max: 1,
     idle_timeout: 5,
     connect_timeout: 15,
-    // A migration may run long; don't let the client time it out.
-    statement_timeout: 0,
     prepare: false,
+    // These must be startup parameters. A top-level `statement_timeout`
+    // option is ignored by postgres.js, leaving the database role's 30-second
+    // default in force during CREATE INDEX CONCURRENTLY.
+    connection: {
+      application_name: 'quizball-migrations',
+      statement_timeout: 0,
+      lock_timeout: 0,
+      idle_in_transaction_session_timeout: 0,
+    },
   });
   const lockSql = postgres(DATABASE_URL, {
     max: 1,
     idle_timeout: 0,
     connect_timeout: 15,
-    statement_timeout: 0,
     prepare: false,
+    connection: {
+      application_name: 'quizball-migration-lock',
+      statement_timeout: 0,
+      lock_timeout: 0,
+      idle_in_transaction_session_timeout: 0,
+    },
   });
 
   try {

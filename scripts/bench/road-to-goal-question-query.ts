@@ -2,6 +2,10 @@ import { performance } from 'node:perf_hooks';
 import { disconnectDb, sql, type TransactionSql } from '../../src/db/index.js';
 import { roadToGoalRepo } from '../../src/modules/road-to-goal/road-to-goal.repo.js';
 import { ensureRoadToGoalDailyCalibration } from '../../src/modules/road-to-goal/road-to-goal.calibration.js';
+import {
+  ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY,
+  ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
+} from '../../src/modules/road-to-goal/road-to-goal.constants.js';
 import type { RoadToGoalQuestionSelectionMode } from '../../src/modules/road-to-goal/road-to-goal.types.js';
 
 const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000000';
@@ -26,7 +30,16 @@ async function selectOnce(
   calibrationVersionId: string,
   mode: RoadToGoalQuestionSelectionMode
 ): Promise<number> {
-  const selected = await roadToGoalRepo.pickRunQuestionCandidates(tx, userId, mode);
+  const candidatesPerDifficulty = mode === 'least_exposed'
+    ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
+    : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
+  const selected = await roadToGoalRepo.pickRunQuestionCandidates(
+    tx,
+    userId,
+    mode,
+    [],
+    candidatesPerDifficulty
+  );
   const candidates = await roadToGoalRepo.filterCandidatesForCalibration(
     tx,
     calibrationVersionId,

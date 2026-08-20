@@ -573,7 +573,7 @@ describe('roadToGoalService', () => {
       USER_ID,
       'least_exposed',
       [],
-      256
+      128
     );
   });
 

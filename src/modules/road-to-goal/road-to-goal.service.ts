@@ -11,6 +11,7 @@ import {
   ROAD_TO_GOAL_COMMITMENT_MS,
   ROAD_TO_GOAL_COMMITMENT_VERSION,
   ROAD_TO_GOAL_DECISION_MS,
+  ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
   ROAD_TO_GOAL_NETWORK_GRACE_MS,
   ROAD_TO_GOAL_PAYOUT_EVENT,
   ROAD_TO_GOAL_QUESTION_MS,
@@ -782,7 +783,7 @@ async function buildCalibratedQuestionSet(
     const candidates: RoadToGoalQuestionCandidate[] = [];
     const excludedQuestionIds = new Set<string>();
     const candidatesPerDifficulty = mode === 'least_exposed'
-      ? ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY * 4
+      ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
       : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
     const maximumPages = mode === 'least_exposed' ? 1 : 4;
     for (let page = 0; page < maximumPages; page += 1) {

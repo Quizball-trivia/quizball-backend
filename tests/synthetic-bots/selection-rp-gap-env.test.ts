@@ -15,7 +15,7 @@ process.env.BOT_PAIRING_MAX_RP_GAP = '600';
 
 const repo = {
   listEligibleBots: vi.fn(),
-  listRecentlyFacedPersistentBotIds: vi.fn().mockResolvedValue([]),
+  listRankedPersistentOpponentHistory: vi.fn().mockResolvedValue([]),
 };
 const reservation = {
   isEnabled: vi.fn(),

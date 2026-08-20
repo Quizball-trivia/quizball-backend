@@ -8,7 +8,7 @@ process.env.FOOTBALL_GRID_XP_ENABLED = 'true';
 process.env.FOOTBALL_GRID_RISK_HASH_SECRET = 'integration-football-grid-risk-secret-0001';
 
 const DB_URL = process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test';
-const REQUIRE_DB = process.env.CI === 'true' || process.env.FOOTBALL_GRID_REQUIRE_DB === 'true';
+const REQUIRE_DB = process.env.FOOTBALL_GRID_REQUIRE_DB === 'true';
 const RELEASE_ID = '00000000-0000-4000-8000-000000990001';
 const CORRECTION_RELEASE_ID = '00000000-0000-4000-8000-000000990003';
 const BOARD_ID = '00000000-0000-4000-8000-000000993001';
@@ -363,8 +363,8 @@ beforeAll(async () => {
     setupError = error;
     // Only an unavailable optional local database may skip. Once connected,
     // missing migrations, schema defects, seed failures, or import failures are
-    // real regressions and must fail in every environment. CI always requires
-    // the integration database.
+    // real regressions and must fail in every environment. The repository's
+    // default CI has no database, so only the explicit opt-in requires one.
     if (REQUIRE_DB || connected) throw error;
     console.warn(`\nSkipping Football Grid runtime integration: ${error instanceof Error ? error.message : String(error)}\n`);
   }

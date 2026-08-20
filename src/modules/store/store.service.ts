@@ -9,6 +9,7 @@ import { usersRepo } from '../users/users.repo.js';
 import { storeRepo } from './store.repo.js';
 import { notificationsService } from '../notifications/notifications.service.js';
 import { stripe } from './stripe.js';
+import { coinPartsToDisplay } from './coin-amount.js';
 import {
   MAX_TICKETS,
   TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
@@ -121,12 +122,14 @@ function buildTicketPurchaseCooldown(
   };
 }
 
-function buildWalletResponse(
-  wallet: Pick<StoreWalletResponse, 'coins' | 'tickets'>,
+export function buildWalletResponse(
+  wallet: Pick<WalletRow, 'coins' | 'coin_fraction_minor' | 'tickets'>,
   ticketPurchaseCooldown: TicketPurchaseCooldown
 ): StoreWalletResponse {
   return {
-    coins: wallet.coins,
+    coins: wallet.coin_fraction_minor == null
+      ? wallet.coins
+      : coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
     tickets: wallet.tickets,
     ticketPurchaseCooldown,
   };
@@ -285,6 +288,12 @@ function isPgUniqueViolation(error: unknown): error is { code: string } {
 }
 
 function toStoreTransactionLogResponse(row: StoreTransactionLogRow) {
+  const coinsDeltaMinor = row.coins_delta_minor == null
+    ? row.coins_delta * 100
+    : Number(row.coins_delta_minor);
+  if (!Number.isSafeInteger(coinsDeltaMinor)) {
+    throw new AppError('Store transaction coin delta exceeds the safe API range', 500);
+  }
   return {
     id: row.id,
     eventType: row.event_type,
@@ -296,6 +305,8 @@ function toStoreTransactionLogResponse(row: StoreTransactionLogRow) {
     stripeCheckoutId: row.stripe_checkout_id,
     stripePaymentIntent: row.stripe_payment_intent,
     coinsDelta: row.coins_delta,
+    coinsDeltaMinor,
+    coinsDeltaExact: coinsDeltaMinor / 100,
     ticketsDelta: row.tickets_delta,
     inventoryDelta: row.inventory_delta,
     reason: row.reason,

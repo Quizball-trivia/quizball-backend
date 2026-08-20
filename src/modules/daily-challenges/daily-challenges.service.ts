@@ -9,6 +9,7 @@ import {
   ValidationError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { coinPartsToDisplay } from '../store/coin-amount.js';
 import { getLocalizedString, mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
 import {
@@ -1096,7 +1097,9 @@ export const dailyChallengesService = {
         xpAwarded: config.xp_reward,
         wallet: wallet
           ? {
-              coins: wallet.coins,
+              coins: wallet.coin_fraction_minor == null
+                ? wallet.coins
+                : coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
               tickets: wallet.tickets,
             }
           : undefined,

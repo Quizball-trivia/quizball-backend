@@ -47,13 +47,25 @@ vi.mock('../../src/modules/store/stripe.js', () => ({
 
 import { storeRepo } from '../../src/modules/store/store.repo.js';
 import { stripe } from '../../src/modules/store/stripe.js';
-import { storeService } from '../../src/modules/store/store.service.js';
+import { buildWalletResponse, storeService } from '../../src/modules/store/store.service.js';
 
 describe('storeService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.STRIPE_SUCCESS_URL = 'http://localhost:3000/store?purchase=success';
     config.STRIPE_CANCEL_URL = 'http://localhost:3000/store?purchase=cancelled';
+  });
+
+  it('keeps fractional coin balances in production wallet responses', () => {
+    expect(buildWalletResponse(
+      { coins: 100, coin_fraction_minor: 75, tickets: 3 },
+      {
+        canBuy: true,
+        nextAvailableAt: null,
+        remainingSeconds: 0,
+        ticketsRemainingInWindow: 5,
+      }
+    )).toMatchObject({ coins: 100.75, tickets: 3 });
   });
 
   it('batch-loads lightweight ranked ticket wallets and clamps ticket counts', async () => {
@@ -235,5 +247,48 @@ describe('storeService', () => {
     expect(result.applied).toBe(false);
     expect(result.wallet).toMatchObject({ coins: 120, tickets: 8 });
     expect(storeRepo.adjustWalletInTx).not.toHaveBeenCalled();
+  });
+
+  it('exposes exact fractional ledger deltas without truncating historic rows', async () => {
+    const base = {
+      id: '11111111-1111-4111-8111-111111111111',
+      event_type: 'road_to_goal_payout',
+      outcome: 'success',
+      purchase_id: null,
+      user_id: '22222222-2222-4222-8222-222222222222',
+      actor_user_id: null,
+      product_id: null,
+      stripe_checkout_id: null,
+      stripe_payment_intent: null,
+      tickets_delta: 0,
+      inventory_delta: {},
+      reason: null,
+      error_code: null,
+      error_message: null,
+      request_id: null,
+      metadata: {},
+      idempotency_key: null,
+      created_at: '2026-08-20T00:00:00.000Z',
+    };
+    (storeRepo.listTransactionLogs as Mock).mockResolvedValue({
+      total: 2,
+      items: [
+        { ...base, coins_delta: 25, coins_delta_minor: '2575' },
+        { ...base, id: '33333333-3333-4333-8333-333333333333', coins_delta: -10, coins_delta_minor: null },
+      ],
+    });
+
+    const result = await storeService.listTransactions({ page: 1, limit: 20 });
+
+    expect(result.items[0]).toMatchObject({
+      coinsDelta: 25,
+      coinsDeltaMinor: 2_575,
+      coinsDeltaExact: 25.75,
+    });
+    expect(result.items[1]).toMatchObject({
+      coinsDelta: -10,
+      coinsDeltaMinor: -1_000,
+      coinsDeltaExact: -10,
+    });
   });
 });

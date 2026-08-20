@@ -1,5 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import { AppError, ErrorCode, NotFoundError } from '../../core/errors.js';
+import { coinPartsToDisplay } from './coin-amount.js';
 import { storeRepo } from './store.repo.js';
 import type { StoreWalletResponse, WalletStateRow } from './store.types.js';
 
@@ -25,9 +26,11 @@ function toIsoString(value: Date | string): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
-export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'tickets'>): StoreWalletResponse {
+export function toStoreWalletResponse(
+  wallet: Pick<WalletStateRow, 'coins' | 'coin_fraction_minor' | 'tickets'>
+): StoreWalletResponse {
   return {
-    coins: wallet.coins,
+    coins: coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
     tickets: wallet.tickets,
     ticketPurchaseCooldown: {
       canBuy: true,

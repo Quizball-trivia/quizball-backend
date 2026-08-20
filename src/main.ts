@@ -12,6 +12,7 @@ import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
 import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
 import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
+import { startRoadToGoalSweeper, stopRoadToGoalSweeper } from './modules/road-to-goal/index.js';
 import {
   startBotChallengeResponder,
   stopBotChallengeResponder,
@@ -41,6 +42,7 @@ const server = httpServer.listen(config.PORT, () => {
 startAiFriendResponder();
 startFreeKicksSweeper();
 startFreeKicksBots();
+startRoadToGoalSweeper();
 // Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).
 startBotChallengeResponder();
 startBotRenameWorker();
@@ -112,6 +114,7 @@ const shutdown = async (signal: string) => {
     stopBotChallengeResponder(),
     stopBotRenameWorker(),
     stopFreeKicksSweeper(),
+    stopRoadToGoalSweeper(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

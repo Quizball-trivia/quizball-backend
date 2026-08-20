@@ -67,7 +67,9 @@
     "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts",
     "ggt:seed": "tsx scripts/guess-the-goal/seed.ts",
     "ggt:smoke": "tsx scripts/guess-the-goal/smoke.ts",
-    "grid:content": "tsx scripts/football-grid-content.ts"
+    "grid:content": "tsx scripts/football-grid-content.ts",
+    "grid:cdn:players": "tsx scripts/football-grid-player-cdn.ts",
+    "grid:cdn:players:retry": "tsx scripts/football-grid-player-cdn.ts --retry-fallbacks --concurrency=4"
   },
   "keywords": [],
   "author": "",

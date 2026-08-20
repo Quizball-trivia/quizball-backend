@@ -38,7 +38,8 @@ beforeAll(async () => {
         AND to_regclass('public.road_to_goal_commitments') IS NOT NULL
         AND to_regclass('public.road_to_goal_zone_question_calibrations') IS NOT NULL
         AND to_regclass('public.road_to_goal_question_exposures') IS NOT NULL
-        AND to_regclass('public.road_to_goal_events') IS NOT NULL AS ready
+        AND to_regclass('public.road_to_goal_events') IS NOT NULL
+        AND to_regclass('public.road_to_goal_ledger_keys') IS NOT NULL AS ready
     `;
     if (!schema?.ready) {
       console.warn(
@@ -63,6 +64,7 @@ afterAll(async () => {
   if (userId) {
     await sql`DELETE FROM road_to_goal_events WHERE user_id = ${userId}`;
     await sql`DELETE FROM road_to_goal_question_exposures WHERE user_id = ${userId}`;
+    await sql`DELETE FROM road_to_goal_ledger_keys WHERE user_id = ${userId}`;
     await sql`DELETE FROM road_to_goal_rounds WHERE user_id = ${userId}`;
     await sql`DELETE FROM road_to_goal_commitments WHERE user_id = ${userId}`;
     await sql`
@@ -223,6 +225,7 @@ describe('Road to Goal start concurrency', () => {
     const [counts] = await sql<{
       rounds: number;
       stakes: number;
+      stake_keys: number;
       exposures: number;
     }[]>`
       SELECT
@@ -238,11 +241,16 @@ describe('Road to Goal start concurrency', () => {
         ) AS stakes,
         (
           SELECT count(*)::integer
+          FROM road_to_goal_ledger_keys
+          WHERE user_id = ${userId} AND event_type = 'road_to_goal_stake'
+        ) AS stake_keys,
+        (
+          SELECT count(*)::integer
           FROM road_to_goal_question_exposures
           WHERE user_id = ${userId} AND last_round_id = ${left.round_id}
         ) AS exposures
     `;
-    expect(counts).toEqual({ rounds: 1, stakes: 1, exposures: 1 });
+    expect(counts).toEqual({ rounds: 1, stakes: 1, stake_keys: 1, exposures: 1 });
 
     await sql`
       UPDATE road_to_goal_rounds

@@ -456,6 +456,12 @@ async function insertPayout(
   reason: string
 ): Promise<void> {
   try {
+    await roadToGoalRepo.insertLedgerKey(tx, {
+      idempotencyKey: roadToGoalPayoutIdempotencyKey(row.id),
+      roundId: row.id,
+      userId: row.user_id,
+      eventType: ROAD_TO_GOAL_PAYOUT_EVENT,
+    });
     await storeRepo.insertTransactionLogInTx(tx, {
       eventType: ROAD_TO_GOAL_PAYOUT_EVENT,
       outcome: 'success',
@@ -1028,6 +1034,12 @@ export const roadToGoalService = {
         if (!firstQuestion) throw new AppError('Road to Goal question snapshot is incomplete', 500);
         await roadToGoalRepo.recordQuestionExposures(tx, userId, round.id, [firstQuestion]);
 
+        await roadToGoalRepo.insertLedgerKey(tx, {
+          idempotencyKey: roadToGoalStakeIdempotencyKey(round.id),
+          roundId: round.id,
+          userId,
+          eventType: ROAD_TO_GOAL_STAKE_EVENT,
+        });
         await storeRepo.insertTransactionLogInTx(tx, {
           eventType: ROAD_TO_GOAL_STAKE_EVENT,
           outcome: 'success',

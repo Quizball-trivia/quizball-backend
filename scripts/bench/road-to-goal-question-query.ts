@@ -70,7 +70,11 @@ try {
   let report: BenchmarkReport | null = null;
   try {
     await sql.begin(async (tx) => {
-      const calibration = await ensureRoadToGoalDailyCalibration(tx);
+      const calibration = await ensureRoadToGoalDailyCalibration(
+        tx,
+        undefined,
+        { logPublication: false }
+      );
       // This session-only relation shadows the production exposure table. The
       // forced rollback below also reverts a calibration created by this run.
       await tx`

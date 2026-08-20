@@ -92,7 +92,8 @@ function utcPublicationDay(now = new Date()): string {
  * normal game starts take the indexed fast path. */
 export async function ensureRoadToGoalDailyCalibration(
   tx: TransactionSql,
-  now?: Date
+  now?: Date,
+  options: { logPublication?: boolean } = {}
 ): Promise<RoadToGoalCalibrationVersionRow> {
   const publicationDay = now
     ? utcPublicationDay(now)
@@ -124,10 +125,12 @@ export async function ensureRoadToGoalDailyCalibration(
     },
   });
   const questionCount = await roadToGoalRepo.insertQuestionCalibrations(tx, version);
-  logger.info(
-    { calibrationVersionId: version.id, publicationDay, questionCount },
-    'road-to-goal daily calibration published'
-  );
+  if (options.logPublication !== false) {
+    logger.info(
+      { calibrationVersionId: version.id, publicationDay, questionCount },
+      'road-to-goal daily calibration published'
+    );
+  }
   return version;
 }
 

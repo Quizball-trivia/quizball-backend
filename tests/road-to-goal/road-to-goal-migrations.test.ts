@@ -57,6 +57,12 @@ describe('Road to Goal migration contracts', () => {
     expect(validateSql).toContain('idx_questions_road_to_goal_eligible');
     expect(validateSql).toContain('index_row.indisvalid');
     expect(validateSql).toContain('index_row.indisready');
+    expect(validateSql).toContain("to_regclass('public.questions')");
+    expect(validateSql).toContain("ARRAY['difficulty', 'id']::text[]");
+    expect(validateSql).toContain("status = ''published''::text");
+    expect(validateSql).toContain("type = ''mcq_single''::text");
+    expect(validateSql).toContain('ranked_eligible = true');
+    expect(validateSql).toContain("visibility = ''public''::text");
   });
 
   it('validates both dedicated uniqueness guards', () => {

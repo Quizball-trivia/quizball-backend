@@ -1,8 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { disconnectDb, sql, type TransactionSql } from '../../src/db/index.js';
-import { roadToGoalRepo } from '../../src/modules/road-to-goal/road-to-goal.repo.js';
 import { ensureRoadToGoalDailyCalibration } from '../../src/modules/road-to-goal/road-to-goal.calibration.js';
-import type { RoadToGoalQuestionSelectionMode } from '../../src/modules/road-to-goal/road-to-goal.types.js';
+import { buildCalibratedQuestionSet } from '../../src/modules/road-to-goal/road-to-goal.service.js';
 
 const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -23,16 +22,15 @@ const userId = process.env.ROAD_TO_GOAL_BENCH_USER_ID ?? DEFAULT_USER_ID;
 
 async function selectOnce(
   tx: TransactionSql,
-  calibrationVersionId: string,
-  mode: RoadToGoalQuestionSelectionMode
+  calibrationVersionId: string
 ): Promise<number> {
-  const selected = await roadToGoalRepo.pickRunQuestionCandidates(tx, userId, mode);
-  const candidates = await roadToGoalRepo.filterCandidatesForCalibration(
+  const selected = await buildCalibratedQuestionSet(
     tx,
+    userId,
     calibrationVersionId,
-    selected
+    { logSelection: false }
   );
-  return candidates.length;
+  return selected.questions.length;
 }
 
 async function measure(select: () => Promise<number>) {
@@ -47,7 +45,7 @@ async function measure(select: () => Promise<number>) {
 
   latencies.sort((a, b) => a - b);
   return {
-    candidates_per_query: minimumCandidateCount,
+    questions_per_run: minimumCandidateCount,
     latency_ms: {
       min: Number(latencies[0].toFixed(2)),
       p50: Number(percentile(latencies, 0.5).toFixed(2)),
@@ -90,7 +88,7 @@ try {
       `;
 
       const emptyHistoryUnseen = await measure(() =>
-        selectOnce(tx, calibration.id, 'unseen')
+        selectOnce(tx, calibration.id)
       );
 
       await tx`
@@ -114,13 +112,7 @@ try {
           AND q.visibility = 'public'
       `;
 
-      const exhaustedHistory = await measure(async () => {
-        const unseenCount = await selectOnce(tx, calibration.id, 'unseen');
-        if (unseenCount > 0) {
-          throw new Error('Exhausted benchmark history unexpectedly returned unseen questions');
-        }
-        return selectOnce(tx, calibration.id, 'least_exposed');
-      });
+      const exhaustedHistory = await measure(() => selectOnce(tx, calibration.id));
 
       report = {
         samples,
@@ -140,8 +132,8 @@ try {
     report.empty_history_unseen,
     report.exhausted_history_unseen_then_fallback,
   ];
-  if (paths.some((path) => path.candidates_per_query < 11)) {
-    console.error('Question query returned fewer than 11 candidates.');
+  if (paths.some((path) => path.questions_per_run < 11)) {
+    console.error('Question selection returned fewer than 11 playable questions.');
     process.exitCode = 1;
   } else if (paths.some((path) => path.latency_ms.p95 > p95BudgetMs)) {
     console.error(`A question-selection path exceeded the ${p95BudgetMs}ms p95 budget.`);

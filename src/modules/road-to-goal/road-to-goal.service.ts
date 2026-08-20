@@ -11,11 +11,14 @@ import {
   ROAD_TO_GOAL_COMMITMENT_MS,
   ROAD_TO_GOAL_COMMITMENT_VERSION,
   ROAD_TO_GOAL_DECISION_MS,
+  ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
+  ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_NETWORK_GRACE_MS,
   ROAD_TO_GOAL_PAYOUT_EVENT,
   ROAD_TO_GOAL_QUESTION_MS,
   ROAD_TO_GOAL_SERVER_WINDOW_MS,
   ROAD_TO_GOAL_STAKE_EVENT,
+  ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_ZONES,
   isRoadToGoalStake,
   roadToGoalPayoutIdempotencyKey,
@@ -760,10 +763,11 @@ function assertSupportedCommitment(row: RoadToGoalCommitmentRow): void {
   }
 }
 
-async function buildCalibratedQuestionSet(
+export async function buildCalibratedQuestionSet(
   tx: TransactionSql,
   userId: string,
-  calibrationVersionId: string
+  calibrationVersionId: string,
+  options: { logSelection?: boolean } = {}
 ): Promise<{
   questions: RoadToGoalQuestionSnapshot[];
   calibrationVersionId: string;
@@ -782,9 +786,11 @@ async function buildCalibratedQuestionSet(
     const candidates: RoadToGoalQuestionCandidate[] = [];
     const excludedQuestionIds = new Set<string>();
     const candidatesPerDifficulty = mode === 'least_exposed'
-      ? ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY * 4
+      ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
       : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
-    const maximumPages = mode === 'least_exposed' ? 1 : 4;
+    const maximumPages = mode === 'least_exposed'
+      ? ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES
+      : ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES;
     for (let page = 0; page < maximumPages; page += 1) {
       queryCount += 2;
       const selected = await roadToGoalRepo.pickRunQuestionCandidates(
@@ -820,16 +826,18 @@ async function buildCalibratedQuestionSet(
   }
 
   const queryMs = performance.now() - startedAt;
-  const log = queryMs > 50 ? logger.warn.bind(logger) : logger.debug.bind(logger);
-  log(
-    {
-      userId,
-      queryMs: Math.round(queryMs * 100) / 100,
-      queryCount,
-      candidates: selection.candidates.length,
-    },
-    'road-to-goal question set selected'
-  );
+  if (options.logSelection !== false) {
+    const log = queryMs > 50 ? logger.warn.bind(logger) : logger.debug.bind(logger);
+    log(
+      {
+        userId,
+        queryMs: Math.round(queryMs * 100) / 100,
+        queryCount,
+        candidates: selection.candidates.length,
+      },
+      'road-to-goal question set selected'
+    );
+  }
 
   if (!selection.questions) {
     throw new AppError('No eligible Road to Goal questions available', 503);

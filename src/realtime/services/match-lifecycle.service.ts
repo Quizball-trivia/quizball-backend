@@ -211,6 +211,8 @@ async function emitRejoinAvailable(
   graceMs: number,
   remainingReconnects: number
 ): Promise<void> {
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'auction') return;
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
@@ -218,7 +220,7 @@ async function emitRejoinAvailable(
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
-    variant: resolveMatchVariant(match.state_payload, match.mode, match.game_variant),
+    variant,
     opponent,
     participants: players.map((player) => {
       const user = usersById.get(player.user_id);
@@ -263,8 +265,8 @@ export async function beginMatchForLobby(
   }
 
   const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
-  if (variantForCountdown === 'football_grid') {
-    logger.warn({ lobbyId, matchId }, 'Legacy match start ignored for Football Grid');
+  if (variantForCountdown === 'football_grid' || variantForCountdown === 'auction') {
+    logger.warn({ lobbyId, matchId, variant: variantForCountdown }, 'Legacy match start ignored for dedicated game lifecycle');
     return;
   }
   const defaultCountdownSec = variantForCountdown === 'friendly_party_quiz'
@@ -570,6 +572,7 @@ export async function rejoinActiveMatchOnConnect(
   const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
   const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
   const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'auction') return;
   if (variant === 'football_grid') {
     await footballGridRealtimeService.handleResync(io, socket, match.id);
     return;

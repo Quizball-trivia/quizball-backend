@@ -812,26 +812,29 @@ export const footballGridRepo = {
     });
   },
 
-  async closeRematchAfterFailure(seriesId: string, pairingToken: string): Promise<void> {
-    await this.runInTransaction(async (tx) => {
-      const rows = await tx.unsafe<Array<{ lobby_id: string | null }>>(
+  async closeRematchAfterFailure(seriesId: string, pairingToken: string): Promise<number | null> {
+    return this.runInTransaction(async (tx) => {
+      const rows = await tx.unsafe<Array<{ lobby_id: string | null; state_version: number }>>(
         `UPDATE football_grid_series
             SET status = 'closed', rematch_expires_at = null,
                 next_pairing_token = null, state_version = state_version + 1,
                 updated_at = now()
           WHERE id = $1 AND next_pairing_token = $2
             AND status = 'rematch_pending'
-          RETURNING lobby_id`,
+          RETURNING lobby_id, state_version`,
         [seriesId, pairingToken],
       );
-      const lobbyId = rows[0]?.lobby_id;
-      if (!lobbyId) return;
-      await tx.unsafe(
-        `UPDATE lobbies SET status = 'waiting', updated_at = now()
-          WHERE id = $1 AND status = 'active'`,
-        [lobbyId],
-      );
-      await tx.unsafe(`UPDATE lobby_members SET is_ready = false WHERE lobby_id = $1`, [lobbyId]);
+      const closed = rows[0];
+      if (!closed) return null;
+      if (closed.lobby_id) {
+        await tx.unsafe(
+          `UPDATE lobbies SET status = 'waiting', updated_at = now()
+            WHERE id = $1 AND status = 'active'`,
+          [closed.lobby_id],
+        );
+        await tx.unsafe(`UPDATE lobby_members SET is_ready = false WHERE lobby_id = $1`, [closed.lobby_id]);
+      }
+      return closed.state_version;
     });
   },
 
@@ -1616,6 +1619,7 @@ export const footballGridRepo = {
       }
       if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
       if (match.state_version !== input.expectedStateVersion) throw new Error('STALE_STATE');
+      if (match.phase === 'terminal') throw new Error('INVALID_STATE');
       if (input.commandType !== 'forfeit') {
         if (match.status !== 'active' || match.phase !== 'turn') throw new Error('INVALID_STATE');
         if (match.current_player_user_id !== input.actorUserId) throw new Error('NOT_YOUR_TURN');

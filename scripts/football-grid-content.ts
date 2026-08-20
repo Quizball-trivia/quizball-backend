@@ -625,17 +625,24 @@ async function writeReviewPack(
   process.stdout.write(`Review pack written to ${outputDir}\n`);
 }
 
+export function optionValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+  return value;
+}
+
 async function main(): Promise<void> {
   const [command, manifestPath, ...args] = process.argv.slice(2);
   if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
   const manifest = await loadManifest(manifestPath);
   if (command === 'generate') {
-    const outIndex = args.indexOf('--out');
     const limitIndex = args.indexOf('--limit');
     const limit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 1_000;
     if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new Error('--limit must be an integer from 1 to 10000');
     const generated = { ...manifest, boards: generateCandidateBoards(manifest, limit) };
-    const outputPath = outIndex >= 0 ? args[outIndex + 1] : 'football-grid-generated-manifest.json';
+    const outputPath = optionValue(args, '--out') ?? 'football-grid-generated-manifest.json';
     await writeFile(outputPath, `${JSON.stringify(generated, null, 2)}\n`);
     process.stdout.write(`Generated ${generated.boards.length} review-required candidate boards at ${outputPath}\n`);
     return;
@@ -647,12 +654,10 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'review') {
-    const outIndex = args.indexOf('--out');
-    const registryIndex = args.indexOf('--asset-registry');
     await writeReviewPack(
       manifest,
-      outIndex >= 0 ? args[outIndex + 1] : 'football-grid-review-pack',
-      registryIndex >= 0 ? args[registryIndex + 1] : undefined,
+      optionValue(args, '--out') ?? 'football-grid-review-pack',
+      optionValue(args, '--asset-registry'),
     );
     return;
   }
@@ -664,11 +669,11 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'activate') {
-    const registryIndex = args.indexOf('--asset-registry');
-    if (registryIndex < 0 || !args[registryIndex + 1]) {
+    const assetRegistry = optionValue(args, '--asset-registry');
+    if (!assetRegistry) {
       throw new Error('activate requires --asset-registry PATH so every launch asset is verified on disk');
     }
-    await activate(manifest, args[registryIndex + 1]);
+    await activate(manifest, assetRegistry);
     return;
   }
   if (command === 'retire') {

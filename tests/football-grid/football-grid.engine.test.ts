@@ -65,6 +65,23 @@ function countdownState(nowMs = 1_000): FootballGridState {
 }
 
 describe('football grid engine', () => {
+  it('does not reorder the caller-owned player roster', () => {
+    const players = [
+      { userId: 'u2', seat: 2 as const },
+      { userId: 'u1', seat: 1 as const },
+    ];
+    const state = createFootballGridState({
+      matchId: 'match-input-immutability',
+      board,
+      players,
+      openerUserId: 'u1',
+      nowMs: 1_000,
+    });
+
+    expect(players.map((player) => player.userId)).toEqual(['u2', 'u1']);
+    expect(state.players.map((player) => player.userId)).toEqual(['u1', 'u2']);
+  });
+
   it('uses the two-client ready barrier before starting the opener turn', () => {
     const state = activeState();
     expect(state.status).toBe('active');

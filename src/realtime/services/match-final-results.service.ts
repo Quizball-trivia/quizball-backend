@@ -135,7 +135,7 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   const standings = buildStandings(players);
   const participants = await buildParticipantPayloads(players, match.mode, match.ranked_context);
   const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
-  if (variant === 'football_grid') return null;
+  if (variant === 'football_grid' || variant === 'auction') return null;
   // Best-effort enrichment: a failure here must never block result delivery —
   // a swallowed emit leaves the client on "Updating rank…" forever.
   let unlockedAchievements: Awaited<ReturnType<typeof achievementsService.listUnlockedForMatch>> = {};

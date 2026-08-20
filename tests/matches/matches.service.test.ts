@@ -182,6 +182,7 @@ describe('matches.service friendly-party-quiz variants', () => {
     expect(resolveMatchVariant({ variant: 'friendly_party_quiz' }, 'friendly')).toBe('friendly_party_quiz');
     expect(resolveMatchVariant({ variant: 'friendly_possession' }, 'friendly')).toBe('friendly_possession');
     expect(resolveMatchVariant(null, 'friendly', 'football_grid')).toBe('football_grid');
+    expect(resolveMatchVariant(null, 'friendly', 'auction')).toBe('auction');
     expect(() => resolveMatchVariant(null, 'friendly', 'future_unknown_variant')).toThrow(
       'Unsupported durable match variant',
     );

@@ -83,6 +83,7 @@ const state = vi.hoisted(() => ({
     created: true,
   })),
   emitMatchFound: vi.fn(),
+  emitSessionState: vi.fn(),
   withUserSessionLocks: vi.fn(),
 }));
 
@@ -166,7 +167,7 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
       resolvedAt: new Date().toISOString(),
     })),
     emitBlocked: vi.fn(),
-    emitState: vi.fn(),
+    emitState: (...args: unknown[]) => state.emitSessionState(...args),
   },
 }));
 
@@ -193,6 +194,7 @@ describe('footballGridMatchmakingService session fencing', () => {
     state.activeSessionUserId = null;
     state.stalePairings = [];
     state.withUserSessionLocks.mockImplementation(async (_userIds, work) => work());
+    state.emitSessionState.mockResolvedValue(undefined);
   });
 
   it('starts a human match immediately when the second search joins', async () => {
@@ -229,6 +231,27 @@ describe('footballGridMatchmakingService session fencing', () => {
 
     expect(state.createMatch).not.toHaveBeenCalled();
     expect((await state.redis!.zRange('football_grid:mm:queue', 0, 10))).toHaveLength(2);
+  });
+
+  it('expires a search at its original queue deadline instead of refreshing it forever', async () => {
+    const expired = {
+      searchId: '00000000-0000-4000-8000-000000000199',
+      userId: 'expired-user',
+      displayName: 'Expired',
+      locale: 'en',
+      queuedAt: Date.now() - 181_000,
+      fallbackAt: Date.now() - 1_000,
+    };
+    await state.redis!.set(`football_grid:mm:search:${expired.searchId}`, JSON.stringify(expired));
+    await state.redis!.hSet('football_grid:mm:user', expired.userId, expired.searchId);
+    await state.redis!.zAdd('football_grid:mm:queue', [{ score: expired.queuedAt, value: expired.searchId }]);
+
+    await footballGridMatchmakingService.handleFallbackTimer(io, expired.searchId, expired.userId);
+
+    expect(await state.redis!.hGet('football_grid:mm:user', expired.userId)).toBeNull();
+    expect(await state.redis!.get(`football_grid:mm:search:${expired.searchId}`)).toBeNull();
+    expect(state.createMatch).not.toHaveBeenCalled();
+    expect(state.emitSessionState).toHaveBeenCalledWith(io, expired.userId);
   });
 
   it('recovers stale pairings under both user locks and restores only still-eligible humans', async () => {

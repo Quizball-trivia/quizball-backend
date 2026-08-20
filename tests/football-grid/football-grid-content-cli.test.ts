@@ -3,6 +3,7 @@ import '../setup.js';
 import {
   generateCandidateBoards,
   manifestSchema,
+  optionValue,
   validateManifest,
 } from '../../scripts/football-grid-content.js';
 
@@ -93,6 +94,14 @@ function sourceManifest() {
 }
 
 describe('Football Grid content CLI contracts', () => {
+  it('rejects flags whose required path value is missing', () => {
+    expect(() => optionValue(['--out'], '--out')).toThrow('--out requires a value');
+    expect(() => optionValue(['--asset-registry', '--feasibility'], '--asset-registry')).toThrow(
+      '--asset-registry requires a value',
+    );
+    expect(optionValue([], '--out')).toBeUndefined();
+  });
+
   it('generates a viable review-required 3x3 candidate from normalized memberships', () => {
     const manifest = sourceManifest();
     const boards = generateCandidateBoards(manifest, 1);

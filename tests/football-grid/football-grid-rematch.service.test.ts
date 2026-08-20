@@ -88,7 +88,7 @@ describe('football-grid-rematch.service', () => {
     createPairingMock.mockResolvedValue(undefined);
     createMatchMock.mockResolvedValue({ state: { matchId: 'next-grid-match' } });
     markPairingFailedMock.mockResolvedValue(undefined);
-    closeRematchAfterFailureMock.mockResolvedValue(undefined);
+    closeRematchAfterFailureMock.mockResolvedValue(readyOffer.seriesVersion + 1);
     releaseActivityFencesMock.mockResolvedValue(undefined);
     emitSessionStateMock.mockResolvedValue(undefined);
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
@@ -147,5 +147,22 @@ describe('football-grid-rematch.service', () => {
       readyOffer.players.map((player) => player.userId),
       readyOffer.pairingToken,
     );
+  });
+
+  it('does not invent a declined series version when durable closure did not commit', async () => {
+    ownsActivityFencesMock.mockResolvedValue(false);
+    closeRematchAfterFailureMock.mockResolvedValue(null);
+    const { footballGridRematchService } = await import('../../src/realtime/services/football-grid-rematch.service.js');
+    const emit = vi.fn();
+    const io = { to: () => ({ emit }) } as never;
+    const socket = { data: { user: { id: readyOffer.players[1].userId } } } as never;
+
+    await expect(footballGridRematchService.accept(io, socket, {
+      matchId: '00000000-0000-4000-8000-000000000100',
+      commandId: '00000000-0000-4000-8000-000000000103',
+      expectedSeriesVersion: 3,
+    })).rejects.toMatchObject({ details: { gridCode: 'REMATCH_ACTIVITY_CONFLICT' } });
+
+    expect(emit.mock.calls.some(([, payload]) => payload?.status === 'declined')).toBe(false);
   });
 });

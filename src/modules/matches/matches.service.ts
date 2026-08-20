@@ -532,7 +532,7 @@ export function resolveMatchVariant(
   statePayload: unknown,
   mode: 'friendly' | 'ranked',
   durableVariant?: string | null,
-): MatchVariant {
+): MatchVariant | 'auction' {
   if (
     durableVariant === 'friendly_possession'
     || durableVariant === 'friendly_party_quiz'
@@ -541,6 +541,11 @@ export function resolveMatchVariant(
   ) {
     return durableVariant as MatchVariant;
   }
+  // Auction persists in the shared matches table, but its authoritative state
+  // and realtime lifecycle live in the auction subsystem. Return the known
+  // discriminator so generic callers can opt out explicitly; only genuinely
+  // unknown durable values are rejected below.
+  if (durableVariant === 'auction') return 'auction';
   // Once the durable discriminator is present it is authoritative. Silently
   // falling back here would let a future/invalid variant enter the possession
   // engine, which can corrupt both its state payload and reward path.

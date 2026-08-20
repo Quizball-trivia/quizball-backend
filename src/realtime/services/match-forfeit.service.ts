@@ -253,8 +253,8 @@ export async function finalizeMatchAsForfeit(
     }
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
-    if (variant === 'football_grid') {
-      throw new Error('Football Grid forfeits must use the Grid lifecycle');
+    if (variant === 'football_grid' || variant === 'auction') {
+      throw new Error(`${variant} forfeits must use their dedicated lifecycle`);
     }
     const roster = await matchPlayersRepo.listMatchPlayers(params.matchId);
     const winnerId =
@@ -524,17 +524,21 @@ export async function handleMatchForfeit(
       }
 
       const { participants: roster, cache } = await getParticipantSnapshot(activeMatch.id);
-      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
-      if (variant === 'football_grid') {
-        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid forfeit action' });
-        return;
-      }
       const isParticipant = roster.some((player) => player.user_id === userId);
       if (!isParticipant) {
         socket.emit('error', {
           code: 'MATCH_NOT_ALLOWED',
           message: 'You are not a participant in this match',
         });
+        return;
+      }
+      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+      if (variant === 'football_grid') {
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid forfeit action' });
+        return;
+      }
+      if (variant === 'auction') {
+        socket.emit('error', { code: 'AUCTION_COMMAND_REQUIRED', message: 'Use the Auction forfeit action' });
         return;
       }
 

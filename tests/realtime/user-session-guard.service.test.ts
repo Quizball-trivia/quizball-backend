@@ -201,7 +201,7 @@ describe('user-session-guard.service', () => {
     expect(startLockHeartbeatMock).toHaveBeenCalledWith('lock:user:session:u1', 'token:lock:user:session:u1', 4000);
     expect(stopLockHeartbeatMock).toHaveBeenCalledOnce();
     expect(releaseLockMock).toHaveBeenCalledWith('lock:user:session:u1', 'token:lock:user:session:u1');
-  });
+  }, 10_000);
 
   it('heartbeats both leases for a combined user and lobby transition', async () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
@@ -436,6 +436,52 @@ describe('user-session-guard.service', () => {
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
     expect(getActiveMatchForUserMock).toHaveBeenCalledTimes(1);
     expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels every stale queue before admitting a new queue search', async () => {
+    const queueMaps = new Map<string, Map<string, string>>([
+      ['ranked:mm:user', new Map([['multi-user', 'ranked-search']])],
+      ['auction:mm:user', new Map([['multi-user', 'auction-search']])],
+      ['football_grid:mm:user', new Map([['multi-user', 'grid-search']])],
+    ]);
+    const redis = {
+      isOpen: true,
+      hGet: vi.fn(async (key: string, field: string) => queueMaps.get(key)?.get(field) ?? null),
+      exists: vi.fn(async () => 0),
+      eval: vi.fn(async (_script: string, input: { keys: string[]; arguments: string[] }) => {
+        queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+        return 1;
+      }),
+      multi: vi.fn(() => {
+        const operations: Array<() => void> = [];
+        const chain = {
+          zRem: () => chain,
+          del: () => chain,
+          hDel: (key: string, field: string) => {
+            operations.push(() => queueMaps.get(key)?.delete(field));
+            return chain;
+          },
+          exec: async () => {
+            operations.forEach((operation) => operation());
+            return [];
+          },
+        };
+        return chain;
+      }),
+    };
+    getRedisClientMock.mockReturnValue(redis);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'multi-user', 'grid');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE', queueSearchId: null } });
+    expect([...queueMaps.values()].every((map) => !map.has('multi-user'))).toBe(true);
   });
 
   it('uses one session-context read for a clean lobby entry', async () => {

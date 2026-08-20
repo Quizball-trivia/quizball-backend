@@ -249,7 +249,11 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
     }
   } else {
     await lockBudgets(tx, humans.map((human) => human.user_id));
-    const durationMs = Math.max(0, Date.parse(row.ended_at ?? '') - Date.parse(row.match_created_at));
+    const startedAtMs = Date.parse(row.match_created_at);
+    const endedAtMs = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
+    const durationMs = Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+      ? Math.max(0, endedAtMs - startedAtMs)
+      : null;
     for (const human of [...humans].sort((a, b) => a.user_id.localeCompare(b.user_id))) {
       const isDraw = row.winner_user_id === null;
       const result: 'win' | 'draw' | 'loss' = isDraw ? 'draw' : row.winner_user_id === human.user_id ? 'win' : 'loss';
@@ -286,7 +290,7 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       else if (opponentType === 'human' && repeatedPairCount > HUMAN_PAIR_DAILY_LIMIT) reason = 'repeated_pair_cap';
       else if (opponentType === 'bot' && budget.botMatches >= BOT_MATCH_DAILY_LIMIT) reason = 'bot_match_cap';
       else if (budget.coins + proposedCoins > COIN_DAILY_CAP) reason = 'daily_coin_cap';
-      else if (result === 'loss' && !(human.claim_count >= 1 || (human.answer_turn_count >= 2 && durationMs >= 45_000))) reason = 'insufficient_participation';
+      else if (result === 'loss' && !(human.claim_count >= 1 || (human.answer_turn_count >= 2 && durationMs !== null && durationMs >= 45_000))) reason = 'insufficient_participation';
       else if (risk?.decision === 'ineligible') reason = `risk_ineligible:${risk.reason}`;
       else if (risk?.decision === 'held') reason = `risk_hold:${risk.reason}`;
       const decision = reason.startsWith('risk_hold:')

@@ -26,8 +26,12 @@ function hasDistinctCellMatching(cells: FootballGridBoardCandidate['cells']): bo
   return cells.every((_cell, index) => visit(index, new Set()));
 }
 
+function compareCodePoints(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function sorted(values: string[]): string[] {
-  return [...values].sort((a, b) => a.localeCompare(b));
+  return [...values].sort(compareCodePoints);
 }
 
 export function canonicalFootballGridBoardChecksum(
@@ -36,7 +40,7 @@ export function canonicalFootballGridBoardChecksum(
 ): string {
   const normal = `${sorted(rowCriterionKeys).join('|')}::${sorted(columnCriterionKeys).join('|')}`;
   const transposed = `${sorted(columnCriterionKeys).join('|')}::${sorted(rowCriterionKeys).join('|')}`;
-  const canonical = [normal, transposed].sort((a, b) => a.localeCompare(b))[0];
+  const canonical = [normal, transposed].sort(compareCodePoints)[0];
   return createHash('sha256').update(canonical).digest('hex');
 }
 

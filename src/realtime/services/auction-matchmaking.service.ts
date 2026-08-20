@@ -175,8 +175,8 @@ export const auctionMatchmakingService = {
         const snapshot = prepared.snapshot;
         if (!prepared.ok || snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
           userSessionGuardService.emitBlocked(socket, {
-            reason: 'ACTIVE_MATCH',
-            message: 'You are already in an active session',
+            reason: prepared.reason ?? 'ACTIVE_MATCH',
+            message: prepared.message ?? 'You are already in an active session',
             operation: 'auction:search_start',
             stateSnapshot: snapshot,
           });

@@ -529,6 +529,8 @@ async function buildRejoinAvailablePayload(
   graceMs: number,
   remainingReconnects: number
 ): Promise<MatchRejoinAvailablePayload> {
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'auction') throw new Error('Auction rejoin uses the Auction lifecycle');
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
@@ -536,7 +538,7 @@ async function buildRejoinAvailablePayload(
   return {
     matchId: match.id,
     mode: match.mode,
-    variant: resolveMatchVariant(match.state_payload, match.mode, match.game_variant),
+    variant,
     opponent,
     participants: players.map((player) => {
       const user = usersById.get(player.user_id);
@@ -625,6 +627,10 @@ export async function handleMatchLeave(
       const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
       if (variant === 'football_grid') {
         socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid leave action' });
+        return;
+      }
+      if (variant === 'auction') {
+        socket.emit('error', { code: 'AUCTION_COMMAND_REQUIRED', message: 'Use the Auction leave action' });
         return;
       }
       if (variant !== 'friendly_party_quiz') {
@@ -723,6 +729,10 @@ export async function handleMatchRejoin(
       const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
       if (variant === 'football_grid') {
         socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use Football Grid resync' });
+        return;
+      }
+      if (variant === 'auction') {
+        socket.emit('error', { code: 'AUCTION_COMMAND_REQUIRED', message: 'Use Auction rejoin' });
         return;
       }
       if (variant === 'friendly_party_quiz') {
@@ -1258,7 +1268,7 @@ export async function completeResumeCountdown(
     await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
-    if (variant === 'football_grid') return;
+    if (variant === 'football_grid' || variant === 'auction') return;
     if (variant !== 'friendly_party_quiz'
       && (activeMatch.state_payload as PossessionStatePayload | null | undefined)?.phase === 'HALFTIME') {
       const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
@@ -1329,7 +1339,7 @@ export async function pauseMatchForDisconnectedPlayer(
     };
   }
   const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
-  if (variant === 'football_grid') {
+  if (variant === 'football_grid' || variant === 'auction') {
     return {
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       remainingReconnects: 0,
@@ -1912,7 +1922,7 @@ export async function resolveExpiredGraceWindow(
     if (!activeMatch || activeMatch.status !== 'active') return;
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
-    if (variant === 'football_grid') return;
+    if (variant === 'football_grid' || variant === 'auction') return;
 
     const roster = await matchPlayersRepo.listMatchPlayers(matchId);
     const cacheSnapshot = variant !== 'friendly_party_quiz' ? await getMatchCache(matchId) : null;

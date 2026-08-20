@@ -632,14 +632,6 @@ async function cancelSimpleQueueSearch(
     .exec();
 }
 
-async function cancelQueueSearch(context: ResolveContext, userId: string): Promise<void> {
-  if (context.queueKind === 'auction' || context.queueKind === 'grid') {
-    await cancelSimpleQueueSearch(userId, context.queueKind);
-    return;
-  }
-  await cancelRankedQueueSearch(userId);
-}
-
 async function cancelAllQueueSearches(userId: string): Promise<void> {
   await Promise.all([
     cancelRankedQueueSearch(userId),
@@ -1001,6 +993,10 @@ export const userSessionGuardService = {
       await cleanupStaleOrphanActiveMatch(io, userId, context);
       context = await resolveContext(userId);
     }
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+    }
 
     if (context.activeMatch?.id) {
       await cancelAllQueueSearches(userId);
@@ -1015,7 +1011,7 @@ export const userSessionGuardService = {
 
     const keepLobbyId = context.waitingLobbies[0]?.id ?? context.activeLobbies[0]?.id;
     if (context.queueSearchId && keepLobbyId) {
-      await cancelQueueSearch(context, userId);
+      await cancelAllQueueSearches(userId);
     }
     const hasExtraLobby = context.openLobbies.some((lobby) => lobby.id !== keepLobbyId);
     if (hasExtraLobby) {
@@ -1046,6 +1042,18 @@ export const userSessionGuardService = {
       await cleanupStaleOrphanActiveMatch(io, userId, context);
       context = await resolveContext(userId);
     }
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+      if (context.queueCount > 0) {
+        return {
+          ok: false,
+          snapshot: toSnapshot(context),
+          reason: 'QUEUE_UNAVAILABLE',
+          message: 'Your previous searches are still being cleaned up. Please retry.',
+        };
+      }
+    }
     let snapshot = toSnapshot(context);
 
     if (await hasAnyPairingInFlight(userId)) {
@@ -1074,7 +1082,7 @@ export const userSessionGuardService = {
       return { ok: true, snapshot };
     }
 
-    if (context.queueSearchId) await cancelQueueSearch(context, userId);
+    if (context.queueSearchId) await cancelAllQueueSearches(userId);
     if (hasLobbyToClean) {
       await cleanupOpenLobbies(io, userId, {
         keepWaitingLobbyId,
@@ -1109,6 +1117,19 @@ export const userSessionGuardService = {
     }
 
     let snapshot = toSnapshot(context);
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
+      if (context.queueCount > 0) {
+        return {
+          ok: false,
+          snapshot,
+          reason: 'QUEUE_UNAVAILABLE',
+          message: 'Your previous searches are still being cleaned up. Please retry.',
+        };
+      }
+    }
     if (await hasAnyPairingInFlight(userId)) {
       return {
         ok: false,
@@ -1153,7 +1174,7 @@ export const userSessionGuardService = {
     // another database round trip. Only resolve again when cleanup changed
     // actual lobby/queue state.
     if (context.openLobbies.length > 0 || context.queueSearchId) {
-      if (context.queueSearchId) await cancelQueueSearch(context, userId);
+      if (context.queueSearchId) await cancelAllQueueSearches(userId);
       await cleanupOpenLobbies(io, userId);
       context = await resolveContext(userId);
       snapshot = toSnapshot(context);

@@ -8,6 +8,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
+import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
 
 export async function startFootballGridMatchFromLobby(
   io: QuizballServer,
@@ -95,11 +96,11 @@ export async function startFootballGridMatchFromLobby(
   });
   const lobbySockets = await io.in(`lobby:${input.lobbyId}`).fetchSockets().catch(() => []);
   for (const memberSocket of lobbySockets) {
-    memberSocket.data.lobbyId = undefined;
-    memberSocket.data.matchId = createdState.matchId;
-    memberSocket.data.gridMatchId = createdState.matchId;
-    memberSocket.leave(`lobby:${input.lobbyId}`);
-    memberSocket.join(`grid:${createdState.matchId}`);
+    await transitionFootballGridSocket(io, {
+      socketId: memberSocket.id,
+      matchId: createdState.matchId,
+      clearLobby: true,
+    });
   }
   await footballGridRealtimeService.emitMatchFound(io, createdState).catch((error) => {
     logger.warn({ error, lobbyId: input.lobbyId, matchId: createdState.matchId }, 'Football Grid match handoff delivery deferred to reconciler');

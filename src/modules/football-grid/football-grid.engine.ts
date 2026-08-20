@@ -141,7 +141,7 @@ export function createFootballGridState(input: {
     status: 'handoff',
     phase: 'handoff',
     board: input.board,
-    players: input.players
+    players: [...input.players]
       .sort((a, b) => a.seat - b.seat)
       .map((player) => ({
         userId: player.userId,

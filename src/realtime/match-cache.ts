@@ -609,9 +609,9 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
     }
     const players = await matchPlayersRepo.listMatchPlayers(matchId);
     const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
-    if (variant === 'football_grid') {
-      // Grid owns its own authoritative state and command inbox. Building a
-      // possession cache for it would allow legacy socket events to mutate the
+    if (variant === 'football_grid' || variant === 'auction') {
+      // Grid and Auction own their authoritative state outside this cache.
+      // Building a possession cache would let legacy socket events mutate the
       // wrong engine.
       return null;
     }

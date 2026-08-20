@@ -63,7 +63,7 @@ export type RealtimeTimerPayload =
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
   | { kind: 'football_grid_phase'; matchId: string; expectedStateVersion: number }
-  | { kind: 'football_grid_matchmaking_fallback'; searchId: string }
+  | { kind: 'football_grid_matchmaking_fallback'; searchId: string; userId: string }
   | { kind: 'football_grid_bot_action'; matchId: string; expectedStateVersion: number; turnNumber: number }
   | { kind: 'football_grid_rematch_expiry'; seriesId: string; expectedSeriesVersion: number }
   | { kind: 'football_grid_presence_expiry'; matchId: string; userId: string; expectedPresenceGeneration: number }

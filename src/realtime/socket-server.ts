@@ -84,6 +84,7 @@ import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
 import { socketRuntimeTracker } from './socket-runtime-stats.js';
 import { ConnectStateBatcher } from './connect-state-batcher.js';
 import type { SessionStatePayload } from './socket.types.js';
+import { handleFootballGridSocketTransition } from './football-grid-socket-transition.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketAuthData>;
 export type QuizballServer = Server<
@@ -471,7 +472,7 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     },
     football_grid_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_matchmaking_fallback') return;
-      await footballGridMatchmakingService.handleFallbackTimer(server, payload.searchId);
+      await footballGridMatchmakingService.handleFallbackTimer(server, payload.searchId, payload.userId);
     },
     football_grid_bot_action: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_bot_action') return;
@@ -572,6 +573,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // misses locally to every peer; only the replica owning the gate consumes it.
   io.on('match:ui_ready_ack', (userId, matchId, phase) => {
     acknowledgeLocalMatchUiReady(io, userId, matchId, phase);
+  });
+  io.on('grid:socket_transition', (payload) => {
+    handleFootballGridSocketTransition(io, payload);
   });
 
   // Lets services force-disconnect a user's sockets without importing socket-server

@@ -116,17 +116,19 @@ export const footballGridRematchService = {
     );
     if (!accepted.readyToCreate) return;
     if (!await userSessionGuardService.ownsActivityFences(userIds, accepted.pairingToken)) {
-      await Promise.all([
+      const [closedVersion] = await Promise.all([
         footballGridRepo.closeRematchAfterFailure(accepted.seriesId, accepted.pairingToken),
         userSessionGuardService.releaseActivityFences(userIds, accepted.pairingToken),
       ]);
-      emitState(io, userIds, {
-        seriesId: accepted.seriesId,
-        seriesVersion: accepted.seriesVersion + 1,
-        status: 'declined',
-        acceptedUserIds: [],
-        expiresAt: null,
-      });
+      if (typeof closedVersion === 'number') {
+        emitState(io, userIds, {
+          seriesId: accepted.seriesId,
+          seriesVersion: closedVersion,
+          status: 'declined',
+          acceptedUserIds: [],
+          expiresAt: null,
+        });
+      }
       throw new ConflictError('A rematch participant entered another activity', {
         gridCode: 'REMATCH_ACTIVITY_CONFLICT',
       });
@@ -166,21 +168,25 @@ export const footballGridRematchService = {
       }
       state = createdState;
     } catch (error) {
+      const closedVersion = await footballGridRepo
+        .closeRematchAfterFailure(accepted.seriesId, accepted.pairingToken)
+        .catch(() => null);
       await Promise.all([
         footballGridRepo.markPairingFailed(
           accepted.pairingToken,
           error instanceof Error ? error.message : 'rematch_creation_failed',
         ).catch(() => {}),
-        footballGridRepo.closeRematchAfterFailure(accepted.seriesId, accepted.pairingToken).catch(() => {}),
         userSessionGuardService.releaseActivityFences(userIds, accepted.pairingToken).catch(() => {}),
       ]);
-      emitState(io, userIds, {
-        seriesId: accepted.seriesId,
-        seriesVersion: accepted.seriesVersion + 1,
-        status: 'declined',
-        acceptedUserIds: [],
-        expiresAt: null,
-      });
+      if (typeof closedVersion === 'number') {
+        emitState(io, userIds, {
+          seriesId: accepted.seriesId,
+          seriesVersion: closedVersion,
+          status: 'declined',
+          acceptedUserIds: [],
+          expiresAt: null,
+        });
+      }
       throw error;
     }
 

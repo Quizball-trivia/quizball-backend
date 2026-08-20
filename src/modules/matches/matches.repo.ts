@@ -45,6 +45,16 @@ export const matchesRepo = {
             : stateVariant === 'football_grid'
               ? 'football_grid'
               : 'friendly_possession');
+    const modeAndVariantAreCompatible = data.mode === 'auction'
+      ? gameVariant === 'auction'
+      : data.mode === 'ranked'
+        ? gameVariant === 'ranked_sim'
+        : gameVariant === 'friendly_possession'
+          || gameVariant === 'friendly_party_quiz'
+          || gameVariant === 'football_grid';
+    if (!modeAndVariantAreCompatible) {
+      throw new Error(`Match mode ${data.mode} is incompatible with game variant ${gameVariant}`);
+    }
     // Accepts an optional transaction handle so callers that must commit the
     // match row atomically with a sibling write (e.g. the persistent-bot
     // reservation transfer) can pass their tx. Uses tx.unsafe inside a

@@ -1280,6 +1280,9 @@ export interface InterServerEvents {
     matchId: string,
     phase: MatchUiReadyPhase,
   ) => void;
+  'grid:socket_transition': (
+    payload: import('./football-grid-socket-transition.js').FootballGridSocketTransitionPayload,
+  ) => void;
 }
 
 export interface ErrorPayload {

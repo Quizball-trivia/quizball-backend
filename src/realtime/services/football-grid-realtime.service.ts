@@ -24,6 +24,7 @@ import type {
   FootballGridVersionedCommandPayload,
 } from '../socket.types.js';
 import { footballGridPresenceService } from './football-grid-presence.service.js';
+import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
 
 const GRID_TIMER_KIND = 'football_grid_phase' as const;
 const GRID_BOT_TIMER_KIND = 'football_grid_bot_action' as const;
@@ -392,7 +393,6 @@ export const footballGridRealtimeService = {
     for (const player of state.players) {
       const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;
       const opponentUser = users.get(opponent.userId);
-      await io.in(`user:${player.userId}`).socketsJoin(gridRoom(state.matchId));
       const playerSockets = await io.in(`user:${player.userId}`).fetchSockets();
       const observationSocket = playerSockets[0];
       if (!player.isBot && observationSocket) {
@@ -411,8 +411,11 @@ export const footballGridRealtimeService = {
         });
       }
       for (const playerSocket of playerSockets) {
-        playerSocket.data.matchId = state.matchId;
-        playerSocket.data.gridMatchId = state.matchId;
+        await transitionFootballGridSocket(io, {
+          socketId: playerSocket.id,
+          matchId: state.matchId,
+          clearLobby: true,
+        });
         await footballGridPresenceService.touch(state.matchId, player.userId, playerSocket.id);
       }
       io.to(`user:${player.userId}`).emit('grid:match_found', {
@@ -617,7 +620,11 @@ export const footballGridRealtimeService = {
 
   async handlePresenceHeartbeat(socket: QuizballSocket, matchId: string): Promise<void> {
     const previous = await footballGridService.getState(matchId, socket.data.user.id);
-    if (socket.data.gridMatchId !== matchId) throw new Error('GRID_MATCH_BINDING_MISMATCH');
+    if (socket.data.gridMatchId !== matchId) {
+      throw new ConflictError('Socket is not bound to this Football Grid match', {
+        gridCode: 'GRID_MATCH_BINDING_MISMATCH',
+      });
+    }
     await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
     const state = await footballGridService.markReconnected(matchId, socket.data.user.id);
     await scheduleStateDeadline(state);

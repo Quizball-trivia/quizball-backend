@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalFootballGridBoardChecksum,
   validateFootballGridBoard,
@@ -43,6 +43,20 @@ describe('football grid content validation', () => {
     const transposed = canonicalFootballGridBoardChecksum(['d', 'e', 'f'], ['a', 'b', 'c']);
     expect(first).toBe(reordered);
     expect(first).toBe(transposed);
+  });
+
+  it('does not depend on runtime locale collation for persisted checksums', () => {
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+      throw new Error('locale collation must not be used');
+    });
+    try {
+      expect(canonicalFootballGridBoardChecksum(
+        ['თბილისი', 'a', 'é'],
+        ['ზ', 'b', 'ä'],
+      )).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      localeCompare.mockRestore();
+    }
   });
 
   it('requires nine distinct and two recognizable answers in every cell', () => {

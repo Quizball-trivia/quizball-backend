@@ -1,24 +1,19 @@
 -- Football Grid: immutable reviewed content, authoritative 1v1 runtime,
 -- moderation, settlement, and lifecycle isolation.
 
+SET LOCAL lock_timeout = '5s';
+
 -- ---------------------------------------------------------------------------
 -- Durable match/lobby variant
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE public.matches
-  ADD COLUMN IF NOT EXISTS game_variant text;
+  ADD COLUMN IF NOT EXISTS game_variant text DEFAULT 'friendly_possession';
 
-UPDATE public.matches
-SET game_variant = CASE
-  WHEN mode = 'auction' THEN 'auction'
-  WHEN mode = 'ranked' THEN 'ranked_sim'
-  WHEN state_payload->>'variant' = 'friendly_party_quiz' THEN 'friendly_party_quiz'
-  ELSE 'friendly_possession'
-END
-WHERE game_variant IS NULL;
-
-ALTER TABLE public.matches
-  ALTER COLUMN game_variant SET NOT NULL;
+-- PostgreSQL stores a constant ADD COLUMN default as table metadata rather
+-- than rewriting every historical match. Drop the default immediately so the
+-- rolling-deploy trigger below remains authoritative for legacy writers.
+ALTER TABLE public.matches ALTER COLUMN game_variant DROP DEFAULT;
 
 -- Rolling-deploy compatibility for legacy writers and test fixtures that do
 -- not yet send the new discriminator. The database derives it once at insert;
@@ -27,6 +22,7 @@ ALTER TABLE public.matches
 CREATE OR REPLACE FUNCTION public.set_match_game_variant_on_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   IF NEW.game_variant IS NULL THEN
@@ -47,6 +43,50 @@ CREATE TRIGGER set_match_game_variant_on_insert
   BEFORE INSERT ON public.matches
   FOR EACH ROW EXECUTE FUNCTION public.set_match_game_variant_on_insert();
 
+-- Called by the following non-transactional migration. Each iteration commits
+-- independently, so historical ranked/auction/party rows never hold one large
+-- lock set for the duration of the complete backfill.
+CREATE OR REPLACE PROCEDURE public.football_grid_backfill_game_variants(batch_size integer DEFAULT 1000)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  updated_count integer;
+BEGIN
+  LOOP
+    WITH batch AS (
+      SELECT id,
+             CASE
+               WHEN mode = 'auction' THEN 'auction'
+               WHEN mode = 'ranked' THEN 'ranked_sim'
+               WHEN state_payload->>'variant' = 'friendly_party_quiz' THEN 'friendly_party_quiz'
+               WHEN state_payload->>'variant' = 'football_grid' THEN 'football_grid'
+               ELSE 'friendly_possession'
+             END AS desired_variant
+        FROM public.matches
+       WHERE game_variant IS DISTINCT FROM CASE
+               WHEN mode = 'auction' THEN 'auction'
+               WHEN mode = 'ranked' THEN 'ranked_sim'
+               WHEN state_payload->>'variant' = 'friendly_party_quiz' THEN 'friendly_party_quiz'
+               WHEN state_payload->>'variant' = 'football_grid' THEN 'football_grid'
+               ELSE 'friendly_possession'
+             END
+       ORDER BY id
+       LIMIT GREATEST(batch_size, 1)
+       FOR UPDATE SKIP LOCKED
+    )
+    UPDATE public.matches m
+       SET game_variant = batch.desired_variant
+      FROM batch
+     WHERE m.id = batch.id;
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    COMMIT;
+    EXIT WHEN updated_count = 0;
+  END LOOP;
+END;
+$$;
+
+REVOKE ALL ON PROCEDURE public.football_grid_backfill_game_variants(integer) FROM PUBLIC;
+
 ALTER TABLE public.matches
   DROP CONSTRAINT IF EXISTS matches_game_variant_check;
 
@@ -59,17 +99,13 @@ ALTER TABLE public.matches
       'auction',
       'football_grid'
     )
-  );
+  ) NOT VALID;
 
-CREATE INDEX IF NOT EXISTS matches_active_game_variant_idx
-  ON public.matches (game_variant, updated_at DESC)
-  WHERE status = 'active';
-
-ALTER TABLE public.lobbies
-  DROP CONSTRAINT IF EXISTS lobbies_game_mode_check;
+ALTER TABLE public.matches
+  ADD CONSTRAINT matches_game_variant_not_null CHECK (game_variant IS NOT NULL) NOT VALID;
 
 ALTER TABLE public.lobbies
-  ADD CONSTRAINT lobbies_game_mode_check CHECK (
+  ADD CONSTRAINT lobbies_game_mode_check_v2 CHECK (
     game_mode IN (
       'friendly_possession',
       'friendly_party_quiz',
@@ -77,7 +113,23 @@ ALTER TABLE public.lobbies
       'ranked_sim',
       'football_grid'
     )
-  );
+  ) NOT VALID;
+
+ALTER TABLE public.matches
+  ADD CONSTRAINT matches_mode_game_variant_check CHECK (
+    (mode = 'auction' AND game_variant = 'auction')
+    OR (mode = 'ranked' AND game_variant = 'ranked_sim')
+    OR (
+      mode = 'friendly'
+      AND game_variant IN ('friendly_possession', 'friendly_party_quiz', 'football_grid')
+    )
+  ) NOT VALID;
+
+ALTER TABLE public.lobbies
+  VALIDATE CONSTRAINT lobbies_game_mode_check_v2;
+
+ALTER TABLE public.lobbies DROP CONSTRAINT IF EXISTS lobbies_game_mode_check;
+ALTER TABLE public.lobbies RENAME CONSTRAINT lobbies_game_mode_check_v2 TO lobbies_game_mode_check;
 
 -- ---------------------------------------------------------------------------
 -- Content releases and provenance
@@ -97,6 +149,10 @@ CREATE TABLE public.football_grid_data_sources (
   approval_owner text,
   approved_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    database_rights_status <> 'approved'
+    OR (approval_owner IS NOT NULL AND approved_at IS NOT NULL)
+  ),
   UNIQUE (source_key, dataset_version)
 );
 
@@ -261,6 +317,7 @@ CREATE TABLE public.football_grid_content_quarantines (
 CREATE OR REPLACE FUNCTION public.football_grid_validate_board_criteria()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 DECLARE
   matching_count integer;
@@ -489,6 +546,7 @@ CREATE TABLE public.football_grid_claims (
 CREATE OR REPLACE FUNCTION public.football_grid_validate_claim()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 DECLARE
   persisted_turn integer;
@@ -693,8 +751,14 @@ CREATE TABLE public.football_grid_reward_risk_observations (
     REFERENCES public.football_grid_participants(match_id, user_id) ON DELETE CASCADE
 );
 
+COMMENT ON TABLE public.football_grid_reward_risk_observations IS
+  'Pseudonymous device/network reward-risk signals; runtime retention is 90 days.';
+
 CREATE INDEX football_grid_reward_risk_observations_identity_idx
   ON public.football_grid_reward_risk_observations (device_hash, network_hash, observed_at DESC);
+
+CREATE INDEX football_grid_reward_risk_observations_retention_idx
+  ON public.football_grid_reward_risk_observations (observed_at);
 
 CREATE TABLE public.football_grid_reward_eligibility (
   match_id uuid NOT NULL REFERENCES public.matches(id) ON DELETE CASCADE,
@@ -769,6 +833,7 @@ CREATE TABLE public.football_grid_missing_answer_reports (
 CREATE OR REPLACE FUNCTION public.football_grid_reject_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   RAISE EXCEPTION 'published football grid content is append-only';
@@ -778,6 +843,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.football_grid_protect_published_release()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   IF OLD.status = 'published' AND TG_OP = 'UPDATE'
@@ -798,6 +864,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.football_grid_protect_approved_source()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   IF OLD.database_rights_status = 'approved' THEN

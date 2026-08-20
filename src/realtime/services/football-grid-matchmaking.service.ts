@@ -23,6 +23,7 @@ const PAIRING_USER_PREFIX = 'session:pairing:user:';
 const LOCK_KEY = 'lock:football_grid:mm';
 const LOCK_TTL_MS = 12_000;
 const SEARCH_TTL_SEC = 180;
+const MAX_SEARCH_AGE_MS = SEARCH_TTL_SEC * 1_000;
 const MATCH_SCAN_LIMIT = 20;
 const REPEAT_SOFT_LIMIT = 3;
 const PAIR_COUNT_CACHE_TTL_SEC = 60;
@@ -50,6 +51,21 @@ function pairingUserKey(userId: string): string {
 
 function pairCountCacheKey(userAId: string, userBId: string): string {
   return `football_grid:mm:pair_count:${[userAId, userBId].sort().join(':')}`;
+}
+
+function searchExpiresAt(search: QueuedGridSearch): number {
+  return search.queuedAt + MAX_SEARCH_AGE_MS;
+}
+
+function isSearchExpired(search: QueuedGridSearch, now = Date.now()): boolean {
+  return now >= searchExpiresAt(search);
+}
+
+function nextFallbackAt(search: QueuedGridSearch, now = Date.now()): number {
+  return Math.min(
+    searchExpiresAt(search),
+    now + harnessDelayMs(config.FOOTBALL_GRID_BOT_FALLBACK_MS, 1_000),
+  );
 }
 
 async function withMatchmakingLock<T>(callback: () => Promise<T>): Promise<T | null> {
@@ -80,8 +96,10 @@ async function readSearch(searchId: string): Promise<QueuedGridSearch | null> {
 async function writeSearch(search: QueuedGridSearch): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) throw new Error('GRID_QUEUE_UNAVAILABLE');
+  const remainingMs = searchExpiresAt(search) - Date.now();
+  if (remainingMs <= 0) throw new Error('GRID_SEARCH_EXPIRED');
   await redis.multi()
-    .set(searchKey(search.searchId), JSON.stringify(search), { EX: SEARCH_TTL_SEC })
+    .set(searchKey(search.searchId), JSON.stringify(search), { EX: Math.max(1, Math.ceil(remainingMs / 1_000)) })
     .hSet(USER_MAP_KEY, search.userId, search.searchId)
     .zAdd(QUEUE_KEY, [{ score: search.queuedAt, value: search.searchId }])
     .exec();
@@ -98,7 +116,7 @@ async function removeSearch(search: QueuedGridSearch): Promise<void> {
   await cancelRealtimeTimer(FALLBACK_TIMER_KIND, search.searchId);
 }
 
-async function listSearches(): Promise<QueuedGridSearch[]> {
+async function listSearches(io: QuizballServer): Promise<QueuedGridSearch[]> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return [];
   const ids = await redis.zRange(QUEUE_KEY, 0, MATCH_SCAN_LIMIT - 1);
@@ -106,7 +124,13 @@ async function listSearches(): Promise<QueuedGridSearch[]> {
   const valid = searches.filter((entry): entry is QueuedGridSearch => entry !== null);
   const staleIds = ids.filter((id) => !valid.some((entry) => entry.searchId === id));
   if (staleIds.length > 0) await redis.zRem(QUEUE_KEY, staleIds);
-  return valid.sort((a, b) => a.queuedAt - b.queuedAt);
+  const expired = valid.filter((search) => isSearchExpired(search));
+  for (const search of expired) {
+    await expireSearch(io, search);
+  }
+  return valid
+    .filter((search) => !isSearchExpired(search))
+    .sort((a, b) => a.queuedAt - b.queuedAt);
 }
 
 async function scheduleFallback(search: QueuedGridSearch): Promise<void> {
@@ -114,7 +138,7 @@ async function scheduleFallback(search: QueuedGridSearch): Promise<void> {
     FALLBACK_TIMER_KIND,
     search.searchId,
     new Date(search.fallbackAt),
-    { kind: FALLBACK_TIMER_KIND, searchId: search.searchId },
+    { kind: FALLBACK_TIMER_KIND, searchId: search.searchId, userId: search.userId },
   );
 }
 
@@ -132,6 +156,7 @@ function parseSearchSnapshot(value: Record<string, unknown> | null): QueuedGridS
 }
 
 async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
+  if (isSearchExpired(search)) return false;
   const session = await userSessionGuardService.resolveState(search.userId);
   if (
     session.activeMatchId
@@ -144,7 +169,7 @@ async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Prom
   if (currentSearchId && currentSearchId !== search.searchId) return false;
   const restored: QueuedGridSearch = {
     ...search,
-    fallbackAt: Date.now() + harnessDelayMs(config.FOOTBALL_GRID_BOT_FALLBACK_MS, 1_000),
+    fallbackAt: nextFallbackAt(search),
   };
   await writeSearch(restored);
   await scheduleFallback(restored);
@@ -157,12 +182,30 @@ async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Prom
   return true;
 }
 
+async function restoreSearchOrIdle(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
+  const restored = await restoreSearch(io, search).catch((error) => {
+    logger.warn({ error, searchId: search.searchId }, 'Football Grid search restoration failed');
+    return false;
+  });
+  if (restored) return true;
+  await removeSearch(search).catch(() => {});
+  emitSearchState(io, search.userId, { state: 'idle', searchId: search.searchId });
+  await userSessionGuardService.emitState(io, search.userId).catch(() => {});
+  return false;
+}
+
 function emitSearchState(
   io: QuizballServer,
   userId: string,
   payload: FootballGridSearchStatePayload,
 ): void {
   io.to(`user:${userId}`).emit('grid:search_state', payload);
+}
+
+async function expireSearch(io: QuizballServer, search: QueuedGridSearch): Promise<void> {
+  await removeSearch(search);
+  emitSearchState(io, search.userId, { state: 'idle', searchId: search.searchId });
+  await userSessionGuardService.emitState(io, search.userId);
 }
 
 async function claimPairingUsers(userIds: string[], pairingToken: string): Promise<boolean> {
@@ -226,6 +269,7 @@ async function chooseOpponent(anchor: QueuedGridSearch, candidates: QueuedGridSe
 }
 
 async function searchesStillExclusivelyQueued(searches: QueuedGridSearch[]): Promise<boolean> {
+  if (searches.some((search) => isSearchExpired(search))) return false;
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
   const currentIds = await Promise.all(searches.map((search) => redis.hGet(USER_MAP_KEY, search.userId)));
@@ -279,8 +323,10 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
         } catch (error) {
           logger.error({ error, pairingToken, userIds: [a.userId, b.userId] }, 'Football Grid human pairing failed');
           await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
-          await restoreSearch(io, a).catch(() => false);
-          await restoreSearch(io, b).catch(() => false);
+          await Promise.all([
+            restoreSearchOrIdle(io, a),
+            restoreSearchOrIdle(io, b),
+          ]);
           return false;
         }
 
@@ -312,7 +358,7 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
 
 async function tryStartHumanPairsLocked(io: QuizballServer): Promise<void> {
   while (true) {
-    const searches = await listSearches();
+    const searches = await listSearches(io);
     const anchor = searches[0];
     if (!anchor || searches.length < 2) return;
     const opponent = await chooseOpponent(anchor, searches.slice(1));
@@ -323,6 +369,7 @@ async function tryStartHumanPairsLocked(io: QuizballServer): Promise<void> {
 }
 
 async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
+  if (isSearchExpired(search)) return false;
   if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return false;
   const humanProfile = await rankedService.ensureProfile(search.userId);
   const paired = await userSessionGuardService.withUserSessionLocks([search.userId], async () => {
@@ -381,7 +428,7 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
         logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
         await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
         await reservationService.abortLobby(search.searchId, 'match_found_cancel');
-        await restoreSearch(io, search).catch(() => false);
+        await restoreSearchOrIdle(io, search);
         return false;
       }
 
@@ -428,13 +475,8 @@ export const footballGridMatchmakingService = {
           }
           let restoredCount = 0;
           for (const search of humanSearches) {
-            const restored = await restoreSearch(io, search).catch(async (error) => {
-              logger.warn({ error, searchId: search.searchId }, 'Football Grid stale search restoration failed');
-              await removeSearch(search).catch(() => {});
-              return false;
-            });
+            const restored = await restoreSearchOrIdle(io, search);
             if (restored) restoredCount += 1;
-            else emitSearchState(io, search.userId, { state: 'idle', searchId: null });
           }
           appMetrics.footballGridPairingRecovery.add(1, {
             outcome: restoredCount === humanSearches.length ? 'requeued' : restoredCount === 0 ? 'idle' : 'partial_requeue',
@@ -498,7 +540,7 @@ export const footballGridMatchmakingService = {
         const existingId = await redis.hGet(USER_MAP_KEY, userId);
         if (existingId) {
           const existing = await readSearch(existingId);
-          if (existing) {
+          if (existing && !isSearchExpired(existing)) {
             emitSearchState(io, userId, {
               state: 'searching', searchId: existing.searchId,
               queuedAt: new Date(existing.queuedAt).toISOString(),
@@ -507,7 +549,8 @@ export const footballGridMatchmakingService = {
             await scheduleFallback(existing);
             return true;
           }
-          await redis.hDel(USER_MAP_KEY, userId);
+          if (existing) await removeSearch(existing);
+          else await redis.hDel(USER_MAP_KEY, userId);
         }
         const now = Date.now();
         const search: QueuedGridSearch = {
@@ -516,7 +559,10 @@ export const footballGridMatchmakingService = {
           displayName: socket.data.user.nickname ?? 'Player',
           locale: input.locale,
           queuedAt: now,
-          fallbackAt: now + harnessDelayMs(config.FOOTBALL_GRID_BOT_FALLBACK_MS, 1_000),
+          fallbackAt: Math.min(
+            now + MAX_SEARCH_AGE_MS,
+            now + harnessDelayMs(config.FOOTBALL_GRID_BOT_FALLBACK_MS, 1_000),
+          ),
         };
         await writeSearch(search);
         await scheduleFallback(search);
@@ -568,16 +614,38 @@ export const footballGridMatchmakingService = {
     if (locked === null) socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Matchmaking is busy. Please retry.' });
   },
 
-  async handleFallbackTimer(io: QuizballServer, searchId: string): Promise<void> {
+  async handleFallbackTimer(io: QuizballServer, searchId: string, userId?: string): Promise<void> {
     await withMatchmakingLock(async () => {
       const search = await readSearch(searchId);
-      if (!search) return;
+      if (!search) {
+        if (userId) {
+          const redis = getRedisClient();
+          if (redis?.isOpen && await redis.hGet(USER_MAP_KEY, userId) === searchId) {
+            await redis.multi().zRem(QUEUE_KEY, searchId).hDel(USER_MAP_KEY, userId).exec();
+            emitSearchState(io, userId, { state: 'idle', searchId });
+            await userSessionGuardService.emitState(io, userId);
+          }
+        }
+        return;
+      }
+      if (isSearchExpired(search)) {
+        await expireSearch(io, search);
+        return;
+      }
       await tryStartHumanPairsLocked(io);
       const remaining = await readSearch(searchId);
       if (!remaining) return;
+      if (isSearchExpired(remaining)) {
+        await expireSearch(io, remaining);
+        return;
+      }
       const started = await startBotPair(io, remaining);
       if (!started && await readSearch(searchId)) {
-        const rearmed = { ...remaining, fallbackAt: Date.now() + harnessDelayMs(config.FOOTBALL_GRID_BOT_FALLBACK_MS, 1_000) };
+        if (isSearchExpired(remaining)) {
+          await expireSearch(io, remaining);
+          return;
+        }
+        const rearmed = { ...remaining, fallbackAt: nextFallbackAt(remaining) };
         await writeSearch(rearmed);
         await scheduleFallback(rearmed);
       }

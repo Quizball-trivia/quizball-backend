@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import postgres from 'postgres';
 import '../setup.js';
 
@@ -8,6 +8,7 @@ process.env.FOOTBALL_GRID_XP_ENABLED = 'true';
 process.env.FOOTBALL_GRID_RISK_HASH_SECRET = 'integration-football-grid-risk-secret-0001';
 
 const DB_URL = process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test';
+const REQUIRE_DB = process.env.CI === 'true' || process.env.FOOTBALL_GRID_REQUIRE_DB === 'true';
 const RELEASE_ID = '00000000-0000-4000-8000-000000990001';
 const CORRECTION_RELEASE_ID = '00000000-0000-4000-8000-000000990003';
 const BOARD_ID = '00000000-0000-4000-8000-000000993001';
@@ -25,6 +26,7 @@ const PLAYER_IDS = Array.from(
 
 let db: postgres.Sql;
 let dbAvailable = false;
+let setupError: unknown = null;
 let footballGridRepo: typeof import('../../src/modules/football-grid/football-grid.repo.js').footballGridRepo;
 let footballGridService: typeof import('../../src/modules/football-grid/football-grid.service.js').footballGridService;
 let footballGridBotService: typeof import('../../src/modules/football-grid/football-grid-bot.service.js').footballGridBotService;
@@ -38,6 +40,12 @@ const runtimeUserIds: string[] = [];
 const runtimeMatchIds: string[] = [];
 const runtimeSeriesIds: string[] = [];
 const runtimeLobbyIds: string[] = [];
+
+function hasRuntimeDb(context: TestContext): boolean {
+  if (dbAvailable) return true;
+  context.skip(setupError instanceof Error ? setupError.message : 'local integration database unavailable');
+  return false;
+}
 
 async function seedImmutableContent(): Promise<void> {
   await db`
@@ -331,9 +339,11 @@ async function playWinningLine(
 }
 
 beforeAll(async () => {
+  let connected = false;
   try {
     db = postgres(DB_URL, { max: 4, connect_timeout: 5 });
     await db`SELECT 1`;
+    connected = true;
     const tables = await db<{ found: boolean }[]>`
       SELECT to_regclass('public.football_grid_matches') IS NOT NULL AS found
     `;
@@ -350,6 +360,12 @@ beforeAll(async () => {
     ({ buildFinalResultsPayload } = await import('../../src/realtime/services/match-final-results.service.js'));
     dbAvailable = true;
   } catch (error) {
+    setupError = error;
+    // Only an unavailable optional local database may skip. Once connected,
+    // missing migrations, schema defects, seed failures, or import failures are
+    // real regressions and must fail in every environment. CI always requires
+    // the integration database.
+    if (REQUIRE_DB || connected) throw error;
     console.warn(`\nSkipping Football Grid runtime integration: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 });
@@ -389,8 +405,8 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
-  it('persists lifecycle, bilingual answers, idempotent commands, claims, reports, and random rewards', async () => {
-    if (!dbAvailable) return;
+  it('persists lifecycle, bilingual answers, idempotent commands, claims, reports, and random rewards', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     const rewards = await footballGridSettlementService.settleMatch(match.matchId);
     expect(rewards.get(match.playerA)).toMatchObject({ xp: 70, coins: 300, eligibilityReason: 'eligible' });
@@ -415,16 +431,16 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(await buildFinalResultsPayload(match.matchId, 1)).toBeNull();
   });
 
-  it('awards XP but no coins for a private friend match', async () => {
-    if (!dbAvailable) return;
+  it('awards XP but no coins for a private friend match', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('private');
     const rewards = await footballGridSettlementService.settleMatch(match.matchId);
     expect(rewards.get(match.playerA)).toMatchObject({ xp: 70, coins: 0, eligibilityReason: 'friend_match_no_coins' });
     expect(rewards.get(match.playerB)).toMatchObject({ xp: 50, coins: 0, eligibilityReason: 'friend_match_no_coins' });
   });
 
-  it('replays terminal delivery after transport loss until each client explicitly acknowledges it', async () => {
-    if (!dbAvailable) return;
+  it('replays terminal delivery after transport loss until each client explicitly acknowledges it', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null });
     runtimeSeriesIds.push(seriesId);
     const match = await playWinningLine('private', seriesId);
@@ -515,8 +531,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(series[0].rematch_expires_at).not.toBeNull();
   });
 
-  it('commutes simultaneous two-client handoff acknowledgements and readiness', async () => {
-    if (!dbAvailable) return;
+  it('commutes simultaneous two-client handoff acknowledgements and readiness', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [playerA, playerB] = await createUsers();
     const pairingToken = randomUUID();
     await footballGridRepo.createPairing({
@@ -555,8 +571,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect((await footballGridService.getState(created.matchId, playerA)).phase).toBe('countdown');
   });
 
-  it('accepts only the exact barrier version or the single peer-advance predecessor', async () => {
-    if (!dbAvailable) return;
+  it('accepts only the exact barrier version or the single peer-advance predecessor', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [playerA, playerB] = await createUsers();
     const pairingToken = randomUUID();
     await footballGridRepo.createPairing({
@@ -613,8 +629,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(countdown.phase).toBe('countdown');
   });
 
-  it('does not treat a pre-ready bot as a commuting peer barrier command', async () => {
-    if (!dbAvailable) return;
+  it('does not treat a pre-ready bot as a commuting peer barrier command', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [humanId, botId] = await createUsers();
     const pairingToken = randomUUID();
     await footballGridRepo.createPairing({
@@ -658,8 +674,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(countdown.phase).toBe('countdown');
   });
 
-  it('keeps the base match activity clock fresh across Grid state transitions', async () => {
-    if (!dbAvailable) return;
+  it('keeps the base match activity clock fresh across Grid state transitions', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     await db`UPDATE matches SET updated_at = now() - interval '20 minutes' WHERE id = ${runtime.matchId}`;
     await footballGridService.pass({
@@ -674,8 +690,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rows[0].fresh).toBe(true);
   });
 
-  it('enforces command retry backoff and replays a persisted terminal rejection', async () => {
-    if (!dbAvailable) return;
+  it('enforces command retry backoff and replays a persisted terminal rejection', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const inbox = await footballGridRepo.admitCommand({
       matchId: runtime.matchId,
@@ -709,8 +725,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     });
   });
 
-  it('holds risk-flagged random coins without crediting the wallet until an audited release', async () => {
-    if (!dbAvailable) return;
+  it('holds risk-flagged random coins without crediting the wallet until an audited release', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     const before = await db<Array<{ coins: number }>>`SELECT coins FROM users WHERE id = ${match.playerA}`;
     await db`
@@ -749,8 +765,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(credited[0].credited_at).not.toBeNull();
   });
 
-  it('automatically holds coins for linked-device opponents', async () => {
-    if (!dbAvailable) return;
+  it('automatically holds coins for linked-device opponents', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     await db`
       UPDATE football_grid_reward_risk_observations
@@ -788,8 +804,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(eligibility[0]).toMatchObject({ decision: 'ineligible', reason: 'risk_hold_denied' });
   });
 
-  it('keeps an old unresolved hold inside the current release budget', async () => {
-    if (!dbAvailable) return;
+  it('keeps an old unresolved hold inside the current release budget', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     await db`
       INSERT INTO football_grid_reward_risk_decisions (
@@ -820,8 +836,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     )).rejects.toThrow('rolling coin cap');
   });
 
-  it('requires an immutable correcting release before accepting a missing-answer report', async () => {
-    if (!dbAvailable) return;
+  it('requires an immutable correcting release before accepting a missing-answer report', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     await expect(footballGridAdminService.decideReport({
       reportId: randomUUID(),
       status: 'accepted',
@@ -859,8 +875,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     });
   });
 
-  it('projects a reversed coin reward deterministically as zero', async () => {
-    if (!dbAvailable) return;
+  it('projects a reversed coin reward deterministically as zero', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     await footballGridSettlementService.settleMatch(match.matchId);
     const events = await db<Array<{ id: string }>>`
@@ -872,8 +888,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(replayed.get(match.playerA)?.coins).toBe(0);
   });
 
-  it('keeps the handoff no-show barrier instead of entering reconnect pause', async () => {
-    if (!dbAvailable) return;
+  it('keeps the handoff no-show barrier instead of entering reconnect pause', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [playerA, playerB] = await createUsers();
     const pairingToken = randomUUID();
     await footballGridRepo.createPairing({
@@ -912,8 +928,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(expiredAgain.state).toMatchObject({ phase: 'paused', pausedFromPhase: 'countdown' });
   });
 
-  it('rejects forged claims and non-monotonic audit events at the database boundary', async () => {
-    if (!dbAvailable) return;
+  it('rejects forged claims and non-monotonic audit events at the database boundary', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const wrong = await footballGridService.submitAnswer({
       matchId: runtime.matchId,
@@ -949,8 +965,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     `).rejects.toThrow(/event_sequence_mismatch/);
   });
 
-  it('keeps a permanent quarantine active after a newer temporary disable expires', async () => {
-    if (!dbAvailable) return;
+  it('keeps a permanent quarantine active after a newer temporary disable expires', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const rollbackMarker = new Error('rollback quarantine state-machine fixture');
     await expect(db.begin(async (tx) => {
       await tx`
@@ -974,8 +990,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     })).rejects.toBe(rollbackMarker);
   });
 
-  it('records explicit quarantine disable and enable events with an admin audit trail', async () => {
-    if (!dbAvailable) return;
+  it('records explicit quarantine disable and enable events with an admin audit trail', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [actorUserId] = await createUsers();
     const disabled = await footballGridAdminService.quarantineContent({
       releaseId: RELEASE_ID,
@@ -1011,8 +1027,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     ]);
   });
 
-  it('deduplicates friend rematch accepts and creates exactly one alternating-opener match', async () => {
-    if (!dbAvailable) return;
+  it('deduplicates friend rematch accepts and creates exactly one alternating-opener match', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null });
     runtimeSeriesIds.push(seriesId);
     const firstMatch = await playWinningLine('private', seriesId);
@@ -1081,8 +1097,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(nextMatch.state.openerUserId).not.toBe(firstMatch.state.openerUserId);
   });
 
-  it('pauses safely after the durable command retry budget is exhausted', async () => {
-    if (!dbAvailable) return;
+  it('pauses safely after the durable command retry budget is exhausted', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const inbox = await footballGridRepo.admitCommand({
       matchId: runtime.matchId,
@@ -1121,8 +1137,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rows[0]).toMatchObject({ status: 'failed', pending_command_id: null, retry_count: 3 });
   });
 
-  it('pins one durable action deadline for a turn and clears it on transition', async () => {
-    if (!dbAvailable) return;
+  it('pins one durable action deadline for a turn and clears it on transition', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const firstDeadline = new Date(Date.now() + 5_000).toISOString();
     const secondDeadline = new Date(Date.now() + 15_000).toISOString();
@@ -1151,8 +1167,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rows[0].bot_action_deadline_at).toBeNull();
   });
 
-  it('finalizes handoff, loading, reconnect, and bot actions against database cutoffs', async () => {
-    if (!dbAvailable) return;
+  it('finalizes handoff, loading, reconnect, and bot actions against database cutoffs', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const [handoffA, handoffB] = await createUsers();
     const handoffPairing = randomUUID();
     await footballGridRepo.createPairing({
@@ -1276,8 +1292,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(lateBot.state.stateVersion).toBe(botState.stateVersion);
   });
 
-  it('recovers a crash after the final command lease and pauses the match', async () => {
-    if (!dbAvailable) return;
+  it('recovers a crash after the final command lease and pauses the match', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const inbox = await footballGridRepo.admitCommand({
       matchId: runtime.matchId,
@@ -1318,8 +1334,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(row[0]).toMatchObject({ status: 'failed', pending_command_id: null });
   });
 
-  it('defers disconnect reconciliation behind an admitted on-time command', async () => {
-    if (!dbAvailable) return;
+  it('defers disconnect reconciliation behind an admitted on-time command', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');
     const inbox = await footballGridRepo.admitCommand({
       matchId: runtime.matchId,
@@ -1351,8 +1367,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(afterCommit.state.turnRemainingMs).toBeGreaterThan(remainingBeforePause - 2_500);
   });
 
-  it('does not extend an expired rematch and reopens its friend lobby', async () => {
-    if (!dbAvailable) return;
+  it('does not extend an expired rematch and reopens its friend lobby', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const players = await createUsers();
     const lobby = await lobbiesRepo.createLobbyWithMembers({
       mode: 'friendly',
@@ -1389,8 +1405,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(await lobbiesRepo.countReadyMembers(lobby.id)).toBe(0);
   });
 
-  it('commits lobby activation with match creation and rejects a stale second start', async () => {
-    if (!dbAvailable) return;
+  it('commits lobby activation with match creation and rejects a stale second start', async (context) => {
+    if (!hasRuntimeDb(context)) return;
     const players = await createUsers();
     const lobby = await lobbiesRepo.createLobbyWithMembers({
       mode: 'friendly',

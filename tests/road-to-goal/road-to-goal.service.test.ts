@@ -524,7 +524,7 @@ describe('roadToGoalService', () => {
     );
   });
 
-  it('caps unseen retries and performs one widened least-exposed fallback sort', async () => {
+  it('caps unseen retries and pages past 129 malformed fallback candidates', async () => {
     const malformedPages = Array.from({ length: 4 }, (_, index) => ({
       ...candidate(90 + index, 'easy'),
       payload: { options: [{ id: `malformed-${index}` }] },
@@ -532,9 +532,21 @@ describe('roadToGoalService', () => {
     for (const malformed of malformedPages) {
       (roadToGoalRepo.pickRunQuestionCandidates as Mock).mockResolvedValueOnce([malformed]);
     }
-    (roadToGoalRepo.pickRunQuestionCandidates as Mock).mockResolvedValueOnce(
-      candidates.map((item, index) => ({ ...item, selection_priority: index + 1 }))
-    );
+    const malformedFallback = Array.from({ length: 129 }, (_, index) => ({
+      ...candidate(200 + index, index % 3 === 0 ? 'easy' : index % 3 === 1 ? 'medium' : 'hard'),
+      payload: { options: [{ id: `fallback-malformed-${index}` }] },
+      selection_priority: index + 1,
+    }));
+    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
+      .mockResolvedValueOnce(malformedFallback.slice(0, 48))
+      .mockResolvedValueOnce(malformedFallback.slice(48, 96))
+      .mockResolvedValueOnce([
+        ...malformedFallback.slice(96),
+        ...candidates.map((item, index) => ({
+          ...item,
+          selection_priority: malformedFallback.length + index + 1,
+        })),
+      ]);
     (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
       ...commitment({ server_seed: data.serverSeed }),
       round_id: data.roundId,
@@ -558,7 +570,7 @@ describe('roadToGoalService', () => {
       autoCashoutZone: null,
     });
 
-    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenCalledTimes(5);
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenCalledTimes(7);
     expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
       4,
       dbMocks.tx,
@@ -568,12 +580,12 @@ describe('roadToGoalService', () => {
       64
     );
     expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
-      5,
+      7,
       dbMocks.tx,
       USER_ID,
       'least_exposed',
-      [],
-      128
+      malformedFallback.slice(0, 96).map((item) => item.id),
+      48
     );
   });
 

@@ -215,7 +215,9 @@ describe('Road to Goal question selection SQL', () => {
       const fallbackCandidates = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         USER_ID,
-        'least_exposed'
+        'least_exposed',
+        [],
+        64
       );
       const fallback = await roadToGoalRepo.filterCandidatesForCalibration(
         tx,

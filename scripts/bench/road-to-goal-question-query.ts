@@ -1,12 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { disconnectDb, sql, type TransactionSql } from '../../src/db/index.js';
-import { roadToGoalRepo } from '../../src/modules/road-to-goal/road-to-goal.repo.js';
 import { ensureRoadToGoalDailyCalibration } from '../../src/modules/road-to-goal/road-to-goal.calibration.js';
-import {
-  ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY,
-  ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
-} from '../../src/modules/road-to-goal/road-to-goal.constants.js';
-import type { RoadToGoalQuestionSelectionMode } from '../../src/modules/road-to-goal/road-to-goal.types.js';
+import { buildCalibratedQuestionSet } from '../../src/modules/road-to-goal/road-to-goal.service.js';
 
 const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -27,25 +22,15 @@ const userId = process.env.ROAD_TO_GOAL_BENCH_USER_ID ?? DEFAULT_USER_ID;
 
 async function selectOnce(
   tx: TransactionSql,
-  calibrationVersionId: string,
-  mode: RoadToGoalQuestionSelectionMode
+  calibrationVersionId: string
 ): Promise<number> {
-  const candidatesPerDifficulty = mode === 'least_exposed'
-    ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
-    : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
-  const selected = await roadToGoalRepo.pickRunQuestionCandidates(
+  const selected = await buildCalibratedQuestionSet(
     tx,
     userId,
-    mode,
-    [],
-    candidatesPerDifficulty
-  );
-  const candidates = await roadToGoalRepo.filterCandidatesForCalibration(
-    tx,
     calibrationVersionId,
-    selected
+    { logSelection: false }
   );
-  return candidates.length;
+  return selected.questions.length;
 }
 
 async function measure(select: () => Promise<number>) {
@@ -103,7 +88,7 @@ try {
       `;
 
       const emptyHistoryUnseen = await measure(() =>
-        selectOnce(tx, calibration.id, 'unseen')
+        selectOnce(tx, calibration.id)
       );
 
       await tx`
@@ -127,13 +112,7 @@ try {
           AND q.visibility = 'public'
       `;
 
-      const exhaustedHistory = await measure(async () => {
-        const unseenCount = await selectOnce(tx, calibration.id, 'unseen');
-        if (unseenCount > 0) {
-          throw new Error('Exhausted benchmark history unexpectedly returned unseen questions');
-        }
-        return selectOnce(tx, calibration.id, 'least_exposed');
-      });
+      const exhaustedHistory = await measure(() => selectOnce(tx, calibration.id));
 
       report = {
         samples,

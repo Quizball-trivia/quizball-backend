@@ -14,6 +14,8 @@ describe('Road to Goal migration contracts', () => {
     expect(runner).toContain('MIGRATION_DATABASE_URL');
     expect(runner).toContain("parsed.port = '5432'");
     expect(runner).toContain("SET statement_timeout = 0");
+    expect(runner).toContain('MIGRATION_ONLINE_DDL_LOCK_TIMEOUT_MS');
+    expect(runner).toContain(': 120_000');
     expect(runner).toContain('await nonTransactionalSql.unsafe(body)');
   });
 

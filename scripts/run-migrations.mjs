@@ -63,6 +63,14 @@ function nonTransactionalDatabaseUrl(databaseUrl) {
 }
 
 const NON_TRANSACTIONAL_DATABASE_URL = nonTransactionalDatabaseUrl(DATABASE_URL);
+const parsedOnlineDdlLockTimeoutMs = Number.parseInt(
+  process.env.MIGRATION_ONLINE_DDL_LOCK_TIMEOUT_MS ?? '',
+  10,
+);
+const ONLINE_DDL_LOCK_TIMEOUT_MS = Number.isInteger(parsedOnlineDdlLockTimeoutMs)
+  && parsedOnlineDdlLockTimeoutMs > 0
+  ? Math.min(parsedOnlineDdlLockTimeoutMs, 15 * 60_000)
+  : 120_000;
 
 // Parse the Supabase-style version: the leading run of digits in the filename
 // (e.g. "20260629120000_fix_draw_miscount.sql" -> "20260629120000").
@@ -225,7 +233,13 @@ async function main() {
           // session-pooler connection. A bounded lock wait fails the deploy
           // safely; the online build itself may run for as long as required.
           await nonTransactionalSql.unsafe('SET statement_timeout = 0');
-          await nonTransactionalSql.unsafe("SET lock_timeout = '10s'");
+          await nonTransactionalSql`
+            SELECT set_config(
+              'lock_timeout',
+              ${`${ONLINE_DDL_LOCK_TIMEOUT_MS}ms`},
+              false
+            )
+          `;
           await nonTransactionalSql.unsafe('SET idle_in_transaction_session_timeout = 0');
           for (const target of concurrentIndexTargets(body)) {
             const qualifiedName = `${target.schema}.${target.name}`;

@@ -781,13 +781,18 @@ async function buildCalibratedQuestionSet(
   const selectQuestionSet = async (mode: 'unseen' | 'least_exposed') => {
     const candidates: RoadToGoalQuestionCandidate[] = [];
     const excludedQuestionIds = new Set<string>();
-    for (let page = 0; page < 4; page += 1) {
+    const candidatesPerDifficulty = mode === 'least_exposed'
+      ? ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY * 4
+      : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
+    const maximumPages = mode === 'least_exposed' ? 1 : 4;
+    for (let page = 0; page < maximumPages; page += 1) {
       queryCount += 2;
       const selected = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         userId,
         mode,
-        [...excludedQuestionIds]
+        [...excludedQuestionIds],
+        candidatesPerDifficulty
       );
       if (selected.length === 0) break;
       selected.forEach((candidate) => excludedQuestionIds.add(candidate.id));
@@ -796,7 +801,7 @@ async function buildCalibratedQuestionSet(
         calibrationVersion.id,
         selected
       );
-      const priorityOffset = page * ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
+      const priorityOffset = page * candidatesPerDifficulty;
       candidates.push(...calibrated.map((candidate) => ({
         ...candidate,
         ...(mode === 'least_exposed' && candidate.selection_priority != null

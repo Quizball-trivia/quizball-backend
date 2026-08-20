@@ -390,7 +390,8 @@ export const roadToGoalRepo = {
     tx: TransactionSql,
     userId: string,
     mode: RoadToGoalQuestionSelectionMode = 'unseen',
-    excludedQuestionIds: readonly string[] = []
+    excludedQuestionIds: readonly string[] = [],
+    candidatesPerDifficulty = ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY
   ): Promise<RoadToGoalQuestionCandidate[]> {
     if (mode === 'least_exposed') {
       return exec(tx)<RoadToGoalQuestionCandidate[]>`
@@ -422,7 +423,7 @@ export const roadToGoalRepo = {
               AND q.difficulty = target.difficulty
               AND q.id <> ALL(${[...excludedQuestionIds]}::uuid[])
             ORDER BY selection_priority
-            LIMIT ${ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY}
+            LIMIT ${candidatesPerDifficulty}
           ) picked
         )
         SELECT q.id, q.difficulty, q.prompt, qp.payload, candidate.selection_priority
@@ -467,7 +468,7 @@ export const roadToGoalRepo = {
                     AND exposure.question_id = q.id
                 )
               ORDER BY q.id
-              LIMIT ${ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY}
+              LIMIT ${candidatesPerDifficulty}
             )
             UNION ALL
             (
@@ -491,10 +492,10 @@ export const roadToGoalRepo = {
                     AND exposure.question_id = q.id
                 )
               ORDER BY q.id
-              LIMIT ${ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY}
+              LIMIT ${candidatesPerDifficulty}
             )
           ) wrapped
-          LIMIT ${ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY}
+          LIMIT ${candidatesPerDifficulty}
         ) picked
       )
       SELECT q.id, q.difficulty, q.prompt, qp.payload

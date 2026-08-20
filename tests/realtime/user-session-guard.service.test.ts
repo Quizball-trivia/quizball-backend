@@ -448,25 +448,16 @@ describe('user-session-guard.service', () => {
       isOpen: true,
       hGet: vi.fn(async (key: string, field: string) => queueMaps.get(key)?.get(field) ?? null),
       exists: vi.fn(async () => 0),
-      eval: vi.fn(async (_script: string, input: { keys: string[]; arguments: string[] }) => {
-        queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+      eval: vi.fn(async (script: string, input: { keys: string[]; arguments: string[] }) => {
+        if (script.includes('local expectedSearchId')) {
+          const userMap = queueMaps.get(input.keys[1]);
+          if (userMap?.get(input.arguments[0]) === input.arguments[1]) {
+            userMap.delete(input.arguments[0]);
+          }
+        } else {
+          queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+        }
         return 1;
-      }),
-      multi: vi.fn(() => {
-        const operations: Array<() => void> = [];
-        const chain = {
-          zRem: () => chain,
-          del: () => chain,
-          hDel: (key: string, field: string) => {
-            operations.push(() => queueMaps.get(key)?.delete(field));
-            return chain;
-          },
-          exec: async () => {
-            operations.forEach((operation) => operation());
-            return [];
-          },
-        };
-        return chain;
       }),
     };
     getRedisClientMock.mockReturnValue(redis);
@@ -482,6 +473,57 @@ describe('user-session-guard.service', () => {
 
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE', queueSearchId: null } });
     expect([...queueMaps.values()].every((map) => !map.has('multi-user'))).toBe(true);
+  });
+
+  it('preserves a replacement queue mapping that races stale cleanup', async () => {
+    const queueMaps = new Map<string, Map<string, string>>([
+      ['ranked:mm:user', new Map([['multi-user', 'ranked-search']])],
+      ['auction:mm:user', new Map([['multi-user', 'auction-search-old']])],
+      ['football_grid:mm:user', new Map()],
+    ]);
+    let auctionReads = 0;
+    const redis = {
+      isOpen: true,
+      hGet: vi.fn(async (key: string, field: string) => {
+        const current = queueMaps.get(key)?.get(field) ?? null;
+        if (key === 'auction:mm:user') {
+          auctionReads += 1;
+          if (auctionReads === 2) {
+            queueMaps.get(key)?.set(field, 'auction-search-new');
+          }
+        }
+        return current;
+      }),
+      exists: vi.fn(async () => 0),
+      eval: vi.fn(async (script: string, input: { keys: string[]; arguments: string[] }) => {
+        if (script.includes('local expectedSearchId')) {
+          const userMap = queueMaps.get(input.keys[1]);
+          if (userMap?.get(input.arguments[0]) === input.arguments[1]) {
+            userMap.delete(input.arguments[0]);
+          }
+        } else {
+          queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+        }
+        return 1;
+      }),
+    };
+    getRedisClientMock.mockReturnValue(redis);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'multi-user', 'grid');
+
+    expect(queueMaps.get('auction:mm:user')?.get('multi-user')).toBe('auction-search-new');
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'QUEUE_UNAVAILABLE',
+      snapshot: { queueSearchId: 'auction-search-new' },
+    });
   });
 
   it('uses one session-context read for a clean lobby entry', async () => {

@@ -50,6 +50,22 @@ const SHARED_PAIRING_USER_KEY_PREFIX = 'session:pairing:user:';
 const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 const STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS = 90 * 1000;
 
+const SIMPLE_MM_CANCEL_SEARCH_SCRIPT = `
+local queueKey = KEYS[1]
+local userMapKey = KEYS[2]
+local searchKey = KEYS[3]
+local userId = ARGV[1]
+local expectedSearchId = ARGV[2]
+
+redis.call('ZREM', queueKey, expectedSearchId)
+redis.call('DEL', searchKey)
+if redis.call('HGET', userMapKey, userId) == expectedSearchId then
+  redis.call('HDEL', userMapKey, userId)
+  return 1
+end
+return 0
+`;
+
 function sharedPairingUserKey(userId: string): string {
   return `${SHARED_PAIRING_USER_KEY_PREFIX}${userId}`;
 }
@@ -625,11 +641,10 @@ async function cancelSimpleQueueSearch(
   const searchPrefix = kind === 'auction' ? AUCTION_SEARCH_KEY_PREFIX : GRID_SEARCH_KEY_PREFIX;
   const searchId = await redis.hGet(userMapKey, userId);
   if (!searchId) return;
-  await redis.multi()
-    .zRem(queueKey, searchId)
-    .hDel(userMapKey, userId)
-    .del(`${searchPrefix}${searchId}`)
-    .exec();
+  await redis.eval(SIMPLE_MM_CANCEL_SEARCH_SCRIPT, {
+    keys: [queueKey, userMapKey, `${searchPrefix}${searchId}`],
+    arguments: [userId, searchId],
+  });
 }
 
 async function cancelAllQueueSearches(userId: string): Promise<void> {

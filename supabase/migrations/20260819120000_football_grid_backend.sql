@@ -51,6 +51,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   updated_count integer;
+  has_remaining boolean;
 BEGIN
   LOOP
     WITH batch AS (
@@ -80,7 +81,23 @@ BEGIN
      WHERE m.id = batch.id;
     GET DIAGNOSTICS updated_count = ROW_COUNT;
     COMMIT;
-    EXIT WHEN updated_count = 0;
+    IF updated_count = 0 THEN
+      SELECT EXISTS (
+        SELECT 1
+          FROM public.matches
+         WHERE game_variant IS DISTINCT FROM CASE
+                 WHEN mode = 'auction' THEN 'auction'
+                 WHEN mode = 'ranked' THEN 'ranked_sim'
+                 WHEN state_payload->>'variant' = 'friendly_party_quiz' THEN 'friendly_party_quiz'
+                 WHEN state_payload->>'variant' = 'football_grid' THEN 'football_grid'
+                 ELSE 'friendly_possession'
+               END
+      ) INTO has_remaining;
+      EXIT WHEN NOT has_remaining;
+      -- A zero-row SKIP LOCKED batch can mean the remaining candidates are
+      -- temporarily locked, not that the backfill is complete.
+      PERFORM pg_sleep(0.25);
+    END IF;
   END LOOP;
 END;
 $$;
@@ -124,12 +141,6 @@ ALTER TABLE public.matches
       AND game_variant IN ('friendly_possession', 'friendly_party_quiz', 'football_grid')
     )
   ) NOT VALID;
-
-ALTER TABLE public.lobbies
-  VALIDATE CONSTRAINT lobbies_game_mode_check_v2;
-
-ALTER TABLE public.lobbies DROP CONSTRAINT IF EXISTS lobbies_game_mode_check;
-ALTER TABLE public.lobbies RENAME CONSTRAINT lobbies_game_mode_check_v2 TO lobbies_game_mode_check;
 
 -- ---------------------------------------------------------------------------
 -- Content releases and provenance

@@ -48,6 +48,9 @@ describe('Football Grid retention maintenance', () => {
       expect.stringContaining('DELETE FROM football_grid_command_inbox'),
       expect.stringContaining('DELETE FROM football_grid_reward_risk_observations'),
     ]);
+    expect(state.unsafe.mock.calls[2]?.[0]).toContain(
+      'COALESCE(i.completed_at, i.admitted_at)',
+    );
     expect(state.heartbeatStop).toHaveBeenCalledOnce();
     expect(state.releaseLock).toHaveBeenCalledWith('lock:football_grid:retention', 'retention-token');
   });

@@ -64,11 +64,11 @@ async function run(): Promise<void> {
     await drain(
       `WITH doomed AS (
          SELECT i.id FROM football_grid_command_inbox i
-          WHERE i.completed_at < now() - interval '90 days'
+          WHERE COALESCE(i.completed_at, i.admitted_at) < now() - interval '90 days'
             AND NOT EXISTS (
               SELECT 1 FROM football_grid_attempts a WHERE a.inbox_id = i.id
             )
-          ORDER BY i.completed_at, i.id
+          ORDER BY COALESCE(i.completed_at, i.admitted_at), i.id
           LIMIT $1
           FOR UPDATE OF i SKIP LOCKED
        )

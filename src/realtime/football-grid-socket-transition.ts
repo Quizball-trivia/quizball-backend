@@ -33,8 +33,15 @@ export async function transitionFootballGridSocket(
   io: QuizballServer,
   payload: FootballGridSocketTransitionPayload,
 ): Promise<void> {
-  if (await applyLocalFootballGridSocketTransition(io, payload)) return;
-  io.serverSideEmit('grid:socket_transition', payload);
+  try {
+    if (await applyLocalFootballGridSocketTransition(io, payload)) return;
+    io.serverSideEmit('grid:socket_transition', payload);
+  } catch (error) {
+    logger.warn(
+      { error, socketId: payload.socketId, matchId: payload.matchId },
+      'Football Grid socket transition dispatch failed',
+    );
+  }
 }
 
 export function handleFootballGridSocketTransition(

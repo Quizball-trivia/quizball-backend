@@ -48,6 +48,22 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+// Supabase's transaction pooler (port 6543) reapplies role-level timeouts for
+// each statement and cannot preserve SET commands for online DDL. Its session
+// pooler uses the same host and credentials on port 5432 and pins one backend
+// for the lifetime of this client. An explicit URL remains the escape hatch for
+// providers with a different topology.
+function nonTransactionalDatabaseUrl(databaseUrl) {
+  if (process.env.MIGRATION_DATABASE_URL) return process.env.MIGRATION_DATABASE_URL;
+  const parsed = new URL(databaseUrl);
+  if (parsed.hostname.endsWith('.pooler.supabase.com') && parsed.port === '6543') {
+    parsed.port = '5432';
+  }
+  return parsed.toString();
+}
+
+const NON_TRANSACTIONAL_DATABASE_URL = nonTransactionalDatabaseUrl(DATABASE_URL);
+
 // Parse the Supabase-style version: the leading run of digits in the filename
 // (e.g. "20260629120000_fix_draw_miscount.sql" -> "20260629120000").
 function versionOf(filename) {
@@ -124,6 +140,15 @@ async function main() {
       idle_in_transaction_session_timeout: 0,
     },
   });
+  const nonTransactionalSql = postgres(NON_TRANSACTIONAL_DATABASE_URL, {
+    max: 1,
+    idle_timeout: 0,
+    connect_timeout: 15,
+    prepare: false,
+    connection: {
+      application_name: 'quizball-online-migrations',
+    },
+  });
 
   try {
     const files = (await readdir(MIGRATIONS_DIR))
@@ -196,21 +221,27 @@ async function main() {
           // with autocommit, then record the version in a separate statement. These
           // files must be idempotent (IF NOT EXISTS) since they aren't atomic.
           console.log(`[migrate]   (non-transactional — running without BEGIN/COMMIT)`);
+          // These SETs persist because nonTransactionalSql uses a dedicated
+          // session-pooler connection. A bounded lock wait fails the deploy
+          // safely; the online build itself may run for as long as required.
+          await nonTransactionalSql.unsafe('SET statement_timeout = 0');
+          await nonTransactionalSql.unsafe("SET lock_timeout = '10s'");
+          await nonTransactionalSql.unsafe('SET idle_in_transaction_session_timeout = 0');
           for (const target of concurrentIndexTargets(body)) {
             const qualifiedName = `${target.schema}.${target.name}`;
-            const [existingIndex] = await migrationSql`
+            const [existingIndex] = await nonTransactionalSql`
               SELECT index_row.indisvalid, index_row.indisready
               FROM pg_catalog.pg_index index_row
               WHERE index_row.indexrelid = pg_catalog.to_regclass(${qualifiedName})
             `;
             if (existingIndex && (!existingIndex.indisvalid || !existingIndex.indisready)) {
               console.warn(`[migrate] Dropping interrupted concurrent index ${qualifiedName}`);
-              await migrationSql.unsafe(
+              await nonTransactionalSql.unsafe(
                 `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdentifier(target.schema)}.${quoteIdentifier(target.name)}`,
               );
             }
           }
-          await migrationSql.unsafe(body);
+          await nonTransactionalSql.unsafe(body);
           await migrationSql`
             INSERT INTO supabase_migrations.schema_migrations (version, name)
             VALUES (${version}, ${name})
@@ -235,6 +266,7 @@ async function main() {
     await Promise.allSettled([
       migrationSql.end({ timeout: 5 }),
       lockSql.end({ timeout: 5 }),
+      nonTransactionalSql.end({ timeout: 5 }),
     ]);
   }
 }

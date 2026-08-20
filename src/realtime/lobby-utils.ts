@@ -6,10 +6,19 @@ import { acquireLock, releaseLock } from './locks.js';
 import { logger } from '../core/logger.js';
 import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
+import {
+  FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS,
+  FRIENDLY_LOBBY_MAX_MEMBERS,
+  FOOTBALL_GRID_LOBBY_MAX_MEMBERS,
+  lobbyCapacityForGameMode,
+  playableMembersForGameMode,
+} from '../modules/lobbies/lobby-capacity.js';
 
-export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
-/** Auction seats exactly 3 players (humans + bot backfill). */
-export const FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS = 3;
+export {
+  FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS,
+  FRIENDLY_LOBBY_MAX_MEMBERS,
+  FOOTBALL_GRID_LOBBY_MAX_MEMBERS,
+};
 const LOBBY_LOCK_TTL_MS = 3000;
 
 const LOBBY_NAME_ADJECTIVES = [
@@ -58,6 +67,7 @@ export function normalizeFriendlyGameMode(
 ): LobbyGameMode {
   if (
     gameMode === 'friendly_party_quiz'
+    || gameMode === 'football_grid'
     || gameMode === 'auction'
     || gameMode === 'ranked_sim'
   ) {
@@ -74,9 +84,7 @@ export function normalizeFriendlyGameMode(
  * hard-capped at its 3 seats.
  */
 export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
-  return gameMode === 'auction'
-    ? FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS
-    : FRIENDLY_LOBBY_MAX_MEMBERS;
+  return lobbyCapacityForGameMode(gameMode);
 }
 
 /**
@@ -85,9 +93,7 @@ export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
  * `maxMembersForFriendlyGameMode` it does not inherit the party ceiling.
  */
 export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
-  if (gameMode === 'auction') return FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS;
-  if (gameMode === 'friendly_possession' || gameMode === 'ranked_sim') return 2;
-  return FRIENDLY_LOBBY_MAX_MEMBERS;
+  return playableMembersForGameMode(gameMode);
 }
 
 async function syncFriendlyLobbyModeForMemberCountInternal(
@@ -103,7 +109,9 @@ async function syncFriendlyLobbyModeForMemberCountInternal(
   const currentMode = normalizeFriendlyGameMode(lobby.game_mode);
   // Auction is an explicitly chosen 3-seat mode — a third member is expected
   // there and must NOT auto-promote the lobby to party quiz.
-  const nextMode = memberCount > 2 && currentMode !== 'auction'
+  const nextMode = memberCount > 2
+    && currentMode !== 'auction'
+    && currentMode !== 'football_grid'
     ? 'friendly_party_quiz'
     : currentMode;
 

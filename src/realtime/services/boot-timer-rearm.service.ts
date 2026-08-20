@@ -78,7 +78,16 @@ export async function rearmActiveMatchTimersOnBoot(io: QuizballServer): Promise<
         summary.skippedPaused += 1;
         continue;
       }
-      const variant = resolveMatchVariant(match.state_payload, match.mode);
+      if (match.game_variant === 'auction') {
+        // Auction has its own boot timer re-arm service.
+        summary.rearmed += 1;
+        continue;
+      }
+      const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+      if (variant === 'football_grid') {
+        summary.rearmed += 1;
+        continue;
+      }
       const ensured = variant === 'friendly_party_quiz'
         ? await ensurePartyQuizActiveTimer(io, match.id)
         : await ensurePossessionActiveTimers(io, match.id);

@@ -249,7 +249,7 @@ export async function applyPartyQuizDropouts(params: {
   pauseStartedAtMs?: number | null;
 }): Promise<{ completed: boolean; continued: boolean; activeCount: number }> {
   const { io, match, players: initialPlayers, droppedUserIds, reason } = params;
-  if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+  if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
     return { completed: false, continued: false, activeCount: initialPlayers.length };
   }
   logger.info(
@@ -286,7 +286,7 @@ export async function applyPartyQuizDropouts(params: {
       );
       return { completed: false, continued: false, activeCount: 0 };
     }
-    if (resolveMatchVariant(lockedMatch.state_payload, lockedMatch.mode) !== 'friendly_party_quiz') {
+    if (resolveMatchVariant(lockedMatch.state_payload, lockedMatch.mode, lockedMatch.game_variant) !== 'friendly_party_quiz') {
       return { completed: false, continued: false, activeCount: initialPlayers.length };
     }
 

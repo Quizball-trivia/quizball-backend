@@ -391,7 +391,14 @@ export const lobbiesRepo = {
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
       GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
-      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 6)
+      HAVING (
+        ${params.joinableOnly}::boolean = false
+        OR COUNT(lm.user_id) < CASE
+          WHEN l.game_mode = 'football_grid' THEN 2
+          WHEN l.game_mode = 'auction' THEN 3
+          ELSE 6
+        END
+      )
       ORDER BY l.created_at DESC
       LIMIT ${params.limit}
     `;

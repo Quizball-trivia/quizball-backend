@@ -181,7 +181,7 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
   // this, an orphan/stale abandon — now also reachable when the AI-forfeit guard
   // routes an AI-only-present match here and progress is undecidable — silently
   // costs the human a ticket. Best-effort; party-quiz uses its own flow.
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
     // Best-effort over the WHOLE refund computation: the match is already
     // abandoned above, so a throw in usersRepo.getByIds must not skip the Redis

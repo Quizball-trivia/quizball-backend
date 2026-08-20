@@ -11,6 +11,7 @@ import {
   userRecentCategoriesRepo,
 } from '../user-recent-categories/user-recent-categories.repo.js';
 import { buildRecentExclusionSet, type RecentCategoryEntry } from './recent-category-filter.js';
+import { lobbyCapacityForGameMode } from './lobby-capacity.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
@@ -319,7 +320,7 @@ export const lobbiesService = {
       isPublic: row.is_public,
       createdAt: row.created_at,
       memberCount: row.member_count,
-      maxMembers: 6,
+      maxMembers: lobbyCapacityForGameMode(row.game_mode ?? 'friendly_possession'),
       host: {
         id: row.host_user_id,
         username: row.host_nickname ?? 'Player',

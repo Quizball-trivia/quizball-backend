@@ -530,12 +530,28 @@ export function createInitialPartyQuizState(
 
 export function resolveMatchVariant(
   statePayload: unknown,
-  mode: 'friendly' | 'ranked'
+  mode: 'friendly' | 'ranked',
+  durableVariant?: string | null,
 ): MatchVariant {
+  if (
+    durableVariant === 'friendly_possession'
+    || durableVariant === 'friendly_party_quiz'
+    || durableVariant === 'football_grid'
+    || durableVariant === 'ranked_sim'
+  ) {
+    return durableVariant as MatchVariant;
+  }
+  // Once the durable discriminator is present it is authoritative. Silently
+  // falling back here would let a future/invalid variant enter the possession
+  // engine, which can corrupt both its state payload and reward path.
+  if (durableVariant != null) {
+    throw new Error(`Unsupported durable match variant: ${durableVariant}`);
+  }
   const candidate = statePayload as Partial<{ variant: MatchVariant }> | null;
   if (
     candidate?.variant === 'friendly_possession' ||
     candidate?.variant === 'friendly_party_quiz' ||
+    candidate?.variant === 'football_grid' ||
     candidate?.variant === 'ranked_sim'
   ) {
     return candidate.variant;

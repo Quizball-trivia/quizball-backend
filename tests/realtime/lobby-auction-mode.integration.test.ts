@@ -216,6 +216,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
   releaseLock: vi.fn(async (key: string, token: string) => {
     if (lockStore.get(key) === token) lockStore.delete(key);
   }),
+  startLockHeartbeat: vi.fn(() => ({ stop: vi.fn() })),
 }));
 
 vi.mock('../../src/realtime/services/auction-realtime.service.js', () => ({

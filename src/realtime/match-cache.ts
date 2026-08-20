@@ -608,7 +608,14 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       return null;
     }
     const players = await matchPlayersRepo.listMatchPlayers(matchId);
-    const state = resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz'
+    const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+    if (variant === 'football_grid') {
+      // Grid owns its own authoritative state and command inbox. Building a
+      // possession cache for it would allow legacy socket events to mutate the
+      // wrong engine.
+      return null;
+    }
+    const state = variant === 'friendly_party_quiz'
       ? sanitizePartyQuizState(match.state_payload, match.total_questions)
       : sanitizePossessionState(match.state_payload, match.mode);
 

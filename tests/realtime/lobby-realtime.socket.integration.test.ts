@@ -244,6 +244,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
       lockStore.delete(key);
     }
   }),
+  startLockHeartbeat: vi.fn(() => ({ stop: vi.fn() })),
 }));
 
 vi.mock('../../src/realtime/services/warmup-realtime.service.js', () => ({

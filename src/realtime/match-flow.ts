@@ -31,7 +31,10 @@ export async function sendMatchQuestion(
     return null;
   }
 
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'football_grid') {
+    throw new Error('Football Grid cannot dispatch through the quiz question engine');
+  }
   if (variant === 'friendly_party_quiz') {
     return sendPartyQuizQuestion(io, matchId, qIndex);
   }
@@ -51,7 +54,10 @@ export async function resolveRound(
     return;
   }
 
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'football_grid') {
+    throw new Error('Football Grid cannot resolve through the quiz question engine');
+  }
   if (variant === 'friendly_party_quiz') {
     await resolvePartyQuizRound(io, matchId, qIndex, fromTimeout);
     return;

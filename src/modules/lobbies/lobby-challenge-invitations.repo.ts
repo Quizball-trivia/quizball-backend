@@ -24,6 +24,7 @@ export interface PendingLobbyChallengeInvitationRow extends LobbyChallengeInvita
   from_avatar_url: string | null;
   from_avatar_customization: Json | null;
   lobby_invite_code: string | null;
+  lobby_game_mode: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid';
 }
 
 /** A pending challenge aimed at a bot, for the delayed decline worker. */
@@ -38,6 +39,15 @@ export interface PendingBotChallengeInvitationRow {
 }
 
 export const lobbyChallengeInvitationsRepo = {
+  async existsForLobby(lobbyId: string): Promise<boolean> {
+    const rows = await sql<Array<{ found: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1 FROM lobby_challenge_invitations
+         WHERE lobby_id = ${lobbyId} AND status = 'accepted'
+      ) AS found
+    `;
+    return rows[0]?.found === true;
+  },
   async create(data: {
     lobbyId: string;
     fromUserId: string;
@@ -93,6 +103,7 @@ export const lobbyChallengeInvitationsRepo = {
         u.avatar_url AS from_avatar_url,
         u.avatar_customization AS from_avatar_customization,
         l.invite_code AS lobby_invite_code
+        , l.game_mode AS lobby_game_mode
       FROM lobby_challenge_invitations i
       JOIN users u ON u.id = i.from_user_id
       JOIN lobbies l ON l.id = i.lobby_id

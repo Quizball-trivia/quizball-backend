@@ -17,6 +17,7 @@ export interface SocketAuthData {
   currentCountry?: string | null;
   lobbyId?: string;
   matchId?: string;
+  gridMatchId?: string;
   connectedAt?: number;
 }
 

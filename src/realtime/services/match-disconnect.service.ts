@@ -252,7 +252,7 @@ export async function abandonPossessionTerminalMatch(
   // the same courtesy the single-forfeiter early-forfeit cancel already gives
   // (match-forfeit.service.ts). Without this a round-1 double-drop silently
   // costs both players a ticket. Best-effort; party-quiz uses its own flow.
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
     const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
     // Only refund players whose row resolved AND is explicitly human. An
@@ -524,7 +524,7 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
 }
 
 async function buildRejoinAvailablePayload(
-  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
+  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown; game_variant?: string | null },
   userId: string,
   graceMs: number,
   remainingReconnects: number
@@ -536,7 +536,7 @@ async function buildRejoinAvailablePayload(
   return {
     matchId: match.id,
     mode: match.mode,
-    variant: resolveMatchVariant(match.state_payload, match.mode),
+    variant: resolveMatchVariant(match.state_payload, match.mode, match.game_variant),
     opponent,
     participants: players.map((player) => {
       const user = usersById.get(player.user_id);
@@ -622,7 +622,11 @@ export async function handleMatchLeave(
         });
         return;
       }
-      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+      if (variant === 'football_grid') {
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid leave action' });
+        return;
+      }
       if (variant !== 'friendly_party_quiz') {
         const disconnectedOpponentId = await findOpponentInDisconnectGrace(
           activeMatch.id,
@@ -716,7 +720,11 @@ export async function handleMatchRejoin(
         });
         return;
       }
-      const variant = resolveMatchVariant(match.state_payload, match.mode);
+      const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+      if (variant === 'football_grid') {
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use Football Grid resync' });
+        return;
+      }
       if (variant === 'friendly_party_quiz') {
         const partyState = sanitizePartyQuizState(match.state_payload, match.total_questions);
         if (isPartyQuizDropped(partyState, userId)) {
@@ -908,7 +916,13 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
   if (!match || match.status !== 'active') return;
   const matchId = match.id;
 
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (match.game_variant === 'auction') return;
+
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'football_grid') {
+    logger.warn({ userId, matchId, socketId: socket.id }, 'Legacy disconnect path ignored for Football Grid');
+    return;
+  }
   if (!boundMatchId) {
     // Fallback is scoped to 1v1 possession variants: their pause flow skips
     // when the user still has a stable live match socket, so a menu/re-auth
@@ -973,6 +987,7 @@ export async function resumePausedMatch(
 ): Promise<void> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return;
+  if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) === 'football_grid') return;
 
   const redis = getRedisClient();
   if (!redis) return;
@@ -1071,7 +1086,7 @@ export async function resumePausedMatch(
   const countdownKey = matchResumeCountdownKey(matchId);
   const rawEndsAt = await redis.get(countdownKey);
   const existingEndsAtMs = Number(rawEndsAt);
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   const activeRoster = variant === 'friendly_party_quiz'
     ? getActivePartyPlayers(roster, sanitizePartyQuizState(match.state_payload, match.total_questions).droppedUserIds)
     : roster;
@@ -1242,7 +1257,8 @@ export async function completeResumeCountdown(
     await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), matchGraceExtendedKey(matchId), countdownKey]);
     await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
-    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+    if (variant === 'football_grid') return;
     if (variant !== 'friendly_party_quiz'
       && (activeMatch.state_payload as PossessionStatePayload | null | undefined)?.phase === 'HALFTIME') {
       const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
@@ -1312,7 +1328,14 @@ export async function pauseMatchForDisconnectedPlayer(
       finalized: false,
     };
   }
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'football_grid') {
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: 0,
+      finalized: false,
+    };
+  }
   appMetrics.matchPauses.add(1, { match_mode: match.mode, variant });
 
   const redis = getRedisClient();
@@ -1888,7 +1911,8 @@ export async function resolveExpiredGraceWindow(
     const activeMatch = await matchesRepo.getMatch(matchId);
     if (!activeMatch || activeMatch.status !== 'active') return;
 
-    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+    if (variant === 'football_grid') return;
 
     const roster = await matchPlayersRepo.listMatchPlayers(matchId);
     const cacheSnapshot = variant !== 'friendly_party_quiz' ? await getMatchCache(matchId) : null;

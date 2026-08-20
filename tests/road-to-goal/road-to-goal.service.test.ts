@@ -381,6 +381,16 @@ describe('roadToGoalService', () => {
         eventType: 'road_to_goal_stake',
       }
     );
+    expect(
+      (roadToGoalRepo.insertLedgerKey as Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      (storeRepo.adjustWalletMinorInTx as Mock).mock.invocationCallOrder[0]
+    );
+    expect(
+      (roadToGoalRepo.insertLedgerKey as Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      (storeRepo.insertTransactionLogInTx as Mock).mock.invocationCallOrder[0]
+    );
     expect(analyticsMocks.trackRoadToGoalRunStarted).toHaveBeenCalledWith(
       expect.objectContaining({ id: ROUND_ID })
     );

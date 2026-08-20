@@ -114,13 +114,10 @@ function quoteIdentifier(value) {
 const MIGRATION_LOCK_KEY = 472636120260629n;
 
 async function main() {
-  // DATABASE_URL points at Supavisor's transaction pooler in Railway. A
-  // session-level advisory lock is unsafe there: the lock and unlock queries
-  // may run on different Postgres backends, and an interrupted deploy can leave
-  // the lock attached to a pooled backend indefinitely. Keep serialization in
-  // a dedicated transaction instead. Transaction pooling pins that transaction
-  // to one backend, and Postgres releases pg_advisory_xact_lock automatically
-  // on commit, rollback, disconnect, or process death.
+  // Normal transactional migrations may use Supavisor's transaction pooler.
+  // Online DDL and its session advisory lock use the session-pooler URL so SET,
+  // lock, and unlock calls stay on one backend. A session lock creates no
+  // long-lived transaction snapshot for CREATE INDEX CONCURRENTLY to await.
   const migrationSql = postgres(DATABASE_URL, {
     max: 1,
     idle_timeout: 5,
@@ -136,7 +133,7 @@ async function main() {
       idle_in_transaction_session_timeout: 0,
     },
   });
-  const lockSql = postgres(DATABASE_URL, {
+  const lockSql = postgres(NON_TRANSACTIONAL_DATABASE_URL, {
     max: 1,
     idle_timeout: 0,
     connect_timeout: 15,
@@ -182,13 +179,10 @@ async function main() {
       seen.set(v, f);
     }
 
-    // The coordinator transaction owns only the advisory lock. Migrations run
-    // through a separate connection so non-transactional SQL such as CREATE
-    // INDEX CONCURRENTLY remains valid while concurrent deploys still serialize.
-    await lockSql.begin(async (lockTx) => {
-      await lockTx.unsafe('SET LOCAL statement_timeout = 0');
-      await lockTx.unsafe('SET LOCAL idle_in_transaction_session_timeout = 0');
-      await lockTx`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`;
+    let migrationLockAcquired = false;
+    try {
+      await lockSql`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
+      migrationLockAcquired = true;
 
       // The tracking table is created by Supabase; ensure it exists so a fresh
       // DB (or one never touched by the CLI) still works. This must happen only
@@ -275,7 +269,16 @@ async function main() {
       }
 
       console.log('[migrate] All pending migrations applied.');
-    });
+    } finally {
+      if (migrationLockAcquired) {
+        const [unlockResult] = await lockSql`
+          SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY}) AS unlocked
+        `;
+        if (!unlockResult?.unlocked) {
+          console.warn('[migrate] Advisory migration lock was not held at release time.');
+        }
+      }
+    }
   } finally {
     await Promise.allSettled([
       migrationSql.end({ timeout: 5 }),

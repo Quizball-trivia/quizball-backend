@@ -16,6 +16,9 @@ describe('Road to Goal migration contracts', () => {
     expect(runner).toContain("SET statement_timeout = 0");
     expect(runner).toContain('MIGRATION_ONLINE_DDL_LOCK_TIMEOUT_MS');
     expect(runner).toContain(': 120_000');
+    expect(runner).toContain('SELECT pg_advisory_lock');
+    expect(runner).toContain('SELECT pg_advisory_unlock');
+    expect(runner).not.toContain('pg_advisory_xact_lock');
     expect(runner).toContain('await nonTransactionalSql.unsafe(body)');
   });
 

@@ -21,6 +21,7 @@ vi.mock('../../src/modules/road-to-goal/road-to-goal.analytics.js', () => analyt
 
 vi.mock('../../src/modules/road-to-goal/road-to-goal.repo.js', () => ({
   roadToGoalRepo: {
+    insertLedgerKey: vi.fn(),
     getRoundByNonceForUpdate: vi.fn(),
     getActiveRoundForUpdate: vi.fn(),
     getRoundForUserForUpdate: vi.fn(),
@@ -312,6 +313,7 @@ describe('roadToGoalService', () => {
     });
     (storeRepo.insertTransactionLogInTx as Mock).mockResolvedValue({ id: 'ledger-1' });
     (roadToGoalRepo.insertEvent as Mock).mockResolvedValue(undefined);
+    (roadToGoalRepo.insertLedgerKey as Mock).mockResolvedValue(undefined);
     (roadToGoalRepo.recordQuestionExposures as Mock).mockResolvedValue(undefined);
     (roadToGoalRepo.insertRound as Mock).mockImplementation((_tx, data) => {
       lockedRound = round({
@@ -369,6 +371,25 @@ describe('roadToGoalService', () => {
     expect(storeRepo.insertTransactionLogInTx).toHaveBeenCalledWith(
       dbMocks.tx,
       expect.objectContaining({ coinsDeltaMinor: -2_500 })
+    );
+    expect(roadToGoalRepo.insertLedgerKey).toHaveBeenCalledWith(
+      dbMocks.tx,
+      {
+        idempotencyKey: `road-to-goal:${ROUND_ID}:stake`,
+        roundId: ROUND_ID,
+        userId: USER_ID,
+        eventType: 'road_to_goal_stake',
+      }
+    );
+    expect(
+      (roadToGoalRepo.insertLedgerKey as Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      (storeRepo.adjustWalletMinorInTx as Mock).mock.invocationCallOrder[0]
+    );
+    expect(
+      (roadToGoalRepo.insertLedgerKey as Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      (storeRepo.insertTransactionLogInTx as Mock).mock.invocationCallOrder[0]
     );
     expect(analyticsMocks.trackRoadToGoalRunStarted).toHaveBeenCalledWith(
       expect.objectContaining({ id: ROUND_ID })
@@ -567,6 +588,15 @@ describe('roadToGoalService', () => {
         coinsDeltaMinor: 2_575,
         idempotencyKey: `road-to-goal:${ROUND_ID}:payout`,
       })
+    );
+    expect(roadToGoalRepo.insertLedgerKey).toHaveBeenCalledWith(
+      dbMocks.tx,
+      {
+        idempotencyKey: `road-to-goal:${ROUND_ID}:payout`,
+        roundId: ROUND_ID,
+        userId: USER_ID,
+        eventType: 'road_to_goal_payout',
+      }
     );
   });
 

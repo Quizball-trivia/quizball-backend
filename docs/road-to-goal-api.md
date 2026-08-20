@@ -35,6 +35,12 @@ Question timeouts count as wrong answers and still run the committed survival
 roll. If a player leaves at a decision point, the five-minute decision deadline
 auto-cashes the already-earned return. Heartbeats do not extend either deadline.
 
+Stake and payout writes are atomic with the wallet mutation and immutable store
+ledger entry. A dedicated Road to Goal key table enforces one stake and at most
+one payout per round without scanning or locking the historical global ledger.
+Stable request nonces make ambiguous client retries return the authoritative
+round instead of charging twice.
+
 Before an answer, the question includes its expected accuracy and exact
 correct/wrong survival odds. The client never receives the remaining question set or any correct option
 before answering. The answer response includes only the current

@@ -96,6 +96,24 @@ const validRoadToGoalMcqShape = sql`
 `;
 
 export const roadToGoalRepo = {
+  async insertLedgerKey(
+    tx: TransactionSql,
+    data: {
+      idempotencyKey: string;
+      roundId: string;
+      userId: string;
+      eventType: 'road_to_goal_stake' | 'road_to_goal_payout';
+    }
+  ): Promise<void> {
+    await exec(tx)`
+      INSERT INTO road_to_goal_ledger_keys (
+        idempotency_key, round_id, user_id, event_type
+      ) VALUES (
+        ${data.idempotencyKey}, ${data.roundId}, ${data.userId}, ${data.eventType}
+      )
+    `;
+  },
+
   async getRoundByNonceForUpdate(
     tx: TransactionSql,
     userId: string,

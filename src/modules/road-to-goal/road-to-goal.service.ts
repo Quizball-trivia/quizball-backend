@@ -456,6 +456,12 @@ async function insertPayout(
   reason: string
 ): Promise<void> {
   try {
+    await roadToGoalRepo.insertLedgerKey(tx, {
+      idempotencyKey: roadToGoalPayoutIdempotencyKey(row.id),
+      roundId: row.id,
+      userId: row.user_id,
+      eventType: ROAD_TO_GOAL_PAYOUT_EVENT,
+    });
     await storeRepo.insertTransactionLogInTx(tx, {
       eventType: ROAD_TO_GOAL_PAYOUT_EVENT,
       outcome: 'success',
@@ -999,14 +1005,6 @@ export const roadToGoalService = {
 
         const questions = readCommittedQuestionSet(commitment);
         const calibrationVersionId = commitment.calibration_version_id;
-        const wallet = await storeRepo.adjustWalletMinorInTx(
-          tx,
-          userId,
-          -commitment.stake_coins * 100,
-          0
-        );
-        if (!wallet) throw new BadRequestError('Not enough coins');
-
         const round = await roadToGoalRepo.insertRound(tx, {
           roundId: commitment.round_id,
           userId,
@@ -1022,11 +1020,25 @@ export const roadToGoalService = {
           rulesManifestHash: commitment.rules_manifest_hash,
           questionSetHash: commitment.question_set_hash,
         });
+        await roadToGoalRepo.insertLedgerKey(tx, {
+          idempotencyKey: roadToGoalStakeIdempotencyKey(round.id),
+          roundId: round.id,
+          userId,
+          eventType: ROAD_TO_GOAL_STAKE_EVENT,
+        });
         const consumed = await roadToGoalRepo.consumeCommitment(tx, commitment.round_id);
         if (!consumed) throw new ConflictError('Commitment expired before round creation');
         const firstQuestion = questions[0];
         if (!firstQuestion) throw new AppError('Road to Goal question snapshot is incomplete', 500);
         await roadToGoalRepo.recordQuestionExposures(tx, userId, round.id, [firstQuestion]);
+
+        const wallet = await storeRepo.adjustWalletMinorInTx(
+          tx,
+          userId,
+          -commitment.stake_coins * 100,
+          0
+        );
+        if (!wallet) throw new BadRequestError('Not enough coins');
 
         await storeRepo.insertTransactionLogInTx(tx, {
           eventType: ROAD_TO_GOAL_STAKE_EVENT,

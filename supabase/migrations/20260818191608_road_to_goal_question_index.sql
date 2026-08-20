@@ -1,9 +1,4 @@
--- Difficulty-stratified random UUID pivot scans use this partial index. The
--- exact eligibility predicate is shared with ranked/free-kicks question pools.
--- CONCURRENTLY requires this migration to contain one statement.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_questions_road_to_goal_eligible
-  ON public.questions (difficulty, id)
-  WHERE status = 'published'
-    AND type = 'mcq_single'
-    AND ranked_eligible = true
-    AND visibility = 'public';
+-- The UUID-pivot selector already uses the questions primary key and bounded
+-- result windows. Remove any interrupted optional accelerator instead of
+-- blocking the launch on a full-table online build through the pooler.
+DROP INDEX CONCURRENTLY IF EXISTS public.idx_questions_road_to_goal_eligible;

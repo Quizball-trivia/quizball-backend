@@ -12,12 +12,13 @@ import {
   ROAD_TO_GOAL_COMMITMENT_VERSION,
   ROAD_TO_GOAL_DECISION_MS,
   ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
-  ROAD_TO_GOAL_MAX_CANDIDATE_PAGES,
+  ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_NETWORK_GRACE_MS,
   ROAD_TO_GOAL_PAYOUT_EVENT,
   ROAD_TO_GOAL_QUESTION_MS,
   ROAD_TO_GOAL_SERVER_WINDOW_MS,
   ROAD_TO_GOAL_STAKE_EVENT,
+  ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_ZONES,
   isRoadToGoalStake,
   roadToGoalPayoutIdempotencyKey,
@@ -787,7 +788,10 @@ export async function buildCalibratedQuestionSet(
     const candidatesPerDifficulty = mode === 'least_exposed'
       ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
       : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
-    for (let page = 0; page < ROAD_TO_GOAL_MAX_CANDIDATE_PAGES; page += 1) {
+    const maximumPages = mode === 'least_exposed'
+      ? ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES
+      : ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES;
+    for (let page = 0; page < maximumPages; page += 1) {
       queryCount += 2;
       const selected = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,

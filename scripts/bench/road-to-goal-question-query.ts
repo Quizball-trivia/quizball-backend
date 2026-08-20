@@ -45,7 +45,7 @@ async function measure(select: () => Promise<number>) {
 
   latencies.sort((a, b) => a - b);
   return {
-    candidates_per_query: minimumCandidateCount,
+    questions_per_run: minimumCandidateCount,
     latency_ms: {
       min: Number(latencies[0].toFixed(2)),
       p50: Number(percentile(latencies, 0.5).toFixed(2)),
@@ -132,8 +132,8 @@ try {
     report.empty_history_unseen,
     report.exhausted_history_unseen_then_fallback,
   ];
-  if (paths.some((path) => path.candidates_per_query < 11)) {
-    console.error('Question query returned fewer than 11 candidates.');
+  if (paths.some((path) => path.questions_per_run < 11)) {
+    console.error('Question selection returned fewer than 11 playable questions.');
     process.exitCode = 1;
   } else if (paths.some((path) => path.latency_ms.p95 > p95BudgetMs)) {
     console.error(`A question-selection path exceeded the ${p95BudgetMs}ms p95 budget.`);

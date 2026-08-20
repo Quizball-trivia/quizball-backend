@@ -68,6 +68,22 @@ function isNonTransactional(body) {
   );
 }
 
+function concurrentIndexTargets(body) {
+  const targets = [];
+  const pattern = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(\w+)\.)?(\w+)/gi;
+  for (const match of body.matchAll(pattern)) {
+    targets.push({ schema: match[1] ?? 'public', name: match[2] });
+  }
+  return targets;
+}
+
+function quoteIdentifier(value) {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(value)) {
+    throw new Error(`Unsafe SQL identifier in concurrent-index migration: ${value}`);
+  }
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
 // Advisory-lock key (arbitrary 64-bit constant) so only one deploy applies
 // migrations at a time — concurrent deploys would otherwise read the same
 // applied set and try to run the same DDL.
@@ -180,6 +196,20 @@ async function main() {
           // with autocommit, then record the version in a separate statement. These
           // files must be idempotent (IF NOT EXISTS) since they aren't atomic.
           console.log(`[migrate]   (non-transactional — running without BEGIN/COMMIT)`);
+          for (const target of concurrentIndexTargets(body)) {
+            const qualifiedName = `${target.schema}.${target.name}`;
+            const [existingIndex] = await migrationSql`
+              SELECT index_row.indisvalid, index_row.indisready
+              FROM pg_catalog.pg_index index_row
+              WHERE index_row.indexrelid = pg_catalog.to_regclass(${qualifiedName})
+            `;
+            if (existingIndex && (!existingIndex.indisvalid || !existingIndex.indisready)) {
+              console.warn(`[migrate] Dropping interrupted concurrent index ${qualifiedName}`);
+              await migrationSql.unsafe(
+                `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdentifier(target.schema)}.${quoteIdentifier(target.name)}`,
+              );
+            }
+          }
           await migrationSql.unsafe(body);
           await migrationSql`
             INSERT INTO supabase_migrations.schema_migrations (version, name)

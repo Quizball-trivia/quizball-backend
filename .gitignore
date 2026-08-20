@@ -28,6 +28,7 @@ scripts/*
 !scripts/generate-image-question-preview.ts
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
+!scripts/export-openapi.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts

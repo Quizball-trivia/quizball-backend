@@ -899,7 +899,7 @@
         "type": "object",
         "properties": {
           "coins": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0
           },
           "tickets": {
@@ -1034,7 +1034,7 @@
             "type": "object",
             "properties": {
               "coins": {
-                "type": "integer",
+                "type": "number",
                 "minimum": 0
               },
               "tickets": {
@@ -1090,7 +1090,7 @@
             "type": "object",
             "properties": {
               "coins": {
-                "type": "integer",
+                "type": "number",
                 "minimum": 0
               },
               "tickets": {
@@ -1187,6 +1187,8 @@
               "admin_account_unban",
               "free_kicks_stake",
               "free_kicks_payout",
+              "road_to_goal_stake",
+              "road_to_goal_payout",
               "guess_the_goal_reward"
             ]
           },
@@ -1227,6 +1229,14 @@
           },
           "coinsDelta": {
             "type": "integer"
+          },
+          "coinsDeltaMinor": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "coinsDeltaExact": {
+            "type": "number"
           },
           "ticketsDelta": {
             "type": "integer"
@@ -1281,6 +1291,8 @@
           "stripeCheckoutId",
           "stripePaymentIntent",
           "coinsDelta",
+          "coinsDeltaMinor",
+          "coinsDeltaExact",
           "ticketsDelta",
           "inventoryDelta",
           "reason",
@@ -1323,6 +1335,8 @@
                     "admin_account_unban",
                     "free_kicks_stake",
                     "free_kicks_payout",
+                    "road_to_goal_stake",
+                    "road_to_goal_payout",
                     "guess_the_goal_reward"
                   ]
                 },
@@ -1363,6 +1377,14 @@
                 },
                 "coinsDelta": {
                   "type": "integer"
+                },
+                "coinsDeltaMinor": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "coinsDeltaExact": {
+                  "type": "number"
                 },
                 "ticketsDelta": {
                   "type": "integer"
@@ -1417,6 +1439,8 @@
                 "stripeCheckoutId",
                 "stripePaymentIntent",
                 "coinsDelta",
+                "coinsDeltaMinor",
+                "coinsDeltaExact",
                 "ticketsDelta",
                 "inventoryDelta",
                 "reason",
@@ -1467,7 +1491,7 @@
             "type": "object",
             "properties": {
               "coins": {
-                "type": "integer",
+                "type": "number",
                 "minimum": 0
               },
               "tickets": {
@@ -1512,6 +1536,1287 @@
         "required": [
           "voided",
           "wallet"
+        ]
+      },
+      "RoadToGoalStateResponse": {
+        "type": "object",
+        "properties": {
+          "round_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "cashed",
+              "lost",
+              "completed"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "question",
+              "decision",
+              "settled"
+            ]
+          },
+          "state_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "stake_coins": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  10
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  25
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  50
+                ]
+              }
+            ]
+          },
+          "cleared_zones": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 11
+          },
+          "total_zones": {
+            "type": "number",
+            "enum": [
+              11
+            ]
+          },
+          "current_multiplier_bp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_multiplier_bp": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "current_return_coins": {
+            "type": "number",
+            "minimum": 0
+          },
+          "next_return_coins": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0
+          },
+          "zone_multipliers_bp": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true
+            }
+          },
+          "calibration_version_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "commitment_version": {
+            "type": "number",
+            "nullable": true,
+            "enum": [
+              3
+            ]
+          },
+          "commit_hash": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rules_manifest_hash": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "question_set_hash": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "client_seed": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "server_seed": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "auto_cashout_zone": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "decision_deadline_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "settlement_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "question": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "question_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "zone": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 11
+              },
+              "difficulty": {
+                "type": "string",
+                "enum": [
+                  "easy",
+                  "medium",
+                  "hard"
+                ]
+              },
+              "prompt": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "image": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "width": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "aspect_ratio": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url",
+                  "width",
+                  "height"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "text": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "text"
+                  ]
+                }
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "deadline_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expected_accuracy_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "target_survival_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "correct_survival_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "wrong_survival_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              }
+            },
+            "required": [
+              "question_id",
+              "zone",
+              "difficulty",
+              "prompt",
+              "image",
+              "options",
+              "duration_ms",
+              "deadline_at",
+              "expected_accuracy_bp",
+              "target_survival_bp",
+              "correct_survival_bp",
+              "wrong_survival_bp"
+            ]
+          },
+          "payout_coins": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0
+          },
+          "server_now": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "round_id",
+          "status",
+          "phase",
+          "state_version",
+          "stake_coins",
+          "cleared_zones",
+          "total_zones",
+          "current_multiplier_bp",
+          "next_multiplier_bp",
+          "current_return_coins",
+          "next_return_coins",
+          "zone_multipliers_bp",
+          "calibration_version_id",
+          "commitment_version",
+          "commit_hash",
+          "rules_manifest_hash",
+          "question_set_hash",
+          "client_seed",
+          "server_seed",
+          "auto_cashout_zone",
+          "decision_deadline_at",
+          "settlement_reason",
+          "question",
+          "payout_coins",
+          "server_now"
+        ]
+      },
+      "RoadToGoalCommitmentResponse": {
+        "type": "object",
+        "properties": {
+          "commitment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "commitment_version": {
+            "type": "number",
+            "enum": [
+              3
+            ]
+          },
+          "calibration_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stake_coins": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  10
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  25
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  50
+                ]
+              }
+            ]
+          },
+          "auto_cashout_zone": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "commit_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rules_manifest": {
+            "type": "object",
+            "properties": {
+              "game": {
+                "type": "string",
+                "enum": [
+                  "road-to-goal"
+                ]
+              },
+              "version": {
+                "type": "number",
+                "enum": [
+                  3
+                ]
+              },
+              "fairnessVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "targetRtpBp": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "desiredSkillGapBp": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minimumAccuracyBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maximumAccuracyBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "minimumSurvivalBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maximumSurvivalBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "multiplierLadderBp": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                }
+              },
+              "difficulties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "medium",
+                    "hard"
+                  ]
+                }
+              },
+              "zoneAccuracyPriorsBp": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "timeoutTreatment": {
+                "type": "string",
+                "enum": [
+                  "gameplay_incorrect_editorial_separate"
+                ]
+              }
+            },
+            "required": [
+              "game",
+              "version",
+              "fairnessVersion",
+              "targetRtpBp",
+              "desiredSkillGapBp",
+              "minimumAccuracyBp",
+              "maximumAccuracyBp",
+              "minimumSurvivalBp",
+              "maximumSurvivalBp",
+              "multiplierLadderBp",
+              "difficulties",
+              "zoneAccuracyPriorsBp",
+              "timeoutTreatment"
+            ]
+          },
+          "rules_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "question_set_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "question_hashes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "server_now": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "commitment_id",
+          "commitment_version",
+          "calibration_version_id",
+          "stake_coins",
+          "auto_cashout_zone",
+          "commit_hash",
+          "rules_manifest",
+          "rules_manifest_hash",
+          "question_set_hash",
+          "question_hashes",
+          "expires_at",
+          "server_now"
+        ]
+      },
+      "RoadToGoalAnswerResponse": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "correct",
+              "wrong",
+              "late"
+            ]
+          },
+          "correct_option_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "survived": {
+            "type": "boolean"
+          },
+          "expected_accuracy_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "target_survival_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "correct_survival_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "wrong_survival_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "applied_survival_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "roll_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "state": {
+            "type": "object",
+            "properties": {
+              "round_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "cashed",
+                  "lost",
+                  "completed"
+                ]
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "question",
+                  "decision",
+                  "settled"
+                ]
+              },
+              "state_version": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "stake_coins": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "enum": [
+                      10
+                    ]
+                  },
+                  {
+                    "type": "number",
+                    "enum": [
+                      25
+                    ]
+                  },
+                  {
+                    "type": "number",
+                    "enum": [
+                      50
+                    ]
+                  }
+                ]
+              },
+              "cleared_zones": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 11
+              },
+              "total_zones": {
+                "type": "number",
+                "enum": [
+                  11
+                ]
+              },
+              "current_multiplier_bp": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "next_multiplier_bp": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
+              },
+              "current_return_coins": {
+                "type": "number",
+                "minimum": 0
+              },
+              "next_return_coins": {
+                "type": "number",
+                "nullable": true,
+                "minimum": 0
+              },
+              "zone_multipliers_bp": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                }
+              },
+              "calibration_version_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "commitment_version": {
+                "type": "number",
+                "nullable": true,
+                "enum": [
+                  3
+                ]
+              },
+              "commit_hash": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "rules_manifest_hash": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "question_set_hash": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "client_seed": {
+                "type": "string",
+                "nullable": true,
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "server_seed": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "auto_cashout_zone": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 1,
+                "maximum": 10
+              },
+              "decision_deadline_at": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "settlement_reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "question": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "question_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "zone": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 11
+                  },
+                  "difficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard"
+                    ]
+                  },
+                  "prompt": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "image": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "width": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true
+                      },
+                      "height": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true
+                      },
+                      "aspect_ratio": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "url",
+                      "width",
+                      "height"
+                    ]
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "text": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "text"
+                      ]
+                    }
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "deadline_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "expected_accuracy_bp": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "target_survival_bp": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "correct_survival_bp": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "wrong_survival_bp": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "question_id",
+                  "zone",
+                  "difficulty",
+                  "prompt",
+                  "image",
+                  "options",
+                  "duration_ms",
+                  "deadline_at",
+                  "expected_accuracy_bp",
+                  "target_survival_bp",
+                  "correct_survival_bp",
+                  "wrong_survival_bp"
+                ]
+              },
+              "payout_coins": {
+                "type": "number",
+                "nullable": true,
+                "minimum": 0
+              },
+              "server_now": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "round_id",
+              "status",
+              "phase",
+              "state_version",
+              "stake_coins",
+              "cleared_zones",
+              "total_zones",
+              "current_multiplier_bp",
+              "next_multiplier_bp",
+              "current_return_coins",
+              "next_return_coins",
+              "zone_multipliers_bp",
+              "calibration_version_id",
+              "commitment_version",
+              "commit_hash",
+              "rules_manifest_hash",
+              "question_set_hash",
+              "client_seed",
+              "server_seed",
+              "auto_cashout_zone",
+              "decision_deadline_at",
+              "settlement_reason",
+              "question",
+              "payout_coins",
+              "server_now"
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "correct_option_id",
+          "survived",
+          "expected_accuracy_bp",
+          "target_survival_bp",
+          "correct_survival_bp",
+          "wrong_survival_bp",
+          "applied_survival_bp",
+          "roll_bp",
+          "state"
+        ]
+      },
+      "RoadToGoalProofResponse": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              3
+            ]
+          },
+          "round_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "calibration_version_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "commitment_version": {
+            "type": "number",
+            "enum": [
+              3
+            ]
+          },
+          "commit_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rules_manifest": {
+            "type": "object",
+            "properties": {
+              "game": {
+                "type": "string",
+                "enum": [
+                  "road-to-goal"
+                ]
+              },
+              "version": {
+                "type": "number",
+                "enum": [
+                  3
+                ]
+              },
+              "fairnessVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "targetRtpBp": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "desiredSkillGapBp": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minimumAccuracyBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maximumAccuracyBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "minimumSurvivalBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "maximumSurvivalBp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "multiplierLadderBp": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                }
+              },
+              "difficulties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "medium",
+                    "hard"
+                  ]
+                }
+              },
+              "zoneAccuracyPriorsBp": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "timeoutTreatment": {
+                "type": "string",
+                "enum": [
+                  "gameplay_incorrect_editorial_separate"
+                ]
+              }
+            },
+            "required": [
+              "game",
+              "version",
+              "fairnessVersion",
+              "targetRtpBp",
+              "desiredSkillGapBp",
+              "minimumAccuracyBp",
+              "maximumAccuracyBp",
+              "minimumSurvivalBp",
+              "maximumSurvivalBp",
+              "multiplierLadderBp",
+              "difficulties",
+              "zoneAccuracyPriorsBp",
+              "timeoutTreatment"
+            ]
+          },
+          "rules_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "question_set_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "question_hashes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "stake_coins": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  10
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  25
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  50
+                ]
+              }
+            ]
+          },
+          "auto_cashout_zone": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "question_set": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "zone": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 11
+                },
+                "commitment_salt": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "question_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "difficulty": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "medium",
+                    "hard"
+                  ]
+                },
+                "prompt": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "width": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "aspect_ratio": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "width",
+                    "height"
+                  ]
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "text": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "text"
+                    ]
+                  }
+                },
+                "correct_option_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "expected_accuracy_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "calibration_source": {
+                  "type": "string",
+                  "enum": [
+                    "difficulty_prior",
+                    "ranked",
+                    "blended",
+                    "road"
+                  ]
+                }
+              },
+              "required": [
+                "zone",
+                "commitment_salt",
+                "question_id",
+                "difficulty",
+                "prompt",
+                "image",
+                "options",
+                "correct_option_id",
+                "expected_accuracy_bp",
+                "calibration_source"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 11
+          },
+          "server_seed": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "client_seed": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "cashed",
+              "lost",
+              "completed"
+            ]
+          },
+          "payout_coins": {
+            "type": "number",
+            "minimum": 0
+          },
+          "cleared_zones": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 11
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "zone": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 11
+                },
+                "question_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "answer_option_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "correct_option_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "correct",
+                    "wrong",
+                    "late"
+                  ]
+                },
+                "expected_accuracy_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "target_survival_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "correct_survival_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "wrong_survival_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "applied_survival_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "roll_bp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9999
+                },
+                "survived": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "zone",
+                "question_id",
+                "answer_option_id",
+                "correct_option_id",
+                "outcome",
+                "expected_accuracy_bp",
+                "target_survival_bp",
+                "correct_survival_bp",
+                "wrong_survival_bp",
+                "applied_survival_bp",
+                "roll_bp",
+                "survived"
+              ]
+            },
+            "maxItems": 11
+          }
+        },
+        "required": [
+          "version",
+          "round_id",
+          "calibration_version_id",
+          "commitment_version",
+          "commit_hash",
+          "rules_manifest",
+          "rules_manifest_hash",
+          "question_set_hash",
+          "question_hashes",
+          "stake_coins",
+          "auto_cashout_zone",
+          "question_set",
+          "server_seed",
+          "client_seed",
+          "status",
+          "payout_coins",
+          "cleared_zones",
+          "zones"
         ]
       },
       "ProgressionResponse": {
@@ -11204,7 +12509,7 @@
                       "type": "object",
                       "properties": {
                         "coins": {
-                          "type": "integer",
+                          "type": "number",
                           "minimum": 0
                         },
                         "tickets": {
@@ -11306,7 +12611,7 @@
                   "type": "object",
                   "properties": {
                     "coins": {
-                      "type": "integer",
+                      "type": "number",
                       "minimum": 0
                     },
                     "tickets": {
@@ -11516,7 +12821,7 @@
                       "type": "object",
                       "properties": {
                         "coins": {
-                          "type": "integer",
+                          "type": "number",
                           "minimum": 0
                         },
                         "tickets": {
@@ -11678,7 +12983,7 @@
                       "type": "object",
                       "properties": {
                         "coins": {
-                          "type": "integer",
+                          "type": "number",
                           "minimum": 0
                         },
                         "tickets": {
@@ -11836,6 +13141,8 @@
                 "admin_account_unban",
                 "free_kicks_stake",
                 "free_kicks_payout",
+                "road_to_goal_stake",
+                "road_to_goal_payout",
                 "guess_the_goal_reward"
               ]
             },
@@ -11931,6 +13238,8 @@
                               "admin_account_unban",
                               "free_kicks_stake",
                               "free_kicks_payout",
+                              "road_to_goal_stake",
+                              "road_to_goal_payout",
                               "guess_the_goal_reward"
                             ]
                           },
@@ -11971,6 +13280,14 @@
                           },
                           "coinsDelta": {
                             "type": "integer"
+                          },
+                          "coinsDeltaMinor": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "coinsDeltaExact": {
+                            "type": "number"
                           },
                           "ticketsDelta": {
                             "type": "integer"
@@ -12025,6 +13342,8 @@
                           "stripeCheckoutId",
                           "stripePaymentIntent",
                           "coinsDelta",
+                          "coinsDeltaMinor",
+                          "coinsDeltaExact",
                           "ticketsDelta",
                           "inventoryDelta",
                           "reason",
@@ -12160,6 +13479,748 @@
           },
           "404": {
             "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/commitments": {
+      "post": {
+        "summary": "Commit the run before disclosing the player seed",
+        "description": "The stable request nonce makes preparation idempotent. The returned commitment binds the server seed, fixed round id, stake, auto-cashout setting, calibration, rules manifest, and ordered question-set hash before the backend accepts a player seed.",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stake": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "enum": [
+                          10
+                        ]
+                      },
+                      {
+                        "type": "number",
+                        "enum": [
+                          25
+                        ]
+                      },
+                      {
+                        "type": "number",
+                        "enum": [
+                          50
+                        ]
+                      }
+                    ]
+                  },
+                  "request_nonce": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "auto_cashout_zone": {
+                    "type": "integer",
+                    "nullable": true,
+                    "minimum": 1,
+                    "maximum": 10
+                  }
+                },
+                "required": [
+                  "stake",
+                  "request_nonce"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Prepared server commitment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalCommitmentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Game disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds": {
+      "post": {
+        "summary": "Start or replay a Road to Goal round",
+        "description": "Finalizes a prepared commitment after the player seed is disclosed. The client nonce makes finalization idempotent.",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "commitment_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "client_nonce": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "client_seed": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "commitment_id",
+                  "client_nonce",
+                  "client_seed"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Round created or replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Insufficient coins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Game disabled or question pool unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/{roundId}/proof": {
+      "get": {
+        "summary": "Verify a settled Road to Goal round",
+        "description": "After settlement, reveals the committed server seed, ordered question metadata, and every deterministic zone roll so the complete run can be independently verified.",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "roundId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verifiable round proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalProofResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Round not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round is still active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/current": {
+      "get": {
+        "summary": "Resume the active Road to Goal round",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current round state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active round",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/{roundId}": {
+      "get": {
+        "summary": "Read an owned Road to Goal round",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "roundId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Round state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Round not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/answer": {
+      "post": {
+        "summary": "Answer the current Road to Goal question",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "round_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "question_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "option_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "request_nonce": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "round_id",
+                  "question_id",
+                  "option_id",
+                  "expected_version",
+                  "request_nonce"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answer outcome and updated state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalAnswerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Option does not belong to the question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Round not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/continue": {
+      "post": {
+        "summary": "Continue to the next zone",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "round_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "request_nonce": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "round_id",
+                  "expected_version",
+                  "request_nonce"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated round state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Round not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/cashout": {
+      "post": {
+        "summary": "Cash out the current return",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "round_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "request_nonce": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "round_id",
+                  "expected_version",
+                  "request_nonce"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated round state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoadToGoalStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Round not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Round state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/road-to-goal/rounds/heartbeat": {
+      "post": {
+        "summary": "Keep the active round session alive",
+        "tags": [
+          "RoadToGoal"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Heartbeat recorded"
+          },
+          "401": {
+            "description": "Not authenticated",
             "content": {
               "application/json": {
                 "schema": {

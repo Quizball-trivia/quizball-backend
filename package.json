@@ -62,6 +62,7 @@
     "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
+    "road-to-goal:bench": "tsx scripts/bench/road-to-goal-question-query.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",
     "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts",
     "ggt:seed": "tsx scripts/guess-the-goal/seed.ts",

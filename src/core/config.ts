@@ -13,7 +13,7 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("")
     .transform((val) => val === "true" || val === "1"),
-  CORS_ORIGINS: z.string().default("http://localhost:3000"),
+  CORS_ORIGINS: z.string().default("http://localhost:3000,http://localhost:3010"),
   DEFAULT_LOCALE: z.string().default("en"),
   PUBLIC_SITE_ORIGIN: z.preprocess(
     (value) => value === '' ? undefined : value,
@@ -125,6 +125,12 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
+  // Road to Goal (real-coins solo mode). New rounds ship disabled; resume,
+  // settlement, and stale-round cleanup remain available regardless.
+  ROAD_TO_GOAL_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
   // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
   // must gate on this flag. The manual `npm run bot:refresh-question-stats`

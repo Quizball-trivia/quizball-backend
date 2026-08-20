@@ -1186,7 +1186,8 @@
               "admin_account_ban",
               "admin_account_unban",
               "free_kicks_stake",
-              "free_kicks_payout"
+              "free_kicks_payout",
+              "guess_the_goal_reward"
             ]
           },
           "outcome": {
@@ -1321,7 +1322,8 @@
                     "admin_account_ban",
                     "admin_account_unban",
                     "free_kicks_stake",
-                    "free_kicks_payout"
+                    "free_kicks_payout",
+                    "guess_the_goal_reward"
                   ]
                 },
                 "outcome": {
@@ -11833,7 +11835,8 @@
                 "admin_account_ban",
                 "admin_account_unban",
                 "free_kicks_stake",
-                "free_kicks_payout"
+                "free_kicks_payout",
+                "guess_the_goal_reward"
               ]
             },
             "required": false,
@@ -11927,7 +11930,8 @@
                               "admin_account_ban",
                               "admin_account_unban",
                               "free_kicks_stake",
-                              "free_kicks_payout"
+                              "free_kicks_payout",
+                              "guess_the_goal_reward"
                             ]
                           },
                           "outcome": {

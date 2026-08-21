@@ -152,4 +152,54 @@ describe('possession special-question exhaustion', () => {
       expect.objectContaining({ matchId: cache.matchId, qIndex: 4, questionId: 'fallback-mcq' })
     );
   });
+
+  it('tries unseen image MCQs before repeating when plain MCQs are exhausted', async () => {
+    const cache = createCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRecentlySeenQuestionIdsMock.mockResolvedValue(['seen-mcq']);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: {
+      questionTypes: string[];
+      allowImageMcqs?: boolean;
+    }) => (
+      params.questionTypes[0] === 'mcq_single' && params.allowImageMcqs
+        ? [{
+          id: 'fallback-image-mcq',
+          category_id: 'category-a',
+          payload: {
+            type: 'mcq_single',
+            image: {
+              url: 'https://cdn.example.com/fallback.png',
+              width: 1200,
+              height: 800,
+            },
+            options: [
+              { id: 'a', text: { en: 'Correct' }, is_correct: true },
+              { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+              { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+              { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+            ],
+          },
+        }]
+        : []
+    ));
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 4)).resolves.toBeNull();
+
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        questionTypes: ['mcq_single'],
+        allowImageMcqs: true,
+        excludeQuestionIds: ['seen-mcq'],
+        leastRecentForUserIds: undefined,
+      })
+    );
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: cache.matchId,
+        qIndex: 4,
+        questionId: 'fallback-image-mcq',
+      })
+    );
+  });
 });

@@ -603,13 +603,31 @@ async function maybePickQuestionForState(
       'Special question pool exhausted; falling back to MCQ (anti-stall)'
     );
     picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+      excludeSeen,
       dropReservedExclusion: true,
     });
     if (!picked) {
       picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
         allowImageMcqs: true,
+        excludeSeen,
         dropReservedExclusion: true,
       });
+    }
+    // Preserve the normal freshness ladder: only reuse a question after both
+    // the plain and image-capable unseen pools are exhausted. If a repeat is
+    // unavoidable, choose the least-recently-seen candidate deterministically.
+    if (!picked && excludeSeen) {
+      picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+        dropReservedExclusion: true,
+        leastRecent: true,
+      });
+      if (!picked) {
+        picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+          allowImageMcqs: true,
+          dropReservedExclusion: true,
+          leastRecent: true,
+        });
+      }
     }
   }
 

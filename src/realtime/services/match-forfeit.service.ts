@@ -534,7 +534,7 @@ export async function handleMatchForfeit(
       }
       const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
       if (variant === 'football_grid') {
-        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid forfeit action' });
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Tic Tac Toe forfeit action' });
         return;
       }
       if (variant === 'auction') {

@@ -57,7 +57,7 @@ function gridError(error: unknown): { code: string; message: string; meta?: Reco
         : {}),
     };
   }
-  return { code: 'GRID_INTERNAL_ERROR', message: 'Football Grid request failed' };
+  return { code: 'GRID_INTERNAL_ERROR', message: 'Football Tic Tac Toe request failed' };
 }
 
 async function scheduleStateDeadline(state: FootballGridState): Promise<void> {

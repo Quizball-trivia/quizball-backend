@@ -626,7 +626,7 @@ export async function handleMatchLeave(
       }
       const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
       if (variant === 'football_grid') {
-        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Football Grid leave action' });
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Tic Tac Toe leave action' });
         return;
       }
       if (variant === 'auction') {
@@ -728,7 +728,7 @@ export async function handleMatchRejoin(
       }
       const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
       if (variant === 'football_grid') {
-        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use Football Grid resync' });
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use Tic Tac Toe resync' });
         return;
       }
       if (variant === 'auction') {

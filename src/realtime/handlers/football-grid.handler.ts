@@ -18,7 +18,7 @@ import { allowFootballGridOperation } from '../services/football-grid-rate-limit
 
 function invalid(socket: QuizballSocket, event: string, details: unknown): void {
   logger.warn({ event, details, userId: socket.data.user.id }, 'Invalid Football Grid payload');
-  socket.emit('grid:error', { code: 'VALIDATION_ERROR', message: 'Invalid Football Grid request' });
+  socket.emit('grid:error', { code: 'VALIDATION_ERROR', message: 'Invalid Football Tic Tac Toe request' });
 }
 
 function run(
@@ -40,7 +40,7 @@ function runLimited(
 ): void {
   run(socket, event, async () => {
     if (!await allowFootballGridOperation(socket.data.user.id, operation)) {
-      socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many Football Grid requests. Please slow down.' });
+      socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many Tic Tac Toe requests. Please slow down.' });
       return;
     }
     await task();

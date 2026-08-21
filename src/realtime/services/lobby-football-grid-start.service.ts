@@ -21,12 +21,12 @@ export async function startFootballGridMatchFromLobby(
   input: { lobbyId: string; isPublic: boolean; inviteCode: string | null },
 ): Promise<void> {
   if (!config.FOOTBALL_GRID_LOBBY_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {
-    socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Grid lobbies are temporarily unavailable' });
+    socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
     return;
   }
   const members = await lobbiesRepo.listMembersWithUser(input.lobbyId);
   if (members.length !== 2 || members.some((member) => member.is_ai)) {
-    socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'Football Grid requires exactly two players' });
+    socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'Football Tic Tac Toe requires exactly two players' });
     return;
   }
   const pairingToken = randomUUID();

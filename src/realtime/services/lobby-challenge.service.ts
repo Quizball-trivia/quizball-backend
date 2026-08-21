@@ -77,7 +77,7 @@ export async function challengeFriend(
   const toUserId = payload.toUserId;
   const gameMode = payload.gameMode ?? 'friendly_possession';
   if (gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
-    socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Grid challenges are temporarily unavailable' });
+    socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe challenges are temporarily unavailable' });
     return;
   }
 

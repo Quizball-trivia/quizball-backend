@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/bootstrap.ts",
+    "dev:tic-tac-toe": "FOOTBALL_GRID_CONTENT_ENABLED=true FOOTBALL_GRID_QUEUE_ENABLED=true FOOTBALL_GRID_LOBBY_ENABLED=true FOOTBALL_GRID_BOTS_ENABLED=true FOOTBALL_GRID_COINS_ENABLED=false FOOTBALL_GRID_XP_ENABLED=true PERSISTENT_BOTS_ENABLED=true npm run dev",
     "build": "tsc",
     "start": "node dist/bootstrap.js",
     "lint": "tsc --noEmit",
@@ -68,6 +69,7 @@
     "ggt:seed": "tsx scripts/guess-the-goal/seed.ts",
     "ggt:smoke": "tsx scripts/guess-the-goal/smoke.ts",
     "grid:content": "tsx scripts/football-grid-content.ts",
+    "grid:dev:seed": "tsx scripts/football-tic-tac-toe-dev-seed.ts",
     "grid:cdn:players": "tsx scripts/football-grid-player-cdn.ts",
     "grid:cdn:players:retry": "tsx scripts/football-grid-player-cdn.ts --retry-fallbacks --concurrency=4"
   },

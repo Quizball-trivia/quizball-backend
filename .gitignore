@@ -29,6 +29,7 @@ scripts/*
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
 !scripts/export-openapi.ts
+!scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts

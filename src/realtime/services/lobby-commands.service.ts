@@ -539,13 +539,13 @@ export async function updateSettings(
     // so reject rather than kick anyone.
     const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
     if (nextSettings.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
-      socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Grid lobbies are temporarily unavailable' });
+      socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
       return;
     }
     if (nextSettings.gameMode === 'football_grid' && memberCount > requestedCapacity) {
       socket.emit('error', {
         code: 'LOBBY_MODE_CAPACITY',
-        message: 'Football Grid supports exactly two players.',
+        message: 'Football Tic Tac Toe supports exactly two players.',
         meta: { memberCount, maxMembers: requestedCapacity, gameMode: nextSettings.gameMode },
       });
       return;
@@ -762,7 +762,7 @@ export async function startFriendlyMatch(
         logger.warn({ lobbyId, error }, 'Failed to create Football Grid lobby match');
         await lobbiesRepo.setAllReady(lobbyId, false);
         await emitLobbyState(io, lobbyId);
-        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start Football Grid' });
+        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start Football Tic Tac Toe' });
       }
       return;
     }

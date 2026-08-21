@@ -577,7 +577,7 @@ export const footballGridMatchmakingService = {
     const userId = socket.data.user.id;
     appMetrics.footballGridQueueJoins.add(1);
     if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {
-      socket.emit('grid:error', { code: 'GRID_UNAVAILABLE', message: 'Football Grid is temporarily unavailable' });
+      socket.emit('grid:error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe is temporarily unavailable' });
       return;
     }
     const redis = getRedisClient();
@@ -646,7 +646,7 @@ export const footballGridMatchmakingService = {
         return true;
       }, { waitMs: 1_200 });
       if (transitioned === null) {
-        socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Football Grid search is already changing. Please retry.' });
+        socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Tic Tac Toe search is already changing. Please retry.' });
         return;
       }
       if (transitioned) await tryStartHumanPairsLocked(io);
@@ -688,7 +688,7 @@ export const footballGridMatchmakingService = {
         return true;
       }, { waitMs: 1_200 });
       if (transitioned === null) {
-        socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Football Grid search is already changing. Please retry.' });
+        socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Tic Tac Toe search is already changing. Please retry.' });
       }
     });
     if (locked === null) socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Matchmaking is busy. Please retry.' });

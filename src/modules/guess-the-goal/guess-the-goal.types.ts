@@ -48,6 +48,7 @@ export interface GoalChoreographyRow {
   year: number;
   goal_ordinal: number;
   schema_version: number;
+  video_url: string | null;
   source: 'seed' | 'agent' | 'editor';
   created_by: string | null;
   created_at: Date;
@@ -63,6 +64,7 @@ export interface GoalSnapshot {
   difficulty: string;
   title: I18nText;
   fun_fact: I18nText | null;
+  video_url: string | null;
   players: ChoreographyPlayer[];
   steps: ChoreographyStep[];
   options: ChoreographyOption[];

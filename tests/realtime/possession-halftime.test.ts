@@ -527,6 +527,7 @@ describe('possession halftime with a preset second-half category', () => {
     // No ban window is opened for a preset.
     expect(cache.statePayload.halftime.deadlineAt).toBeNull();
     expect(cache.statePayload.halftime.firstBanSeat).toBeNull();
+    expect(getDraftCategoriesByIdsMock).toHaveBeenCalledWith(['cat-preset'], 5, 'possession');
     expect(selectRandomCategoriesExcludingMock).not.toHaveBeenCalled();
   });
 
@@ -612,6 +613,11 @@ describe('possession halftime with a preset second-half category', () => {
     // Penalty still bans between 3 options; the preset never short-circuits it.
     expect(cache.statePayload.halftime.purpose).toBe('penalty');
     expect(cache.statePayload.halftime.categoryOptions).toHaveLength(3);
+    expect(selectRandomCategoriesExcludingMock).toHaveBeenCalledWith(
+      3,
+      expect.any(Array),
+      'possession'
+    );
     expect(getDraftCategoriesByIdsMock).not.toHaveBeenCalled();
   });
 });

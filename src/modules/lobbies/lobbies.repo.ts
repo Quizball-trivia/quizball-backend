@@ -1,6 +1,10 @@
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
-import { MATCHMAKING_CATEGORY_EXCLUSIONS, RANKED_ELIGIBILITY_HAVING_COUNTS } from '../../db/sql-fragments.js';
+import {
+  buildPossessionEligibilityHavingCounts,
+  MATCHMAKING_CATEGORY_EXCLUSIONS,
+  RANKED_ELIGIBILITY_HAVING_COUNTS,
+} from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -28,6 +32,22 @@ export interface CreateLobbyData {
 export interface CreateLobbyMemberData {
   userId: string;
   isReady: boolean;
+}
+
+export type FriendlyCategoryPool = 'mcq' | 'possession';
+
+function friendlyCategoryCoverageSql(minQuestions: number, pool: FriendlyCategoryPool) {
+  if (pool === 'possession') {
+    return {
+      questionTypeFilter: sql`AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')`,
+      having: buildPossessionEligibilityHavingCounts(minQuestions),
+    };
+  }
+
+  return {
+    questionTypeFilter: sql`AND q.type = 'mcq_single'`,
+    having: sql`HAVING COUNT(*) >= ${minQuestions}`,
+  };
 }
 
 function deriveLobbyDefaults(data: CreateLobbyData) {
@@ -412,11 +432,14 @@ export const lobbiesRepo = {
   },
 
   async listAllValidCategories(
-    minQuestions: number
+    minQuestions: number,
+    pool: FriendlyCategoryPool = 'mcq'
   ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
-    // Friendly/party pool = NON-featured categories only. Counts-only (no
-    // payloads join / JSONB validation) — see RANKED_ELIGIBILITY_HAVING_COUNTS
-    // in sql-fragments.ts for the rationale and staging identity verification.
+    // Friendly pools = NON-featured categories only. Party quiz needs MCQ
+    // depth; possession additionally needs the two special slots in every
+    // half. Counts-only (no payloads join / JSONB validation) — see
+    // sql-fragments.ts for the rationale and staging identity verification.
+    const coverage = friendlyCategoryCoverageSql(minQuestions, pool);
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
@@ -427,9 +450,9 @@ export const lobbiesRepo = {
         AND q.status = 'published'
         AND q.visibility = 'public'
         AND q.ranked_eligible = true
-        AND q.type = 'mcq_single'
+        ${coverage.questionTypeFilter}
       GROUP BY c.id, c.name, c.icon, c.image_url
-      HAVING COUNT(*) >= ${minQuestions}
+      ${coverage.having}
     `;
   },
 
@@ -510,9 +533,12 @@ export const lobbiesRepo = {
 
   async listValidCategoryIds(
     categoryIds: string[],
-    minQuestions: number
+    minQuestions: number,
+    pool: FriendlyCategoryPool = 'mcq'
   ): Promise<string[]> {
     if (categoryIds.length === 0) return [];
+
+    const coverage = friendlyCategoryCoverageSql(minQuestions, pool);
 
     const rows = await sql<{ id: string }[]>`
       SELECT c.id
@@ -525,9 +551,9 @@ export const lobbiesRepo = {
         AND q.status = 'published'
         AND q.visibility = 'public'
         AND q.ranked_eligible = true
-        AND q.type = 'mcq_single'
+        ${coverage.questionTypeFilter}
       GROUP BY c.id
-      HAVING COUNT(*) >= ${minQuestions}
+      ${coverage.having}
     `;
 
     return rows.map((row) => row.id);

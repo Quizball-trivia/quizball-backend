@@ -1,0 +1,1 @@
+export const MIN_QUESTIONS_PER_CATEGORY = 5;

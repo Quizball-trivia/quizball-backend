@@ -429,6 +429,166 @@ describe('roadToGoalService', () => {
     expect(storeRepo.adjustWalletMinorInTx).not.toHaveBeenCalled();
   });
 
+  it('pages past malformed legacy candidates without using full-pool JSON filters', async () => {
+    const malformed = {
+      ...candidate(99, 'easy'),
+      payload: { options: [{ id: 'only-one' }] },
+    };
+    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
+      .mockResolvedValueOnce([malformed])
+      .mockResolvedValueOnce(candidates);
+    (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
+      ...commitment({ server_seed: data.serverSeed }),
+      round_id: data.roundId,
+      user_id: data.userId,
+      request_nonce: data.requestNonce,
+      stake_coins: data.stakeCoins,
+      auto_cashout_zone: data.autoCashoutZone,
+      calibration_version_id: data.calibrationVersionId,
+      commitment_version: data.commitmentVersion,
+      server_seed: data.serverSeed,
+      run_questions: data.runQuestions,
+      question_set_hash: data.questionSetHash,
+      commit_hash: data.commitHash,
+      rules_manifest: data.rulesManifest,
+      rules_manifest_hash: data.rulesManifestHash,
+    }));
+
+    await roadToGoalService.prepareCommitment(USER_ID, {
+      stakeCoins: 25,
+      requestNonce: COMMITMENT_NONCE,
+      autoCashoutZone: null,
+    });
+
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      1,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      [],
+      64
+    );
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      2,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      [malformed.id],
+      64
+    );
+    const [, insertedCommitment] = (roadToGoalRepo.insertCommitment as Mock).mock.calls[0]!;
+    expect(insertedCommitment.runQuestions).toHaveLength(11);
+    expect(insertedCommitment.runQuestions.map((question: { question_id: string }) => (
+      question.question_id
+    ))).not.toContain(malformed.id);
+  });
+
+  it('pages past candidates rejected by the immutable calibration gate', async () => {
+    const staleCandidate = candidate(98, 'easy');
+    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
+      .mockResolvedValueOnce([staleCandidate])
+      .mockResolvedValueOnce(candidates);
+    (roadToGoalRepo.filterCandidatesForCalibration as Mock)
+      .mockResolvedValueOnce([])
+      .mockImplementation(async (_tx, _versionId, selected) => selected);
+    (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
+      ...commitment({ server_seed: data.serverSeed }),
+      round_id: data.roundId,
+      user_id: data.userId,
+      request_nonce: data.requestNonce,
+      stake_coins: data.stakeCoins,
+      auto_cashout_zone: data.autoCashoutZone,
+      calibration_version_id: data.calibrationVersionId,
+      commitment_version: data.commitmentVersion,
+      server_seed: data.serverSeed,
+      run_questions: data.runQuestions,
+      question_set_hash: data.questionSetHash,
+      commit_hash: data.commitHash,
+      rules_manifest: data.rulesManifest,
+      rules_manifest_hash: data.rulesManifestHash,
+    }));
+
+    await roadToGoalService.prepareCommitment(USER_ID, {
+      stakeCoins: 25,
+      requestNonce: COMMITMENT_NONCE,
+      autoCashoutZone: null,
+    });
+
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      2,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      [staleCandidate.id],
+      64
+    );
+  });
+
+  it('caps unseen retries and pages past 129 malformed fallback candidates', async () => {
+    const malformedPages = Array.from({ length: 4 }, (_, index) => ({
+      ...candidate(90 + index, 'easy'),
+      payload: { options: [{ id: `malformed-${index}` }] },
+    }));
+    for (const malformed of malformedPages) {
+      (roadToGoalRepo.pickRunQuestionCandidates as Mock).mockResolvedValueOnce([malformed]);
+    }
+    const malformedFallback = Array.from({ length: 129 }, (_, index) => ({
+      ...candidate(200 + index, index % 3 === 0 ? 'easy' : index % 3 === 1 ? 'medium' : 'hard'),
+      payload: { options: [{ id: `fallback-malformed-${index}` }] },
+      selection_priority: index + 1,
+    }));
+    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
+      .mockResolvedValueOnce(malformedFallback.slice(0, 48))
+      .mockResolvedValueOnce(malformedFallback.slice(48, 96))
+      .mockResolvedValueOnce([
+        ...malformedFallback.slice(96),
+        ...candidates.map((item, index) => ({
+          ...item,
+          selection_priority: malformedFallback.length + index + 1,
+        })),
+      ]);
+    (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
+      ...commitment({ server_seed: data.serverSeed }),
+      round_id: data.roundId,
+      user_id: data.userId,
+      request_nonce: data.requestNonce,
+      stake_coins: data.stakeCoins,
+      auto_cashout_zone: data.autoCashoutZone,
+      calibration_version_id: data.calibrationVersionId,
+      commitment_version: data.commitmentVersion,
+      server_seed: data.serverSeed,
+      run_questions: data.runQuestions,
+      question_set_hash: data.questionSetHash,
+      commit_hash: data.commitHash,
+      rules_manifest: data.rulesManifest,
+      rules_manifest_hash: data.rulesManifestHash,
+    }));
+
+    await roadToGoalService.prepareCommitment(USER_ID, {
+      stakeCoins: 25,
+      requestNonce: COMMITMENT_NONCE,
+      autoCashoutZone: null,
+    });
+
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenCalledTimes(7);
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      4,
+      dbMocks.tx,
+      USER_ID,
+      'unseen',
+      malformedPages.slice(0, 3).map((item) => item.id),
+      64
+    );
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
+      7,
+      dbMocks.tx,
+      USER_ID,
+      'least_exposed',
+      malformedFallback.slice(0, 96).map((item) => item.id),
+      48
+    );
+  });
+
   it('replays a start nonce without another query or debit', async () => {
     (roadToGoalRepo.getRoundByNonceForUpdate as Mock).mockResolvedValue(lockedRound);
 

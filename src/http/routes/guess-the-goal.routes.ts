@@ -31,5 +31,6 @@ router.post(
   guessTheGoalController.answerBonus
 );
 router.get('/stats', guessTheGoalController.stats);
+router.get('/gallery', guessTheGoalController.gallery);
 
 export { router as guessTheGoalRoutes };

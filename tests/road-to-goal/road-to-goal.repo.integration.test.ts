@@ -5,6 +5,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import '../setup.js';
+import { buildRoadToGoalQuestionSet } from '../../src/modules/road-to-goal/road-to-goal.questions.js';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let roadToGoalRepo: typeof import('../../src/modules/road-to-goal/road-to-goal.repo.js').roadToGoalRepo;
@@ -174,8 +175,12 @@ describe('Road to Goal question selection SQL', () => {
         CALIBRATION_ID,
         unseenCandidates
       );
-      expect(unseen).toHaveLength(14);
-      expect(unseen.map((candidate) => candidate.id)).not.toContain(malformedId);
+      expect(unseen).toHaveLength(15);
+      expect(unseen.map((candidate) => candidate.id)).toContain(malformedId);
+      const parsedQuestionSet = buildRoadToGoalQuestionSet(unseen, () => 0.5);
+      expect(parsedQuestionSet).toHaveLength(11);
+      expect(parsedQuestionSet?.map((question) => question.question_id))
+        .not.toContain(malformedId);
       expect(unseen.some((candidate) => {
         const value = candidate.payload as { image?: { url?: string } };
         return value.image?.url === 'https://cdn.example.com/integration.jpg';
@@ -210,7 +215,9 @@ describe('Road to Goal question selection SQL', () => {
       const fallbackCandidates = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         USER_ID,
-        'least_exposed'
+        'least_exposed',
+        [],
+        64
       );
       const fallback = await roadToGoalRepo.filterCandidatesForCalibration(
         tx,

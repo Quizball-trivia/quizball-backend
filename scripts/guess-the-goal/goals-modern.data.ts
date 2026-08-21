@@ -682,8 +682,8 @@ export const MODERN_GOALS: ChoreographyContent[] = [
     steps: [
       { kind: 'pass', player: 'wilshere', to: [31, 77], duration: 0.9 },
       { kind: 'pass', player: 'cazorla', to: [36, 84], duration: 0.9 },
-      { kind: 'pass', player: 'giroud', to: [38, 88], duration: 0.9 },
-      { kind: 'run', player: 'wilshere', to: [38, 88], withPrev: true, duration: 1.4 },
+      { kind: 'pass', player: 'giroud', to: [30, 91], duration: 0.9 },
+      { kind: 'run', player: 'wilshere', to: [30, 91], withPrev: true, duration: 1.4 },
       { kind: 'shot', player: 'wilshere', to: [32, 104], loft: 0.4, duration: 0.8 },
     ],
     scorer: 'Jack Wilshere',

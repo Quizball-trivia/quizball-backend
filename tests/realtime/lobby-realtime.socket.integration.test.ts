@@ -1442,7 +1442,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
-    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 5);
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 5, 'possession');
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
@@ -1610,6 +1610,11 @@ describe('lobby realtime socket integration', () => {
         (entry.payload as { code?: string }).code === 'INSUFFICIENT_CATEGORIES'
     );
     expect(errorEvent).toBeDefined();
+    expect(vi.mocked(lobbiesRepo.listValidCategoryIds)).toHaveBeenCalledWith(
+      [lobby.friendly_category_a_id],
+      5,
+      'possession'
+    );
     expect(vi.mocked(matchesService.createMatchFromLobby)).not.toHaveBeenCalled();
   });
 });

@@ -2,9 +2,8 @@
  * Integration test: featured categories are RANKED-EXCLUSIVE. The friendly/party
  * and daily-challenge pools must draw ONLY from NON-featured categories — a
  * featured category never appears in those casual modes (it's reserved for
- * ranked). Seeds one featured + one non-featured category, each with enough
- * published mcq_single questions, and asserts every casual selector returns the
- * non-featured one and excludes the featured one.
+ * ranked). Also proves possession rejects an MCQ-only category while party
+ * eligibility continues to accept it.
  *
  * Requires a running test database (DATABASE_URL in setup.ts). Skipped if the
  * database is not available.
@@ -22,6 +21,7 @@ let dailyChallengesRepo: typeof import('../../src/modules/daily-challenges/daily
 let dbAvailable = false;
 let featuredCategoryId = '';
 let plainCategoryId = '';
+let possessionCategoryId = '';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard', 'easy', 'medium', 'hard'] as const;
 
@@ -54,6 +54,42 @@ async function seedCategoryWithQuestions(name: string): Promise<string> {
   return categoryId;
 }
 
+async function seedPossessionSpecials(categoryId: string): Promise<void> {
+  const [putInOrder] = await sql<{ id: string }[]>`
+    INSERT INTO questions (category_id, type, difficulty, status, prompt)
+    VALUES (${categoryId}, 'put_in_order', 'medium', 'published', ${{ en: 'Order these clubs' }}::jsonb)
+    RETURNING id
+  `;
+  await sql`
+    INSERT INTO question_payloads (question_id, payload)
+    VALUES (${putInOrder.id}, ${{
+      type: 'put_in_order',
+      prompt: { en: 'Order these clubs' },
+      direction: 'asc',
+      items: [
+        { id: 'a', label: { en: 'A' }, sort_value: 1 },
+        { id: 'b', label: { en: 'B' }, sort_value: 2 },
+        { id: 'c', label: { en: 'C' }, sort_value: 3 },
+      ],
+    }}::jsonb)
+  `;
+
+  const [clueChain] = await sql<{ id: string }[]>`
+    INSERT INTO questions (category_id, type, difficulty, status, prompt)
+    VALUES (${categoryId}, 'clue_chain', 'medium', 'published', ${{ en: 'Who am I?' }}::jsonb)
+    RETURNING id
+  `;
+  await sql`
+    INSERT INTO question_payloads (question_id, payload)
+    VALUES (${clueChain.id}, ${{
+      type: 'clue_chain',
+      display_answer: { en: 'Player' },
+      accepted_answers: ['Player'],
+      clues: [{ type: 'text', content: { en: 'Clue' } }],
+    }}::jsonb)
+  `;
+}
+
 beforeAll(async () => {
   try {
     const dbModule = await import('../../src/db/index.js');
@@ -69,6 +105,8 @@ beforeAll(async () => {
 
   featuredCategoryId = await seedCategoryWithQuestions('FeaturedPoolTest');
   plainCategoryId = await seedCategoryWithQuestions('NonFeaturedPoolTest');
+  possessionCategoryId = await seedCategoryWithQuestions('PossessionPoolTest');
+  await seedPossessionSpecials(possessionCategoryId);
 
   // Only the first category is featured → it must be EXCLUDED from casual pools.
   await sql`
@@ -79,14 +117,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!dbAvailable) return;
-  await sql`DELETE FROM featured_categories WHERE category_id IN (${featuredCategoryId}, ${plainCategoryId})`;
+  await sql`DELETE FROM featured_categories WHERE category_id IN (${featuredCategoryId}, ${plainCategoryId}, ${possessionCategoryId})`;
   // question_payloads cascade on questions delete; questions block category delete (ON DELETE RESTRICT)
-  await sql`DELETE FROM questions WHERE category_id IN (${featuredCategoryId}, ${plainCategoryId})`;
-  await sql`DELETE FROM categories WHERE id IN (${featuredCategoryId}, ${plainCategoryId})`;
+  await sql`DELETE FROM questions WHERE category_id IN (${featuredCategoryId}, ${plainCategoryId}, ${possessionCategoryId})`;
+  await sql`DELETE FROM categories WHERE id IN (${featuredCategoryId}, ${plainCategoryId}, ${possessionCategoryId})`;
   await sql.end({ timeout: 5 });
 });
 
-describe('friendly/party category pool excludes featured (ranked-exclusive)', () => {
+describe('friendly category pools', () => {
   it('listAllValidCategories returns the non-featured category, not the featured one', async ({ skip }) => {
     if (!dbAvailable) skip();
     const rows = await lobbiesRepo.listAllValidCategories(5);
@@ -116,6 +154,21 @@ describe('friendly/party category pool excludes featured (ranked-exclusive)', ()
     const validated = await lobbiesRepo.listValidCategoryIds([featuredCategoryId, plainCategoryId], 5);
     expect(validated).toContain(plainCategoryId);
     expect(validated).not.toContain(featuredCategoryId);
+  });
+
+  it('possession eligibility requires both special question types', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const rows = await lobbiesRepo.listAllValidCategories(5, 'possession');
+    const ids = rows.map((row) => row.id);
+    expect(ids).toContain(possessionCategoryId);
+    expect(ids).not.toContain(plainCategoryId);
+
+    const validated = await lobbiesRepo.listValidCategoryIds(
+      [plainCategoryId, possessionCategoryId],
+      5,
+      'possession'
+    );
+    expect(validated).toEqual([possessionCategoryId]);
   });
 });
 

@@ -7,6 +7,7 @@ const getMatchCacheOrRebuildMock = vi.fn();
 const getMatchMock = vi.fn();
 const getRecentlySeenQuestionIdsMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
@@ -28,7 +29,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
     getRandomQuestionCandidatesForMatch: (...args: unknown[]) => getRandomQuestionCandidatesForMatchMock(...args),
     getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
     getImageMcqCandidateForMatchById: vi.fn(async () => []),
-    insertMatchQuestionIfMissing: vi.fn(),
+    insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
     setQuestionTiming: vi.fn(),
   },
 }));
@@ -153,6 +154,44 @@ describe('possession question exhaustion', () => {
 
     await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 6)).resolves.toBeNull();
 
+    expect(completePossessionMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('replaces an exhausted special slot with an MCQ instead of freezing normal play', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 4;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 4;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { questionTypes: string[] }) => (
+      params.questionTypes[0] === 'mcq_single'
+        ? [{
+          id: 'fallback-mcq',
+          category_id: 'category-a',
+          payload: {
+            type: 'mcq_single',
+            options: [
+              { id: 'a', text: { en: 'Correct' }, is_correct: true },
+              { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+              { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+              { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+            ],
+          },
+        }]
+        : []
+    ));
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 4)).resolves.toBeNull();
+
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ questionTypes: ['put_in_order'] })
+    );
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ questionTypes: ['mcq_single'], difficulties: ['easy', 'medium', 'hard'] })
+    );
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: cache.matchId, qIndex: 4, questionId: 'fallback-mcq' })
+    );
     expect(completePossessionMatchMock).not.toHaveBeenCalled();
   });
 });

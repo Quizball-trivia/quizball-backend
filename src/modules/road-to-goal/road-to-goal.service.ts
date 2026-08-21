@@ -7,14 +7,18 @@ import type { I18nField } from '../../db/types.js';
 import { storeRepo } from '../store/store.repo.js';
 import {
   ROAD_TO_GOAL_ACCURACY_PRIORS_BP,
+  ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY,
   ROAD_TO_GOAL_COMMITMENT_MS,
   ROAD_TO_GOAL_COMMITMENT_VERSION,
   ROAD_TO_GOAL_DECISION_MS,
+  ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY,
+  ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_NETWORK_GRACE_MS,
   ROAD_TO_GOAL_PAYOUT_EVENT,
   ROAD_TO_GOAL_QUESTION_MS,
   ROAD_TO_GOAL_SERVER_WINDOW_MS,
   ROAD_TO_GOAL_STAKE_EVENT,
+  ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES,
   ROAD_TO_GOAL_ZONES,
   isRoadToGoalStake,
   roadToGoalPayoutIdempotencyKey,
@@ -51,6 +55,7 @@ import type {
   RoadToGoalCommitmentRow,
   RoadToGoalEventRow,
   RoadToGoalPhase,
+  RoadToGoalQuestionCandidate,
   RoadToGoalQuestionImage,
   RoadToGoalQuestionSnapshot,
   RoadToGoalRoundRow,
@@ -758,10 +763,11 @@ function assertSupportedCommitment(row: RoadToGoalCommitmentRow): void {
   }
 }
 
-async function buildCalibratedQuestionSet(
+export async function buildCalibratedQuestionSet(
   tx: TransactionSql,
   userId: string,
-  calibrationVersionId: string
+  calibrationVersionId: string,
+  options: { logSelection?: boolean } = {}
 ): Promise<{
   questions: RoadToGoalQuestionSnapshot[];
   calibrationVersionId: string;
@@ -776,46 +782,76 @@ async function buildCalibratedQuestionSet(
   assertCalibrationVersion(calibrationVersion);
   const startedAt = performance.now();
   let queryCount = 0;
-  const selectCandidates = async (mode: 'unseen' | 'least_exposed') => {
-    queryCount += 2;
-    const selected = await roadToGoalRepo.pickRunQuestionCandidates(tx, userId, mode);
-    return roadToGoalRepo.filterCandidatesForCalibration(
-      tx,
-      calibrationVersion.id,
-      selected
-    );
+  const selectQuestionSet = async (mode: 'unseen' | 'least_exposed') => {
+    const candidates: RoadToGoalQuestionCandidate[] = [];
+    const excludedQuestionIds = new Set<string>();
+    const candidatesPerDifficulty = mode === 'least_exposed'
+      ? ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY
+      : ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY;
+    const maximumPages = mode === 'least_exposed'
+      ? ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES
+      : ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES;
+    for (let page = 0; page < maximumPages; page += 1) {
+      queryCount += 2;
+      const selected = await roadToGoalRepo.pickRunQuestionCandidates(
+        tx,
+        userId,
+        mode,
+        [...excludedQuestionIds],
+        candidatesPerDifficulty
+      );
+      if (selected.length === 0) break;
+      selected.forEach((candidate) => excludedQuestionIds.add(candidate.id));
+      const calibrated = await roadToGoalRepo.filterCandidatesForCalibration(
+        tx,
+        calibrationVersion.id,
+        selected
+      );
+      const priorityOffset = page * candidatesPerDifficulty;
+      candidates.push(...calibrated.map((candidate) => ({
+        ...candidate,
+        ...(mode === 'least_exposed' && candidate.selection_priority != null
+          ? { selection_priority: candidate.selection_priority + priorityOffset }
+          : {}),
+      })));
+      const questions = buildRoadToGoalQuestionSet(candidates, Math.random, mode);
+      if (questions) return { candidates, questions };
+    }
+    return { candidates, questions: null };
   };
-  let candidates = await selectCandidates('unseen');
-  let questions = buildRoadToGoalQuestionSet(candidates);
+  let selection = await selectQuestionSet('unseen');
 
-  if (!questions) {
-    candidates = await selectCandidates('least_exposed');
-    questions = buildRoadToGoalQuestionSet(candidates, Math.random, 'least_exposed');
+  if (!selection.questions) {
+    selection = await selectQuestionSet('least_exposed');
   }
 
   const queryMs = performance.now() - startedAt;
-  const log = queryMs > 50 ? logger.warn.bind(logger) : logger.debug.bind(logger);
-  log(
-    {
-      userId,
-      queryMs: Math.round(queryMs * 100) / 100,
-      queryCount,
-      candidates: candidates.length,
-    },
-    'road-to-goal question set selected'
-  );
+  if (options.logSelection !== false) {
+    const log = queryMs > 50 ? logger.warn.bind(logger) : logger.debug.bind(logger);
+    log(
+      {
+        userId,
+        queryMs: Math.round(queryMs * 100) / 100,
+        queryCount,
+        candidates: selection.candidates.length,
+      },
+      'road-to-goal question set selected'
+    );
+  }
 
-  if (!questions) throw new AppError('No eligible Road to Goal questions available', 503);
+  if (!selection.questions) {
+    throw new AppError('No eligible Road to Goal questions available', 503);
+  }
   const calibrations = await roadToGoalRepo.getQuestionCalibrations(
     tx,
     calibrationVersion.id,
-    questions.map((question, index) => ({
+    selection.questions.map((question, index) => ({
       questionId: question.question_id,
       zone: index + 1,
     }))
   );
   return {
-    questions: applyQuestionCalibrations(questions, calibrations),
+    questions: applyQuestionCalibrations(selection.questions, calibrations),
     calibrationVersionId: calibrationVersion.id,
   };
 }

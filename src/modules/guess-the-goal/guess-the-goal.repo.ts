@@ -1,6 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { GoalChoreographyRow, GgtSessionRow } from './guess-the-goal.types.js';
-import { GGT_REWARD_EVENT } from './guess-the-goal.constants.js';
+import { GGT_REWARD_EVENT, GGT_XP_SOURCE } from './guess-the-goal.constants.js';
 
 /** postgres.js TransactionSql loses its call signature through the type
  *  re-export; the repo-wide convention is to cast (see tuning.repo.ts). */
@@ -172,6 +172,73 @@ export const guessTheGoalRepo = {
       RETURNING user_id
     `;
     return rows.length > 0;
+  },
+
+  /** Solved gallery cards, read from the SOLVING SESSION'S immutable snapshot
+   *  (title/video as the user actually saw them — the live row can be edited
+   *  after the fact, and a live read would hand out a new, unplayed answer). */
+  async solvedGalleryRows(
+    tx: TransactionSql,
+    userId: string
+  ): Promise<
+    Array<{
+      difficulty: string;
+      title: unknown;
+      year: number;
+      video_url: string | null;
+      solved_at: string;
+      points: number | null;
+      bonus_correct: boolean | null;
+    }>
+  > {
+    return exec(tx)`
+      SELECT g.difficulty, g.year,
+             sess.goal_snapshot->'title' AS title,
+             sess.goal_snapshot->>'video_url' AS video_url,
+             s.solved_at, sess.points, sess.bonus_correct
+      FROM guess_the_goal_solves s
+      JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
+      JOIN guess_the_goal_sessions sess ON sess.id = s.session_id
+      WHERE s.user_id = ${userId}
+      ORDER BY s.solved_at
+    ` as unknown as Promise<
+      Array<{
+        difficulty: string;
+        title: unknown;
+        year: number;
+        video_url: string | null;
+        solved_at: string;
+        points: number | null;
+        bonus_correct: boolean | null;
+      }>
+    >;
+  },
+
+  /** Unsolved goals as per-difficulty COUNTS only — even redacted rows leak a
+   *  stable global ordering, so unplayed goals never get individual entries. */
+  async unsolvedCounts(tx: TransactionSql, userId: string): Promise<Record<string, number>> {
+    const rows = await exec(tx)<Array<{ difficulty: string; count: number | string }>>`
+      SELECT g.difficulty, COUNT(*) AS count
+      FROM goal_choreographies g
+      LEFT JOIN guess_the_goal_solves s ON s.goal_id = g.id AND s.user_id = ${userId}
+      WHERE g.status = 'published' AND s.user_id IS NULL
+      GROUP BY g.difficulty
+    `;
+    return Object.fromEntries(rows.map((r) => [r.difficulty, Number(r.count)]));
+  },
+
+  /** All-time coins + XP earned from this mode (progress screen totals). */
+  async lifetimeEarnings(tx: TransactionSql, userId: string): Promise<{ coins: number; xp: number }> {
+    const [row] = await exec(tx)<Array<{ coins: number | string | null; xp: number | string | null }>>`
+      SELECT
+        (SELECT COALESCE(SUM(coins_delta), 0)
+         FROM store_transaction_logs
+         WHERE user_id = ${userId} AND event_type = ${GGT_REWARD_EVENT} AND outcome = 'success') AS coins,
+        (SELECT COALESCE(SUM(xp_delta), 0)
+         FROM user_xp_events
+         WHERE user_id = ${userId} AND source_type = ${GGT_XP_SOURCE}) AS xp
+    `;
+    return { coins: Number(row?.coins ?? 0), xp: Number(row?.xp ?? 0) };
   },
 
   /** Coins already granted by this mode since UTC midnight (daily faucet cap). */

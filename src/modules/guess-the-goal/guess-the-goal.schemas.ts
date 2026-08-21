@@ -86,6 +86,11 @@ export const choreographyContentSchema = z
     year: z.number().int().min(1900).max(2100),
     goal_ordinal: z.number().int().min(1).max(9).default(1),
     schema_version: z.literal(1).default(1),
+    video_url: z
+      .string()
+      .regex(/^https:\/\/((www\.)?youtube\.com\/(watch\?v=|shorts\/|embed\/)[A-Za-z0-9_-]{6,}|youtu\.be\/[A-Za-z0-9_-]{6,})/)
+      .nullable()
+      .optional(),
   })
   .superRefine((goal, ctx) => {
     const playerIds = new Set(goal.players.map((p) => p.id));

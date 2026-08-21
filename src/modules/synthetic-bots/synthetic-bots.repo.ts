@@ -524,13 +524,22 @@ export const syntheticBotsRepo = {
   },
 
   /**
-   * Durable backstop for the per-human recent-opponent LRU. Redis supplies the
-   * freshest cross-mode memory, while this query preserves ranked rotation
-   * across cache loss, restart, or a transient Redis outage.
+   * Durable backstop for the per-human recent-opponent rotation, one row per
+   * DISTINCT persistent bot faced in ranked over the trailing 7 days, most
+   * recent first. Redis supplies the freshest cross-mode memory, while this
+   * query preserves ranked rotation across cache loss, restart, or a transient
+   * Redis outage — and its per-pair match counts drive the weekly frequency
+   * cap (BOT_RANKED_PAIR_WEEKLY_CAP). Unbounded on purpose: the row count is
+   * naturally capped by how many distinct bots one human can start matches
+   * against in a week (tens, not thousands).
    */
-  async listRecentlyFacedPersistentBotIds(humanUserId: string, limit: number): Promise<string[]> {
-    const rows = await sql<{ bot_user_id: string }[]>`
-      SELECT opponent.user_id AS bot_user_id
+  async listRankedPersistentOpponentHistory(
+    humanUserId: string,
+  ): Promise<{ bot_user_id: string; matches_count: number }[]> {
+    const rows = await sql<{ bot_user_id: string; matches_count: number }[]>`
+      SELECT
+        opponent.user_id AS bot_user_id,
+        COUNT(*)::int AS matches_count
       FROM match_players human
       JOIN matches m ON m.id = human.match_id
       JOIN match_players opponent
@@ -545,9 +554,8 @@ export const syntheticBotsRepo = {
         AND m.started_at >= NOW() - INTERVAL '7 days'
       GROUP BY opponent.user_id
       ORDER BY MAX(COALESCE(m.started_at, m.updated_at)) DESC
-      LIMIT ${limit}
     `;
-    return rows.map((row) => row.bot_user_id);
+    return rows;
   },
 
   /**

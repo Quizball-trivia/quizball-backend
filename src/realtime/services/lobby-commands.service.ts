@@ -6,10 +6,8 @@ import type {
   LobbyLeaveResult,
 } from '../socket.types.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import {
-  lobbiesService,
-  MIN_QUESTIONS_PER_CATEGORY,
-} from '../../modules/lobbies/lobbies.service.js';
+import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import { MIN_QUESTIONS_PER_CATEGORY } from '../../modules/lobbies/lobbies.constants.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import {
   matchesService,
@@ -771,10 +769,11 @@ export async function startFriendlyMatch(
     let categoryBId: string | null;
 
     if (currentLobby.friendly_random) {
-      const minimumQuestions = currentFriendlyMode === 'friendly_party_quiz'
-        ? PARTY_QUIZ_TOTAL_QUESTIONS
-        : MIN_QUESTIONS_PER_CATEGORY;
-      const categories = await lobbiesService.selectRandomCategories(1, minimumQuestions);
+      const isPartyQuiz = currentFriendlyMode === 'friendly_party_quiz';
+      const minimumQuestions = isPartyQuiz ? PARTY_QUIZ_TOTAL_QUESTIONS : MIN_QUESTIONS_PER_CATEGORY;
+      const categories = isPartyQuiz
+        ? await lobbiesService.selectRandomCategories(1, minimumQuestions)
+        : await lobbiesService.selectRandomCategories(1, minimumQuestions, 'possession');
       if (categories.length < 1) {
         logger.warn(
           { lobbyId, categoryCount: categories.length },
@@ -820,12 +819,13 @@ export async function startFriendlyMatch(
 
       // Category B must clear the same question-count bar as A: it plays a full
       // half, so an under-stocked preset would starve second-half dispatch.
-      const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
-        requestedCategoryIds,
-        currentFriendlyMode === 'friendly_party_quiz'
-          ? PARTY_QUIZ_TOTAL_QUESTIONS
-          : MIN_QUESTIONS_PER_CATEGORY
-      );
+      const validCategoryIds = currentFriendlyMode === 'friendly_party_quiz'
+        ? await lobbiesRepo.listValidCategoryIds(requestedCategoryIds, PARTY_QUIZ_TOTAL_QUESTIONS)
+        : await lobbiesRepo.listValidCategoryIds(
+          requestedCategoryIds,
+          MIN_QUESTIONS_PER_CATEGORY,
+          'possession'
+        );
       if (validCategoryIds.length !== requestedCategoryIds.length) {
         socket.emit('error', {
           code: 'INSUFFICIENT_CATEGORIES',

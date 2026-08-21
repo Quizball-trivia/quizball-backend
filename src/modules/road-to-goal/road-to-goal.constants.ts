@@ -40,6 +40,11 @@ export const ROAD_TO_GOAL_SERVER_WINDOW_MS =
   ROAD_TO_GOAL_QUESTION_MS + ROAD_TO_GOAL_NETWORK_GRACE_MS;
 
 export const ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY = 64;
+export const ROAD_TO_GOAL_FALLBACK_CANDIDATES_PER_DIFFICULTY = 48;
+export const ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES = 4;
+/** Three pages allow recovery after 129 rejected legacy rows while bounding
+ * the least-exposed full-pool sort to 144 candidates per difficulty. */
+export const ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES = 3;
 export const ROAD_TO_GOAL_DECISION_MS = 5 * 60_000;
 
 export const ROAD_TO_GOAL_ACCURACY_PRIORS_BP = {

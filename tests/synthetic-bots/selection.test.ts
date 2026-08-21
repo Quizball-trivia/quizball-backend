@@ -454,10 +454,12 @@ describe('ranked recent-opponent rotation', () => {
       bot('durable-sixteenth', { rp: 1500 }),
       bot('fallback', { rp: 1000 }),
     ]);
-    // 15 fresh Redis identities fill the default ranked window; the durable
-    // 16th falls off the end of the merged window and is selectable again.
-    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `r${i + 1}`));
-    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('durable-sixteenth')]);
+    // 15 fresher durable identities fill the default ranked window; the 16th
+    // (oldest) falls off the end of the merged window and is selectable again.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('durable-sixteenth'),
+    ]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -484,6 +486,27 @@ describe('ranked recent-opponent rotation', () => {
       faced('newest-durable'),
       ...stale.map((id) => faced(id)),
     ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('fallback');
+  });
+
+  it('does not let 15 Redis-only cross-mode identities evict a newer durable ranked opponent', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('newest-durable', { rp: 1500 }),
+      bot('fallback', { rp: 1000 }),
+    ]);
+    // Redis holds 15 identities the ranked history has never seen (e.g. old
+    // auction opponents kept alive by TTL refreshes). The durable ranked
+    // opponent must still occupy the window; cache-only ids get the leftovers.
+    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `aux${i + 1}`));
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('newest-durable')]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -548,10 +571,12 @@ describe('weekly pair-frequency cap', () => {
       bot('farmed-leader', { rp: 1500 }),
       bot('fresh-lower', { rp: 1000 }),
     ]);
-    // Faced 3x in the trailing 7 days (default cap) but NOT in the recent
-    // window — only the frequency cap can exclude it here.
-    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `r${i + 1}`));
-    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('farmed-leader', 3)]);
+    // Faced 3x in the trailing 7 days (default cap) but pushed beyond the
+    // 15-identity recency window — only the frequency cap can exclude it here.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('farmed-leader', 3),
+    ]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -571,8 +596,12 @@ describe('weekly pair-frequency cap', () => {
       bot('lightly-faced', { rp: 1500 }),
       bot('fresh-lower', { rp: 1000 }),
     ]);
-    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `r${i + 1}`));
-    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('lightly-faced', 2)]);
+    // Push it beyond the 15-identity recency window so only the frequency cap
+    // could exclude it — and at 2 of 3 it must not.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('lightly-faced', 2),
+    ]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -605,13 +634,13 @@ describe('weekly pair-frequency cap', () => {
       bot('capped-days-ago', { rp: 1500 }),
     ]);
     // Both are rotation-excluded, so selection must re-enter. The capped bot
-    // has fallen off the 15-identity recency window entirely (15 fresher Redis
-    // entries), so it was faced longest ago of all and goes first.
-    redis.lRange.mockResolvedValue([
-      'just-played',
-      ...Array.from({ length: 14 }, (_, i) => `r${i + 2}`),
+    // has fallen off the 15-identity recency window entirely (15 fresher
+    // durable entries), so it was faced longest ago of all and goes first.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      faced('just-played', 1),
+      ...Array.from({ length: 14 }, (_, i) => faced(`d${i + 2}`)),
+      faced('capped-days-ago', 5),
     ]);
-    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('capped-days-ago', 5)]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',

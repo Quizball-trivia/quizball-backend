@@ -71,6 +71,8 @@ interface GuessOutcome {
   revealed_moves: number;
   title: I18nText;
   fun_fact: I18nText | null;
+  /** Real footage — only ever exposed AFTER the guess. */
+  video_url: string | null;
   bonus?: { question: I18nText; options: PublicOption[] };
   awards: AwardSummary;
   session_state: 'guessed' | 'complete';
@@ -148,6 +150,7 @@ function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
     difficulty: goal.difficulty,
     title: { en: goal.title.en, ka: goal.title.ka ?? null },
     fun_fact: goal.fun_fact ? { en: goal.fun_fact.en, ka: goal.fun_fact.ka ?? null } : null,
+    video_url: goal.video_url ?? null,
     players,
     steps,
     options: anonymizeOptions(goal.options, 'o'),
@@ -308,6 +311,7 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
     revealed_moves: session.revealed_moves ?? 0,
     title: snapshot.title,
     fun_fact: snapshot.fun_fact,
+    video_url: snapshot.video_url ?? null,
     awards: mainAwards(session),
     session_state: session.state === 'guessed' ? 'guessed' : 'complete',
   };
@@ -439,6 +443,7 @@ export const guessTheGoalService = {
         revealed_moves: revealed,
         title: snapshot.title,
         fun_fact: snapshot.fun_fact,
+        video_url: snapshot.video_url ?? null,
         awards,
         session_state: nextState,
       };

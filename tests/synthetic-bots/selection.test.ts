@@ -15,8 +15,12 @@ import '../setup.js';
 
 const repo = {
   listEligibleBots: vi.fn(),
-  listRecentlyFacedPersistentBotIds: vi.fn().mockResolvedValue([]),
+  listRankedPersistentOpponentHistory: vi.fn().mockResolvedValue([]),
 };
+/** Durable-history row shorthand: a bot faced `count` times in the last 7 days. */
+function faced(botUserId: string, count = 1) {
+  return { bot_user_id: botUserId, matches_count: count };
+}
 const reservation = {
   isEnabled: vi.fn(),
   acquire: vi.fn(),
@@ -139,7 +143,7 @@ beforeEach(() => {
   }));
   redis.isOpen = true;
   redis.lRange.mockResolvedValue([]);
-  repo.listRecentlyFacedPersistentBotIds.mockResolvedValue([]);
+  repo.listRankedPersistentOpponentHistory.mockResolvedValue([]);
 });
 
 describe('rollout flag behavior', () => {
@@ -433,7 +437,7 @@ describe('ranked recent-opponent rotation', () => {
       bot('durable-recent', { rp: 1500 }),
       bot('alternate', { rp: 1400 }),
     ]);
-    repo.listRecentlyFacedPersistentBotIds.mockResolvedValue(['durable-recent']);
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('durable-recent')]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -445,13 +449,17 @@ describe('ranked recent-opponent rotation', () => {
     expect(result?.bot.user_id).toBe('alternate');
   });
 
-  it('caps the merged Redis and durable window at five identities', async () => {
+  it('caps the merged Redis and durable window at BOT_RANKED_RECENT_WINDOW identities', async () => {
     repo.listEligibleBots.mockResolvedValue([
-      bot('durable-sixth', { rp: 1500 }),
+      bot('durable-sixteenth', { rp: 1500 }),
       bot('fallback', { rp: 1000 }),
     ]);
-    redis.lRange.mockResolvedValue(['r1', 'r2', 'r3', 'r4', 'r5']);
-    repo.listRecentlyFacedPersistentBotIds.mockResolvedValue(['durable-sixth']);
+    // 15 fresher durable identities fill the default ranked window; the 16th
+    // (oldest) falls off the end of the merged window and is selectable again.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('durable-sixteenth'),
+    ]);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
@@ -460,7 +468,74 @@ describe('ranked recent-opponent rotation', () => {
       allowOutOfBandFallback: true,
     });
 
-    expect(result?.bot.user_id).toBe('durable-sixth');
+    expect(result?.bot.user_id).toBe('durable-sixteenth');
+  });
+
+  it('does not let a stale full Redis list hide a durably-recorded newer opponent', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('newest-durable', { rp: 1500 }),
+      bot('fallback', { rp: 1000 }),
+    ]);
+    // Redis recovered with an old full window (all 15 ids also present in the
+    // durable history) but MISSED the newest opponent. The durable order is
+    // authoritative: the newest opponent must stay inside the window instead of
+    // being sliced off behind the stale cache entries.
+    const stale = Array.from({ length: 15 }, (_, i) => `s${i + 1}`);
+    redis.lRange.mockResolvedValue(stale);
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      faced('newest-durable'),
+      ...stale.map((id) => faced(id)),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('fallback');
+  });
+
+  it('does not let 15 Redis-only cross-mode identities evict a newer durable ranked opponent', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('newest-durable', { rp: 1500 }),
+      bot('fallback', { rp: 1000 }),
+    ]);
+    // Redis holds 15 identities the ranked history has never seen (e.g. old
+    // auction opponents kept alive by TTL refreshes). The durable ranked
+    // opponent must still occupy the window; cache-only ids get the leftovers.
+    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `aux${i + 1}`));
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('newest-durable')]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('fallback');
+  });
+
+  it('keeps a bot excluded while it is inside the ranked window even when Redis holds fewer', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('sixth-recent', { rp: 1500 }),
+      bot('fallback', { rp: 1000 }),
+    ]);
+    // Under the old 5-identity window the 6th-most-recent opponent was already
+    // selectable again — exactly the loop top players reported. The 15-window
+    // keeps it out and selection walks down to a fresh identity instead.
+    redis.lRange.mockResolvedValue(['r1', 'r2', 'r3', 'r4', 'r5', 'sixth-recent']);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('fallback');
   });
 
   it('keeps optional-caller recent-opponent relaxation and skips the durable ranked query', async () => {
@@ -475,7 +550,7 @@ describe('ranked recent-opponent rotation', () => {
 
     expect(result?.bot.user_id).toBe('optional-recent');
     expect(result?.relaxationLevel).toBe('relax_recently_faced');
-    expect(repo.listRecentlyFacedPersistentBotIds).not.toHaveBeenCalled();
+    expect(repo.listRankedPersistentOpponentHistory).not.toHaveBeenCalled();
     expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({
       requirePersistent: false,
     }));
@@ -486,7 +561,118 @@ describe('ranked recent-opponent rotation', () => {
 
     expect(redis.lRem).toHaveBeenCalledWith('ranked:persistent:recent:human', 0, 'bot-1');
     expect(redis.lPush).toHaveBeenCalledWith('ranked:persistent:recent:human', 'bot-1');
-    expect(redis.lTrim).toHaveBeenCalledWith('ranked:persistent:recent:human', 0, 4);
+    expect(redis.lTrim).toHaveBeenCalledWith('ranked:persistent:recent:human', 0, 14);
+  });
+});
+
+describe('weekly pair-frequency cap', () => {
+  it('excludes a bot the human already faced BOT_RANKED_PAIR_WEEKLY_CAP times, even at closer RP', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('farmed-leader', { rp: 1500 }),
+      bot('fresh-lower', { rp: 1000 }),
+    ]);
+    // Faced 3x in the trailing 7 days (default cap) but pushed beyond the
+    // 15-identity recency window — only the frequency cap can exclude it here.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('farmed-leader', 3),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('fresh-lower');
+    expect(reservation.acquire).not.toHaveBeenCalledWith(expect.objectContaining({
+      botUserId: 'farmed-leader',
+    }));
+  });
+
+  it('does not exclude a bot below the weekly cap', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('lightly-faced', { rp: 1500 }),
+      bot('fresh-lower', { rp: 1000 }),
+    ]);
+    // Push it beyond the 15-identity recency window so only the frequency cap
+    // could exclude it — and at 2 of 3 it must not.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      ...Array.from({ length: 15 }, (_, i) => faced(`d${i + 1}`)),
+      faced('lightly-faced', 2),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('lightly-faced');
+  });
+
+  it('still serves a weekly-capped bot as the last resort when nothing else is usable', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('only-option', { rp: 1500 })]);
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([faced('only-option', 7)]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('only-option');
+    expect(result?.relaxationLevel).toBe('relax_recently_faced');
+  });
+
+  it('retries a capped bot outside the recency list before a recently-faced one', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('just-played', { rp: 1500 }),
+      bot('capped-days-ago', { rp: 1500 }),
+    ]);
+    // Both are rotation-excluded, so selection must re-enter. The capped bot
+    // has fallen off the 15-identity recency window entirely (15 fresher
+    // durable entries), so it was faced longest ago of all and goes first.
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      faced('just-played', 1),
+      ...Array.from({ length: 14 }, (_, i) => faced(`d${i + 2}`)),
+      faced('capped-days-ago', 5),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('capped-days-ago');
+  });
+
+  it('re-enters the least-recent of TWO capped bots beyond the window, not the closest-RP one', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('capped-newer', { rp: 1500 }),
+      bot('capped-older', { rp: 1400 }),
+    ]);
+    // Both capped bots fell off the 15-id window; the full durable order must
+    // still break the tie by true recency (older first), not by RP closeness.
+    redis.lRange.mockResolvedValue(Array.from({ length: 15 }, (_, i) => `r${i + 1}`));
+    repo.listRankedPersistentOpponentHistory.mockResolvedValue([
+      faced('capped-newer', 5),
+      faced('capped-older', 5),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      allowOutOfBandFallback: true,
+    });
+
+    expect(result?.bot.user_id).toBe('capped-older');
   });
 });
 

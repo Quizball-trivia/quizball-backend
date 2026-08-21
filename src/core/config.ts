@@ -104,6 +104,16 @@ const configSchema = z.object({
   // ceiling can be retuned by an env change + restart rather than a code change
   // (wider = more roster coverage, worse parity).
   BOT_PAIRING_MAX_RP_GAP: z.coerce.number().int().min(150).max(2000).default(300),
+  // How many DISTINCT recent bot identities ranked selection keeps out of a
+  // human's fresh candidate pools before re-entry may repeat one. The old
+  // 5-identity window let players above the roster's RP ceiling cycle the same
+  // ~6 top bots forever — wide enough to be recognized and reported as bots.
+  BOT_RANKED_RECENT_WINDOW: z.coerce.number().int().min(1).max(50).default(15),
+  // Per-pair frequency cap: once a human has STARTED this many ranked matches
+  // against one bot in the trailing 7 days, that bot leaves the fresh pools and
+  // selection walks further down the ladder (a new identity beats a closer RP).
+  // 0 disables the cap.
+  BOT_RANKED_PAIR_WEEKLY_CAP: z.coerce.number().int().min(0).max(20).default(3),
   // Rubber-band governor kill switch (PR9). Ships ENABLED, unlike the flags
   // above, because it is a SAFETY loop, not a feature: it is what keeps roster
   // bots from climbing into the human top 10 and what steers win rate into the

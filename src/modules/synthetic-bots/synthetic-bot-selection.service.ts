@@ -25,9 +25,13 @@ import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
  *     keep the bounded band because they still own an ephemeral fallback.
  *   - Eligibility ladder relaxes SOFT constraints in fixed order:
  *       session preference → recently-faced → daily cap → schedule.
- *     Ranked first removes recently-faced identities from its normal and
- *     out-of-band pools. Only after every fresh candidate is exhausted may it
- *     retry the least-recent opponent, so rotation never becomes an outage.
+ *     Ranked first removes rotation-excluded identities — the last
+ *     BOT_RANKED_RECENT_WINDOW distinct opponents plus any bot this human has
+ *     already faced BOT_RANKED_PAIR_WEEKLY_CAP times in the trailing 7 days —
+ *     from its normal and out-of-band pools, so a fresh identity further down
+ *     the ladder beats repeating a closer-RP one. Only after every fresh
+ *     candidate is exhausted may it retry the least-recent opponent, so
+ *     rotation never becomes an outage.
  *     HARD constraints (status='active', not reserved) are enforced in SQL and
  *     NEVER relaxed. reserved is additionally guaranteed by the acquire race.
  *   - On a hit: acquire the reservation (ON CONFLICT DO NOTHING). If the acquire
@@ -40,7 +44,21 @@ import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
  */
 
 const RESERVATION_TTL_SEC = 180; // lobby-lifetime lease; heartbeated across the match.
+// Auction (and any future optional caller) keeps the original short soft
+// window; ranked uses the wider env-tunable BOT_RANKED_RECENT_WINDOW so a
+// player above the roster's RP ceiling rotates through ~window+1 identities
+// instead of the ~6 that a 5-window allowed.
 const RECENTLY_FACED_LIMIT = 5;
+
+/** The identity window ranked keeps out of its fresh pools. */
+function rankedRecentWindow(): number {
+  return config.BOT_RANKED_RECENT_WINDOW;
+}
+
+/** Redis stores the widest window any caller reads. */
+function storedRecentLimit(): number {
+  return Math.max(RECENTLY_FACED_LIMIT, rankedRecentWindow());
+}
 // Inner parity band. Prod evidence (2026-07-31): at a gap ≤150 RP bots win ~32%
 // of matches; beyond it the human is overwhelmingly the stronger side (77% of
 // bot matches paired a human 150+ RP above the bot, which bots won 4.5% of).
@@ -67,44 +85,72 @@ function recentlyFacedKey(humanUserId: string): string {
   return `ranked:persistent:recent:${humanUserId}`;
 }
 
-/** The human's last N persistent-bot opponents (most-recent first). Best-effort. */
-async function getRecentlyFaced(humanUserId: string, includeDurable: boolean): Promise<string[]> {
+interface RecentOpponentState {
+  /** Last N distinct persistent-bot opponents, most-recent first. */
+  recentlyFacedList: string[];
+  /** Bots this human already faced >= BOT_RANKED_PAIR_WEEKLY_CAP times in 7 days. */
+  weeklyCappedIds: string[];
+  /**
+   * FULL recency order (most-recent first), unsliced — every identity in the
+   * exclusion pools appears here, so emergency re-entry can pick the genuinely
+   * least-recent opponent even among bots that fell off the window.
+   */
+  recentOrder: string[];
+}
+
+/** The human's recent persistent-bot opponent state. Best-effort. */
+async function getRecentlyFaced(humanUserId: string, includeDurable: boolean): Promise<RecentOpponentState> {
+  const window = includeDurable ? rankedRecentWindow() : RECENTLY_FACED_LIMIT;
   const redis = getRedisClient();
-  const [cached, durable] = await Promise.all([
+  const [cached, history] = await Promise.all([
     redis?.isOpen
-      ? redis.lRange(recentlyFacedKey(humanUserId), 0, RECENTLY_FACED_LIMIT - 1).catch((err) => {
+      ? redis.lRange(recentlyFacedKey(humanUserId), 0, window - 1).catch((err) => {
           logger.warn({ err, humanUserId }, 'persistent-bot recently-faced cache read failed');
           return [] as string[];
         })
       : Promise.resolve([] as string[]),
     includeDurable
-      ? syntheticBotsRepo.listRecentlyFacedPersistentBotIds(humanUserId, RECENTLY_FACED_LIMIT).catch((err) => {
+      ? syntheticBotsRepo.listRankedPersistentOpponentHistory(humanUserId).catch((err) => {
           logger.warn({ err, humanUserId }, 'persistent-bot recently-faced durable read failed');
-          return [] as string[];
+          return [] as { bot_user_id: string; matches_count: number }[];
         })
-      : Promise.resolve([] as string[]),
+      : Promise.resolve([] as { bot_user_id: string; matches_count: number }[]),
   ]);
-  // Redis is the freshest source, so preserve its order and fill any remaining
-  // slots from the durable backstop. The effective window is always exactly N,
-  // never N from each source (which would silently double the exclusion pool).
-  return [...new Set([...cached, ...durable])].slice(0, RECENTLY_FACED_LIMIT);
+  // The durable history is computed straight from started matches, so for
+  // ranked it is the authoritative recency order — neither a stale-but-full
+  // Redis list nor lingering cross-mode (auction) identities may push a
+  // durably-recorded ranked opponent off the window. Redis-only identities
+  // (auction opponents, or a transfer recorded ahead of match visibility) fill
+  // whatever window room the ranked history leaves. The effective window is
+  // always exactly N, never N from each source (which would silently double
+  // the exclusion pool).
+  const durableIds = history.map((row) => row.bot_user_id);
+  const durableSet = new Set(durableIds);
+  const cacheOnly = cached.filter((id) => !durableSet.has(id));
+  const recentOrder = [...new Set([...durableIds, ...cacheOnly])];
+  const recentlyFacedList = recentOrder.slice(0, window);
+  const weeklyCap = config.BOT_RANKED_PAIR_WEEKLY_CAP;
+  const weeklyCappedIds = weeklyCap > 0
+    ? history.filter((row) => row.matches_count >= weeklyCap).map((row) => row.bot_user_id)
+    : [];
+  return { recentlyFacedList, weeklyCappedIds, recentOrder };
 }
 
 /**
  * Record a persistent bot as a recent opponent for the human (LRU, capped at
- * RECENTLY_FACED_LIMIT). Called by the caller after a successful transfer so
- * the exclusion reflects matches that actually started. Best-effort.
+ * the widest caller window). Called by the caller after a successful transfer
+ * so the exclusion reflects matches that actually started. Best-effort.
  */
 export async function recordRecentlyFaced(humanUserId: string, botUserId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
   try {
     const key = recentlyFacedKey(humanUserId);
-    // Keep five DISTINCT identities. Without LREM, repeat entries consume the
+    // Keep DISTINCT identities. Without LREM, repeat entries consume the
     // whole list and collapse the effective rotation window back to one bot.
     await redis.lRem(key, 0, botUserId);
     await redis.lPush(key, botUserId);
-    await redis.lTrim(key, 0, RECENTLY_FACED_LIMIT - 1);
+    await redis.lTrim(key, 0, storedRecentLimit() - 1);
     // No permanent memory of who a player has ever faced — only a short window.
     await redis.expire(key, 60 * 60 * 24 * 7);
   } catch (err) {
@@ -270,15 +316,20 @@ function orderOutOfBandFallback(
   return [...lower, ...higher];
 }
 
-/** Stable oldest-first ordering within an already RP-scoped candidate list. */
+/**
+ * Stable oldest-first ordering within an already RP-scoped candidate list.
+ * A bot absent from the recency list (possible for a weekly-capped bot whose
+ * last match predates the recent-identity window) was faced longest ago of
+ * all, so it sorts FIRST, ahead of every listed identity.
+ */
 function orderByLeastRecentlyFaced(
   bots: EligibleBotRow[],
   recentlyFacedList: readonly string[],
 ): EligibleBotRow[] {
   const recency = new Map(recentlyFacedList.map((userId, index) => [userId, index]));
-  return [...bots].sort(
-    (a, b) => (recency.get(b.user_id) ?? -1) - (recency.get(a.user_id) ?? -1),
-  );
+  const indexOf = (bot: EligibleBotRow): number =>
+    recency.get(bot.user_id) ?? Number.MAX_SAFE_INTEGER;
+  return [...bots].sort((a, b) => indexOf(b) - indexOf(a));
 }
 
 export interface SelectedPersistentBot {
@@ -315,11 +366,12 @@ export const syntheticBotSelectionService = {
     const targetRp = selectionTargetRpForHuman(params.humanProfile);
     const unavailableOutcome = rankedPersistentOnly ? 'unavailable' : 'ephemeral_fallback';
 
-    const [eligible, recentlyFacedList, tuning] = await Promise.all([
+    const [eligible, recentState, tuning] = await Promise.all([
       syntheticBotsRepo.listEligibleBots(),
       getRecentlyFaced(params.humanUserId, rankedPersistentOnly),
       loadBotTuning(),
     ]);
+    const { recentlyFacedList, weeklyCappedIds, recentOrder } = recentState;
 
     if (eligible.length === 0) {
       appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation: 'empty_roster' });
@@ -327,9 +379,14 @@ export const syntheticBotSelectionService = {
       return null;
     }
 
-    const recentlyFaced = new Set(recentlyFacedList);
+    // Rotation exclusion: the recent-identity window plus any bot this human
+    // has already faced BOT_RANKED_PAIR_WEEKLY_CAP times in the trailing 7
+    // days. weeklyCappedIds is only populated on the ranked path, so this is
+    // exactly the old recently-faced set for optional callers.
+    const recentlyFaced = new Set([...recentlyFacedList, ...weeklyCappedIds]);
     const unseated = eligible;
-    // Ranked keeps recent identities out of both normal pools.
+    // Ranked keeps rotation-excluded identities out of both normal pools — a
+    // fresh identity further down the RP ladder beats repeating a closer one.
     const selectable = rankedPersistentOnly
       ? unseated.filter((bot) => !recentlyFaced.has(bot.user_id))
       : unseated;
@@ -343,12 +400,12 @@ export const syntheticBotSelectionService = {
       : [];
     const recentInBand = orderByLeastRecentlyFaced(
       orderByNearestRp(recentPool, targetRp),
-      recentlyFacedList,
+      recentOrder,
     );
     const recentInBandUserIds = new Set(recentInBand.map((bot) => bot.user_id));
     const recentOutOfBand = orderByLeastRecentlyFaced(
       orderOutOfBandFallback(recentPool, targetRp, recentInBandUserIds),
-      recentlyFacedList,
+      recentOrder,
     );
 
     // Optional callers remain bounded and may hand the seat to their ephemeral
@@ -366,6 +423,8 @@ export const syntheticBotSelectionService = {
           eligibleCount: eligible.length,
           selectableCount: selectable.length,
           recentlyFacedCount: recentlyFaced.size,
+          weeklyCappedCount: weeklyCappedIds.length,
+          recentWindow: rankedPersistentOnly ? rankedRecentWindow() : RECENTLY_FACED_LIMIT,
           maxRpGap: config.BOT_PAIRING_MAX_RP_GAP,
         },
         'persistent-bot selection: no candidate available',
@@ -404,6 +463,8 @@ export const syntheticBotSelectionService = {
           botRp: bot.rp,
           rpScope,
           relaxation: level.relaxationLabel,
+          recentlyFacedCount: recentlyFaced.size,
+          weeklyCappedCount: weeklyCappedIds.length,
         },
         'persistent-bot selected + reserved',
       );

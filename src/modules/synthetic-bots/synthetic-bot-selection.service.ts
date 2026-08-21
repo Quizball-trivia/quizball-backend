@@ -117,17 +117,17 @@ async function getRecentlyFaced(humanUserId: string, includeDurable: boolean): P
       : Promise.resolve([] as { bot_user_id: string; matches_count: number }[]),
   ]);
   // The durable history is computed straight from started matches, so for
-  // ranked it is the authoritative recency order — a stale-but-full Redis list
-  // must never push a durably-recorded newer opponent off the window. Redis
-  // contributes only identities the ranked history cannot know: cross-mode
-  // (auction) opponents and anything recorded ahead of match visibility. Those
-  // are freshest-first by construction, so they go in front. The effective
-  // window is always exactly N, never N from each source (which would silently
-  // double the exclusion pool).
+  // ranked it is the authoritative recency order — neither a stale-but-full
+  // Redis list nor lingering cross-mode (auction) identities may push a
+  // durably-recorded ranked opponent off the window. Redis-only identities
+  // (auction opponents, or a transfer recorded ahead of match visibility) fill
+  // whatever window room the ranked history leaves. The effective window is
+  // always exactly N, never N from each source (which would silently double
+  // the exclusion pool).
   const durableIds = history.map((row) => row.bot_user_id);
   const durableSet = new Set(durableIds);
   const cacheOnly = cached.filter((id) => !durableSet.has(id));
-  const recentOrder = [...new Set([...cacheOnly, ...durableIds])];
+  const recentOrder = [...new Set([...durableIds, ...cacheOnly])];
   const recentlyFacedList = recentOrder.slice(0, window);
   const weeklyCap = config.BOT_RANKED_PAIR_WEEKLY_CAP;
   const weeklyCappedIds = weeklyCap > 0

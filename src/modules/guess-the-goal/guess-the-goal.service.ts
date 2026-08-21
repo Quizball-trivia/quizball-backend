@@ -4,11 +4,12 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors
 import { storeRepo } from '../store/store.repo.js';
 import { progressionRepo } from '../progression/progression.repo.js';
 import { guessTheGoalRepo } from './guess-the-goal.repo.js';
-import { buildTimings, pointsForReveal, revealedMovesAt } from './guess-the-goal.timing.js';
+import { buildTimings, pointsForElapsed, revealedMovesAt } from './guess-the-goal.timing.js';
 import {
   GGT_BONUS_POINTS,
   GGT_COINS_PER_POINT,
   GGT_DAILY_COIN_CAP,
+  GGT_FULL_POINTS_SECONDS,
   GGT_GRACE_MS,
   GGT_MAX_POINTS,
   GGT_MIN_POINTS,
@@ -38,6 +39,9 @@ interface PublicSession {
   server_now: string;
   started_at: string;
   grace_ms: number;
+  /** Seconds of play over which the score decays MAX→MIN (mirrors the server
+   *  formula so the client preview can't drift from the settlement). */
+  full_points_seconds: number;
   max_points: number;
   min_points: number;
   goal: {
@@ -199,6 +203,7 @@ async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
     server_now: now.toISOString(),
     started_at: new Date(session.started_at).toISOString(),
     grace_ms: GGT_GRACE_MS,
+    full_points_seconds: GGT_FULL_POINTS_SECONDS,
     max_points: session.max_points,
     min_points: GGT_MIN_POINTS,
     goal: {
@@ -407,7 +412,7 @@ export const guessTheGoalService = {
 
       const correct = option.is_correct;
       const points = correct
-        ? pointsForReveal(revealed, timings.mainStarts.length, session.max_points, GGT_MIN_POINTS)
+        ? pointsForElapsed(elapsed, session.max_points, GGT_MIN_POINTS, GGT_FULL_POINTS_SECONDS)
         : 0;
 
       const hasBonus = correct && snapshot.bonus != null;
@@ -529,6 +534,7 @@ export const guessTheGoalService = {
   async getStats(userId: string): Promise<{
     solved: number;
     total: number;
+    pool_exhausted: boolean;
     coins_today: number;
     daily_coin_cap: number;
   }> {
@@ -537,7 +543,13 @@ export const guessTheGoalService = {
       guessTheGoalRepo.countPublished(),
       sql.begin((tx) => guessTheGoalRepo.coinsGrantedToday(tx, userId)),
     ]);
-    return { solved, total, coins_today: coinsToday, daily_coin_cap: GGT_DAILY_COIN_CAP };
+    return {
+      solved,
+      total,
+      pool_exhausted: solved >= total,
+      coins_today: coinsToday,
+      daily_coin_cap: GGT_DAILY_COIN_CAP,
+    };
   },
 
   /** Progress gallery. Solved cards come from the solving session's immutable
@@ -548,6 +560,7 @@ export const guessTheGoalService = {
   async getGallery(userId: string): Promise<{
     solved: number;
     total: number;
+    pool_exhausted: boolean;
     coins_earned: number;
     xp_earned: number;
     daily_coin_cap: number;
@@ -591,6 +604,7 @@ export const guessTheGoalService = {
     return {
       solved: goals.length,
       total: goals.length + lockedTotal,
+      pool_exhausted: lockedTotal === 0 && goals.length > 0,
       coins_earned: earnings.coins,
       xp_earned: earnings.xp,
       daily_coin_cap: GGT_DAILY_COIN_CAP,

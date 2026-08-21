@@ -122,7 +122,7 @@ BEGIN
     END IF;
   END LOOP;
 END;
-$$inner$;
+$inner$;
   END IF;
 END
 $$;

@@ -1,6 +1,7 @@
 import type { QuizballServer } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import { MIN_QUESTIONS_PER_CATEGORY } from '../../modules/lobbies/lobbies.constants.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -164,7 +165,7 @@ export async function startDraft(
         categories = selection.categories;
         recentFilterApplied = selection.recentFilterApplied;
       } else {
-        categories = await lobbiesService.selectRandomCategories(3);
+        categories = await lobbiesService.selectRandomCategories(3, MIN_QUESTIONS_PER_CATEGORY, 'possession');
       }
       span.setAttribute('quizball.category_count', categories.length);
       span.setAttribute('quizball.recent_filter_applied', recentFilterApplied);

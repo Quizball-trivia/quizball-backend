@@ -525,6 +525,7 @@ async function maybePickQuestionForState(
   }
 
   const pickValidCandidate = async (
+    candidateQuestionType: QuestionType,
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
     opts?: {
       allowImageMcqs?: boolean;
@@ -542,13 +543,13 @@ async function maybePickQuestionForState(
       matchId,
       categoryIds,
       difficulties,
-      questionTypes: [questionType],
+      questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
       leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
-      limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
+      limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
-    return pickFirstValidCandidate(rows, questionType, {
+    return pickFirstValidCandidate(rows, candidateQuestionType, {
       matchId,
       categoryIds,
       difficulties,
@@ -565,12 +566,13 @@ async function maybePickQuestionForState(
   //      by LEAST-recently-seen (the question they saw longest ago), never a
   //      random recent repeat, and never a stall.
   const excludeSeen = recentlySeenIds.length > 0;
-  let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen });
+  let picked = await pickValidCandidate(questionType, preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {
-    picked = await pickValidCandidate(['easy', 'medium', 'hard'], { excludeSeen });
+    picked = await pickValidCandidate(questionType, ['easy', 'medium', 'hard'], { excludeSeen });
   }
   if (!picked && excludeSeen) {
     picked = await pickValidCandidate(
+      questionType,
       useDifficulty ? ['easy', 'medium', 'hard'] : preferredDifficulties,
       { leastRecent: true },
     );
@@ -585,10 +587,30 @@ async function maybePickQuestionForState(
       { matchId, categoryIds, questionType },
       'Plain MCQ pool exhausted; retrying with image MCQs allowed (anti-stall)'
     );
-    picked = await pickValidCandidate(['easy', 'medium', 'hard'], {
+    picked = await pickValidCandidate(questionType, ['easy', 'medium', 'hard'], {
       allowImageMcqs: true,
       dropReservedExclusion: true,
     });
+  }
+  if (!picked && !useDifficulty) {
+    // Content eligibility prevents categories without the normal-play special
+    // types from entering new matches. This remains the live-match safety net
+    // for content being unpublished mid-match, stale caches, or legacy matches
+    // that were already active: replace the unavailable special slot with an
+    // MCQ instead of leaving both clients waiting forever.
+    logger.error(
+      { matchId, categoryIds, requestedQuestionType: questionType, fallbackQuestionType: 'mcq_single' },
+      'Special question pool exhausted; falling back to MCQ (anti-stall)'
+    );
+    picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+      dropReservedExclusion: true,
+    });
+    if (!picked) {
+      picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+        allowImageMcqs: true,
+        dropReservedExclusion: true,
+      });
+    }
   }
 
   return picked;

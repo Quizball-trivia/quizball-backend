@@ -74,11 +74,15 @@ export const RANKED_ELIGIBILITY_HAVING = sql`
  * category is overcounted here.
  * Assumes `q` aliases `questions` with status/type filtered in WHERE.
  */
-export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
-  HAVING COUNT(*) FILTER (WHERE q.type = 'mcq_single') >= 4
+export function buildPossessionEligibilityHavingCounts(minMcqQuestions: number) {
+  return sql`
+  HAVING COUNT(*) FILTER (WHERE q.type = 'mcq_single') >= ${minMcqQuestions}
     AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
 `;
+}
+
+export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHavingCounts(4);
 
 /**
  * Game-mode/daily-challenge categories must never enter matchmaking pools

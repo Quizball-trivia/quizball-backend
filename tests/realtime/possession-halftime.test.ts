@@ -123,6 +123,34 @@ describe('possession halftime finalize', () => {
     setMatchStatePayloadMock.mockResolvedValue(undefined);
   });
 
+  it('uses possession-complete categories for friendly halftime options', async () => {
+    const cache = createHalftimeCache();
+    cache.statePayload.halftime.categoryOptions = [];
+    cache.statePayload.halftime.firstHalfShownCategoryIds = [];
+    const { lobbiesService } = await import('../../src/modules/lobbies/lobbies.service.js');
+    const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+    vi.mocked(matchesRepo.getMatch).mockResolvedValue(null);
+    vi.mocked(lobbiesService.selectRandomCategoriesExcluding).mockResolvedValue([
+      { id: 'cat-b', name: 'B', icon: null },
+      { id: 'cat-c', name: 'C', icon: null },
+      { id: 'cat-d', name: 'D', icon: null },
+    ] as never);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(cache.statePayload, cache.categoryAId, cache.matchId);
+
+    expect(lobbiesService.selectRandomCategoriesExcluding).toHaveBeenCalledWith(
+      3,
+      expect.any(Array),
+      'possession'
+    );
+    expect(cache.statePayload.halftime.categoryOptions).toHaveLength(3);
+  });
+
   it('reveals auto-filled missing bans before starting the second half when no AI can respond', async () => {
     const cache = createHalftimeCache();
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);

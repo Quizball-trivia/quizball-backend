@@ -50,6 +50,11 @@ interface PublicSession {
   };
   /** Present when state = 'guessed' (correct guess, bonus pending). */
   bonus?: { question: I18nText; options: PublicOption[] };
+  /** Present when state = 'guessed': the already-settled reveal, so a client
+   *  that refreshes mid-session can restore the full outcome (title, fact,
+   *  points, video). Safe — the guess has been made. */
+  outcome?: GuessOutcome;
+  guess_option_id?: string;
   progress: { solved: number; total: number };
 }
 
@@ -208,6 +213,8 @@ async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
   };
   if (session.state === 'guessed') {
     payload.bonus = bonusPayload(session);
+    payload.outcome = replayGuessOutcome(session);
+    payload.guess_option_id = session.guess_option_id ?? undefined;
   }
   return payload;
 }

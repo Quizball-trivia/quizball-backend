@@ -3,6 +3,7 @@ import { getRandom } from '../core/rng.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
+import { MIN_QUESTIONS_PER_CATEGORY } from '../modules/lobbies/lobbies.constants.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   RANKED_RECENT_CATEGORY_MODE,
@@ -150,7 +151,11 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     if (state.halftime.categoryOptions.some((category) => category.id === categoryBId)) return;
 
     try {
-      state.halftime.categoryOptions = await lobbiesService.getDraftCategoriesByIds([categoryBId]);
+      state.halftime.categoryOptions = await lobbiesService.getDraftCategoriesByIds(
+        [categoryBId],
+        MIN_QUESTIONS_PER_CATEGORY,
+        'possession'
+      );
     } catch (error) {
       logger.error({ error, matchId, categoryBId }, 'Failed to load preset second-half category');
       state.halftime.categoryOptions = [];
@@ -191,11 +196,19 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
       const useRankedCategories = state.variant === 'ranked_sim';
       const selectExcluding = useRankedCategories
-        ? lobbiesService.selectRandomRankedCategoriesExcluding.bind(lobbiesService)
-        : lobbiesService.selectRandomCategoriesExcluding.bind(lobbiesService);
+        ? (count: number, excluded: string[]) => lobbiesService.selectRandomRankedCategoriesExcluding(count, excluded)
+        : (count: number, excluded: string[]) => lobbiesService.selectRandomCategoriesExcluding(
+          count,
+          excluded,
+          'possession'
+        );
       const selectAny = useRankedCategories
-        ? lobbiesService.selectRandomRankedCategories.bind(lobbiesService)
-        : lobbiesService.selectRandomCategories.bind(lobbiesService);
+        ? (count: number) => lobbiesService.selectRandomRankedCategories(count)
+        : (count: number) => lobbiesService.selectRandomCategories(
+          count,
+          MIN_QUESTIONS_PER_CATEGORY,
+          'possession'
+        );
 
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
       // Penalty ban: also exclude the second-half category so penalties don't

@@ -61,8 +61,28 @@ describe('lobbiesService public/friendly helpers', () => {
     ]);
 
     expect(lobbiesRepo.listAllValidCategories).toHaveBeenCalledTimes(2);
-    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(1, 5);
-    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(2, 10);
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(1, 5, 'mcq');
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(2, 10, 'mcq');
+  });
+
+  it('keeps possession coverage separate from the MCQ-only party pool', async () => {
+    (lobbiesRepo.listAllValidCategories as Mock).mockImplementation(async (_minimum: number, pool: string) => (
+      pool === 'possession'
+        ? [{ id: 'complete', name: { en: 'Complete' }, icon: null, image_url: null }]
+        : [{ id: 'mcq-only', name: { en: 'MCQ only' }, icon: null, image_url: null }]
+    ));
+
+    await expect(lobbiesService.selectRandomCategories(1, 5)).resolves.toEqual([
+      expect.objectContaining({ id: 'mcq-only' }),
+    ]);
+    await expect(lobbiesService.selectRandomCategories(1, 5, 'possession')).resolves.toEqual([
+      expect.objectContaining({ id: 'complete' }),
+    ]);
+    await expect(lobbiesService.selectRandomCategories(1, 5)).resolves.toEqual([
+      expect.objectContaining({ id: 'mcq-only' }),
+    ]);
+
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenCalledTimes(2);
   });
 
   it('defaults legacy friendly game mode to friendly_possession in lobby state', async () => {

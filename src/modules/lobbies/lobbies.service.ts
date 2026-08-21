@@ -1,4 +1,4 @@
-import { lobbiesRepo } from './lobbies.repo.js';
+import { lobbiesRepo, type FriendlyCategoryPool } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import { isRankedSettleEligible } from '../users/ai-classification.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
@@ -11,6 +11,9 @@ import {
   userRecentCategoriesRepo,
 } from '../user-recent-categories/user-recent-categories.repo.js';
 import { buildRecentExclusionSet, type RecentCategoryEntry } from './recent-category-filter.js';
+import { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
+
+export { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
@@ -67,8 +70,6 @@ async function buildRankPointsByUserId(
   return new Map(entries.filter((entry): entry is [string, number] => entry !== null));
 }
 
-export const MIN_QUESTIONS_PER_CATEGORY = 5;
-
 // ── Valid category cache ──
 // Caches the expensive JSONB-validated category query results for 5 minutes.
 // Categories/questions change infrequently, so a short TTL is safe.
@@ -79,24 +80,26 @@ interface CategoryCacheEntry {
   expiresAt: number;
 }
 
-// Friendly possession and party quiz require different pool depths. Key the
-// cache by the requested minimum so a warm 5-question possession lookup can
-// never make an 8-question category eligible for a 10-question party quiz.
-const validCategoryCache = new Map<number, CategoryCacheEntry>();
+// Friendly possession and party quiz require different type coverage and pool
+// depths. Key by both so neither mode can warm an eligibility result for the
+// other one.
+const validCategoryCache = new Map<string, CategoryCacheEntry>();
 let rankedCategoryCache: CategoryCacheEntry | null = null;
 
 async function getValidCategories(
-  minQuestions: number
+  minQuestions: number,
+  pool: FriendlyCategoryPool
 ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
   const now = Date.now();
-  const cached = validCategoryCache.get(minQuestions);
+  const cacheKey = `${pool}:${minQuestions}`;
+  const cached = validCategoryCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     return cached.rows;
   }
   // Fetch ALL valid categories (no LIMIT, no randomization) and cache the full set.
   // Callers shuffle/filter/slice from this cached set.
-  const rows = await lobbiesRepo.listAllValidCategories(minQuestions);
-  validCategoryCache.set(minQuestions, { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS });
+  const rows = await lobbiesRepo.listAllValidCategories(minQuestions, pool);
+  validCategoryCache.set(cacheKey, { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS });
   return rows;
 }
 
@@ -149,9 +152,10 @@ export const lobbiesService = {
 
   async selectRandomCategories(
     count: number,
-    minQuestions = MIN_QUESTIONS_PER_CATEGORY
+    minQuestions = MIN_QUESTIONS_PER_CATEGORY,
+    pool: FriendlyCategoryPool = 'mcq'
   ): Promise<DraftCategory[]> {
-    const allValid = await getValidCategories(minQuestions);
+    const allValid = await getValidCategories(minQuestions, pool);
     // Shuffle and take `count` from cached set
     const shuffled = shuffle([...allValid]);
     const selected = shuffled.slice(0, count);
@@ -171,10 +175,11 @@ export const lobbiesService = {
    */
   async getDraftCategoriesByIds(
     categoryIds: string[],
-    minQuestions = MIN_QUESTIONS_PER_CATEGORY
+    minQuestions = MIN_QUESTIONS_PER_CATEGORY,
+    pool: FriendlyCategoryPool = 'mcq'
   ): Promise<DraftCategory[]> {
     if (categoryIds.length === 0) return [];
-    const allValid = await getValidCategories(minQuestions);
+    const allValid = await getValidCategories(minQuestions, pool);
     const byId = new Map(allValid.map((row) => [row.id, row]));
 
     return categoryIds
@@ -188,8 +193,12 @@ export const lobbiesService = {
       }));
   },
 
-  async selectRandomCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
-    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
+  async selectRandomCategoriesExcluding(
+    count: number,
+    excludeCategoryIds: string[],
+    pool: FriendlyCategoryPool = 'mcq'
+  ): Promise<DraftCategory[]> {
+    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY, pool);
     const excludeSet = new Set(excludeCategoryIds);
     const filtered = allValid.filter((row) => !excludeSet.has(row.id));
     const shuffled = shuffle(filtered);

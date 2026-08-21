@@ -23,10 +23,19 @@ export const guessTheGoalRepo = {
 
   /**
    * Pick the next goal for a user: published, not yet solved, preferring goals
-   * never seen in any prior session. Falls back to any published goal when the
-   * user has solved the whole pool (replay for fun, no rewards).
+   * never seen in any prior session, and (when the unsolved pool allows) never
+   * the goal from the user's most recent session — back-to-back repeats read
+   * as broken. Falls back to any published goal when the user has solved the
+   * whole pool (replay for fun, no rewards).
    */
   async pickNextGoal(tx: TransactionSql, userId: string): Promise<GoalChoreographyRow | null> {
+    const [lastServed] = await exec(tx)<Array<{ goal_id: string }>>`
+      SELECT goal_id FROM guess_the_goal_sessions
+      WHERE user_id = ${userId}
+      ORDER BY started_at DESC
+      LIMIT 1
+    `;
+    const lastGoalId = lastServed?.goal_id ?? null;
     const [row] = await exec(tx)<GoalChoreographyRow[]>`
       SELECT g.* FROM goal_choreographies g
       WHERE g.status = 'published'
@@ -34,6 +43,7 @@ export const guessTheGoalRepo = {
           SELECT 1 FROM guess_the_goal_solves s
           WHERE s.user_id = ${userId} AND s.goal_id = g.id
         )
+        AND (${lastGoalId}::uuid IS NULL OR g.id <> ${lastGoalId}::uuid)
       ORDER BY
         EXISTS (
           SELECT 1 FROM guess_the_goal_sessions ss
@@ -43,6 +53,19 @@ export const guessTheGoalRepo = {
       LIMIT 1
     `;
     if (row) return row;
+    // Single-goal pool (or the only unsolved goal was just served): allow the
+    // repeat rather than stall the kick-off.
+    const [unsolvedRepeat] = await exec(tx)<GoalChoreographyRow[]>`
+      SELECT g.* FROM goal_choreographies g
+      WHERE g.status = 'published'
+        AND NOT EXISTS (
+          SELECT 1 FROM guess_the_goal_solves s
+          WHERE s.user_id = ${userId} AND s.goal_id = g.id
+        )
+      ORDER BY random()
+      LIMIT 1
+    `;
+    if (unsolvedRepeat) return unsolvedRepeat;
     const [fallback] = await exec(tx)<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies
       WHERE status = 'published'

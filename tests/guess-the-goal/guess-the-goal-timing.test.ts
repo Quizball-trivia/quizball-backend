@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTimings,
-  pointsForReveal,
+  pointsForElapsed,
   revealedMovesAt,
 } from '../../src/modules/guess-the-goal/guess-the-goal.timing.js';
 import type { ChoreographyStep } from '../../src/modules/guess-the-goal/guess-the-goal.types.js';
@@ -33,21 +33,34 @@ describe('guess-the-goal timing', () => {
     expect(revealedMovesAt(t, 99)).toBe(4);
   });
 
-  it('points decay linearly from max to min and clamp at the floor', () => {
-    expect(pointsForReveal(1, 4, 100, 40)).toBe(100);
-    expect(pointsForReveal(2, 4, 100, 40)).toBe(80);
-    expect(pointsForReveal(3, 4, 100, 40)).toBe(60);
-    expect(pointsForReveal(4, 4, 100, 40)).toBe(40);
-    expect(pointsForReveal(9, 4, 100, 40)).toBe(40);
+  it('points decay linearly over elapsed seconds and clamp at both ends', () => {
+    expect(pointsForElapsed(0, 100, 40, 10)).toBe(100);
+    expect(pointsForElapsed(2.5, 100, 40, 10)).toBe(85);
+    expect(pointsForElapsed(5, 100, 40, 10)).toBe(70);
+    expect(pointsForElapsed(10, 100, 40, 10)).toBe(40);
+    expect(pointsForElapsed(99, 100, 40, 10)).toBe(40);
+    expect(pointsForElapsed(-3, 100, 40, 10)).toBe(100);
+  });
+
+  it('decay is a pure function of the clock — no goal-shape input exists', () => {
+    // The old move-count decay gave a 2-move goal ~3s of range and a 7-move
+    // goal ~9s; time decay takes no timings, so every goal scores the same
+    // clock the same. Pinned with exact values.
+    expect(pointsForElapsed(1, 100, 40, 10)).toBe(94);
+    expect(pointsForElapsed(3, 100, 40, 10)).toBe(82);
+    expect(pointsForElapsed(7.5, 100, 40, 10)).toBe(55);
+    expect(pointsForElapsed(12, 100, 40, 10)).toBe(40);
   });
 
   it('a repeat-view clamp (max = min) always scores the floor', () => {
-    for (let revealed = 1; revealed <= 6; revealed += 1) {
-      expect(pointsForReveal(revealed, 5, 40, 40)).toBe(40);
+    for (let elapsed = 0; elapsed <= 15; elapsed += 1.5) {
+      expect(pointsForElapsed(elapsed, 40, 40, 10)).toBe(40);
     }
   });
 
-  it('single-main-step content never divides by zero', () => {
-    expect(pointsForReveal(1, 1, 100, 40)).toBe(100);
+  it('degenerate window never divides by zero (span floors at 1s)', () => {
+    expect(pointsForElapsed(0, 100, 40, 0)).toBe(100);
+    expect(pointsForElapsed(0.5, 100, 40, 0)).toBe(70);
+    expect(pointsForElapsed(1, 100, 40, 0)).toBe(40);
   });
 });

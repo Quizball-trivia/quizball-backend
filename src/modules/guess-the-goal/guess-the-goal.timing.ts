@@ -32,7 +32,8 @@ export function buildTimings(steps: ChoreographyStep[]): ChoreographyTimings {
   return { mainStarts, duration: cursor };
 }
 
-/** Number of main moves revealed after `elapsedSeconds` (≥ 1 once started). */
+/** Number of main moves revealed after `elapsedSeconds` (≥ 1 once started).
+ *  Recorded on the outcome for analytics; scoring itself no longer uses it. */
 export function revealedMovesAt(timings: ChoreographyTimings, elapsedSeconds: number): number {
   let revealed = 0;
   for (const start of timings.mainStarts) {
@@ -41,15 +42,19 @@ export function revealedMovesAt(timings: ChoreographyTimings, elapsedSeconds: nu
   return Math.max(1, revealed);
 }
 
-/** Linear decay MAX→MIN by revealed main moves; past full reveal stays at MIN. */
-export function pointsForReveal(
-  revealed: number,
-  mainCount: number,
+/**
+ * Linear decay MAX→MIN over elapsed seconds of play (grace already excluded by
+ * the caller). Deliberately independent of the goal's authored step count — a
+ * 2-move goal and a 7-move goal must score the same guess the same way.
+ */
+export function pointsForElapsed(
+  elapsedSeconds: number,
   maxPoints: number,
-  minPoints: number
+  minPoints: number,
+  fullPointsSeconds: number
 ): number {
-  const step = Math.max(0, Math.min(revealed - 1, mainCount - 1));
-  const span = Math.max(1, mainCount - 1);
-  const raw = Math.round(maxPoints - ((maxPoints - minPoints) * step) / span);
+  const span = Math.max(1, fullPointsSeconds);
+  const fraction = Math.max(0, Math.min(1, elapsedSeconds / span));
+  const raw = Math.round(maxPoints - (maxPoints - minPoints) * fraction);
   return Math.max(minPoints, Math.min(maxPoints, raw));
 }

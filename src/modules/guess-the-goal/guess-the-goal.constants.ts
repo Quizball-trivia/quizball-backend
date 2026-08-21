@@ -1,12 +1,21 @@
-/** Scoring: guess at move 1 = MAX, decays linearly per revealed main step to
- *  MIN at full reveal; replays of a previously seen goal are clamped to MIN. */
+/** Scoring: guess fast = MAX, decaying linearly over GGT_FULL_POINTS_SECONDS
+ *  of server-clock play to MIN; replays of a previously seen goal are clamped
+ *  to MIN. */
 export const GGT_MAX_POINTS = 100;
 export const GGT_MIN_POINTS = 40;
 export const GGT_BONUS_POINTS = 40;
 
 /** Network/reaction grace subtracted from server-side elapsed time before
- *  mapping it to revealed moves. */
-export const GGT_GRACE_MS = 1_000;
+ *  decay starts. Sized so seeing the first move AND reading four option
+ *  labels doesn't already cost points (the old 1s window scored the whole
+ *  range before most phones finished rendering the options). */
+export const GGT_GRACE_MS = 2_500;
+
+/** Seconds of play (after grace) over which the score decays MAX→MIN.
+ *  Time-based, not move-count-based: authored step counts vary 2–7, so move
+ *  decay burned the whole range in ~3s on short goals and made identical
+ *  skill score differently per goal. */
+export const GGT_FULL_POINTS_SECONDS = 10;
 
 /** Rewards are paid only on the first-ever solve of a goal. */
 export const GGT_COINS_PER_POINT = 0.25;

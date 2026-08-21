@@ -45,4 +45,8 @@ export const guessTheGoalController = {
   async stats(req: Request, res: Response): Promise<void> {
     noStore(res).json(await guessTheGoalService.getStats(req.user!.id));
   },
+
+  async gallery(req: Request, res: Response): Promise<void> {
+    noStore(res).json(await guessTheGoalService.getGallery(req.user!.id));
+  },
 };

@@ -97,11 +97,15 @@ function resetActionTimeouts(state: FootballGridState, userId: string): void {
 }
 
 function advanceTurn(state: FootballGridState, actorUserId: string, nowMs: number): void {
-  state.turnNumber += 1;
-  if (state.turnNumber >= FOOTBALL_GRID_MAX_TURNS) {
+  // Evaluate the cap against the NEXT turn number without mutating state:
+  // the terminal match row must keep the resolving turn's number so the
+  // claim-validation trigger (which equates terminal claims with the
+  // persisted turn) still accepts a correct answer at the boundary.
+  if (state.turnNumber + 1 >= FOOTBALL_GRID_MAX_TURNS) {
     complete(state, null, 'turn_limit', nowMs);
     return;
   }
+  state.turnNumber += 1;
   state.currentPlayerUserId = otherPlayerId(state, actorUserId);
   state.turnDeadlineAt = iso(nowMs + FOOTBALL_GRID_TURN_MS);
   state.phaseDeadlineAt = state.turnDeadlineAt;

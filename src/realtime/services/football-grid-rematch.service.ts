@@ -228,7 +228,7 @@ export const footballGridRematchService = {
           expiresAt: null,
         });
       }
-      throw error;
+      throw toRematchDomainError(error);
     }
 
     // The durable match now exists. Network delivery is deliberately outside

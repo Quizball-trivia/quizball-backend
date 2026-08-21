@@ -52,11 +52,20 @@ CREATE TRIGGER set_match_game_variant_on_insert
 -- Called by the following non-transactional migration. Each iteration commits
 -- independently, so historical ranked/auction/party rows never hold one large
 -- lock set for the duration of the complete backfill.
-CREATE OR REPLACE PROCEDURE public.football_grid_backfill_game_variants(batch_size integer DEFAULT 1000)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  updated_count integer;
+-- Guarded creation: the validation migration on environments that already
+-- applied the original combined migration drops this helper when it finishes,
+-- so re-creating it unconditionally would leave dead cruft behind.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_proc p
+     WHERE p.proname = 'football_grid_backfill_game_variants'
+       AND p.pronamespace = 'public'::regnamespace
+  ) THEN
+    CREATE OR REPLACE PROCEDURE public.football_grid_backfill_game_variants(batch_size integer DEFAULT 1000)
+    LANGUAGE plpgsql
+    AS $inner$
+DECLARE  updated_count integer;
   has_remaining boolean;
   stalled_rounds integer := 0;
 BEGIN
@@ -113,6 +122,9 @@ BEGIN
     END IF;
   END LOOP;
 END;
+$$inner$;
+  END IF;
+END
 $$;
 
 REVOKE ALL ON PROCEDURE public.football_grid_backfill_game_variants(integer) FROM PUBLIC;

@@ -554,8 +554,8 @@ export const footballGridRepo = {
     await sql`
       UPDATE football_grid_result_deliveries
          SET status = 'pending', processing_lease_until = null, ack_token = null,
-             attempt_count = attempt_count + 1,
-             next_attempt_at = now() + interval '5 seconds' * power(2, least(attempt_count, 7))::int,
+             next_attempt_at = now() + interval '5 seconds'
+               * power(2, least(greatest(attempt_count - 1, 0), 7))::int,
              last_error = ${input.reason.slice(0, 500)}, updated_at = now()
        WHERE match_id = ${input.matchId} AND user_id = ${input.userId}
          AND terminal_state_version = ${input.terminalStateVersion}
@@ -1780,6 +1780,23 @@ export const footballGridRepo = {
       if (matchId) finalizedMatchIds.push(matchId);
     }
     return finalizedMatchIds;
+  },
+
+  async repairInterruptionDeadlines(): Promise<number> {
+    // Matches paused into service_interruption before the deadline existed
+    // carry a NULL phase_deadline_at forever. Give them one on every recovery
+    // pass so they terminate administratively instead of waiting for the
+    // stale-match sweeper.
+    const rows = await sql<Array<{ match_id: string }>>`
+      UPDATE football_grid_matches
+         SET phase_deadline_at = now() + make_interval(secs => $1 / 1000.0),
+             updated_at = now(), state_version = state_version + 1,
+             last_event_sequence = last_event_sequence + 1
+       WHERE phase = 'service_interruption' AND phase_deadline_at IS NULL
+         AND pending_command_id IS NULL
+      RETURNING match_id
+    `;
+    return rows.length;
   },
 
   async getAttemptForInbox(inboxId: string): Promise<{

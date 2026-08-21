@@ -379,6 +379,8 @@ export const footballGridRealtimeService = {
         // Postgres is the durable fallback for every Grid deadline. This poll
         // continuously repairs lost Redis ZSET members, including after a
         // Redis restart that happens long after application boot.
+        await footballGridRepo.repairInterruptionDeadlines()
+          .catch((error) => logger.warn({ error }, 'Football Grid interruption-deadline repair failed'));
         const duePhases = await footballGridRepo.listDuePhaseDeadlines();
         for (const due of duePhases) {
           await footballGridRealtimeService.handlePhaseTimer(io, {
@@ -763,8 +765,15 @@ export const footballGridRealtimeService = {
           return;
         }
         await scheduleStateDeadline(presence.value.state);
-        await emitState(io, presence.value.state);
-        return;
+        if (snapshot.phase !== 'paused') {
+          await emitState(io, presence.value.state);
+          return;
+        }
+        // Paused matches only record absence or shorten their window here.
+        // The authoritative forfeit/cancel decision must still run through
+        // handlePhaseDeadline below, otherwise an expired reconnect deadline
+        // would be rescheduled forever without ever judging it.
+        continue;
       }
     }
     const result = await footballGridService.handlePhaseDeadline(

@@ -546,7 +546,9 @@ export const guessTheGoalService = {
     return {
       solved,
       total,
-      pool_exhausted: solved >= total,
+      // Same rule as getGallery: an EMPTY pool is not "exhausted" (the mode
+      // has nothing to serve at all), only a pool you've fully cleared is.
+      pool_exhausted: total > 0 && solved >= total,
       coins_today: coinsToday,
       daily_coin_cap: GGT_DAILY_COIN_CAP,
     };

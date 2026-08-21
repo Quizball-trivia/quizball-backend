@@ -459,7 +459,9 @@ export const footballGridService = {
           ? await footballGridRepo.hasTurnActivityInTx(tx, matchId, actor, previous.turnNumber)
           : false;
         next = expireTurn(previous, previous.stateVersion, nowMs, { hadActivity });
-        eventType = next.phase === 'terminal' ? 'no_action_forfeit' : 'turn_timeout';
+        eventType = next.phase === 'terminal'
+          ? (next.completionReason === 'no_action_timeouts' ? 'no_action_forfeit' : 'turn_limit_reached')
+          : 'turn_timeout';
         turnResolution = actor ? { actorUserId: actor, outcome: 'timeout' } : null;
       } else if (previous.phase === 'paused') {
         const absent = await footballGridRepo.listAbsentParticipantsInTx(tx, matchId);
@@ -471,6 +473,12 @@ export const footballGridService = {
           next = forfeitMatch(previous, absent[0].userId, 'disconnect_timeout', nowMs);
           eventType = 'disconnect_forfeit';
         }
+      } else if (previous.phase === 'service_interruption') {
+        // The interruption pause carries its own deadline. If command recovery
+        // has not resumed the match by now, end it cleanly rather than leaving
+        // both players stranded until the stale-match sweeper acts.
+        next = cancelNoContest(previous, 'administrative_cancel', nowMs);
+        eventType = 'service_interruption_cancelled';
       } else {
         return { state: previous, deferred: false, turnResolution: null };
       }

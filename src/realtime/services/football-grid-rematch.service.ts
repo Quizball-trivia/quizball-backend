@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ConflictError } from '../../core/errors.js';
+import { AuthorizationError, ConflictError, NotFoundError } from '../../core/errors.js';
 import {
   trackFootballGridMatchFound,
   trackFootballGridRematchResponse,
@@ -30,6 +30,29 @@ function emitState(io: QuizballServer, userIds: string[], payload: {
   expiresAt: string | null;
 }): void {
   for (const userId of userIds) io.to(`user:${userId}`).emit('grid:rematch_state', payload);
+}
+
+// Repo-level rematch guards throw plain Errors. Map the known codes to typed
+// app errors so clients receive actionable gridCodes instead of a generic
+// GRID_INTERNAL_ERROR (e.g. both players tapping Accept at the same instant).
+function toRematchDomainError(error: unknown): Error {
+  if (!(error instanceof Error)) return error instanceof Error ? error : new ConflictError('Rematch request failed');
+  switch (error.message) {
+    case 'REMATCH_UNAVAILABLE':
+      return new NotFoundError('Rematch is not available for this match', { gridCode: 'REMATCH_UNAVAILABLE' });
+    case 'REMATCH_EXPIRED':
+      return new ConflictError('The rematch window has expired', { gridCode: 'REMATCH_EXPIRED' });
+    case 'REMATCH_ALREADY_DECIDED':
+      return new ConflictError('You have already responded to this rematch', { gridCode: 'REMATCH_ALREADY_DECIDED' });
+    case 'STALE_SERIES':
+      return new ConflictError('Rematch state changed. Please try again.', { gridCode: 'STALE_SERIES' });
+    case 'SERIES_CLOSED':
+      return new ConflictError('This series was already closed', { gridCode: 'SERIES_CLOSED' });
+    case 'NOT_PARTICIPANT':
+      return new AuthorizationError('Not a Football Grid participant');
+    default:
+      return error;
+  }
 }
 
 export const footballGridRematchService = {
@@ -83,6 +106,8 @@ export const footballGridRematchService = {
         ...input,
         userId,
         proposedPairingToken: randomUUID(),
+      }).catch((error) => {
+        throw toRematchDomainError(error);
       });
       let fenced = false;
       try {
@@ -240,7 +265,10 @@ export const footballGridRematchService = {
     expectedSeriesVersion: number;
   }): Promise<void> {
     const state = await footballGridService.getState(input.matchId, socket.data.user.id);
-    const declined = await footballGridRepo.declineRematch({ ...input, userId: socket.data.user.id });
+    const declined = await footballGridRepo.declineRematch({ ...input, userId: socket.data.user.id })
+      .catch((error) => {
+        throw toRematchDomainError(error);
+      });
     trackFootballGridRematchResponse({
       userId: socket.data.user.id,
       matchId: input.matchId,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FOOTBALL_GRID_COUNTDOWN_MS,
+  FOOTBALL_GRID_MAX_TURNS,
   FOOTBALL_GRID_TURN_MS,
   FOOTBALL_GRID_WIN_LINES,
   acknowledgeHandoff,
@@ -141,6 +142,28 @@ describe('football grid engine', () => {
     });
     expect(result).toEqual(state);
     expect(result).not.toBe(state);
+  });
+
+  it('ends the match as a draw once the turn limit is reached', () => {
+    const state = activeState();
+    state.turnNumber = FOOTBALL_GRID_MAX_TURNS - 1;
+    const result = applyResolvedAnswer(state, {
+      userId: 'u1', expectedStateVersion: state.stateVersion, cellIndex: 0,
+      outcome: 'wrong', footballPlayerId: null, nowMs: 50_000,
+    });
+    expect(result.status).toBe('completed');
+    expect(result.phase).toBe('terminal');
+    expect(result.winnerUserId).toBeNull();
+    expect(result.completionReason).toBe('turn_limit');
+    expect(result.currentPlayerUserId).toBeNull();
+  });
+
+  it('ends the match as a draw when a pass reaches the turn limit', () => {
+    const state = activeState();
+    state.turnNumber = FOOTBALL_GRID_MAX_TURNS - 1;
+    const result = passTurn(state, 'u1', state.stateVersion, 50_000);
+    expect(result.phase).toBe('terminal');
+    expect(result.completionReason).toBe('turn_limit');
   });
 
   it('ends a turn for wrong, already-used, and pass outcomes', () => {

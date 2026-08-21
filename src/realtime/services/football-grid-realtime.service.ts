@@ -730,7 +730,12 @@ export const footballGridRealtimeService = {
       ? snapshot.players.filter((player) => !player.isBot && player.userId === snapshot.currentPlayerUserId)
       : snapshot.phase === 'countdown'
         ? snapshot.players.filter((player) => !player.isBot)
-        : [];
+        : snapshot.phase === 'paused'
+          // Reconcile presence BEFORE the reconnect deadline is judged, so a
+          // Redis-degraded node cannot leave an actually-gone player marked
+          // present in Postgres and gift them the disconnect forfeit.
+          ? snapshot.players.filter((player) => !player.isBot)
+          : [];
     for (const player of presenceUsers) {
       const presence = await footballGridPresenceService.reconcile(
         snapshot.matchId,

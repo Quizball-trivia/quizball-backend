@@ -10,6 +10,7 @@ import type {
 import {
   FOOTBALL_GRID_HANDOFF_MS,
   FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS,
+  FOOTBALL_GRID_SERVICE_INTERRUPTION_MS,
 } from './football-grid.engine.js';
 
 type SqlExecutor = Pick<typeof sql, 'unsafe'> | Pick<TransactionSql, 'unsafe'>;
@@ -281,14 +282,15 @@ async function pauseMatchForFailedCommandInTx(
               WHEN turn_deadline_at IS NULL THEN turn_remaining_ms
               ELSE greatest(0, extract(epoch FROM (turn_deadline_at - clock_timestamp())) * 1000)::int
             END,
-            turn_deadline_at = null, phase_deadline_at = null,
+            turn_deadline_at = null,
+            phase_deadline_at = now() + make_interval(secs => $3 / 1000.0),
             bot_action_deadline_at = null, pending_command_id = null,
             updated_at = now(), state_version = state_version + 1,
             last_event_sequence = last_event_sequence + 1
       WHERE match_id = $1 AND pending_command_id = $2
         AND phase <> 'terminal'
       RETURNING state_version, last_event_sequence`,
-    [matchId, commandInboxId],
+    [matchId, commandInboxId, FOOTBALL_GRID_SERVICE_INTERRUPTION_MS],
   );
   const row = updated[0];
   if (!row) {
@@ -552,7 +554,8 @@ export const footballGridRepo = {
     await sql`
       UPDATE football_grid_result_deliveries
          SET status = 'pending', processing_lease_until = null, ack_token = null,
-             next_attempt_at = now() + interval '5 seconds',
+             attempt_count = attempt_count + 1,
+             next_attempt_at = now() + interval '5 seconds' * power(2, least(attempt_count, 7))::int,
              last_error = ${input.reason.slice(0, 500)}, updated_at = now()
        WHERE match_id = ${input.matchId} AND user_id = ${input.userId}
          AND terminal_state_version = ${input.terminalStateVersion}
@@ -695,7 +698,13 @@ export const footballGridRepo = {
       if (existing[0] && existing[0].command_id !== input.commandId) throw new Error('REMATCH_ALREADY_DECIDED');
       const replayed = Boolean(existing[0]);
       if (!replayed) {
-        if (series.state_version !== input.expectedSeriesVersion) throw new Error('STALE_SERIES');
+        // Tolerate exactly one concurrent bump: the peer accepting a moment
+        // earlier and opening the rematch window. Any other divergence is a
+        // genuinely stale client view.
+        if (
+          series.state_version !== input.expectedSeriesVersion
+          && !(series.status === 'rematch_pending' && series.state_version === input.expectedSeriesVersion + 1)
+        ) throw new Error('STALE_SERIES');
         await tx.unsafe(
           `INSERT INTO football_grid_series_acceptances (
              series_id, rematch_index, user_id, command_id, expected_series_version, decision
@@ -750,16 +759,26 @@ export const footballGridRepo = {
     decisionAt: string;
   }> {
     return this.runInTransaction(async (tx) => {
+      // Declining is only meaningful while the series' CURRENT match is over
+      // and the series is still open. Without these guards a crafted request
+      // could close an active series mid-rematch.
       const rows = await tx.unsafe<Array<{ id: string; state_version: number; next_pairing_token: string | null; lobby_id: string | null }>>(
         `SELECT s.id, s.state_version, s.next_pairing_token, s.lobby_id
            FROM football_grid_series s
            JOIN football_grid_matches gm ON gm.series_id = s.id
           WHERE gm.match_id = $1 AND s.current_match_id = $1
+            AND gm.phase = 'terminal' AND s.origin <> 'random'
+            AND s.status IN ('active', 'rematch_pending')
           FOR UPDATE OF s`,
         [input.matchId],
       );
       const series = rows[0];
       if (!series) throw new Error('REMATCH_UNAVAILABLE');
+      const players = await tx.unsafe<Array<{ is_bot: boolean }>>(
+        `SELECT is_bot FROM football_grid_participants WHERE match_id = $1`,
+        [input.matchId],
+      );
+      if (players.length !== 2 || players.some((player) => player.is_bot)) throw new Error('REMATCH_UNAVAILABLE');
       if (series.state_version !== input.expectedSeriesVersion) throw new Error('STALE_SERIES');
       const member = await tx.unsafe<Array<{ found: boolean }>>(
         `SELECT EXISTS (SELECT 1 FROM football_grid_participants WHERE match_id = $1 AND user_id = $2) AS found`,
@@ -1353,14 +1372,18 @@ export const footballGridRepo = {
       }
       if (input.seriesId) {
         const openerSeat = input.players.find((player) => player.userId === input.openerUserId)?.seat ?? 1;
-        await tx.unsafe(
+        const seriesUpdate = await tx.unsafe<Array<{ id: string }>>(
           `UPDATE football_grid_series
               SET current_match_id = $2, rematch_index = $3, status = 'active',
                   next_opener_seat = $4, next_pairing_token = null,
                   rematch_expires_at = null, updated_at = now(), state_version = state_version + 1
-            WHERE id = $1`,
+            WHERE id = $1 AND status <> 'closed'
+            RETURNING id`,
           [input.seriesId, matchId, input.rematchIndex ?? 0, openerSeat === 1 ? 2 : 1],
         );
+        // A concurrent decline or expiry closed the series between the second
+        // acceptance and this creation. Abort instead of resurrecting it.
+        if (!seriesUpdate[0]) throw new Error('SERIES_CLOSED');
       }
       await tx.unsafe(
         `UPDATE football_grid_matches SET last_event_sequence = 1 WHERE match_id = $1`,

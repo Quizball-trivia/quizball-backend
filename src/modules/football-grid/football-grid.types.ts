@@ -29,6 +29,7 @@ export type FootballGridResolutionOutcome =
 export type FootballGridCompletionReason =
   | 'line'
   | 'board_full'
+  | 'turn_limit'
   | 'forfeit'
   | 'no_action_timeouts'
   | 'disconnect_timeout'

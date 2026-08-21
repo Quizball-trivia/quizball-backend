@@ -13,6 +13,15 @@ export const FOOTBALL_GRID_READY_MS = 20_000;
 export const FOOTBALL_GRID_RECONNECT_MS = 30_000;
 export const FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS = 60_000;
 export const FOOTBALL_GRID_MAX_NO_ACTION_TIMEOUTS = 3;
+// If a durable command cannot commit (DB blip), the match pauses for this
+// long while recovery retries the command. When the deadline passes without
+// a successful recovery the match is cancelled administratively instead of
+// stranding both players until the stale-match sweeper eventually acts.
+export const FOOTBALL_GRID_SERVICE_INTERRUPTION_MS = 120_000;
+// Hard ceiling on total turns so two humans answering wrong forever cannot
+// keep a match (and its timers/rows) alive indefinitely. Generous enough that
+// legitimate play almost always ends by line or board_full first.
+export const FOOTBALL_GRID_MAX_TURNS = 40;
 
 export const FOOTBALL_GRID_WIN_LINES: ReadonlyArray<readonly [number, number, number]> = [
   [0, 1, 2],
@@ -89,6 +98,10 @@ function resetActionTimeouts(state: FootballGridState, userId: string): void {
 
 function advanceTurn(state: FootballGridState, actorUserId: string, nowMs: number): void {
   state.turnNumber += 1;
+  if (state.turnNumber >= FOOTBALL_GRID_MAX_TURNS) {
+    complete(state, null, 'turn_limit', nowMs);
+    return;
+  }
   state.currentPlayerUserId = otherPlayerId(state, actorUserId);
   state.turnDeadlineAt = iso(nowMs + FOOTBALL_GRID_TURN_MS);
   state.phaseDeadlineAt = state.turnDeadlineAt;

@@ -838,7 +838,7 @@ export async function runPartyQuizRoundTransition(
       pendingReadyGates.clear(matchId);
       return;
     }
-    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
       await Promise.all([
         cancelRealtimeTimer('party_round_transition', timerKey),
         clearSharedPartyReadyGate(matchId, resolvedQIndex),
@@ -918,7 +918,7 @@ export async function sendPartyQuizQuestion(
       matchPlayersRepo.listMatchPlayers(matchId),
     ]);
     if (!match || match.status !== 'active') return null;
-    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
       return null;
     }
     if (paused) {
@@ -1099,7 +1099,7 @@ export async function resumePartyQuizQuestion(
     );
     return false;
   }
-  if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+  if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
     return false;
   }
 
@@ -1173,7 +1173,7 @@ export async function ensurePartyQuizActiveTimer(
 ): Promise<boolean> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return false;
-  if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+  if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
     return false;
   }
   if (await isPartyQuizMatchPaused(matchId)) {
@@ -1244,7 +1244,7 @@ export async function resolvePartyQuizRound(
         await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }
-      if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+      if (resolveMatchVariant(match.state_payload, match.mode, match.game_variant) !== 'friendly_party_quiz') {
         await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }

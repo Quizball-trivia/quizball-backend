@@ -192,6 +192,32 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+  FOOTBALL_GRID_QUEUE_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_LOBBY_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_COINS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
+  FOOTBALL_GRID_XP_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  FOOTBALL_GRID_CONTENT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_BOT_FALLBACK_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
@@ -341,10 +367,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
-  if (
-    result.data.NODE_ENV !== "local"
-    && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL
-  ) {
+  if (result.data.NODE_ENV !== "local" && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL) {
     if (!result.data.SUPABASE_URL) {
       throw new ConfigError(
         "Invalid configuration: SUPABASE_URL is required when CAMPAIGN_QUIZ_ASSET_BASE_URL is set outside local.",
@@ -359,6 +382,17 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
         { nodeEnv: result.data.NODE_ENV, assetOrigin, storageOrigin },
       );
     }
+  }
+
+  if (
+    result.data.NODE_ENV !== "local"
+    && result.data.FOOTBALL_GRID_COINS_ENABLED
+    && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32
+  ) {
+    throw new ConfigError(
+      "Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins are enabled.",
+      { nodeEnv: result.data.NODE_ENV },
+    );
   }
 
   // Auto-disable docs in production unless explicitly enabled

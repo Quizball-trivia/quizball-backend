@@ -36,6 +36,12 @@ export const progressionService = {
     if (!match || match.status !== 'completed' || match.is_dev) {
       return;
     }
+    // Football Grid owns XP settlement in its transactional outbox adapter.
+    // Keeping the generic quiz progression path out prevents competing reward
+    // semantics; the Grid ledger remains the sole idempotent writer.
+    if (match.game_variant === 'football_grid') {
+      return;
+    }
 
     const players = await matchPlayersRepo.listMatchPlayers(matchId);
     if (players.length === 0) {

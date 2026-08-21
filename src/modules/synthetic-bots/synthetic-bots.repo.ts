@@ -440,6 +440,11 @@ export const syntheticBotsRepo = {
           OR EXISTS (
             SELECT 1 FROM matches m WHERE m.id = r.match_id AND m.status = 'abandoned'
           )
+          OR EXISTS (
+            SELECT 1 FROM matches m
+             WHERE m.id = r.match_id
+               AND m.state_payload @> '{"footballGridRewardsSettled":true}'::jsonb
+          )
         )
       RETURNING r.bot_user_id
     `;

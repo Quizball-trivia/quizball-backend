@@ -40,6 +40,7 @@ import {
   schedulePartyQuizKickoff,
 } from '../party-quiz-match-flow.js';
 import { getRedisClient } from '../redis.js';
+import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import {
   acknowledgeMatchUiReady,
   emitMatchUiReadyGateState,
@@ -129,7 +130,7 @@ function scheduleFirstQuestionAfterCountdown(
           return;
         }
         logger.info(
-          { eventName: 'match:first_question_dispatch', matchId, variant: resolveMatchVariant(match.state_payload, match.mode) },
+          { eventName: 'match:first_question_dispatch', matchId, variant: resolveMatchVariant(match.state_payload, match.mode, match.game_variant) },
           'Dispatching first match question after countdown'
         );
         await sendMatchQuestion(io, matchId, 0);
@@ -205,11 +206,13 @@ function startKickoffCountdown(params: {
 
 async function emitRejoinAvailable(
   socket: QuizballSocket,
-  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
+  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown; game_variant?: string | null },
   userId: string,
   graceMs: number,
   remainingReconnects: number
 ): Promise<void> {
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'auction') return;
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
@@ -217,7 +220,7 @@ async function emitRejoinAvailable(
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
-    variant: resolveMatchVariant(match.state_payload, match.mode),
+    variant,
     opponent,
     participants: players.map((player) => {
       const user = usersById.get(player.user_id);
@@ -261,7 +264,11 @@ export async function beginMatchForLobby(
     return;
   }
 
-  const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode);
+  const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variantForCountdown === 'football_grid' || variantForCountdown === 'auction') {
+    logger.warn({ lobbyId, matchId, variant: variantForCountdown }, 'Legacy match start ignored for dedicated game lifecycle');
+    return;
+  }
   const defaultCountdownSec = variantForCountdown === 'friendly_party_quiz'
     ? PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC
     : MATCH_START_COUNTDOWN_SEC;
@@ -564,7 +571,12 @@ export async function rejoinActiveMatchOnConnect(
   const redis = getRedisClient();
   const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
   const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'auction') return;
+  if (variant === 'football_grid') {
+    await footballGridRealtimeService.handleResync(io, socket, match.id);
+    return;
+  }
   if (variant === 'friendly_party_quiz') {
     const partyState = sanitizePartyQuizState(match.state_payload, match.total_questions);
     if (isPartyQuizDropped(partyState, userId)) {

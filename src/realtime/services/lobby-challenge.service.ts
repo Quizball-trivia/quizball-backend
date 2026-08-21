@@ -28,6 +28,7 @@ function mapChallengeInvitePayload(invite: {
   from_nickname: string | null;
   from_avatar_url: string | null;
   from_avatar_customization: unknown;
+  lobby_game_mode: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid';
 }): LobbyChallengeInvitePayload | null {
   if (!invite.lobby_invite_code) return null;
   return {
@@ -41,6 +42,7 @@ function mapChallengeInvitePayload(invite: {
       avatarCustomization: (invite.from_avatar_customization ?? null) as AvatarCustomization | null,
     },
     expiresAt: invite.expires_at,
+    gameMode: invite.lobby_game_mode,
   };
 }
 
@@ -69,10 +71,15 @@ export async function emitPendingChallengeInvitesOnConnect(socket: QuizballSocke
 export async function challengeFriend(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: { toUserId: string }
+  payload: { toUserId: string; gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid' }
 ): Promise<void> {
   const userId = socket.data.user.id;
   const toUserId = payload.toUserId;
+  const gameMode = payload.gameMode ?? 'friendly_possession';
+  if (gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+    socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe challenges are temporarily unavailable' });
+    return;
+  }
 
   if (userId === toUserId) {
     socket.emit('error', {
@@ -183,7 +190,7 @@ export async function challengeFriend(
         mode: 'friendly',
         hostUserId: userId,
         inviteCode,
-        gameMode: 'friendly_possession',
+        gameMode,
         isPublic: false,
         displayName,
       });
@@ -212,6 +219,7 @@ export async function challengeFriend(
         lobbyId: lobby.id,
         inviteCode,
         toUserId,
+        gameMode,
       });
 
       io.to(`user:${toUserId}`).emit('lobby:challenge_received', {
@@ -225,6 +233,7 @@ export async function challengeFriend(
           avatarCustomization: (socket.data.user.avatar_customization ?? null) as AvatarCustomization | null,
         },
         expiresAt: invite.expires_at,
+        gameMode,
       });
 
       logger.info({ lobbyId: lobby.id, fromUserId: userId, toUserId }, 'Friend challenge lobby created');

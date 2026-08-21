@@ -56,10 +56,12 @@ describe('lobby-utils', () => {
     expect(normalizeFriendlyGameMode('friendly_party_quiz')).toBe('friendly_party_quiz');
     expect(normalizeFriendlyGameMode('auction')).toBe('auction');
     expect(normalizeFriendlyGameMode('ranked_sim')).toBe('ranked_sim');
+    expect(normalizeFriendlyGameMode('football_grid')).toBe('football_grid');
   });
 
   it('caps auction lobbies at 3 members and everything else at the party ceiling', () => {
     expect(maxMembersForFriendlyGameMode('auction')).toBe(3);
+    expect(maxMembersForFriendlyGameMode('football_grid')).toBe(2);
     expect(maxMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
     // Possession may HOLD more than 2 — it auto-promotes to party quiz.
     expect(maxMembersForFriendlyGameMode('friendly_possession')).toBe(6);
@@ -67,6 +69,7 @@ describe('lobby-utils', () => {
 
   it('reports playable size per mode (possession is strictly a duel)', () => {
     expect(playableMembersForFriendlyGameMode('auction')).toBe(3);
+    expect(playableMembersForFriendlyGameMode('football_grid')).toBe(2);
     expect(playableMembersForFriendlyGameMode('friendly_possession')).toBe(2);
     expect(playableMembersForFriendlyGameMode('ranked_sim')).toBe(2);
     expect(playableMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
@@ -90,6 +93,26 @@ describe('lobby-utils', () => {
 
     expect(lobbiesRepo.updateLobbySettings).not.toHaveBeenCalled();
     // The expected 3rd auction member must not wipe ready states.
+    expect(lobbiesRepo.setAllReady).not.toHaveBeenCalled();
+  });
+
+  it('keeps a two-player Football Grid lobby isolated from party auto-promotion', async () => {
+    vi.mocked(lobbiesRepo.getById).mockResolvedValue({
+      id: 'lobby-grid',
+      mode: 'friendly',
+      status: 'waiting',
+      game_mode: 'football_grid',
+      friendly_random: false,
+      friendly_category_a_id: null,
+      friendly_category_b_id: null,
+    } as never);
+    vi.mocked(lobbiesRepo.countMembers).mockResolvedValue(2);
+
+    await syncFriendlyLobbyModeForMemberCountLocked('lobby-grid', {
+      clearReadyOnPartyTransition: true,
+    });
+
+    expect(lobbiesRepo.updateLobbySettings).not.toHaveBeenCalled();
     expect(lobbiesRepo.setAllReady).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-import { trackEvent } from '../analytics.js';
+import { stableAnalyticsEventUuid, trackEvent } from '../analytics.js';
 
 // Match Events
 export function trackMatchCreated(
@@ -386,5 +386,214 @@ export function trackPartyQuizStarted(params: {
   trackEvent('party_quiz_started', params.userId, {
     match_id: params.matchId,
     player_count: params.playerCount,
+  });
+}
+
+// Football Grid events deliberately stay aggregate and low-volume. Raw typed
+// answers are never analytics properties; answer quality is summarized once on
+// the authoritative completion event instead.
+export function trackFootballGridQueueJoined(params: {
+  userId: string;
+  searchId: string;
+  locale: 'en' | 'ka';
+  queuedAt: string | Date;
+}): void {
+  trackEvent('football_grid_queue_joined', params.userId, {
+    mode: 'football_grid',
+    search_id_prefix: idPrefix(params.searchId),
+    locale: params.locale,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:queue-joined:${params.searchId}:${params.userId}`),
+    occurredAt: params.queuedAt,
+  });
+}
+
+export function trackFootballGridQueueLeft(params: {
+  userId: string;
+  searchId: string;
+  reason: 'cancelled' | 'expired' | 'matched' | 'server_abort';
+  queuedAt: string | Date;
+  leftAt?: string | Date;
+  opponentType?: 'human' | 'bot' | null;
+}): void {
+  const queuedAtMs = new Date(params.queuedAt).getTime();
+  const leftAt = params.leftAt ? new Date(params.leftAt) : new Date();
+  const waitMs = Number.isFinite(queuedAtMs) && Number.isFinite(leftAt.getTime())
+    ? Math.max(0, leftAt.getTime() - queuedAtMs)
+    : null;
+  trackEvent('football_grid_queue_left', params.userId, {
+    mode: 'football_grid',
+    search_id_prefix: idPrefix(params.searchId),
+    reason: params.reason,
+    wait_ms: waitMs,
+    opponent_type: params.opponentType ?? null,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:queue-left:${params.searchId}:${params.userId}:${params.reason}`),
+    occurredAt: leftAt,
+  });
+}
+
+export function trackFootballGridMatchFound(params: {
+  userId: string;
+  matchId: string;
+  searchId?: string | null;
+  origin: 'random' | 'challenge' | 'private' | 'public' | 'code';
+  opponentType: 'human' | 'bot';
+  queueWaitMs?: number | null;
+  boardId: string;
+  boardVersion: number;
+  boardDifficulty?: 'easy' | 'normal' | 'hard' | null;
+  occurredAt?: string | Date;
+}): void {
+  const occurredAt = params.occurredAt ?? new Date();
+  trackEvent('football_grid_match_found', params.userId, {
+    match_id: params.matchId,
+    mode: 'football_grid',
+    variant: 'football_grid',
+    search_id_prefix: idPrefix(params.searchId),
+    origin: params.origin,
+    opponent_type: params.opponentType,
+    opponent_is_ai: params.opponentType === 'bot',
+    queue_wait_ms: params.queueWaitMs ?? null,
+    board_id: params.boardId,
+    board_version: params.boardVersion,
+    board_difficulty: params.boardDifficulty ?? null,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:match-found:${params.matchId}:${params.userId}`),
+    occurredAt,
+  });
+}
+
+export function trackFootballGridMatchStarted(params: {
+  userId: string;
+  matchId: string;
+  opponentType: 'human' | 'bot';
+  boardId: string;
+  boardVersion: number;
+  boardDifficulty?: 'easy' | 'normal' | 'hard' | null;
+  occurredAt: string | Date;
+}): void {
+  trackEvent('match_started', params.userId, {
+    match_id: params.matchId,
+    mode: 'football_grid',
+    variant: 'football_grid',
+    opponent_type: params.opponentType,
+    opponent_is_ai: params.opponentType === 'bot',
+    board_id: params.boardId,
+    board_version: params.boardVersion,
+    board_difficulty: params.boardDifficulty ?? null,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:match-started:${params.matchId}:${params.userId}`),
+    occurredAt: params.occurredAt,
+  });
+}
+
+export interface TrackFootballGridMatchCompletedOptions {
+  userId: string;
+  matchId: string;
+  origin: 'random' | 'challenge' | 'private' | 'public' | 'code';
+  opponentType: 'human' | 'bot';
+  result: 'win' | 'draw' | 'loss';
+  completionReason: string;
+  startedAt: string | Date;
+  endedAt: string | Date;
+  boardId: string;
+  boardVersion: number;
+  boardDifficulty: 'easy' | 'normal' | 'hard';
+  turns: number;
+  claimCount: number;
+  correctAnswers: number;
+  wrongAnswers: number;
+  ambiguousAnswers: number;
+  alreadyUsedAnswers: number;
+  passes: number;
+  noActionTimeouts: number;
+  averageResponseMs: number | null;
+  xpEarned: number;
+  coinsEarned: number;
+  rewardEligibilityReason: string;
+}
+
+export function trackFootballGridMatchCompleted(
+  params: TrackFootballGridMatchCompletedOptions,
+): void {
+  const startedAtMs = new Date(params.startedAt).getTime();
+  const endedAtMs = new Date(params.endedAt).getTime();
+  const durationMs = Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+    ? Math.max(0, endedAtMs - startedAtMs)
+    : null;
+  const noContest = params.completionReason === 'loading_no_show'
+    || params.completionReason === 'simultaneous_disconnect'
+    || params.completionReason === 'administrative_cancel';
+  const eventName = noContest ? 'match_abandoned' : 'match_completed';
+  trackEvent(eventName, params.userId, {
+    match_id: params.matchId,
+    mode: 'football_grid',
+    variant: 'football_grid',
+    origin: params.origin,
+    opponent_type: params.opponentType,
+    opponent_is_ai: params.opponentType === 'bot',
+    result: params.result,
+    won: params.result === 'win',
+    is_draw: params.result === 'draw',
+    completion_reason: params.completionReason,
+    duration_ms: durationMs,
+    duration_sec: durationMs === null ? null : durationMs / 1_000,
+    board_id: params.boardId,
+    board_version: params.boardVersion,
+    board_difficulty: params.boardDifficulty,
+    turns: Math.max(0, params.turns),
+    claim_count: Math.max(0, params.claimCount),
+    correct_answers: Math.max(0, params.correctAnswers),
+    wrong_answers: Math.max(0, params.wrongAnswers),
+    ambiguous_answers: Math.max(0, params.ambiguousAnswers),
+    already_used_answers: Math.max(0, params.alreadyUsedAnswers),
+    passes: Math.max(0, params.passes),
+    no_action_timeouts: Math.max(0, params.noActionTimeouts),
+    average_response_ms: params.averageResponseMs,
+    xp_earned: Math.max(0, params.xpEarned),
+    coins_earned: Math.max(0, params.coinsEarned),
+    reward_eligibility_reason: params.rewardEligibilityReason,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:${eventName}:${params.matchId}:${params.userId}`),
+    occurredAt: params.endedAt,
+  });
+}
+
+export function trackFootballGridMissingAnswerReported(params: {
+  userId: string;
+  matchId: string;
+  attemptId: string;
+  boardId: string;
+  cellIndex: number | null;
+  attemptOutcome: string;
+  occurredAt: string | Date;
+}): void {
+  trackEvent('football_grid_missing_answer_reported', params.userId, {
+    match_id: params.matchId,
+    board_id: params.boardId,
+    attempt_id_prefix: idPrefix(params.attemptId),
+    cell_index: params.cellIndex,
+    attempt_outcome: params.attemptOutcome,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:missing-answer:${params.attemptId}:${params.userId}`),
+    occurredAt: params.occurredAt,
+  });
+}
+
+export function trackFootballGridRematchResponse(params: {
+  userId: string;
+  matchId: string;
+  seriesId: string;
+  response: 'accepted' | 'declined';
+  occurredAt: string | Date;
+}): void {
+  trackEvent('football_grid_rematch_response', params.userId, {
+    match_id: params.matchId,
+    series_id_prefix: idPrefix(params.seriesId),
+    response: params.response,
+  }, {
+    uuid: stableAnalyticsEventUuid(`football-grid:rematch:${params.matchId}:${params.userId}:${params.response}`),
+    occurredAt: params.occurredAt,
   });
 }

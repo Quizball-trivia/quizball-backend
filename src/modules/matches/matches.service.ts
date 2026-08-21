@@ -530,12 +530,33 @@ export function createInitialPartyQuizState(
 
 export function resolveMatchVariant(
   statePayload: unknown,
-  mode: 'friendly' | 'ranked'
-): MatchVariant {
+  mode: 'friendly' | 'ranked',
+  durableVariant?: string | null,
+): MatchVariant | 'auction' {
+  if (
+    durableVariant === 'friendly_possession'
+    || durableVariant === 'friendly_party_quiz'
+    || durableVariant === 'football_grid'
+    || durableVariant === 'ranked_sim'
+  ) {
+    return durableVariant as MatchVariant;
+  }
+  // Auction persists in the shared matches table, but its authoritative state
+  // and realtime lifecycle live in the auction subsystem. Return the known
+  // discriminator so generic callers can opt out explicitly; only genuinely
+  // unknown durable values are rejected below.
+  if (durableVariant === 'auction') return 'auction';
+  // Once the durable discriminator is present it is authoritative. Silently
+  // falling back here would let a future/invalid variant enter the possession
+  // engine, which can corrupt both its state payload and reward path.
+  if (durableVariant != null) {
+    throw new Error(`Unsupported durable match variant: ${durableVariant}`);
+  }
   const candidate = statePayload as Partial<{ variant: MatchVariant }> | null;
   if (
     candidate?.variant === 'friendly_possession' ||
     candidate?.variant === 'friendly_party_quiz' ||
+    candidate?.variant === 'football_grid' ||
     candidate?.variant === 'ranked_sim'
   ) {
     return candidate.variant;

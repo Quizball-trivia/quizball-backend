@@ -171,11 +171,12 @@ export const auctionMatchmakingService = {
       io,
       socket,
       async () => {
-        const snapshot = await userSessionGuardService.resolveState(user.id);
-        if (snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
+        const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
+        const snapshot = prepared.snapshot;
+        if (!prepared.ok || snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
           userSessionGuardService.emitBlocked(socket, {
-            reason: 'ACTIVE_MATCH',
-            message: 'You are already in an active session',
+            reason: prepared.reason ?? 'ACTIVE_MATCH',
+            message: prepared.message ?? 'You are already in an active session',
             operation: 'auction:search_start',
             stateSnapshot: snapshot,
           });

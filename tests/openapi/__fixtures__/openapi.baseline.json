@@ -11622,6 +11622,8 @@
                             "enum": [
                               "friendly_possession",
                               "friendly_party_quiz",
+                              "football_grid",
+                              "auction",
                               "ranked_sim"
                             ]
                           },

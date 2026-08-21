@@ -11,6 +11,7 @@ export interface CreateMatchData {
   categoryBId: string | null;
   totalQuestions: number;
   statePayload?: unknown;
+  gameVariant?: MatchRow['game_variant'];
   rankedContext?: RankedLobbyContext | null;
   isDev?: boolean;
 }
@@ -31,6 +32,29 @@ export interface CreateMatchData {
  */
 export const matchesRepo = {
   async createMatch(data: CreateMatchData, tx?: TransactionSql): Promise<MatchRow> {
+    const stateVariant = data.statePayload && typeof data.statePayload === 'object'
+      ? (data.statePayload as { variant?: unknown }).variant
+      : null;
+    const gameVariant: MatchRow['game_variant'] = data.gameVariant
+      ?? (data.mode === 'auction'
+        ? 'auction'
+        : data.mode === 'ranked'
+          ? 'ranked_sim'
+          : stateVariant === 'friendly_party_quiz'
+            ? 'friendly_party_quiz'
+            : stateVariant === 'football_grid'
+              ? 'football_grid'
+              : 'friendly_possession');
+    const modeAndVariantAreCompatible = data.mode === 'auction'
+      ? gameVariant === 'auction'
+      : data.mode === 'ranked'
+        ? gameVariant === 'ranked_sim'
+        : gameVariant === 'friendly_possession'
+          || gameVariant === 'friendly_party_quiz'
+          || gameVariant === 'football_grid';
+    if (!modeAndVariantAreCompatible) {
+      throw new Error(`Match mode ${data.mode} is incompatible with game variant ${gameVariant}`);
+    }
     // Accepts an optional transaction handle so callers that must commit the
     // match row atomically with a sibling write (e.g. the persistent-bot
     // reservation transfer) can pass their tx. Uses tx.unsafe inside a
@@ -39,16 +63,17 @@ export const matchesRepo = {
     if (tx) {
       const rows = await tx.unsafe<MatchRow[]>(
         `INSERT INTO matches (
-          id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+          id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
         )
         VALUES (
-          gen_random_uuid(), $1, $2, 'active',
-          $3, $4, 0, $5, $6::jsonb, $7::jsonb, $8, NOW()
+          gen_random_uuid(), $1, $2, $3, 'active',
+          $4, $5, 0, $6, $7::jsonb, $8::jsonb, $9, NOW()
         )
         RETURNING *`,
         [
           data.lobbyId,
           data.mode,
+          gameVariant,
           data.categoryAId,
           data.categoryBId,
           data.totalQuestions,
@@ -67,10 +92,10 @@ export const matchesRepo = {
     }
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+        id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
       )
       VALUES (
-        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, 'active',
+        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, ${gameVariant}, 'active',
         ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions},
         ${sql.json(data.statePayload as Json ?? null)},
         ${sql.json((data.rankedContext ?? null) as Json)},
@@ -94,10 +119,10 @@ export const matchesRepo = {
   }): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+        id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
       )
       VALUES (
-        ${data.id}, null, 'auction', 'active',
+        ${data.id}, null, 'auction', 'auction', 'active',
         null, null, 0, 0,
         ${sql.json((data.statePayload ?? null) as Json)},
         null, false, NOW()

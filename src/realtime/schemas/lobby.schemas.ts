@@ -31,6 +31,7 @@ export const lobbyUpdateSettingsSchema = z
     gameMode: z.enum([
       'friendly_possession',
       'friendly_party_quiz',
+      'football_grid',
       'auction',
       'ranked_sim',
     ]),
@@ -41,7 +42,11 @@ export const lobbyUpdateSettingsSchema = z
   })
   .superRefine((data, ctx) => {
     // Auction draws from published auction cards, not lobby categories.
-    if (data.gameMode === 'ranked_sim' || data.gameMode === 'auction') return;
+    if (
+      data.gameMode === 'ranked_sim'
+      || data.gameMode === 'auction'
+      || data.gameMode === 'football_grid'
+    ) return;
 
     if (data.friendlyRandom === false) {
       if (!data.friendlyCategoryAId) {
@@ -74,6 +79,7 @@ export const lobbyStartSchema = z.object({
 
 export const lobbyChallengeSchema = z.object({
   toUserId: z.string().uuid(),
+  gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'football_grid']).optional(),
 });
 
 export const lobbyChallengeDecisionSchema = z.object({

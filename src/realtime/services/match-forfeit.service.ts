@@ -76,7 +76,7 @@ export function isRankedEarlyForfeitMatch(
   activeMatch: MatchRow,
   cacheSnapshot?: MatchCache | null
 ): boolean {
-  const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+  const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
   const roundsPlayed = cacheSnapshot?.currentQIndex ?? activeMatch.current_q_index;
   return activeMatch.mode === 'ranked'
     && variant !== 'friendly_party_quiz'
@@ -252,7 +252,10 @@ export async function finalizeMatchAsForfeit(
       };
     }
 
-    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+    if (variant === 'football_grid' || variant === 'auction') {
+      throw new Error(`${variant} forfeits must use their dedicated lifecycle`);
+    }
     const roster = await matchPlayersRepo.listMatchPlayers(params.matchId);
     const winnerId =
       variant === 'friendly_party_quiz'
@@ -521,13 +524,21 @@ export async function handleMatchForfeit(
       }
 
       const { participants: roster, cache } = await getParticipantSnapshot(activeMatch.id);
-      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
       const isParticipant = roster.some((player) => player.user_id === userId);
       if (!isParticipant) {
         socket.emit('error', {
           code: 'MATCH_NOT_ALLOWED',
           message: 'You are not a participant in this match',
         });
+        return;
+      }
+      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode, activeMatch.game_variant);
+      if (variant === 'football_grid') {
+        socket.emit('error', { code: 'GRID_COMMAND_REQUIRED', message: 'Use the Tic Tac Toe forfeit action' });
+        return;
+      }
+      if (variant === 'auction') {
+        socket.emit('error', { code: 'AUCTION_COMMAND_REQUIRED', message: 'Use the Auction forfeit action' });
         return;
       }
 

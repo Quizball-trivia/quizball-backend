@@ -33,6 +33,11 @@ export type RealtimeTimerKind =
   | 'draft_ai_ban'
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
+  | 'football_grid_phase'
+  | 'football_grid_matchmaking_fallback'
+  | 'football_grid_bot_action'
+  | 'football_grid_rematch_expiry'
+  | 'football_grid_presence_expiry'
   | 'match_disconnect_forfeit'
   | 'match_resume_countdown'
   | 'party_question'
@@ -57,6 +62,11 @@ export type RealtimeTimerPayload =
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
+  | { kind: 'football_grid_phase'; matchId: string; expectedStateVersion: number }
+  | { kind: 'football_grid_matchmaking_fallback'; searchId: string; userId: string }
+  | { kind: 'football_grid_bot_action'; matchId: string; expectedStateVersion: number; turnNumber: number }
+  | { kind: 'football_grid_rematch_expiry'; seriesId: string; expectedSeriesVersion: number }
+  | { kind: 'football_grid_presence_expiry'; matchId: string; userId: string; expectedPresenceGeneration: number }
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string; disconnectMarkerMs?: number }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
@@ -125,6 +135,11 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'
+    && kind !== 'football_grid_phase'
+    && kind !== 'football_grid_matchmaking_fallback'
+    && kind !== 'football_grid_bot_action'
+    && kind !== 'football_grid_rematch_expiry'
+    && kind !== 'football_grid_presence_expiry'
     && kind !== 'match_disconnect_forfeit'
     && kind !== 'match_resume_countdown'
     && kind !== 'party_question'

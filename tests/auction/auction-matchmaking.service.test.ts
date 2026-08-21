@@ -167,6 +167,17 @@ const sessionGuardMock = vi.hoisted(() => ({
       openLobbyIds: [],
       resolvedAt: '2026-06-20T10:00:00.000Z',
     })),
+    prepareForQueueJoin: vi.fn(async () => ({
+      ok: true,
+      snapshot: {
+        state: 'IDLE',
+        activeMatchId: null,
+        waitingLobbyId: null,
+        queueSearchId: null,
+        openLobbyIds: [],
+        resolvedAt: '2026-06-20T10:00:00.000Z',
+      },
+    })),
     emitBlocked: vi.fn(),
   },
 }));

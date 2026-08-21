@@ -21,6 +21,11 @@ const abortLobbyMock = vi.fn();
 const countMembersMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const resolveMatchReplayEvidenceMock = vi.fn();
+const getRedisClientMock = vi.fn();
+const acquireLockMock = vi.fn();
+const releaseLockMock = vi.fn();
+const startLockHeartbeatMock = vi.fn();
+const stopLockHeartbeatMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -32,7 +37,13 @@ vi.mock('../../src/core/logger.js', () => ({
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
-  getRedisClient: () => null,
+  getRedisClient: () => getRedisClientMock(),
+}));
+
+vi.mock('../../src/realtime/locks.js', () => ({
+  acquireLock: (...args: unknown[]) => acquireLockMock(...args),
+  releaseLock: (...args: unknown[]) => releaseLockMock(...args),
+  startLockHeartbeat: (...args: unknown[]) => startLockHeartbeatMock(...args),
 }));
 
 // Ranked pre-match lobby teardown + reservation release goes through the locked
@@ -136,6 +147,10 @@ function presenceFor(
 describe('user-session-guard.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    acquireLockMock.mockImplementation(async (key: string) => ({ acquired: true, token: `token:${key}` }));
+    releaseLockMock.mockResolvedValue(true);
+    startLockHeartbeatMock.mockReturnValue({ stop: stopLockHeartbeatMock });
+    getRedisClientMock.mockReturnValue(null);
     listOpenLobbiesForUserMock.mockResolvedValue([]);
     listOpenLobbiesForUsersMock.mockResolvedValue(new Map());
     getActiveMatchesForUsersMock.mockResolvedValue(new Map());
@@ -176,6 +191,28 @@ describe('user-session-guard.service', () => {
     buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
     emitFinalResultsMock.mockResolvedValue(undefined);
     abandonMatchWithCompleteLockMock.mockResolvedValue({ abandoned: true });
+  });
+
+  it('heartbeats a user transition lock until long-running work completes', async () => {
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.withUserSessionLock('u1', async () => 'done');
+
+    expect(result).toBe('done');
+    expect(startLockHeartbeatMock).toHaveBeenCalledWith('lock:user:session:u1', 'token:lock:user:session:u1', 4000);
+    expect(stopLockHeartbeatMock).toHaveBeenCalledOnce();
+    expect(releaseLockMock).toHaveBeenCalledWith('lock:user:session:u1', 'token:lock:user:session:u1');
+  }, 10_000);
+
+  it('heartbeats both leases for a combined user and lobby transition', async () => {
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.withUserAndLobbyLock('u1', 'l1', async () => 'done');
+
+    expect(result).toBe('done');
+    expect(startLockHeartbeatMock).toHaveBeenCalledWith('lock:user:session:u1', 'token:lock:user:session:u1', 4000);
+    expect(startLockHeartbeatMock).toHaveBeenCalledWith('lock:lobby:l1', 'token:lock:lobby:l1', 4000);
+    expect(stopLockHeartbeatMock).toHaveBeenCalledTimes(2);
+    expect(releaseLockMock).toHaveBeenNthCalledWith(1, 'lock:lobby:l1', 'token:lock:lobby:l1');
+    expect(releaseLockMock).toHaveBeenNthCalledWith(2, 'lock:user:session:u1', 'token:lock:user:session:u1');
   });
 
   it('resolves multiple session states with one batched match query and one batched lobby query', async () => {
@@ -401,6 +438,94 @@ describe('user-session-guard.service', () => {
     expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels every stale queue before admitting a new queue search', async () => {
+    const queueMaps = new Map<string, Map<string, string>>([
+      ['ranked:mm:user', new Map([['multi-user', 'ranked-search']])],
+      ['auction:mm:user', new Map([['multi-user', 'auction-search']])],
+      ['football_grid:mm:user', new Map([['multi-user', 'grid-search']])],
+    ]);
+    const redis = {
+      isOpen: true,
+      hGet: vi.fn(async (key: string, field: string) => queueMaps.get(key)?.get(field) ?? null),
+      exists: vi.fn(async () => 0),
+      eval: vi.fn(async (script: string, input: { keys: string[]; arguments: string[] }) => {
+        if (script.includes('local expectedSearchId')) {
+          const userMap = queueMaps.get(input.keys[1]);
+          if (userMap?.get(input.arguments[0]) === input.arguments[1]) {
+            userMap.delete(input.arguments[0]);
+          }
+        } else {
+          queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+        }
+        return 1;
+      }),
+    };
+    getRedisClientMock.mockReturnValue(redis);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'multi-user', 'grid');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE', queueSearchId: null } });
+    expect([...queueMaps.values()].every((map) => !map.has('multi-user'))).toBe(true);
+  });
+
+  it('preserves a replacement queue mapping that races stale cleanup', async () => {
+    const queueMaps = new Map<string, Map<string, string>>([
+      ['ranked:mm:user', new Map([['multi-user', 'ranked-search']])],
+      ['auction:mm:user', new Map([['multi-user', 'auction-search-old']])],
+      ['football_grid:mm:user', new Map()],
+    ]);
+    let auctionReads = 0;
+    const redis = {
+      isOpen: true,
+      hGet: vi.fn(async (key: string, field: string) => {
+        const current = queueMaps.get(key)?.get(field) ?? null;
+        if (key === 'auction:mm:user') {
+          auctionReads += 1;
+          if (auctionReads === 2) {
+            queueMaps.get(key)?.set(field, 'auction-search-new');
+          }
+        }
+        return current;
+      }),
+      exists: vi.fn(async () => 0),
+      eval: vi.fn(async (script: string, input: { keys: string[]; arguments: string[] }) => {
+        if (script.includes('local expectedSearchId')) {
+          const userMap = queueMaps.get(input.keys[1]);
+          if (userMap?.get(input.arguments[0]) === input.arguments[1]) {
+            userMap.delete(input.arguments[0]);
+          }
+        } else {
+          queueMaps.get(input.keys[2])?.delete(input.arguments[1]);
+        }
+        return 1;
+      }),
+    };
+    getRedisClientMock.mockReturnValue(redis);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'multi-user', 'grid');
+
+    expect(queueMaps.get('auction:mm:user')?.get('multi-user')).toBe('auction-search-new');
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'QUEUE_UNAVAILABLE',
+      snapshot: { queueSearchId: 'auction-search-new' },
+    });
+  });
+
   it('uses one session-context read for a clean lobby entry', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     listOpenLobbiesForUserMock.mockResolvedValue([]);
@@ -416,6 +541,30 @@ describe('user-session-guard.service', () => {
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
     expect(getActiveMatchForUserMock).toHaveBeenCalledTimes(1);
     expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks lobby entry while a shared pairing or rematch fence is held', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(1),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForLobbyEntry(io, 'reserved-user');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'ACTIVE_MATCH',
+      message: 'Your match or rematch is starting',
+    });
+    expect(removeMemberMock).not.toHaveBeenCalled();
   });
 
   it('preserves a lobby membership created during lobby-entry cleanup', async () => {

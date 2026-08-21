@@ -73,6 +73,40 @@ const persistentBotSweeperActions = meter.createCounter('quizball_persistent_bot
   description: 'Reconciliation sweeper actions tagged by action (rekey / release / skipped_live)',
 });
 
+const footballGridQueueJoins = meter.createCounter('quizball_football_grid_queue_joins_total', {
+  description: 'Football Grid queue join attempts',
+});
+const footballGridMatches = meter.createCounter('quizball_football_grid_matches_total', {
+  description: 'Football Grid matches created by opponent type and origin',
+});
+const footballGridCommands = meter.createCounter('quizball_football_grid_commands_total', {
+  description: 'Football Grid commands resolved by outcome',
+});
+const footballGridResolverDuration = meter.createHistogram('quizball_football_grid_resolver_duration_ms', {
+  description: 'Football Grid answer resolver latency', unit: 'ms',
+});
+const footballGridSettlements = meter.createCounter('quizball_football_grid_settlements_total', {
+  description: 'Football Grid reward settlements by outcome',
+});
+const footballGridQueueWaitDuration = meter.createHistogram('quizball_football_grid_queue_wait_duration_ms', {
+  description: 'Football Grid queue wait before a human or bot pairing', unit: 'ms',
+});
+const footballGridPhaseTimeouts = meter.createCounter('quizball_football_grid_phase_timeouts_total', {
+  description: 'Football Grid authoritative phase deadline expirations',
+});
+const footballGridPresenceTransitions = meter.createCounter('quizball_football_grid_presence_transitions_total', {
+  description: 'Football Grid disconnect and reconnect transitions',
+});
+const footballGridContentExhaustion = meter.createCounter('quizball_football_grid_content_exhaustion_total', {
+  description: 'Football Grid match creation attempts with no selectable published board',
+});
+const footballGridRewardEligibility = meter.createCounter('quizball_football_grid_reward_eligibility_total', {
+  description: 'Football Grid reward decisions by reason and origin',
+});
+const footballGridPairingRecovery = meter.createCounter('quizball_football_grid_pairing_recovery_total', {
+  description: 'Football Grid stale pairing reconciliation outcomes',
+});
+
 export const appMetrics = {
   rankedQueueJoins,
   rankedQueueLeaves,
@@ -90,4 +124,15 @@ export const appMetrics = {
   persistentBotSelections,
   persistentBotReservationReleases,
   persistentBotSweeperActions,
+  footballGridQueueJoins,
+  footballGridMatches,
+  footballGridCommands,
+  footballGridResolverDuration,
+  footballGridSettlements,
+  footballGridQueueWaitDuration,
+  footballGridPhaseTimeouts,
+  footballGridPresenceTransitions,
+  footballGridContentExhaustion,
+  footballGridRewardEligibility,
+  footballGridPairingRecovery,
 };

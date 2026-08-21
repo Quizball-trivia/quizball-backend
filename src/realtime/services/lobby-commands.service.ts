@@ -30,6 +30,8 @@ import {
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
 import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
+import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.service.js';
+import { config } from '../../core/config.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
@@ -57,6 +59,7 @@ function isValidFriendlyStartShape(
   memberCount: number
 ): boolean {
   if (friendlyMode === 'friendly_possession') return memberCount === 2;
+  if (friendlyMode === 'football_grid') return memberCount === 2;
   if (friendlyMode === 'friendly_party_quiz') {
     return memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS;
   }
@@ -533,6 +536,18 @@ export async function updateSettings(
     // while it holds more members than the target allows would strand members,
     // so reject rather than kick anyone.
     const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
+    if (nextSettings.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+      socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
+      return;
+    }
+    if (nextSettings.gameMode === 'football_grid' && memberCount > requestedCapacity) {
+      socket.emit('error', {
+        code: 'LOBBY_MODE_CAPACITY',
+        message: 'Football Tic Tac Toe supports exactly two players.',
+        meta: { memberCount, maxMembers: requestedCapacity, gameMode: nextSettings.gameMode },
+      });
+      return;
+    }
     if (
       lobby.mode === 'friendly' &&
       currentSettings.gameMode === 'auction' &&
@@ -555,7 +570,7 @@ export async function updateSettings(
       }
     }
 
-    if (nextSettings.gameMode === 'auction') {
+    if (nextSettings.gameMode === 'auction' || nextSettings.gameMode === 'football_grid') {
       // Auction has no lobby categories of its own.
       nextSettings.friendlyRandom = true;
       nextSettings.friendlyCategoryAId = null;
@@ -605,8 +620,7 @@ export async function updateSettings(
     // Entering auction opens a third seat and changes the game entirely — clear
     // ready states so nobody is dragged into a mode they never agreed to.
     if (
-      nextSettings.gameMode === 'auction' &&
-      currentSettings.gameMode !== 'auction'
+      nextSettings.gameMode !== currentSettings.gameMode
     ) {
       await lobbiesRepo.setAllReady(lobbyId, false);
     }
@@ -733,6 +747,21 @@ export async function startFriendlyMatch(
         lobbyId,
         hostUserId: currentLobby.host_user_id,
       });
+      return;
+    }
+    if (currentFriendlyMode === 'football_grid') {
+      try {
+        await startFootballGridMatchFromLobby(io, socket, {
+          lobbyId,
+          isPublic: currentLobby.is_public,
+          inviteCode: currentLobby.invite_code,
+        });
+      } catch (error) {
+        logger.warn({ lobbyId, error }, 'Failed to create Football Grid lobby match');
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start Football Tic Tac Toe' });
+      }
       return;
     }
 

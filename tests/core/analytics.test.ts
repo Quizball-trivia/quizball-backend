@@ -52,6 +52,7 @@ let identifyUserProfile: typeof import('../../src/core/analytics.js').identifyUs
 let trackAccountCreated: typeof import('../../src/core/analytics.js').trackAccountCreated;
 let registerAiUserId: typeof import('../../src/core/analytics.js').registerAiUserId;
 let shutdownPostHog: typeof import('../../src/core/analytics.js').shutdownPostHog;
+let stableAnalyticsEventUuid: typeof import('../../src/core/analytics.js').stableAnalyticsEventUuid;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -73,6 +74,7 @@ beforeEach(async () => {
   trackAccountCreated = mod.trackAccountCreated;
   registerAiUserId = mod.registerAiUserId;
   shutdownPostHog = mod.shutdownPostHog;
+  stableAnalyticsEventUuid = mod.stableAnalyticsEventUuid;
 });
 
 afterEach(() => {
@@ -168,6 +170,27 @@ describe('analytics AI-user suppression', () => {
     const ts = captureMock.mock.calls[0][0].properties.$timestamp;
     // Stamped at call time; within a couple seconds of now (not skewed by lookup latency).
     expect(Math.abs(Date.now() - new Date(ts).getTime())).toBeLessThan(2000);
+  });
+
+  it('supports stable uuid and timestamp metadata for retry-safe server events', async () => {
+    const occurredAt = '2026-08-20T10:00:00.000Z';
+    const uuid = stableAnalyticsEventUuid(`football-grid:completed:match-1:${REAL_USER}`);
+
+    trackEvent('match_completed', REAL_USER, { mode: 'football_grid' }, { uuid, occurredAt });
+    await flush();
+
+    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(stableAnalyticsEventUuid(`football-grid:completed:match-1:${REAL_USER}`)).toBe(uuid);
+    expect(captureMock).toHaveBeenCalledWith(expect.objectContaining({
+      distinctId: REAL_USER,
+      event: 'match_completed',
+      uuid,
+      timestamp: new Date(occurredAt),
+      properties: expect.objectContaining({
+        mode: 'football_grid',
+        $timestamp: occurredAt,
+      }),
+    }));
   });
 
   it('fails OPEN: captures the event if the DB lookup throws', async () => {

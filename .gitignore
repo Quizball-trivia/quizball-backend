@@ -29,6 +29,7 @@ scripts/*
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
 !scripts/export-openapi.ts
+!scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts
@@ -47,6 +48,7 @@ scripts/*
 !scripts/refresh-question-stats.ts
 !scripts/bot-calibration/
 !scripts/bot-calibration/**
+!scripts/football-grid-content.ts
 # Persistent bot roster generator — code + measured patterns.json + the dry-run
 # deliverables (report/CSV/manifest) are all committed for review. The out/
 # .gitignore then narrows out/ to just those three deliverables.

@@ -592,6 +592,32 @@ export const footballGridService = {
     });
   },
 
+  /**
+   * Atomic decision for a player re-entering matchmaking while an unfinished
+   * match exists. Row-locks the match so a concurrent deadline advance cannot
+   * turn an un-started bot match into a live one mid-cancel (and vice versa).
+   */
+  async resolveStaleMatchOnSearchStart(input: {
+    matchId: string;
+    userId: string;
+  }): Promise<'cancelled' | 'resumable' | 'gone'> {
+    return footballGridRepo.runInTransaction(async (tx) => {
+      const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
+      if (!previous || previous.phase === 'terminal') return 'gone';
+      const opponent = previous.players.find((player) => player.userId !== input.userId);
+      const notYetStarted = previous.phase === 'handoff'
+        || previous.phase === 'loading'
+        || previous.phase === 'countdown';
+      if (!(notYetStarted && opponent?.isBot)) return 'resumable';
+      const next = cancelNoContest(previous, 'administrative_cancel', await footballGridRepo.databaseNowMs(tx));
+      await footballGridRepo.persistStateInTx(tx, previous, next, {
+        eventType: 'administrative_cancel',
+        eventPayload: { userId: input.userId, reason: 'abandoned_before_start' },
+      });
+      return 'cancelled';
+    });
+  },
+
   async recoverPendingCommand(inbox: FootballGridCommandInboxRow): Promise<FootballGridCommandResult> {
     return processInbox(inbox);
   },

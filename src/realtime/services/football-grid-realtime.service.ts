@@ -407,7 +407,10 @@ export const footballGridRealtimeService = {
           const pendingHandoffs = await footballGridRepo.listPendingHandoffMatchIds(100, handoffCursor);
           for (const matchId of pendingHandoffs) {
             const state = await footballGridRepo.loadState(matchId);
-            if (state) {
+            // Only redeliver matches still genuinely awaiting handoff; a match
+            // terminalized since listing (e.g. administrative cancel) must not
+            // be resurrected onto a player who already moved on.
+            if (state && state.phase === 'handoff') {
               await footballGridRealtimeService.emitMatchFound(io, state)
                 .catch((error) => logger.warn({ error, matchId }, 'Football Grid handoff redelivery failed'));
             }

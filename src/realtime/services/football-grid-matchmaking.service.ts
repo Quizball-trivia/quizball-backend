@@ -587,20 +587,22 @@ export const footballGridMatchmakingService = {
     }
     const activeMatchId = await footballGridRepo.getActiveMatchIdForUser(userId);
     if (activeMatchId) {
-      const state = await footballGridService.getState(activeMatchId, userId);
-      const opponent = state.players.find((player) => player.userId !== userId);
-      const notYetStarted = state.phase === 'handoff' || state.phase === 'loading' || state.phase === 'countdown';
-      // Resuming a match that never actually started (abandoned during
-      // handoff/loading/countdown) reads as "instantly paired" to the player.
-      // Un-started bot matches are cancelled so the next tap is a fresh
-      // search; un-started human matches still resume because the opponent
-      // may be waiting on the same barrier.
-      if (notYetStarted && opponent?.isBot) {
-        await footballGridService.cancelAdministratively(activeMatchId);
-      } else {
+      const outcome = await footballGridService.resolveStaleMatchOnSearchStart({
+        matchId: activeMatchId,
+        userId,
+      });
+      if (outcome === 'resumable') {
+        const state = await footballGridService.getState(activeMatchId, userId);
         await footballGridRealtimeService.emitMatchFound(io, state);
         return;
       }
+      if (outcome === 'cancelled') {
+        // Drop this socket's stale binding so a disconnect during the fresh
+        // search still cleans up the queued search instead of skipping it.
+        if (socket.data.gridMatchId === activeMatchId) socket.data.gridMatchId = undefined;
+        if (socket.data.matchId === activeMatchId) socket.data.matchId = undefined;
+      }
+      // 'gone' (terminal or vanished): fall through to a fresh search.
     }
     const locked = await withMatchmakingLock(async () => {
       const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {

@@ -593,16 +593,23 @@ export const footballGridMatchmakingService = {
       });
       if (outcome === 'resumable') {
         const state = await footballGridService.getState(activeMatchId, userId);
-        await footballGridRealtimeService.emitMatchFound(io, state);
-        return;
+        // emitMatchFound refuses terminal states, so a deadline that fires
+        // between resolve and here simply falls through to a fresh search.
+        if (state.phase !== 'terminal') {
+          await footballGridRealtimeService.emitMatchFound(io, state);
+          return;
+        }
       }
-      if (outcome === 'cancelled') {
-        // Drop this socket's stale binding so a disconnect during the fresh
-        // search still cleans up the queued search instead of skipping it.
-        if (socket.data.gridMatchId === activeMatchId) socket.data.gridMatchId = undefined;
-        if (socket.data.matchId === activeMatchId) socket.data.matchId = undefined;
+      if (outcome !== 'resumable') {
+        // Clear every socket this user has bound to the dead match so later
+        // disconnects still clean up an in-flight queued search.
+        const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => []);
+        for (const s of sockets) {
+          if (s.data.gridMatchId === activeMatchId) s.data.gridMatchId = undefined;
+          if (s.data.matchId === activeMatchId) s.data.matchId = undefined;
+        }
       }
-      // 'gone' (terminal or vanished): fall through to a fresh search.
+      // 'gone' or terminalized: fall through to a fresh search.
     }
     const locked = await withMatchmakingLock(async () => {
       const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {

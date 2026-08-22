@@ -441,6 +441,10 @@ export const footballGridRealtimeService = {
   },
 
   async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<void> {
+    // A deadline/sweeper/cancel can terminalize a match between an upstream
+    // staleness decision and this emission. Never announce or bind a
+    // terminal match as "match found".
+    if (state.phase === 'terminal') return;
     const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
     for (const player of state.players) {
       const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;
@@ -663,7 +667,10 @@ export const footballGridRealtimeService = {
         gridCode: 'COMPLETION_ACK_INVALID',
       });
     }
-    socket.data.gridMatchId = undefined;
+    // Only unbind if this socket is still attached to THAT match; a stale
+    // delivery (e.g. from an administratively cancelled match) must never
+    // detach a socket that has already joined a newer match.
+    if (socket.data.gridMatchId === input.matchId) socket.data.gridMatchId = undefined;
     if (socket.data.matchId === input.matchId) socket.data.matchId = undefined;
     await socket.leave(gridRoom(input.matchId));
   },

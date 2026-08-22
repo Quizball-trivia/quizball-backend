@@ -588,8 +588,19 @@ export const footballGridMatchmakingService = {
     const activeMatchId = await footballGridRepo.getActiveMatchIdForUser(userId);
     if (activeMatchId) {
       const state = await footballGridService.getState(activeMatchId, userId);
-      await footballGridRealtimeService.emitMatchFound(io, state);
-      return;
+      const opponent = state.players.find((player) => player.userId !== userId);
+      const notYetStarted = state.phase === 'handoff' || state.phase === 'loading' || state.phase === 'countdown';
+      // Resuming a match that never actually started (abandoned during
+      // handoff/loading/countdown) reads as "instantly paired" to the player.
+      // Un-started bot matches are cancelled so the next tap is a fresh
+      // search; un-started human matches still resume because the opponent
+      // may be waiting on the same barrier.
+      if (notYetStarted && opponent?.isBot) {
+        await footballGridService.cancelAdministratively(activeMatchId);
+      } else {
+        await footballGridRealtimeService.emitMatchFound(io, state);
+        return;
+      }
     }
     const locked = await withMatchmakingLock(async () => {
       const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {

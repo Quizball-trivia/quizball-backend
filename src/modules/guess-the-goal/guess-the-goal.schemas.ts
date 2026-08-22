@@ -91,8 +91,19 @@ export const choreographyContentSchema = z
       .regex(/^https:\/\/((www\.)?youtube\.com\/(watch\?v=|shorts\/|embed\/)[A-Za-z0-9_-]{6,}|youtu\.be\/[A-Za-z0-9_-]{6,})/)
       .nullable()
       .optional(),
+    clip_start_s: z.number().int().min(0).max(7200).nullable().optional(),
+    clip_end_s: z.number().int().min(1).max(7200).nullable().optional(),
   })
   .superRefine((goal, ctx) => {
+    if (
+      (goal.clip_start_s == null) !== (goal.clip_end_s == null) ||
+      (goal.clip_start_s != null && goal.clip_end_s != null && goal.clip_start_s >= goal.clip_end_s)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'clip_start_s/clip_end_s must both be set with start < end',
+      });
+    }
     const playerIds = new Set(goal.players.map((p) => p.id));
     if (playerIds.size !== goal.players.length) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'player ids must be unique' });

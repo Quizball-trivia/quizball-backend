@@ -49,6 +49,9 @@ export interface GoalChoreographyRow {
   goal_ordinal: number;
   schema_version: number;
   video_url: string | null;
+  /** Verified goal window in the source upload (embed plays exactly this). */
+  clip_start_s: number | null;
+  clip_end_s: number | null;
   source: 'seed' | 'agent' | 'editor';
   created_by: string | null;
   created_at: Date;
@@ -65,6 +68,8 @@ export interface GoalSnapshot {
   title: I18nText;
   fun_fact: I18nText | null;
   video_url: string | null;
+  clip_start_s?: number | null;
+  clip_end_s?: number | null;
   players: ChoreographyPlayer[];
   steps: ChoreographyStep[];
   options: ChoreographyOption[];

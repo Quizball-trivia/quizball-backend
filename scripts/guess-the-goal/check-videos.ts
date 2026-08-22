@@ -20,6 +20,72 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { config as loadEnv } from 'dotenv';
+import postgres from 'postgres';
+
+// --db: audit the LIVE published pool instead of goal-videos.json. Keyless —
+// YouTube's oEmbed endpoint answers 200 for embeddable+existing, 401/403 when
+// embedding is disabled, 404 for missing/private. This is the check that
+// would have flagged the four agent-generated goals that shipped with no
+// video at all.
+if (process.argv.includes('--db')) {
+  loadEnv({ path: '.env.local' });
+  loadEnv();
+  if (!process.env.DATABASE_URL) {
+    console.error('DATABASE_URL is required for --db');
+    process.exit(1);
+  }
+  const db = postgres(process.env.DATABASE_URL, { max: 1, prepare: false });
+  const rows = await db<{ slug: string; video_url: string | null }[]>`
+    SELECT slug, video_url FROM goal_choreographies WHERE status = 'published' ORDER BY slug`;
+  await db.end();
+
+  let failures = 0;
+  const byId = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.video_url) {
+      console.error(`✗ ${row.slug}: NO video attached`);
+      failures += 1;
+      continue;
+    }
+    const id = videoId(row.video_url);
+    if (!id) {
+      console.error(`✗ ${row.slug}: unparseable url ${row.video_url}`);
+      failures += 1;
+      continue;
+    }
+    const list = byId.get(id) ?? [];
+    list.push(row.slug);
+    byId.set(id, list);
+  }
+  for (const [id, slugs] of byId) {
+    const status = await new Promise<number>((resolve) => {
+      import('node:https').then(({ default: https }) => {
+        https
+          .get(
+            `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}&format=json`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' } },
+            (r) => {
+              r.resume();
+              resolve(r.statusCode);
+            }
+          )
+          .on('error', () => resolve(0));
+      });
+    });
+    const verdict =
+      status === 200 ? 'ok' : status === 401 || status === 403 ? 'EMBED-BLOCKED' : 'MISSING/PRIVATE';
+    if (verdict === 'ok') console.log(`✓ ${slugs.join(',')}: ${id}`);
+    else {
+      console.error(`✗ ${slugs.join(',')}: ${verdict} (${id})`);
+      failures += 1;
+    }
+  }
+  console.log(
+    failures > 0 ? `\n${failures} problem(s) across ${rows.length} published goals.` : `\nAll ${rows.length} published goals have live, embeddable videos.`
+  );
+  process.exit(failures > 0 ? 1 : 0);
+}
 
 const apiKey = process.env.YOUTUBE_API_KEY;
 if (!apiKey) {

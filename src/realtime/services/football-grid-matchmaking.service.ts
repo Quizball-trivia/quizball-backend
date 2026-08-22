@@ -593,23 +593,24 @@ export const footballGridMatchmakingService = {
       });
       if (outcome === 'resumable') {
         const state = await footballGridService.getState(activeMatchId, userId);
-        // emitMatchFound refuses terminal states, so a deadline that fires
-        // between resolve and here simply falls through to a fresh search.
+        // emitMatchFound re-reads authoritative state and refuses terminal
+        // matches, so a deadline firing mid-flight falls through cleanly.
         if (state.phase !== 'terminal') {
           await footballGridRealtimeService.emitMatchFound(io, state);
           return;
         }
       }
-      if (outcome !== 'resumable') {
-        // Clear every socket this user has bound to the dead match so later
-        // disconnects still clean up an in-flight queued search.
+      if (activeMatchId) {
+        // Clear local replicas' stale bindings for the dead match. Sockets on
+        // other replicas keep their binding, but disconnect cleanup now
+        // consults the DB instead of trusting it.
         const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => []);
         for (const s of sockets) {
           if (s.data.gridMatchId === activeMatchId) s.data.gridMatchId = undefined;
           if (s.data.matchId === activeMatchId) s.data.matchId = undefined;
         }
       }
-      // 'gone' or terminalized: fall through to a fresh search.
+      // 'gone', cancelled, or resumable-but-terminalized: fresh search.
     }
     const locked = await withMatchmakingLock(async () => {
       const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {
@@ -753,7 +754,14 @@ export const footballGridMatchmakingService = {
   },
 
   async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-    if (socket.data.gridMatchId || socket.data.lobbyId) return;
+    if (socket.data.lobbyId) return;
+    // A stale gridMatchId (cancelled/gone match, possibly bound on another
+    // replica we cannot mutate) must not skip search cleanup. Trust the
+    // database, not the binding.
+    if (socket.data.gridMatchId) {
+      const bound = await footballGridRepo.loadState(socket.data.gridMatchId).catch(() => null);
+      if (bound && bound.phase !== 'terminal') return;
+    }
     const userId = socket.data.user.id;
     const others = await io.in(`user:${userId}`).fetchSockets().catch(() => []);
     if (others.some((candidate) => candidate.id !== socket.id)) return;

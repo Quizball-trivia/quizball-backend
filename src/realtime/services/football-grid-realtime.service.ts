@@ -441,10 +441,12 @@ export const footballGridRealtimeService = {
   },
 
   async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<void> {
-    // A deadline/sweeper/cancel can terminalize a match between an upstream
-    // staleness decision and this emission. Never announce or bind a
-    // terminal match as "match found".
-    if (state.phase === 'terminal') return;
+    // Caller snapshots go stale the instant a deadline, sweeper, or cancel
+    // commits. Re-read authoritatively so a terminal match can never be
+    // announced or bound as "match found", whatever raced us upstream.
+    const current = await footballGridRepo.loadState(state.matchId);
+    if (!current || current.phase === 'terminal') return;
+    state = current;
     const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
     for (const player of state.players) {
       const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;

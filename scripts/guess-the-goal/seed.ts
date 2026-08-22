@@ -109,7 +109,7 @@ try {
         INSERT INTO goal_choreographies (
           slug, status, difficulty, title, options, fun_fact, bonus,
           players, steps, scorer, match_label, year, goal_ordinal,
-          schema_version, video_url, source
+          schema_version, video_url, source, clip_start_s, clip_end_s
         ) VALUES (
           ${goal.slug}, ${status}, ${goal.difficulty},
           ${sql.json(goal.title)}, ${sql.json(goal.options)},
@@ -117,7 +117,8 @@ try {
           ${goal.bonus ? sql.json(goal.bonus) : null},
           ${sql.json(goal.players)}, ${sql.json(goal.steps)},
           ${goal.scorer}, ${goal.match_label}, ${goal.year}, ${goal.goal_ordinal},
-          ${goal.schema_version}, ${goal.video_url}, 'seed'
+          ${goal.schema_version}, ${goal.video_url}, 'seed',
+          ${goal.clip_start_s ?? null}, ${goal.clip_end_s ?? null}
         )
         ON CONFLICT (slug) DO UPDATE SET
           difficulty = EXCLUDED.difficulty,
@@ -132,7 +133,9 @@ try {
           year = EXCLUDED.year,
           goal_ordinal = EXCLUDED.goal_ordinal,
           schema_version = EXCLUDED.schema_version,
-          video_url = EXCLUDED.video_url
+          video_url = EXCLUDED.video_url,
+          clip_start_s = EXCLUDED.clip_start_s,
+          clip_end_s = EXCLUDED.clip_end_s
         RETURNING (xmax = 0) AS inserted
       `;
       if (rows[0]?.inserted) inserted += 1;

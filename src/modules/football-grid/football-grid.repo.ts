@@ -1787,15 +1787,19 @@ export const footballGridRepo = {
     // carry a NULL phase_deadline_at forever. Give them one on every recovery
     // pass so they terminate administratively instead of waiting for the
     // stale-match sweeper.
-    const rows = await sql<Array<{ match_id: string }>>`
-      UPDATE football_grid_matches
-         SET phase_deadline_at = now() + make_interval(secs => $1 / 1000.0),
-             updated_at = now(), state_version = state_version + 1,
-             last_event_sequence = last_event_sequence + 1
-       WHERE phase = 'service_interruption' AND phase_deadline_at IS NULL
-         AND pending_command_id IS NULL
-      RETURNING match_id
-    `;
+    // unsafe + explicit params: a raw `$1` inside the tagged template never
+    // binds (postgres.js only interpolates ${…}) and Postgres rejects the
+    // bind message with 08P01 — this call spammed that error every pass.
+    const rows = await sql.unsafe<Array<{ match_id: string }>>(
+      `UPDATE football_grid_matches
+          SET phase_deadline_at = now() + make_interval(secs => $1 / 1000.0),
+              updated_at = now(), state_version = state_version + 1,
+              last_event_sequence = last_event_sequence + 1
+        WHERE phase = 'service_interruption' AND phase_deadline_at IS NULL
+          AND pending_command_id IS NULL
+        RETURNING match_id`,
+      [FOOTBALL_GRID_SERVICE_INTERRUPTION_MS],
+    );
     return rows.length;
   },
 

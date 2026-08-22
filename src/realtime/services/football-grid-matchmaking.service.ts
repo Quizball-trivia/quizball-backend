@@ -593,12 +593,13 @@ export const footballGridMatchmakingService = {
       });
       if (outcome === 'resumable') {
         const state = await footballGridService.getState(activeMatchId, userId);
-        // emitMatchFound re-reads authoritative state and refuses terminal
-        // matches, so a deadline firing mid-flight falls through cleanly.
-        if (state.phase !== 'terminal') {
-          await footballGridRealtimeService.emitMatchFound(io, state);
-          return;
-        }
+        // emitMatchFound re-reads authoritative state; when it reports the
+        // match terminalized mid-flight we sweep and fall through to a fresh
+        // search instead of leaving the player's request unanswered.
+        const resumed = state.phase !== 'terminal'
+          ? await footballGridRealtimeService.emitMatchFound(io, state)
+          : false;
+        if (resumed) return;
       }
       if (activeMatchId) {
         // Clear local replicas' stale bindings for the dead match. Sockets on

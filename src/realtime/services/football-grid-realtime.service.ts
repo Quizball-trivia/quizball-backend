@@ -440,12 +440,15 @@ export const footballGridRealtimeService = {
     socket.emit('grid:error', payload);
   },
 
-  async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<void> {
-    // Caller snapshots go stale the instant a deadline, sweeper, or cancel
-    // commits. Re-read authoritatively so a terminal match can never be
-    // announced or bound as "match found", whatever raced us upstream.
+  /**
+   * Emits grid:match_found and binds sockets. Re-reads authoritative state
+   * first; returns false (and emits nothing) when the match is gone or has
+   * terminalized, so callers can fall back to fresh matchmaking instead of
+   * stranding the player in silence.
+   */
+  async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<boolean> {
     const current = await footballGridRepo.loadState(state.matchId);
-    if (!current || current.phase === 'terminal') return;
+    if (!current || current.phase === 'terminal') return false;
     state = current;
     const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
     for (const player of state.players) {
@@ -492,6 +495,7 @@ export const footballGridRealtimeService = {
       });
     }
     await scheduleStateDeadline(state);
+    return true;
   },
 
   async handleHandoffAck(

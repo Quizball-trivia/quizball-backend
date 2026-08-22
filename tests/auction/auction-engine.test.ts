@@ -21,6 +21,7 @@ import {
 import {
   AUCTION_SQUAD_SIZE,
   CLUE_STUDY_MS,
+  MIN_PLAYER_COST,
   OPENING_TURN_MS,
   RAISE_TURN_MS,
   STARTING_BUDGET,
@@ -273,6 +274,34 @@ describe('auction engine transitions', () => {
     expect(afterBotFold.currentRound?.currentTurnSeatId).not.toBe('seat-human');
   });
 
+  it('folds a priced-out opener on timeout instead of forcing an unaffordable bid', () => {
+    // Post-forfeit state: leadership stripped to null and the seated turn
+    // (like every remaining seat) cannot afford the starting price. The old
+    // behavior force-bid the opening price, threw inside the lock, and the
+    // timeout re-armed in a retry loop until the state TTL.
+    // getMaxBid reserves MIN_PLAYER_COST per still-empty slot beyond the
+    // first, so a seat priced out of the 30M opener holds just under
+    // 6×MIN_PLAYER_COST + startingPrice.
+    const pricedOut = MIN_PLAYER_COST * 6 + 30_000_000 - 1;
+    const stripped = startReadyBiddingRound(card('haaland', 'FWD', 180_000_000, 30_000_000));
+    const leaderless: AuctionMatchState = {
+      ...stripped,
+      seats: stripped.seats.map((entry) => ({ ...entry, budget: pricedOut })),
+      currentRound: stripped.currentRound
+        ? { ...stripped.currentRound, highestBidderSeatId: null, highestBid: 0 }
+        : null,
+    };
+
+    const next = applyTurnTimeout(leaderless, context());
+
+    // Unsold: the round completes with no winner and the match returns to
+    // content selection instead of wedging in bidding.
+    expect(next.phase).toBe('created');
+    const completed = next.completedRounds.at(-1);
+    expect(completed?.winnerSeatId ?? null).toBeNull();
+    expect(next.seats.every((entry) => entry.budget === pricedOut)).toBe(true);
+  });
+
   it('skips a forced opener who cannot afford the starting price', () => {
     const state = withBudget(startReadyBiddingRound(card('expensive', 'FWD', 90_000_000, 50_000_000)), 'seat-human', 0);
     const clueRound = {
@@ -367,7 +396,10 @@ describe('auction engine transitions', () => {
     expect(solo.phase).toBe('solo_pick');
     expect(solo.soloPick?.optionA.type).toBe('revealed');
     expect(solo.soloPick?.optionB.type).toBe('mystery');
-    expect(solo.soloPick?.optionB.clues).toHaveLength(3);
+    // The mystery card stores no facet labels server-side: its clues array is
+    // the same five-facet label list every card carries, and serializing it as
+    // revealedClues leaked the scout season (incl. value) to devtools.
+    expect(solo.soloPick?.optionB.clues).toBeUndefined();
 
     const selected = selectSoloPickOption(solo, 'seat-human', 'B', context());
     const human = selected.seats.find((seat) => seat.seatId === 'seat-human')!;

@@ -242,6 +242,30 @@ describe('auction turn service', () => {
     });
   });
 
+  it('rejects actions past the turn deadline even when the timeout timer is late', async () => {
+    const { io } = createIo();
+    const socket = createSocket();
+    const { handleAuctionBid } = await import('../../src/realtime/services/auction-turn.service.js');
+    // Deadline 61s before the mocked clock — far beyond the buzzer grace.
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      currentRound: {
+        ...biddingState().currentRound!,
+        turnEndsAt: '2026-06-20T09:59:00.000Z',
+      },
+    }));
+
+    await handleAuctionBid(io, socket, {
+      matchId: 'match-1',
+      amount: 30_000_000,
+    }, { context: timerContext });
+
+    expect(stateStoreMock.save).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('auction:error', {
+      code: 'auction_turn_expired',
+      message: 'Turn deadline already passed',
+    });
+  });
+
   it('rejects opener fold without saving', async () => {
     const { io } = createIo();
     const socket = createSocket();
@@ -353,6 +377,43 @@ describe('auction turn service', () => {
     expect(stateStoreMock.save).not.toHaveBeenCalled();
     expect(roomEmit).not.toHaveBeenCalled();
     expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
+  });
+
+  it('folds a priced-out leaderless opener, resolves unsold, and skips the turn-timeout broadcast', async () => {
+    const { io, roomEmit } = createIo();
+    const { runAuctionTurnTimeoutTimer } = await import('../../src/realtime/services/auction-turn.service.js');
+    // Post-forfeit shape: leadership stripped to null and the seated turn
+    // cannot afford the opening price. The old path force-bid it (invalid),
+    // threw inside the lock, and retried every second until the state TTL.
+    const pricedOutBudget = 5_000_000;
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      seats: biddingState().seats.map((entry) => ({ ...entry, budget: pricedOutBudget })),
+    }));
+
+    const outcome = await runAuctionTurnTimeoutTimer(io, {
+      kind: 'auction_turn_timeout',
+      matchId: 'match-1',
+      roundId: 'round-1',
+      expectedTurnSeatId: 'seat-human',
+      stateVersion: 3,
+      turnEndsAt: '2026-06-20T10:00:30.000Z',
+    }, { context: timerContext });
+
+    expect(outcome.kind).toBe('round_resolved_timeout');
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    expect(saved.phase).toBe('created');
+    expect(saved.currentRound).toBeNull();
+    // No turn-timeout broadcast: there is no round left to describe, and the
+    // old payload builder would have thrown on the missing round AFTER the
+    // save, stranding the match without a next-step drive.
+    expect(roomEmit).not.toHaveBeenCalledWith(
+      'auction:turn_timeout',
+      expect.anything()
+    );
+    // The flow still advances: the completed round lands in history so the
+    // next step can be created.
+    expect(saved.completedRounds).toHaveLength(1);
+    expect(saved.completedRounds[0].winnerSeatId ?? null).toBeNull();
   });
 
   it('does not double-apply duplicate human bids', async () => {

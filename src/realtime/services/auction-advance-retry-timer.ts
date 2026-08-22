@@ -25,7 +25,10 @@ export async function scheduleAuctionAdvanceRetryTimer(
 ): Promise<void> {
   await scheduleRealtimeTimer(
     'auction_advance_retry',
-    matchId,
+    // Keyed per phase: scheduling by matchId alone let a later phase's retry
+    // overwrite an earlier phase's armed payload, and the redrive then no-op'd
+    // on the phase mismatch — stranding clue reveals until a reconnect.
+    `${matchId}:${phaseHint}`,
     dueAt,
     {
       kind: 'auction_advance_retry',

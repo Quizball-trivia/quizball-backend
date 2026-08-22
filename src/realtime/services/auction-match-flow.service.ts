@@ -1,6 +1,7 @@
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { shuffle } from '../../core/rng.js';
+import { getRedisClient } from '../redis.js';
 import {
   type ResolvedAuctionEngineContext,
 } from '../../modules/auction/auction-context.js';
@@ -346,6 +347,14 @@ export async function emitAuctionStepStarted(
   }
 
   if (state.phase === 'finished' && state.rankings) {
+    // Claim the broadcast BEFORE persisting: with two concurrent finish
+    // drivers, the fast ON CONFLICT loser used to reach the guard first and
+    // broadcast empty rewards, suppressing the paying driver's real payload.
+    // The claimer crashing between here and the emit is recovered by clients
+    // via rejoin (rewards recompute from persisted state).
+    if (!(await claimAuctionFinishBroadcast(state.matchId))) {
+      return state;
+    }
     // Persist first so we know each human's coin + Auction Points reward, then
     // emit it with the finish payload. Persistence is best-effort (its own
     // try/catch) and returns empty rewards on failure, so a DB hiccup just means
@@ -678,12 +687,30 @@ function emitSoloPickSelected(
   } satisfies AuctionSquadUpdatedPayload);
 }
 
+const AUCTION_FINISH_BROADCAST_KEY_PREFIX = 'auction:finish_broadcast:';
+
+// Redis NX once-guard so exactly one driver broadcasts the finish. Fails open
+// (claims) when Redis is unavailable — the pre-guard behavior.
+async function claimAuctionFinishBroadcast(matchId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return true;
+  try {
+    const claimed = await redis.set(
+      `${AUCTION_FINISH_BROADCAST_KEY_PREFIX}${matchId}`,
+      '1',
+      { NX: true, EX: 6 * 60 * 60 }
+    );
+    return claimed === 'OK';
+  } catch {
+    return true;
+  }
+}
+
 function emitMatchFinished(
   io: QuizballServer,
   state: AuctionMatchState,
   rewards: AuctionMatchRewards = { coinsByUserId: {} },
-): void {
-  if (!state.rankings) return;
+): void {  if (!state.rankings) return;
   const publicState = toPublicAuctionMatchState(state);
   // Emitting the finish event is the one thing that must never throw, so a
   // partial/absent rewards object degrades to "no reward shown". `apByUserId`

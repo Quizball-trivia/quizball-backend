@@ -19,6 +19,8 @@ import {
 } from '../../modules/auction/auction-state.store.js';
 import {
   canPlayerContinue,
+  getMaxBid,
+  getEmptySlots,
   hasLastPlayerStanding,
 } from '../../modules/auction/auction-rules.js';
 import {
@@ -796,7 +798,17 @@ async function forfeitAuctionSeatForDisconnect(
           updatedAt: context.nowIso(),
         },
       }, seatId);
-      if (forfeitedCurrentTurn) {
+      // When the forfeiter held the high bid out of turn, leadership drops to
+      // null without a turn change: the round silently reopens on whoever's
+      // clock was running. If that seat can't afford the opening price, no
+      // action of theirs can ever be valid, so re-drive turn selection now
+      // (it skips priced-out seats and resolves unsold when nobody remains).
+      const reopenedRound = next.currentRound;
+      const reopenStuck = !forfeitedCurrentTurn
+        && reopenedRound !== null
+        && !reopenedRound.highestBidderSeatId
+        && !canSeatOpenReopenedRound(next, reopenedRound);
+      if (forfeitedCurrentTurn || reopenStuck) {
         next = advanceTurnOrResolveRound(next, context);
       }
     } else if (next.phase === 'solo_pick' && next.soloPick?.playerSeatId === seatId) {
@@ -850,6 +862,15 @@ function buildOpponentDisconnectedPayload(input: AuctionOpponentDisconnectedPayl
     ...input,
     serverNow: new Date().toISOString(),
   };
+}
+
+function canSeatOpenReopenedRound(
+  state: AuctionMatchState,
+  round: NonNullable<AuctionMatchState['currentRound']>
+): boolean {
+  const seat = state.seats.find((entry) => entry.seatId === round.currentTurnSeatId);
+  if (!seat || seat.isEliminated) return false;
+  return getMaxBid(seat.budget, getEmptySlots(seat.team)) >= round.startingPrice;
 }
 
 function buildPlayerForfeitedPayload(

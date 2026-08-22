@@ -6,7 +6,7 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedCardCount: vi.fn(),
     getPublishedCardAvailability: vi.fn(),
     getRandomPublishedAuctionCard: vi.fn(),
-    getSeasonSnapshots: vi.fn(async () => []),
+    getSeasonSnapshots: vi.fn(),
     claimScoutEncounter: vi.fn(async () => 0),
     getPublishedAuctionCardById: vi.fn(),
     getRecentlySeenFootballPlayerIds: vi.fn(),
@@ -54,9 +54,18 @@ const basePublishedCard = {
   starting_price_eur: 30_000_000,
 } satisfies PublishedAuctionCardRow;
 
+/** Stats-only world: served cards carry ≥3 valued seasons. The invariant test
+ *  overrides this to prove thin lookups get SKIPPED, never served as text. */
+const DEFAULT_SEASON_ROWS = [
+  { season_label: '2023/24', league_name: 'premier-league', age: 23, apps: 30, goals: 20, assists: 5, clean_sheets: null, goals_conceded: null, value_eur: 120_000_000 },
+  { season_label: '2024/25', league_name: 'premier-league', age: 24, apps: 32, goals: 28, assists: 7, clean_sheets: null, goals_conceded: null, value_eur: 150_000_000 },
+  { season_label: '2025/26', league_name: 'premier-league', age: 25, apps: 31, goals: 26, assists: 6, clean_sheets: null, goals_conceded: null, value_eur: 180_000_000 },
+];
+
 describe('auctionContentService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(DEFAULT_SEASON_ROWS);
   });
 
   it('maps published card rows to runtime footballer units and currency fields', async () => {
@@ -77,12 +86,30 @@ describe('auctionContentService', () => {
       startingPriceEur: 30_000_000,
       currentValueEur: 180_000_000,
       imageUrl: 'https://img.example/haaland.jpg',
-      clues: [
-        'Scored heavily in his first Premier League campaign.',
-        'Won the Champions League with a Manchester club.',
-        'Represents Norway at international level.',
-      ],
     });
+    // Stats-only: served clues are the facet labels, never the authored
+    // sentence texts from the clue-card row.
+    expect(result.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    expect(result.snapshots).toHaveLength(3);
+  });
+
+  it('never serves a text-clue card when snapshots are thin — skips to another candidate', async () => {
+    // Two candidates come back without enough season history (view/table
+    // drift or a degraded read); the invariant demands they be skipped, not
+    // served in the legacy text-clue format.
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(DEFAULT_SEASON_ROWS.slice(0, 2))
+      .mockResolvedValue(DEFAULT_SEASON_ROWS);
+
+    const result = await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+    });
+
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(3);
+    expect(result?.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    expect(result?.snapshots).toHaveLength(3);
   });
 
   it('throws a typed no-content error when there are no published usable rows', async () => {
@@ -384,13 +411,15 @@ describe('auctionContentService', () => {
     expect(auctionContentRepo.claimScoutEncounter).toHaveBeenCalledWith(userIds, PLAYER_ID);
   });
 
-  it('keeps text clues when a player has too little season history', async () => {
+  it('throws content-unavailable when EVERY candidate lacks snapshots (stats-only pool)', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
     (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(snapshotRows.slice(0, 2));
 
-    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
-
-    expect(result.snapshots).toBeUndefined();
-    expect(result.clues).toHaveLength(3);
+    // Stats-only invariant: thin-history candidates are never served in the
+    // text-clue format — the lookup exhausts its redraws and reports empty.
+    await expect(
+      auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' })
+    ).resolves.toBeNull();
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(4);
   });
 });

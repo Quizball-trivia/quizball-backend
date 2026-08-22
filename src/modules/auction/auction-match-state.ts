@@ -206,7 +206,7 @@ function paceScoutFacets(
   const isGoalkeeper = positionGroup === 'GK';
   return {
     season: scout.season,
-    apps: scout.apps,
+    apps: revealedCount > 0 ? scout.apps : 0,
     goals: !isGoalkeeper && revealedCount > 0 ? scout.goals : 0,
     assists: !isGoalkeeper && revealedCount > 1 ? scout.assists : undefined,
     cleanSheets: isGoalkeeper && revealedCount > 0 ? scout.cleanSheets : undefined,
@@ -315,7 +315,11 @@ function toPublicSoloPick(option: AuctionSoloPickState): PublicAuctionSoloPickSt
     optionB: {
       ...option.optionB,
       footballer: option.optionB.type === 'mystery'
-        ? toHiddenFootballer(option.optionB.footballer, option.optionB.clues ?? option.optionB.footballer.clues ?? [])
+        // The mystery card must travel fully blind: its facet labels are the
+        // same five clues every served card carries, so passing them as
+        // revealedClues shipped the scout season's stats (incl. value) and let
+        // a devtools reader identify the player before choosing.
+        ? toHiddenFootballer(option.optionB.footballer)
         : toRevealedFootballer(option.optionB.footballer),
     },
   };

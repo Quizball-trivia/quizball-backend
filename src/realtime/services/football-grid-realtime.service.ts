@@ -407,7 +407,10 @@ export const footballGridRealtimeService = {
           const pendingHandoffs = await footballGridRepo.listPendingHandoffMatchIds(100, handoffCursor);
           for (const matchId of pendingHandoffs) {
             const state = await footballGridRepo.loadState(matchId);
-            if (state) {
+            // Only redeliver matches still genuinely awaiting handoff; a match
+            // terminalized since listing (e.g. administrative cancel) must not
+            // be resurrected onto a player who already moved on.
+            if (state && state.phase === 'handoff') {
               await footballGridRealtimeService.emitMatchFound(io, state)
                 .catch((error) => logger.warn({ error, matchId }, 'Football Grid handoff redelivery failed'));
             }
@@ -437,7 +440,16 @@ export const footballGridRealtimeService = {
     socket.emit('grid:error', payload);
   },
 
-  async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<void> {
+  /**
+   * Emits grid:match_found and binds sockets. Re-reads authoritative state
+   * first; returns false (and emits nothing) when the match is gone or has
+   * terminalized, so callers can fall back to fresh matchmaking instead of
+   * stranding the player in silence.
+   */
+  async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<boolean> {
+    const current = await footballGridRepo.loadState(state.matchId);
+    if (!current || current.phase === 'terminal') return false;
+    state = current;
     const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
     for (const player of state.players) {
       const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;
@@ -483,6 +495,7 @@ export const footballGridRealtimeService = {
       });
     }
     await scheduleStateDeadline(state);
+    return true;
   },
 
   async handleHandoffAck(
@@ -660,7 +673,10 @@ export const footballGridRealtimeService = {
         gridCode: 'COMPLETION_ACK_INVALID',
       });
     }
-    socket.data.gridMatchId = undefined;
+    // Only unbind if this socket is still attached to THAT match; a stale
+    // delivery (e.g. from an administratively cancelled match) must never
+    // detach a socket that has already joined a newer match.
+    if (socket.data.gridMatchId === input.matchId) socket.data.gridMatchId = undefined;
     if (socket.data.matchId === input.matchId) socket.data.matchId = undefined;
     await socket.leave(gridRoom(input.matchId));
   },

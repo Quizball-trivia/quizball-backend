@@ -171,7 +171,13 @@ export function decideAuctionBotAction(
     return { kind: 'fold' };
   }
 
-  const cap = round.highestBidderSeatId ? Math.min(maxBid, willingness) : maxBid;
+  // Opening keeps a floor at minBid (a bot must still be able to open an
+  // affordable round), but jumps are clamped to willingness in both cases —
+  // without that, an opener could leap past its own valuation and self-harm
+  // with nobody bidding against it.
+  const cap = round.highestBidderSeatId
+    ? Math.min(maxBid, willingness)
+    : Math.min(maxBid, Math.max(minBid, willingness));
   let amount = minBid;
   if (random() >= behaviour.jumpThreshold) {
     amount += MIN_BID_INCREMENT * (1 + Math.floor(random() * 3));

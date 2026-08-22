@@ -68,6 +68,24 @@ describe('snapshot exposure over the wire', () => {
     expect(hidden.snapshots!.at(-1)!.valueEur).toBe(0);
   });
 
+  it('a mystery solo-pick card serializes with every facet blanked', () => {
+    // toPublicSoloPick serializes the mystery option through
+    // toHiddenFootballer with NO revealed clues. Its label list must never
+    // double as revealedClues — that shipped the whole scout season (incl.
+    // market value) and let devtools identify the player before choosing.
+    const mystery = toHiddenFootballer(footballer);
+
+    expect(mystery.clues).toEqual([]);
+    expect(mystery.snapshots![0]).toMatchObject({
+      apps: 0,
+      goals: 0,
+      assists: undefined,
+      valueEur: 0,
+      age: null,
+      league: '',
+    });
+  });
+
   it('revealed footballers carry full snapshots and league', () => {
     const revealed = toRevealedFootballer(footballer);
 

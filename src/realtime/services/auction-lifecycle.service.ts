@@ -22,7 +22,8 @@ import {
 import { getAuctionDisconnectedUser } from './auction-disconnect-state.service.js';
 
 const BOOT_AUCTION_REARM_DELAY_MS = 3_000;
-const BOOT_AUCTION_REARM_BATCH = 500;
+const BOOT_AUCTION_REARM_CHUNK = 100;
+const BOOT_AUCTION_REARM_CHUNK_PAUSE_MS = 50;
 
 let bootAuctionRearmTimer: NodeJS.Timeout | null = null;
 
@@ -143,26 +144,32 @@ export const auctionLifecycleService = {
       return summary;
     }
 
-    for (const matchId of matchIds.slice(0, BOOT_AUCTION_REARM_BATCH)) {
-      summary.scanned += 1;
-      try {
-        const state = await auctionStateStore.load(matchId);
-        if (!state) {
-          summary.missing += 1;
-          await auctionStateStore.clearIndexes(matchId);
-          continue;
+    for (let offset = 0; offset < matchIds.length; offset += BOOT_AUCTION_REARM_CHUNK) {
+      if (offset > 0) {
+        // Paced so a boot with many live matches can't stampede Redis/loads.
+        await new Promise((resolve) => setTimeout(resolve, BOOT_AUCTION_REARM_CHUNK_PAUSE_MS));
+      }
+      for (const matchId of matchIds.slice(offset, offset + BOOT_AUCTION_REARM_CHUNK)) {
+        summary.scanned += 1;
+        try {
+          const state = await auctionStateStore.load(matchId);
+          if (!state) {
+            summary.missing += 1;
+            await auctionStateStore.clearIndexes(matchId);
+            continue;
+          }
+          if (state.phase === 'finished') {
+            summary.finished += 1;
+            await auctionStateStore.clearIndexes(state);
+            continue;
+          }
+          if (await ensureAuctionActiveTimers(io, state, { bootRecovery: true })) {
+            summary.rearmed += 1;
+          }
+        } catch (error) {
+          summary.failed += 1;
+          logger.warn({ error, matchId }, 'Auction boot timer re-arm failed for match');
         }
-        if (state.phase === 'finished') {
-          summary.finished += 1;
-          await auctionStateStore.clearIndexes(state);
-          continue;
-        }
-        if (await ensureAuctionActiveTimers(io, state, { bootRecovery: true })) {
-          summary.rearmed += 1;
-        }
-      } catch (error) {
-        summary.failed += 1;
-        logger.warn({ error, matchId }, 'Auction boot timer re-arm failed for match');
       }
     }
 

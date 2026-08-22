@@ -201,19 +201,37 @@ async function findRandomPublishedAuctionCard(
   options: RandomPublishedAuctionCardOptions,
   random: () => number = getRandom
 ): Promise<PublishedAuctionCard | null> {
-  if (!options.fameTier) {
-    const fameTier: AuctionFameTier =
-      random() < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
-    const tiered = await auctionContentRepo.getRandomPublishedAuctionCard({
-      ...options,
-      fameTier,
-    });
-    if (tiered) return attachSeasonSnapshots(mapPublishedAuctionCard(tiered), random, options.scoutCycleUserIds);
-    // The rolled tier is exhausted for this position/exclusion set — fall
-    // through to the unrestricted pool rather than failing the round.
+  // Stats-only is a product invariant. A card whose snapshot lookup comes back
+  // thin (view/table drift, degraded DB read) must NEVER fall through in the
+  // legacy text-clue format — skip it and try another candidate instead.
+  for (let attempt = 0; attempt < AUCTION_SNAPSHOT_CARD_ATTEMPTS; attempt += 1) {
+    let row: PublishedAuctionCardRow | null;
+    if (!options.fameTier) {
+      const fameTier: AuctionFameTier =
+        random() < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+      row = await auctionContentRepo.getRandomPublishedAuctionCard({
+        ...options,
+        fameTier,
+      });
+      // The rolled tier is exhausted for this position/exclusion set — fall
+      // through to the unrestricted pool rather than failing the round.
+      if (!row) {
+        row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
+      }
+    } else {
+      row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
+    }
+    if (!row) return null;
+
+    const card = await attachSeasonSnapshots(mapPublishedAuctionCard(row), random, options.scoutCycleUserIds);
+    if (card.snapshots && card.snapshots.length >= MIN_SNAPSHOT_SEASONS) return card;
+
+    logger.warn(
+      { footballPlayerId: card.footballPlayerId, clueCardId: card.clueCardId, locale: options.locale },
+      'Auction candidate lacks season snapshots; skipping (stats-only invariant)'
+    );
   }
-  const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
-  return row ? attachSeasonSnapshots(mapPublishedAuctionCard(row), random, options.scoutCycleUserIds) : null;
+  return null;
 }
 
 // The web client's LEAGUES catalogue uses display names; the snapshot table
@@ -250,6 +268,11 @@ const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'A
 
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
+
+/** Candidate redraws before a selection gives up rather than serving a
+ *  snapshot-less card. Small: the SQL predicate already filters to
+ *  snapshot-ready players, so a miss means drift between view and table. */
+const AUCTION_SNAPSHOT_CARD_ATTEMPTS = 4;
 
 /** Stable per-player offset so all players don't start their season rotation
  *  at the same career point. Salted server-side: player UUIDs are public after

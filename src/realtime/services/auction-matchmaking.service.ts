@@ -653,6 +653,13 @@ async function listQueuedSearches(
 ): Promise<QueuedAuctionSearch[]> {
   const searchIds = await redis.zRange(AUCTION_MM_QUEUE_KEY, 0, -1);
   const searches = await Promise.all(searchIds.map((searchId) => readSearch(redis, searchId)));
+  // writeSearch lands the hash and the ZSET member in one MULTI, so a null
+  // read means the search is expired/corrupt/claimed — prune it instead of
+  // letting dead members grow the set (and this O(n) scan) forever.
+  const deadIds = searchIds.filter((_, index) => searches[index] === null);
+  if (deadIds.length > 0) {
+    await redis.zRem(AUCTION_MM_QUEUE_KEY, deadIds).catch(() => {});
+  }
   return searches
     .filter((search): search is QueuedAuctionSearch => search !== null && search.locale === locale)
     .sort((a, b) => a.queuedAt - b.queuedAt);

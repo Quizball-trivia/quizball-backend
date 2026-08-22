@@ -220,7 +220,6 @@ export function startSoloPick(
       optionB: {
         type: 'mystery',
         footballer: optionB,
-        clues: optionB.clues ? [...optionB.clues] : [],
       },
       selectedOption: null,
       startedAt: now,
@@ -436,6 +435,23 @@ export function applyTurnTimeout(
   if (!seatId) throw new AuctionInvalidActionError('No active turn');
 
   if (!round.highestBidderSeatId) {
+    // An opening timeout force-bids the starting price — but only when the
+    // seat can actually afford it. After a mid-round forfeit strips bid
+    // leadership, the seated turn may be priced out; forcing the bid would
+    // throw inside the state lock and re-arm the timeout every second until
+    // the state TTL. Folding instead lets advanceTurnOrResolveRound skip the
+    // other priced-out seats and resolve unsold.
+    const turnSeat = state.seats.find((entry) => entry.seatId === seatId);
+    const canOpen = Boolean(turnSeat)
+      && getMaxBid(turnSeat!.budget, getEmptySlots(turnSeat!.team)) >= round.startingPrice;
+    if (!canOpen) {
+      const foldedRound = {
+        ...round,
+        foldedSeatIds: unique([...round.foldedSeatIds, seatId]),
+        updatedAt: context.nowIso(),
+      };
+      return advanceTurnOrResolveRound({ ...state, currentRound: foldedRound }, context);
+    }
     return applyBid(state, seatId, round.startingPrice, contextInput);
   }
 

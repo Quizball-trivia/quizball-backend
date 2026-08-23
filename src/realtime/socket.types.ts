@@ -771,6 +771,8 @@ export interface AuctionSearchStartedPayload {
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
+  queuedPlayers: AuctionQueuedPlayerSummary[];
+  botCount: number;
 }
 
 export interface AuctionSearchStatusPayload {
@@ -779,6 +781,13 @@ export interface AuctionSearchStatusPayload {
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
+  queuedPlayers: AuctionQueuedPlayerSummary[];
+  botCount: number;
+}
+
+export interface AuctionQueuedPlayerSummary {
+  userId: string;
+  displayName: string;
 }
 
 export interface AuctionSearchCancelledPayload {

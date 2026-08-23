@@ -301,7 +301,30 @@ describe('auctionMatchmakingService', () => {
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u2',
       'auction:search_status',
-      expect.objectContaining({ locale: 'ka', queuedUserCount: 2, seatsNeeded: 1 })
+      expect.objectContaining({
+        locale: 'ka',
+        queuedUserCount: 2,
+        seatsNeeded: 1,
+        queuedPlayers: [
+          { userId: 'u1', displayName: 'One' },
+          { userId: 'u2', displayName: 'Two' },
+        ],
+        botCount: 0,
+      })
+    );
+    // The first browser receives the same roster update even when the second
+    // join lands on another application replica.
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u1',
+      'auction:search_status',
+      expect.objectContaining({
+        locale: 'en',
+        queuedUserCount: 2,
+        queuedPlayers: [
+          { userId: 'u1', displayName: 'One' },
+          { userId: 'u2', displayName: 'Two' },
+        ],
+      })
     );
 
     // First tick: 2 humans + 0 bots = 2 seats < 3 → stage ONE bot, reschedule,
@@ -484,6 +507,29 @@ describe('auctionMatchmakingService', () => {
       `auction:mm:fill:${searchId}`
     );
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts the smaller roster to remaining players when someone cancels', async () => {
+    const { io, roomEmit } = createIo();
+    const firstSocket = socket('u1', 'One');
+    const secondSocket = socket('u2', 'Two');
+
+    await auctionMatchmakingService.handleSearchStart(io, firstSocket, { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, secondSocket, { locale: 'ka' });
+    roomEmit.mockClear();
+
+    await auctionMatchmakingService.handleSearchCancel(io, secondSocket);
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u1',
+      'auction:search_status',
+      expect.objectContaining({
+        queuedUserCount: 1,
+        seatsNeeded: 2,
+        queuedPlayers: [{ userId: 'u1', displayName: 'One' }],
+        botCount: 0,
+      })
+    );
   });
 
   it('rejects cancellation after matchmaking has already seated the user', async () => {

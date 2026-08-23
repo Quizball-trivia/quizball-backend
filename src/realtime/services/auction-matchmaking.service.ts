@@ -209,7 +209,17 @@ export const auctionMatchmakingService = {
               };
               await writeSearch(redis, rearmed);
               await scheduleAuctionMatchmakingFill(rearmed);
-              emitSearchStarted(io, rearmed, await countQueuedByLocale(redis, rearmed.locale));
+              const queueDepth = await countQueuedSearches(redis);
+              emitSearchStarted(io, rearmed, queueDepth);
+              logger.info(
+                {
+                  userId: user.id,
+                  searchId: rearmed.searchId,
+                  locale: rearmed.locale,
+                  queueDepth,
+                },
+                'Auction matchmaking search reattached'
+              );
               return true;
             }
             await redis.hDel(AUCTION_MM_USER_MAP_KEY, user.id);
@@ -227,8 +237,18 @@ export const auctionMatchmakingService = {
           };
           await writeSearch(redis, search);
           await scheduleAuctionMatchmakingFill(search);
-          emitSearchStarted(io, search, await countQueuedByLocale(redis, search.locale));
-          await tryStartFullHumanMatchesLocked(io, search.locale);
+          const queueDepth = await countQueuedSearches(redis);
+          emitSearchStarted(io, search, queueDepth);
+          logger.info(
+            {
+              userId: user.id,
+              searchId: search.searchId,
+              locale: search.locale,
+              queueDepth,
+            },
+            'Auction matchmaking search joined'
+          );
+          await tryStartFullHumanMatchesLocked(io);
           return true;
         });
         // Lock still busy after the bounded wait: the client got NOTHING —
@@ -335,7 +355,7 @@ export const auctionMatchmakingService = {
       // the same group again in the same wave.
       if (anchor.fallbackAt > Date.now() + 500) return;
 
-      const queued = await listQueuedSearches(redis, anchor.locale);
+      const queued = await listQueuedSearches(redis);
       const fillGroup = queued.slice(0, 3);
       if (!fillGroup.some((entry) => entry.searchId === anchor.searchId)) return;
       if (fillGroup.length === 0) return;
@@ -400,15 +420,12 @@ export const auctionMatchmakingService = {
   },
 };
 
-async function tryStartFullHumanMatchesLocked(
-  io: QuizballServer,
-  locale: AuctionContentLocale
-): Promise<void> {
+async function tryStartFullHumanMatchesLocked(io: QuizballServer): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
 
   while (true) {
-    const queued = await listQueuedSearches(redis, locale);
+    const queued = await listQueuedSearches(redis);
     if (queued.length < 3) return;
     const started = await startMatchFromQueuedSearches(io, redis, queued.slice(0, 3));
     // A failed start requeues its searches — looping here would re-pick the
@@ -430,6 +447,10 @@ async function startMatchFromQueuedSearches(
 
   await claimSearches(redis, searches);
   try {
+    // Match humans from one shared queue, regardless of their UI language,
+    // just like ranked matchmaking. Auction state currently has one shared
+    // content locale, so the oldest search deterministically chooses the card
+    // language while each client keeps its own locale for interface copy.
     const match = await startAuctionMatchForHumans(io, {
       humanPlayers: humans,
       formation: oldest.formation,
@@ -648,8 +669,7 @@ async function readSearch(
 }
 
 async function listQueuedSearches(
-  redis: NonNullable<ReturnType<typeof getRedisClient>>,
-  locale: AuctionContentLocale
+  redis: NonNullable<ReturnType<typeof getRedisClient>>
 ): Promise<QueuedAuctionSearch[]> {
   const searchIds = await redis.zRange(AUCTION_MM_QUEUE_KEY, 0, -1);
   const searches = await Promise.all(searchIds.map((searchId) => readSearch(redis, searchId)));
@@ -661,15 +681,14 @@ async function listQueuedSearches(
     await redis.zRem(AUCTION_MM_QUEUE_KEY, deadIds).catch(() => {});
   }
   return searches
-    .filter((search): search is QueuedAuctionSearch => search !== null && search.locale === locale)
+    .filter((search): search is QueuedAuctionSearch => search !== null)
     .sort((a, b) => a.queuedAt - b.queuedAt);
 }
 
-async function countQueuedByLocale(
-  redis: NonNullable<ReturnType<typeof getRedisClient>>,
-  locale: AuctionContentLocale
+async function countQueuedSearches(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>
 ): Promise<number> {
-  return (await listQueuedSearches(redis, locale)).length;
+  return (await listQueuedSearches(redis)).length;
 }
 
 async function claimSearches(

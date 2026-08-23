@@ -291,12 +291,18 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('stages one bot for two humans, then starts a 2-human + 1-bot match on the next tick', async () => {
+  it('matches two humans across locales, then adds one bot on the next tick', async () => {
     const { io, roomEmit } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
-    await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'ka' });
     const searchId = scheduledSearchIds()[0];
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u2',
+      'auction:search_status',
+      expect.objectContaining({ locale: 'ka', queuedUserCount: 2, seatsNeeded: 1 })
+    );
 
     // First tick: 2 humans + 0 bots = 2 seats < 3 → stage ONE bot, reschedule,
     // do NOT start yet.
@@ -317,6 +323,7 @@ describe('auctionMatchmakingService', () => {
     expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledWith(
       io,
       expect.objectContaining({
+        locale: 'en',
         humanPlayers: [
           { userId: 'u1', displayName: 'One' },
           { userId: 'u2', displayName: 'Two' },
@@ -326,7 +333,7 @@ describe('auctionMatchmakingService', () => {
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u2',
       'auction:match_found',
-      expect.objectContaining({ humanUserIds: ['u1', 'u2'], botCount: 1 })
+      expect.objectContaining({ humanUserIds: ['u1', 'u2'], botCount: 1, locale: 'en' })
     );
   });
 

@@ -209,14 +209,15 @@ export const auctionMatchmakingService = {
               };
               await writeSearch(redis, rearmed);
               await scheduleAuctionMatchmakingFill(rearmed);
-              const queueDepth = await countQueuedSearches(redis);
-              emitSearchStarted(io, rearmed, queueDepth);
+              const queued = await listQueuedSearches(redis);
+              const group = queueGroupForSearch(queued, rearmed.searchId);
+              emitSearchStarted(io, rearmed, group);
               logger.info(
                 {
                   userId: user.id,
                   searchId: rearmed.searchId,
                   locale: rearmed.locale,
-                  queueDepth,
+                  queueDepth: queued.length,
                 },
                 'Auction matchmaking search reattached'
               );
@@ -237,14 +238,20 @@ export const auctionMatchmakingService = {
           };
           await writeSearch(redis, search);
           await scheduleAuctionMatchmakingFill(search);
-          const queueDepth = await countQueuedSearches(redis);
-          emitSearchStarted(io, search, queueDepth);
+          const queued = await listQueuedSearches(redis);
+          const group = queueGroupForSearch(queued, search.searchId);
+          // A join changes the visible lobby for everyone already in this
+          // three-seat group. Broadcast the same authoritative roster to all
+          // of them so a player connected to another Railway replica updates
+          // at the same time as the newly joined player.
+          emitSearchStarted(io, search, group);
+          emitSearchStatuses(io, group);
           logger.info(
             {
               userId: user.id,
               searchId: search.searchId,
               locale: search.locale,
-              queueDepth,
+              queueDepth: queued.length,
             },
             'Auction matchmaking search joined'
           );
@@ -298,6 +305,9 @@ export const auctionMatchmakingService = {
             searchId: removed?.searchId ?? null,
             reason: 'cancelled',
           } satisfies AuctionSearchCancelledPayload);
+          if (removed) {
+            emitAllQueueStatuses(io, await listQueuedSearches(redis));
+          }
         });
         if (result === null) {
           emitAuctionError(socket, {
@@ -330,6 +340,7 @@ export const auctionMatchmakingService = {
         searchId: removed.searchId,
         reason: 'disconnect',
       } satisfies AuctionSearchCancelledPayload);
+      emitAllQueueStatuses(io, await listQueuedSearches(redis));
       return true;
     });
     // Lock busy through the whole bounded wait: retry once shortly after —
@@ -337,7 +348,10 @@ export const auctionMatchmakingService = {
     if (cleaned === null) {
       setTimeout(() => {
         void withAuctionMatchmakingLock(async () => {
-          await removeQueuedSearchForUser(redis, user.id);
+          const removed = await removeQueuedSearchForUser(redis, user.id);
+          if (removed) {
+            emitAllQueueStatuses(io, await listQueuedSearches(redis));
+          }
         }).catch(() => {});
       }, 3_000);
     }
@@ -381,10 +395,7 @@ export const auctionMatchmakingService = {
         };
         await writeSearch(redis, updated);
         // Broadcast the new count to every human in the fill group.
-        for (const human of fillGroup) {
-          const humanSearch = await readSearch(redis, human.searchId);
-          if (humanSearch) emitSearchStatus(io, humanSearch, fillGroup.length + nextBotFill);
-        }
+        emitSearchStatuses(io, fillGroup, nextBotFill);
         await scheduleRealtimeTimer(
           'auction_matchmaking_fill',
           fillTimerKey(anchor.searchId),
@@ -570,37 +581,77 @@ async function isUserInLiveAuctionMatch(matchId: string, userId: string): Promis
 function emitSearchStarted(
   io: QuizballServer,
   search: QueuedAuctionSearch,
-  queuedUserCount: number
+  group: readonly QueuedAuctionSearch[]
 ): void {
+  const botCount = stagedBotCount(group);
+  const queuedUserCount = Math.min(3, group.length + botCount);
+  const queuedPlayers = queuePlayerSummaries(group);
   io.to(`user:${search.userId}`).emit('auction:search_start', {
     searchId: search.searchId,
     locale: search.locale,
     queuedUserCount,
     seatsNeeded: Math.max(0, 3 - queuedUserCount),
     fallbackAt: new Date(search.fallbackAt).toISOString(),
+    queuedPlayers,
+    botCount,
   } satisfies AuctionSearchStartedPayload);
-  io.to(`user:${search.userId}`).emit('auction:search_status', {
-    searchId: search.searchId,
-    locale: search.locale,
-    queuedUserCount,
-    seatsNeeded: Math.max(0, 3 - queuedUserCount),
-    fallbackAt: new Date(search.fallbackAt).toISOString(),
-  } satisfies AuctionSearchStatusPayload);
 }
 
-/** Emit just the live queue-count update (used by the staged bot backfill). */
-function emitSearchStatus(
+/** Emit the current three-seat lobby snapshot to every human in the group. */
+function emitSearchStatuses(
   io: QuizballServer,
-  search: QueuedAuctionSearch,
-  queuedUserCount: number
+  group: readonly QueuedAuctionSearch[],
+  botCountOverride?: number
 ): void {
-  io.to(`user:${search.userId}`).emit('auction:search_status', {
-    searchId: search.searchId,
-    locale: search.locale,
-    queuedUserCount,
-    seatsNeeded: Math.max(0, 3 - queuedUserCount),
-    fallbackAt: new Date(search.fallbackAt).toISOString(),
-  } satisfies AuctionSearchStatusPayload);
+  if (group.length === 0) return;
+  const queuedPlayers = queuePlayerSummaries(group);
+  const botCount = Math.min(3 - group.length, botCountOverride ?? stagedBotCount(group));
+  const queuedUserCount = Math.min(3, group.length + botCount);
+  for (const search of group) {
+    io.to(`user:${search.userId}`).emit('auction:search_status', {
+      searchId: search.searchId,
+      locale: search.locale,
+      queuedUserCount,
+      seatsNeeded: Math.max(0, 3 - queuedUserCount),
+      fallbackAt: new Date(search.fallbackAt).toISOString(),
+      queuedPlayers,
+      botCount,
+    } satisfies AuctionSearchStatusPayload);
+  }
+}
+
+function emitAllQueueStatuses(
+  io: QuizballServer,
+  searches: readonly QueuedAuctionSearch[]
+): void {
+  for (let index = 0; index < searches.length; index += 3) {
+    emitSearchStatuses(io, searches.slice(index, index + 3));
+  }
+}
+
+function queueGroupForSearch(
+  searches: readonly QueuedAuctionSearch[],
+  searchId: string
+): QueuedAuctionSearch[] {
+  const index = searches.findIndex((search) => search.searchId === searchId);
+  if (index < 0) return [];
+  const start = Math.floor(index / 3) * 3;
+  return searches.slice(start, start + 3);
+}
+
+function queuePlayerSummaries(group: readonly QueuedAuctionSearch[]) {
+  return group.map((search) => ({
+    userId: search.userId,
+    displayName: search.displayName,
+  }));
+}
+
+function stagedBotCount(group: readonly QueuedAuctionSearch[]): number {
+  const staged = group.reduce(
+    (maximum, search) => Math.max(maximum, search.botFillCount ?? 0),
+    0
+  );
+  return Math.min(Math.max(0, 3 - group.length), staged);
 }
 
 async function scheduleAuctionMatchmakingFill(search: QueuedAuctionSearch): Promise<void> {
@@ -683,12 +734,6 @@ async function listQueuedSearches(
   return searches
     .filter((search): search is QueuedAuctionSearch => search !== null)
     .sort((a, b) => a.queuedAt - b.queuedAt);
-}
-
-async function countQueuedSearches(
-  redis: NonNullable<ReturnType<typeof getRedisClient>>
-): Promise<number> {
-  return (await listQueuedSearches(redis)).length;
 }
 
 async function claimSearches(

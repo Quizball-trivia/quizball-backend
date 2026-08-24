@@ -15,6 +15,10 @@ import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-sta
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
+  parseStoredAvatarCustomization,
+  type AvatarCustomization,
+} from '../../modules/users/avatar-customization.js';
+import {
   startAuctionMatchForHumans,
   rejoinAuctionMatch,
   type AuctionMatchHumanPlayer,
@@ -57,6 +61,8 @@ interface QueuedAuctionSearch {
   searchId: string;
   userId: string;
   displayName: string;
+  /** Database-backed layered avatar shown to every player in the waiting room. */
+  avatarCustomization?: AvatarCustomization | null;
   locale: AuctionContentLocale;
   formation?: FormationName;
   queuedAt: number;
@@ -231,6 +237,7 @@ export const auctionMatchmakingService = {
             searchId: randomUUID(),
             userId: user.id,
             displayName: user.nickname ?? 'Player',
+            avatarCustomization: parseStoredAvatarCustomization(user.avatar_customization),
             locale: input.locale,
             formation: input.formation,
             queuedAt: now,
@@ -454,6 +461,9 @@ async function startMatchFromQueuedSearches(
   const humans = searches.map((search) => ({
     userId: search.userId,
     displayName: search.displayName,
+    ...(search.avatarCustomization
+      ? { avatarCustomization: search.avatarCustomization }
+      : {}),
   }));
 
   await claimSearches(redis, searches);
@@ -654,6 +664,9 @@ function queuePlayerSummaries(group: readonly QueuedAuctionSearch[]) {
   return group.map((search) => ({
     userId: search.userId,
     displayName: search.displayName,
+    ...(search.avatarCustomization
+      ? { avatarCustomization: search.avatarCustomization }
+      : {}),
   }));
 }
 
@@ -692,6 +705,9 @@ async function writeSearch(
       searchId: search.searchId,
       userId: search.userId,
       displayName: search.displayName,
+      avatarCustomization: search.avatarCustomization
+        ? JSON.stringify(search.avatarCustomization)
+        : '',
       locale: search.locale,
       formation: search.formation ?? '',
       status: 'queued',
@@ -721,6 +737,7 @@ async function readSearch(
     searchId,
     userId: row.userId,
     displayName: row.displayName,
+    avatarCustomization: parseQueuedAvatarCustomization(row.avatarCustomization),
     locale: row.locale,
     formation: isFormationName(row.formation) ? row.formation : undefined,
     queuedAt,
@@ -728,6 +745,15 @@ async function readSearch(
     botFillCount: Number.isFinite(Number(row.botFillCount)) ? Number(row.botFillCount) : 0,
     startFailures: Number.isFinite(Number(row.startFailures)) ? Number(row.startFailures) : 0,
   };
+}
+
+function parseQueuedAvatarCustomization(value: string | undefined): AvatarCustomization | null {
+  if (!value) return null;
+  try {
+    return parseStoredAvatarCustomization(JSON.parse(value));
+  } catch {
+    return null;
+  }
 }
 
 async function listQueuedSearches(

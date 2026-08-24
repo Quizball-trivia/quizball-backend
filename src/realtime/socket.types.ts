@@ -788,6 +788,8 @@ export interface AuctionSearchStatusPayload {
 export interface AuctionQueuedPlayerSummary {
   userId: string;
   displayName: string;
+  /** Saved layered avatar so every waiting-room client renders the same outfit. */
+  avatarCustomization?: AvatarCustomization | null;
 }
 
 export interface AuctionMatchBotSummary {

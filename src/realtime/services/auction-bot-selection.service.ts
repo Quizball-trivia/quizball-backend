@@ -21,18 +21,47 @@ export interface AuctionBotSeatProfile {
   rp?: number | null;
 }
 
+function stableNameHash(value: string): number {
+  let hash = 0;
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
 /**
  * Plausible ranked identity for a bot's showdown card, deterministic per name
  * so the same bot always shows the same tier/RP. Bots must read as ordinary
  * players (product rule), so an empty frame is not an option.
  */
 export function fabricatedRankedIdentity(displayName: string): { tier: string; rp: number } {
-  let hash = 0;
-  for (const char of displayName) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
+  const hash = stableNameHash(displayName);
   const rp = 350 + (hash % 1400);
   return { tier: tierFromRp(rp), rp };
+}
+
+/**
+ * Give an ephemeral fallback bot a stable personality instead of routing every
+ * fallback seat through one shared behaviour. Persistent roster bots keep their
+ * real stored profiles; this only covers flag-off, thin-roster and degraded-DB
+ * matches.
+ *
+ * The independent name hashes deliberately span weak-to-smart, erratic-to-
+ * consistent and conservative-to-aggressive behaviour. `resolveAuctionBotBehaviour`
+ * turns these three inputs into willingness, jump frequency, pace, chemistry
+ * awareness and budget discipline, so a nickname keeps the same recognizable
+ * style across matches without revealing that it is automated.
+ */
+export function fabricatedAuctionBotProfile(displayName: string): AuctionBotProfile {
+  const skillTrait = stableNameHash(`skill:${displayName}`) / 0xffffffff;
+  const consistencyTrait = stableNameHash(`consistency:${displayName}`) / 0xffffffff;
+  const personalitySeed = stableNameHash(`personality:${displayName}`) || 1;
+
+  return {
+    baseSkill: 0.15 + skillTrait * 0.75,
+    consistency: 0.2 + consistencyTrait * 0.7,
+    personalitySeed,
+  };
 }
 
 /**

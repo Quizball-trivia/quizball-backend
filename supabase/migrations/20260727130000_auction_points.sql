@@ -39,17 +39,8 @@
 -- behind other locks; the index build is CONCURRENTLY so it cannot block
 -- writes (the migration runner applies CONCURRENTLY files statement-by-
 -- statement with autocommit).
-SET lock_timeout = '5s';
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS auction_points integer NOT NULL DEFAULT 0
     CHECK (auction_points >= 0);
-
--- Leaderboard ordering + own-rank counting. Partial on `auction_points > 0`:
--- users who never played a queue auction can never place, so excluding them
--- keeps this index proportional to auction players, not total registered users.
--- The tiebreaker mirrors ranked's (score DESC, updated_at ASC) so the earlier
--- arrival at a score ranks higher and ordering stays stable across pages.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_auction_points_desc
-  ON public.users (auction_points DESC, updated_at ASC)
-  WHERE auction_points > 0;

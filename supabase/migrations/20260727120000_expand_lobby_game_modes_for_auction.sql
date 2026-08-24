@@ -1,7 +1,7 @@
 -- Lock-hardened for prod promotion (2026-08-24): lobbies is a live gameplay
 -- table; a queued ACCESS EXCLUSIVE here would block lobby traffic behind it.
 -- Fail fast instead — an aborted deploy is retryable, blocked players are not.
-SET lock_timeout = '5s';
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE public.lobbies
   DROP CONSTRAINT IF EXISTS lobbies_game_mode_check;

@@ -450,23 +450,15 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('stages two bots over successive ticks for a lone human, then starts a 1-human + 2-bot match', async () => {
+  it('fills a lone human with two named smart bots on the first fallback tick', async () => {
     const { io, roomEmit } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
     const searchId = scheduledSearchIds()[0];
 
-    // Tick 1: 1 human + 0 bots → stage bot #1, reschedule.
+    // Like ranked fallback, the server selects the actual named opponents
+    // before telling the client those seats are occupied.
     vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
-    await auctionMatchmakingService.runFillTimer(io, {
-      kind: 'auction_matchmaking_fill',
-      searchId,
-    });
-    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
-
-    // Tick 2: the second bot completes the table, so select both named bot
-    // profiles and start immediately rather than showing an anonymous seat.
-    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId,

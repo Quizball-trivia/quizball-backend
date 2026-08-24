@@ -45,14 +45,9 @@ const AUCTION_MM_LOCK_TTL_MS = 30_000;
 const AUCTION_MM_START_RETRY_MS = 3_000;
 const AUCTION_MM_MAX_START_FAILURES = 3;
 const AUCTION_MM_SEARCH_TTL_SEC = 120;
-// First AI bidder is staged after this long alone (the initial wait for a
-// second real player before any bot fill begins).
+// Ranked-style fallback begins after this wait: any empty seats are filled by
+// selected smart-bot profiles and the match starts immediately.
 const AUCTION_ONE_HUMAN_FALLBACK_MS = 10_000;
-// Staged bot backfill: after this long with no new real player, add ONE AI
-// bidder, emit the updated count (so the client's search animation advances
-// 1→2→3), then wait again before adding the next. Real players joining the
-// queue short-circuit the wait. Tunable.
-const AUCTION_BOT_BACKFILL_STEP_MS = 10_000;
 // Server-authoritative pre-match "GET READY" countdown once all 3 seats fill.
 const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
@@ -67,8 +62,6 @@ interface QueuedAuctionSearch {
   formation?: FormationName;
   queuedAt: number;
   fallbackAt: number;
-  /** How many AI bidders have been staged into this search so far (0..2). */
-  botFillCount?: number;
   /** Transient match-start failures while this search was claimed — the search
    *  is requeued (not dropped) until AUCTION_MM_MAX_START_FAILURES. */
   startFailures?: number;
@@ -206,12 +199,11 @@ export const auctionMatchmakingService = {
             const existing = await readSearch(redis, existingSearchId);
             if (existing) {
               // Re-attaching to an in-flight search (e.g. a page reload). Make
-              // sure the bot-backfill fill timer is still armed — otherwise the
-              // search hangs forever at its current count. Re-arm it relative to
-              // now so the staged fill resumes.
+              // sure the ranked-style fallback timer is still armed — otherwise
+              // the search could wait forever. Re-arm it relative to now.
               const rearmed: QueuedAuctionSearch = {
                 ...existing,
-                fallbackAt: Date.now() + harnessDelayMs(AUCTION_BOT_BACKFILL_STEP_MS, 1_000),
+                fallbackAt: Date.now() + harnessDelayMs(AUCTION_ONE_HUMAN_FALLBACK_MS, 1_000),
               };
               await writeSearch(redis, rearmed);
               await scheduleAuctionMatchmakingFill(rearmed);
@@ -387,43 +379,9 @@ export const auctionMatchmakingService = {
         return;
       }
 
-      // Staged bot backfill: seats = real humans + AI bidders staged so far.
-      const botFillCount = anchor.botFillCount ?? 0;
-      const seatsFilled = fillGroup.length + botFillCount;
-
-      if (seatsFilled < 3) {
-        // Add ONE staged bidder. If that completes the table, create the match
-        // immediately so clients receive the ACTUAL selected smart-bot identity
-        // in `auction:match_found`; do not broadcast an anonymous "AI player"
-        // placeholder for another full timer interval.
-        const nextBotFill = botFillCount + 1;
-        if (fillGroup.length + nextBotFill >= 3) {
-          await startMatchFromQueuedSearches(io, redis, fillGroup);
-          return true;
-        }
-
-        // The table still has an empty seat (only possible for one human + one
-        // staged bidder), so retain the staged count and wait for the final
-        // fill. The client deliberately keeps unnamed staged seats visually
-        // empty until a real persistent/ephemeral profile is selected.
-        const updated: QueuedAuctionSearch = {
-          ...anchor,
-          botFillCount: nextBotFill,
-          fallbackAt: Date.now() + harnessDelayMs(AUCTION_BOT_BACKFILL_STEP_MS, 1_000),
-        };
-        await writeSearch(redis, updated);
-        // Broadcast the new count to every human in the fill group.
-        emitSearchStatuses(io, fillGroup, nextBotFill);
-        await scheduleRealtimeTimer(
-          'auction_matchmaking_fill',
-          fillTimerKey(anchor.searchId),
-          new Date(updated.fallbackAt),
-          { kind: 'auction_matchmaking_fill', searchId: anchor.searchId }
-        );
-        return;
-      }
-
-      // Seats are full (humans + staged bots) — start the match.
+      // Ranked-style bot fallback: once the human wait expires, select and
+      // reserve the real smart-bot profiles, then start. We never expose a
+      // synthetic "bot joined" count without the corresponding username.
       await startMatchFromQueuedSearches(io, redis, fillGroup);
       return true;
     });
@@ -615,8 +573,8 @@ function emitSearchStarted(
   search: QueuedAuctionSearch,
   group: readonly QueuedAuctionSearch[]
 ): void {
-  const botCount = stagedBotCount(group);
-  const queuedUserCount = Math.min(3, group.length + botCount);
+  const botCount = 0;
+  const queuedUserCount = Math.min(3, group.length);
   const queuedPlayers = queuePlayerSummaries(group);
   io.to(`user:${search.userId}`).emit('auction:search_start', {
     searchId: search.searchId,
@@ -632,13 +590,12 @@ function emitSearchStarted(
 /** Emit the current three-seat lobby snapshot to every human in the group. */
 function emitSearchStatuses(
   io: QuizballServer,
-  group: readonly QueuedAuctionSearch[],
-  botCountOverride?: number
+  group: readonly QueuedAuctionSearch[]
 ): void {
   if (group.length === 0) return;
   const queuedPlayers = queuePlayerSummaries(group);
-  const botCount = Math.min(3 - group.length, botCountOverride ?? stagedBotCount(group));
-  const queuedUserCount = Math.min(3, group.length + botCount);
+  const botCount = 0;
+  const queuedUserCount = Math.min(3, group.length);
   for (const search of group) {
     io.to(`user:${search.userId}`).emit('auction:search_status', {
       searchId: search.searchId,
@@ -681,14 +638,6 @@ function queuePlayerSummaries(group: readonly QueuedAuctionSearch[]) {
   }));
 }
 
-function stagedBotCount(group: readonly QueuedAuctionSearch[]): number {
-  const staged = group.reduce(
-    (maximum, search) => Math.max(maximum, search.botFillCount ?? 0),
-    0
-  );
-  return Math.min(Math.max(0, 3 - group.length), staged);
-}
-
 async function scheduleAuctionMatchmakingFill(search: QueuedAuctionSearch): Promise<void> {
   await scheduleRealtimeTimer(
     'auction_matchmaking_fill',
@@ -724,7 +673,6 @@ async function writeSearch(
       status: 'queued',
       queuedAt: String(search.queuedAt),
       fallbackAt: String(search.fallbackAt),
-      botFillCount: String(search.botFillCount ?? 0),
       startFailures: String(search.startFailures ?? 0),
     })
     .expire(searchKey(search.searchId), AUCTION_MM_SEARCH_TTL_SEC)
@@ -753,7 +701,6 @@ async function readSearch(
     formation: isFormationName(row.formation) ? row.formation : undefined,
     queuedAt,
     fallbackAt,
-    botFillCount: Number.isFinite(Number(row.botFillCount)) ? Number(row.botFillCount) : 0,
     startFailures: Number.isFinite(Number(row.startFailures)) ? Number(row.startFailures) : 0,
   };
 }

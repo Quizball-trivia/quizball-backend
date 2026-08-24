@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listEligibleCandidatesMock = vi.fn();
+const listDormantCandidatesMock = vi.fn();
 const insertAssignmentMock = vi.fn();
 const recoverStaleClaimsMock = vi.fn();
 const cancelInvalidPendingMock = vi.fn();
@@ -18,6 +19,7 @@ const verifyEmailLinkTokenMock = vi.fn();
 vi.mock('../../src/modules/retention-email/retention-email.repo.js', () => ({
   retentionEmailRepo: {
     listEligibleCandidates: (...args: unknown[]) => listEligibleCandidatesMock(...args),
+    listDormantCandidates: (...args: unknown[]) => listDormantCandidatesMock(...args),
     insertAssignment: (...args: unknown[]) => insertAssignmentMock(...args),
     recoverStaleClaims: (...args: unknown[]) => recoverStaleClaimsMock(...args),
     cancelInvalidPending: (...args: unknown[]) => cancelInvalidPendingMock(...args),
@@ -41,6 +43,12 @@ vi.mock('../../src/core/config.js', () => ({
     RETENTION_EMAIL_BATCH_SIZE: 25,
     RETENTION_EMAIL_ASSIGNMENT_CAP: 100,
     RETENTION_EMAIL_USER_ID_ALLOWLIST: [],
+    DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED: true,
+    DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS: 14,
+    DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS: 90,
+    DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES: 3,
+    DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP: 200,
+    DORMANT_COMEBACK_EMAIL_USER_ID_ALLOWLIST: [],
     RESEND_WEBHOOK_SECRET: 'whsec_test',
     API_BASE_URL: 'https://api.quizball.test',
     PUBLIC_SITE_ORIGIN: 'https://quizball.test',
@@ -67,6 +75,7 @@ vi.mock('../../src/core/logger.js', () => ({
 }));
 
 import {
+  assignDormantComebackEmailCandidates,
   assignRetentionEmailCandidates,
   buildRetentionEmail,
   deliverRetentionEmails,
@@ -81,7 +90,9 @@ const candidate = (userId: string) => ({
   preferred_language: 'ka',
   tournament_id: '11111111-1111-4111-8111-111111111111',
   entry_closes_at: '2026-08-25T12:00:00.000Z',
+  message_kind: 'weekend_league' as const,
   qp_remaining: 40,
+  lifetime_matches: 12,
   cta_state: 'qualifying' as const,
   destination_path: '/play' as const,
   last_match_started_at: '2026-08-20T12:00:00.000Z',
@@ -101,6 +112,7 @@ const assignment = (userId = '22222222-2222-4222-8222-222222222222') => ({
 describe('retention email experiment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listDormantCandidatesMock.mockResolvedValue([]);
     recoverStaleClaimsMock.mockResolvedValue(undefined);
     cancelInvalidPendingMock.mockResolvedValue(undefined);
     markDeliveryMock.mockResolvedValue(undefined);
@@ -156,6 +168,51 @@ describe('retention email experiment', () => {
     expect(trackEventMock).not.toHaveBeenCalled();
   });
 
+  it('assigns established dormant players through a separate feature flag and cap', async () => {
+    const dormantCandidate = {
+      ...candidate('77777777-7777-4777-8777-777777777777'),
+      tournament_id: null,
+      entry_closes_at: null,
+      message_kind: 'dormant_comeback' as const,
+      qp_remaining: 0,
+      lifetime_matches: 18,
+      cta_state: 'comeback' as const,
+      destination_path: '/play' as const,
+      last_match_started_at: '2026-07-10T12:00:00.000Z',
+    };
+    listDormantCandidatesMock.mockResolvedValue([dormantCandidate]);
+    getFeatureFlagMock.mockResolvedValue('test');
+    insertAssignmentMock.mockImplementation(async ({ candidate: value, variant }) => ({
+      ...assignment(value.user_id),
+      ...value,
+      campaign_key: 'dormant_player_comeback_v1',
+      feature_flag_key: 'email-comeback-dormant-players',
+      variant,
+      send_status: 'pending',
+    }));
+
+    await expect(assignDormantComebackEmailCandidates()).resolves.toBe(1);
+
+    expect(getFeatureFlagMock).toHaveBeenCalledWith(
+      'email-comeback-dormant-players',
+      dormantCandidate.user_id,
+      expect.any(Object),
+    );
+    expect(insertAssignmentMock).toHaveBeenCalledWith(expect.objectContaining({
+      campaignKey: 'dormant_player_comeback_v1',
+      assignmentCap: 200,
+    }));
+    expect(trackEventMock).toHaveBeenCalledWith(
+      'retention_email_assigned',
+      dormantCandidate.user_id,
+      expect.objectContaining({
+        message_kind: 'dormant_comeback',
+        lifetime_matches: 18,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('sends the test email once and records provider acceptance', async () => {
     const value = assignment();
     claimOneMock.mockResolvedValueOnce(value).mockResolvedValueOnce(null);
@@ -197,6 +254,26 @@ describe('retention email experiment', () => {
     expect(email.html).not.toMatch(/coin|მონეტ|free item|უფასო/i);
   });
 
+  it('builds a general dormant-player comeback email without a League deadline or reward', () => {
+    const value = {
+      ...assignment(),
+      tournament_id: null,
+      entry_closes_at: null,
+      message_kind: 'dormant_comeback' as const,
+      cta_state: 'comeback' as const,
+      qp_remaining: 0,
+    };
+    const email = buildRetentionEmail(
+      value,
+      'https://api.quizball.test/click',
+      'https://api.quizball.test/unsubscribe',
+    );
+
+    expect(email.subject).toContain('Quizball');
+    expect(email.html).toContain('ითამაშე ახლა');
+    expect(email.html).not.toMatch(/QP|coin|მონეტ|free item|უფასო|უიქენდ/i);
+  });
+
   it('records an idempotent click and redirects only to the stored destination', async () => {
     const value = assignment();
     getClickAssignmentMock.mockResolvedValue({
@@ -204,6 +281,7 @@ describe('retention email experiment', () => {
       user_id: value.user_id,
       campaign_key: value.campaign_key,
       variant: 'test',
+      message_kind: 'weekend_league',
       cta_state: 'qualifying',
       destination_path: '/play',
       send_status: 'sent',
@@ -234,6 +312,7 @@ describe('retention email experiment', () => {
       user_id: value.user_id,
       campaign_key: value.campaign_key,
       variant: 'test',
+      message_kind: 'weekend_league',
       cta_state: 'qualifying',
       destination_path: '/play',
     });
@@ -264,6 +343,7 @@ describe('retention email experiment', () => {
       user_id: value.user_id,
       campaign_key: value.campaign_key,
       variant: 'test',
+      message_kind: 'weekend_league',
       cta_state: 'qualifying',
       destination_path: '/play',
     });

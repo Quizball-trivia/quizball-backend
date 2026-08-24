@@ -121,7 +121,7 @@ export async function sendEmailDetailed(input: {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      logger.warn({ status: res.status, body: body.slice(0, 300), to: input.to }, 'Email send failed');
+      logger.warn({ status: res.status, body: body.slice(0, 300) }, 'Email send failed');
       return { accepted: false, messageId: null };
     }
     const response = await res.json().catch(() => null) as { id?: unknown } | null;
@@ -130,7 +130,7 @@ export async function sendEmailDetailed(input: {
       messageId: typeof response?.id === 'string' ? response.id : null,
     };
   } catch (error) {
-    logger.warn({ err: error, to: input.to }, 'Email send transport error');
+    logger.warn({ err: error }, 'Email send transport error');
     return { accepted: false, messageId: null };
   }
 }

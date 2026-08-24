@@ -115,6 +115,28 @@ Use signed redirect links with non-personal identifiers and these campaign param
 
 The redirect endpoint records one idempotent click, validates the destination against an allowlist, and then redirects to either Weekend League or Ranked. Raw email addresses must never appear in URLs or analytics properties.
 
+## Established dormant-player comeback experiment
+
+This is a separate experiment from the deadline-based Weekend League email.
+It targets contactable Georgian players whose last non-dev match was 14–90
+days ago and who have played at least three lifetime matches. The initial
+production cap is 200 assignments: a 50/50 PostHog split produces roughly 100
+emails and 100 no-email controls.
+
+- Flag: `email-comeback-dormant-players`.
+- Campaign: `dormant_player_comeback_v1`.
+- Control: persist the assignment and send nothing.
+- Test: send one Georgian/English comeback email linking to `/play`.
+- Primary: `match_started` within 72 hours of assignment.
+- Secondary: returned session within 72 hours and three matches within seven days.
+- Guardrails: delivery failures, complaints, unsubscribes, and no more than one
+  retention assignment per player in seven days across all campaigns.
+
+The message does not mention Weekend League, coins, cosmetics, or another
+reward. A reward must not be introduced until an idempotent backend grant exists.
+The experiment uses its own server switch and assignment cap; changing the
+Weekend League cap cannot broaden this cohort.
+
 ### Launch gate
 
 Before creating or activating the email experiment, calculate the current eligible cohort size and the required sample size. Do not launch if consent eligibility, provider webhooks, unsubscribe handling, global frequency limiting, or control-group assignment cannot be verified end to end in staging.

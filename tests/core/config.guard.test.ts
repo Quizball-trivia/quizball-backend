@@ -197,6 +197,12 @@ describe('retention email experiment configuration', () => {
     expect(parsed.RETENTION_EMAIL_MAX_LEAD_HOURS).toBe(24);
     expect(parsed.RETENTION_EMAIL_ASSIGNMENT_CAP).toBe(0);
     expect(parsed.RETENTION_EMAIL_USER_ID_ALLOWLIST).toEqual([]);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED).toBe(false);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS).toBe(14);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS).toBe(90);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES).toBe(3);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP).toBe(0);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_USER_ID_ALLOWLIST).toEqual([]);
   });
 
   it('rejects inverted inactivity and send windows', () => {
@@ -208,17 +214,23 @@ describe('retention email experiment configuration', () => {
       RETENTION_EMAIL_MIN_LEAD_HOURS: '24',
       RETENTION_EMAIL_MAX_LEAD_HOURS: '18',
     }))).toThrow(/RETENTION_EMAIL_MIN_LEAD_HOURS/);
+    expect(() => parseConfig(baseEnv({
+      DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS: '90',
+      DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS: '14',
+    }))).toThrow(/DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS/);
   });
 
   it('accepts a bounded rollout cap and UUID allowlist', () => {
     const parsed = parseConfig(baseEnv({
       RETENTION_EMAIL_ASSIGNMENT_CAP: '20',
+      DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP: '200',
       RETENTION_EMAIL_USER_ID_ALLOWLIST: [
         '11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222',
       ].join(','),
     }));
     expect(parsed.RETENTION_EMAIL_ASSIGNMENT_CAP).toBe(20);
+    expect(parsed.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP).toBe(200);
     expect(parsed.RETENTION_EMAIL_USER_ID_ALLOWLIST).toHaveLength(2);
   });
 

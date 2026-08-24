@@ -77,3 +77,6 @@ scripts/bot-burnin/*.receipt.json
 # Legacy fake-account cleanup (code only; reads DSN from env, dry-run default).
 !scripts/seed-cleanup/
 !scripts/seed-cleanup/**
+
+# Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
+node_modules

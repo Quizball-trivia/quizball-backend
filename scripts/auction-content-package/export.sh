@@ -63,6 +63,6 @@ WHERE locale='en' AND status='published' AND active_status='active' AND image_ur
 GROUP BY position_group
 " > "$OUT/expected-counts.txt"
 
-( cd "$OUT" && shasum -a 256 ./*.csv > checksums.sha256 )
+( cd "$OUT" && shasum -a 256 ./*.csv expected-counts.txt > checksums.sha256 )
 echo "--- expected-counts:"; cat "$OUT/expected-counts.txt"
 echo "--- checksums:"; cat "$OUT/checksums.sha256"

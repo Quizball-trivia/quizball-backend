@@ -224,6 +224,13 @@ vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
   };
 });
 
+// The release kill switch defaults OFF; these tests exercise the enabled
+// matchmaking path. The disabled path has its own test below.
+vi.mock('../../src/core/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/config.js')>();
+  return { ...actual, config: { ...actual.config, AUCTION_ENABLED: true } };
+});
+
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => redisMock.client,
 }));
@@ -670,4 +677,30 @@ describe('auctionMatchmakingService', () => {
     expect(timerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
   });
+
+  it('kill switch: a queued search never fills into a match while AUCTION_ENABLED is off', async () => {
+    const { config } = await import('../../src/core/config.js');
+    const { io, roomEmit } = createIo();
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
+    const searchId = scheduledSearchIds()[0];
+
+    (config as { AUCTION_ENABLED: boolean }).AUCTION_ENABLED = false;
+    try {
+      await auctionMatchmakingService.runFillTimer(io, {
+        kind: 'auction_matchmaking_fill',
+        searchId,
+      });
+    } finally {
+      (config as { AUCTION_ENABLED: boolean }).AUCTION_ENABLED = true;
+    }
+
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u1',
+      'auction:search_cancelled',
+      expect.objectContaining({ reason: 'cancelled' })
+    );
+  });
+
 });

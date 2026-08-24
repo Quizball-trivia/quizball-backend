@@ -4,6 +4,7 @@ import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { getRedisClient } from '../redis.js';
+import { config } from '../../core/config.js';
 import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
@@ -374,6 +375,25 @@ export const auctionMatchmakingService = {
   async runFillTimer(io: QuizballServer, payload: AuctionMatchmakingFillPayload): Promise<void> {
     const redis = getRedisClient();
     if (!redis?.isOpen) return;
+
+    // Kill-switch: a search queued before AUCTION_ENABLED was flipped off (or
+    // re-armed across a redeploy) must never fill into a NEW match while the
+    // mode is disabled. Cancel it cleanly instead of leaving it queued forever.
+    if (!config.AUCTION_ENABLED) {
+      await withAuctionMatchmakingLock(async () => {
+        const anchor = await readSearch(redis, payload.searchId);
+        if (!anchor) return;
+        const removed = await removeQueuedSearchForUser(redis, anchor.userId).catch(() => null);
+        if (removed) {
+          io.to(`user:${anchor.userId}`).emit('auction:search_cancelled', {
+            searchId: removed.searchId,
+            reason: 'cancelled',
+          } satisfies AuctionSearchCancelledPayload);
+        }
+        emitAllQueueStatuses(io, await listQueuedSearches(redis));
+      });
+      return;
+    }
 
     const completed = await withAuctionMatchmakingLock(async () => {
       const anchor = await readSearch(redis, payload.searchId);

@@ -34,7 +34,14 @@ for (const line of csv.slice(1)) {
   const m = line.match(/https:\/\/nsdfiprfmhdqhbfxfwpv\.supabase\.co\/storage\/v1\/object\/public\/imgs\/([^",\s]+)/);
   if (m) paths.add(m[1]);
 }
-console.log(`objects referenced by package: ${paths.size}`);
+const expected = readFileSync(`${pkg}/expected-counts.txt`, 'utf8')
+  .split('\n').find((l) => l.startsWith('players|'));
+const expectedPlayers = Number(expected?.split('|')[1] ?? NaN);
+if (!Number.isFinite(expectedPlayers) || paths.size !== expectedPlayers) {
+  console.error(`image path count ${paths.size} != manifest players ${expectedPlayers}`);
+  process.exit(1);
+}
+console.log(`objects referenced by package: ${paths.size} (matches manifest)`);
 
 const sha = (buf) => createHash('sha256').update(Buffer.from(buf)).digest('hex');
 let copied = 0, verified = 0, failed = 0;

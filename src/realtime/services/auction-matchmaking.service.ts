@@ -48,7 +48,11 @@ const AUCTION_MM_SEARCH_TTL_SEC = 120;
 // Ranked-style fallback begins after this wait: any empty seats are filled by
 // selected smart-bot profiles and the match starts immediately.
 const AUCTION_ONE_HUMAN_FALLBACK_MS = 10_000;
-// Server-authoritative pre-match "GET READY" countdown once all 3 seats fill.
+// Server-authoritative ranked-style pre-match sequence once all 3 seats fill.
+// The full connected lineup stays visible first, followed by the showdown and
+// then a five-second countdown shared by every browser.
+const AUCTION_PREMATCH_LINEUP_MS = 2_500;
+const AUCTION_PREMATCH_SHOWDOWN_MS = 2_500;
 const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
@@ -147,16 +151,27 @@ export const auctionMatchmakingService = {
     const redis = getRedisClient();
     if (!redis?.isOpen) {
       try {
-        const match = await startAuctionMatchForHumans(io, {
+        const humans = [{
+          userId: user.id,
+          displayName: user.nickname ?? 'Player',
+        }];
+        await startAuctionMatchForHumans(io, {
           humanPlayers: [{ userId: user.id, displayName: user.nickname ?? 'Player' }],
           formation: input.formation,
           locale: input.locale,
           sourceSocket: socket,
+        }, {
+          beforeStartEvents: (prepared) => {
+            emitMatchFound(
+              io,
+              prepared.matchId,
+              humans,
+              botPlayerSummaries(prepared.seats),
+              input.locale,
+              prepared.formation,
+            );
+          },
         });
-        emitMatchFound(io, match.matchId, [{
-          userId: user.id,
-          displayName: user.nickname ?? 'Player',
-        }], botPlayerSummaries(match.seats), input.locale, match.formation);
       } catch (error) {
         emitAuctionError(socket, toAuctionErrorPayload(error, {
           fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
@@ -445,9 +460,19 @@ async function startMatchFromQueuedSearches(
       humanPlayers: humans,
       formation: oldest.formation,
       locale: oldest.locale,
+    }, {
+      beforeStartEvents: (prepared) => {
+        emitMatchFound(
+          io,
+          prepared.matchId,
+          humans,
+          botPlayerSummaries(prepared.seats),
+          oldest.locale,
+          prepared.formation,
+        );
+      },
     });
     const botPlayers = botPlayerSummaries(match.seats);
-    emitMatchFound(io, match.matchId, humans, botPlayers, oldest.locale, match.formation);
     logger.info(
       {
         matchId: match.matchId,
@@ -528,6 +553,9 @@ function emitMatchFound(
   locale: AuctionContentLocale,
   formation: FormationName
 ): void {
+  const serverNowMs = Date.now();
+  const lineupEndsAtMs = serverNowMs + AUCTION_PREMATCH_LINEUP_MS;
+  const showdownEndsAtMs = lineupEndsAtMs + AUCTION_PREMATCH_SHOWDOWN_MS;
   const payload: AuctionMatchFoundPayload = {
     matchId,
     humanUserIds: humans.map((human) => human.userId),
@@ -535,8 +563,11 @@ function emitMatchFound(
     botPlayers,
     locale,
     formation,
-    // Single server-chosen instant so all clients count down in sync.
-    countdownEndsAt: new Date(Date.now() + AUCTION_PREMATCH_COUNTDOWN_MS).toISOString(),
+    serverNow: new Date(serverNowMs).toISOString(),
+    lineupEndsAt: new Date(lineupEndsAtMs).toISOString(),
+    showdownEndsAt: new Date(showdownEndsAtMs).toISOString(),
+    // Single server-chosen instant so all clients finish the countdown in sync.
+    countdownEndsAt: new Date(showdownEndsAtMs + AUCTION_PREMATCH_COUNTDOWN_MS).toISOString(),
   };
   for (const human of humans) {
     io.to(`user:${human.userId}`).emit('auction:match_found', payload);

@@ -149,11 +149,18 @@ const timerMock = vi.hoisted(() => ({
 
 const startMatchMock = vi.hoisted(() => ({
   startAuctionMatchForHumans: vi.fn(async (
-    _io: unknown,
-    input: { formation?: string; humanPlayers: Array<{ userId: string; displayName: string }> }
+    io: { to: (room: string) => { emit: (event: string, payload?: unknown) => void } },
+    input: { formation?: string; humanPlayers: Array<{ userId: string; displayName: string }> },
+    options?: {
+      beforeStartEvents?: (match: {
+        matchId: string;
+        formation: string;
+        seats: Array<{ seatId: string; displayName: string; isBot: boolean }>;
+      }) => void;
+    },
   ) => {
     const botCount = 3 - input.humanPlayers.length;
-    return {
+    const match = {
       matchId: 'match-found',
       formation: input.formation ?? '2-2-2',
       seats: [
@@ -169,6 +176,9 @@ const startMatchMock = vi.hoisted(() => ({
         })),
       ],
     };
+    options?.beforeStartEvents?.(match);
+    io.to(`match:${match.matchId}`).emit('auction:match_started', { matchId: match.matchId });
+    return match;
   }),
   rejoinAuctionMatch: vi.fn(async () => true),
 }));
@@ -314,13 +324,29 @@ describe('auctionMatchmakingService', () => {
           { userId: 'u2', displayName: 'Two' },
           { userId: 'u3', displayName: 'Three' },
         ],
-      })
+      }),
+      expect.objectContaining({ beforeStartEvents: expect.any(Function) }),
     );
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u1',
       'auction:match_found',
-      expect.objectContaining({ humanUserIds: ['u1', 'u2', 'u3'], botCount: 0 })
+      expect.objectContaining({
+        humanUserIds: ['u1', 'u2', 'u3'],
+        botCount: 0,
+        serverNow: '2026-06-20T10:00:00.000Z',
+        lineupEndsAt: '2026-06-20T10:00:02.500Z',
+        showdownEndsAt: '2026-06-20T10:00:05.000Z',
+        countdownEndsAt: '2026-06-20T10:00:10.000Z',
+      })
     );
+    const foundCall = roomEmit.mock.calls.findIndex(
+      ([room, event]) => room === 'user:u1' && event === 'auction:match_found',
+    );
+    const startedCall = roomEmit.mock.calls.findIndex(
+      ([room, event]) => room === 'match:match-found' && event === 'auction:match_started',
+    );
+    expect(foundCall).toBeGreaterThanOrEqual(0);
+    expect(startedCall).toBeGreaterThan(foundCall);
   });
 
   it('matches two humans across locales, then immediately seats a named bot on the fill tick', async () => {
@@ -356,7 +382,7 @@ describe('auctionMatchmakingService', () => {
           { userId: 'u1', displayName: 'One' },
           { userId: 'u2', displayName: 'Two' },
         ],
-      })
+      }),
     );
 
     // One bot completes the table, so start immediately. This avoids exposing
@@ -375,7 +401,8 @@ describe('auctionMatchmakingService', () => {
           { userId: 'u1', displayName: 'One' },
           { userId: 'u2', displayName: 'Two' },
         ],
-      })
+      }),
+      expect.objectContaining({ beforeStartEvents: expect.any(Function) }),
     );
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u2',
@@ -446,7 +473,8 @@ describe('auctionMatchmakingService', () => {
           { userId: 'u1', displayName: 'One' },
           { userId: 'u2', displayName: 'Two' },
         ],
-      })
+      }),
+      expect.objectContaining({ beforeStartEvents: expect.any(Function) }),
     );
   });
 
@@ -468,7 +496,8 @@ describe('auctionMatchmakingService', () => {
       io,
       expect.objectContaining({
         humanPlayers: [{ userId: 'u1', displayName: 'One' }],
-      })
+      }),
+      expect.objectContaining({ beforeStartEvents: expect.any(Function) }),
     );
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u1',

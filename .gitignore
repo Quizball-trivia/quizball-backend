@@ -40,6 +40,9 @@ scripts/*
 # Auction prod-promotion content tooling — code only, no secrets.
 !scripts/auction-content-package/
 !scripts/auction-content-package/**
+# Anti-cheat analysis SQL — code only, no secrets.
+!scripts/anti-cheat/
+!scripts/anti-cheat/**
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**

@@ -1159,6 +1159,7 @@ export interface ClientToServerEvents {
   'match:resume_ui_ready': (data: { matchId: string }) => void;
   'match:presence_heartbeat': (data: MatchStagePresencePayload) => void;
   'match:stage_ready': (data: MatchStagePresencePayload) => void;
+  'match:visibility_signal': (data: { matchId: string; signal: 'hidden' | 'visible' | 'blur' | 'focus' | 'pagehide' }) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;

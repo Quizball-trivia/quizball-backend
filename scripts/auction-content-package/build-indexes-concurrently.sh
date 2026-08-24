@@ -39,12 +39,17 @@ if [ "$MODE" = "build" ]; then
     "CREATE INDEX CONCURRENTLY IF NOT EXISTS matches_active_game_variant_idx
        ON public.matches (game_variant, updated_at DESC)
        WHERE status = 'active';"
-  psql "$PROD_DB" -v ON_ERROR_STOP=1 -t -c \
+  RESULT=$(psql "$PROD_DB" -v ON_ERROR_STOP=1 -t -A -c \
     "SELECT indexrelid::regclass || ' valid=' || indisvalid
        FROM pg_index
       WHERE indexrelid::regclass::text IN
-        ('idx_users_auction_points_desc', 'matches_active_game_variant_idx');" \
-    | tee /dev/stderr | grep -q "valid=f" && { echo "INVALID INDEX — drop and rebuild" >&2; exit 1; }
+        ('idx_users_auction_points_desc', 'matches_active_game_variant_idx');")
+  echo "$RESULT"
+  VALID_COUNT=$(printf '%s\n' "$RESULT" | grep -c 'valid=t' || true)
+  if [ "$VALID_COUNT" != "2" ]; then
+    echo "EXPECTED 2 VALID INDEXES, got: [$RESULT] — drop any invalid one and rebuild" >&2
+    exit 1
+  fi
   echo "both indexes built concurrently and valid"
   exit 0
 fi

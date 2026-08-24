@@ -183,3 +183,49 @@ describe('campaign quiz artwork generation configuration', () => {
     expect(() => parseConfig(baseEnv({ OPENAI_IMAGE_QUALITY: 'ultra' }))).toThrow(/OPENAI_IMAGE_QUALITY/);
   });
 });
+
+describe('retention email experiment configuration', () => {
+  it('is disabled by default with the agreed inactivity, frequency, and deadline windows', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.RETENTION_EMAIL_EXPERIMENT_ENABLED).toBe(false);
+    expect(parsed.RETENTION_EMAIL_MIN_INACTIVE_DAYS).toBe(3);
+    expect(parsed.RETENTION_EMAIL_MAX_INACTIVE_DAYS).toBe(7);
+    expect(parsed.RETENTION_EMAIL_FREQUENCY_DAYS).toBe(7);
+    expect(parsed.RETENTION_EMAIL_MIN_LEAD_HOURS).toBe(18);
+    expect(parsed.RETENTION_EMAIL_MAX_LEAD_HOURS).toBe(24);
+    expect(parsed.RETENTION_EMAIL_ASSIGNMENT_CAP).toBe(0);
+    expect(parsed.RETENTION_EMAIL_USER_ID_ALLOWLIST).toEqual([]);
+  });
+
+  it('rejects inverted inactivity and send windows', () => {
+    expect(() => parseConfig(baseEnv({
+      RETENTION_EMAIL_MIN_INACTIVE_DAYS: '7',
+      RETENTION_EMAIL_MAX_INACTIVE_DAYS: '3',
+    }))).toThrow(/RETENTION_EMAIL_MIN_INACTIVE_DAYS/);
+    expect(() => parseConfig(baseEnv({
+      RETENTION_EMAIL_MIN_LEAD_HOURS: '24',
+      RETENTION_EMAIL_MAX_LEAD_HOURS: '18',
+    }))).toThrow(/RETENTION_EMAIL_MIN_LEAD_HOURS/);
+  });
+
+  it('accepts a bounded rollout cap and UUID allowlist', () => {
+    const parsed = parseConfig(baseEnv({
+      RETENTION_EMAIL_ASSIGNMENT_CAP: '20',
+      RETENTION_EMAIL_USER_ID_ALLOWLIST: [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ].join(','),
+    }));
+    expect(parsed.RETENTION_EMAIL_ASSIGNMENT_CAP).toBe(20);
+    expect(parsed.RETENTION_EMAIL_USER_ID_ALLOWLIST).toHaveLength(2);
+  });
+
+  it('rejects malformed canary user IDs and excessive rollout caps', () => {
+    expect(() => parseConfig(baseEnv({
+      RETENTION_EMAIL_USER_ID_ALLOWLIST: 'not-a-user-id',
+    }))).toThrow(/RETENTION_EMAIL_USER_ID_ALLOWLIST/);
+    expect(() => parseConfig(baseEnv({
+      RETENTION_EMAIL_ASSIGNMENT_CAP: '10001',
+    }))).toThrow(/RETENTION_EMAIL_ASSIGNMENT_CAP/);
+  });
+});

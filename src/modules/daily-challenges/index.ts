@@ -11,12 +11,16 @@ export {
   listAdminDailyChallengesResponseSchema,
   dailyChallengeSessionResponseSchema,
   completeDailyChallengeResponseSchema,
+  dailyComebackStateResponseSchema,
+  setDailyComebackReminderBodySchema,
+  setDailyComebackReminderResponseSchema,
   resetDailyChallengeResponseSchema,
   type DailyChallengeType,
   type DailyChallengeLocaleQuery,
   type DailyChallengeParam,
   type UpdateDailyChallengeConfigBody,
   type CompleteDailyChallengeBody,
+  type SetDailyComebackReminderBody,
 } from './daily-challenges.schemas.js';
 export type {
   DailyChallengeCompletionRow,

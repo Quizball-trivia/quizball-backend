@@ -46,6 +46,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
 
 const getDraftCategoriesByIdsMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
+const selectRandomCategoriesMock = vi.fn();
 const selectRandomCategoriesExcludingMock = vi.fn();
 const listCategoryIdsWithMinPlainMcqCountMock = vi.fn();
 
@@ -53,7 +54,7 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
     getLobbyCategories: (...args: unknown[]) => getLobbyCategoriesMock(...args),
     getDraftCategoriesByIds: (...args: unknown[]) => getDraftCategoriesByIdsMock(...args),
-    selectRandomCategories: vi.fn(),
+    selectRandomCategories: (...args: unknown[]) => selectRandomCategoriesMock(...args),
     selectRandomCategoriesExcluding: (...args: unknown[]) => selectRandomCategoriesExcludingMock(...args),
     selectRandomRankedCategories: vi.fn(),
     selectRandomRankedCategoriesExcluding: vi.fn(),
@@ -130,6 +131,7 @@ describe('possession halftime finalize', () => {
     setMatchCategoryBMock.mockResolvedValue(undefined);
     setMatchStatePayloadMock.mockResolvedValue(undefined);
     listCategoryIdsWithMinPlainMcqCountMock.mockImplementation(async (ids: string[]) => ids);
+    selectRandomCategoriesMock.mockResolvedValue([]);
   });
 
   it('uses possession-complete categories for friendly halftime options', async () => {
@@ -717,6 +719,45 @@ describe('possession halftime with a preset second-half category', () => {
       'cat-deep-1',
       'cat-thin-1',
       'cat-thin-2',
+    ]);
+  });
+
+  it('keeps the second-half category excluded when penalty selection relaxes exclusions', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock
+      .mockResolvedValueOnce([
+        { id: 'cat-only', name: { en: 'Only' }, icon: null, imageUrl: null },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'cat-r1', name: { en: 'R1' }, icon: null, imageUrl: null },
+        { id: 'cat-r2', name: { en: 'R2' }, icon: null, imageUrl: null },
+        { id: 'cat-preset', name: { en: 'Just Played' }, icon: null, imageUrl: null },
+      ]);
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    expect(selectRandomCategoriesExcludingMock).toHaveBeenLastCalledWith(
+      3,
+      ['cat-a', 'cat-preset'],
+      'possession'
+    );
+    // Even if the selector leaks the just-played category, it is filtered out.
+    expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([
+      'cat-only',
+      'cat-r1',
+      'cat-r2',
     ]);
   });
 

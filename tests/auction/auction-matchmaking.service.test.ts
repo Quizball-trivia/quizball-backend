@@ -144,10 +144,26 @@ const timerMock = vi.hoisted(() => ({
 }));
 
 const startMatchMock = vi.hoisted(() => ({
-  startAuctionMatchForHumans: vi.fn(async (_io: unknown, input: { formation?: string }) => {
+  startAuctionMatchForHumans: vi.fn(async (
+    _io: unknown,
+    input: { formation?: string; humanPlayers: Array<{ userId: string; displayName: string }> }
+  ) => {
+    const botCount = 3 - input.humanPlayers.length;
     return {
       matchId: 'match-found',
       formation: input.formation ?? '2-2-2',
+      seats: [
+        ...input.humanPlayers.map((player, index) => ({
+          seatId: `seat-human-${index + 1}`,
+          displayName: player.displayName,
+          isBot: false,
+        })),
+        ...Array.from({ length: botCount }, (_, index) => ({
+          seatId: `seat-bot-${index + 1}`,
+          displayName: `Smart Bot ${index + 1}`,
+          isBot: true,
+        })),
+      ],
     };
   }),
   rejoinAuctionMatch: vi.fn(async () => true),
@@ -356,7 +372,12 @@ describe('auctionMatchmakingService', () => {
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u2',
       'auction:match_found',
-      expect.objectContaining({ humanUserIds: ['u1', 'u2'], botCount: 1, locale: 'en' })
+      expect.objectContaining({
+        humanUserIds: ['u1', 'u2'],
+        botCount: 1,
+        botPlayers: [{ seatId: 'seat-bot-1', displayName: 'Smart Bot 1' }],
+        locale: 'en',
+      })
     );
   });
 
@@ -439,7 +460,14 @@ describe('auctionMatchmakingService', () => {
     expect(roomEmit).toHaveBeenCalledWith(
       'user:u1',
       'auction:match_found',
-      expect.objectContaining({ humanUserIds: ['u1'], botCount: 2 })
+      expect.objectContaining({
+        humanUserIds: ['u1'],
+        botCount: 2,
+        botPlayers: [
+          { seatId: 'seat-bot-1', displayName: 'Smart Bot 1' },
+          { seatId: 'seat-bot-2', displayName: 'Smart Bot 2' },
+        ],
+      })
     );
   });
 

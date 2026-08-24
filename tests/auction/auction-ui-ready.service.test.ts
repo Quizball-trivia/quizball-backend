@@ -149,6 +149,30 @@ describe('auction UI-ready shared gate', () => {
     replicaB.clearAuctionUiReadyGate('match-1', 'round', 'round-1', 7);
   });
 
+  it('holds the opening round until all three connected human seats are UI-ready', async () => {
+    const service = await import('../../src/realtime/services/auction-ui-ready.service.js');
+    latestState = {
+      ...state(),
+      seats: [
+        { isBot: false, userId: 'user-1' },
+        { isBot: false, userId: 'user-2' },
+        { isBot: false, userId: 'user-3' },
+      ],
+    } as AuctionMatchState;
+    const dispatch = vi.fn();
+    service.openAuctionUiReadyGate({ io: io(), state: latestState, phase: 'round', dispatch });
+
+    await service.acknowledgeAuctionUiReady(io(), 'user-1', payload);
+    await service.acknowledgeAuctionUiReady(io(), 'user-2', payload);
+    await flushGateDispatch();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await service.acknowledgeAuctionUiReady(io(), 'user-3', payload);
+    await flushGateDispatch();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith({ reason: 'all_ready', missingUserIds: [] });
+  });
+
   it('does not wait for a forfeited human seat', async () => {
     const service = await import('../../src/realtime/services/auction-ui-ready.service.js');
     latestState = state();

@@ -24,7 +24,7 @@ import {
   openAuctionUiReadyGate,
 } from './auction-ui-ready.service.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
-import type { FormationName } from '../../modules/auction/auction.types.js';
+import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   AuctionMatchStartedPayload,
@@ -62,6 +62,17 @@ export interface AuctionStartAiMatchServiceInput {
 
 export interface AuctionStartAiMatchOptions {
   context?: AuctionEngineContext;
+  /**
+   * Matchmaking uses this seam after every human socket has joined the match
+   * room, but before any live Auction state is emitted. This guarantees the
+   * ranked-style pre-match sequence (`match_found` -> showdown -> countdown)
+   * cannot be overtaken by `match_started` / `round_started` on fast clients.
+   */
+  beforeStartEvents?: (match: {
+    matchId: string;
+    formation: FormationName;
+    seats: readonly AuctionPlayer[];
+  }) => void;
 }
 
 export interface AuctionMatchHumanPlayer {
@@ -226,6 +237,12 @@ export async function startAuctionMatchForHumans(
       ? false
       : armAuctionDisconnectGrace(io, saved, player.userId)
   )));
+
+  options.beforeStartEvents?.({
+    matchId: saved.matchId,
+    formation: saved.formation,
+    seats: saved.seats,
+  });
 
   const startedPayload: AuctionMatchStartedPayload = {
     matchId: saved.matchId,

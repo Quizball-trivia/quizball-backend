@@ -121,12 +121,15 @@ describe('auctionRealtimeService', () => {
   it('starts an authenticated AI auction match, stores Redis state, joins the match room, and emits start events', async () => {
     const { io, to, roomEmit } = createIo();
     const socket = createSocket();
+    const beforeStartEvents = vi.fn(() => {
+      roomEmit('auction:match_found', { matchId: 'match-id' });
+    });
 
     await auctionRealtimeService.handleStartAiMatch(
       io,
       socket,
       { locale: 'en', formation: '2-2-2' },
-      { context: deterministicContext }
+      { context: deterministicContext, beforeStartEvents }
     );
 
     expect(auctionContentServiceMock.assertPublishedAuctionContentAvailable).toHaveBeenCalledWith('en');
@@ -140,6 +143,11 @@ describe('auctionRealtimeService', () => {
     expect(socket.join).toHaveBeenCalledWith('match:match-id');
     expect(socket.data.matchId).toBe('match-id');
     expect(socket.data.lobbyId).toBeUndefined();
+    expect(beforeStartEvents).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: 'match-id',
+      formation: '2-2-2',
+      seats: expect.arrayContaining([expect.objectContaining({ userId: 'user-1' })]),
+    }));
     expect(to).toHaveBeenCalledWith('match:match-id');
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:match_started',
@@ -156,6 +164,12 @@ describe('auctionRealtimeService', () => {
         }),
       })
     );
+    const matchFoundCall = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_found');
+    const matchStartedCall = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_started');
+    const roundStartedCall = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:round_started');
+    expect(matchFoundCall).toBeGreaterThanOrEqual(0);
+    expect(matchStartedCall).toBeGreaterThan(matchFoundCall);
+    expect(roundStartedCall).toBeGreaterThan(matchStartedCall);
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:waiting_for_ready',
       expect.objectContaining({

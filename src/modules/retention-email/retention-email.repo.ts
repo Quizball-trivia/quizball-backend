@@ -1,16 +1,19 @@
 import { sql } from '../../db/index.js';
 
 export type RetentionEmailVariant = 'control' | 'test';
-export type RetentionEmailCtaState = 'qualifying' | 'qualified';
+export type RetentionEmailCtaState = 'qualifying' | 'qualified' | 'comeback';
+export type RetentionEmailMessageKind = 'weekend_league' | 'dormant_comeback';
 
 export type RetentionEmailCandidate = {
   user_id: string;
   email: string;
   nickname: string | null;
   preferred_language: string;
-  tournament_id: string;
-  entry_closes_at: string;
+  tournament_id: string | null;
+  entry_closes_at: string | null;
+  message_kind: RetentionEmailMessageKind;
   qp_remaining: number;
+  lifetime_matches: number;
   cta_state: RetentionEmailCtaState;
   destination_path: '/play' | '/weekend-league';
   last_match_started_at: string;
@@ -31,6 +34,7 @@ export type RetentionEmailClickAssignment = {
   user_id: string;
   campaign_key: string;
   variant: RetentionEmailVariant;
+  message_kind: RetentionEmailMessageKind;
   cta_state: RetentionEmailCtaState;
   destination_path: '/play' | '/weekend-league';
   send_status: string;
@@ -49,6 +53,7 @@ export type RetentionEmailProviderAttribution = {
   user_id: string;
   campaign_key: string;
   variant: RetentionEmailVariant;
+  message_kind: RetentionEmailMessageKind;
   cta_state: RetentionEmailCtaState;
   destination_path: '/play' | '/weekend-league';
 };
@@ -90,14 +95,18 @@ export const retentionEmailRepo = {
         u.preferred_language,
         t.id AS tournament_id,
         t.entry_closes_at::text AS entry_closes_at,
+        'weekend_league'::text AS message_kind,
         GREATEST(0, t.qp_target - qp.balance)::int AS qp_remaining,
+        activity.lifetime_matches,
         CASE WHEN qp.balance >= t.qp_target THEN 'qualified' ELSE 'qualifying' END AS cta_state,
         CASE WHEN qp.balance >= t.qp_target THEN '/weekend-league' ELSE '/play' END AS destination_path,
         activity.last_match_started_at::text AS last_match_started_at
       FROM users u
       CROSS JOIN current_tournament t
       JOIN LATERAL (
-        SELECT MAX(m.started_at) AS last_match_started_at
+        SELECT
+          MAX(m.started_at) AS last_match_started_at,
+          COUNT(DISTINCT m.id)::int AS lifetime_matches
         FROM match_players mp
         JOIN matches m ON m.id = mp.match_id
         WHERE mp.user_id = u.id
@@ -137,7 +146,6 @@ export const retentionEmailRepo = {
         AND NOT EXISTS (
           SELECT 1 FROM retention_email_assignments a
           WHERE a.campaign_key = ${input.campaignKey}
-            AND a.tournament_id = t.id
             AND a.user_id = u.id
         )
         AND NOT EXISTS (
@@ -151,6 +159,78 @@ export const retentionEmailRepo = {
             AND legacy.sent_at >= NOW() - make_interval(days => ${input.frequencyDays})
         )
       ORDER BY activity.last_match_started_at DESC, u.id
+      LIMIT ${input.limit}
+    `;
+  },
+
+  async listDormantCandidates(input: {
+    campaignKey: string;
+    minInactiveDays: number;
+    maxInactiveDays: number;
+    minLifetimeMatches: number;
+    frequencyDays: number;
+    userIdAllowlist: string[];
+    limit: number;
+  }): Promise<RetentionEmailCandidate[]> {
+    return sql<RetentionEmailCandidate[]>`
+      SELECT
+        u.id AS user_id,
+        u.email,
+        u.nickname,
+        u.preferred_language,
+        NULL::uuid AS tournament_id,
+        NULL::text AS entry_closes_at,
+        'dormant_comeback'::text AS message_kind,
+        0::int AS qp_remaining,
+        activity.lifetime_matches,
+        'comeback'::text AS cta_state,
+        '/play'::text AS destination_path,
+        activity.last_match_started_at::text AS last_match_started_at
+      FROM users u
+      JOIN LATERAL (
+        SELECT
+          MAX(m.started_at) AS last_match_started_at,
+          COUNT(DISTINCT m.id)::int AS lifetime_matches
+        FROM match_players mp
+        JOIN matches m ON m.id = mp.match_id
+        WHERE mp.user_id = u.id
+          AND m.is_dev = false
+      ) activity ON activity.last_match_started_at IS NOT NULL
+      WHERE u.email IS NOT NULL
+        AND BTRIM(u.email) <> ''
+        AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+        AND u.is_ai = false
+        AND u.is_seed = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND u.is_banned = false
+        AND activity.lifetime_matches >= ${input.minLifetimeMatches}
+        AND activity.last_match_started_at <= NOW() - make_interval(days => ${input.minInactiveDays})
+        AND activity.last_match_started_at > NOW() - make_interval(days => ${input.maxInactiveDays})
+        AND (
+          ${input.userIdAllowlist.length === 0}
+          OR u.id = ANY(${sql.array(input.userIdAllowlist)}::uuid[])
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM email_unsubscribes x WHERE x.user_id = u.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM retention_email_assignments a
+          WHERE a.campaign_key = ${input.campaignKey}
+            AND a.user_id = u.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM retention_email_assignments recent
+          WHERE recent.user_id = u.id
+            AND recent.assigned_at >= NOW() - make_interval(days => ${input.frequencyDays})
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM wl_email_log legacy
+          WHERE legacy.user_id = u.id
+            AND legacy.sent_at >= NOW() - make_interval(days => ${input.frequencyDays})
+        )
+      ORDER BY hashtextextended(u.id::text || ${input.campaignKey}, 0), u.id
       LIMIT ${input.limit}
     `;
   },
@@ -179,10 +259,12 @@ export const retentionEmailRepo = {
         feature_flag_key,
         user_id,
         tournament_id,
+        message_kind,
         variant,
         cta_state,
         destination_path,
         qp_remaining,
+        lifetime_matches,
         last_match_started_at,
         send_status
       )
@@ -191,14 +273,16 @@ export const retentionEmailRepo = {
         ${input.featureFlagKey},
         ${input.candidate.user_id},
         ${input.candidate.tournament_id},
+        ${input.candidate.message_kind},
         ${input.variant},
         ${input.candidate.cta_state},
         ${input.candidate.destination_path},
         ${input.candidate.qp_remaining},
+        ${input.candidate.lifetime_matches},
         ${input.candidate.last_match_started_at},
         ${input.variant === 'test' ? 'pending' : 'not_applicable'}
       FROM within_cap
-      ON CONFLICT (campaign_key, tournament_id, user_id) DO NOTHING
+      ON CONFLICT (campaign_key, user_id) DO NOTHING
       RETURNING *
     `;
     if (!row) return null;
@@ -241,7 +325,7 @@ export const retentionEmailRepo = {
                 AND u.is_banned = false
                 AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
             ) THEN 'user_ineligible'
-            WHEN EXISTS (
+            WHEN a.message_kind = 'weekend_league' AND EXISTS (
               SELECT 1 FROM wl_entries e
               WHERE e.tournament_id = a.tournament_id AND e.user_id = a.user_id
             ) THEN 'already_entered'
@@ -257,7 +341,8 @@ export const retentionEmailRepo = {
               SELECT 1 FROM wl_email_log legacy
               WHERE legacy.user_id = a.user_id AND legacy.sent_at > a.assigned_at
             ) THEN 'another_marketing_email_sent'
-            ELSE 'entry_window_closed'
+            WHEN a.message_kind = 'weekend_league' THEN 'entry_window_closed'
+            ELSE 'campaign_no_longer_eligible'
           END
       WHERE a.send_status = 'pending'
         AND (
@@ -275,10 +360,10 @@ export const retentionEmailRepo = {
               AND u.is_banned = false
               AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
           )
-          OR EXISTS (
+          OR (a.message_kind = 'weekend_league' AND EXISTS (
             SELECT 1 FROM wl_entries e
             WHERE e.tournament_id = a.tournament_id AND e.user_id = a.user_id
-          )
+          ))
           OR EXISTS (
             SELECT 1
             FROM match_players mp
@@ -291,12 +376,12 @@ export const retentionEmailRepo = {
             SELECT 1 FROM wl_email_log legacy
             WHERE legacy.user_id = a.user_id AND legacy.sent_at > a.assigned_at
           )
-          OR NOT EXISTS (
+          OR (a.message_kind = 'weekend_league' AND NOT EXISTS (
             SELECT 1 FROM wl_tournaments t
             WHERE t.id = a.tournament_id
               AND t.status = 'entry_open'
               AND t.entry_closes_at > NOW()
-          )
+          ))
         )
     `;
   },
@@ -318,7 +403,7 @@ export const retentionEmailRepo = {
           qp.balance
         FROM retention_email_assignments a
         JOIN users u ON u.id = a.user_id
-        JOIN wl_tournaments t ON t.id = a.tournament_id
+        LEFT JOIN wl_tournaments t ON t.id = a.tournament_id
         CROSS JOIN LATERAL (
           SELECT COALESCE(SUM(award.points), 0)::int AS balance
           FROM wl_qp_awards award
@@ -340,12 +425,17 @@ export const retentionEmailRepo = {
           AND u.pending_deletion_at IS NULL
           AND u.is_banned = false
           AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
-          AND t.status = 'entry_open'
-          AND t.entry_closes_at > NOW()
+          AND (
+            a.message_kind = 'dormant_comeback'
+            OR (t.status = 'entry_open' AND t.entry_closes_at > NOW())
+          )
           AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = a.user_id)
-          AND NOT EXISTS (
-            SELECT 1 FROM wl_entries e
-            WHERE e.tournament_id = a.tournament_id AND e.user_id = a.user_id
+          AND (
+            a.message_kind = 'dormant_comeback'
+            OR NOT EXISTS (
+              SELECT 1 FROM wl_entries e
+              WHERE e.tournament_id = a.tournament_id AND e.user_id = a.user_id
+            )
           )
           AND NOT EXISTS (
             SELECT 1
@@ -368,9 +458,21 @@ export const retentionEmailRepo = {
       SET send_status = 'sending',
           attempts = a.attempts + 1,
           last_attempt_at = NOW(),
-          cta_state = CASE WHEN candidate.balance >= candidate.qp_target THEN 'qualified' ELSE 'qualifying' END,
-          destination_path = CASE WHEN candidate.balance >= candidate.qp_target THEN '/weekend-league' ELSE '/play' END,
-          qp_remaining = GREATEST(0, candidate.qp_target - candidate.balance)::int
+          cta_state = CASE
+            WHEN a.message_kind = 'weekend_league'
+              THEN CASE WHEN candidate.balance >= candidate.qp_target THEN 'qualified' ELSE 'qualifying' END
+            ELSE a.cta_state
+          END,
+          destination_path = CASE
+            WHEN a.message_kind = 'weekend_league'
+              THEN CASE WHEN candidate.balance >= candidate.qp_target THEN '/weekend-league' ELSE '/play' END
+            ELSE a.destination_path
+          END,
+          qp_remaining = CASE
+            WHEN a.message_kind = 'weekend_league'
+              THEN GREATEST(0, candidate.qp_target - candidate.balance)::int
+            ELSE a.qp_remaining
+          END
       FROM candidate
       WHERE a.id = candidate.id
       RETURNING a.*, candidate.email, candidate.nickname,
@@ -408,7 +510,7 @@ export const retentionEmailRepo = {
 
   async getClickAssignment(id: string): Promise<RetentionEmailClickAssignment | null> {
     const [row] = await sql<RetentionEmailClickAssignment[]>`
-      SELECT id, user_id, campaign_key, variant, cta_state,
+      SELECT id, user_id, campaign_key, variant, message_kind, cta_state,
              destination_path, send_status, clicked_at::text
       FROM retention_email_assignments
       WHERE id = ${id}
@@ -526,7 +628,7 @@ export const retentionEmailRepo = {
         FROM matched, inserted
         WHERE a.id = matched.id
         RETURNING a.id, a.user_id, a.campaign_key, a.variant,
-                  a.cta_state, a.destination_path
+                  a.message_kind, a.cta_state, a.destination_path
       ), suppressed AS (
         INSERT INTO email_unsubscribes (user_id, source)
         SELECT user_id, ${`resend:${deliveryStatus}`}

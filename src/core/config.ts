@@ -316,6 +316,25 @@ const configSchema = z.object({
     .transform((value) => value.split(",").map((part) => part.trim()).filter(Boolean))
     .pipe(z.array(z.string().uuid()).max(50)),
 
+  // Separate campaign for established Georgian players who have been dormant
+  // for weeks. It deliberately has its own kill switch and hard assignment
+  // cap so changing the Weekend League campaign cannot start this audience.
+  DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS: z.coerce.number().int().min(7).max(180).default(14),
+  DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS: z.coerce.number().int().min(8).max(365).default(90),
+  DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES: z.coerce.number().int().min(1).max(1_000).default(3),
+  // Zero is the safe default. Approximately half of a 200-assignment test
+  // receives email and half remains an intention-to-treat control.
+  DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP: z.coerce.number().int().min(0).max(10_000).default(0),
+  DORMANT_COMEBACK_EMAIL_USER_ID_ALLOWLIST: z
+    .string()
+    .default("")
+    .transform((value) => value.split(",").map((part) => part.trim()).filter(Boolean))
+    .pipe(z.array(z.string().uuid()).max(50)),
+
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),
   DOCS_USERNAME: z.string().optional(),
@@ -415,6 +434,15 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
   if (result.data.RETENTION_EMAIL_MIN_LEAD_HOURS >= result.data.RETENTION_EMAIL_MAX_LEAD_HOURS) {
     throw new ConfigError(
       "Invalid configuration: RETENTION_EMAIL_MIN_LEAD_HOURS must be less than RETENTION_EMAIL_MAX_LEAD_HOURS.",
+    );
+  }
+
+  if (
+    result.data.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS
+    >= result.data.DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS
+  ) {
+    throw new ConfigError(
+      "Invalid configuration: DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS must be less than DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS.",
     );
   }
 

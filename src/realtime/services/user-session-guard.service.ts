@@ -1,5 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
@@ -38,12 +38,70 @@ const RANKED_QUEUE_KEY = 'ranked:mm:queue';
 const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const RANKED_USER_MAP_KEY = 'ranked:mm:user';
 const RANKED_SEARCH_KEY_PREFIX = 'ranked:mm:search:';
+const AUCTION_QUEUE_KEY = 'auction:mm:queue';
+const AUCTION_USER_MAP_KEY = 'auction:mm:user';
+const AUCTION_SEARCH_KEY_PREFIX = 'auction:mm:search:';
+const GRID_QUEUE_KEY = 'football_grid:mm:queue';
+const GRID_USER_MAP_KEY = 'football_grid:mm:user';
+const GRID_SEARCH_KEY_PREFIX = 'football_grid:mm:search:';
+const SHARED_PAIRING_USER_KEY_PREFIX = 'session:pairing:user:';
 const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 const STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS = 90 * 1000;
+
+const SIMPLE_MM_CANCEL_SEARCH_SCRIPT = `
+local queueKey = KEYS[1]
+local userMapKey = KEYS[2]
+local searchKey = KEYS[3]
+local userId = ARGV[1]
+local expectedSearchId = ARGV[2]
+
+redis.call('ZREM', queueKey, expectedSearchId)
+redis.call('DEL', searchKey)
+if redis.call('HGET', userMapKey, userId) == expectedSearchId then
+  redis.call('HDEL', userMapKey, userId)
+  return 1
+end
+return 0
+`;
+
+function sharedPairingUserKey(userId: string): string {
+  return `${SHARED_PAIRING_USER_KEY_PREFIX}${userId}`;
+}
+
+async function releaseSharedActivityFences(userIds: string[], fenceToken: string): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  const keys = [...new Set(userIds)].sort().map(sharedPairingUserKey);
+  await redis.eval(`
+    for i = 1, #KEYS do
+      if redis.call('GET', KEYS[i]) == ARGV[1] then redis.call('DEL', KEYS[i]) end
+    end
+    return 1
+  `, { keys, arguments: [fenceToken] });
+}
+
+async function renewSharedActivityFences(
+  userIds: string[],
+  fenceToken: string,
+  ttlMs: number,
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+  const keys = [...new Set(userIds)].sort().map(sharedPairingUserKey);
+  return await redis.eval(`
+    for i = 1, #KEYS do
+      if redis.call('GET', KEYS[i]) ~= ARGV[1] then return 0 end
+    end
+    for i = 1, #KEYS do redis.call('PEXPIRE', KEYS[i], ARGV[2]) end
+    return 1
+  `, { keys, arguments: [fenceToken, String(ttlMs)] }) === 1;
+}
 
 type ResolveContext = {
   activeMatch: Awaited<ReturnType<typeof matchesRepo.getActiveMatchForUser>> | null;
   queueSearchId: string | null;
+  queueKind: 'ranked' | 'auction' | 'grid' | null;
+  queueCount: number;
   waitingLobbies: LobbyWithJoinedAt[];
   activeLobbies: LobbyWithJoinedAt[];
   openLobbies: LobbyWithJoinedAt[];
@@ -57,7 +115,11 @@ function toSnapshot(context: ResolveContext): SessionStatePayload {
     Number(Boolean(primaryLobby));
 
   let state: SessionStatePayload['state'] = 'IDLE';
-  if (indicatorCount > 1 || context.waitingLobbies.length + context.activeLobbies.length > 1) {
+  if (
+    indicatorCount > 1
+    || context.queueCount > 1
+    || context.waitingLobbies.length + context.activeLobbies.length > 1
+  ) {
     state = 'CORRUPT_MULTI_STATE';
   } else if (context.activeMatch?.id) {
     state = 'IN_ACTIVE_MATCH';
@@ -136,26 +198,40 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
     'quizball.user_id': userId,
   }, async (span) => {
     const redis = getRedisClient();
-    const queueSearchIdPromise = redis
-      ? redis.hGet(RANKED_USER_MAP_KEY, userId)
-      : Promise.resolve<string | null>(null);
+    const queueSearchIdsPromise = redis
+      ? Promise.all([
+          redis.hGet(RANKED_USER_MAP_KEY, userId),
+          redis.hGet(AUCTION_USER_MAP_KEY, userId),
+          redis.hGet(GRID_USER_MAP_KEY, userId),
+        ])
+      : Promise.resolve<[string | null, string | null, string | null]>([null, null, null]);
 
-    const [rawActiveMatch, openLobbies, queueSearchId] = await Promise.all([
+    const [rawActiveMatch, openLobbies, queueSearchIds] = await Promise.all([
       matchesRepo.getActiveMatchForUser(userId),
       lobbiesRepo.listOpenLobbiesForUser(userId),
-      queueSearchIdPromise,
+      queueSearchIdsPromise,
     ]);
+    const [rankedSearchId, auctionSearchId, gridSearchId] = queueSearchIds;
+    const queueEntries = [
+      rankedSearchId ? { kind: 'ranked' as const, id: rankedSearchId } : null,
+      auctionSearchId ? { kind: 'auction' as const, id: auctionSearchId } : null,
+      gridSearchId ? { kind: 'grid' as const, id: gridSearchId } : null,
+    ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const queueEntry = queueEntries[0] ?? null;
     const activeMatch = rawActiveMatch && isUserDroppedFromPartyMatch(rawActiveMatch, userId)
       ? null
       : rawActiveMatch;
 
     span.setAttribute('quizball.has_active_match', Boolean(activeMatch?.id));
     span.setAttribute('quizball.open_lobby_count', openLobbies.length);
-    span.setAttribute('quizball.in_ranked_queue', Boolean(queueSearchId));
+    span.setAttribute('quizball.queue_count', queueEntries.length);
+    span.setAttribute('quizball.queue_kind', queueEntry?.kind ?? 'none');
 
     return {
       activeMatch,
-      queueSearchId: queueSearchId ?? null,
+      queueSearchId: queueEntry?.id ?? null,
+      queueKind: queueEntry?.kind ?? null,
+      queueCount: queueEntries.length,
       waitingLobbies: openLobbies.filter((lobby) => lobby.status === 'waiting'),
       activeLobbies: openLobbies.filter((lobby) => lobby.status === 'active'),
       openLobbies,
@@ -172,8 +248,12 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
   }, async () => {
     const redis = getRedisClient();
     const queueSearchIdsPromise = redis
-      ? Promise.all(uniqueUserIds.map((userId) => redis.hGet(RANKED_USER_MAP_KEY, userId)))
-      : Promise.resolve(uniqueUserIds.map(() => null));
+      ? Promise.all(uniqueUserIds.map(async (userId) => Promise.all([
+          redis.hGet(RANKED_USER_MAP_KEY, userId),
+          redis.hGet(AUCTION_USER_MAP_KEY, userId),
+          redis.hGet(GRID_USER_MAP_KEY, userId),
+        ])))
+      : Promise.resolve(uniqueUserIds.map(() => [null, null, null] as [string | null, string | null, string | null]));
     const [activeMatchesByUserId, openLobbiesByUserId, queueSearchIds] = await Promise.all([
       matchesRepo.getActiveMatchesForUsers(uniqueUserIds),
       lobbiesRepo.listOpenLobbiesForUsers(uniqueUserIds),
@@ -186,9 +266,17 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
         ? null
         : rawActiveMatch;
       const openLobbies = openLobbiesByUserId.get(userId) ?? [];
+      const [rankedSearchId, auctionSearchId, gridSearchId] = queueSearchIds[index];
+      const queueEntries = [
+        rankedSearchId ? { kind: 'ranked' as const, id: rankedSearchId } : null,
+        auctionSearchId ? { kind: 'auction' as const, id: auctionSearchId } : null,
+        gridSearchId ? { kind: 'grid' as const, id: gridSearchId } : null,
+      ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
       const context: ResolveContext = {
         activeMatch,
-        queueSearchId: queueSearchIds[index] ?? null,
+        queueSearchId: queueEntries[0]?.id ?? null,
+        queueKind: queueEntries[0]?.kind ?? null,
+        queueCount: queueEntries.length,
         waitingLobbies: openLobbies.filter((lobby) => lobby.status === 'waiting'),
         activeLobbies: openLobbies.filter((lobby) => lobby.status === 'active'),
         openLobbies,
@@ -198,10 +286,14 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
   });
 }
 
-async function hasRankedPairingInFlight(userId: string): Promise<boolean> {
+async function hasAnyPairingInFlight(userId: string): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
-  return (await redis.exists(rankedPairingInFlightKey(userId))) === 1;
+  const count = await redis.exists([
+    rankedPairingInFlightKey(userId),
+    `${SHARED_PAIRING_USER_KEY_PREFIX}${userId}`,
+  ]);
+  return count > 0;
 }
 
 async function cleanupStaleOrphanActiveMatch(
@@ -270,6 +362,11 @@ async function cleanupStaleOrphanActiveMatch(
     } catch (error) {
       logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
     }
+  }
+
+  if (activeMatch.game_variant === 'football_grid') {
+    // Football Grid does not ship in this release; the variant cannot occur.
+    return;
   }
 
   if (activeMatch.mode === 'ranked') {
@@ -528,6 +625,31 @@ async function cancelRankedQueueSearch(userId: string): Promise<void> {
   });
 }
 
+async function cancelSimpleQueueSearch(
+  userId: string,
+  kind: 'auction' | 'grid',
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  const queueKey = kind === 'auction' ? AUCTION_QUEUE_KEY : GRID_QUEUE_KEY;
+  const userMapKey = kind === 'auction' ? AUCTION_USER_MAP_KEY : GRID_USER_MAP_KEY;
+  const searchPrefix = kind === 'auction' ? AUCTION_SEARCH_KEY_PREFIX : GRID_SEARCH_KEY_PREFIX;
+  const searchId = await redis.hGet(userMapKey, userId);
+  if (!searchId) return;
+  await redis.eval(SIMPLE_MM_CANCEL_SEARCH_SCRIPT, {
+    keys: [queueKey, userMapKey, `${searchPrefix}${searchId}`],
+    arguments: [userId, searchId],
+  });
+}
+
+async function cancelAllQueueSearches(userId: string): Promise<void> {
+  await Promise.all([
+    cancelRankedQueueSearch(userId),
+    cancelSimpleQueueSearch(userId, 'auction'),
+    cancelSimpleQueueSearch(userId, 'grid'),
+  ]);
+}
+
 async function cleanupOpenLobbies(
   io: QuizballServer,
   userId: string,
@@ -639,6 +761,47 @@ async function cleanupRankedWaitingLobbies(io: QuizballServer, userId: string): 
 }
 
 export const userSessionGuardService = {
+  async withUserSessionLocks<T>(
+    userIds: string[],
+    work: () => Promise<T>,
+    options?: { waitMs?: number },
+  ): Promise<T | null> {
+    const orderedUserIds = [...new Set(userIds)].sort();
+    const deadlineMs = Date.now() + Math.max(0, options?.waitMs ?? 0);
+    const held: Array<{
+      key: string;
+      token: string;
+      heartbeat: ReturnType<typeof startLockHeartbeat>;
+    }> = [];
+    try {
+      for (const userId of orderedUserIds) {
+        const key = `lock:user:session:${userId}`;
+        while (true) {
+          const lock = await acquireLock(key, SESSION_LOCK_TTL_MS);
+          if (lock.acquired && lock.token) {
+            held.push({
+              key,
+              token: lock.token,
+              heartbeat: startLockHeartbeat(key, lock.token, SESSION_LOCK_TTL_MS),
+            });
+            break;
+          }
+          if (Date.now() >= deadlineMs) return null;
+          await new Promise((resolve) => setTimeout(
+            resolve,
+            Math.min(SESSION_LOCK_RETRY_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
+          ));
+        }
+      }
+      return await work();
+    } finally {
+      for (const lock of held.reverse()) {
+        lock.heartbeat.stop();
+        await releaseLock(lock.key, lock.token).catch(() => false);
+      }
+    }
+  },
+
   async withUserSessionLock<T>(
     userId: string,
     work: () => Promise<T>,
@@ -656,9 +819,11 @@ export const userSessionGuardService = {
         const lock = await acquireLock(lockKey, SESSION_LOCK_TTL_MS);
         if (lock.acquired && lock.token) {
           span.setAttribute('quizball.lock_acquired', true);
+          const heartbeat = startLockHeartbeat(lockKey, lock.token, SESSION_LOCK_TTL_MS);
           try {
             return await work();
           } finally {
+            heartbeat.stop();
             await releaseLock(lockKey, lock.token);
           }
         }
@@ -696,9 +861,13 @@ export const userSessionGuardService = {
       return null;
     }
 
+    const userHeartbeat = startLockHeartbeat(userLockKey, userLock.token, SESSION_LOCK_TTL_MS);
+    const lobbyHeartbeat = startLockHeartbeat(lobbyLockKey, lobbyLock.token, LOBBY_LOCK_TTL_MS);
     try {
       return await work();
     } finally {
+      lobbyHeartbeat.stop();
+      userHeartbeat.stop();
       await releaseLock(lobbyLockKey, lobbyLock.token);
       await releaseLock(userLockKey, userLock.token);
     }
@@ -712,6 +881,53 @@ export const userSessionGuardService = {
   async resolveStates(userIds: string[]): Promise<Map<string, SessionStatePayload>> {
     const contexts = await resolveContexts(userIds);
     return new Map([...contexts].map(([userId, context]) => [userId, toSnapshot(context)]));
+  },
+
+  async claimRematchActivityFence(input: {
+    userId: string;
+    fenceToken: string;
+    allowedLobbyId: string | null;
+    ttlMs?: number;
+  }): Promise<boolean> {
+    const redis = getRedisClient();
+    if (!redis?.isOpen) return false;
+    const key = sharedPairingUserKey(input.userId);
+    const claimed = await redis.set(key, input.fenceToken, {
+      NX: true,
+      PX: input.ttlMs ?? 30_000,
+    });
+    if (claimed !== 'OK') {
+      return await redis.get(key) === input.fenceToken;
+    }
+
+    const context = await resolveContext(input.userId);
+    const allowedLobby = (lobby: LobbyWithJoinedAt) => (
+      input.allowedLobbyId !== null && lobby.id === input.allowedLobbyId
+    );
+    const hasConflictingActivity = Boolean(context.activeMatch)
+      || Boolean(context.queueSearchId)
+      || context.openLobbies.some((lobby) => !allowedLobby(lobby));
+    if (!hasConflictingActivity) return true;
+
+    await releaseSharedActivityFences([input.userId], input.fenceToken);
+    return false;
+  },
+
+  async ownsActivityFences(userIds: string[], fenceToken: string): Promise<boolean> {
+    const redis = getRedisClient();
+    if (!redis?.isOpen) return false;
+    const values = await Promise.all(
+      [...new Set(userIds)].sort().map((userId) => redis.get(sharedPairingUserKey(userId))),
+    );
+    return values.length === new Set(userIds).size && values.every((value) => value === fenceToken);
+  },
+
+  async renewActivityFences(userIds: string[], fenceToken: string, ttlMs = 30_000): Promise<boolean> {
+    return renewSharedActivityFences(userIds, fenceToken, ttlMs);
+  },
+
+  async releaseActivityFences(userIds: string[], fenceToken: string): Promise<void> {
+    await releaseSharedActivityFences(userIds, fenceToken);
   },
 
   async emitState(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
@@ -787,9 +1003,13 @@ export const userSessionGuardService = {
       await cleanupStaleOrphanActiveMatch(io, userId, context);
       context = await resolveContext(userId);
     }
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+    }
 
     if (context.activeMatch?.id) {
-      await cancelRankedQueueSearch(userId);
+      await cancelAllQueueSearches(userId);
       if (context.openLobbies.length > 0) {
         await cleanupOpenLobbies(io, userId, {
           preserveActiveMatchId: context.activeMatch.id,
@@ -801,7 +1021,7 @@ export const userSessionGuardService = {
 
     const keepLobbyId = context.waitingLobbies[0]?.id ?? context.activeLobbies[0]?.id;
     if (context.queueSearchId && keepLobbyId) {
-      await cancelRankedQueueSearch(userId);
+      await cancelAllQueueSearches(userId);
     }
     const hasExtraLobby = context.openLobbies.some((lobby) => lobby.id !== keepLobbyId);
     if (hasExtraLobby) {
@@ -832,7 +1052,28 @@ export const userSessionGuardService = {
       await cleanupStaleOrphanActiveMatch(io, userId, context);
       context = await resolveContext(userId);
     }
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+      if (context.queueCount > 0) {
+        return {
+          ok: false,
+          snapshot: toSnapshot(context),
+          reason: 'QUEUE_UNAVAILABLE',
+          message: 'Your previous searches are still being cleaned up. Please retry.',
+        };
+      }
+    }
     let snapshot = toSnapshot(context);
+
+    if (await hasAnyPairingInFlight(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'Your match or rematch is starting',
+      };
+    }
 
     if (snapshot.activeMatchId) {
       return {
@@ -851,7 +1092,7 @@ export const userSessionGuardService = {
       return { ok: true, snapshot };
     }
 
-    if (context.queueSearchId) await cancelRankedQueueSearch(userId);
+    if (context.queueSearchId) await cancelAllQueueSearches(userId);
     if (hasLobbyToClean) {
       await cleanupOpenLobbies(io, userId, {
         keepWaitingLobbyId,
@@ -860,22 +1101,51 @@ export const userSessionGuardService = {
     }
     context = await resolveContext(userId);
     snapshot = toSnapshot(context);
+    if (snapshot.activeMatchId || await hasAnyPairingInFlight(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'Your match is starting',
+      };
+    }
     return { ok: true, snapshot };
   },
 
   async prepareForQueueJoin(
     io: QuizballServer,
-    userId: string
+    userId: string,
+    requestedQueue: 'ranked' | 'auction' | 'grid' = 'ranked',
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
-    await this.prepareForConnect(io, userId);
-    const context = await resolveContext(userId);
-    const snapshot = toSnapshot(context);
-    if (await hasRankedPairingInFlight(userId)) {
+    // Queue join is a flash-traffic path. A clean user only needs one context
+    // read; the generic connect preparation used to resolve the same match and
+    // lobby state repeatedly before resolving it yet again below.
+    let context = await resolveContext(userId);
+    if (context.activeMatch) {
+      await cleanupStaleOrphanActiveMatch(io, userId, context);
+      context = await resolveContext(userId);
+    }
+
+    let snapshot = toSnapshot(context);
+    if (context.queueCount > 1) {
+      await cancelAllQueueSearches(userId);
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
+      if (context.queueCount > 0) {
+        return {
+          ok: false,
+          snapshot,
+          reason: 'QUEUE_UNAVAILABLE',
+          message: 'Your previous searches are still being cleaned up. Please retry.',
+        };
+      }
+    }
+    if (await hasAnyPairingInFlight(userId)) {
       return {
         ok: false,
         snapshot,
         reason: 'ACTIVE_MATCH',
-        message: 'Your ranked match is starting',
+        message: 'Your match is starting',
       };
     }
 
@@ -897,14 +1167,47 @@ export const userSessionGuardService = {
       };
     }
 
+    if (snapshot.state === 'IN_QUEUE' && context.queueKind !== requestedQueue) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'QUEUE_UNAVAILABLE',
+        message: 'You are already searching in another game mode',
+      };
+    }
+
     if (snapshot.state === 'IN_QUEUE') {
       return { ok: true, snapshot };
     }
 
-    await cancelRankedQueueSearch(userId);
-    await cleanupOpenLobbies(io, userId);
-    const nextSnapshot = await this.resolveState(userId);
-    return { ok: true, snapshot: nextSnapshot };
+    // The common IDLE path has no artifacts to clean and can return without
+    // another database round trip. Only resolve again when cleanup changed
+    // actual lobby/queue state.
+    if (context.openLobbies.length > 0 || context.queueSearchId) {
+      if (context.queueSearchId) await cancelAllQueueSearches(userId);
+      await cleanupOpenLobbies(io, userId);
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
+    }
+
+    if (snapshot.activeMatchId || await hasAnyPairingInFlight(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'Your match is starting',
+      };
+    }
+    if (context.openLobbies.length > 0) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'Your lobby state changed. Please retry.',
+      };
+    }
+
+    return { ok: true, snapshot };
   },
 
   async cleanupRankedQueueArtifacts(io: QuizballServer, userId: string): Promise<SessionStatePayload> {

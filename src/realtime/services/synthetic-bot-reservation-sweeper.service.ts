@@ -3,6 +3,9 @@ import { appMetrics } from '../../core/metrics.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
+import { isAuctionReservationHolder } from '../../modules/synthetic-bots/reservation.service.js';
+import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
+import { allAuctionReservationKeys } from './auction-bot-reservation.service.js';
 
 /**
  * Reconciliation sweeper for stranded persistent-bot reservations (Appendix A).
@@ -40,14 +43,69 @@ let sweepTimer: NodeJS.Timeout | null = null;
 // exists → extend forever" would strand a bot permanently.
 const MAX_LOBBY_KEYED_AGE_MS = 15 * 60 * 1000;
 
+/**
+ * Is an AUCTION reservation's match still live?
+ *
+ * Called only for rows already identified as auction-owned by their `holder`
+ * tag, so this decides liveness alone:
+ *   - `true`  → the match is still in Redis (keep + heartbeat).
+ *   - `false` → its Redis state is gone (finished/TTL-expired) → safe to reap.
+ *
+ * Recognition RECOMPUTES the derived key set for every currently-active auction
+ * match, because auction keys are derived rather than stored. The active-match
+ * set is small (concurrent auctions only) and this runs once a minute over
+ * EXPIRED rows, so it is cheap and needs no schema change.
+ *
+ * Fails CLOSED: if Redis is unreachable we cannot prove the match is gone, so we
+ * report the reservation as live and let a later sweep decide. Releasing on a
+ * Redis blip would free a bot in the middle of a match.
+ */
+async function isAuctionReservationLive(lobbyId: string): Promise<boolean> {
+  try {
+    const activeMatchIds = await auctionStateStore.listActiveMatchIds();
+    return activeMatchIds.some((matchId) => allAuctionReservationKeys(matchId).includes(lobbyId));
+  } catch (err) {
+    logger.warn({ err, lobbyId }, 'auction reservation liveness check failed; treating as live');
+    return true;
+  }
+}
+
 async function reconcileOne(reservation: {
   bot_user_id: string;
   lobby_id: string;
   match_id: string | null;
+  holder: string;
   fence: number;
   acquired_at: string;
 }): Promise<void> {
   const { bot_user_id: botUserId, lobby_id: lobbyId, match_id: matchId, fence } = reservation;
+
+  // AUCTION reservations are reconciled FIRST and by their own rules, identified
+  // exactly by their holder tag. They stay lobby-keyed for life under a uuid
+  // derived from the auction match id (auction-bot-reservation.service.ts) and
+  // have NO lobbies row and NO matches row while live, so every ranked branch
+  // below would misread them — the lobby lookup finds nothing and the row would
+  // be released while the bot is still bidding. Auction liveness is a REDIS fact.
+  if (isAuctionReservationHolder(reservation.holder)) {
+    if (await isAuctionReservationLive(lobbyId)) {
+      // Live auction match still in Redis — extend (fenced), never reclaim.
+      const extended = await syntheticBotsRepo.heartbeatReservationFenced({
+        botUserId,
+        expectedFence: fence,
+        expiresAt: new Date(Date.now() + LIVE_HEARTBEAT_EXTENSION_SEC * 1000),
+      });
+      appMetrics.persistentBotSweeperActions.add(1, { action: extended ? 'skipped_live' : 'stale_snapshot' });
+      return;
+    }
+    // The auction match's Redis state is gone (finished + cleared, or TTL-expired)
+    // and no terminal hook freed this bot — reap it.
+    const released = await syntheticBotsRepo.releaseAuctionReservations([lobbyId]);
+    appMetrics.persistentBotSweeperActions.add(1, { action: released.length > 0 ? 'release' : 'skipped_live' });
+    if (released.length > 0) {
+      logger.info({ botUserId, lobbyId }, 'reservation sweeper released stranded auction reservation (match state gone)');
+    }
+    return;
+  }
 
   if (matchId) {
     const match = await matchesRepo.getMatch(matchId);

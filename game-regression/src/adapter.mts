@@ -141,6 +141,14 @@ class RoomEmitter {
   async fetchSockets(): Promise<FakeSocket[]> {
     return this.io._socketsIn(this.room);
   }
+
+  socketsJoin(room: string): void {
+    for (const socket of this.io._socketsIn(this.room)) socket.join(room);
+  }
+
+  socketsLeave(room: string): void {
+    for (const socket of this.io._socketsIn(this.room)) socket.leave(room);
+  }
 }
 
 export class FakeIo {

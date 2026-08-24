@@ -44,6 +44,9 @@ import { registerNotificationsOpenApi } from '../../modules/notifications/notifi
 import { registerWeekendLeagueOpenApi } from '../../modules/weekend-league/weekend-league.openapi.js';
 import { registerAnnouncementsOpenApi } from '../../modules/announcements/announcements.openapi.js';
 import { registerFeedbackOpenApi } from '../../modules/feedback/feedback.openapi.js';
+import { registerAuctionOpenApi } from '../../modules/auction/auction.openapi.js';
+import { registerPlayerClueCardsOpenApi } from '../../modules/auction/player-clue-cards.openapi.js';
+import { registerAuctionPipelineOpenApi } from '../../modules/auction/auction-pipeline.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -69,6 +72,9 @@ registerNotificationsOpenApi(registry);
 registerWeekendLeagueOpenApi(registry);
 registerAnnouncementsOpenApi(registry);
 registerFeedbackOpenApi(registry);
+registerAuctionOpenApi(registry);
+registerPlayerClueCardsOpenApi(registry);
+registerAuctionPipelineOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

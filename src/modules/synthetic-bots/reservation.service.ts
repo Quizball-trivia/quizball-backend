@@ -24,6 +24,20 @@ import { syntheticBotsRepo } from './synthetic-bots.repo.js';
 // reservation the bot has since re-acquired under a newer fence.
 const HOLDER_ID = `persistent-bot:${process.pid}:${randomUUID().slice(0, 8)}`;
 
+/**
+ * Holder prefix stamped on AUCTION reservations. Auction reservations are
+ * lobby-keyed for life under a uuid derived from the auction match id and have
+ * NO lobbies/matches row while the match is live, so the sweeper must reconcile
+ * them against Redis rather than the ranked lobby/match ladder. Tagging the
+ * holder makes that classification exact and needs no migration.
+ */
+export const AUCTION_HOLDER_PREFIX = 'auction:';
+
+/** True when a reservation row was acquired for an auction match. */
+export function isAuctionReservationHolder(holder: string | null | undefined): boolean {
+  return typeof holder === 'string' && holder.startsWith(AUCTION_HOLDER_PREFIX);
+}
+
 export type ReservationReleasePath =
   | 'abort_before_match_creation'
   | 'abort_start_for_tickets'
@@ -65,9 +79,17 @@ export const reservationService = {
     lobbyId: string;
     ttlSec: number;
     /**
+     * Marks the reservation as belonging to a non-ranked mode. Recorded in the
+     * `holder` column so the reconciliation sweeper can tell an AUCTION
+     * reservation (lobby-keyed forever, no lobbies/matches row while live) from
+     * a ranked one WITHOUT a schema change — the two need different liveness
+     * rules, and misclassifying either one frees a bot mid-match.
+     */
+    mode?: 'auction';
+    /**
      * Ranked is persistent-only: its required roster reservation is not a
      * rollout experiment and must not silently degrade into a legacy identity.
-     * Optional callers leave this false and honor the flag.
+     * Optional callers such as auction leave this false and honor the flag.
      */
     requirePersistent?: boolean;
   }): Promise<{ botUserId: string; lobbyId: string; fence: number } | null> {
@@ -77,7 +99,7 @@ export const reservationService = {
       const row = await syntheticBotsRepo.acquireReservation({
         botUserId: params.botUserId,
         lobbyId: params.lobbyId,
-        holder: HOLDER_ID,
+        holder: params.mode === 'auction' ? `${AUCTION_HOLDER_PREFIX}${HOLDER_ID}` : HOLDER_ID,
         expiresAt,
       });
       if (!row) return null;

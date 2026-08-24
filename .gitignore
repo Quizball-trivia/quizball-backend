@@ -36,6 +36,9 @@ scripts/*
 !scripts/wl-weekly-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
+# Auction prod-promotion content tooling — code only, no secrets.
+!scripts/auction-content-package/
+!scripts/auction-content-package/**
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**
@@ -74,3 +77,6 @@ scripts/bot-burnin/*.receipt.json
 # Legacy fake-account cleanup (code only; reads DSN from env, dry-run default).
 !scripts/seed-cleanup/
 !scripts/seed-cleanup/**
+
+# Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
+node_modules

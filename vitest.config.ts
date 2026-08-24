@@ -16,6 +16,10 @@ export default defineConfig({
       // `npm run test:wl`): parallel workers shadow each other's
       // "current tournament" against the shared local DB.
       'tests/weekend-league/*.integration.test.ts',
+      'tests/regression/auction-full-flow.test.ts',
+      'tests/regression/auction-disconnect-scenarios.test.ts',
+      'tests/regression/auction-lifecycle-scenarios.test.ts',
+      'tests/regression/auction-ranked-parity-scenarios.test.ts',
       'tests/regression/match-boot.test.ts',
       'tests/regression/clean-match-invariants.test.ts',
       'tests/regression/disconnect-scenarios.test.ts',

@@ -440,6 +440,11 @@ export const syntheticBotsRepo = {
           OR EXISTS (
             SELECT 1 FROM matches m WHERE m.id = r.match_id AND m.status = 'abandoned'
           )
+          OR EXISTS (
+            SELECT 1 FROM matches m
+             WHERE m.id = r.match_id
+               AND m.state_payload @> '{"footballGridRewardsSettled":true}'::jsonb
+          )
         )
       RETURNING r.bot_user_id
     `;
@@ -740,5 +745,63 @@ export const syntheticBotsRepo = {
        WHERE user_id = $1`,
       [botUserId],
     );
+  },
+
+  /**
+   * Release every auction reservation belonging to one auction match.
+   *
+   * Auction reservations are keyed by a per-seat SYNTHETIC lobby id derived from
+   * the match id (see auction-bot-reservation.service.ts): an auction seats up to
+   * two bots in ONE match, and `match_id` is UNIQUE, so the ranked-style
+   * lobby→match transfer cannot represent two bots in the same match. They stay
+   * lobby-keyed for their whole life and are released by that derived-key set.
+   *
+   * Deliberately NOT settlement-gated. The ranked gate
+   * (releaseReservationByMatchIfSettled) treats "no `matches` row" as proof of
+   * settlement, which is exactly backwards for auction: an auction match has no
+   * `matches` row until it FINISHES, so that predicate would free a bot that is
+   * still mid-match. Auction liveness is a Redis fact, so the callers gate on
+   * Redis state (terminal hooks fire on a finished/gone match; the sweeper checks
+   * the live Redis key) and this statement performs the unconditional delete.
+   */
+  async releaseAuctionReservations(lobbyIds: readonly string[]): Promise<string[]> {
+    if (lobbyIds.length === 0) return [];
+    const rows = await sql<{ bot_user_id: string }[]>`
+      DELETE FROM synthetic_bot_reservations
+      WHERE lobby_id = ANY(${sql.array([...lobbyIds])}::uuid[])
+      RETURNING bot_user_id
+    `;
+    return rows.map((row) => row.bot_user_id);
+  },
+
+  /**
+   * Bump the daily counter + session stamp for an auction seating (non-tx).
+   *
+   * Auction has no match-creation transaction to piggyback on (the match lives in
+   * Redis; no `matches` row exists until the finish), so the bump runs right
+   * after a successful acquire. Same Georgia-day 07:00-reset semantics as the
+   * ranked tx variant.
+   */
+  async bumpMatchesTodayForAuction(botUserId: string): Promise<void> {
+    await sql`
+      UPDATE synthetic_player_profiles
+        SET
+          matches_today = CASE
+            WHEN matches_day IS DISTINCT FROM (
+              (now() AT TIME ZONE 'Asia/Tbilisi' - interval '7 hours')::date
+            ) THEN 1
+            ELSE matches_today + 1
+          END,
+          matches_day = (now() AT TIME ZONE 'Asia/Tbilisi' - interval '7 hours')::date,
+          last_selected_at = now(),
+          schedule = jsonb_set(
+            COALESCE(schedule, '{}'::jsonb),
+            '{last_session_at}',
+            to_jsonb(now()),
+            true
+          ),
+          updated_at = now()
+      WHERE user_id = ${botUserId}
+    `;
   },
 };

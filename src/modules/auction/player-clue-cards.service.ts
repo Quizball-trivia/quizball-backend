@@ -1,0 +1,317 @@
+import { logger } from '../../core/logger.js';
+import { NotFoundError } from '../../core/errors.js';
+import { activityRepo } from '../activity/activity.repo.js';
+import { playerClueCardsRepo } from './player-clue-cards.repo.js';
+import { parsePlayerClueFile } from './player-clue-cards.parser.js';
+import { getTranslationProvider } from '../questions/translation.provider.js';
+import type {
+  ClueCardDifficulty,
+  ClueCardLocale,
+  ClueCardStatus,
+  CommitResult,
+  CommitResultRow,
+  PreviewResult,
+  PreviewRow,
+} from './player-clue-cards.types.js';
+import type {
+  BulkUpdateStatusRequest,
+  ImportCommitRequest,
+  ImportPreviewRequest,
+  UpdateStatusRequest,
+} from './player-clue-cards.schemas.js';
+
+export const playerClueCardsService = {
+  async previewImport(params: ImportPreviewRequest): Promise<PreviewResult> {
+    const { rows: parsedRows, errors: parseErrors } = parsePlayerClueFile(
+      params.text,
+      params.defaultDifficulty
+    );
+
+    if (parseErrors.length > 0) {
+      logger.warn({ parseErrors }, 'player-clue-cards.preview: parse errors');
+    }
+
+    const previewRows: PreviewRow[] = [];
+    const provider = getTranslationProvider();
+
+    for (const parsed of parsedRows) {
+      const matchResult = await playerClueCardsRepo.matchPlayerByName(parsed.answerName);
+
+      // When the upload gave no difficulty, let the LLM read the clues and
+      // assign one (shown in the preview before the editor accepts).
+      let difficulty = parsed.difficulty;
+      let difficultySource = parsed.difficultySource;
+      if (difficultySource === 'default' && provider.isConfigured()) {
+        difficulty = await provider.rateDifficulty([parsed.clue1, parsed.clue2, parsed.clue3]);
+        difficultySource = 'ai';
+      }
+
+      previewRows.push({
+        ...parsed,
+        difficulty,
+        difficultySource,
+        matchStatus: matchResult.matchStatus,
+        matchedPlayer: matchResult.matchedPlayer,
+        candidates: matchResult.candidates,
+        matchMethod: matchResult.matchMethod,
+        matchConfidence: matchResult.matchConfidence,
+        duplicateInBatch: false,
+        alreadyHasCard: false,
+      });
+    }
+
+    // Flag duplicates so the editor decides consciously instead of silently
+    // skipping/overwriting on commit. (a) the same resolved player appearing
+    // more than once in this paste, and (b) a player who already has a card.
+    const resolvedIds = previewRows
+      .map((r) => r.matchedPlayer?.footballPlayerId)
+      .filter((id): id is string => !!id);
+    const existing = await playerClueCardsRepo.findPlayersWithExistingCard(
+      resolvedIds,
+      params.locale as ClueCardLocale
+    );
+    const seenInBatch = new Set<string>();
+    for (const row of previewRows) {
+      const id = row.matchedPlayer?.footballPlayerId;
+      if (!id) continue;
+      if (seenInBatch.has(id)) row.duplicateInBatch = true;
+      else seenInBatch.add(id);
+      if (existing.has(id)) row.alreadyHasCard = true;
+    }
+
+    const matchedCount = previewRows.filter((r) => r.matchStatus === 'matched').length;
+    const ambiguousCount = previewRows.filter((r) => r.matchStatus === 'ambiguous').length;
+    const unmatchedCount = previewRows.filter((r) => r.matchStatus === 'unmatched').length;
+    const duplicateCount = previewRows.filter((r) => r.duplicateInBatch || r.alreadyHasCard).length;
+    const warningCount = previewRows.reduce((sum, r) => sum + r.warnings.length + r.factRiskFlags.length, 0);
+
+    return {
+      rowsParsed: previewRows.length,
+      matchedCount,
+      ambiguousCount,
+      unmatchedCount,
+      duplicateCount,
+      warningCount,
+      rows: previewRows,
+    };
+  },
+
+  async commitImport(params: ImportCommitRequest, adminUserId: string): Promise<CommitResult> {
+    const resultRows: CommitResultRow[] = [];
+    let inserted = 0;
+    let updated = 0;
+    let skippedExisting = 0;
+    let failed = 0;
+
+    for (const row of params.rows) {
+      try {        const difficulty: ClueCardDifficulty = row.difficulty ?? params.defaultDifficulty;
+        const difficultySource = row.difficulty ? 'row' : 'default';
+
+        const evidence: Record<string, unknown> = {
+          source: 'editor_created',
+          style: 'editor_first_person',
+          difficulty_source: difficultySource,
+          match_confidence: row.matchConfidence ?? null,
+          match_method: row.matchMethod ?? null,
+          fact_risk_flags: row.factRiskFlags ?? [],
+        };
+
+        const sourcePayload: Record<string, unknown> = {
+          original_text: row.originalText ?? '',
+          answer_name: row.answerName,
+          row_index: row.rowIndex,
+          source_player_number: row.sourcePlayerNumber ?? null,
+          manual_mapping: row.manualMapping,
+        };
+
+        const { row: insertedRow, action } = await playerClueCardsRepo.upsertPlayerClueCard({
+          footballPlayerId: row.footballPlayerId,
+          locale: params.locale as ClueCardLocale,
+          clue1: row.clue1,
+          clue2: row.clue2,
+          clue3: row.clue3,
+          difficulty,
+          status: params.status as ClueCardStatus,
+          source: 'cms',
+          generationProvider: 'editor',
+          generationModel: 'editor_manual',
+          promptVersion: params.promptVersion,
+          evidence,
+          sourcePayload,
+          force: params.force,
+        });
+
+        if (action === 'inserted') inserted++;
+        else if (action === 'updated') updated++;
+        else if (action === 'skipped_existing') skippedExisting++;
+
+        resultRows.push({
+          rowIndex: row.rowIndex,
+          status: action,
+          clueCardId: insertedRow?.id ?? null,
+          error: null,
+        });
+      } catch (error) {
+        failed++;
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        resultRows.push({
+          rowIndex: row.rowIndex,
+          status: 'failed',
+          clueCardId: null,
+          error: message,
+        });
+        logger.error({ error, rowIndex: row.rowIndex }, 'player-clue-cards.commit: row failed');
+      }
+    }
+
+    await activityRepo.insertAuditLog({
+      userId: adminUserId,
+      action: 'import',
+      entityType: 'player_clue_card',
+      metadata: {
+        locale: params.locale,
+        promptVersion: params.promptVersion,
+        status: params.status,
+        force: params.force,
+        total: params.rows.length,
+        inserted,
+        updated,
+        skippedExisting,
+        failed,
+      },
+    });
+
+    return {
+      total: params.rows.length,
+      inserted,
+      updated,
+      skippedExisting,
+      failed,
+      rows: resultRows,
+    };
+  },
+
+  async updateStatus(id: string, params: UpdateStatusRequest, adminUserId: string): Promise<void> {
+    const existing = await playerClueCardsRepo.getPlayerClueCardById(id);
+    if (!existing) {
+      throw new NotFoundError('Player clue card not found');
+    }
+
+    await playerClueCardsRepo.updatePlayerClueCardStatus(
+      id,
+      params.status as ClueCardStatus,
+      params.reviewNotes ?? null,
+      params.rejectionReason ?? null
+    );
+
+    await activityRepo.insertAuditLog({
+      userId: adminUserId,
+      action: 'status_change',
+      entityType: 'player_clue_card',
+      entityId: id,
+      metadata: {
+        oldStatus: existing.status,
+        newStatus: params.status,
+        reviewNotes: params.reviewNotes ?? null,
+        rejectionReason: params.rejectionReason ?? null,
+      },
+    });
+  },
+
+  async bulkUpdateStatus(params: BulkUpdateStatusRequest, adminUserId: string): Promise<{ updated: number }> {
+    const count = await playerClueCardsRepo.bulkUpdateStatus(
+      params.ids,
+      params.status as ClueCardStatus,
+      params.reviewNotes ?? null
+    );
+
+    await activityRepo.insertAuditLog({
+      userId: adminUserId,
+      action: 'bulk_status_change',
+      entityType: 'player_clue_card',
+      metadata: {
+        ids: params.ids,
+        newStatus: params.status,
+        reviewNotes: params.reviewNotes ?? null,
+        updatedCount: count,
+      },
+    });
+
+    return { updated: count };
+  },
+
+  /** How many en clue cards still lack a ka translation. */
+  async getTranslateStatus(): Promise<{ clues: number }> {
+    const clues = await playerClueCardsRepo.countCardsMissingKaSibling();
+    return { clues };
+  },
+
+  /**
+   * Translate every en clue card that lacks a ka sibling into Georgian and
+   * write the ka rows. Runs in batches so one bad batch doesn't sink the rest.
+   * Mirrors the questions "Translate All" backfill.
+   */
+  async translateMissingKaSiblings(
+    adminUserId: string
+  ): Promise<{ status: 'started' | 'done'; total: number; translated: number; failed: number }> {
+    const BATCH_SIZE = 25;
+    const total = await playerClueCardsRepo.countCardsMissingKaSibling();
+    if (total === 0) {
+      return { status: 'done', total: 0, translated: 0, failed: 0 };
+    }
+
+    const provider = getTranslationProvider();
+    if (!provider.isConfigured()) {
+      throw new NotFoundError('Translation provider is not configured');
+    }
+
+    let translated = 0;
+    let failed = 0;
+
+    // Drain the queue batch by batch; each loop re-queries so already-written
+    // siblings drop out and we converge to zero.
+    for (;;) {
+      const cards = await playerClueCardsRepo.listCardsMissingKaSibling(BATCH_SIZE);
+      if (cards.length === 0) break;
+
+      try {
+        const outputs = await provider.translateClues(
+          cards.map((c) => ({ id: c.id, clue_1: c.clue1, clue_2: c.clue2, clue_3: c.clue3 }))
+        );
+        const byId = new Map(outputs.map((o) => [o.id, o]));
+
+        for (const card of cards) {
+          const out = byId.get(card.id);
+          if (!out || !out.clue_1 || !out.clue_2 || !out.clue_3) {
+            failed += 1;
+            continue;
+          }
+          await playerClueCardsRepo.upsertKaSibling({
+            footballPlayerId: card.footballPlayerId,
+            clue1: out.clue_1,
+            clue2: out.clue_2,
+            clue3: out.clue_3,
+            difficulty: card.difficulty,
+            status: 'needs_review',
+            promptVersion: card.promptVersion,
+          });
+          translated += 1;
+        }
+      } catch (error) {
+        // A failed batch would otherwise loop forever (same cards re-fetched).
+        logger.error({ error, batchSize: cards.length }, 'Clue translation batch failed');
+        failed += cards.length;
+        break;
+      }
+    }
+
+    await activityRepo.insertAuditLog({
+      userId: adminUserId,
+      action: 'translate_backfill',
+      entityType: 'player_clue_card',
+      metadata: { total, translated, failed },
+    });
+
+    return { status: 'started', total, translated, failed };
+  },
+};

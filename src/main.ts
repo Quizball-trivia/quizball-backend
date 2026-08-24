@@ -18,6 +18,14 @@ import {
   stopBotChallengeResponder,
 } from './modules/lobbies/bot-challenge-responder.service.js';
 import { startBotRenameWorker, stopBotRenameWorker } from './modules/bots/bot-rename.service.js';
+import {
+  startDailyComebackReminderWorker,
+  stopDailyComebackReminderWorker,
+} from './modules/daily-challenges/daily-comeback-reminders.worker.js';
+import {
+  startRetentionEmailWorker,
+  stopRetentionEmailWorker,
+} from './modules/retention-email/retention-email.worker.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -46,6 +54,8 @@ startRoadToGoalSweeper();
 // Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).
 startBotChallengeResponder();
 startBotRenameWorker();
+startDailyComebackReminderWorker();
+startRetentionEmailWorker();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -115,6 +125,8 @@ const shutdown = async (signal: string) => {
     stopBotRenameWorker(),
     stopFreeKicksSweeper(),
     stopRoadToGoalSweeper(),
+    stopDailyComebackReminderWorker(),
+    stopRetentionEmailWorker(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

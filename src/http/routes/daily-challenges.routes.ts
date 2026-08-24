@@ -7,6 +7,7 @@ import {
   dailyChallengeLocaleQuerySchema,
   dailyChallengeParamSchema,
   dailyChallengesController,
+  setDailyComebackReminderBodySchema,
 } from '../../modules/daily-challenges/index.js';
 
 const router = Router();
@@ -17,6 +18,14 @@ router.get(
   '/',
   validate({ query: dailyChallengeLocaleQuerySchema }),
   dailyChallengesController.list
+);
+
+router.get('/comeback', dailyChallengesController.comebackState);
+
+router.put(
+  '/comeback/reminder',
+  validate({ body: setDailyComebackReminderBodySchema }),
+  dailyChallengesController.setComebackReminder
 );
 
 router.post(

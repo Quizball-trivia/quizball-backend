@@ -18,6 +18,12 @@ const upsertConfigMock = vi.fn();
 const listByIdsMock = vi.fn();
 const listRecentlyServedQuestionsMock = vi.fn();
 const recordServedQuestionsMock = vi.fn();
+const listDistinctCompletionDaysMock = vi.fn();
+const createStreakBonusAwardMock = vi.fn();
+const getPendingReminderMock = vi.fn();
+const canReceiveReminderEmailMock = vi.fn();
+const upsertReminderMock = vi.fn();
+const cancelReminderMock = vi.fn();
 
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
   dailyChallengesRepo: {
@@ -33,6 +39,11 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     upsertConfig: (...args: unknown[]) => upsertConfigMock(...args),
     listRecentlyServedQuestions: (...args: unknown[]) => listRecentlyServedQuestionsMock(...args),
     recordServedQuestions: (...args: unknown[]) => recordServedQuestionsMock(...args),
+    listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+    getPendingReminder: (...args: unknown[]) => getPendingReminderMock(...args),
+    canReceiveReminderEmail: (...args: unknown[]) => canReceiveReminderEmailMock(...args),
+    upsertReminder: (...args: unknown[]) => upsertReminderMock(...args),
+    cancelReminder: (...args: unknown[]) => cancelReminderMock(...args),
   },
 }));
 
@@ -52,12 +63,21 @@ describe('dailyChallengesService', () => {
       createCompletion: typeof createCompletionMock;
       addCoins: typeof addCoinsMock;
       grantXp: typeof grantXpMock;
+      listDistinctCompletionDays: typeof listDistinctCompletionDaysMock;
+      createStreakBonusAward: typeof createStreakBonusAwardMock;
     }) => Promise<unknown>) => callback({
       getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
       createCompletion: (...args: unknown[]) => createCompletionMock(...args),
       addCoins: (...args: unknown[]) => addCoinsMock(...args),
       grantXp: (...args: unknown[]) => grantXpMock(...args),
+      listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+      createStreakBonusAward: (...args: unknown[]) => createStreakBonusAwardMock(...args),
     }));
+    listDistinctCompletionDaysMock.mockResolvedValue([]);
+    createStreakBonusAwardMock.mockResolvedValue(false);
+    getPendingReminderMock.mockResolvedValue(null);
+    canReceiveReminderEmailMock.mockResolvedValue(true);
+    cancelReminderMock.mockResolvedValue(undefined);
   });
 
   it('lists active challenges with per-user completion flags', async () => {
@@ -1200,6 +1220,9 @@ describe('dailyChallengesService', () => {
       challengeType: 'countdown',
       completedToday: true,
       coinsAwarded: 300,
+      streakBonusAwarded: 0,
+      dailyStreakDays: 1,
+      nextStreakBonusCoins: 0,
       xpAwarded: 15,
       wallet: {
         coins: 1080,
@@ -1382,6 +1405,37 @@ describe('dailyChallengesService', () => {
 
     expect(() => dailyChallengesService.assertDevResetAllowed('admin')).not.toThrow();
     expect(() => dailyChallengesService.assertDevResetAllowed('user')).toThrow();
+  });
+
+  it('projects the current completion into a server-owned Daily streak preview', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const previous = (days: number) => {
+      const date = new Date(`${today}T00:00:00.000Z`);
+      date.setUTCDate(date.getUTCDate() - days);
+      return date.toISOString().slice(0, 10);
+    };
+    listDistinctCompletionDaysMock.mockResolvedValue([previous(1), previous(2)]);
+    getPendingReminderMock.mockResolvedValue({ remind_at: '2026-08-25T10:00:00.000Z' });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.getComebackState('user-1');
+
+    expect(result).toMatchObject({
+      projectedStreakDays: 3,
+      tomorrowBonusCoins: 0,
+      rewardEnabled: false,
+      remindersEnabled: false,
+      reminderScheduled: true,
+    });
+  });
+
+  it('can cancel a pending comeback reminder even while delivery is disabled', async () => {
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await expect(dailyChallengesService.setComebackReminder('user-1', false)).resolves.toEqual({
+      enabled: false,
+      reminderAt: null,
+    });
+    expect(cancelReminderMock).toHaveBeenCalledWith('user-1');
   });
 
   it('resets today completion for the dev user flow', async () => {

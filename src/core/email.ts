@@ -38,6 +38,28 @@ export function emailUnsubToken(userId: string): string | null {
   return createHmac('sha256', secret).update(`email-unsub:${userId}`).digest('hex');
 }
 
+/** Signed token for campaign links. The purpose is part of the signature so a
+ * click token can never be replayed as an unsubscribe token (or vice versa). */
+export function emailLinkToken(purpose: string, payload: string): string | null {
+  const secret = unsubSecret();
+  if (!secret) return null;
+  return createHmac('sha256', secret)
+    .update(`email-link:${purpose}:${payload}`)
+    .digest('hex');
+}
+
+export function verifyEmailLinkToken(
+  purpose: string,
+  payload: string,
+  token: string,
+): boolean {
+  const expectedToken = emailLinkToken(purpose, payload);
+  if (!expectedToken) return false;
+  const expected = Buffer.from(expectedToken, 'utf8');
+  const given = Buffer.from(token, 'utf8');
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
 export function verifyEmailUnsubToken(userId: string, token: string): boolean {
   const expectedToken = emailUnsubToken(userId);
   if (!expectedToken) return false;
@@ -63,7 +85,12 @@ export function marketingEmailHeaders(userId: string): Record<string, string> {
   };
 }
 
-export async function sendEmail(input: {
+export type EmailSendResult = {
+  accepted: boolean;
+  messageId: string | null;
+};
+
+export async function sendEmailDetailed(input: {
   to: string;
   subject: string;
   html: string;
@@ -71,9 +98,9 @@ export async function sendEmail(input: {
       send (crash between accept and our log write, timeout after accept). */
   idempotencyKey?: string;
   headers?: Record<string, string>;
-}): Promise<boolean> {
+}): Promise<EmailSendResult> {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return false;
+  if (!apiKey) return { accepted: false, messageId: null };
   const from = process.env.EMAIL_FROM ?? 'Quizball <league@quizball.io>';
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -95,13 +122,23 @@ export async function sendEmail(input: {
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       logger.warn({ status: res.status, body: body.slice(0, 300), to: input.to }, 'Email send failed');
-      return false;
+      return { accepted: false, messageId: null };
     }
-    return true;
+    const response = await res.json().catch(() => null) as { id?: unknown } | null;
+    return {
+      accepted: true,
+      messageId: typeof response?.id === 'string' ? response.id : null,
+    };
   } catch (error) {
     logger.warn({ err: error, to: input.to }, 'Email send transport error');
-    return false;
+    return { accepted: false, messageId: null };
   }
+}
+
+export async function sendEmail(
+  input: Parameters<typeof sendEmailDetailed>[0],
+): Promise<boolean> {
+  return (await sendEmailDetailed(input)).accepted;
 }
 
 // config import kept for future env plumbing consistency; avoids the module

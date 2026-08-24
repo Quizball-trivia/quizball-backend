@@ -6570,6 +6570,19 @@
             "type": "integer",
             "minimum": 0
           },
+          "streakBonusAwarded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dailyStreakDays": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "nextStreakBonusCoins": {
+            "type": "integer",
+            "minimum": 0
+          },
           "xpAwarded": {
             "type": "integer",
             "minimum": 0
@@ -6596,7 +6609,63 @@
           "challengeType",
           "completedToday",
           "coinsAwarded",
+          "streakBonusAwarded",
+          "dailyStreakDays",
+          "nextStreakBonusCoins",
           "xpAwarded"
+        ]
+      },
+      "DailyComebackStateResponse": {
+        "type": "object",
+        "properties": {
+          "projectedStreakDays": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "tomorrowBonusCoins": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rewardEnabled": {
+            "type": "boolean"
+          },
+          "remindersEnabled": {
+            "type": "boolean"
+          },
+          "reminderScheduled": {
+            "type": "boolean"
+          },
+          "reminderAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "projectedStreakDays",
+          "tomorrowBonusCoins",
+          "rewardEnabled",
+          "remindersEnabled",
+          "reminderScheduled",
+          "reminderAt"
+        ]
+      },
+      "SetDailyComebackReminderResponse": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "reminderAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "enabled",
+          "reminderAt"
         ]
       },
       "ResetDailyChallengeResponse": {
@@ -19515,6 +19584,151 @@
         }
       }
     },
+    "/api/v1/daily-challenges/comeback": {
+      "get": {
+        "summary": "Get server-authoritative Daily comeback streak and reminder state",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projected streak, bonus, and reminder availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "projectedStreakDays": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "tomorrowBonusCoins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rewardEnabled": {
+                      "type": "boolean"
+                    },
+                    "remindersEnabled": {
+                      "type": "boolean"
+                    },
+                    "reminderScheduled": {
+                      "type": "boolean"
+                    },
+                    "reminderAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "projectedStreakDays",
+                    "tomorrowBonusCoins",
+                    "rewardEnabled",
+                    "remindersEnabled",
+                    "reminderScheduled",
+                    "reminderAt"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges/comeback/reminder": {
+      "put": {
+        "summary": "Schedule or cancel the next Daily Challenge reminder",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reminder state updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "reminderAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "reminderAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Daily reminders are not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/daily-challenges/{challengeType}/complete": {
       "post": {
         "summary": "Complete a daily challenge for the day",
@@ -19596,6 +19810,19 @@
                       "type": "integer",
                       "minimum": 0
                     },
+                    "streakBonusAwarded": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "dailyStreakDays": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "nextStreakBonusCoins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "xpAwarded": {
                       "type": "integer",
                       "minimum": 0
@@ -19622,6 +19849,9 @@
                     "challengeType",
                     "completedToday",
                     "coinsAwarded",
+                    "streakBonusAwarded",
+                    "dailyStreakDays",
+                    "nextStreakBonusCoins",
                     "xpAwarded"
                   ]
                 }

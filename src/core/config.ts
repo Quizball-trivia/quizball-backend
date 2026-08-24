@@ -278,6 +278,44 @@ const configSchema = z.object({
     .optional()
     .default('false'),
 
+  // Daily comeback experiment mechanics. Rewards and outbound reminders ship
+  // disabled so deploying the code cannot change the coin economy or send an
+  // email before the matching product experiment is deliberately launched.
+  DAILY_COMEBACK_REWARDS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  DAILY_STREAK_BONUS_COINS: z.coerce.number().int().min(0).max(10_000).default(250),
+  DAILY_REMINDERS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+
+  // Inactive-player comeback email experiment. This is a second, independent
+  // kill switch in addition to the inactive PostHog feature flag: deploying
+  // the worker alone can never assign players or send email.
+  RETENTION_EMAIL_EXPERIMENT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  RETENTION_EMAIL_MIN_INACTIVE_DAYS: z.coerce.number().int().min(1).max(30).default(3),
+  RETENTION_EMAIL_MAX_INACTIVE_DAYS: z.coerce.number().int().min(2).max(60).default(7),
+  RETENTION_EMAIL_FREQUENCY_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  RETENTION_EMAIL_MIN_LEAD_HOURS: z.coerce.number().int().min(1).max(72).default(18),
+  RETENTION_EMAIL_MAX_LEAD_HOURS: z.coerce.number().int().min(2).max(96).default(24),
+  RETENTION_EMAIL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
+  // Hard campaign-wide assignment cap. Zero is intentionally safe: even if
+  // the worker switch is enabled, nobody is assigned until a rollout cap is
+  // chosen. Roughly half of assignments receive email in the 50/50 test.
+  RETENTION_EMAIL_ASSIGNMENT_CAP: z.coerce.number().int().min(0).max(10_000).default(0),
+  // Optional staging/canary allowlist. UUIDs avoid putting recipient email
+  // addresses in configuration or logs. Blank means no additional filter.
+  RETENTION_EMAIL_USER_ID_ALLOWLIST: z
+    .string()
+    .default("")
+    .transform((value) => value.split(",").map((part) => part.trim()).filter(Boolean))
+    .pipe(z.array(z.string().uuid()).max(50)),
+
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),
   DOCS_USERNAME: z.string().optional(),
@@ -312,6 +350,7 @@ const configSchema = z.object({
 
   // Resend transactional email (used by the ops/daily-report endpoint)
   RESEND_API_KEY: z.string().optional(),
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().default("Quizball Ops <ops@quizball.io>"),
   // Shared secret the scheduled report agent presents to POST the daily report.
   OPS_REPORT_TOKEN: z.string().optional(),
@@ -364,6 +403,18 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
         realtimeTimerHandlerConcurrency: result.data.REALTIME_TIMER_HANDLER_CONCURRENCY,
         dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
       },
+    );
+  }
+
+  if (result.data.RETENTION_EMAIL_MIN_INACTIVE_DAYS >= result.data.RETENTION_EMAIL_MAX_INACTIVE_DAYS) {
+    throw new ConfigError(
+      "Invalid configuration: RETENTION_EMAIL_MIN_INACTIVE_DAYS must be less than RETENTION_EMAIL_MAX_INACTIVE_DAYS.",
+    );
+  }
+
+  if (result.data.RETENTION_EMAIL_MIN_LEAD_HOURS >= result.data.RETENTION_EMAIL_MAX_LEAD_HOURS) {
+    throw new ConfigError(
+      "Invalid configuration: RETENTION_EMAIL_MIN_LEAD_HOURS must be less than RETENTION_EMAIL_MAX_LEAD_HOURS.",
     );
   }
 

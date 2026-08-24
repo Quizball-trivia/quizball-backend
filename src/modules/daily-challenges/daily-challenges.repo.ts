@@ -27,6 +27,16 @@ export interface DailyChallengesTransactionRepo {
   }): Promise<DailyChallengeCompletionRow>;
   addCoins(userId: string, amount: number): Promise<WalletRow | null>;
   grantXp(input: GrantXpInput): Promise<GrantXpResult>;
+  listDistinctCompletionDays(
+    userId: string,
+    throughDay: string,
+    limit: number
+  ): Promise<string[]>;
+  createStreakBonusAward(
+    userId: string,
+    challengeDay: string,
+    coinsAwarded: number
+  ): Promise<boolean>;
 }
 
 export const dailyChallengesRepo = {
@@ -37,6 +47,10 @@ export const dailyChallengesRepo = {
       createCompletion: (input) => dailyChallengesRepo.createCompletionInTx(tx, input),
       addCoins: (userId, amount) => storeRepo.addCoinsInTx(tx, userId, amount),
       grantXp: (input) => progressionRepo.grantXpInTx(tx, input),
+      listDistinctCompletionDays: (userId, throughDay, limit) =>
+        dailyChallengesRepo.listDistinctCompletionDaysInTx(tx, userId, throughDay, limit),
+      createStreakBonusAward: (userId, challengeDay, coinsAwarded) =>
+        dailyChallengesRepo.createStreakBonusAwardInTx(tx, userId, challengeDay, coinsAwarded),
     })) as Promise<T>;
   },
 
@@ -110,6 +124,128 @@ export const dailyChallengesRepo = {
       FROM daily_challenge_completions
       WHERE user_id = ${userId}
         AND challenge_day = ${challengeDay}
+    `;
+  },
+
+  async listDistinctCompletionDays(
+    userId: string,
+    throughDay: string,
+    limit = 370
+  ): Promise<string[]> {
+    const rows = await sql<Array<{ challenge_day: string }>>`
+      SELECT DISTINCT challenge_day::text AS challenge_day
+      FROM daily_challenge_completions
+      WHERE user_id = ${userId}
+        AND challenge_day <= ${throughDay}::date
+      ORDER BY challenge_day DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => row.challenge_day);
+  },
+
+  async listDistinctCompletionDaysInTx(
+    tx: TransactionSql,
+    userId: string,
+    throughDay: string,
+    limit = 370
+  ): Promise<string[]> {
+    const rows = await tx.unsafe<Array<{ challenge_day: string }>>(
+      `
+      SELECT DISTINCT challenge_day::text AS challenge_day
+      FROM daily_challenge_completions
+      WHERE user_id = $1
+        AND challenge_day <= $2::date
+      ORDER BY challenge_day DESC
+      LIMIT $3
+      `,
+      [userId, throughDay, limit]
+    );
+    return rows.map((row) => row.challenge_day);
+  },
+
+  async createStreakBonusAwardInTx(
+    tx: TransactionSql,
+    userId: string,
+    challengeDay: string,
+    coinsAwarded: number
+  ): Promise<boolean> {
+    const rows = await tx.unsafe<Array<{ id: string }>>(
+      `
+      INSERT INTO daily_challenge_streak_bonus_awards (
+        user_id,
+        challenge_day,
+        coins_awarded
+      )
+      VALUES ($1, $2::date, $3)
+      ON CONFLICT (user_id, challenge_day) DO NOTHING
+      RETURNING id
+      `,
+      [userId, challengeDay, coinsAwarded]
+    );
+    return rows.length === 1;
+  },
+
+  async getPendingReminder(userId: string): Promise<{ remind_at: string } | null> {
+    const [row] = await sql<Array<{ remind_at: string }>>`
+      SELECT remind_at
+      FROM daily_challenge_reminders
+      WHERE user_id = ${userId}
+        AND status = 'pending'
+        AND remind_at > NOW()
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async canReceiveReminderEmail(userId: string): Promise<boolean> {
+    const [row] = await sql<Array<{ eligible: boolean }>>`
+      SELECT (
+        u.email IS NOT NULL
+        AND u.is_ai = false
+        AND u.is_seed = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND u.is_banned = false
+        AND NOT EXISTS (
+          SELECT 1 FROM email_unsubscribes x WHERE x.user_id = u.id
+        )
+      ) AS eligible
+      FROM users u
+      WHERE u.id = ${userId}
+      LIMIT 1
+    `;
+    return row?.eligible === true;
+  },
+
+  async upsertReminder(userId: string, remindAt: Date): Promise<{ remind_at: string }> {
+    const [row] = await sql<Array<{ remind_at: string }>>`
+      INSERT INTO daily_challenge_reminders (
+        user_id,
+        remind_at,
+        status,
+        attempts,
+        sent_at,
+        last_attempt_at
+      )
+      VALUES (${userId}, ${remindAt}, 'pending', 0, NULL, NULL)
+      ON CONFLICT (user_id) DO UPDATE SET
+        remind_at = EXCLUDED.remind_at,
+        status = 'pending',
+        attempts = 0,
+        sent_at = NULL,
+        last_attempt_at = NULL
+      RETURNING remind_at
+    `;
+    return row;
+  },
+
+  async cancelReminder(userId: string): Promise<void> {
+    await sql`
+      UPDATE daily_challenge_reminders
+      SET status = 'cancelled'
+      WHERE user_id = ${userId}
+        AND status = 'pending'
     `;
   },
 

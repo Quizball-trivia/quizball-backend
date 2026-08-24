@@ -12,6 +12,7 @@
  */
 
 import { sql } from '../../db/index.js';
+import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
 
 const WAVE_BATCH_SIZE = 200;
@@ -368,6 +369,11 @@ export async function wlNotifyQualifiedEntryOpen(
         SELECT 1 FROM wl_email_log l
         WHERE l.user_id = q.user_id AND l.source_event_key = ${key}
           AND (l.sent_at IS NOT NULL OR l.attempts >= 5)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM retention_email_assignments r
+        WHERE r.user_id = q.user_id
+          AND r.assigned_at >= NOW() - make_interval(days => ${config.RETENTION_EMAIL_FREQUENCY_DAYS})
       )
     ORDER BY q.user_id
     LIMIT 40

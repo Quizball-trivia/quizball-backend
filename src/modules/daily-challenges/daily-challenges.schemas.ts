@@ -364,11 +364,32 @@ export const completeDailyChallengeResponseSchema = z.object({
   challengeType: dailyChallengeTypeEnum,
   completedToday: z.literal(true),
   coinsAwarded: z.number().int().nonnegative(),
+  streakBonusAwarded: z.number().int().nonnegative(),
+  dailyStreakDays: z.number().int().positive(),
+  nextStreakBonusCoins: z.number().int().nonnegative(),
   xpAwarded: z.number().int().nonnegative(),
   wallet: z.object({
     coins: z.number().int().nonnegative(),
     tickets: z.number().int().nonnegative(),
   }).optional(),
+});
+
+export const dailyComebackStateResponseSchema = z.object({
+  projectedStreakDays: z.number().int().positive(),
+  tomorrowBonusCoins: z.number().int().nonnegative(),
+  rewardEnabled: z.boolean(),
+  remindersEnabled: z.boolean(),
+  reminderScheduled: z.boolean(),
+  reminderAt: z.string().datetime({ offset: true }).nullable(),
+});
+
+export const setDailyComebackReminderBodySchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const setDailyComebackReminderResponseSchema = z.object({
+  enabled: z.boolean(),
+  reminderAt: z.string().datetime({ offset: true }).nullable(),
 });
 
 export const resetDailyChallengeResponseSchema = z.object({
@@ -408,6 +429,7 @@ export type AdminDailyChallengeCategoryOption = z.infer<typeof adminDailyChallen
 export type DailyChallengeSessionResponse = z.infer<typeof dailyChallengeSessionResponseSchema>;
 export type DailyChallengeConfigResponse = z.infer<typeof dailyChallengeConfigResponseSchema>;
 export type CompleteDailyChallengeBody = z.infer<typeof completeDailyChallengeBodySchema>;
+export type SetDailyComebackReminderBody = z.infer<typeof setDailyComebackReminderBodySchema>;
 export type UpdateDailyChallengeConfigBody = z.infer<typeof updateDailyChallengeConfigSchema>;
 export type DailyChallengeParam = z.infer<typeof dailyChallengeParamSchema>;
 export type DailyChallengeLocaleQuery = z.infer<typeof dailyChallengeLocaleQuerySchema>;

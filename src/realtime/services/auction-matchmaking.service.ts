@@ -12,7 +12,7 @@ import {
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
-import type { FormationName } from '../../modules/auction/auction.types.js';
+import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
   startAuctionMatchForHumans,
@@ -157,7 +157,7 @@ export const auctionMatchmakingService = {
         emitMatchFound(io, match.matchId, [{
           userId: user.id,
           displayName: user.nickname ?? 'Player',
-        }], 2, input.locale, match.formation);
+        }], botPlayerSummaries(match.seats), input.locale, match.formation);
       } catch (error) {
         emitAuctionError(socket, toAuctionErrorPayload(error, {
           fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
@@ -467,12 +467,13 @@ async function startMatchFromQueuedSearches(
       formation: oldest.formation,
       locale: oldest.locale,
     });
-    emitMatchFound(io, match.matchId, humans, 3 - humans.length, oldest.locale, match.formation);
+    const botPlayers = botPlayerSummaries(match.seats);
+    emitMatchFound(io, match.matchId, humans, botPlayers, oldest.locale, match.formation);
     logger.info(
       {
         matchId: match.matchId,
         humanUserIds: humans.map((human) => human.userId),
-        botCount: 3 - humans.length,
+        botCount: botPlayers.length,
         locale: oldest.locale,
       },
       'Auction matchmaking started match'
@@ -544,14 +545,15 @@ function emitMatchFound(
   io: QuizballServer,
   matchId: string,
   humans: readonly AuctionMatchHumanPlayer[],
-  botCount: number,
+  botPlayers: AuctionMatchFoundPayload['botPlayers'],
   locale: AuctionContentLocale,
   formation: FormationName
 ): void {
   const payload: AuctionMatchFoundPayload = {
     matchId,
     humanUserIds: humans.map((human) => human.userId),
-    botCount,
+    botCount: botPlayers.length,
+    botPlayers,
     locale,
     formation,
     // Single server-chosen instant so all clients count down in sync.
@@ -560,6 +562,15 @@ function emitMatchFound(
   for (const human of humans) {
     io.to(`user:${human.userId}`).emit('auction:match_found', payload);
   }
+}
+
+function botPlayerSummaries(seats: readonly AuctionPlayer[]): AuctionMatchFoundPayload['botPlayers'] {
+  return seats
+    .filter((seat) => seat.isBot)
+    .map((seat) => ({
+      seatId: seat.seatId,
+      displayName: seat.displayName,
+    }));
 }
 
 /**

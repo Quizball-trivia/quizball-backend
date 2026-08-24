@@ -790,6 +790,11 @@ export interface AuctionQueuedPlayerSummary {
   displayName: string;
 }
 
+export interface AuctionMatchBotSummary {
+  seatId: string;
+  displayName: string;
+}
+
 export interface AuctionSearchCancelledPayload {
   searchId: string | null;
   reason: 'cancelled' | 'disconnect';
@@ -799,6 +804,10 @@ export interface AuctionMatchFoundPayload {
   matchId: string;
   humanUserIds: string[];
   botCount: number;
+  /** The actual bot personas reserved for this match. The queue only knows a
+   * count while it is filling; identities become authoritative at match
+   * creation time. */
+  botPlayers: AuctionMatchBotSummary[];
   locale: 'en' | 'ka';
   formation: FormationName;
   /** Absolute server time (ISO) the pre-match countdown ends — all clients

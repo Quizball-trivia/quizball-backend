@@ -34,6 +34,7 @@ scripts/*
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts
+!scripts/auction-beta-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
 # Auction prod-promotion content tooling — code only, no secrets.

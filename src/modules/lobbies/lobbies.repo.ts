@@ -566,6 +566,27 @@ export const lobbiesRepo = {
     return rows.map((row) => row.id);
   },
 
+  async listCategoryIdsWithMinPlainMcqCount(
+    categoryIds: string[],
+    minCount: number
+  ): Promise<string[]> {
+    if (categoryIds.length === 0) return [];
+
+    const rows = await sql<{ id: string }[]>`
+      SELECT q.category_id AS id
+      FROM questions q
+      WHERE q.category_id = ANY(${sql.array(categoryIds)}::uuid[])
+        AND q.status = 'published'
+        AND q.visibility = 'public'
+        AND q.ranked_eligible = true
+        AND q.type = 'mcq_single'
+      GROUP BY q.category_id
+      HAVING COUNT(*) >= ${minCount}
+    `;
+
+    return rows.map((row) => row.id);
+  },
+
   async listRankedEligibleCategoryIds(categoryIds: string[]): Promise<string[]> {
     if (categoryIds.length === 0) return [];
 

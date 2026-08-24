@@ -94,6 +94,11 @@ export const matchQuestionRevealedSchema = z.object({
   qIndex: z.number().int().min(0),
 });
 
+export const matchVisibilitySignalSchema = z.object({
+  matchId: z.string().uuid(),
+  signal: z.enum(['hidden', 'visible', 'blur', 'focus', 'pagehide']),
+});
+
 export type MatchAnswerPayload = z.infer<typeof matchAnswerSchema>;
 export type MatchCountdownGuessPayload = z.infer<typeof matchCountdownGuessSchema>;
 export type MatchPutInOrderAnswerPayload = z.infer<typeof matchPutInOrderAnswerSchema>;
@@ -109,3 +114,4 @@ export type MatchFinalResultsAckPayload = z.infer<typeof matchFinalResultsAckSch
 export type MatchPlayAgainPayload = z.infer<typeof matchPlayAgainSchema>;
 export type MatchReadyForNextQuestionPayload = z.infer<typeof matchReadyForNextQuestionSchema>;
 export type MatchQuestionRevealedPayload = z.infer<typeof matchQuestionRevealedSchema>;
+export type MatchVisibilitySignalPayload = z.infer<typeof matchVisibilitySignalSchema>;

@@ -35,6 +35,9 @@ scripts/*
 !scripts/wl-weekly-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
+# Anti-cheat analysis SQL — code only, no secrets.
+!scripts/anti-cheat/
+!scripts/anti-cheat/**
 # Guess the Goal content seeds + local smoke — code only, no secrets.
 !scripts/guess-the-goal/
 !scripts/guess-the-goal/**
@@ -77,3 +80,6 @@ scripts/bot-burnin/*.receipt.json
 # Legacy fake-account cleanup (code only; reads DSN from env, dry-run default).
 !scripts/seed-cleanup/
 !scripts/seed-cleanup/**
+
+# Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
+node_modules

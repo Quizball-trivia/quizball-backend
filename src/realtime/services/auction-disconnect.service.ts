@@ -494,8 +494,25 @@ export async function handleAuctionRejoin(
     return true;
   }
 
-  // A forfeited seat can't come back — their grace already expired.
-  if (seat.forfeited) return false;
+  // A forfeited seat can't come back into live play, but the returning client
+  // still needs an authoritative snapshot. Replaying the forfeited state lets
+  // it render the same "removed from match" result used by an in-session
+  // forfeit instead of silently falling through to a brand-new search.
+  if (seat.forfeited) {
+    const publicState = toPublicAuctionMatchState(state);
+    socket.emit('auction:state', {
+      matchId: state.matchId,
+      state: publicState,
+      stateVersion: state.version,
+      serverNow: new Date().toISOString(),
+    });
+    socket.emit('auction:player_forfeited', buildPlayerForfeitedPayload(state, {
+      userId,
+      seatId: seat.seatId,
+      reason: 'disconnect_timeout',
+    }));
+    return true;
+  }
 
   socket.data.lobbyId = undefined;
   socket.data.matchId = matchId;

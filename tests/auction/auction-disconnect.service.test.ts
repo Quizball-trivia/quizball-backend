@@ -803,6 +803,37 @@ describe('auction disconnect service', () => {
     expect(socket.emit.mock.calls.some(([event]) => event === 'auction:state')).toBe(true);
   });
 
+  it('replays a live forfeited seat so an expired reconnect renders removal results', async () => {
+    const { handleAuctionRejoin } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const { io } = createIo();
+    const socket = createSocket();
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      seats: [
+        { ...seat('seat-human', 'user-1'), isEliminated: true, forfeited: true },
+        seat('seat-bot-a', null, true),
+        seat('seat-human-2', 'user-2'),
+      ],
+    }));
+
+    const replayed = await handleAuctionRejoin(io, socket, 'match-1');
+
+    expect(replayed).toBe(true);
+    expect(socket.join).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith(
+      'auction:state',
+      expect.objectContaining({ matchId: 'match-1' }),
+    );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'auction:player_forfeited',
+      expect.objectContaining({
+        matchId: 'match-1',
+        userId: 'user-1',
+        seatId: 'seat-human',
+        reason: 'disconnect_timeout',
+      }),
+    );
+  });
+
   it('does not replay a finished match to a user who never held a seat in it', async () => {
     const { handleAuctionRejoin } = await import('../../src/realtime/services/auction-disconnect.service.js');
     const { io } = createIo();

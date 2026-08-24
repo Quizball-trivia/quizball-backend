@@ -47,7 +47,12 @@ import {
   resumeAuctionUserIfDisconnected,
 } from './auction-disconnect.service.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
-import { fabricatedRankedIdentity, reserveAuctionPersistentBots } from './auction-bot-selection.service.js';
+import {
+  fabricatedAuctionBotProfile,
+  fabricatedRankedIdentity,
+  reserveAuctionPersistentBots,
+  type AuctionBotSeatProfile,
+} from './auction-bot-selection.service.js';
 import { releaseAuctionReservations } from './auction-bot-reservation.service.js';
 
 export interface AuctionStartAiMatchServiceInput {
@@ -256,7 +261,7 @@ export async function startAuctionMatchForHumans(
  */
 async function generateAuctionBotProfiles(
   count: number
-): Promise<{ displayName: string; avatarUrl: string }[]> {
+): Promise<AuctionBotSeatProfile[]> {
   if (count <= 0) return [];
   let takenLower: Set<string>;
   try {
@@ -274,6 +279,7 @@ async function generateAuctionBotProfiles(
     return {
       displayName,
       avatarUrl: generateRankedAiAvatarUrl(96),
+      botProfile: fabricatedAuctionBotProfile(displayName),
       ...fabricatedRankedIdentity(displayName),
     };
   });

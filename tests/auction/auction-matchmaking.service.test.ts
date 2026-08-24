@@ -323,7 +323,7 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('matches two humans across locales, then adds one bot on the next tick', async () => {
+  it('matches two humans across locales, then immediately seats a named bot on the fill tick', async () => {
     const { io, roomEmit } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
@@ -359,17 +359,9 @@ describe('auctionMatchmakingService', () => {
       })
     );
 
-    // First tick: 2 humans + 0 bots = 2 seats < 3 → stage ONE bot, reschedule,
-    // do NOT start yet.
+    // One bot completes the table, so start immediately. This avoids exposing
+    // an anonymous staged-bot label while the real smart bot is being selected.
     vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
-    await auctionMatchmakingService.runFillTimer(io, {
-      kind: 'auction_matchmaking_fill',
-      searchId,
-    });
-    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
-
-    // Second tick: 2 humans + 1 staged bot = 3 seats → start the match.
-    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId,
@@ -431,7 +423,7 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('stages one bot on the first tick after a second human joins, reschedules, then starts', async () => {
+  it('starts immediately when one bot fills the final seat after a second human joins', async () => {
     const { io } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
@@ -440,22 +432,8 @@ describe('auctionMatchmakingService', () => {
     await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
     vi.setSystemTime(new Date('2026-06-20T10:00:12.000Z'));
 
-    // First tick: 2 humans + 0 bots → stage one bot and reschedule one step out.
-    await auctionMatchmakingService.runFillTimer(io, {
-      kind: 'auction_matchmaking_fill',
-      searchId: firstSearchId,
-    });
-
-    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
-    expect(timerMock.scheduleRealtimeTimer).toHaveBeenLastCalledWith(
-      'auction_matchmaking_fill',
-      `auction:mm:fill:${firstSearchId}`,
-      new Date('2026-06-20T10:00:22.000Z'),
-      { kind: 'auction_matchmaking_fill', searchId: firstSearchId }
-    );
-
-    // Second tick: 2 humans + 1 staged bot = 3 seats → start the match.
-    vi.setSystemTime(new Date('2026-06-20T10:00:22.000Z'));
+    // The selected smart bot is the final seat, so there is no anonymous
+    // placeholder step or second fill timer.
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId: firstSearchId,
@@ -486,16 +464,9 @@ describe('auctionMatchmakingService', () => {
     });
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
 
-    // Tick 2: 1 human + 1 bot → stage bot #2, reschedule.
+    // Tick 2: the second bot completes the table, so select both named bot
+    // profiles and start immediately rather than showing an anonymous seat.
     vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
-    await auctionMatchmakingService.runFillTimer(io, {
-      kind: 'auction_matchmaking_fill',
-      searchId,
-    });
-    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
-
-    // Tick 3: 1 human + 2 bots = 3 seats → start the match.
-    vi.setSystemTime(new Date('2026-06-20T10:00:30.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId,

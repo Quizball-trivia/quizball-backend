@@ -392,9 +392,20 @@ export const auctionMatchmakingService = {
       const seatsFilled = fillGroup.length + botFillCount;
 
       if (seatsFilled < 3) {
-        // Add ONE AI bidder, bump the broadcast count so the client's search
-        // animation advances (1→2→3), then wait again before the next.
+        // Add ONE staged bidder. If that completes the table, create the match
+        // immediately so clients receive the ACTUAL selected smart-bot identity
+        // in `auction:match_found`; do not broadcast an anonymous "AI player"
+        // placeholder for another full timer interval.
         const nextBotFill = botFillCount + 1;
+        if (fillGroup.length + nextBotFill >= 3) {
+          await startMatchFromQueuedSearches(io, redis, fillGroup);
+          return true;
+        }
+
+        // The table still has an empty seat (only possible for one human + one
+        // staged bidder), so retain the staged count and wait for the final
+        // fill. The client deliberately keeps unnamed staged seats visually
+        // empty until a real persistent/ephemeral profile is selected.
         const updated: QueuedAuctionSearch = {
           ...anchor,
           botFillCount: nextBotFill,

@@ -314,6 +314,10 @@ async function clearAuctionFixtures(): Promise<void> {
     WHERE prompt_version = ${AUCTION_FIXTURE_PROMPT_VERSION}
   `;
   await sql`
+    DELETE FROM player_season_snapshots
+    WHERE transfermarkt_id LIKE 'regression-auction-%'
+  `;
+  await sql`
     DELETE FROM football_players
     WHERE transfermarkt_id LIKE 'regression-auction-%'
   `;
@@ -377,6 +381,28 @@ export async function seedAuctionFixtures(): Promise<SeededAuctionFixtures> {
           )
           RETURNING id
         `;
+
+        // Snapshot-lots product rule (2026-08-17): the runtime only serves
+        // players with >= 3 valued season snapshots (auction-content.repo
+        // snapshotReadyPredicate). Seed a minimal valued history per player so
+        // fixture content stays inside the live eligibility pool.
+        for (let season = 0; season < 3; season++) {
+          const startYear = 2023 + season;
+          await sql`
+            INSERT INTO player_season_snapshots (
+              id, football_player_id, transfermarkt_id, season_start_year,
+              season_label, league_name, club_name, age, apps, goals, assists,
+              minutes, value_eur, value_date, source
+            )
+            VALUES (
+              gen_random_uuid(), ${player.id}, ${transfermarktId}, ${startYear},
+              ${`${startYear}/${(startYear + 1) % 100}`}, 'Regression League',
+              ${`Regression ${position} FC`}, ${21 + season}, ${30 + season},
+              ${position === 'FWD' ? 15 : 3}, ${5}, ${2500},
+              ${value - season * 1_000_000}, ${`${startYear}-06-30`}, 'transfermarkt_live'
+            )
+          `;
+        }
 
         const [card] = await sql<{ id: string }[]>`
           INSERT INTO player_clue_cards (

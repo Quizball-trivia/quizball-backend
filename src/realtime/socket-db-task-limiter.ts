@@ -168,3 +168,9 @@ export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 30_000);
 // once and crowd out foreground lobby commands. Keep this budget separate from
 // disconnect cleanup so a hydration backlog cannot delay match cleanup.
 export const postConnectDbTaskLimiter = new SocketDbTaskLimiter(4, 12_000, 30_000);
+
+// Telemetry writes (e.g. match visibility events) are strictly droppable:
+// two slots, a tiny queue, and a short wait so a visibility burst can never
+// occupy the disconnect-cleanup or hydration budgets above. Overload here
+// means dropped telemetry rows, never delayed gameplay work.
+export const telemetryDbTaskLimiter = new SocketDbTaskLimiter(2, 200, 5_000);

@@ -3,14 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 const redisCounters = new Map<string, number>();
+let redisMultiFails = false;
 const fakeRedis = {
   isOpen: true,
-  incr: vi.fn(async (key: string) => {
-    const next = (redisCounters.get(key) ?? 0) + 1;
-    redisCounters.set(key, next);
-    return next;
+  multi: vi.fn(() => {
+    let pendingKey = '';
+    const chain = {
+      incr: (key: string) => {
+        pendingKey = key;
+        return chain;
+      },
+      expire: () => chain,
+      exec: async () => {
+        if (redisMultiFails) throw new Error('redis down');
+        const next = (redisCounters.get(pendingKey) ?? 0) + 1;
+        redisCounters.set(pendingKey, next);
+        return [next, true];
+      },
+    };
+    return chain;
   }),
-  expire: vi.fn(async () => true),
 };
 
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -31,12 +43,17 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
     cache.players.find((player) => player.userId === userId) ?? null,
 }));
 
+let limiterRejects = false;
+const limiterRunMock = vi.fn((task: () => Promise<void>) => {
+  if (limiterRejects) return Promise.reject(new Error('queue_full'));
+  return task();
+});
 vi.mock('../../src/realtime/socket-db-task-limiter.js', () => ({
-  socketDbTaskLimiter: { run: (task: () => Promise<void>) => task() },
+  telemetryDbTaskLimiter: { run: (task: () => Promise<void>) => limiterRunMock(task) },
 }));
 
-function fakeSocket(userId: string | null) {
-  return { data: { user: userId ? { id: userId } : undefined } } as never;
+function fakeSocket(userId: string | null, rooms: string[] = ['match:match-1']) {
+  return { data: { user: userId ? { id: userId } : undefined }, rooms: new Set(rooms) } as never;
 }
 
 function activeCache(overrides: Record<string, unknown> = {}) {
@@ -52,10 +69,16 @@ function activeCache(overrides: Record<string, unknown> = {}) {
   };
 }
 
+async function flushMicrotasks() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('match-visibility.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     redisCounters.clear();
+    redisMultiFails = false;
+    limiterRejects = false;
     fakeRedis.isOpen = true;
   });
 
@@ -64,6 +87,7 @@ describe('match-visibility.service', () => {
     const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
 
     await handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' });
+    await flushMicrotasks();
 
     expect(insertVisibilityEventMock).toHaveBeenCalledWith({
       matchId: 'match-1',
@@ -79,6 +103,18 @@ describe('match-visibility.service', () => {
     });
   });
 
+  it('drops events before any Redis/DB work when the socket is not in the match room', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(activeCache());
+    const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
+
+    await handleVisibilitySignal(fakeSocket('user-1', []), { matchId: 'match-1', signal: 'hidden' });
+    await handleVisibilitySignal(fakeSocket('user-1', ['match:other']), { matchId: 'match-1', signal: 'hidden' });
+
+    expect(fakeRedis.multi).not.toHaveBeenCalled();
+    expect(getMatchCacheOrRebuildMock).not.toHaveBeenCalled();
+    expect(insertVisibilityEventMock).not.toHaveBeenCalled();
+  });
+
   it('drops events from non-participants and inactive matches', async () => {
     const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
 
@@ -91,23 +127,45 @@ describe('match-visibility.service', () => {
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     await handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' });
 
+    await flushMicrotasks();
     expect(insertVisibilityEventMock).not.toHaveBeenCalled();
   });
 
-  it('rate limits per user+match and never throws when the repo fails', async () => {
+  it('rate limits per user+match before touching the match cache', async () => {
     getMatchCacheOrRebuildMock.mockResolvedValue(activeCache());
     const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
 
     for (let i = 0; i < 35; i += 1) {
       await handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' });
     }
+    await flushMicrotasks();
+
     expect(insertVisibilityEventMock).toHaveBeenCalledTimes(30);
+    expect(getMatchCacheOrRebuildMock).toHaveBeenCalledTimes(30);
+  });
+
+  it('fails open when Redis errors and never rejects on repo or limiter failure', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(activeCache());
+    const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
+
+    redisMultiFails = true;
+    await handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' });
+    await flushMicrotasks();
+    expect(insertVisibilityEventMock).toHaveBeenCalledTimes(1);
+    redisMultiFails = false;
 
     insertVisibilityEventMock.mockRejectedValueOnce(new Error('db down'));
-    redisCounters.clear();
     await expect(
       handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'visible' })
     ).resolves.toBeUndefined();
+
+    // Limiter admission rejection (queue full) must be swallowed — an
+    // unhandled rejection here would trip the bootstrap restart guard.
+    limiterRejects = true;
+    await expect(
+      handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'blur' })
+    ).resolves.toBeUndefined();
+    await flushMicrotasks();
   });
 
   it('records null question context when no question is open', async () => {
@@ -115,6 +173,7 @@ describe('match-visibility.service', () => {
     const { handleVisibilitySignal } = await import('../../src/realtime/services/match-visibility.service.js');
 
     await handleVisibilitySignal(fakeSocket('user-2'), { matchId: 'match-1', signal: 'blur' });
+    await flushMicrotasks();
 
     expect(insertVisibilityEventMock).toHaveBeenCalledWith(
       expect.objectContaining({ questionOpen: false, questionKind: null, questionId: null, qIndex: 7 })

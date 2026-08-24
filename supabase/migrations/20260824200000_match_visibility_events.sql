@@ -38,6 +38,12 @@ CREATE INDEX IF NOT EXISTS match_visibility_events_match_user_occurred_idx
 CREATE INDEX IF NOT EXISTS match_visibility_events_user_occurred_idx
   ON match_visibility_events (user_id, occurred_at DESC);
 
+-- Time-leading BRIN for the daily retention purge (predicate is solely on
+-- occurred_at; the composite indexes above lead with match/user and would
+-- force a full scan). BRIN is near-free for this append-mostly table.
+CREATE INDEX IF NOT EXISTS match_visibility_events_occurred_brin
+  ON match_visibility_events USING brin (occurred_at);
+
 -- Retention: shadow telemetry, 30 days is enough to tune heuristics and
 -- investigate reports. Purge daily so the table (and its indexes) stay
 -- bounded regardless of match volume.

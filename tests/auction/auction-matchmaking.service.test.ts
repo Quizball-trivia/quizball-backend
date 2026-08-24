@@ -4,7 +4,11 @@ import '../setup.js';
 type FakeSocket = {
   id: string;
   data: {
-    user: { id: string; nickname: string | null };
+    user: {
+      id: string;
+      nickname: string | null;
+      avatar_customization?: Record<string, string> | null;
+    };
     matchId?: string;
     lobbyId?: string;
   };
@@ -237,10 +241,22 @@ import { auctionMatchmakingService } from '../../src/realtime/services/auction-m
 import { AuctionContentUnavailableError } from '../../src/modules/auction/index.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
-function socket(userId: string, nickname = userId): FakeSocket {
+function socket(
+  userId: string,
+  nickname = userId,
+  avatarCustomization?: Record<string, string> | null,
+): FakeSocket {
   return {
     id: `socket-${userId}`,
-    data: { user: { id: userId, nickname } },
+    data: {
+      user: {
+        id: userId,
+        nickname,
+        ...(avatarCustomization !== undefined
+          ? { avatar_customization: avatarCustomization }
+          : {}),
+      },
+    },
     emit: vi.fn(),
   };
 }
@@ -378,6 +394,40 @@ describe('auctionMatchmakingService', () => {
         botPlayers: [{ seatId: 'seat-bot-1', displayName: 'Smart Bot 1' }],
         locale: 'en',
       })
+    );
+  });
+
+  it('broadcasts each queued human\'s saved layered avatar to every client', async () => {
+    const { io, roomEmit } = createIo();
+    const redAvatar = {
+      skin: 'skin_male_white',
+      jersey: 'jersey_red',
+      hair: 'hair_boy_basic',
+    };
+
+    await auctionMatchmakingService.handleSearchStart(
+      io,
+      socket('u1', 'Red Player', redAvatar),
+      { locale: 'en' },
+    );
+    await auctionMatchmakingService.handleSearchStart(
+      io,
+      socket('u2', 'Web Player'),
+      { locale: 'en' },
+    );
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u2',
+      'auction:search_status',
+      expect.objectContaining({
+        queuedPlayers: expect.arrayContaining([
+          {
+            userId: 'u1',
+            displayName: 'Red Player',
+            avatarCustomization: redAvatar,
+          },
+        ]),
+      }),
     );
   });
 

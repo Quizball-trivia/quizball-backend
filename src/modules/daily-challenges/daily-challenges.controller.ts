@@ -5,6 +5,7 @@ import type {
   CompleteDailyChallengeBody,
   DailyChallengeLocaleQuery,
   DailyChallengeParam,
+  SetDailyComebackReminderBody,
   UpdateDailyChallengeConfigBody,
 } from './daily-challenges.schemas.js';
 
@@ -32,6 +33,17 @@ export const dailyChallengesController = {
     const { challengeType } = req.validated.params as DailyChallengeParam;
     const session = await dailyChallengesService.getChallengeSession(req.user!.id, challengeType, getRequestLocale(req));
     res.json(session);
+  },
+
+  async comebackState(req: Request, res: Response): Promise<void> {
+    const result = await dailyChallengesService.getComebackState(req.user!.id);
+    res.json(result);
+  },
+
+  async setComebackReminder(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as SetDailyComebackReminderBody;
+    const result = await dailyChallengesService.setComebackReminder(req.user!.id, body.enabled);
+    res.json(result);
   },
 
   async complete(req: Request, res: Response): Promise<void> {

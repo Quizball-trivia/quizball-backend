@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import { logger } from './logger.js';
 import { sql } from '../db/index.js';
@@ -121,14 +122,25 @@ export async function shutdownPostHog(): Promise<void> {
 export function trackEvent(
   eventName: string,
   distinctId: string,
-  properties?: Record<string, any>
+  properties?: Record<string, any>,
+  delivery?: {
+    /** Stable UUID for retry-safe server events. */
+    uuid?: string;
+    /** Stable occurrence time paired with uuid for PostHog deduplication. */
+    occurredAt?: string | Date;
+  },
 ): void {
   const client = getPostHogClient();
   if (!client) return;
 
   // Stamp the time the event actually occurred (now), BEFORE the async AI
   // lookup — otherwise a slow DB lookup would skew $timestamp later.
-  const occurredAt = new Date().toISOString();
+  const requestedOccurredAt = delivery?.occurredAt
+    ? new Date(delivery.occurredAt)
+    : new Date();
+  const occurredAt = Number.isFinite(requestedOccurredAt.getTime())
+    ? requestedOccurredAt
+    : new Date();
 
   // Resolve AI status asynchronously, then capture. Callers stay synchronous
   // (fire-and-forget); a known AI distinctId never reaches PostHog. Registered as
@@ -139,9 +151,11 @@ export function trackEvent(
       client.capture({
         distinctId,
         event: eventName,
+        ...(delivery?.uuid ? { uuid: delivery.uuid } : {}),
+        timestamp: occurredAt,
         properties: {
           ...properties,
-          $timestamp: occurredAt,
+          $timestamp: occurredAt.toISOString(),
           environment: process.env.NODE_ENV || 'development',
         },
       });
@@ -149,6 +163,21 @@ export function trackEvent(
       logger.error({ error }, 'Failed to track PostHog event');
     }
   });
+}
+
+/**
+ * Convert an internal idempotency key into a namespaced UUID. PostHog retries
+ * deduplicate on this UUID together with event time and distinct ID.
+ */
+export function stableAnalyticsEventUuid(idempotencyKey: string): string {
+  const bytes = createHash('sha256')
+    .update(`quizball-analytics:${idempotencyKey}`)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 // Helper function to identify users (set user properties)

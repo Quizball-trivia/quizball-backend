@@ -7,6 +7,8 @@ import {
   ValidationError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { config } from '../../core/config.js';
+import { emailEnabled } from '../../core/email.js';
 import { getLocalizedString, mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
 import {
@@ -40,6 +42,38 @@ import type {
 
 function getDailyChallengeDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+function addUtcDays(day: string, amount: number): string {
+  const date = new Date(`${day}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+}
+
+function consecutiveDailyStreakDays(completionDays: string[], throughDay: string): number {
+  const completed = new Set(completionDays);
+  let streak = 0;
+  let cursor = throughDay;
+  while (completed.has(cursor)) {
+    streak += 1;
+    cursor = addUtcDays(cursor, -1);
+  }
+  return streak;
+}
+
+function comebackBonusCoins(): number {
+  return config.DAILY_COMEBACK_REWARDS_ENABLED
+    ? config.DAILY_STREAK_BONUS_COINS
+    : 0;
+}
+
+/** Tomorrow at 14:00 Georgia time (UTC+4, no DST). */
+function nextDailyReminderAt(now = new Date()): Date {
+  const geNow = new Date(now.getTime() + 4 * 60 * 60 * 1_000);
+  const year = geNow.getUTCFullYear();
+  const month = geNow.getUTCMonth();
+  const day = geNow.getUTCDate() + 1;
+  return new Date(Date.UTC(year, month, day, 10, 0, 0, 0));
 }
 
 const dailyChallengeSettingsSchemas = {
@@ -572,6 +606,43 @@ export const dailyChallengesService = {
     return knownConfigs.map((config) => toListItem(config, completionByType.get(config.challenge_type), locale));
   },
 
+  async getComebackState(userId: string) {
+    const today = getDailyChallengeDay();
+    const [completionDays, reminder, canReceiveReminder] = await Promise.all([
+      dailyChallengesRepo.listDistinctCompletionDays(userId, today),
+      dailyChallengesRepo.getPendingReminder(userId),
+      dailyChallengesRepo.canReceiveReminderEmail(userId),
+    ]);
+    const projectedDays = completionDays.includes(today)
+      ? completionDays
+      : [today, ...completionDays];
+
+    return {
+      projectedStreakDays: consecutiveDailyStreakDays(projectedDays, today),
+      tomorrowBonusCoins: comebackBonusCoins(),
+      rewardEnabled: config.DAILY_COMEBACK_REWARDS_ENABLED,
+      remindersEnabled: config.DAILY_REMINDERS_ENABLED && emailEnabled() && canReceiveReminder,
+      reminderScheduled: reminder != null,
+      reminderAt: reminder?.remind_at ?? null,
+    };
+  },
+
+  async setComebackReminder(userId: string, enabled: boolean) {
+    if (!enabled) {
+      await dailyChallengesRepo.cancelReminder(userId);
+      return { enabled: false as const, reminderAt: null };
+    }
+    if (
+      !config.DAILY_REMINDERS_ENABLED
+      || !emailEnabled()
+      || !await dailyChallengesRepo.canReceiveReminderEmail(userId)
+    ) {
+      throw new ValidationError('Daily Challenge reminders are not enabled');
+    }
+    const reminder = await dailyChallengesRepo.upsertReminder(userId, nextDailyReminderAt());
+    return { enabled: true as const, reminderAt: reminder.remind_at };
+  },
+
   async listAdminConfigs() {
     const configs = (await dailyChallengesRepo.listConfigs(false)).filter(isKnownDailyChallengeConfig);
     const categoryOptionsByType = new Map(
@@ -1027,12 +1098,15 @@ export const dailyChallengesService = {
       throw new NotFoundError('Daily challenge not available');
     }
     const coinsAwarded = getCoinsAwardedForCompletion(challengeType, score);
+    const configuredStreakBonus = comebackBonusCoins();
 
     return dailyChallengesRepo.runInTransaction(async (txRepo) => {
       const existing = await txRepo.getCompletionForUserOnDay(userId, challengeType, day);
       if (existing) {
         throwAlreadyCompleted(challengeType);
       }
+
+      const completionDaysBefore = await txRepo.listDistinctCompletionDays(userId, day, 370);
 
       try {
         await txRepo.createCompletion({
@@ -1050,7 +1124,12 @@ export const dailyChallengesService = {
         throw error;
       }
 
-      const wallet = await txRepo.addCoins(userId, coinsAwarded);
+      const completedYesterday = completionDaysBefore.includes(addUtcDays(day, -1));
+      const streakBonusAwarded = completedYesterday && configuredStreakBonus > 0
+        && await txRepo.createStreakBonusAward(userId, day, configuredStreakBonus)
+        ? configuredStreakBonus
+        : 0;
+      const wallet = await txRepo.addCoins(userId, coinsAwarded + streakBonusAwarded);
       await txRepo.grantXp({
         userId,
         sourceType: 'daily_challenge_completion',
@@ -1062,10 +1141,17 @@ export const dailyChallengesService = {
         },
       });
 
+      const completionDaysAfter = completionDaysBefore.includes(day)
+        ? completionDaysBefore
+        : [day, ...completionDaysBefore];
+
       return {
         challengeType,
         completedToday: true as const,
         coinsAwarded,
+        streakBonusAwarded,
+        dailyStreakDays: consecutiveDailyStreakDays(completionDaysAfter, day),
+        nextStreakBonusCoins: configuredStreakBonus,
         xpAwarded: config.xp_reward,
         wallet: wallet
           ? {

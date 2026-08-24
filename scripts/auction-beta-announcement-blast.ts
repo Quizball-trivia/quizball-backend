@@ -190,11 +190,17 @@ async function main(): Promise<void> {
     }
     const batch = await nextBatch();
     if (batch.length === 0) break;
+    // Failed-but-not-exhausted recipients stay batch-eligible while this run
+    // has already attempted them (seenAddresses). If a whole batch yields no
+    // new work, every remaining candidate is a this-run retry — stop instead
+    // of spinning on identical queries forever; a re-run retries them fresh.
+    let progressed = 0;
     for (const c of batch) {
       if (sent + failed >= LIMIT) break outer;
       const address = c.email.toLowerCase();
       if (seenAddresses.has(address)) continue;
       seenAddresses.add(address);
+      progressed += 1;
 
       const url = unsubscribeUrl(c.user_id);
       const ok = await sendEmail({
@@ -219,6 +225,10 @@ async function main(): Promise<void> {
       }
       if ((sent + failed) % 100 === 0) console.log(`progress: ${sent} sent, ${failed} failed`);
       await new Promise((resolve) => setTimeout(resolve, SEND_INTERVAL_MS));
+    }
+    if (progressed === 0) {
+      console.error(`only already-attempted candidates remain (${batch.length} in batch) — stopping. Re-run to retry failures.`);
+      break;
     }
   }
 

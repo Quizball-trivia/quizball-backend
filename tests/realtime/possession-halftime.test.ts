@@ -46,17 +46,20 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
 
 const getDraftCategoriesByIdsMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
+const selectRandomCategoriesMock = vi.fn();
 const selectRandomCategoriesExcludingMock = vi.fn();
+const listCategoryIdsWithMinPlainMcqCountMock = vi.fn();
 
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
     getLobbyCategories: (...args: unknown[]) => getLobbyCategoriesMock(...args),
     getDraftCategoriesByIds: (...args: unknown[]) => getDraftCategoriesByIdsMock(...args),
-    selectRandomCategories: vi.fn(),
+    selectRandomCategories: (...args: unknown[]) => selectRandomCategoriesMock(...args),
     selectRandomCategoriesExcluding: (...args: unknown[]) => selectRandomCategoriesExcludingMock(...args),
     selectRandomRankedCategories: vi.fn(),
     selectRandomRankedCategoriesExcluding: vi.fn(),
     selectRankedCategoriesForDraft: vi.fn(),
+    listCategoryIdsWithMinPlainMcqCount: (...args: unknown[]) => listCategoryIdsWithMinPlainMcqCountMock(...args),
   },
 }));
 
@@ -127,6 +130,8 @@ describe('possession halftime finalize', () => {
     setMatchCacheMock.mockResolvedValue(undefined);
     setMatchCategoryBMock.mockResolvedValue(undefined);
     setMatchStatePayloadMock.mockResolvedValue(undefined);
+    listCategoryIdsWithMinPlainMcqCountMock.mockImplementation(async (ids: string[]) => ids);
+    selectRandomCategoriesMock.mockResolvedValue([]);
   });
 
   it('reveals auto-filled missing bans before starting the second half when no AI can respond', async () => {
@@ -496,6 +501,8 @@ describe('possession halftime with a preset second-half category', () => {
     getDraftCategoriesByIdsMock.mockResolvedValue([
       { id: 'cat-preset', name: { en: 'Preset' }, icon: null, imageUrl: null },
     ]);
+    listCategoryIdsWithMinPlainMcqCountMock.mockImplementation(async (ids: string[]) => ids);
+    selectRandomCategoriesMock.mockResolvedValue([]);
   });
 
   function createPresetCache(): MatchCache {
@@ -614,10 +621,147 @@ describe('possession halftime with a preset second-half category', () => {
     expect(cache.statePayload.halftime.purpose).toBe('penalty');
     expect(cache.statePayload.halftime.categoryOptions).toHaveLength(3);
     expect(selectRandomCategoriesExcludingMock).toHaveBeenCalledWith(
-      3,
+      9,
       expect.any(Array),
       'possession'
     );
     expect(getDraftCategoriesByIdsMock).not.toHaveBeenCalled();
+  });
+
+  it('drops penalty option categories too thin to survive a shootout', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock.mockResolvedValue([
+      { id: 'cat-thin-1', name: { en: 'Thin 1' }, icon: null, imageUrl: null },
+      { id: 'cat-deep-1', name: { en: 'Deep 1' }, icon: null, imageUrl: null },
+      { id: 'cat-thin-2', name: { en: 'Thin 2' }, icon: null, imageUrl: null },
+      { id: 'cat-deep-2', name: { en: 'Deep 2' }, icon: null, imageUrl: null },
+      { id: 'cat-deep-3', name: { en: 'Deep 3' }, icon: null, imageUrl: null },
+    ]);
+    listCategoryIdsWithMinPlainMcqCountMock.mockResolvedValue(['cat-deep-1', 'cat-deep-2', 'cat-deep-3']);
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([
+      'cat-deep-1',
+      'cat-deep-2',
+      'cat-deep-3',
+    ]);
+    expect(listCategoryIdsWithMinPlainMcqCountMock).toHaveBeenCalledWith(
+      ['cat-thin-1', 'cat-deep-1', 'cat-thin-2', 'cat-deep-2', 'cat-deep-3'],
+      12,
+      'match-1'
+    );
+  });
+
+  it('fails open with thin penalty categories when fewer than 3 are deep enough', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock.mockResolvedValue([
+      { id: 'cat-thin-1', name: { en: 'Thin 1' }, icon: null, imageUrl: null },
+      { id: 'cat-deep-1', name: { en: 'Deep 1' }, icon: null, imageUrl: null },
+      { id: 'cat-thin-2', name: { en: 'Thin 2' }, icon: null, imageUrl: null },
+    ]);
+    listCategoryIdsWithMinPlainMcqCountMock.mockResolvedValue(['cat-deep-1']);
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    // Deep categories come first, thin ones fill the remaining slots.
+    expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([
+      'cat-deep-1',
+      'cat-thin-1',
+      'cat-thin-2',
+    ]);
+  });
+
+  it('keeps the second-half category excluded when penalty selection relaxes exclusions', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock
+      .mockResolvedValueOnce([
+        { id: 'cat-only', name: { en: 'Only' }, icon: null, imageUrl: null },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'cat-r1', name: { en: 'R1' }, icon: null, imageUrl: null },
+        { id: 'cat-r2', name: { en: 'R2' }, icon: null, imageUrl: null },
+        { id: 'cat-preset', name: { en: 'Just Played' }, icon: null, imageUrl: null },
+      ]);
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    expect(selectRandomCategoriesExcludingMock).toHaveBeenLastCalledWith(
+      3,
+      ['cat-a', 'cat-preset'],
+      'possession'
+    );
+    // Even if the selector leaks the just-played category, it is filtered out.
+    expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([
+      'cat-only',
+      'cat-r1',
+      'cat-r2',
+    ]);
+  });
+
+  it('fails open with unfiltered penalty options when the depth query throws', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock.mockResolvedValue([
+      { id: 'cat-x', name: { en: 'X' }, icon: null, imageUrl: null },
+      { id: 'cat-y', name: { en: 'Y' }, icon: null, imageUrl: null },
+      { id: 'cat-z', name: { en: 'Z' }, icon: null, imageUrl: null },
+    ]);
+    listCategoryIdsWithMinPlainMcqCountMock.mockRejectedValue(new Error('db down'));
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([
+      'cat-x',
+      'cat-y',
+      'cat-z',
+    ]);
   });
 });

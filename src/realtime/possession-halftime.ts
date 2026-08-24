@@ -3,7 +3,11 @@ import { getRandom } from '../core/rng.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
-import { MIN_QUESTIONS_PER_CATEGORY } from '../modules/lobbies/lobbies.constants.js';
+import {
+  MIN_PENALTY_CATEGORY_MCQS,
+  MIN_QUESTIONS_PER_CATEGORY,
+  PENALTY_OPTION_CANDIDATE_COUNT,
+} from '../modules/lobbies/lobbies.constants.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   RANKED_RECENT_CATEGORY_MODE,
@@ -213,9 +217,13 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
       // Penalty ban: also exclude the second-half category so penalties don't
       // re-offer a category that was just played.
-      if (state.halftime.purpose === 'penalty' && categoryBId) {
+      const isPenaltyPurpose = state.halftime.purpose === 'penalty';
+      if (isPenaltyPurpose && categoryBId) {
         excludedIds.add(categoryBId);
       }
+      // Penalty options get depth-filtered below, so over-fetch candidates to
+      // keep 3 deep-enough ones available.
+      const optionCount = isPenaltyPurpose ? PENALTY_OPTION_CANDIDATE_COUNT : 3;
 
       let primary: DraftCategory[];
       if (useRankedCategories) {
@@ -236,13 +244,13 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           logger.warn({ error, matchId }, 'Failed to resolve players for halftime recent-category filter');
         }
         const selection = await lobbiesService.selectRankedCategoriesForDraft({
-          count: 3,
+          count: optionCount,
           userIds: recentAvoidUserIds,
           excludeCategoryIds: Array.from(excludedIds),
         });
         primary = selection.categories;
       } else {
-        primary = await selectExcluding(3, Array.from(excludedIds));
+        primary = await selectExcluding(optionCount, Array.from(excludedIds));
       }
       let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
 
@@ -261,8 +269,46 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           },
           'Insufficient unique halftime categories excluding first-half draft categories; relaxing exclusion'
         );
-        const relaxed = await selectExcluding(3, [categoryAId]);
-        categories = uniqueDraftCategories([...categories, ...relaxed]).filter((category) => category.id !== categoryAId);
+        const relaxedExcludedIds = isPenaltyPurpose && categoryBId
+          ? [categoryAId, categoryBId]
+          : [categoryAId];
+        const relaxed = await selectExcluding(3, relaxedExcludedIds);
+        categories = uniqueDraftCategories([...categories, ...relaxed])
+          .filter((category) => !relaxedExcludedIds.includes(category.id));
+      }
+
+      if (isPenaltyPurpose && categories.length > 0) {
+        // The un-banned leftover becomes the shootout's only question source,
+        // so prefer categories deep enough to survive one (see
+        // MIN_PENALTY_CATEGORY_MCQS). Fail-open on any shortfall or error:
+        // a thin shootout now completes via the penalty-goals fallback, but a
+        // missing interlude would stall the match outright.
+        try {
+          const deepIds = new Set(
+            await lobbiesService.listCategoryIdsWithMinPlainMcqCount(
+              categories.map((category) => category.id),
+              MIN_PENALTY_CATEGORY_MCQS,
+              matchId
+            )
+          );
+          const deep = categories.filter((category) => deepIds.has(category.id));
+          if (deep.length >= 3) {
+            categories = deep;
+          } else {
+            logger.warn(
+              {
+                matchId,
+                deepCount: deep.length,
+                candidateCount: categories.length,
+                minMcqs: MIN_PENALTY_CATEGORY_MCQS,
+              },
+              'Fewer than 3 penalty categories meet the MCQ depth minimum; topping up with thin ones'
+            );
+            categories = [...deep, ...categories.filter((category) => !deepIds.has(category.id))];
+          }
+        } catch (error) {
+          logger.warn({ error, matchId }, 'Penalty category depth filter failed; using unfiltered options');
+        }
       }
 
       state.halftime.categoryOptions = categories.slice(0, 3);

@@ -309,6 +309,10 @@ export const lobbiesService = {
     return lobbiesRepo.listRankedEligibleCategoryIds(categoryIds);
   },
 
+  async listCategoryIdsWithMinPlainMcqCount(categoryIds: string[], minCount: number, matchId: string): Promise<string[]> {
+    return lobbiesRepo.listCategoryIdsWithMinPlainMcqCount(categoryIds, minCount, matchId);
+  },
+
   async getLobbyCategories(lobbyId: string): Promise<DraftCategory[]> {
     const rows: LobbyCategoryWithDetails[] = await lobbiesRepo.listLobbyCategoriesWithDetails(lobbyId);
     return rows.map((row) => ({

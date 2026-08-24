@@ -3,7 +3,10 @@ import type { Json } from '../../db/types.js';
 import {
   buildPossessionEligibilityHavingCounts,
   MATCHMAKING_CATEGORY_EXCLUSIONS,
+  MCQ_HAS_IMAGE_CONDITIONS_NP_RAW,
+  NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW,
   RANKED_ELIGIBILITY_HAVING_COUNTS,
+  VALID_PAYLOAD_CONDITIONS_NP_RAW,
 } from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
@@ -562,6 +565,49 @@ export const lobbiesRepo = {
       GROUP BY c.id
       ${coverage.having}
     `;
+
+    return rows.map((row) => row.id);
+  },
+
+  async listCategoryIdsWithMinPlainMcqCount(
+    categoryIds: string[],
+    minCount: number,
+    matchId: string
+  ): Promise<string[]> {
+    if (categoryIds.length === 0) return [];
+
+    // Mirrors the runtime plain-MCQ picker (match-questions.repo) exactly:
+    // active category, valid payload, no image MCQs, and none already used by
+    // this match — a looser count here would pass categories the picker can
+    // still run dry on mid-shootout.
+    const validPayload = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
+    const imageMcq = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
+    const rows = await sql.unsafe<{ id: string }[]>(
+      `
+      SELECT q.category_id AS id
+      FROM questions q
+      JOIN categories c ON c.id = q.category_id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      ${NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW}
+      WHERE q.category_id = ANY($1::uuid[])
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.visibility = 'public'
+        AND q.ranked_eligible = true
+        AND q.type = 'mcq_single'
+        AND (${validPayload})
+        AND NOT (${imageMcq})
+        AND NOT EXISTS (
+          SELECT 1
+          FROM match_questions mq
+          WHERE mq.match_id = $2
+            AND mq.question_id = q.id
+        )
+      GROUP BY q.category_id
+      HAVING COUNT(*) >= $3
+      `,
+      [categoryIds, matchId, minCount]
+    );
 
     return rows.map((row) => row.id);
   },

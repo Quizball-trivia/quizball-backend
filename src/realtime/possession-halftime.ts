@@ -235,7 +235,8 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           const deepIds = new Set(
             await lobbiesService.listCategoryIdsWithMinPlainMcqCount(
               categories.map((category) => category.id),
-              MIN_PENALTY_CATEGORY_MCQS
+              MIN_PENALTY_CATEGORY_MCQS,
+              matchId
             )
           );
           const deep = categories.filter((category) => deepIds.has(category.id));

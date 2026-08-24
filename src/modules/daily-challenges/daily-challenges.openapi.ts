@@ -8,6 +8,7 @@ import {
   completeDailyChallengeBodySchema,
   completeDailyChallengeResponseSchema,
   dailyChallengeConfigResponseSchema,
+  dailyComebackStateResponseSchema,
   dailyChallengeMetadataSchema,
   dailyChallengeParamSchema,
   dailyChallengeSessionResponseSchema,
@@ -15,6 +16,8 @@ import {
   listAdminDailyChallengesResponseSchema,
   listDailyChallengesResponseSchema,
   resetDailyChallengeResponseSchema,
+  setDailyComebackReminderBodySchema,
+  setDailyComebackReminderResponseSchema,
   updateDailyChallengeConfigSchema,
 } from './daily-challenges.schemas.js';
 
@@ -32,6 +35,8 @@ export function registerDailyChallengesOpenApi(registry: OpenAPIRegistry): void 
   registry.register('AdminDailyChallengeCategoryOption', adminDailyChallengeCategoryOptionOpenApiSchema);
   registry.register('DailyChallengeSessionResponse', dailyChallengeSessionResponseSchema.openapi('DailyChallengeSessionResponse'));
   registry.register('CompleteDailyChallengeResponse', completeDailyChallengeResponseSchema.openapi('CompleteDailyChallengeResponse'));
+  registry.register('DailyComebackStateResponse', dailyComebackStateResponseSchema.openapi('DailyComebackStateResponse'));
+  registry.register('SetDailyComebackReminderResponse', setDailyComebackReminderResponseSchema.openapi('SetDailyComebackReminderResponse'));
   registry.register('ResetDailyChallengeResponse', resetDailyChallengeResponseSchema.openapi('ResetDailyChallengeResponse'));
   registry.register('AdminDailyChallengeConfigResponse', adminDailyChallengeConfigResponseOpenApiSchema);
 
@@ -61,6 +66,32 @@ export function registerDailyChallengesOpenApi(registry: OpenAPIRegistry): void 
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       404: { description: 'Challenge not available', schema: errorResponseSchema },
       409: { description: 'Already completed or content unavailable', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/daily-challenges/comeback',
+    summary: 'Get server-authoritative Daily comeback streak and reminder state',
+    tags: ['Daily Challenges'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Projected streak, bonus, and reminder availability', schema: dailyComebackStateResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'put',
+    path: '/api/v1/daily-challenges/comeback/reminder',
+    summary: 'Schedule or cancel the next Daily Challenge reminder',
+    tags: ['Daily Challenges'],
+    security: [{ bearerAuth: [] }],
+    body: setDailyComebackReminderBodySchema,
+    responses: {
+      200: { description: 'Reminder state updated', schema: setDailyComebackReminderResponseSchema },
+      400: { description: 'Daily reminders are not enabled', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });
 

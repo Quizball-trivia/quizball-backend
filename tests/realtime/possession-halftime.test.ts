@@ -654,6 +654,11 @@ describe('possession halftime with a preset second-half category', () => {
       'cat-deep-2',
       'cat-deep-3',
     ]);
+    expect(listCategoryIdsWithMinPlainMcqCountMock).toHaveBeenCalledWith(
+      ['cat-thin-1', 'cat-deep-1', 'cat-thin-2', 'cat-deep-2', 'cat-deep-3'],
+      12,
+      'match-1'
+    );
   });
 
   it('fails open with thin penalty categories when fewer than 3 are deep enough', async () => {

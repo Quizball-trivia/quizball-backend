@@ -18,7 +18,10 @@ const TIMER_BATCH_SIZE = 100;
 const TIMER_HANDLER_CONCURRENCY = 4;
 
 export type RealtimeTimerKind =
+  | 'auction_advance_retry'
   | 'auction_bot_action'
+  | 'auction_clue_study'
+  | 'auction_disconnect_debounce'
   | 'auction_clue_reveal'
   | 'auction_disconnect_grace'
   | 'auction_matchmaking_fill'
@@ -44,7 +47,10 @@ export type RealtimeTimerPayload =
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
   | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
-  | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string }
+  | { kind: 'auction_advance_retry'; matchId: string; phaseHint: 'round' | 'bidding' | 'reveal' }
+  | { kind: 'auction_clue_study'; matchId: string; roundId: string; stateVersion: number }
+  | { kind: 'auction_disconnect_debounce'; matchId: string; userId: string; seatId: string; disconnectedAt: string }
+  | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string; nonce?: number }
   | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
@@ -104,7 +110,10 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   const key = member.slice(separator + 1);
   if (!key) return null;
   if (
-    kind !== 'auction_bot_action'
+    kind !== 'auction_advance_retry'
+    && kind !== 'auction_bot_action'
+    && kind !== 'auction_clue_study'
+    && kind !== 'auction_disconnect_debounce'
     && kind !== 'auction_clue_reveal'
     && kind !== 'auction_disconnect_grace'
     && kind !== 'auction_matchmaking_fill'

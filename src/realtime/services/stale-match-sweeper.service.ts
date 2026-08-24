@@ -69,6 +69,10 @@ async function cleanupMatchRedisKeys(matchId: string, userIds: string[]): Promis
  * re-check `status='active'` and are therefore idempotent.
  */
 async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<void> {
+  if (match.game_variant === 'auction') {
+    logger.info({ matchId: match.id }, 'Stale generic sweeper skipped Auction-owned match');
+    return;
+  }
   const roster = await matchPlayersRepo.listMatchPlayers(match.id);
   if (roster.length === 0) {
     // No participants at all (pure dead row) — just close it.
@@ -84,7 +88,7 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
   // forfeit helper (which only excludes a single user from standings) would
   // resolve it wrong. A stale party match is already dead — abandon it safely
   // rather than fabricate a winner.
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   if (variant === 'friendly_party_quiz') {
     const abandoned = await abandonMatchWithCompleteLock(match.id);
     if (!abandoned.abandoned && abandoned.reason === 'lock_not_acquired') return;

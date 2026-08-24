@@ -15,14 +15,14 @@ import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
  * Live persistent-bot selection for the ranked AI-fallback seam (PR7).
  *
  * Contract (PERSISTENT-BOTS-PLAN §1.3 / §1.7):
- *   - The rollout flag still gates optional callers. Ranked is persistent-
+ *   - The rollout flag still gates optional auction use. Ranked is persistent-
  *     only and therefore selects/reserves from the roster even when the legacy
  *     rollout flag is off; there is no ephemeral ranked path to fall back to.
  *   - Nearest-RP to the human's SELECTION TARGET (placement anchor for unplaced,
  *     current RP for placed), widening ±150 → ±BOT_PAIRING_MAX_RP_GAP (300).
  *     Ranked callers may then fall through to the highest lower-RP persistent
- *     bot (or the closest higher bot when no lower bot exists). Optional callers
- *     keep the bounded band because they still own an ephemeral fallback.
+ *     bot (or the closest higher bot when no lower bot exists). Auction keeps
+ *     the bounded band because it still owns a separate ephemeral seat fallback.
  *   - Eligibility ladder relaxes SOFT constraints in fixed order:
  *       session preference → recently-faced → daily cap → schedule.
  *     Ranked first removes rotation-excluded identities — the last
@@ -36,8 +36,8 @@ import { MAX_DAILY_CAP } from '../bots/tuning/tuning.schemas.js';
  *     NEVER relaxed. reserved is additionally guaranteed by the acquire race.
  *   - On a hit: acquire the reservation (ON CONFLICT DO NOTHING). If the acquire
  *     loses the race (another selection grabbed the same bot), try the next
- *     candidate; exhausting candidates → null. Optional callers may then create
- *     an ephemeral seat; ranked reports an unavailable roster and never does.
+ *     candidate; exhausting candidates → null. Auction may then create an
+ *     ephemeral seat; ranked reports an unavailable roster and never does.
  *
  * Telemetry: every terminal outcome increments persistentBotSelections tagged
  * with { outcome, relaxation } so PR9 can build alerting on it.
@@ -352,6 +352,10 @@ export const syntheticBotSelectionService = {
     humanUserId: string;
     humanProfile: RankedProfileRow;
     lobbyId: string;
+    /** Tags the acquired reservation so the sweeper reconciles it by mode. */
+    mode?: 'auction';
+    /** Bots already seated in THIS match, excluded so one match never seats the same bot twice. */
+    excludeBotUserIds?: readonly string[];
     /** Ranked-only: use a persistent bot outside the RP ceiling instead of legacy AI. */
     allowOutOfBandFallback?: boolean;
   }): Promise<SelectedPersistentBot | null> {
@@ -382,11 +386,17 @@ export const syntheticBotSelectionService = {
     // Rotation exclusion: the recent-identity window plus any bot this human
     // has already faced BOT_RANKED_PAIR_WEEKLY_CAP times in the trailing 7
     // days. weeklyCappedIds is only populated on the ranked path, so this is
-    // exactly the old recently-faced set for optional callers.
+    // exactly the old recently-faced set for auction.
     const recentlyFaced = new Set([...recentlyFacedList, ...weeklyCappedIds]);
-    const unseated = eligible;
+    // HARD exclusion: a bot already seated in this same match must not be picked
+    // for a second seat. The reservations table's bot_user_id PK would reject the
+    // duplicate acquire anyway, but filtering here avoids burning acquire
+    // attempts (MAX_ACQUIRE_ATTEMPTS) on candidates that cannot possibly win.
+    const excluded = new Set(params.excludeBotUserIds ?? []);
+    const unseated = eligible.filter((bot) => !excluded.has(bot.user_id));
     // Ranked keeps rotation-excluded identities out of both normal pools — a
     // fresh identity further down the RP ladder beats repeating a closer one.
+    // Auction retains the original soft ladder, including relax_recently_faced.
     const selectable = rankedPersistentOnly
       ? unseated.filter((bot) => !recentlyFaced.has(bot.user_id))
       : unseated;
@@ -408,20 +418,33 @@ export const syntheticBotSelectionService = {
       recentOrder,
     );
 
-    // Optional callers remain bounded and may hand the seat to their ephemeral
+    // Auction remains bounded and may hand unfilled seats to its own ephemeral
     // fallback. Ranked appends outOfBand above, so this branch means the roster
-    // is genuinely unavailable after its hard constraints.
+    // is genuinely unavailable after hard exclusions (recent, seated, reserved).
+    //
+    // Distinguish the two ways this can happen so the metric means one thing:
+    // 'all_excluded' is a multi-seat auction that already seated every in-band
+    // bot (expected on a thin roster, NOT an RP-coverage hole), while
+    // 'no_bot_in_rp_band' is a genuine gap in roster coverage at this RP — the
+    // signal to widen BOT_PAIRING_MAX_RP_GAP or extend the roster's top end.
     if (inBand.length === 0 && outOfBand.length === 0 && recentPool.length === 0) {
-      appMetrics.persistentBotSelections.add(1, {
-        outcome: unavailableOutcome,
-        relaxation: 'no_bot_in_rp_band',
-      });
+      // Was the band actually populated before this match's own seats were
+      // excluded? If so the roster covers this RP fine and the miss is purely
+      // exclusion, not coverage.
+      const inBandBeforeExclusion = excluded.size > 0
+        ? orderByNearestRp(eligible, targetRp).length
+        : 0;
+      const relaxation = inBandBeforeExclusion > 0
+          ? 'all_excluded'
+          : 'no_bot_in_rp_band';
+      appMetrics.persistentBotSelections.add(1, { outcome: unavailableOutcome, relaxation });
       logger.info(
         {
           humanUserId: params.humanUserId,
           targetRp,
           eligibleCount: eligible.length,
           selectableCount: selectable.length,
+          excludedCount: excluded.size,
           recentlyFacedCount: recentlyFaced.size,
           weeklyCappedCount: weeklyCappedIds.length,
           recentWindow: rankedPersistentOnly ? rankedRecentWindow() : RECENTLY_FACED_LIMIT,
@@ -445,6 +468,7 @@ export const syntheticBotSelectionService = {
         botUserId: bot.user_id,
         lobbyId: params.lobbyId,
         ttlSec: RESERVATION_TTL_SEC,
+        mode: params.mode,
         requirePersistent: rankedPersistentOnly,
       });
       if (!reservation) return null;

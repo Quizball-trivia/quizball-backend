@@ -10,7 +10,7 @@ export const publicLobbyResponseSchema = z.object({
   lobbyId: z.string().uuid(),
   inviteCode: z.string(),
   displayName: z.string(),
-  gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'ranked_sim']),
+  gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'auction', 'ranked_sim']),
   isPublic: z.boolean(),
   createdAt: z.string().datetime(),
   memberCount: z.number().int(),

@@ -28,14 +28,15 @@ export const lobbyReadySchema = z.object({
 export const lobbyUpdateSettingsSchema = z
   .object({
     lobbyId: z.string().uuid().optional(),
-    gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'ranked_sim']),
+    gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'auction', 'ranked_sim']),
     friendlyRandom: z.boolean().optional(),
     friendlyCategoryAId: z.string().uuid().nullable().optional(),
     friendlyCategoryBId: z.string().uuid().nullable().optional(),
     isPublic: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.gameMode === 'ranked_sim') return;
+    // Auction draws from published auction cards, not lobby categories.
+    if (data.gameMode === 'ranked_sim' || data.gameMode === 'auction') return;
 
     if (data.friendlyRandom === false) {
       if (!data.friendlyCategoryAId) {

@@ -61,6 +61,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: (...args: unknown[]) => acquireLockMock(...args),
   releaseLock: (...args: unknown[]) => releaseLockMock(...args),
+  startLockHeartbeat: vi.fn(() => ({ stop: vi.fn() })),
 }));
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({

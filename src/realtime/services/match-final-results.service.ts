@@ -13,7 +13,7 @@ import {
   matchForfeitPendingUserKey,
 } from '../match-keys.js';
 import { buildStandings } from '../match-utils.js';
-import type { AchievementUnlockPayload, MatchFinalResultsPayload } from '../socket.types.js';
+import type { AchievementUnlockPayload, MatchFinalResultsPayload, MatchVariant } from '../socket.types.js';
 import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { buildParticipantPayloads } from './match-participants.helpers.js';
@@ -81,7 +81,7 @@ export async function buildFinalQuestionResults(
 
 export async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
-  variant?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
+  variant?: MatchVariant;
   winnerId: string | null;
   players: Record<string, {
     totalPoints: number;
@@ -134,7 +134,8 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
 
   const standings = buildStandings(players);
   const participants = await buildParticipantPayloads(players, match.mode, match.ranked_context);
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
+  if (variant === 'football_grid' || variant === 'auction') return null;
   // Best-effort enrichment: a failure here must never block result delivery —
   // a swallowed emit leaves the client on "Updating rank…" forever.
   let unlockedAchievements: Awaited<ReturnType<typeof achievementsService.listUnlockedForMatch>> = {};

@@ -7,6 +7,7 @@ export interface MatchRow {
   id: string;
   lobby_id: string | null;
   mode: 'friendly' | 'ranked';
+  game_variant: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid' | 'ranked_sim' | 'auction';
   status: 'active' | 'completed' | 'abandoned';
   category_a_id: string;
   category_b_id: string | null;

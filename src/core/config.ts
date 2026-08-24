@@ -60,6 +60,14 @@ const configSchema = z.object({
 
   // Redis
   REDIS_URL: z.string().url().optional(),
+  // Auction kill switch. Blocks NEW auction entry (queue searches, AI matches,
+  // friend-lobby starts) while letting in-flight matches finish — flipping it
+  // off mid-incident must never strand live players. Default OFF so a fresh
+  // deploy is dark until the operator explicitly enables the mode.
+  AUCTION_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   RANKED_HUMAN_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

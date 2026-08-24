@@ -12,6 +12,22 @@ import { registerWlHandlers } from './handlers/wl.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
+import { registerAuctionHandlers } from './handlers/auction.handler.js';
+import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
+import { runAuctionClueRevealTimer, runAuctionClueStudyTimer } from './services/auction-clue-timer.service.js';
+import {
+  runAuctionDisconnectDebounceTimer,
+  runAuctionDisconnectGraceTimer,
+  runAuctionResumeCountdownTimer,
+} from './services/auction-disconnect.service.js';
+import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
+import { runAuctionAdvanceRetryTimer } from './services/auction-advance-retry.service.js';
+import {
+  auctionLifecycleService,
+  scheduleBootAuctionTimerRearm,
+} from './services/auction-lifecycle.service.js';
+import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
+import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 import type {
   ClientToServerEvents,
   InterServerEvents,
@@ -293,6 +309,14 @@ async function runPostConnectHydration(
     }
   }
 
+  if (!socket.data.matchId && !socket.data.lobbyId) {
+    try {
+      await auctionLifecycleService.rejoinActiveAuctionMatchOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin active auction match on connect');
+    }
+  }
+
   if (!socket.data.matchId) {
     try {
       await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(socket);
@@ -366,6 +390,46 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       // and the reconciler re-arms anything a lost hint missed.
       const { wlAdvanceOneTournament } = await import('../modules/weekend-league/wl-orchestrator.js');
       await wlAdvanceOneTournament(io, payload.tournamentId);
+    },
+    auction_advance_retry: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_advance_retry') return;
+      await runAuctionAdvanceRetryTimer(server, payload);
+    },
+    auction_bot_action: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_bot_action') return;
+      await runAuctionBotActionTimer(server, payload);
+    },
+    auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_clue_reveal') return;
+      await runAuctionClueRevealTimer(server, payload);
+    },
+    auction_clue_study: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_clue_study') return;
+      await runAuctionClueStudyTimer(server, payload);
+    },
+    auction_disconnect_debounce: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_disconnect_debounce') return;
+      await runAuctionDisconnectDebounceTimer(server, payload);
+    },
+    auction_disconnect_grace: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_disconnect_grace') return;
+      await runAuctionDisconnectGraceTimer(server, payload);
+    },
+    auction_matchmaking_fill: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_matchmaking_fill') return;
+      await auctionMatchmakingService.runFillTimer(server, payload);
+    },
+    auction_resume_countdown: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_resume_countdown') return;
+      await runAuctionResumeCountdownTimer(server, payload);
+    },
+    auction_solo_pick_timeout: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_solo_pick_timeout') return;
+      await runAuctionSoloPickTimeoutTimer(server, payload);
+    },
+    auction_turn_timeout: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_turn_timeout') return;
+      await runAuctionTurnTimeoutTimer(server, payload);
     },
     draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_ai_ban') return;
@@ -490,6 +554,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // match silently freezes until the 15-minute sweeper.
   scheduleBootMatchTimerRearm(io);
   startWlOrchestrator(io);
+  scheduleBootAuctionTimerRearm(io);
 
   rankedMatchmakingService.start(io);
 
@@ -519,6 +584,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerDraftHandlers(io, socket);
     registerMatchHandlers(io, socket);
     registerWarmupHandlers(io, socket);
+    registerAuctionHandlers(io, socket);
     registerDevHandlers(io, socket);
     registerWlHandlers(io, socket);
 
@@ -592,8 +658,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
           matchRealtimeService.handleMatchDisconnect(io, socket)
         );
       }
-      void rankedMatchmakingService.handleSocketDisconnect(io, socket);
-      void trackUserOffline(io, user.id);
+      runSocketDbTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
+      runSocketDbTask('presence_offline', user.id, () => trackUserOffline(io, user.id));
       scheduleOnlineCountBroadcast(io);
     });
 

@@ -269,8 +269,12 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           },
           'Insufficient unique halftime categories excluding first-half draft categories; relaxing exclusion'
         );
-        const relaxed = await selectExcluding(3, [categoryAId]);
-        categories = uniqueDraftCategories([...categories, ...relaxed]).filter((category) => category.id !== categoryAId);
+        const relaxedExcludedIds = isPenaltyPurpose && categoryBId
+          ? [categoryAId, categoryBId]
+          : [categoryAId];
+        const relaxed = await selectExcluding(3, relaxedExcludedIds);
+        categories = uniqueDraftCategories([...categories, ...relaxed])
+          .filter((category) => !relaxedExcludedIds.includes(category.id));
       }
 
       if (isPenaltyPurpose && categories.length > 0) {

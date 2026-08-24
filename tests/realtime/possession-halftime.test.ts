@@ -501,6 +501,8 @@ describe('possession halftime with a preset second-half category', () => {
     getDraftCategoriesByIdsMock.mockResolvedValue([
       { id: 'cat-preset', name: { en: 'Preset' }, icon: null, imageUrl: null },
     ]);
+    listCategoryIdsWithMinPlainMcqCountMock.mockImplementation(async (ids: string[]) => ids);
+    selectRandomCategoriesMock.mockResolvedValue([]);
   });
 
   function createPresetCache(): MatchCache {

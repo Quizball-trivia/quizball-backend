@@ -7,11 +7,24 @@
 -- answer landing < 1.5s after returning — a human reading the question fresh
 -- can't do that; someone pasting from an LLM can.
 --
--- Detection-only. Run ad hoc (Georgia time in output) or scope with the
--- :since / :user filters. Requires the match_visibility_events table
--- (migration 20260824200000).
+-- Detection-only. Run ad hoc (Georgia time in output); narrow the window or
+-- add a user_id predicate by editing the WHERE clauses directly. Requires the
+-- match_visibility_events table (migration 20260824200000).
 
-WITH episodes AS (
+WITH stream AS (
+  -- Only true away/back signals: 'blur' fires for in-page browser UI and
+  -- would fake departures; 'pagehide' has no return event.
+  SELECT
+    match_id, user_id, signal, q_index, question_kind, mode, question_open, occurred_at,
+    LAG(signal) OVER (PARTITION BY match_id, user_id ORDER BY occurred_at, id) AS prev_signal
+  FROM match_visibility_events
+  WHERE signal IN ('hidden', 'visible', 'focus')
+    AND occurred_at > now() - interval '30 days'
+),
+episodes AS (
+  -- One episode per departure: only the FIRST 'hidden' after being back pairs
+  -- with the next return, so repeated 'hidden' rows (reconnect baselines)
+  -- cannot double-count against the same answer.
   SELECT
     h.match_id,
     h.user_id,
@@ -21,7 +34,7 @@ WITH episodes AS (
     h.occurred_at AS hidden_at,
     v.occurred_at AS visible_at,
     EXTRACT(epoch FROM (v.occurred_at - h.occurred_at)) AS hidden_seconds
-  FROM match_visibility_events h
+  FROM stream h
   CROSS JOIN LATERAL (
     SELECT occurred_at
     FROM match_visibility_events v
@@ -33,8 +46,8 @@ WITH episodes AS (
     LIMIT 1
   ) v
   WHERE h.signal = 'hidden'
+    AND h.prev_signal IS DISTINCT FROM 'hidden'
     AND h.question_open
-    AND h.occurred_at > now() - interval '30 days'
 ),
 scored AS (
   SELECT

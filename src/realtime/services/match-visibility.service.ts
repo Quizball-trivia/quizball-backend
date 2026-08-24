@@ -73,7 +73,16 @@ export async function handleVisibilitySignal(
     return;
   }
 
-  const cache = await getMatchCacheOrRebuild(payload.matchId);
+  let cache;
+  try {
+    cache = await getMatchCacheOrRebuild(payload.matchId);
+  } catch (error) {
+    logger.debug(
+      { err: error, matchId: payload.matchId, userId },
+      'match:visibility_signal cache lookup failed; dropping event'
+    );
+    return;
+  }
   if (!cache || cache.status !== 'active') return;
   if (!getCachedPlayer(cache, userId)) return;
 

@@ -127,6 +127,12 @@ describe('match-visibility.service', () => {
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     await handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' });
 
+    // A cache/DB failure drops the event instead of rejecting the handler.
+    getMatchCacheOrRebuildMock.mockRejectedValue(new Error('redis lock lost'));
+    await expect(
+      handleVisibilitySignal(fakeSocket('user-1'), { matchId: 'match-1', signal: 'hidden' })
+    ).resolves.toBeUndefined();
+
     await flushMicrotasks();
     expect(insertVisibilityEventMock).not.toHaveBeenCalled();
   });

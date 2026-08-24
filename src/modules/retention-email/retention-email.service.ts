@@ -21,6 +21,8 @@ import {
 
 export const RETENTION_EMAIL_CAMPAIGN_KEY = 'weekend_league_comeback_v1';
 export const RETENTION_EMAIL_FEATURE_FLAG_KEY = 'email-comeback-weekend-league';
+export const DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY = 'dormant_player_comeback_v1';
+export const DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY = 'email-comeback-dormant-players';
 const MAX_ATTEMPTS = 5;
 const STALE_CLAIM_MINUTES = 10;
 const PUBLIC_API_FALLBACK = 'https://quizball-backend-production.up.railway.app';
@@ -90,13 +92,44 @@ export function buildRetentionEmail(
   now = new Date(),
 ): { subject: string; html: string } {
   const georgian = assignment.preferred_language.toLowerCase().startsWith('ka');
-  const timeLeft = humanTimeLeft(assignment.entry_closes_at, now);
   const nickname = assignment.nickname?.trim()
     ? escapeHtml(assignment.nickname.trim())
     : null;
   const greeting = georgian
     ? (nickname ? `გამარჯობა, ${nickname}` : 'გამარჯობა')
     : (nickname ? `Hi ${nickname}` : 'Hi');
+
+  if (assignment.message_kind === 'dormant_comeback') {
+    const subject = georgian
+      ? 'Quizball-ში ახალი მატჩი გელოდება'
+      : 'A new Quizball match is waiting';
+    const title = georgian ? 'დაბრუნდი თამაშში' : 'Come back to the game';
+    const body = georgian
+      ? 'ცოტა ხანია არ გითამაშია. დაბრუნდი Quizball-ში და ითამაშე ერთი მატჩი დღეს.'
+      : 'It has been a while since your last match. Come back to Quizball and play one today.';
+    const cta = georgian ? 'ითამაშე ახლა' : 'Play now';
+    const unsubscribe = georgian ? 'გამოწერის გაუქმება' : 'Unsubscribe';
+    return {
+      subject,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px 16px;color:#111">
+          <div style="font-size:28px;margin-bottom:8px">⚽</div>
+          <p style="margin:0 0 8px;color:#555">${greeting}</p>
+          <h2 style="margin:0 0 10px">${title}</h2>
+          <p style="margin:0 0 20px;line-height:1.55;color:#444">${body}</p>
+          <a href="${clickUrl}"
+             style="display:inline-block;background:#2455ff;color:white;padding:13px 24px;border-radius:10px;text-decoration:none;font-weight:700">
+            ${cta}
+          </a>
+          <p style="margin:20px 0 0;font-size:12px"><a href="${unsubscribeUrl}" style="color:#999">${unsubscribe}</a></p>
+        </div>`,
+    };
+  }
+
+  if (!assignment.entry_closes_at) {
+    throw new Error('Weekend League retention email requires entry_closes_at');
+  }
+  const timeLeft = humanTimeLeft(assignment.entry_closes_at, now);
   const subject = georgian
     ? `უიქენდის ლიგამდე ${timeLeft} დარჩა`
     : `Weekend League closes in ${timeLeft}`;
@@ -131,22 +164,32 @@ export function buildRetentionEmail(
 }
 
 function assignmentAnalyticsProperties(assignment: RetentionEmailAssignment) {
+  const inactivityDays = Math.max(0, Math.floor(
+    (Date.parse(assignment.assigned_at) - Date.parse(assignment.last_match_started_at))
+    / (24 * 60 * 60 * 1_000),
+  ));
   return {
     campaign_key: assignment.campaign_key,
     variant: assignment.variant,
+    message_kind: assignment.message_kind,
     tournament_id: assignment.tournament_id,
     cta_state: assignment.cta_state,
     destination: assignment.destination_path,
     qp_remaining: assignment.qp_remaining,
+    lifetime_matches: assignment.lifetime_matches,
+    inactivity_days: inactivityDays,
   };
 }
 
-async function evaluateVariant(candidate: RetentionEmailCandidate): Promise<RetentionEmailVariant | null> {
+async function evaluateVariant(
+  candidate: RetentionEmailCandidate,
+  featureFlagKey: string,
+): Promise<RetentionEmailVariant | null> {
   const client = getPostHogClient();
   if (!client) return null;
   try {
     const value = await client.getFeatureFlag(
-      RETENTION_EMAIL_FEATURE_FLAG_KEY,
+      featureFlagKey,
       candidate.user_id,
       {
         personProperties: { country: 'GE' },
@@ -183,7 +226,7 @@ export async function assignRetentionEmailCandidates(): Promise<number> {
 
   let assigned = 0;
   for (const candidate of candidates) {
-    const variant = await evaluateVariant(candidate);
+    const variant = await evaluateVariant(candidate, RETENTION_EMAIL_FEATURE_FLAG_KEY);
     if (!variant) continue;
     const assignment = await retentionEmailRepo.insertAssignment({
       campaignKey: RETENTION_EMAIL_CAMPAIGN_KEY,
@@ -211,10 +254,63 @@ export async function assignRetentionEmailCandidates(): Promise<number> {
   return assigned;
 }
 
+export async function assignDormantComebackEmailCandidates(): Promise<number> {
+  if (
+    !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED
+    || !config.RESEND_WEBHOOK_SECRET
+    || !emailUnsubEnabled()
+    || config.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP <= 0
+  ) return 0;
+  const candidates = await retentionEmailRepo.listDormantCandidates({
+    campaignKey: DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,
+    minInactiveDays: config.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS,
+    maxInactiveDays: config.DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS,
+    minLifetimeMatches: config.DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES,
+    frequencyDays: config.RETENTION_EMAIL_FREQUENCY_DAYS,
+    userIdAllowlist: config.DORMANT_COMEBACK_EMAIL_USER_ID_ALLOWLIST,
+    limit: Math.min(
+      config.RETENTION_EMAIL_BATCH_SIZE,
+      config.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP,
+    ),
+  });
+
+  let assigned = 0;
+  for (const candidate of candidates) {
+    const variant = await evaluateVariant(candidate, DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY);
+    if (!variant) continue;
+    const assignment = await retentionEmailRepo.insertAssignment({
+      campaignKey: DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,
+      featureFlagKey: DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY,
+      candidate,
+      variant,
+      assignmentCap: config.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP,
+    });
+    if (!assignment) continue;
+    assigned += 1;
+    const properties = assignmentAnalyticsProperties(assignment);
+    trackEvent('$feature_flag_called', assignment.user_id, {
+      $feature_flag: DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY,
+      $feature_flag_response: variant,
+      ...properties,
+    }, {
+      uuid: stableAnalyticsEventUuid(`retention-email:exposure:${assignment.id}`),
+      occurredAt: assignment.assigned_at,
+    });
+    trackEvent('retention_email_assigned', assignment.user_id, properties, {
+      uuid: stableAnalyticsEventUuid(`retention-email:assigned:${assignment.id}`),
+      occurredAt: assignment.assigned_at,
+    });
+  }
+  return assigned;
+}
+
 export async function deliverRetentionEmails(): Promise<number> {
   if (
     !config.RETENTION_EMAIL_EXPERIMENT_ENABLED
-    || !config.RESEND_WEBHOOK_SECRET
+    && !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED
+  ) return 0;
+  if (
+    !config.RESEND_WEBHOOK_SECRET
     || !emailUnsubEnabled()
   ) return 0;
   await retentionEmailRepo.recoverStaleClaims(MAX_ATTEMPTS, STALE_CLAIM_MINUTES);
@@ -285,6 +381,7 @@ export async function handleRetentionEmailClick(
     trackEvent('retention_email_clicked', assignment.user_id, {
       campaign_key: assignment.campaign_key,
       variant: assignment.variant,
+      message_kind: assignment.message_kind,
       cta_state: assignment.cta_state,
       destination: assignment.destination_path,
     }, {
@@ -337,6 +434,7 @@ export async function handleRetentionEmailProviderEvent(input: {
   const properties = {
     campaign_key: assignment.campaign_key,
     variant: assignment.variant,
+    message_kind: assignment.message_kind,
     cta_state: assignment.cta_state,
     destination: assignment.destination_path,
     provider_status: status,

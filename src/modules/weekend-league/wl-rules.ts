@@ -84,7 +84,7 @@ export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i' | 'money
 export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [100, 80, 60, 40, 20];
 
 /**
- * Money Drop (final round, daily-challenge rules): a 300-point budget enters
+ * Money Drop (final round, daily-challenge rules): a 500-point budget enters
  * question 1; each question the player spreads it across the options, keeps
  * only what sits on the correct one, and the survivor rides into the next
  * question. Whatever survives question 5 is the round's points — recorded on

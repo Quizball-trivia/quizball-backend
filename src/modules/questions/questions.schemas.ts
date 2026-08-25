@@ -456,6 +456,40 @@ export const listQuestionsQuerySchema = z.object({
 export type ListQuestionsQuery = z.infer<typeof listQuestionsQuerySchema>;
 
 /**
+ * Stem length caps, shared with the agent pipeline's contract: players answer
+ * on a 10-second timer, so a stem must be one short readable sentence. The
+ * agent side already enforces this at its publish gate; this applies the same
+ * caps to editor/CMS creation — the Weekend League ingest published 131-185
+ * char stems through this path with no check at all. Countdown set-definitions
+ * get more room; clue_chain/career_path/high_low/football_logic/input_text
+ * render payload-driven stems, so their top-level prompt is boilerplate.
+ */
+const STEM_CAPS: Partial<Record<QuestionType, { en: number; ka: number }>> = {
+  mcq_single: { en: 130, ka: 150 },
+  true_false: { en: 130, ka: 150 },
+  put_in_order: { en: 130, ka: 150 },
+  imposter_multi_select: { en: 130, ka: 150 },
+  countdown_list: { en: 180, ka: 207 },
+};
+
+function stemCapIssues(
+  type: QuestionType | undefined,
+  prompt: Record<string, string> | undefined | null
+): string[] {
+  if (!prompt) return [];
+  // Type unknown (partial update): use the loosest caps so a countdown edit is
+  // never falsely rejected; the create path always knows the type.
+  const caps = type ? STEM_CAPS[type] : { en: 180, ka: 207 };
+  if (!caps) return [];
+  const issues: string[] = [];
+  const en = (prompt.en ?? '').trim();
+  const ka = (prompt.ka ?? '').trim();
+  if (en.length > caps.en) issues.push(`en prompt is ${en.length} chars (max ${caps.en})`);
+  if (ka.length > caps.ka) issues.push(`ka prompt is ${ka.length} chars (max ${caps.ka})`);
+  return issues;
+}
+
+/**
  * Base create question schema (before payload type validation)
  */
 export const createQuestionBaseSchema = z.object({
@@ -474,10 +508,16 @@ export const createQuestionBaseSchema = z.object({
  * - Payload is required
  * - Payload type must match question type
  */
-export const createQuestionSchema = createQuestionBaseSchema.refine(
-  (data) => data.payload.type === data.type,
-  { message: 'Payload type must match question type', path: ['payload', 'type'] }
-);
+export const createQuestionSchema = createQuestionBaseSchema
+  .refine((data) => data.payload.type === data.type, {
+    message: 'Payload type must match question type',
+    path: ['payload', 'type'],
+  })
+  .superRefine((data, ctx) => {
+    for (const issue of stemCapIssues(data.type, data.prompt)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ['prompt'] });
+    }
+  });
 
 export type CreateQuestionRequest = z.infer<typeof createQuestionSchema>;
 
@@ -506,7 +546,12 @@ export const updateQuestionSchema = z
       return true;
     },
     { message: 'Payload type must match question type', path: ['payload', 'type'] }
-  );
+  )
+  .superRefine((data, ctx) => {
+    for (const issue of stemCapIssues(data.type ?? data.payload?.type, data.prompt)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ['prompt'] });
+    }
+  });
 
 export type UpdateQuestionRequest = z.infer<typeof updateQuestionSchema>;
 
@@ -694,10 +739,17 @@ export const bulkCreateQuestionsSchema = z.object({
   category_id: z.string().uuid(),
   questions: z
     .array(
-      createQuestionBaseSchema.omit({ category_id: true }).refine(
-        (data) => data.payload.type === data.type,
-        { message: 'Payload type must match question type', path: ['payload', 'type'] }
-      )
+      createQuestionBaseSchema
+        .omit({ category_id: true })
+        .refine((data) => data.payload.type === data.type, {
+          message: 'Payload type must match question type',
+          path: ['payload', 'type'],
+        })
+        .superRefine((data, ctx) => {
+          for (const issue of stemCapIssues(data.type, data.prompt)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ['prompt'] });
+          }
+        })
     )
     .min(1, 'At least one question required')
     .max(100, 'Maximum 100 questions per upload'),

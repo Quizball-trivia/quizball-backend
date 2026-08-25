@@ -11,7 +11,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
-import { WL_FINAL_GAME_INDEX, WL_FINALISTS, WL_LATE_JOIN_MS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
+import { WL_BREAK_MS, WL_FINAL_GAME_INDEX, WL_FINALISTS, WL_LATE_JOIN_MS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
 import { wlConfigFrom } from './wl-config.js';
 
 export interface WlEngine {
@@ -698,7 +698,7 @@ async function finalizeGame(
   const eliminated = isFinal ? [] : board.filter((b) => !survivorSet.has(b.user_id)).map((b) => b.user_id);
   const cfg = (t.config ?? {}) as Record<string, unknown>;
   const breakMs = Number(cfg['break_ms']) >= 0 && Number.isFinite(Number(cfg['break_ms']))
-    ? Number(cfg['break_ms']) : 120_000;
+    ? Number(cfg['break_ms']) : WL_BREAK_MS;
 
   const toStatus = isFinal ? 'completed' : (isLastQualifierGame ? 'qualifier_done' : 'break');
   const fromStatus = gameIndex === WL_FINAL_GAME_INDEX ? 'final_live' : 'game_live';
@@ -785,7 +785,9 @@ async function finalizeGame(
       type: isFinal ? 'final_result' : 'game_result',
       payload: {
         game_index: gameIndex,
-        board: board.slice(0, WL_FINALISTS),
+        // Full board, matching reveals: a 24-row result wiped the exact rank
+        // the reveal just gave everyone below the cut (Codex review).
+        board,
         field: board.length,
         advanced: advanceCount,
         // The final ends the tournament: EVERYONE leaves the live room

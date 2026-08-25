@@ -51,6 +51,7 @@ import {
 type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTimeout: boolean) => Promise<void>;
 
 const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
+const AI_ANSWER_LOCK_BUSY_RETRY_MS = 750;
 const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 const AI_DELAY_MIN_MS = 800;
 const AI_DELAY_QUESTION_BUFFER_MS = 1500;
@@ -778,10 +779,12 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         'Possession AI answer timer fired'
       );
 
+      let roundLockBusy = false;
       const onRoundLockBusy = () => {
+        roundLockBusy = true;
         logger.warn(
           { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId },
-          'Possession AI answer skipped: round lock busy'
+          'Possession AI answer deferred: round lock busy'
         );
       };
 
@@ -1063,6 +1066,31 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           clueIndex,
         };
       });
+
+      if (committed === undefined && roundLockBusy) {
+        // The durable timer was consumed when this handler fired; dropping the
+        // run would leave the bot answerless for the round. Re-arm with the
+        // original payload (awaited — a fire-and-forget can race scheduler
+        // cleanup) and let the retry re-validate against the round, which
+        // no-ops harmlessly if the lock holder resolved it meanwhile.
+        await scheduleRealtimeTimer(
+          'possession_ai_answer',
+          questionTimerKey(matchId, qIndex),
+          new Date(Date.now() + AI_ANSWER_LOCK_BUSY_RETRY_MS),
+          {
+            kind: 'possession_ai_answer',
+            matchId,
+            qIndex,
+            plannedAnswerTimeMs,
+            plannedClueIndex,
+            plannedIsCorrect,
+            plannedFoundCount,
+            plannedPutInOrderCount,
+            plannedClueSolved,
+          }
+        );
+        return;
+      }
 
       if (!committed) return;
 

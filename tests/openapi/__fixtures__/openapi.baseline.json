@@ -20486,6 +20486,10 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "tier": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "rank": {
                             "type": "integer",
                             "minimum": 0,
@@ -20498,6 +20502,7 @@
                           "avatarUrl",
                           "auctionPoints",
                           "country",
+                          "tier",
                           "rank"
                         ]
                       }
@@ -20590,6 +20595,10 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "tier": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "rank": {
                       "type": "integer",
                       "minimum": 0,
@@ -20606,6 +20615,7 @@
                     "avatarUrl",
                     "auctionPoints",
                     "country",
+                    "tier",
                     "rank",
                     "total"
                   ]

@@ -14,7 +14,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
-import { getMatchCache, type MatchCache } from '../match-cache.js';
+import { getMatchCache, getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   cancelMatchQuestionTimer,
@@ -1305,16 +1305,44 @@ export async function completeResumeCountdown(
       }
     }
 
+    // The resume path refused: usually the round for current_q_index already
+    // resolved and the cache moved on while the DB column lagged. Dispatching
+    // current_q_index here would silently replay the question the players just
+    // answered (fresh deadline, cleared answers). The cache is the authority
+    // on the live round — never dispatch an index it has already passed, and
+    // if it holds an ACTIVE question at the newer index, resume that question
+    // (a fresh dispatch would clear its answers and reset its timing).
+    let targetQIndex = activeMatch.current_q_index;
+    if (variant !== 'friendly_party_quiz') {
+      const cache = await getMatchCacheOrRebuild(matchId);
+      if (cache && Number.isInteger(cache.currentQIndex)) {
+        targetQIndex = Math.max(targetQIndex, cache.currentQIndex);
+        if (cache.currentQuestion?.qIndex === targetQIndex && targetQIndex !== activeMatch.current_q_index) {
+          const fallbackPauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+            ? pauseStartedAtMs
+            : Date.now();
+          const resumedAhead = await resumePossessionMatchQuestion(io, matchId, targetQIndex, fallbackPauseStartedAtMs);
+          if (resumedAhead) {
+            io.to(`match:${matchId}`).emit('match:resume', {
+              matchId,
+              nextQIndex: targetQIndex,
+            });
+            return;
+          }
+        }
+      }
+    }
+
     io.to(`match:${matchId}`).emit('match:resume', {
       matchId,
-      nextQIndex: activeMatch.current_q_index,
+      nextQIndex: targetQIndex,
     });
 
     if (variant === 'friendly_party_quiz') {
-      await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
+      await sendPartyQuizQuestion(io, matchId, targetQIndex);
       return;
     }
-    await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
+    await sendMatchQuestion(io, matchId, targetQIndex);
   } catch (err) {
     logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
   }

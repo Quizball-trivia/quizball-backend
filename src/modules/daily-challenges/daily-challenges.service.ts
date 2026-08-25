@@ -550,9 +550,15 @@ function toListItem(
 async function listTypedQuestionRows<TType extends QuestionPayloadType>(
   categoryIds: string[],
   questionType: TType,
-  options?: { limit?: number }
+  options?: { limit?: number; excludeImagePayloads?: boolean }
 ): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
-  const cacheKey = sharedDailyContentKey('rows', questionType, categoryIds, options?.limit);
+  const cacheKey = sharedDailyContentKey(
+    'rows',
+    questionType,
+    categoryIds,
+    options?.limit,
+    options?.excludeImagePayloads
+  );
   const rows = await getOrLoadJson(cacheKey, DAILY_CONTENT_CACHE_TTL_SECONDS, () =>
     dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
       questionType,
@@ -573,9 +579,15 @@ function sharedDailyContentKey(
   kind: 'rows' | 'count',
   questionType: QuestionPayloadType,
   categoryIds: string[],
-  limit?: number
+  limit?: number,
+  excludeImagePayloads?: boolean
 ): string {
-  const identity = JSON.stringify([questionType, [...categoryIds].sort(), limit ?? null]);
+  const identity = JSON.stringify([
+    questionType,
+    [...categoryIds].sort(),
+    limit ?? null,
+    excludeImagePayloads ?? false,
+  ]);
   const digest = createHash('sha256').update(identity).digest('hex');
   return `daily:content:v1:${kind}:${digest}`;
 }
@@ -759,15 +771,18 @@ export const dailyChallengesService = {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
 
-      const validRows = await listTypedQuestionRows(
-        settings.categoryIds,
-        'mcq_single',
-        { limit: settings.questionCount * 5 }
-      );
       // Image MCQs publish as plain mcq_single, but their stem references the
       // photo ("who is pictured…") and this response schema carries no image —
       // served here they'd be unanswerable. Ranked renders the image; Money
       // Drop must skip them (359 published image MCQs sat in this pool).
+      // Excluded in SQL, BEFORE the sample limit — a post-limit filter could
+      // come up short in image-heavy categories. The in-memory check stays as
+      // a belt-and-braces guard for cached rows.
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'mcq_single',
+        { limit: settings.questionCount * 5, excludeImagePayloads: true }
+      );
       const validQuestions = validRows.filter(
         ({ row, payload }) =>
           getOptionalQuestionPrompt(row, locale) !== null &&

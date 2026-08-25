@@ -365,10 +365,16 @@ export const dailyChallengesRepo = {
   async listPublishedQuestionsByTypeAndCategories(
     questionType: string,
     categoryIds: string[],
-    options?: { limit?: number }
+    options?: { limit?: number; excludeImagePayloads?: boolean }
   ): Promise<QuestionContentRow[]> {
     const categoryFilter = categoryIds.length > 0
       ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
+      : sql``;
+
+    // Must be filtered in SQL, before LIMIT: a post-limit filter could leave a
+    // random sample with too few usable rows in image-heavy categories.
+    const imageFilter = options?.excludeImagePayloads
+      ? sql`AND NOT (qp.payload ? 'image')`
       : sql``;
 
     const limitClause = options?.limit != null
@@ -394,6 +400,7 @@ export const dailyChallengesRepo = {
         AND c.is_active = true
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
+        ${imageFilter}
       ${limitClause}
     `;
   },

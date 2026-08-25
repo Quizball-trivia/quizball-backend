@@ -546,7 +546,7 @@ function toListItem(
 async function listTypedQuestionRows<TType extends QuestionPayloadType>(
   categoryIds: string[],
   questionType: TType,
-  options?: { limit?: number }
+  options?: { limit?: number; excludeImagePayloads?: boolean }
 ): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
   const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
     questionType,
@@ -731,12 +731,23 @@ export const dailyChallengesService = {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
 
+      // Image MCQs publish as plain mcq_single, but their stem references the
+      // photo ("who is pictured…") and this response schema carries no image —
+      // served here they'd be unanswerable. Ranked renders the image; Money
+      // Drop must skip them (359 published image MCQs sat in this pool).
+      // Excluded in SQL, BEFORE the sample limit — a post-limit filter could
+      // come up short in image-heavy categories. The in-memory check stays as
+      // a belt-and-braces guard for cached rows.
       const validRows = await listTypedQuestionRows(
         settings.categoryIds,
         'mcq_single',
-        { limit: settings.questionCount * 5 }
+        { limit: settings.questionCount * 5, excludeImagePayloads: true }
       );
-      const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
+      const validQuestions = validRows.filter(
+        ({ row, payload }) =>
+          getOptionalQuestionPrompt(row, locale) !== null &&
+          (payload as { image?: unknown }).image == null
+      );
       const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,

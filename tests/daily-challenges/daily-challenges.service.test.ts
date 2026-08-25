@@ -291,6 +291,12 @@ describe('dailyChallengesService', () => {
 
     expect(result.questions).toHaveLength(1);
     expect(result.questions[0].id).toBe('q-plain');
+    // the exclusion must also reach SQL, before the sample limit is applied
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).toHaveBeenCalledWith(
+      'mcq_single',
+      [categoryId],
+      expect.objectContaining({ excludeImagePayloads: true })
+    );
   });
 
   it('falls back to legacy payload prompt when the row prompt is blank', async () => {

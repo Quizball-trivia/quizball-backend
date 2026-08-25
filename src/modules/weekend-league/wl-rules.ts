@@ -64,29 +64,34 @@ export const WL_QUESTIONS_PER_ROUND: Record<WlRoundKind, number> = {
 
 /** Per-step maximum for the timed kinds; who_am_i scores by clue instead. */
 /**
- * Per-question maxima. The five rounds must total WL_GAME_MAX_POINTS for a
- * perfect game: 5x30 + 5x30 + 5x40 + 5x40 + 300 (who-am-i, one puzzle) = 1000.
- * Changing a count here means rebalancing these.
+ * Per-question maxima — RANKED PARITY (2026-08-25 rework): every question
+ * scores exactly like a ranked question, up to 100 with the same 10-points-
+ * per-remaining-second curve players already know ("+90 = answered in ~1s").
+ * Perfect game: 4 rounds x 5 x 100 + 100 (who-am-i, one puzzle) = 2100.
+ * The old skew (30/40-point steps + a 300-point who-am-i that decided finals
+ * on one gamble) is gone: all questions are worth the same.
  */
 export const WL_STEP_MAX_POINTS: Record<Exclude<WlRoundKind, 'who_am_i' | 'money_drop'>, number> = {
-  true_false: 30,
-  higher_lower: 30,
-  mcq: 40,
-  career_path: 40,
-  put_in_order: 30,
+  true_false: 100,
+  higher_lower: 100,
+  mcq: 100,
+  career_path: 100,
+  put_in_order: 100,
 };
 
-export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [300, 240, 180, 120, 60];
+/** One question's worth, paid by how few clues were needed — a finale, not a
+ *  match-decider (was 300/240/180/120/60 = 30% of the game). */
+export const WL_WHO_AM_I_CLUE_POINTS: readonly number[] = [100, 80, 60, 40, 20];
 
 /**
  * Money Drop (final round, daily-challenge rules): a 300-point budget enters
  * question 1; each question the player spreads it across the options, keeps
  * only what sits on the correct one, and the survivor rides into the next
  * question. Whatever survives question 5 is the round's points — recorded on
- * the final answer row alone, so a perfect run is exactly 300 and the game
- * maximum stays WL_GAME_MAX_POINTS.
+ * the final answer row alone. Budget = 500 so a perfect money-drop round is
+ * worth exactly as much as any other 5-question round (ranked parity).
  */
-export const WL_MONEY_DROP_BUDGET = 300;
+export const WL_MONEY_DROP_BUDGET = 500;
 /** Betting window in base question windows — 20s at the prod 10s clock.
  *  10s tested too tight: spreading a budget across four sliders is a slower
  *  interaction than picking one option (playtest feedback 2026-08-07). */
@@ -140,7 +145,7 @@ export function wlMoneyDropSanitizeBets(
   return bets;
 }
 
-export const WL_GAME_MAX_POINTS = 1000;
+export const WL_GAME_MAX_POINTS = 2100;
 
 /**
  * Speed points for one timed step: the ranked 10-bucket curve (incl. its 500ms

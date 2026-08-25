@@ -5,7 +5,8 @@ import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { matchesService } from '../modules/matches/matches.service.js';
 import { trackPenaltyTaken, trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
-import { acquireLock, releaseLock } from './locks.js';
+import { extendLock, releaseLock } from './locks.js';
+import { acquireLockBounded } from './possession-answer-lock.js';
 import { matchPauseKey } from './match-keys.js';
 
 /** Regular penalty rounds before sudden-death kicks in. Mirrors the
@@ -16,6 +17,9 @@ const MAX_PENALTY_ROUNDS = 5;
  *  cache miss). The fire already consumed the durable ZSET member, so without
  *  an explicit re-arm the round would be left with no resolver at all. */
 const TIMEOUT_NOOP_RETRY_MS = 5000;
+
+/** Round-lock lease per extension; renewed at half-life while resolving. */
+const RESOLVE_LOCK_TTL_MS = 5000;
 import {
   answerCount,
   buildAnswerPayload,
@@ -83,8 +87,14 @@ export async function resolvePossessionRound(
     return;
   }
 
-  const lockKey = `lock:match:${matchId}:resolve`;
-  const lock = await acquireLock(lockKey, 5000);
+  // Shares the answer-commit lock key: a resolve (especially the deadline
+  // timeout) must never interleave with a half-committed answer, or the
+  // resolver backfills the still-writing player as a 0-point no-answer and
+  // scores the round with it (wrongful penalty saves under simultaneous
+  // last-second answers). Bounded wait so an in-flight answer commit (ms) or
+  // a duplicate submission can't starve the resolve into the next timer fire.
+  const lockKey = `lock:match:${matchId}:round`;
+  const lock = await acquireLockBounded(lockKey, RESOLVE_LOCK_TTL_MS, 1000);
   if (!lock.acquired || !lock.token) {
     logger.warn({ eventName: 'match:round_result', matchId, qIndex, fromTimeout }, 'Possession round resolve skipped: lock busy');
     // A timeout fire already consumed the durable timer (the scheduler pops the
@@ -94,6 +104,15 @@ export async function resolvePossessionRound(
     if (fromTimeout) await deferQuestionTimer(matchId, qIndex, TIMEOUT_NOOP_RETRY_MS);
     return;
   }
+
+  // Renew the lease while resolution runs: cache rebuilds, the goal
+  // transaction's retries, and match completion can exceed a fixed TTL, and an
+  // expired lease would let an answer commit interleave mid-resolution — the
+  // exact race the shared key exists to prevent.
+  const lockToken = lock.token;
+  const renewLock = setInterval(() => {
+    void extendLock(lockKey, lockToken, RESOLVE_LOCK_TTL_MS).catch(() => {});
+  }, Math.floor(RESOLVE_LOCK_TTL_MS / 2));
 
   // Only cancel the durable question/AI timers when this round has genuinely
   // concluded (resolved, or the match/round is past it). No-op returns —
@@ -776,6 +795,7 @@ export async function resolvePossessionRound(
       goalScoredBySeat,
     });
   } finally {
+    clearInterval(renewLock);
     await releaseLock(lockKey, lock.token);
     if (roundConcluded) {
       clearQuestionTimer(matchId, qIndex);

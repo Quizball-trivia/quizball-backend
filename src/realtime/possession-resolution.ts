@@ -262,11 +262,14 @@ export function applyPenaltyResolution(
   const keeperAnswer = answerByUserId.get(keeperUserId ?? '');
   const shooterPoints = shooterAnswer?.points_earned ?? 0;
   const keeperPoints = keeperAnswer?.points_earned ?? 0;
+  const shooterCorrect = shooterAnswer?.is_correct ?? false;
+  const keeperCorrect = keeperAnswer?.is_correct ?? false;
 
-  // Penalties are decided by the points earned in this duel. The shooter must
-  // beat the keeper outright; equal points are a save, so ties always favour
-  // the goalkeeper regardless of answer time or player seat.
-  const isGoal = shooterPoints > keeperPoints;
+  // A correct shot against a wrong keeper is always a goal, even when the
+  // shooter's answer was slow enough to floor to 0 points. Otherwise points
+  // decide the duel: the shooter must beat the keeper outright, so equal
+  // points are a save and ties favour the goalkeeper.
+  const isGoal = (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints;
 
   let goalScoredByUserId: string | null = null;
   if (isGoal) {

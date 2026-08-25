@@ -646,6 +646,10 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         state.penalty.shooterSeat = 1;
         state.penalty.suddenDeath = false;
         state.penalty.kicksTaken = { seat1: 0, seat2: 0 };
+        // Attempts must reset with kicksTaken: the sudden-death winner check
+        // requires attempts.length === kicksTaken parity, and stale entries
+        // here desync the HUD pips and can hang the shootout.
+        state.penalty.attempts = { seat1: [], seat2: [] };
         state.halftime.purpose = 'second_half';
         state.currentQuestion = null;
         bumpStateVersion(state);

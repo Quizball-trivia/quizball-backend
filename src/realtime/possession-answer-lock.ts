@@ -11,15 +11,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<typeof acquireLock>>> {
-  const deadline = Date.now() + ANSWER_LOCK_WAIT_MS;
+/**
+ * Acquire with a bounded wait: short critical sections (answer commits,
+ * resolve no-ops) release within milliseconds, so briefly retrying beats
+ * surfacing a spurious busy to the caller. Shared by the answer handlers and
+ * the round resolver, which contend on the same `:round` key by design.
+ */
+export async function acquireLockBounded(
+  lockKey: string,
+  ttlMs: number,
+  waitMs: number
+): Promise<Awaited<ReturnType<typeof acquireLock>>> {
+  const deadline = Date.now() + waitMs;
   do {
-    const lock = await acquireLock(lockKey, ANSWER_LOCK_TTL_MS);
+    const lock = await acquireLock(lockKey, ttlMs);
     if (lock.acquired && lock.token) return lock;
     if (Date.now() >= deadline) return { acquired: false };
     await sleep(Math.min(ANSWER_LOCK_RETRY_MS, Math.max(0, deadline - Date.now())));
   } while (Date.now() < deadline);
   return { acquired: false };
+}
+
+function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<typeof acquireLock>>> {
+  return acquireLockBounded(lockKey, ANSWER_LOCK_TTL_MS, ANSWER_LOCK_WAIT_MS);
 }
 
 export async function withAnswerLock<T>(

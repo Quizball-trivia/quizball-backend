@@ -139,7 +139,7 @@ export async function handlePossessionAnswer(
     answerCount: number;
   };
 
-  const committed = await withAnswerLock<Committed | null>(matchId, 'answer', () => emitMatchBusy(socket), async () => {
+  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -629,7 +629,7 @@ export async function handlePossessionPutInOrderAnswer(
     foundCount: number;
   };
 
-  const committed = await withAnswerLock<Committed | null>(matchId, 'put_in_order_answer', () => emitMatchBusy(socket), async () => {
+  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -896,7 +896,7 @@ export async function handlePossessionCluesAnswer(
     | { kind: 'committed'; data: Committed }
     | { kind: 'noop' };
 
-  const outcome = await withAnswerLock<LockOutcome>(matchId, 'clues_answer', () => emitMatchBusy(socket), async () => {
+  const outcome = await withAnswerLock<LockOutcome>(matchId, 'round', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(

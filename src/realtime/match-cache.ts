@@ -16,6 +16,7 @@ import {
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { getRedisClient } from './redis.js';
+import { normalizePenaltyAttempts } from './possession-penalty-attempts.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
@@ -82,38 +83,6 @@ function numberFromPayload(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function normalizePenaltyAttempts(params: {
-  attempts: unknown;
-  goals: { seat1: number; seat2: number };
-  kicksTaken: { seat1: number; seat2: number };
-}): { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> } {
-  const fromRaw = (value: unknown, goals: number, kicksTaken: number): Array<'goal' | 'miss'> => {
-    const total = Math.max(0, kicksTaken);
-    // Canonical default: `goals` goals followed by misses, exactly `kicksTaken` long.
-    const result: Array<'goal' | 'miss'> = [
-      ...Array.from({ length: Math.min(total, Math.max(0, goals)) }, () => 'goal' as const),
-      ...Array.from({ length: Math.max(0, total - Math.max(0, goals)) }, () => 'miss' as const),
-    ];
-    // Overwrite the prefix with any real per-kick outcomes we have, but NEVER
-    // change the length — a rebuilt cache must keep attempts.length === kicksTaken,
-    // otherwise the penalty UI sees contradictory state (slice() can't pad).
-    if (Array.isArray(value)) {
-      const sanitized = value.filter((entry): entry is 'goal' | 'miss' => entry === 'goal' || entry === 'miss');
-      for (let i = 0; i < Math.min(sanitized.length, total); i += 1) {
-        result[i] = sanitized[i];
-      }
-    }
-    return result;
-  };
-
-  const raw = params.attempts && typeof params.attempts === 'object'
-    ? params.attempts as { seat1?: unknown; seat2?: unknown }
-    : {};
-  return {
-    seat1: fromRaw(raw.seat1, params.goals.seat1, params.kicksTaken.seat1),
-    seat2: fromRaw(raw.seat2, params.goals.seat2, params.kicksTaken.seat2),
-  };
-}
 
 export function buildAnswerPayload(answer: Pick<CachedAnswer,
   'questionKind' | 'foundCount' | 'foundAnswerIds' | 'submittedOrderIds' | 'clueIndex'

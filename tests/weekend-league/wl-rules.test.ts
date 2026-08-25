@@ -48,6 +48,13 @@ describe('point tables', () => {
     expect(wlStepPoints('mcq', true, 5500)).toBe(50);
   });
 
+  it('career path pays the full step for a correct answer at ANY speed (typed round)', () => {
+    expect(wlStepPoints('career_path', true, 0)).toBe(100);
+    expect(wlStepPoints('career_path', true, 5500)).toBe(100);
+    expect(wlStepPoints('career_path', true, 9900)).toBe(100);
+    expect(wlStepPoints('career_path', false, 0)).toBe(0);
+  });
+
   it('wrong answers score zero at any speed', () => {
     expect(wlStepPoints('mcq', false, 0)).toBe(0);
     expect(wlStepPoints('true_false', false, 9000)).toBe(0);

@@ -17,7 +17,7 @@ import {
 } from '../../src/modules/weekend-league/wl-rules.js';
 
 describe('point tables', () => {
-  it('a perfect game scores exactly 1000', () => {
+  it('a perfect game scores exactly 2100 (ranked parity)', () => {
     let total = 0;
     for (const kind of WL_ROUND_ORDER) {
       const steps = WL_QUESTIONS_PER_ROUND[kind];
@@ -35,17 +35,17 @@ describe('point tables', () => {
   });
 
   it('instant correct answers earn the step max (grace window)', () => {
-    expect(wlStepPoints('true_false', true, 0)).toBe(30);
-    expect(wlStepPoints('higher_lower', true, 400)).toBe(30);
-    expect(wlStepPoints('mcq', true, 500)).toBe(40);
-    expect(wlStepPoints('career_path', true, 0)).toBe(40);
+    expect(wlStepPoints('true_false', true, 0)).toBe(100);
+    expect(wlStepPoints('higher_lower', true, 400)).toBe(100);
+    expect(wlStepPoints('mcq', true, 500)).toBe(100);
+    expect(wlStepPoints('career_path', true, 0)).toBe(100);
   });
 
   it('scales down with elapsed time and floors to integers', () => {
     // 5.5s elapsed → 5s effective remaining → ranked bucket 50 → scaled.
-    expect(wlStepPoints('true_false', true, 5500)).toBe(15);
-    expect(wlStepPoints('higher_lower', true, 5500)).toBe(15);
-    expect(wlStepPoints('mcq', true, 5500)).toBe(20);
+    expect(wlStepPoints('true_false', true, 5500)).toBe(50);
+    expect(wlStepPoints('higher_lower', true, 5500)).toBe(50);
+    expect(wlStepPoints('mcq', true, 5500)).toBe(50);
   });
 
   it('wrong answers score zero at any speed', () => {
@@ -60,10 +60,10 @@ describe('point tables', () => {
   });
 
   it('who-am-i scores by clue index and clamps out-of-range indexes', () => {
-    expect(wlWhoAmIPoints(true, 0)).toBe(300);
-    expect(wlWhoAmIPoints(true, 4)).toBe(60);
-    expect(wlWhoAmIPoints(true, 99)).toBe(60);
-    expect(wlWhoAmIPoints(true, -1)).toBe(300);
+    expect(wlWhoAmIPoints(true, 0)).toBe(100);
+    expect(wlWhoAmIPoints(true, 4)).toBe(20);
+    expect(wlWhoAmIPoints(true, 99)).toBe(20);
+    expect(wlWhoAmIPoints(true, -1)).toBe(100);
     expect(wlWhoAmIPoints(false, 0)).toBe(0);
   });
 });
@@ -136,8 +136,8 @@ describe('score encoding + comparator', () => {
   });
 
   it('stays inside the 53-bit exact double range', () => {
-    expect(wlEncodeScore(1000, 0)).toBeLessThan(Number.MAX_SAFE_INTEGER);
-    expect(Number.isSafeInteger(wlEncodeScore(1000, 0))).toBe(true);
+    expect(wlEncodeScore(2100, 0)).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    expect(Number.isSafeInteger(wlEncodeScore(2100, 0))).toBe(true);
   });
 
   it('comparator is a strict total order: points desc, time asc, userId asc', () => {

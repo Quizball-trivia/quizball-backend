@@ -21,6 +21,7 @@ export const auctionLeaderboardEntryResponseSchema = z.object({
   avatarCustomization: z.unknown().nullable(),
   auctionPoints: z.number().int().nonnegative(),
   country: z.string().nullable(),
+  tier: z.string().nullable(),
   rank: z.number().int().positive(),
 });
 

@@ -21125,9 +21125,19 @@
                     "type": "object",
                     "properties": {
                       "rules_version": {
-                        "type": "number",
-                        "enum": [
-                          1
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "enum": [
+                              1
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              2
+                            ]
+                          }
                         ]
                       },
                       "launch_edition": {

@@ -210,9 +210,12 @@ describe('auction bot service', () => {
       currentRound: {
         ...biddingState().currentRound!,
         footballer: { ...footballer, trueValue: 100_000_000 },
-        bids: [{ seatId: 'seat-human', amount: 100_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
+        // 200M standing on a 100M-value card: even a maximal perception error
+        // (1.4x) times the ephemeral band top (1.1x) stays under the 205M
+        // raise, so the fold is forced by willingness for every hash draw.
+        bids: [{ seatId: 'seat-human', amount: 200_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
         highestBidderSeatId: 'seat-human',
-        highestBid: 100_000_000,
+        highestBid: 200_000_000,
       },
     }));
 
@@ -301,9 +304,12 @@ describe('auction bot service', () => {
       currentRound: {
         ...biddingState().currentRound!,
         footballer: { ...footballer, trueValue: 100_000_000 },
-        bids: [{ seatId: 'seat-human', amount: 100_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
+        // 200M standing on a 100M-value card: even a maximal perception error
+        // (1.4x) times the ephemeral band top (1.1x) stays under the 205M
+        // raise, so the fold is forced by willingness for every hash draw.
+        bids: [{ seatId: 'seat-human', amount: 200_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
         highestBidderSeatId: 'seat-human',
-        highestBid: 100_000_000,
+        highestBid: 200_000_000,
         foldedSeatIds: ['seat-bot-b'],
       },
     }));
@@ -324,7 +330,7 @@ describe('auction bot service', () => {
     expect(saved.seats.find((player) => player.seatId === 'seat-human')?.team.slots.FWD).toHaveLength(1);
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:round_revealed',
-      expect.objectContaining({ winnerSeatId: 'seat-human', winningBid: 100_000_000 })
+      expect.objectContaining({ winnerSeatId: 'seat-human', winningBid: 200_000_000 })
     );
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:squad_updated',

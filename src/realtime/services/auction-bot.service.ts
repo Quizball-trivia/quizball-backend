@@ -31,6 +31,8 @@ import {
 } from './auction-realtime-payloads.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 import {
+  perceivedCardValue,
+  recognizesChemistryLink,
   resolveAuctionBotBehaviour,
   type AuctionBotProfile,
 } from './auction-bot-profile.js';
@@ -151,21 +153,41 @@ export function decideAuctionBotAction(
   // can afford (that would silently shrink the field and stall bidding).
   const maxBid = Math.max(minBid, Math.floor(hardMaxBid * behaviour.budgetDiscipline));
 
+  // Bots price the card off what they BELIEVE it is worth, not the hidden
+  // trueValue: the perceived value carries a per-seat per-round misjudgement,
+  // so a bot can overpay for a lemon or let a star go cheap exactly like a
+  // clue-reading human. The estimate is hash-derived (never RNG), so it holds
+  // for the whole round on every replica; the margin draw below stays
+  // per-turn randomness, as it always was.
+  const estimateKey = `${state.matchId}:${round.roundId}:${round.footballer.id}`;
+  const perceivedValue = perceivedCardValue({
+    trueValue: round.footballer.trueValue,
+    profile: player.botProfile,
+    seatId,
+    estimateKey,
+  });
+
   // A card is worth more TO THIS BOT when it links with the squad: each squad
-  // chemistry point multiplies final PROFIT by ~+10%. Chemistry therefore
-  // raises willingness WITHIN the profit region but is hard-capped at
-  // trueValue — the multiplier amplifies gains only (auction-rules
-  // getAdjustedProfit never amplifies losses), so any bid above value is a
-  // guaranteed unamplified loss no link can justify. Without the cap, humans
-  // could bait chem-hungry bots past value and dump the loss on them.
-  const chemGain = chemistryGainIfAdded(player.team, round.footballer, round.positionGroup);
+  // chemistry point multiplies final PROFIT by ~+10%. But the card's
+  // club/league/nation are concealed until reveal, so pricing the link every
+  // round is another form of peeking — a bot only spots it when its
+  // skill-scaled recognition draw says so. When spotted, chemistry raises
+  // willingness within the profit region, capped at the PERCEIVED value
+  // (under the bot's beliefs, bidding above value is a guaranteed unamplified
+  // loss — auction-rules getAdjustedProfit never amplifies losses). The
+  // margin band's top can still exceed the perceived value for wild profiles
+  // (deliberate human-like overpays, same as before this fix), so a bait is
+  // bounded by misjudgement × band top, not by misjudgement alone.
+  const chemGain = recognizesChemistryLink({ profile: player.botProfile, seatId, estimateKey })
+    ? chemistryGainIfAdded(player.team, round.footballer, round.positionGroup)
+    : 0;
   const baseWillingness = Math.floor(
-    round.footballer.trueValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
+    perceivedValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
   );
   const chemBoosted = Math.floor(baseWillingness * (1 + 0.1 * chemGain * behaviour.chemWeight));
   const willingness = Math.max(
     baseWillingness,
-    Math.min(round.footballer.trueValue, chemBoosted)
+    Math.min(perceivedValue, chemBoosted)
   );
   if (round.highestBidderSeatId && minBid > willingness) {
     return { kind: 'fold' };

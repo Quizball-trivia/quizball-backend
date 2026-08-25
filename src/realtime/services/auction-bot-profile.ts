@@ -9,7 +9,8 @@ import type { AuctionMatchState } from '../../modules/auction/auction-match-stat
  *
  * Kept as a small POJO carried ON THE SEAT (not re-read from the DB per turn) so
  * the decision function stays pure and the harness can drive it deterministically:
- * same seed + same profile ⇒ same decisions.
+ * same seed + same profile + same seat/round identity ⇒ same decisions (the
+ * perception draws also hash the seatId and round).
  */
 export interface AuctionBotProfile {
   /** 0..1 — higher = values players closer to their true worth. */
@@ -88,12 +89,89 @@ export function seedTrait(personalitySeed: number, trait: string): number {
 }
 
 /**
+ * Relative estimation error bounds for a bot's read of a card's hidden value:
+ * error = MAX − SKILL_CUT × base_skill. Every production seat carries a
+ * profile (roster bots 0.05–0.90 skill, fabricated ephemeral 0.15–0.90), so
+ * live errors span ±23%–±48.5%; the profile-less constant is a fallback for
+ * seats fabricated without a profile.
+ */
+export const AUCTION_BOT_ESTIMATE_ERROR_MAX = 0.5;
+export const AUCTION_BOT_ESTIMATE_ERROR_SKILL_CUT = 0.3;
+export const EPHEMERAL_AUCTION_BOT_ESTIMATE_ERROR = 0.4;
+
+/**
+ * How often a bot spots that the concealed card links with its squad:
+ * recognition = BASE + SKILL_SPAN × base_skill (profile-less: the EPHEMERAL
+ * constant). A sharp scout reads the clues onto the right club most rounds; a
+ * weak bot mostly bids the name.
+ */
+export const AUCTION_BOT_CHEM_RECOGNITION_BASE = 0.25;
+export const AUCTION_BOT_CHEM_RECOGNITION_SKILL_SPAN = 0.5;
+export const EPHEMERAL_AUCTION_BOT_CHEM_RECOGNITION = 0.4;
+
+export interface AuctionBotCardPerception {
+  trueValue: number;
+  profile: AuctionBotProfile | null | undefined;
+  /** Perception is per-SEAT: two bots sharing a personalitySeed (the DB does
+   *  not enforce uniqueness) must still misjudge cards independently. */
+  seatId: string;
+  /** Stable identity of this look at this card: match + round + footballer. */
+  estimateKey: string;
+}
+
+/** Stable 0..1 draw for one bot's read of one card along one perception axis. */
+function perceptionUnit(
+  profile: AuctionBotProfile | null | undefined,
+  seatId: string,
+  axis: string,
+  estimateKey: string
+): number {
+  const identity = profile ? `${profile.personalitySeed}:${seatId}` : seatId;
+  const hash = createHash('md5').update(`${identity}:${axis}:${estimateKey}`).digest('hex');
+  return Number.parseInt(hash.slice(0, 8), 16) / 0xffffffff;
+}
+
+/**
+ * What THIS bot believes the card is worth. Bots must not bid off the hidden
+ * trueValue itself — that gives them a perfect stop-loss no human can match
+ * (humans estimate from three clues) and made fallback opponents win >90% of
+ * prod matches. The misjudgement is hash-derived (never RNG) from the seat and
+ * the round, so it is stable for the whole bidding war and every replica
+ * computes the same figure; a different round or a different seat gets an
+ * independent error, so bots disagree with each other like humans do.
+ */
+export function perceivedCardValue(perception: AuctionBotCardPerception): number {
+  const { profile } = perception;
+  const errorMagnitude = profile
+    ? AUCTION_BOT_ESTIMATE_ERROR_MAX - AUCTION_BOT_ESTIMATE_ERROR_SKILL_CUT * clamp01(profile.baseSkill)
+    : EPHEMERAL_AUCTION_BOT_ESTIMATE_ERROR;
+  const unit = perceptionUnit(profile, perception.seatId, 'estimate', perception.estimateKey);
+  const multiplier = 1 + (2 * unit - 1) * errorMagnitude;
+  return Math.max(1, Math.floor(perception.trueValue * multiplier));
+}
+
+/**
+ * Whether THIS bot notices the concealed card's chemistry link this round.
+ * The card's club/league/nation are hidden from humans until reveal, so a bot
+ * that always prices marginal chemistry is peeking at them every round.
+ * Hash-deterministic like the value estimate: stable within the round,
+ * independent across rounds and seats.
+ */
+export function recognizesChemistryLink(perception: Omit<AuctionBotCardPerception, 'trueValue'>): boolean {
+  const { profile } = perception;
+  const recognition = profile
+    ? AUCTION_BOT_CHEM_RECOGNITION_BASE + AUCTION_BOT_CHEM_RECOGNITION_SKILL_SPAN * clamp01(profile.baseSkill)
+    : EPHEMERAL_AUCTION_BOT_CHEM_RECOGNITION;
+  return perceptionUnit(profile, perception.seatId, 'chem', perception.estimateKey) < recognition;
+}
+
+/**
  * Translate a roster profile into concrete bidding behaviour.
  *
- * - base_skill tightens the willingness spread AROUND true value: a high-skill
- *   bot bids close to what a player is really worth, a low-skill bot swings
- *   wildly both under and over. The band is centred on 1.0 * trueValue so skill
- *   changes precision, not systematic generosity.
+ * - base_skill tightens the willingness spread around the bot's PERCEIVED
+ *   value of the card (see perceivedCardValue — skill also shrinks that
+ *   estimate's error): a high-skill bot bids close to what it believes the
+ *   player is worth, a low-skill bot swings wildly both under and over.
  * - consistency narrows that band further (a consistent bot repeats itself).
  * - personality_seed sets jump-bid propensity and the think-time window, so two
  *   bots of equal skill still feel like different people.

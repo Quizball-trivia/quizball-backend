@@ -17,7 +17,10 @@ export const WL_DISPATCH_LEAD_MS = 3_000;
 /** Extra lead at ROUND starts so the round-intro overlay can play first. */
 export const WL_ROUND_INTRO_MS = 2_200;
 export const WL_FINALISTS = 24;
-export const WL_BREAK_MS = 2 * 60 * 1000;
+// 45s: two minutes of dead air between games bled a third of the field each
+// break (Aug-22: 53 -> 39 -> 31 players); the break only needs to cover the
+// result board read + a breath (owner call 2026-08-25).
+export const WL_BREAK_MS = 45 * 1000;
 /**
  * Pause after the LAST question of a round before the next round dispatches —
  * room for the verdict plus the round-end standings beat. Mid-round questions
@@ -109,10 +112,11 @@ export const WL_STEP_REVEAL_HOLD_MS = 3_000;
 export const WL_PUT_IN_ORDER_REVEAL_HOLD_MS = 9_000;
 
 /** Ordering four items is a slower interaction than one tap — two base
- *  windows (20s at the prod 10s clock), same reasoning as money drop. */
-// 3 steps = 30s — the SAME clock ranked's put-in-order runs
-// (PUT_IN_ORDER_QUESTION_TIME_MS), so the muscle memory transfers.
-export const WL_PUT_IN_ORDER_WINDOW_STEPS = 3;
+ *  windows (20s at the prod 10s clock). Was 3 (ranked's 30s clock); 30s of
+ *  forced watching for early finishers dragged the round (owner call
+ *  2026-08-25 — scoring has no speed factor, so the shorter clock only trims
+ *  dead time, not points). */
+export const WL_PUT_IN_ORDER_WINDOW_STEPS = 2;
 
 /**
  * Sanitize a client bet sheet against the server-known budget: non-negative
@@ -161,6 +165,11 @@ export function wlStepPoints(
    *  order submitted in the window's second half. */
   windowMs: number = WL_QUESTION_TIME_MS
 ): number {
+  // Career path is a TYPED round: racing the clock while typing a name is
+  // hostile UX, so a correct answer inside the window earns the full step —
+  // no speed decay (owner call 2026-08-25). who_am_i, the other typed kind,
+  // already scores by clue depth rather than speed.
+  if (kind === 'career_path') return isCorrect ? WL_STEP_MAX_POINTS.career_path : 0;
   const base = calculatePoints(isCorrect, elapsedMs, Math.max(1_000, windowMs));
   return Math.floor((base * WL_STEP_MAX_POINTS[kind]) / 100);
 }

@@ -122,6 +122,21 @@ export const weekendLeagueRepo = {
     return { registered: row?.registered ?? 0, checkedIn: row?.checked_in ?? 0 };
   },
 
+  /** Sunday counts: the final's field is the FINALISTS, not the whole entry
+   *  list — the check-in card read "54/122" during final_checkin because the
+   *  qualifier counts were reused verbatim (Aug-24 report). no_show stays in
+   *  the denominator: they were invited; they just didn't show. */
+  async getFinalCounts(tournamentId: string): Promise<{ registered: number; checkedIn: number }> {
+    const [row] = await sql<{ registered: number; checked_in: number }[]>`
+      SELECT COUNT(*)::int AS registered,
+             COUNT(*) FILTER (WHERE final_checked_in_at IS NOT NULL)::int AS checked_in
+      FROM wl_entries
+      WHERE tournament_id = ${tournamentId}
+        AND state IN ('finalist', 'no_show')
+    `;
+    return { registered: row?.registered ?? 0, checkedIn: row?.checked_in ?? 0 };
+  },
+
   /**
    * Entry as ONE conditional statement: the window, status and qualification
    * checks live in the same INSERT that claims the seat, so a race with the

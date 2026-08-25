@@ -138,11 +138,17 @@ export const weekendLeagueService = {
       return { tournament: null, you: null };
     }
 
+    // Sunday phases count finalists against final check-ins; the qualifier
+    // counts otherwise. Distinct cache keys — a phase flip must not serve the
+    // other phase's cached numbers for the TTL tail.
+    const finalPhase = tournament.status === 'final_checkin' || tournament.status === 'final_live';
     const [counts, entry, qp, lastGameRank] = await Promise.all([
       getOrLoadJson(
-        `wl:counts:${tournament.id}`,
+        finalPhase ? `wl:final-counts:${tournament.id}` : `wl:counts:${tournament.id}`,
         COUNTS_CACHE_TTL_SECONDS,
-        () => weekendLeagueRepo.getCounts(tournament.id)
+        () => (finalPhase
+          ? weekendLeagueRepo.getFinalCounts(tournament.id)
+          : weekendLeagueRepo.getCounts(tournament.id))
       ),
       weekendLeagueRepo.getEntry(tournament.id, userId),
       loadQp(tournament, userId),

@@ -764,7 +764,15 @@ export const dailyChallengesService = {
         'mcq_single',
         { limit: settings.questionCount * 5 }
       );
-      const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
+      // Image MCQs publish as plain mcq_single, but their stem references the
+      // photo ("who is pictured…") and this response schema carries no image —
+      // served here they'd be unanswerable. Ranked renders the image; Money
+      // Drop must skip them (359 published image MCQs sat in this pool).
+      const validQuestions = validRows.filter(
+        ({ row, payload }) =>
+          getOptionalQuestionPrompt(row, locale) !== null &&
+          (payload as { image?: unknown }).image == null
+      );
       const selected = pickChallengeQuestions(
         ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,

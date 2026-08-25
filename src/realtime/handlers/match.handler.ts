@@ -15,12 +15,32 @@ import {
   matchReadyForNextQuestionSchema,
   matchResumeUiReadySchema,
   matchRejoinSchema,
+  matchVisibilitySignalSchema,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { matchRealtimeService } from '../services/match-realtime.service.js';
+import { handleVisibilitySignal } from '../services/match-visibility.service.js';
 import { handlePossessionHalftimeUiReady } from '../possession-match-flow.js';
 
 export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket): void {
+  socket.on('match:visibility_signal', async (payload) => {
+    const parsed = matchVisibilitySignalSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:visibility_signal payload');
+      return;
+    }
+
+    try {
+      await handleVisibilitySignal(socket, parsed.data);
+    } catch (error) {
+      // Telemetry only — never emit an error to the client for this event.
+      logger.warn(
+        { err: error, userId: socket.data.user?.id, matchId: parsed.data.matchId },
+        'Error handling match:visibility_signal'
+      );
+    }
+  });
+
   socket.on('match:answer', async (payload) => {
     const parsed = matchAnswerSchema.safeParse(payload);
     if (!parsed.success) {

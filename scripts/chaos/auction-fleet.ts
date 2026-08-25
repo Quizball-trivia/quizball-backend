@@ -249,15 +249,14 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
       }) => {
         touch();
         if (!mySeatId || payload.currentTurnSeatId !== mySeatId) return;
-        // Human-ish thinking delay, then bid/fold. The forced OPENER may not
-        // fold (server rejects it) — an affordable opener always bids; an
-        // unaffordable one stays silent and lets the turn timer advance.
+        // Human-ish thinking delay, then bid/fold. The opener may PASS like
+        // anyone else now (fairness wave) — openers mostly bid so matches
+        // progress, but pass often enough to exercise the unsold path.
         // Otherwise bid appetite shrinks as the price grows vs the 350M budget.
         const affordable = payload.minBid <= payload.maxBid;
-        const mustOpen = !payload.round?.highestBidderSeatId;
+        const isOpener = !payload.round?.highestBidderSeatId;
         const appetite = payload.minBid <= 40_000_000 ? 0.75 : payload.minBid <= 90_000_000 ? 0.45 : 0.2;
-        const willBid = affordable && (mustOpen || Math.random() < appetite);
-        if (!willBid && mustOpen) return;
+        const willBid = affordable && Math.random() < (isOpener ? 0.8 : appetite);
         setTimeout(() => {
           if (phase !== 'playing') return;
           pendingAction = { kind: willBid ? 'bid' : 'fold', at: Date.now() };

@@ -1,15 +1,17 @@
 /**
  * Profile-parameterized bidding in decideAuctionBotAction.
  *
- * The function is pure: all randomness arrives through the injected `random`
- * (the harness seeds it via AuctionEngineContext), personality through the
- * seat's own botProfile, and the card-perception draws are hash-derived from
- * seat + round identity. So:
- *   - same seed + same profile + same seat/round ⇒ byte-identical decisions
+ * The function is a PURE FUNCTION OF STATE: the value estimate, the margin
+ * drawn within the willingness band, jump impulses, and chemistry recognition
+ * are all hash-derived from seat + round (+ standing price) identity — no RNG
+ * parameter exists. So:
+ *   - same persisted state ⇒ byte-identical decisions on every replica/retry
  *   - a seat with NO profile uses the ephemeral band, anchored (like every
  *     seat) to its PERCEIVED value of the card, never the hidden trueValue
  *   - higher base_skill ⇒ a tighter willingness band AND a smaller
  *     perception error
+ * Behavioural variety comes from rounds and seats differing, not from
+ * per-call randomness.
  */
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
@@ -32,15 +34,6 @@ import {
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 
 const TRUE_VALUE = 100_000_000;
-
-/** Deterministic LCG so a seed fully reproduces a decision sequence. */
-function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
 
 function buildState(options: {
   botProfile?: AuctionBotProfile | null;
@@ -108,16 +101,19 @@ function buildState(options: {
 const SKILLED: AuctionBotProfile = { baseSkill: 0.9, consistency: 0.8, personalitySeed: 11 };
 const UNSKILLED: AuctionBotProfile = { baseSkill: 0.05, consistency: 0.2, personalitySeed: 11 };
 
+const ROUND_IDS = (count: number) => Array.from({ length: count }, (_, i) => `round-${i}`);
+
 /**
- * Empirical willingness ceiling: the highest standing bid this bot will still
- * raise over. Found by bisection on the fold boundary for a fixed seed, which is
- * exactly the quantity base_skill is meant to control.
+ * Empirical willingness ceiling for one round: the highest standing bid this
+ * bot will still raise over, found by bisection on the fold boundary. The
+ * decision is state-deterministic, so the boundary is a fixed number per
+ * (profile, round) — sampling across rounds sweeps the band.
  *
  * Uses a HUGE budget so the wallet ceiling (getMaxBid, which also reserves
  * MIN_PLAYER_COST for every other empty slot) can never bind before willingness
  * does — otherwise this would measure the budget rule, not the valuation.
  */
-function willingnessFor(profile: AuctionBotProfile | null, seed: number, roundId?: string): number {
+function willingnessFor(profile: AuctionBotProfile | null, roundId?: string): number {
   let low = 0;
   let high = TRUE_VALUE * 3;
   for (let i = 0; i < 40; i++) {
@@ -129,7 +125,7 @@ function willingnessFor(profile: AuctionBotProfile | null, seed: number, roundId
       budget: TRUE_VALUE * 100,
       roundId,
     });
-    const decision = decideAuctionBotAction(state, 'seat-bot', seededRandom(seed));
+    const decision = decideAuctionBotAction(state, 'seat-bot');
     if (decision.kind === 'fold') high = mid;
     else low = mid;
   }
@@ -152,29 +148,29 @@ function stdev(values: number[]): number {
 }
 
 describe('determinism', () => {
-  it('same seed + same profile ⇒ identical decisions', () => {
+  it('same persisted state ⇒ byte-identical decisions (replica/retry safe)', () => {
     const state = buildState({ botProfile: SKILLED });
-    const a = decideAuctionBotAction(state, 'seat-bot', seededRandom(12345));
-    const b = decideAuctionBotAction(state, 'seat-bot', seededRandom(12345));
+    const a = decideAuctionBotAction(state, 'seat-bot');
+    const b = decideAuctionBotAction(state, 'seat-bot');
     expect(a).toEqual(b);
   });
 
-  it('is replayable across a whole sequence of seeds', () => {
-    const state = buildState({ botProfile: SKILLED });
-    const run = () => Array.from({ length: 25 }, (_, i) => decideAuctionBotAction(state, 'seat-bot', seededRandom(i)));
+  it('is replayable across a whole sequence of round states', () => {
+    const run = () => ROUND_IDS(25).map((roundId) =>
+      decideAuctionBotAction(buildState({ botProfile: SKILLED, roundId }), 'seat-bot'));
     expect(run()).toEqual(run());
   });
 
-  it('different profiles diverge on the same seed', () => {
+  it('different profiles diverge on the same round', () => {
     // At a price well above true value the skilled bot folds where the wild
     // one may not — scan rounds until the divergence shows up (the wild bot
-    // only chases when its perception overrates the card).
-    const diverged = Array.from({ length: 30 }, (_, i) => `round-${i}`).some((roundId) => {
+    // only chases when its perception + margin overrate the card).
+    const diverged = ROUND_IDS(30).some((roundId) => {
       const kinds = [SKILLED, UNSKILLED].map((profile) => {
         const state = buildState({
           botProfile: profile, highestBid: 130_000_000, highestBidderSeatId: 'seat-human', roundId,
         });
-        return decideAuctionBotAction(state, 'seat-bot', seededRandom(1920)).kind;
+        return decideAuctionBotAction(state, 'seat-bot').kind;
       });
       return new Set(kinds).size > 1;
     });
@@ -185,45 +181,42 @@ describe('determinism', () => {
 describe('skill → precision', () => {
   it('a high-skill bot hunts a profit margin: willingness stays BELOW its perceived value', () => {
     // Profit economy: the score is (value - spend) x chemistry, so a sharp bot
-    // pays a margin under what it BELIEVES the card is worth on every sample,
+    // pays a margin under what it BELIEVES the card is worth on every round,
     // while a weak bot's wide band still overpays at its top end. Relative to
     // the hidden trueValue the sharp bot can now be wrong too — its belief
     // carries a (small) estimation error like everyone else's.
-    const seeds = Array.from({ length: 60 }, (_, i) => i * 7919 + 1);
-    const skilled = seeds.map((s) => willingnessFor(SKILLED, s));
-    const wild = seeds.map((s) => willingnessFor(UNSKILLED, s));
+    const rounds = ROUND_IDS(60);
+    const skilledRatios = rounds.map((r) => willingnessFor(SKILLED, r) / fixturePerceivedValue(SKILLED, r));
+    const wildRatios = rounds.map((r) => willingnessFor(UNSKILLED, r) / fixturePerceivedValue(UNSKILLED, r));
 
-    for (const willingness of skilled) {
-      expect(willingness).toBeLessThan(fixturePerceivedValue(SKILLED));
+    for (const ratio of skilledRatios) {
+      expect(ratio).toBeLessThan(1);
     }
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-    expect(mean(skilled) / fixturePerceivedValue(SKILLED)).toBeLessThan(
-      mean(wild) / fixturePerceivedValue(UNSKILLED) + MIN_BID_INCREMENT / TRUE_VALUE
-    );
+    expect(mean(skilledRatios)).toBeLessThan(mean(wildRatios) + MIN_BID_INCREMENT / TRUE_VALUE);
   });
 
-  it('a high-skill bot has a TIGHTER willingness distribution over N samples', () => {
-    const seeds = Array.from({ length: 60 }, (_, i) => i * 7919 + 1);
-    const skilled = seeds.map((s) => willingnessFor(SKILLED, s));
-    const wild = seeds.map((s) => willingnessFor(UNSKILLED, s));
+  it('a high-skill bot has a TIGHTER willingness band over N rounds', () => {
+    const rounds = ROUND_IDS(60);
+    const skilledRatios = rounds.map((r) => willingnessFor(SKILLED, r) / fixturePerceivedValue(SKILLED, r));
+    const wildRatios = rounds.map((r) => willingnessFor(UNSKILLED, r) / fixturePerceivedValue(UNSKILLED, r));
 
-    expect(stdev(skilled)).toBeLessThan(stdev(wild));
+    expect(stdev(skilledRatios)).toBeLessThan(stdev(wildRatios));
   });
 });
 
 describe('ephemeral parity', () => {
   it('a seat with NO profile uses the profit-economy ephemeral band exactly', () => {
     // Profit-economy ephemeral band: willingness = PERCEIVED value * (0.60 +
-    // rand*0.50) ⇒ within [0.60, 1.10] of what the bot believes the card is
-    // worth (its belief, not the hidden trueValue, anchors the band).
+    // marginDraw*0.50) ⇒ within [0.60, 1.10] of what the bot believes the
+    // card is worth (its belief, not the hidden trueValue, anchors the band).
     //
     // The measured quantity is the highest STANDING bid the bot will still raise
     // over, and a raise costs MIN_BID_INCREMENT, so the fold boundary sits one
     // increment BELOW willingness. Widen the band by exactly that increment.
-    const perceived = fixturePerceivedValue(null);
-    const seeds = Array.from({ length: 40 }, (_, i) => i * 104729 + 3);
-    for (const seed of seeds) {
-      const boundary = willingnessFor(null, seed);
+    for (const roundId of ROUND_IDS(40)) {
+      const perceived = fixturePerceivedValue(null, roundId);
+      const boundary = willingnessFor(null, roundId);
       expect(boundary).toBeGreaterThanOrEqual(Math.floor(perceived * 0.6) - MIN_BID_INCREMENT - 2);
       expect(boundary).toBeLessThanOrEqual(Math.ceil(perceived * 1.1) + 2);
     }
@@ -231,24 +224,22 @@ describe('ephemeral parity', () => {
 
   it('still folds when the standing bid is far beyond any plausible willingness', () => {
     const state = buildState({ botProfile: null, highestBid: TRUE_VALUE * 2, highestBidderSeatId: 'seat-human' });
-    expect(decideAuctionBotAction(state, 'seat-bot', seededRandom(5)).kind).toBe('fold');
+    expect(decideAuctionBotAction(state, 'seat-bot').kind).toBe('fold');
   });
 });
 
 describe('perceived value (bots must not peek at trueValue)', () => {
-  const roundIds = Array.from({ length: 30 }, (_, i) => `round-${i}`);
-
   it('is a pure function of (seat, round): stable across calls, so every replica agrees', () => {
     const a = fixturePerceivedValue(SKILLED);
     const b = fixturePerceivedValue(SKILLED);
     expect(a).toBe(b);
-    // The estimate cannot flip-flop between turns of one bidding war. (The
-    // margin draw on top of it is still per-turn RNG, as it always was.)
-    expect(willingnessFor(SKILLED, 7)).toBe(willingnessFor(SKILLED, 7));
+    // The whole fold boundary — estimate AND margin — is fixed for the round:
+    // a bot cannot accept 40M on one turn and refuse 35M on a later one.
+    expect(willingnessFor(SKILLED)).toBe(willingnessFor(SKILLED));
   });
 
   it('honours the exact skill-scaled error formula and actually uses the band', () => {
-    const manyRounds = Array.from({ length: 300 }, (_, i) => `round-${i}`);
+    const manyRounds = ROUND_IDS(300);
     const errorBound = (profile: AuctionBotProfile | null) => profile
       ? AUCTION_BOT_ESTIMATE_ERROR_MAX - AUCTION_BOT_ESTIMATE_ERROR_SKILL_CUT * profile.baseSkill
       : EPHEMERAL_AUCTION_BOT_ESTIMATE_ERROR;
@@ -265,7 +256,7 @@ describe('perceived value (bots must not peek at trueValue)', () => {
   });
 
   it('varies between rounds and between seats (they misjudge independently)', () => {
-    const estimates = new Set(roundIds.map((r) => fixturePerceivedValue(UNSKILLED, r)));
+    const estimates = new Set(ROUND_IDS(30).map((r) => fixturePerceivedValue(UNSKILLED, r)));
     expect(estimates.size).toBeGreaterThan(10);
     // Perception is per-SEAT even for profiled bots: personality seeds are not
     // unique in the DB, and two bots sharing one must not share every
@@ -281,7 +272,7 @@ describe('perceived value (bots must not peek at trueValue)', () => {
   });
 
   it('spots chemistry links at the skill-scaled recognition rate, deterministically', () => {
-    const manyRounds = Array.from({ length: 1500 }, (_, i) => `round-${i}`);
+    const manyRounds = ROUND_IDS(1500);
     const rateFor = (profile: AuctionBotProfile) => {
       const hits = manyRounds.filter((r) => recognizesChemistryLink({
         profile, seatId: 'seat-bot', estimateKey: `m1:${r}:f1`,
@@ -304,39 +295,35 @@ describe('perceived value (bots must not peek at trueValue)', () => {
     // truth, a weak bot must sometimes chase a card past that OLD ceiling AND
     // sometimes fold below the OLD floor — excursions that were impossible
     // with the oracle, exactly the human-like misreads the fairness fix
-    // exists to create.
-    // Seeds chosen for extreme FIRST draws (the willingness draw): 1920 ⇒
-    // ~0.98 (top of band), 1972 ⇒ ~0.0003 (bottom) — the LCG's first draw
-    // barely varies across small consecutive seeds.
+    // exists to create. Sampling many rounds sweeps both the perception and
+    // the (now frozen per-round) margin draw.
     const oldBand = resolveAuctionBotBehaviour(UNSKILLED);
     const oldCeiling = TRUE_VALUE * (oldBand.willingnessFloor + oldBand.willingnessSpread);
     const oldFloor = TRUE_VALUE * oldBand.willingnessFloor;
-    const boundaries = roundIds.flatMap((r) =>
-      [1920, 1972].map((seed) => willingnessFor(UNSKILLED, seed, r))
-    );
+    const boundaries = ROUND_IDS(200).map((r) => willingnessFor(UNSKILLED, r));
     expect(boundaries.some((b) => b > oldCeiling)).toBe(true);
     expect(boundaries.some((b) => b < oldFloor - MIN_BID_INCREMENT)).toBe(true);
   });
 });
 
 describe('budget discipline', () => {
-  it('can still OPEN a round it can afford, however disciplined', () => {
+  it('can still OPEN a round it can afford and wants, however disciplined', () => {
     // Discipline scales the wallet ceiling down, but must never scale it below
-    // the minimum bid — that would silently thin the field and stall rounds.
-    // Budget is the default (comfortably above the 7-slot reserve), so the only
-    // thing that could suppress the bid here is over-aggressive discipline.
-    for (let seed = 0; seed < 25; seed++) {
-      const state = buildState({ botProfile: SKILLED });
-      const decision = decideAuctionBotAction(state, 'seat-bot', seededRandom(seed));
+    // the minimum bid. The fixture lot starts at 10M against a ~100M perceived
+    // value — far inside every profile's willingness band — so the only thing
+    // that could suppress the bid here is over-aggressive discipline.
+    for (const roundId of ROUND_IDS(25)) {
+      const state = buildState({ botProfile: SKILLED, roundId });
+      const decision = decideAuctionBotAction(state, 'seat-bot');
       expect(decision.kind).toBe('bid');
     }
   });
 
   it('never bids more than the seat can pay', () => {
-    for (let seed = 0; seed < 40; seed++) {
+    for (const roundId of ROUND_IDS(40)) {
       const budget = 500_000_000;
-      const state = buildState({ botProfile: UNSKILLED, budget });
-      const decision = decideAuctionBotAction(state, 'seat-bot', seededRandom(seed));
+      const state = buildState({ botProfile: UNSKILLED, budget, roundId });
+      const decision = decideAuctionBotAction(state, 'seat-bot');
       if (decision.kind === 'bid') expect(decision.amount).toBeLessThanOrEqual(budget);
     }
   });
@@ -345,12 +332,7 @@ describe('budget discipline', () => {
 describe('chemistry-aware valuation (350M profit economy)', () => {
   const CHEM_PROFILE: AuctionBotProfile = { baseSkill: 0.9, consistency: 0.9, personalitySeed: 21 };
 
-  // Chemistry recognition is a per-round hash draw — pin a round where this
-  // bot DOES spot the link, so the test exercises the priced-in path.
-  const CHEM_ROUND = Array.from({ length: 50 }, (_, i) => `chem-round-${i}`)
-    .find((r) => recognizesChemistryLink({ profile: CHEM_PROFILE, seatId: 'seat-bot', estimateKey: `m1:${r}:f1` }))!;
-
-  function stateWithSquadmate(cardClub: string | null, roundId: string = CHEM_ROUND): AuctionMatchState {
+  function stateWithSquadmate(cardClub: string | null, roundId: string): AuctionMatchState {
     // Raising over the standing bid must cost exactly 95% of what THIS bot
     // believes the card is worth (the pre-perception fixture pinned 85M
     // standing + 10M raise against a 100M value; anchoring to the perceived
@@ -379,24 +361,17 @@ describe('chemistry-aware valuation (350M profit economy)', () => {
     // Raising costs 95% of the bot's perceived value, above its whole margin
     // band on the raw card (tops out ~91%) — the UNLINKED card is always a
     // fold. A same-club link (+2 squad chemistry ≈ +18% effective value at
-    // high chemWeight) lifts the band top past ~108%, so a healthy share of
-    // seeds flip to a raise. Chemistry may only ever raise willingness, never
-    // lower it.
-    // The LCG's FIRST draw barely varies across small consecutive seeds — warm
-    // it so the willingness draw actually sweeps the band.
-    const warmedRandom = (seed: number) => {
-      const rng = seededRandom(seed * 2654435761 + 97);
-      rng(); rng(); rng();
-      return rng;
-    };
+    // high chemWeight) lifts the band top past ~108%, so rounds where the
+    // link is RECOGNIZED and the margin draw sits high enough flip to a
+    // raise. Chemistry may only ever raise willingness, never lower it.
     let flippedToBid = 0;
-    for (let seed = 1; seed <= 120; seed += 1) {
-      const unlinked = decideAuctionBotAction(stateWithSquadmate('Chelsea'), 'seat-bot', warmedRandom(seed));
-      const linked = decideAuctionBotAction(stateWithSquadmate('Real Madrid'), 'seat-bot', warmedRandom(seed));
+    for (const roundId of Array.from({ length: 150 }, (_, i) => `chem-round-${i}`)) {
+      const unlinked = decideAuctionBotAction(stateWithSquadmate('Chelsea', roundId), 'seat-bot');
+      const linked = decideAuctionBotAction(stateWithSquadmate('Real Madrid', roundId), 'seat-bot');
       expect(unlinked.kind).toBe('fold');
       if (linked.kind === 'bid') flippedToBid += 1;
     }
-    expect(flippedToBid).toBeGreaterThan(10);
+    expect(flippedToBid).toBeGreaterThan(15);
   });
 
   it('an UNRECOGNIZED link prices exactly like no link at all', () => {
@@ -404,15 +379,13 @@ describe('chemistry-aware valuation (350M profit economy)', () => {
     // recognition draw misses, a linked card must be indistinguishable from
     // an unlinked one — if the service quietly went back to always pricing
     // chemistry, this fails.
-    const blindRound = Array.from({ length: 50 }, (_, i) => `chem-blind-${i}`)
-      .find((r) => !recognizesChemistryLink({ profile: CHEM_PROFILE, seatId: 'seat-bot', estimateKey: `m1:${r}:f1` }))!;
-    for (let seed = 1; seed <= 60; seed += 1) {
-      const rng = seededRandom(seed * 2654435761 + 97);
-      rng(); rng(); rng();
-      const rngB = seededRandom(seed * 2654435761 + 97);
-      rngB(); rngB(); rngB();
-      const linked = decideAuctionBotAction(stateWithSquadmate('Real Madrid', blindRound), 'seat-bot', rng);
-      const unlinked = decideAuctionBotAction(stateWithSquadmate('Chelsea', blindRound), 'seat-bot', rngB);
+    const blindRounds = Array.from({ length: 200 }, (_, i) => `chem-blind-${i}`)
+      .filter((r) => !recognizesChemistryLink({ profile: CHEM_PROFILE, seatId: 'seat-bot', estimateKey: `m1:${r}:f1` }))
+      .slice(0, 40);
+    expect(blindRounds.length).toBeGreaterThan(10);
+    for (const roundId of blindRounds) {
+      const linked = decideAuctionBotAction(stateWithSquadmate('Real Madrid', roundId), 'seat-bot');
+      const unlinked = decideAuctionBotAction(stateWithSquadmate('Chelsea', roundId), 'seat-bot');
       expect(linked).toEqual(unlinked);
     }
   });

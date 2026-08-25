@@ -1,4 +1,3 @@
-import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
 import {
   MIN_BID_INCREMENT,
@@ -32,6 +31,7 @@ import {
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 import {
   perceivedCardValue,
+  perceptionUnit,
   recognizesChemistryLink,
   resolveAuctionBotBehaviour,
   type AuctionBotProfile,
@@ -116,10 +116,11 @@ export async function runAuctionBotActionTimer(
 }
 
 /**
- * Decide one bot turn. PURE: all randomness arrives through `random` (the
- * harness seeds it via AuctionEngineContext), and the bot's personality comes
- * from the seat's own `botProfile`, so the same seed + profile always yields the
- * same decision.
+ * Decide one bot turn. A PURE FUNCTION OF STATE: every random-looking input
+ * (value estimate, margin within the willingness band, jump impulses) is
+ * hash-derived from the seat + round + standing price, so a retried timer, a
+ * failover replica, or a harness replay computes the identical decision from
+ * the same persisted state. Only think-time scheduling still uses RNG.
  *
  * A seat with no profile (human-facing ephemeral bot, or the flag-off path) uses
  * EPHEMERAL_AUCTION_BOT_BEHAVIOUR. All behaviours are tuned for the 350M
@@ -128,8 +129,7 @@ export async function runAuctionBotActionTimer(
  */
 export function decideAuctionBotAction(
   state: AuctionMatchState,
-  seatId: string,
-  random: () => number = getRandom
+  seatId: string
 ): BotDecision {
   const round = state.currentRound;
   const player = state.seats.find((seat) => seat.seatId === seatId);
@@ -144,7 +144,7 @@ export function decideAuctionBotAction(
   const minBid = getMinBid(round.startingPrice, round.highestBid);
   const hardMaxBid = getMaxBid(player.budget, emptySlots);
   if (hardMaxBid < minBid) {
-    return round.highestBidderSeatId ? { kind: 'fold' } : { kind: 'noop', reason: 'bot_cannot_open' };
+    return { kind: 'fold' };
   }
 
   // Budget discipline: a skilled bot commits only part of its per-slot ceiling to
@@ -156,9 +156,8 @@ export function decideAuctionBotAction(
   // Bots price the card off what they BELIEVE it is worth, not the hidden
   // trueValue: the perceived value carries a per-seat per-round misjudgement,
   // so a bot can overpay for a lemon or let a star go cheap exactly like a
-  // clue-reading human. The estimate is hash-derived (never RNG), so it holds
-  // for the whole round on every replica; the margin draw below stays
-  // per-turn randomness, as it always was.
+  // clue-reading human. Hash-derived (never RNG): stable for the whole round
+  // on every replica.
   const estimateKey = `${state.matchId}:${round.roundId}:${round.footballer.id}`;
   const perceivedValue = perceivedCardValue({
     trueValue: round.footballer.trueValue,
@@ -181,32 +180,41 @@ export function decideAuctionBotAction(
   const chemGain = recognizesChemistryLink({ profile: player.botProfile, seatId, estimateKey })
     ? chemistryGainIfAdded(player.team, round.footballer, round.positionGroup)
     : 0;
+  // The margin draw is frozen per round too: a real bidder decides their
+  // walk-away price for a lot ONCE — resampling each turn let the same bot
+  // accept at 40M and refuse at 35M within one bidding war (and made retried
+  // timers non-reproducible).
+  const marginUnit = perceptionUnit(player.botProfile, seatId, 'margin', estimateKey);
   const baseWillingness = Math.floor(
-    perceivedValue * (behaviour.willingnessFloor + random() * behaviour.willingnessSpread)
+    perceivedValue * (behaviour.willingnessFloor + marginUnit * behaviour.willingnessSpread)
   );
   const chemBoosted = Math.floor(baseWillingness * (1 + 0.1 * chemGain * behaviour.chemWeight));
   const willingness = Math.max(
     baseWillingness,
     Math.min(perceivedValue, chemBoosted)
   );
-  if (round.highestBidderSeatId && minBid > willingness) {
+  // The opener may pass now, so the willingness check applies to opening
+  // bids too: a bot never opens a lot priced above what it believes the
+  // card is worth — it passes, exactly like it would fold on a raise.
+  if (minBid > willingness) {
     return { kind: 'fold' };
   }
 
-  // Opening keeps a floor at minBid (a bot must still be able to open an
-  // affordable round), but jumps are clamped to willingness in both cases —
-  // without that, an opener could leap past its own valuation and self-harm
-  // with nobody bidding against it.
-  const cap = round.highestBidderSeatId
-    ? Math.min(maxBid, willingness)
-    : Math.min(maxBid, Math.max(minBid, willingness));
+  // Jumps are clamped to willingness — an opener must not leap past its own
+  // valuation and self-harm with nobody bidding against it.
+  const cap = Math.min(maxBid, willingness);
   let amount = minBid;
-  if (random() >= behaviour.jumpThreshold) {
-    amount += MIN_BID_INCREMENT * (1 + Math.floor(random() * 3));
+  // Jump impulses hash the standing price in, so each distinct raise point
+  // gets its own deterministic yes/no + size — variety across the war,
+  // reproducibility within one decision.
+  if (perceptionUnit(player.botProfile, seatId, `jump:${minBid}`, estimateKey) >= behaviour.jumpThreshold) {
+    amount += MIN_BID_INCREMENT * (1 + Math.floor(
+      perceptionUnit(player.botProfile, seatId, `jumpsize:${minBid}`, estimateKey) * 3
+    ));
   }
   amount = Math.min(amount, cap);
   if (amount < minBid) {
-    return round.highestBidderSeatId ? { kind: 'fold' } : { kind: 'noop', reason: 'bot_bid_below_min' };
+    return { kind: 'fold' };
   }
 
   return { kind: 'bid', amount };
@@ -221,7 +229,7 @@ async function applyAuctionBotAction(
     const validation = validateBotPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));
 
-    const decision = decideAuctionBotAction(current, payload.expectedTurnSeatId, context.random);
+    const decision = decideAuctionBotAction(current, payload.expectedTurnSeatId);
     if (decision.kind === 'noop') return skipAuctionMatchMutation(noop(decision.reason));
 
     const nextState = decision.kind === 'bid'

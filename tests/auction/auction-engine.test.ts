@@ -249,19 +249,68 @@ describe('auction engine transitions', () => {
     expect(raised.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:00.789Z');
   });
 
-  it('blocks opener fold and auto-bids the opener on timeout', () => {
+  it('lets the opener pass, and an opener timeout is a pass — never an auto-buy', () => {
     const state = startReadyBiddingRound();
 
-    expect(() => applyFold(state, 'seat-human', context())).toThrow('Opening bidder cannot fold');
+    const folded = applyFold(state, 'seat-human', context());
+    expect(folded.currentRound?.foldedSeatIds).toContain('seat-human');
+    expect(folded.currentRound?.highestBidderSeatId).toBeNull();
+    expect(folded.currentRound?.currentTurnSeatId).toBe('bot-seat-1');
 
     const next = applyTurnTimeout(state, context());
-    expect(next.currentRound?.highestBidderSeatId).toBe('seat-human');
-    expect(next.currentRound?.highestBid).toBe(30_000_000);
-    expect(next.currentRound?.bids).toEqual([
-      { seatId: 'seat-human', amount: 30_000_000, placedAt: '2026-06-20T10:00:00.000Z' },
-    ]);
+    expect(next.currentRound?.foldedSeatIds).toContain('seat-human');
+    expect(next.currentRound?.highestBidderSeatId).toBeNull();
+    expect(next.currentRound?.bids).toEqual([]);
     expect(next.currentRound?.currentTurnSeatId).toBe('bot-seat-1');
-    expect(next.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:15.000Z');
+  });
+
+  it('resolves unsold through the reveal when every seat passes', () => {
+    let state = startReadyBiddingRound();
+    state = applyFold(state, 'seat-human', context());
+    state = applyFold(state, 'bot-seat-1', context());
+    state = applyFold(state, 'bot-seat-2', context());
+
+    expect(state.phase).toBe('reveal');
+    expect(state.currentRound?.winnerSeatId).toBeNull();
+    expect(state.currentRound?.revealed).toBe(true);
+    expect(state.seats.every((entry) => entry.budget === entry.startingBudget)).toBe(true);
+  });
+
+  it('discards an unsold lot and draws a replacement card', () => {
+    let state = startReadyBiddingRound();
+    state = applyFold(state, 'seat-human', context());
+    state = applyFold(state, 'bot-seat-1', context());
+    state = applyFold(state, 'bot-seat-2', context());
+
+    const pool: AuctionCardPool = { FWD: [card('replacement', 'FWD', 60_000_000, 20_000_000)] };
+    const next = advanceToNextRoundOrFinish(state, pool, context());
+
+    expect(next.completedRounds.at(-1)?.winnerSeatId ?? null).toBeNull();
+    expect(next.phase).toBe('clue_reveal');
+    expect(next.currentRound?.footballer.id).toBe('replacement');
+
+    // The replacement lot plays out normally — a passed-on card never blocks
+    // the match.
+    let replacement = revealAllAndStart(next, context());
+    replacement = applyBid(replacement, replacement.currentRound!.currentTurnSeatId!, 20_000_000, context());
+    replacement = applyTurnTimeout(replacement, context());
+    replacement = applyTurnTimeout(replacement, context());
+    expect(replacement.phase).toBe('reveal');
+    expect(replacement.currentRound?.winnerSeatId).not.toBeNull();
+  });
+
+  it('rotates the opening turn among needers with the round count', () => {
+    const base = startReadyBiddingRound();
+    const dummyRound = base.currentRound!;
+    const match = createMatch();
+    const openers = [0, 1, 2, 3].map((completed) => {
+      const staged = { ...match, completedRounds: Array.from({ length: completed }, () => dummyRound) };
+      const round = startBiddingRound(staged, 'FWD', card(`rot-${completed}`, 'FWD', 50_000_000, 10_000_000), staged.seats, context());
+      return round.currentRound!.turnOrder[0];
+    });
+    // Three seats: the opener cycles seat-by-seat and wraps on the fourth round.
+    expect(new Set(openers.slice(0, 3)).size).toBe(3);
+    expect(openers[3]).toBe(openers[0]);
   });
 
   it('auto-folds a non-opener timeout and skips the high bidder on the next turn', () => {
@@ -294,11 +343,11 @@ describe('auction engine transitions', () => {
 
     const next = applyTurnTimeout(leaderless, context());
 
-    // Unsold: the round completes with no winner and the match returns to
-    // content selection instead of wedging in bidding.
-    expect(next.phase).toBe('created');
-    const completed = next.completedRounds.at(-1);
-    expect(completed?.winnerSeatId ?? null).toBeNull();
+    // Unsold: the round resolves winnerless through the reveal (so players
+    // see the passed-on card) instead of wedging in bidding.
+    expect(next.phase).toBe('reveal');
+    expect(next.currentRound?.winnerSeatId).toBeNull();
+    expect(next.currentRound?.revealed).toBe(true);
     expect(next.seats.every((entry) => entry.budget === pricedOut)).toBe(true);
   });
 
@@ -377,9 +426,9 @@ describe('auction engine transitions', () => {
     };
     state = revealAllAndStart(state, context());
 
-    expect(state.phase).toBe('created');
-    expect(state.currentRound).toBeNull();
-    expect(state.completedRounds.at(-1)?.winnerSeatId).toBeNull();
+    expect(state.phase).toBe('reveal');
+    expect(state.currentRound?.winnerSeatId).toBeNull();
+    expect(state.currentRound?.revealed).toBe(true);
   });
 
   it('starts solo-pick when exactly one active player needs the position and selection costs the opening price', () => {

@@ -192,10 +192,14 @@ export const auctionContentService = {
   assertPublishedAuctionContentAvailable,
 };
 
-// Serve roughly 70% household names, 30% deeper cuts. Uniform picking would
-// drift toward unknowns as generation finishes the long €5-25M tail of the
-// pool; the weighted roll keeps matches recognisable regardless of pool shape.
-const FAME_MIX_WELL_KNOWN_SHARE = 0.7;
+// Serve roughly 80% household names, 20% deeper cuts (raised from 70/30 on
+// 2026-08-26 after player feedback that lots skewed obscure). Uniform picking
+// would drift toward unknowns as generation finishes the long €5-25M tail of
+// the pool; the weighted roll keeps matches recognisable regardless of pool
+// shape. The ≥€25M fame threshold stays put: goalkeepers have only ~20 cards
+// above it, so raising the BAR (rather than the share) would loop the same
+// few GK names.
+const FAME_MIX_WELL_KNOWN_SHARE = 0.8;
 
 async function findRandomPublishedAuctionCard(
   options: RandomPublishedAuctionCardOptions,
@@ -265,6 +269,9 @@ export function displayLeagueName(slug: string): string {
 // on any client that falls back to plain clue text.
 const SNAPSHOT_FACETS = ['Goals', 'Assists', 'Market value', 'Age', 'League'] as const;
 const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'Age', 'League'] as const;
+
+/** Authored text hints revealed after the stat facets (clue_1 and clue_2). */
+export const AUCTION_TEXT_HINTS_PER_LOT = 2;
 
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
@@ -346,9 +353,30 @@ async function attachSeasonSnapshots(
   }));
 
   card.snapshots = snapshots;
+
+  // The lot opens at the scout season's REAL market value — the exact figure
+  // the card itself shows ("buy him at his {scout season} price"; profit is
+  // what he became by the scoring season). Historically true by construction,
+  // no synthetic fallback needed, and it leaks nothing: the same number is a
+  // public facet of the scout season. The view's starting_price_eur remains
+  // only as a guard against a malformed snapshot value.
+  const scoutValue = snapshots[0]?.valueEur;
+  if (Number.isFinite(scoutValue) && scoutValue > 0) {
+    card.startingPrice = Math.floor(scoutValue);
+    card.startingPriceEur = Math.floor(scoutValue);
+  }
+
   card.league = snapshots[snapshots.length - 1]?.league ?? null;
+  // Reveal steps: the five stat facets, then up to two of the card's authored
+  // text hints (clue_1/clue_2, already in the match locale). The hint TEXTS
+  // ride the existing revealedClues pacing — the client receives each string
+  // only when its step is revealed, exactly like the facet labels before them.
+  const authoredClues = (card.clues ?? [])
+    .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+    .slice(0, AUCTION_TEXT_HINTS_PER_LOT);
   card.clues = [
     ...(card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS),
+    ...authoredClues,
   ];
   return card;
 }

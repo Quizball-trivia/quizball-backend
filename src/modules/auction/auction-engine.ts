@@ -1,4 +1,3 @@
-import { shuffle } from '../../core/rng.js';
 import {
   AUCTION_SEAT_COUNT,
   FORMATIONS,
@@ -166,7 +165,19 @@ export function startBiddingRound(
 ): AuctionMatchState {
   const context = resolveAuctionContext(contextInput);
   const now = context.nowIso();
-  const turnOrder = shuffle(needers.map((player) => player.seatId), context.random);
+  // The opening turn ROTATES with the round count instead of being a fresh
+  // shuffle: a random draw could hand the same seat the opener many rounds
+  // in a row. Rotation happens WITHIN the needer list (in stable seat
+  // order) — rotating all seats and filtering afterward would bias the
+  // opener toward whichever needers sit after a non-needer's offset. Who
+  // opens FIRST still varies match to match: seat order comes from
+  // matchmaking, so the rotation's starting seat is already arbitrary.
+  const neederIds = new Set(needers.map((player) => player.seatId));
+  const neederOrder = state.seats
+    .map((player) => player.seatId)
+    .filter((seatId) => neederIds.has(seatId));
+  const offset = state.completedRounds.length % Math.max(1, neederOrder.length);
+  const turnOrder = [...neederOrder.slice(offset), ...neederOrder.slice(0, offset)];
   const round: AuctionRoundState = {
     roundId: context.createId('round'),
     roundIndex: state.completedRounds.length + 1,
@@ -412,10 +423,9 @@ export function applyFold(
   const round = requireBiddingRound(state);
   requireCurrentTurnPlayer(state, seatId);
 
-  if (!round.highestBidderSeatId) {
-    throw new AuctionInvalidActionError('Opening bidder cannot fold');
-  }
-
+  // The opener may pass like anyone else. If every seat passes, the round
+  // resolves unsold and the flow draws a fresh card — nobody is ever forced
+  // to buy a lot they did not choose.
   const nextRound = {
     ...round,
     foldedSeatIds: unique([...round.foldedSeatIds, seatId]),
@@ -434,27 +444,9 @@ export function applyTurnTimeout(
   const seatId = round.currentTurnSeatId;
   if (!seatId) throw new AuctionInvalidActionError('No active turn');
 
-  if (!round.highestBidderSeatId) {
-    // An opening timeout force-bids the starting price — but only when the
-    // seat can actually afford it. After a mid-round forfeit strips bid
-    // leadership, the seated turn may be priced out; forcing the bid would
-    // throw inside the state lock and re-arm the timeout every second until
-    // the state TTL. Folding instead lets advanceTurnOrResolveRound skip the
-    // other priced-out seats and resolve unsold.
-    const turnSeat = state.seats.find((entry) => entry.seatId === seatId);
-    const canOpen = Boolean(turnSeat)
-      && getMaxBid(turnSeat!.budget, getEmptySlots(turnSeat!.team)) >= round.startingPrice;
-    if (!canOpen) {
-      const foldedRound = {
-        ...round,
-        foldedSeatIds: unique([...round.foldedSeatIds, seatId]),
-        updatedAt: context.nowIso(),
-      };
-      return advanceTurnOrResolveRound({ ...state, currentRound: foldedRound }, context);
-    }
-    return applyBid(state, seatId, round.startingPrice, contextInput);
-  }
-
+  // A timeout is always a pass — opening turn included. Auto-buying the
+  // starting price on the opener's timeout forced players into purchases
+  // they never chose; letting the round resolve unsold is the fair outcome.
   const nextRound = {
     ...round,
     foldedSeatIds: unique([...round.foldedSeatIds, seatId]),
@@ -569,7 +561,7 @@ export function resolveUnsoldRound(
 ): AuctionMatchState {
   const context = resolveAuctionContext(contextInput);
   const round = requireCurrentRound(state);
-  const completedRound = {
+  const unsoldRound = {
     ...round,
     currentTurnSeatId: null,
     turnEndsAt: null,
@@ -581,11 +573,13 @@ export function resolveUnsoldRound(
     updatedAt: context.nowIso(),
   };
 
+  // An unsold lot goes through the same reveal as a sold one (winnerSeatId
+  // null) so everyone sees who the passed-on player was; the post-reveal
+  // advance moves it into completedRounds and draws a fresh card.
   return touch({
     ...state,
-    phase: 'created',
-    currentRound: null,
-    completedRounds: [...state.completedRounds, completedRound],
+    phase: 'reveal',
+    currentRound: unsoldRound,
   }, context);
 }
 

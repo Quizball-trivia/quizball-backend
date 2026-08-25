@@ -150,7 +150,7 @@ describe('auction clue reveal timers', () => {
     );
   });
 
-  it('reveals clue 1, emits a hidden clue payload, and schedules clue 2', async () => {
+  it('reveals clues 1+2 as a pair, emits a hidden clue payload, and schedules clue 3', async () => {
     const { io, roomEmit } = createIo();
     const { runAuctionClueRevealTimer } = await import('../../src/realtime/services/auction-clue-timer.service.js');
     stateStoreMock.load.mockResolvedValue(matchState());
@@ -164,10 +164,11 @@ describe('auction clue reveal timers', () => {
     }, { context: timerContext });
 
     expect(outcome.kind).toBe('clue_revealed');
+    // Reveal steps land in pairs — one tick uncovers clues 1 AND 2.
     expect(stateStoreMock.save).toHaveBeenCalledWith(
       expect.objectContaining({
         version: 1,
-        currentRound: expect.objectContaining({ clueRevealIndex: 1 }),
+        currentRound: expect.objectContaining({ clueRevealIndex: 2 }),
       }),
       { expectedVersion: 0, now: new Date('2026-06-20T10:00:00.000Z') }
     );
@@ -176,16 +177,16 @@ describe('auction clue reveal timers', () => {
       expect.objectContaining({
         matchId: 'match-1',
         roundId: 'round-1',
-        clueIndex: 1,
-        clue: footballer.clues[0],
+        clueIndex: 2,
+        clue: footballer.clues[1],
         stateVersion: 1,
       })
     );
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
-      'match-1:round-1:2',
+      'match-1:round-1:3',
       new Date('2026-06-20T10:00:03.000Z'),
-      expect.objectContaining({ expectedClueIndex: 2, stateVersion: 1 })
+      expect.objectContaining({ expectedClueIndex: 3, stateVersion: 1 })
     );
 
     const payloadText = JSON.stringify(roomEmit.mock.calls);

@@ -84,7 +84,9 @@ describe('reserveAuctionPersistentBots — happy path', () => {
       userId: 'bot-1',
       displayName: 'nick-bot-1',
       avatarUrl: 'http://avatars/bot-1.png',
-      botProfile: { baseSkill: 0.7, consistency: 0.6, personalitySeed: 42 },
+      // base_skill 0.7 clamps to the auction skill cap (0.55): full-match sim
+      // showed uncapped roster skill makes fallback opponents oppressive.
+      botProfile: { baseSkill: 0.55, consistency: 0.6, personalitySeed: 42 },
     });
     expect(seats[1].botProfile).toEqual({ baseSkill: 0.2, consistency: 0.9, personalitySeed: 7 });
   });

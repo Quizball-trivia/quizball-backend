@@ -119,8 +119,13 @@ export interface AuctionBotCardPerception {
   estimateKey: string;
 }
 
-/** Stable 0..1 draw for one bot's read of one card along one perception axis. */
-function perceptionUnit(
+/**
+ * Stable 0..1 draw for one bot's read of one card along one perception axis.
+ * Exported so the bid decision can derive ALL of its per-round randomness
+ * (value estimate, margin, jump impulses) from state — a retried or
+ * replica-recomputed decision is byte-identical.
+ */
+export function perceptionUnit(
   profile: AuctionBotProfile | null | undefined,
   seatId: string,
   axis: string,

@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { Json } from '../../db/types.js';
+import { getOrLoadJson } from '../../core/json-cache.js';
 import {
   AuthorizationError,
   DailyChallengeAlreadyCompletedError,
@@ -89,6 +91,7 @@ const dailyChallengeSettingsSchemas = {
 } as const;
 
 const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka'] as const;
+const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
 type PayloadOfType<TType extends QuestionPayloadType> = Extract<QuestionPayload, { type: TType }>;
@@ -548,10 +551,19 @@ async function listTypedQuestionRows<TType extends QuestionPayloadType>(
   questionType: TType,
   options?: { limit?: number; excludeImagePayloads?: boolean }
 ): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
-  const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
+  const cacheKey = sharedDailyContentKey(
+    'rows',
     questionType,
     categoryIds,
-    options
+    options?.limit,
+    options?.excludeImagePayloads
+  );
+  const rows = await getOrLoadJson(cacheKey, DAILY_CONTENT_CACHE_TTL_SECONDS, () =>
+    dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
+      questionType,
+      categoryIds,
+      options
+    )
   );
 
   return rows
@@ -562,13 +574,40 @@ async function listTypedQuestionRows<TType extends QuestionPayloadType>(
     .filter((item): item is { row: QuestionContentRow; payload: PayloadOfType<TType> } => item !== null);
 }
 
+function sharedDailyContentKey(
+  kind: 'rows' | 'count',
+  questionType: QuestionPayloadType,
+  categoryIds: string[],
+  limit?: number,
+  excludeImagePayloads?: boolean
+): string {
+  const identity = JSON.stringify([
+    questionType,
+    [...categoryIds].sort(),
+    limit ?? null,
+    excludeImagePayloads ?? false,
+  ]);
+  const digest = createHash('sha256').update(identity).digest('hex');
+  return `daily:content:v1:${kind}:${digest}`;
+}
+
+async function countPublishedQuestions(
+  questionType: QuestionPayloadType,
+  categoryIds: string[]
+): Promise<number> {
+  const cacheKey = sharedDailyContentKey('count', questionType, categoryIds);
+  return getOrLoadJson(cacheKey, DAILY_CONTENT_CACHE_TTL_SECONDS, () =>
+    dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(questionType, categoryIds)
+  );
+}
+
 async function getContentAvailabilityDetails<TType extends QuestionPayloadType>(
   categoryIds: string[],
   questionType: TType,
   validRows: Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>
 ): Promise<ContentAvailabilityDetails> {
   const rawPublishedInSelectedCategories =
-    await dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(questionType, categoryIds);
+    await countPublishedQuestions(questionType, categoryIds);
 
   if (categoryIds.length === 0) {
     return {
@@ -581,7 +620,7 @@ async function getContentAvailabilityDetails<TType extends QuestionPayloadType>(
 
   const allValidRows = await listTypedQuestionRows([], questionType);
   const rawPublishedAcrossAllCategories =
-    await dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(questionType, []);
+    await countPublishedQuestions(questionType, []);
 
   return {
     categoryIds,

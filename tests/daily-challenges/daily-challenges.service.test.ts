@@ -235,6 +235,70 @@ describe('dailyChallengesService', () => {
     });
   });
 
+  it('excludes image MCQs from money drop — their stem needs a photo the schema cannot carry', async () => {
+    const categoryId = '11111111-1111-1111-1111-111111111111';
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'moneyDrop',
+      is_active: true,
+      sort_order: 1,
+      show_on_home: true,
+      coin_reward: 100,
+      xp_reward: 20,
+      settings: {
+        categoryIds: [categoryId],
+        questionCount: 1,
+        secondsPerQuestion: 30,
+        startingMoney: 100000,
+      },
+      created_at: '2026-03-15T00:00:00.000Z',
+      updated_at: '2026-03-15T00:00:00.000Z',
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listByIdsMock.mockResolvedValue([{ id: categoryId, is_active: true }]);
+    const baseOptions = [
+      { id: 'a', text: { en: 'Spain' }, is_correct: true },
+      { id: 'b', text: { en: 'Germany' }, is_correct: false },
+      { id: 'c', text: { en: 'Brazil' }, is_correct: false },
+      { id: 'd', text: { en: 'France' }, is_correct: false },
+    ];
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'q-image',
+        category_id: categoryId,
+        difficulty: 'easy',
+        prompt: { en: 'Which team is pictured lifting the cup?' },
+        explanation: null,
+        category_name: { en: 'World Cup' },
+        payload: {
+          type: 'mcq_single',
+          options: baseOptions,
+          image: { url: 'https://cdn.example/x.webp', width: 800, height: 600 },
+        },
+      },
+      {
+        id: 'q-plain',
+        category_id: categoryId,
+        difficulty: 'easy',
+        prompt: { en: 'Who won the 2010 World Cup?' },
+        explanation: null,
+        category_name: { en: 'World Cup' },
+        payload: { type: 'mcq_single', options: baseOptions },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.getChallengeSession('user-1', 'moneyDrop');
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].id).toBe('q-plain');
+    // the exclusion must also reach SQL, before the sample limit is applied
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).toHaveBeenCalledWith(
+      'mcq_single',
+      [categoryId],
+      expect.objectContaining({ excludeImagePayloads: true })
+    );
+  });
+
   it('falls back to legacy payload prompt when the row prompt is blank', async () => {
     const categoryId = '11111111-1111-1111-1111-111111111111';
     getConfigMock.mockResolvedValue({

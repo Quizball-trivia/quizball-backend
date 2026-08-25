@@ -369,8 +369,12 @@ export const agentsService = {
     // For a question (type + category), which ACTIVE daily challenges can use it?
     // A challenge qualifies when its consumed question type matches AND its
     // category filter includes the category (empty filter = all categories).
-    const feedsFor = (qType: string, categoryId: string): string[] => {
-      const candidates = CHALLENGE_BY_QUESTION_TYPE[qType] ?? [];
+    const feedsFor = (qType: string, categoryId: string, payload: unknown): string[] => {
+      // Image MCQs are type mcq_single, but Money Drop skips them (its response
+      // schema has no image, so the stem would reference a photo nobody sees) —
+      // don't show the editor a "Feeds: Money Drop" badge that can't happen.
+      const hasImage = !!(payload as { image?: unknown } | null)?.image;
+      const candidates = hasImage ? [] : (CHALLENGE_BY_QUESTION_TYPE[qType] ?? []);
       return candidates
         .filter((c) =>
           activeChallenges.some(
@@ -393,7 +397,7 @@ export const agentsService = {
       source: r.job_type === 'daily_challenge' ? 'daily' : 'ranked',
       jobType: r.job_type,
       topic: r.topic,
-      feedsChallenges: feedsFor(r.type, r.category_id),
+      feedsChallenges: feedsFor(r.type, r.category_id, r.payload),
       createdAt: r.created_at,
     }));
     // group by source then topic, so the editor sees "Daily · Juventus (3)" etc.

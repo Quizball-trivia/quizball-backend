@@ -27,8 +27,10 @@ export const auctionLeaderboardRepo = {
         u.avatar_url AS "avatarUrl",
         u.avatar_customization AS "avatarCustomization",
         u.auction_points AS "auctionPoints",
-        u.country
+        u.country,
+        CASE WHEN rp.placement_status = 'placed' THEN rp.tier END AS "tier"
       FROM users u
+      LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE u.is_ai = false
         AND u.is_seed = false
         AND u.is_deleted = false
@@ -55,8 +57,10 @@ export const auctionLeaderboardRepo = {
     const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
     const [result] = await sql<AuctionUserRankResult[]>`
       WITH target AS (
-        SELECT u.id, u.auction_points, u.updated_at, u.country
+        SELECT u.id, u.auction_points, u.updated_at, u.country,
+               CASE WHEN rp.placement_status = 'placed' THEN rp.tier END AS tier
         FROM users u
+        LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
         WHERE u.id = ${userId}
           AND u.is_ai = false
           AND u.is_seed = false
@@ -68,6 +72,7 @@ export const auctionLeaderboardRepo = {
       )
       SELECT
         target.auction_points AS "auctionPoints",
+        target.tier AS "tier",
         (SELECT COUNT(*)::int + 1
          FROM users u
          WHERE u.is_ai = false

@@ -50,6 +50,7 @@ export const auctionLeaderboardController = {
       avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
       country: user?.country ?? null,
       auctionPoints: rankInfo.auctionPoints,
+      tier: rankInfo.tier ?? null,
       rank: rankInfo.rank,
       total: rankInfo.total,
     });

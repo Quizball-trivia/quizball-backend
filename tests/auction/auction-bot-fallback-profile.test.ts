@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-import {
+import { AUCTION_BOT_SKILL_CAP,
   fabricatedAuctionBotProfile,
 } from '../../src/realtime/services/auction-bot-selection.service.js';
 import { resolveAuctionBotBehaviour } from '../../src/realtime/services/auction-bot-profile.js';
@@ -27,7 +27,8 @@ describe('ephemeral Auction bot personalities', () => {
     for (const name of ['tengo', 'lukaberidze', 'futbolmaster', 'datuna', 'nika']) {
       const profile = fabricatedAuctionBotProfile(name);
       expect(profile.baseSkill).toBeGreaterThanOrEqual(0.15);
-      expect(profile.baseSkill).toBeLessThanOrEqual(0.9);
+      // Sim-tuned auction cap: uncapped skill farms casual players.
+      expect(profile.baseSkill).toBeLessThanOrEqual(AUCTION_BOT_SKILL_CAP);
       expect(profile.consistency).toBeGreaterThanOrEqual(0.2);
       expect(profile.consistency).toBeLessThanOrEqual(0.9);
       expect(profile.personalitySeed).toBeGreaterThan(0);

@@ -86,7 +86,7 @@ describe('auctionContentService', () => {
       imageUrl: 'https://img.example/haaland.jpg',
     });
     // The lot opens at the SCOUT season's real market value — the figure the
-    // card itself shows — never the view's fallback price.
+    // card itself shows — when it leaves bidding headroom (≤90% of trueValue).
     expect(result.startingPrice).toBe(result.snapshots![0].valueEur);
     expect(result.startingPriceEur).toBe(result.snapshots![0].valueEur);
     // Reveal steps: the five stat facets, then the card's first two authored
@@ -360,6 +360,30 @@ describe('auctionContentService', () => {
     expect(result.startingPrice).toBe(result.snapshots![0].valueEur);
     expect(result.startingPrice).not.toBe(10_000_000);
     expect(result.trueValue).toBe(180_000_000);
+  });
+
+  it('keeps the view starting price when the scout season opens above 90% of the hidden value', async () => {
+    // Declined veteran: glory-season value dwarfs today's. Opening at the
+    // scout price would make buying a guaranteed loss, so the capped view
+    // fallback must win.
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue({
+      ...basePublishedCard,
+      auction_price_eur: 4_000_000,
+      current_value_eur: 4_000_000,
+      starting_price_eur: 1_500_000,
+    });
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue([
+      { season_label: '2015/16', league_name: 'bundesliga', age: 26, apps: 31, goals: 20, assists: 12, clean_sheets: null, goals_conceded: null, value_eur: 75_000_000 },
+      { season_label: '2020/21', league_name: 'bundesliga', age: 31, apps: 32, goals: 11, assists: 18, clean_sheets: null, goals_conceded: null, value_eur: 30_000_000 },
+      { season_label: '2025/26', league_name: 'mls', age: 36, apps: 25, goals: 6, assists: 8, clean_sheets: null, goals_conceded: null, value_eur: 4_000_000 },
+    ]);
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(result.snapshots![0].valueEur).toBe(75_000_000);
+    expect(result.startingPrice).toBe(1_500_000);
+    expect(result.startingPriceEur).toBe(1_500_000);
+    expect(result.trueValue).toBe(4_000_000);
   });
 
   const snapshotRows = [

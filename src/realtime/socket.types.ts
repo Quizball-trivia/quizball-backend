@@ -795,6 +795,10 @@ export interface AuctionQueuedPlayerSummary {
 export interface AuctionMatchBotSummary {
   seatId: string;
   displayName: string;
+  /** Ms after `serverNow` when this bot pops into the lineup. Bots "arrive"
+   *  at staggered, randomized moments instead of all at once, so the fill
+   *  feels like a real queue. Absent (legacy) = show immediately. */
+  joinDelayMs?: number;
 }
 
 export interface AuctionSearchCancelledPayload {

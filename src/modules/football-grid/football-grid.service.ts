@@ -28,6 +28,7 @@ import {
 import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
 import { footballGridRepo, type FootballGridCommandInboxRow } from './football-grid.repo.js';
 import type {
+  FootballGridAliasRecord,
   FootballGridOrigin,
   FootballGridResolvedAnswer,
   FootballGridState,
@@ -41,15 +42,26 @@ export interface FootballGridCommandResult {
   duplicate: boolean;
 }
 
-type FootballGridBoardAnswerContent = Awaited<ReturnType<typeof footballGridRepo.getAliasesForBoard>>;
+type FootballGridBoardAnswerContent = {
+  aliases: FootballGridAliasRecord[];
+  validPlayerIdsByCell: Map<number, string[]>;
+  boardPlayerIds: string[];
+};
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
+const ALIAS_RELEASE_CACHE_TTL_MS = 30 * 60_000;
+const ALIAS_RELEASE_CACHE_MAX_ENTRIES = 4;
 type BoardAnswerCacheEntry = {
   generation: number;
   value: FootballGridBoardAnswerContent | null;
   expiresAt: number;
 };
 const boardAnswerCache = new Map<string, BoardAnswerCacheEntry>();
+type AliasReleaseCacheEntry = {
+  expiresAt: number;
+  value: Promise<Map<string, FootballGridAliasRecord[]>>;
+};
+const aliasReleaseCache = new Map<string, AliasReleaseCacheEntry>();
 
 function trimBoardAnswerCache(): void {
   while (boardAnswerCache.size > BOARD_ANSWER_CACHE_MAX_ENTRIES) {
@@ -70,6 +82,45 @@ function invalidateBoardAnswerContent(matchId: string): void {
   trimBoardAnswerCache();
 }
 
+function trimAliasReleaseCache(): void {
+  while (aliasReleaseCache.size > ALIAS_RELEASE_CACHE_MAX_ENTRIES) {
+    const oldestKey = aliasReleaseCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    aliasReleaseCache.delete(oldestKey);
+  }
+}
+
+async function getAliasesByPlayerForRelease(
+  releaseId: string,
+): Promise<Map<string, FootballGridAliasRecord[]>> {
+  const now = Date.now();
+  const cached = aliasReleaseCache.get(releaseId);
+  if (cached && cached.expiresAt > now) {
+    aliasReleaseCache.delete(releaseId);
+    aliasReleaseCache.set(releaseId, cached);
+    return cached.value;
+  }
+  if (cached) aliasReleaseCache.delete(releaseId);
+  const value = footballGridRepo.getAliasesForRelease(releaseId).then((aliases) => {
+    const byPlayer = new Map<string, FootballGridAliasRecord[]>();
+    for (const alias of aliases) {
+      const current = byPlayer.get(alias.playerId) ?? [];
+      current.push(alias);
+      byPlayer.set(alias.playerId, current);
+    }
+    return byPlayer;
+  });
+  const entry = { value, expiresAt: now + ALIAS_RELEASE_CACHE_TTL_MS };
+  aliasReleaseCache.set(releaseId, entry);
+  trimAliasReleaseCache();
+  try {
+    return await value;
+  } catch (error) {
+    if (aliasReleaseCache.get(releaseId) === entry) aliasReleaseCache.delete(releaseId);
+    throw error;
+  }
+}
+
 async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
   const now = Date.now();
   const cached = boardAnswerCache.get(matchId);
@@ -80,7 +131,20 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   }
   const generation = cached?.generation ?? 0;
   if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
-  const value = await footballGridRepo.getAliasesForBoard(matchId);
+  const context = await footballGridRepo.getBoardAnswerContext(matchId);
+  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
+  const validPlayerIdsByCell = new Map<number, string[]>();
+  const boardPlayerIds = [...new Set(context.answers.map((answer) => answer.footballPlayerId))];
+  for (const answer of context.answers) {
+    const current = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
+    current.push(answer.footballPlayerId);
+    validPlayerIdsByCell.set(answer.cellIndex, current);
+  }
+  const value: FootballGridBoardAnswerContent = {
+    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
+    validPlayerIdsByCell,
+    boardPlayerIds,
+  };
   const state = await currentOrThrow(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
   if (state.phase === 'terminal' || latestGeneration !== generation) return value;

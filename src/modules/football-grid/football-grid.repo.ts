@@ -2003,17 +2003,31 @@ export const footballGridRepo = {
     });
   },
 
-  async getAliasesForBoard(matchId: string): Promise<{
-    aliases: FootballGridAliasRecord[];
-    validPlayerIdsByCell: Map<number, string[]>;
-    boardPlayerIds: string[];
+  async getBoardAnswerContext(matchId: string): Promise<{
+    aliasReleaseId: string;
+    answers: Array<{ cellIndex: number; footballPlayerId: string }>;
   }> {
-    const answerRows = await sql<Array<{ cell_index: number; football_player_id: string }>>`
-      SELECT a.cell_index, a.football_player_id
+    const answerRows = await sql<Array<{
+      alias_release_id: string;
+      cell_index: number;
+      football_player_id: string;
+    }>>`
+      SELECT gm.alias_release_id, a.cell_index, a.football_player_id
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
        WHERE gm.match_id = ${matchId}
     `;
+    if (!answerRows[0]) throw new Error('Football Grid board answers not found');
+    return {
+      aliasReleaseId: answerRows[0].alias_release_id,
+      answers: answerRows.map((row) => ({
+        cellIndex: row.cell_index,
+        footballPlayerId: row.football_player_id,
+      })),
+    };
+  },
+
+  async getAliasesForRelease(releaseId: string): Promise<FootballGridAliasRecord[]> {
     const aliases = await sql<Array<{
       id: string;
       football_player_id: string;
@@ -2022,33 +2036,19 @@ export const footballGridRepo = {
       locale: 'en' | 'ka' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
-      SELECT pa.id, pa.football_player_id, pa.alias, pa.normalized_alias,
-             pa.locale, pa.acceptance_policy
-        FROM football_grid_matches gm
-        JOIN football_grid_player_aliases pa ON pa.release_id = gm.alias_release_id
-       WHERE gm.match_id = ${matchId}
-         AND pa.football_player_id IN (
-           SELECT football_player_id FROM football_grid_board_answers WHERE board_id = gm.board_id
-         )
+      SELECT id, football_player_id, alias, normalized_alias,
+             locale, acceptance_policy
+        FROM football_grid_player_aliases
+       WHERE release_id = ${releaseId}
     `;
-    const byCell = new Map<number, string[]>();
-    for (const answer of answerRows) {
-      const current = byCell.get(answer.cell_index) ?? [];
-      current.push(answer.football_player_id);
-      byCell.set(answer.cell_index, current);
-    }
-    return {
-      aliases: aliases.map((row) => ({
-        id: row.id,
-        playerId: row.football_player_id,
-        alias: row.alias,
-        normalizedAlias: row.normalized_alias,
-        locale: row.locale,
-        acceptancePolicy: row.acceptance_policy,
-      })),
-      validPlayerIdsByCell: byCell,
-      boardPlayerIds: [...new Set(answerRows.map((answer) => answer.football_player_id))],
-    };
+    return aliases.map((row) => ({
+      id: row.id,
+      playerId: row.football_player_id,
+      alias: row.alias,
+      normalizedAlias: row.normalized_alias,
+      locale: row.locale,
+      acceptancePolicy: row.acceptance_policy,
+    }));
   },
 
   async finishCommandInTx(input: {

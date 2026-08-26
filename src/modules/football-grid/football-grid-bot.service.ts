@@ -1,4 +1,7 @@
+import { appMetrics } from '../../core/metrics.js';
 import { applyResolvedAnswer, FOOTBALL_GRID_WIN_LINES, passTurn } from './football-grid.engine.js';
+import { parseFootballGridBotStrengthAdjustment } from './football-grid-bot-governor.js';
+import { footballGridBotGovernorService } from './football-grid-bot-governor.service.js';
 import { footballGridRepo } from './football-grid.repo.js';
 import type { FootballGridState } from './football-grid.types.js';
 
@@ -39,6 +42,18 @@ export function footballGridBotTierPolicy(tier: string): FootballGridBotTierPoli
   };
 }
 
+export function footballGridBotTierPolicyV2(tier: string): FootballGridBotTierPolicy {
+  const index = tierIndex(tier);
+  const skill = index / (TIER_ORDER.length - 1);
+  return {
+    accuracy: Number((0.42 + index * 0.04).toFixed(2)),
+    tacticalOptimality: Number((0.45 + index * 0.04).toFixed(2)),
+    passOnMiss: Number((0.38 - index * 0.02).toFixed(2)),
+    minDelayMs: Math.round(7_000 - skill * 2_500),
+    maxDelayMs: Math.round(16_000 - skill * 5_000),
+  };
+}
+
 export function footballGridBotTierPolicyForVersion(
   modelVersion: number,
   configVersion: number,
@@ -48,6 +63,68 @@ export function footballGridBotTierPolicyForVersion(
   // must add a new branch rather than changing the coefficients used by live
   // or replayed v1 matches.
   if (modelVersion === 1 && configVersion === 1) return footballGridBotTierPolicy(tier);
+  if (modelVersion === 2 && configVersion === 1) return footballGridBotTierPolicyV2(tier);
+  throw new Error(`Unsupported Football Grid bot policy ${modelVersion}/${configVersion}`);
+}
+
+export function footballGridBotScarcityMultiplier(
+  modelVersion: number,
+  configVersion: number,
+  chosenCellUnusedAnswerCount: number,
+): number {
+  if (modelVersion === 1 && configVersion === 1) return 1;
+  if (modelVersion !== 2 || configVersion !== 1) {
+    throw new Error(`Unsupported Football Grid bot policy ${modelVersion}/${configVersion}`);
+  }
+  if (chosenCellUnusedAnswerCount <= 9) return 0.85;
+  if (chosenCellUnusedAnswerCount <= 14) return 0.92;
+  return 1;
+}
+
+export function footballGridBotEffectiveAccuracy(input: {
+  modelVersion: number;
+  configVersion: number;
+  tier: string;
+  strengthAdjustment: number;
+  chosenCellUnusedAnswerCount: number;
+}): { baseAccuracy: number; scarcityMultiplier: number; effectiveAccuracy: number } {
+  const policy = footballGridBotTierPolicyForVersion(
+    input.modelVersion,
+    input.configVersion,
+    input.tier,
+  );
+  if (input.modelVersion === 1 && input.configVersion === 1) {
+    return { baseAccuracy: policy.accuracy, scarcityMultiplier: 1, effectiveAccuracy: policy.accuracy };
+  }
+  const strengthAdjustment = parseFootballGridBotStrengthAdjustment(
+    input.strengthAdjustment,
+    { required: true },
+  );
+  const scarcityMultiplier = footballGridBotScarcityMultiplier(
+    input.modelVersion,
+    input.configVersion,
+    input.chosenCellUnusedAnswerCount,
+  );
+  if (input.chosenCellUnusedAnswerCount <= 0) {
+    return { baseAccuracy: policy.accuracy, scarcityMultiplier, effectiveAccuracy: 0 };
+  }
+  // The governor trims the tier baseline first; cell scarcity then makes the
+  // selected intersection no easier. Final clamp is the invariant that no
+  // modifier may ever strengthen a bot above its tier's safe v2 baseline.
+  const effectiveAccuracy = Math.min(
+    policy.accuracy,
+    Math.max(0, policy.accuracy + strengthAdjustment) * scarcityMultiplier,
+  );
+  return { baseAccuracy: policy.accuracy, scarcityMultiplier, effectiveAccuracy };
+}
+
+export function footballGridBotRecognizableCandidates(
+  modelVersion: number,
+  configVersion: number,
+  orderedCandidateIds: string[],
+): string[] {
+  if (modelVersion === 1 && configVersion === 1) return orderedCandidateIds;
+  if (modelVersion === 2 && configVersion === 1) return orderedCandidateIds.slice(0, 5);
   throw new Error(`Unsupported Football Grid bot policy ${modelVersion}/${configVersion}`);
 }
 
@@ -61,6 +138,17 @@ export function footballGridBotDelayMs(tier: string, seed: number, turnNumber: n
     policy.minDelayMs
       + seededUnit(seed, turnNumber, 0x51f15e) * Math.max(500, policy.maxDelayMs - policy.minDelayMs),
   );
+}
+
+export function footballGridBotActionIsOnTime(nowMs: number, deadlineAt: string | null): boolean {
+  const deadlineMs = Date.parse(deadlineAt ?? '');
+  return Number.isFinite(nowMs) && Number.isFinite(deadlineMs) && nowMs <= deadlineMs;
+}
+
+function scarcityBucket(candidateCount: number): 'scarce_0_9' | 'limited_10_14' | 'broad_15_plus' {
+  if (candidateCount <= 9) return 'scarce_0_9';
+  if (candidateCount <= 14) return 'limited_10_14';
+  return 'broad_15_plus';
 }
 
 function completingCell(state: FootballGridState, userId: string): number | null {
@@ -131,7 +219,7 @@ export const footballGridBotService = {
   }> {
     const runtime = await footballGridRepo.getBotRuntime(input.matchId);
     if (!runtime) throw new Error('Football Grid bot runtime is missing');
-    return footballGridRepo.runInTransaction(async (tx) => {
+    const execution = await footballGridRepo.runInTransaction(async (tx) => {
       const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
       if (!previous) throw new Error('Football Grid match not found');
       if (
@@ -141,27 +229,35 @@ export const footballGridBotService = {
         || previous.turnNumber !== input.turnNumber
       ) {
         return {
-          state: previous,
-          changed: false,
-          actorUserId: null,
-          cellIndex: null,
-          outcome: null,
-          resolvedPlayerId: null,
+          result: {
+            state: previous,
+            changed: false,
+            actorUserId: null,
+            cellIndex: null,
+            outcome: null,
+            resolvedPlayerId: null,
+          },
+          telemetry: null,
         };
       }
       const nowMs = await footballGridRepo.databaseNowMs(tx);
-      const turnDeadlineMs = Date.parse(previous.turnDeadlineAt ?? previous.phaseDeadlineAt ?? '');
       // A delayed bot callback is never allowed to steal the match-row lock
       // after the advertised turn cutoff. The phase-deadline reconciler owns
       // timeout advancement in that case.
-      if (Number.isFinite(turnDeadlineMs) && nowMs > turnDeadlineMs) {
+      if (!footballGridBotActionIsOnTime(
+        nowMs,
+        previous.turnDeadlineAt ?? previous.phaseDeadlineAt,
+      )) {
         return {
-          state: previous,
-          changed: false,
-          actorUserId: null,
-          cellIndex: null,
-          outcome: null,
-          resolvedPlayerId: null,
+          result: {
+            state: previous,
+            changed: false,
+            actorUserId: null,
+            cellIndex: null,
+            outcome: null,
+            resolvedPlayerId: null,
+          },
+          telemetry: null,
         };
       }
       const policy = footballGridBotTierPolicyForVersion(runtime.modelVersion, runtime.configVersion, runtime.botTier);
@@ -174,10 +270,24 @@ export const footballGridBotService = {
       );
       const answers = await footballGridRepo.getUnusedAnswersForCellsInTx(tx, input.matchId, [cellIndex]);
       const candidates = answers.get(cellIndex) ?? [];
-      const accurate = candidates.length > 0
-        && seededUnit(runtime.rngSeed, previous.turnNumber, 0x19660d) <= policy.accuracy;
+      const recognizableCandidates = footballGridBotRecognizableCandidates(
+        runtime.modelVersion,
+        runtime.configVersion,
+        candidates,
+      );
+      const accuracy = footballGridBotEffectiveAccuracy({
+        modelVersion: runtime.modelVersion,
+        configVersion: runtime.configVersion,
+        tier: runtime.botTier,
+        strengthAdjustment: runtime.strengthAdjustment,
+        chosenCellUnusedAnswerCount: candidates.length,
+      });
+      const accurate = recognizableCandidates.length > 0
+        && seededUnit(runtime.rngSeed, previous.turnNumber, 0x19660d) <= accuracy.effectiveAccuracy;
       const footballPlayerId = accurate
-        ? candidates[Math.floor(seededUnit(runtime.rngSeed, previous.turnNumber, 0x3c6ef3) * candidates.length)]
+        ? recognizableCandidates[Math.floor(
+            seededUnit(runtime.rngSeed, previous.turnNumber, 0x3c6ef3) * recognizableCandidates.length,
+          )]
         : null;
       const passes = !accurate
         && seededUnit(runtime.rngSeed, previous.turnNumber, 0xa53c9e) <= policy.passOnMiss;
@@ -210,14 +320,52 @@ export const footballGridBotService = {
           },
         } : {}),
       });
+      const outcome: 'correct' | 'wrong' | 'pass' = accurate ? 'correct' : passes ? 'pass' : 'wrong';
+      if (runtime.modelVersion === 2 && runtime.configVersion === 1) {
+        await footballGridBotGovernorService.recordActionInTx(tx, {
+          matchId: input.matchId,
+          turnNumber: previous.turnNumber,
+          botUserId: runtime.botUserId,
+          cellIndex,
+          outcome,
+          modelVersion: runtime.modelVersion,
+          configVersion: runtime.configVersion,
+          botTier: runtime.botTier,
+          baseAccuracy: accuracy.baseAccuracy,
+          scarcityMultiplier: accuracy.scarcityMultiplier,
+          effectiveAccuracy: accuracy.effectiveAccuracy,
+          tacticalOptimality: policy.tacticalOptimality,
+          passOnMiss: policy.passOnMiss,
+          candidateCount: candidates.length,
+          recognizablePoolSize: recognizableCandidates.length,
+          pinnedStrengthAdjustment: runtime.strengthAdjustment,
+        });
+      }
       return {
-        state: next,
-        changed: true,
-        actorUserId: runtime.botUserId,
-        cellIndex,
-        outcome: accurate ? 'correct' : passes ? 'pass' : 'wrong',
-        resolvedPlayerId: accurate ? footballPlayerId : null,
+        result: {
+          state: next,
+          changed: true,
+          actorUserId: runtime.botUserId,
+          cellIndex,
+          outcome,
+          resolvedPlayerId: accurate ? footballPlayerId : null,
+        },
+        telemetry: {
+          tier: runtime.botTier,
+          modelVersion: runtime.modelVersion,
+          outcome,
+          candidateCount: candidates.length,
+        },
       };
     });
+    if (execution.telemetry) {
+      appMetrics.footballGridBotActions.add(1, {
+        tier: execution.telemetry.tier,
+        model_version: String(execution.telemetry.modelVersion),
+        outcome: execution.telemetry.outcome,
+        scarcity_bucket: scarcityBucket(execution.telemetry.candidateCount),
+      });
+    }
+    return execution.result;
   },
 };

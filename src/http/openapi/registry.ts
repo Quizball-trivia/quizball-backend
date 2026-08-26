@@ -48,6 +48,7 @@ import { registerFeedbackOpenApi } from '../../modules/feedback/feedback.openapi
 import { registerAuctionOpenApi } from '../../modules/auction/auction.openapi.js';
 import { registerPlayerClueCardsOpenApi } from '../../modules/auction/player-clue-cards.openapi.js';
 import { registerAuctionPipelineOpenApi } from '../../modules/auction/auction-pipeline.openapi.js';
+import { registerFootballGridOpenApi } from '../../modules/football-grid/football-grid.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -77,6 +78,7 @@ registerFeedbackOpenApi(registry);
 registerAuctionOpenApi(registry);
 registerPlayerClueCardsOpenApi(registry);
 registerAuctionPipelineOpenApi(registry);
+registerFootballGridOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

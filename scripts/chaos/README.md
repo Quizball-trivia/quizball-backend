@@ -17,6 +17,9 @@ There are two load shapes:
   must resolve to project `nsdfiprfmhdqhbfxfwpv`.
 - Socket fleet mode applies the same guard to the socket URL and only allows
   `api-staging.quizball.io` or localhost targets.
+- The Football Tic Tac Toe fleet additionally requires exact staging Railway
+  project/environment/service IDs and `LOAD_ANALYTICS_ENVIRONMENT=staging`.
+  Missing or ambiguous identities abort before any test user is created.
 - Spend routes (ticket/coin drains like `daily/complete`) are **off by default**;
   enable with `--include-spend`.
 - Test users are provisioned as `chaos+uN@quizball.io`, pre-confirmed via the
@@ -41,6 +44,17 @@ npx tsx scripts/chaos/run.ts --target=staging --rps=100 --duration=30 --users=25
 # with another test user; AI fallback, duplicate/self-pairs, and ghost cleanup fail.
 npm run chaos:matchmaking -- --target=local --clients=100
 npm run chaos:matchmaking -- --target=staging --clients=500 --offset=0
+
+# Complete Football Tic Tac Toe capacity gate: 500 clients form exactly 250
+# human-vs-human matches, resolve all 40 turns, verify XP/TP/coin rewards, ACK
+# every result, and collect per-replica + Postgres pressure. The four explicit
+# identity assertions are mandatory and must name staging.
+LOAD_RAILWAY_PROJECT_ID=f69e88c4-9afa-4640-8748-f592350dd58e \
+LOAD_RAILWAY_ENVIRONMENT_ID=8eb31d59-ff31-4fee-9468-a747b8d29de4 \
+LOAD_RAILWAY_SERVICE_ID=f686a274-653b-48e1-ac91-74e0882113bd \
+LOAD_ANALYTICS_ENVIRONMENT=staging \
+npm run chaos:grid -- --target=staging --clients=500 --ramp-s=120 \
+  --campaign=grid-release-20260826
 
 # Distributed workers use disjoint shards (example: five 1k workers for 5k).
 # Connections are prepared first, then each worker compresses joins into 1s.

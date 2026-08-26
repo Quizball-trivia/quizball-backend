@@ -725,7 +725,14 @@ export interface FootballGridCompletedPayload extends FootballGridStatePayload {
       imageAssetKey: string | null;
     }>;
   }>;
-  rewards?: { xp: number; coins: number; eligibilityReason?: string };
+  rewards?: {
+    xp: number;
+    coins: number;
+    tp: number;
+    eligibilityReason?: string;
+    coinEligibilityReason?: string;
+    tpEligibilityReason?: string;
+  };
   rematch?: { seriesId: string; seriesVersion: number; eligible: boolean; expiresAt: string | null; acceptedUserIds: string[] } | null;
 }
 

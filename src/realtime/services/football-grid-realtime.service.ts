@@ -182,7 +182,10 @@ async function processTerminalDeliveries(
       const reward = rewards.get(participant.userId) ?? {
         xp: 0,
         coins: 0,
+        tp: 0,
         eligibilityReason: 'settlement_not_ready',
+        coinEligibilityReason: 'settlement_not_ready',
+        tpEligibilityReason: 'settlement_not_ready',
       };
       const result = analyticsFacts.winnerUserId === null
         ? 'draw'
@@ -212,7 +215,9 @@ async function processTerminalDeliveries(
         averageResponseMs: participant.averageResponseMs,
         xpEarned: reward.xp,
         coinsEarned: reward.coins,
-        rewardEligibilityReason: reward.eligibilityReason,
+        tpEarned: reward.tp,
+        coinEligibilityReason: reward.coinEligibilityReason,
+        tpEligibilityReason: reward.tpEligibilityReason,
       });
     }
   }

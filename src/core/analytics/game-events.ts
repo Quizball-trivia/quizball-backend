@@ -511,7 +511,9 @@ export interface TrackFootballGridMatchCompletedOptions {
   averageResponseMs: number | null;
   xpEarned: number;
   coinsEarned: number;
-  rewardEligibilityReason: string;
+  tpEarned: number;
+  coinEligibilityReason: string;
+  tpEligibilityReason: string;
 }
 
 export function trackFootballGridMatchCompleted(
@@ -553,7 +555,9 @@ export function trackFootballGridMatchCompleted(
     average_response_ms: params.averageResponseMs,
     xp_earned: Math.max(0, params.xpEarned),
     coins_earned: Math.max(0, params.coinsEarned),
-    reward_eligibility_reason: params.rewardEligibilityReason,
+    tp_earned: Math.max(0, params.tpEarned),
+    coin_eligibility_reason: params.coinEligibilityReason,
+    tp_eligibility_reason: params.tpEligibilityReason,
   }, {
     uuid: stableAnalyticsEventUuid(`football-grid:${eventName}:${params.matchId}:${params.userId}`),
     occurredAt: params.endedAt,

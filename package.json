@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/bootstrap.ts",
-    "dev:tic-tac-toe": "FOOTBALL_GRID_CONTENT_ENABLED=true FOOTBALL_GRID_QUEUE_ENABLED=true FOOTBALL_GRID_LOBBY_ENABLED=true FOOTBALL_GRID_BOTS_ENABLED=true FOOTBALL_GRID_COINS_ENABLED=false FOOTBALL_GRID_XP_ENABLED=true PERSISTENT_BOTS_ENABLED=true npm run dev",
+    "dev:tic-tac-toe": "FOOTBALL_GRID_CONTENT_ENABLED=true FOOTBALL_GRID_QUEUE_ENABLED=true FOOTBALL_GRID_LOBBY_ENABLED=true FOOTBALL_GRID_BOTS_ENABLED=true FOOTBALL_GRID_BOT_MODEL_VERSION=2 FOOTBALL_GRID_COINS_ENABLED=false FOOTBALL_GRID_POINTS_ENABLED=true FOOTBALL_GRID_XP_ENABLED=true PERSISTENT_BOTS_ENABLED=true npm run dev",
     "build": "tsc",
     "start": "node dist/bootstrap.js",
     "lint": "tsc --noEmit",
@@ -31,6 +31,7 @@
     "chaos:capacity": "tsx scripts/chaos/capacity.ts",
     "chaos:matchmaking": "tsx scripts/chaos/matchmaking.ts",
     "chaos:party": "tsx scripts/chaos/friendly.ts",
+    "chaos:grid": "tsx scripts/chaos/football-grid.ts",
     "load:k6:inspect": "k6 inspect scripts/load/k6/auth-api.k6.js",
     "load:k6:smoke": "TARGET=staging MODE=smoke USERS=2 VUS=2 k6 run scripts/load/k6/auth-api.k6.js",
     "load:k6": "k6 run scripts/load/k6/auth-api.k6.js",

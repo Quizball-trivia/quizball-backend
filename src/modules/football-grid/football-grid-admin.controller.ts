@@ -18,6 +18,18 @@ export const footballGridAdminController = {
     await footballGridAdminService.reverseCoin(eventId, req.user!.id, reason);
     res.status(204).end();
   },
+  async releaseHeldPoints(req: Request, res: Response): Promise<void> {
+    const { eventId } = req.validated.params as { eventId: string };
+    const { reason } = req.validated.body as { reason: string };
+    await footballGridAdminService.releaseHeldPoints(eventId, req.user!.id, reason);
+    res.status(204).end();
+  },
+  async reversePoints(req: Request, res: Response): Promise<void> {
+    const { eventId } = req.validated.params as { eventId: string };
+    const { reason } = req.validated.body as { reason: string };
+    await footballGridAdminService.reversePoints(eventId, req.user!.id, reason);
+    res.status(204).end();
+  },
   async listReports(req: Request, res: Response): Promise<void> {
     const { status, limit } = req.validated.query as { status?: string; limit: number };
     res.json({ reports: await footballGridAdminService.listReports(status, limit) });

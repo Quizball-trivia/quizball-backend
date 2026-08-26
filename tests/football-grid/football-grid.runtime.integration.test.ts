@@ -4,6 +4,7 @@ import postgres from 'postgres';
 import '../setup.js';
 
 process.env.FOOTBALL_GRID_COINS_ENABLED = 'true';
+process.env.FOOTBALL_GRID_POINTS_ENABLED = 'true';
 process.env.FOOTBALL_GRID_XP_ENABLED = 'true';
 process.env.FOOTBALL_GRID_RISK_HASH_SECRET = 'integration-football-grid-risk-secret-0001';
 
@@ -30,9 +31,11 @@ let setupError: unknown = null;
 let footballGridRepo: typeof import('../../src/modules/football-grid/football-grid.repo.js').footballGridRepo;
 let footballGridService: typeof import('../../src/modules/football-grid/football-grid.service.js').footballGridService;
 let footballGridBotService: typeof import('../../src/modules/football-grid/football-grid-bot.service.js').footballGridBotService;
+let footballGridBotGovernorService: typeof import('../../src/modules/football-grid/football-grid-bot-governor.service.js').footballGridBotGovernorService;
 let footballGridSettlementService: typeof import('../../src/modules/football-grid/football-grid-settlement.service.js').footballGridSettlementService;
 let footballGridAdminService: typeof import('../../src/modules/football-grid/football-grid-admin.service.js').footballGridAdminService;
 let footballGridRealtimeService: typeof import('../../src/realtime/services/football-grid-realtime.service.js').footballGridRealtimeService;
+let runtimeConfig: typeof import('../../src/core/config.js').config;
 let lobbiesRepo: typeof import('../../src/modules/lobbies/lobbies.repo.js').lobbiesRepo;
 let rebuildCacheFromDB: typeof import('../../src/realtime/match-cache.js').rebuildCacheFromDB;
 let buildFinalResultsPayload: typeof import('../../src/realtime/services/match-final-results.service.js').buildFinalResultsPayload;
@@ -40,6 +43,7 @@ const runtimeUserIds: string[] = [];
 const runtimeMatchIds: string[] = [];
 const runtimeSeriesIds: string[] = [];
 const runtimeLobbyIds: string[] = [];
+const runtimeGovernorTiers = new Set<string>();
 
 function hasRuntimeDb(context: TestContext): boolean {
   if (dbAvailable) return true;
@@ -275,6 +279,101 @@ async function createReadyTurn(
   return { matchId: state.matchId, playerA, playerB, stateVersion: state.stateVersion };
 }
 
+async function seedBotGovernorTier(input: {
+  tier: string;
+  adjustment?: number;
+  scoreEma?: number | null;
+  observationCount?: number;
+  observationsAtAdjustment?: number;
+  adjustmentUpdatedAt?: Date | null;
+}): Promise<void> {
+  runtimeGovernorTiers.add(input.tier);
+  await db`
+    INSERT INTO football_grid_bot_governor_state (
+      bot_model_version, bot_config_version, bot_tier, strength_adjustment,
+      score_ema, observation_count, observations_at_adjustment,
+      adjustment_updated_at
+    ) VALUES (
+      2, 1, ${input.tier}, ${input.adjustment ?? 0},
+      ${input.scoreEma ?? null}, ${input.observationCount ?? 0},
+      ${input.observationsAtAdjustment ?? 0}, ${input.adjustmentUpdatedAt ?? null}
+    )
+    ON CONFLICT (bot_model_version, bot_config_version, bot_tier)
+    DO UPDATE SET
+      strength_adjustment = EXCLUDED.strength_adjustment,
+      score_ema = EXCLUDED.score_ema,
+      observation_count = EXCLUDED.observation_count,
+      observations_at_adjustment = EXCLUDED.observations_at_adjustment,
+      adjustment_updated_at = EXCLUDED.adjustment_updated_at,
+      updated_at = now()
+  `;
+}
+
+async function createV2BotMatch(tier: string, opener: 'human' | 'bot' = 'bot'): Promise<{
+  matchId: string;
+  humanUserId: string;
+  botUserId: string;
+  stateVersion: number;
+}> {
+  const [humanUserId, botUserId] = await createUsers();
+  const pairingToken = randomUUID();
+  await footballGridRepo.createPairing({
+    pairingToken,
+    searchAId: randomUUID(),
+    userAId: humanUserId,
+    userBId: botUserId,
+    opponentType: 'bot',
+  });
+  const state = (await footballGridService.createMatch({
+    pairingToken,
+    origin: 'random',
+    players: [
+      { userId: humanUserId, seat: 1 },
+      { userId: botUserId, seat: 2, isBot: true },
+    ],
+    openerUserId: opener === 'bot' ? botUserId : humanUserId,
+    botReservationFence: 1,
+    botRp: 1_500,
+    botTier: tier,
+    botModelVersion: 2,
+    botConfigVersion: 1,
+    botRngSeed: 123_456,
+  })).state;
+  runtimeMatchIds.push(state.matchId);
+  return { matchId: state.matchId, humanUserId, botUserId, stateVersion: state.stateVersion };
+}
+
+async function forceCompetitiveBotWin(match: {
+  matchId: string;
+  botUserId: string;
+}): Promise<void> {
+  const rows = await db<Array<{ state_version: number; reward_schedule_version: number }>>`
+    SELECT state_version, reward_schedule_version
+      FROM football_grid_matches WHERE match_id = ${match.matchId}
+  `;
+  const terminalVersion = rows[0].state_version + 1;
+  await db`
+    UPDATE football_grid_matches
+       SET status = 'completed', phase = 'terminal', winner_user_id = ${match.botUserId},
+           current_player_user_id = null, completion_reason = 'line',
+           state_version = ${terminalVersion}, ended_at = now(), updated_at = now()
+     WHERE match_id = ${match.matchId}
+  `;
+  await db`
+    UPDATE matches
+       SET status = 'completed', winner_user_id = ${match.botUserId}, ended_at = now(), updated_at = now()
+     WHERE id = ${match.matchId}
+  `;
+  await db`
+    INSERT INTO football_grid_settlement_outbox (
+      match_id, terminal_state_version, reward_schedule_version, payload
+    ) VALUES (
+      ${match.matchId}, ${terminalVersion}, ${rows[0].reward_schedule_version},
+      ${{ winnerUserId: match.botUserId, reason: 'line' }}
+    ) ON CONFLICT (match_id, terminal_state_version) DO NOTHING
+  `;
+}
+
 async function playWinningLine(
   origin: 'random' | 'private',
   seriesId?: string,
@@ -352,9 +451,11 @@ beforeAll(async () => {
     ({ footballGridRepo } = await import('../../src/modules/football-grid/football-grid.repo.js'));
     ({ footballGridService } = await import('../../src/modules/football-grid/football-grid.service.js'));
     ({ footballGridBotService } = await import('../../src/modules/football-grid/football-grid-bot.service.js'));
+    ({ footballGridBotGovernorService } = await import('../../src/modules/football-grid/football-grid-bot-governor.service.js'));
     ({ footballGridSettlementService } = await import('../../src/modules/football-grid/football-grid-settlement.service.js'));
     ({ footballGridAdminService } = await import('../../src/modules/football-grid/football-grid-admin.service.js'));
     ({ footballGridRealtimeService } = await import('../../src/realtime/services/football-grid-realtime.service.js'));
+    ({ config: runtimeConfig } = await import('../../src/core/config.js'));
     ({ lobbiesRepo } = await import('../../src/modules/lobbies/lobbies.repo.js'));
     ({ rebuildCacheFromDB } = await import('../../src/realtime/match-cache.js'));
     ({ buildFinalResultsPayload } = await import('../../src/realtime/services/match-final-results.service.js'));
@@ -380,6 +481,11 @@ afterEach(async () => {
        USING football_grid_coin_events e
        WHERE a.coin_event_id = e.id AND e.match_id = ANY(${runtimeMatchIds}::uuid[])
     `;
+    await db`
+      DELETE FROM football_grid_point_event_audit a
+       USING football_grid_point_events e
+       WHERE a.point_event_id = e.id AND e.match_id = ANY(${runtimeMatchIds}::uuid[])
+    `;
     await db`DELETE FROM matches WHERE id = ANY(${runtimeMatchIds}::uuid[])`;
   }
   if (runtimeSeriesIds.length > 0) {
@@ -394,10 +500,18 @@ afterEach(async () => {
        AND entity_type IN ('football_grid_board', 'football_grid_release')
   `;
   await db`DELETE FROM users WHERE id = ANY(${runtimeUserIds}::uuid[])`;
+  if (runtimeGovernorTiers.size > 0) {
+    await db`
+      DELETE FROM football_grid_bot_governor_state
+       WHERE bot_model_version = 2 AND bot_config_version = 1
+         AND bot_tier = ANY(${[...runtimeGovernorTiers]}::text[])
+    `;
+  }
   runtimeMatchIds.length = 0;
   runtimeSeriesIds.length = 0;
   runtimeLobbyIds.length = 0;
   runtimeUserIds.length = 0;
+  runtimeGovernorTiers.clear();
 });
 
 afterAll(async () => {
@@ -405,16 +519,120 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
+  it('pins v2 strength transactionally and records private action policy provenance', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    await seedBotGovernorTier({ tier: 'World-Class', adjustment: -0.075 });
+    const match = await createV2BotMatch('World-Class');
+    const runtime = await footballGridRepo.getBotRuntime(match.matchId);
+    expect(runtime).toMatchObject({
+      botUserId: match.botUserId,
+      botTier: 'World-Class',
+      modelVersion: 2,
+      configVersion: 1,
+      strengthAdjustment: -0.075,
+    });
+
+    let state = await footballGridService.acknowledgeHandoff({
+      matchId: match.matchId,
+      userId: match.humanUserId,
+      expectedStateVersion: match.stateVersion,
+    });
+    state = await footballGridService.markReady({
+      matchId: match.matchId,
+      userId: match.humanUserId,
+      commandId: randomUUID(),
+      expectedStateVersion: state.stateVersion,
+    });
+    await db`UPDATE football_grid_matches SET phase_deadline_at = now() - interval '1 second' WHERE match_id = ${match.matchId}`;
+    state = (await footballGridService.handlePhaseDeadline(match.matchId, state.stateVersion, true)).state;
+    expect(state.currentPlayerUserId).toBe(match.botUserId);
+    const schedule = await footballGridBotService.getSchedule(match.matchId, state);
+    expect(schedule?.delayMs).toBeGreaterThanOrEqual(5_000);
+    expect(schedule?.delayMs).toBeLessThanOrEqual(12_000);
+    const turn = await footballGridBotService.performTurn({
+      matchId: match.matchId,
+      expectedStateVersion: schedule!.expectedStateVersion,
+      turnNumber: schedule!.turnNumber,
+    });
+    expect(turn.changed).toBe(true);
+
+    const audits = await db<Array<{
+      candidate_count: number;
+      recognizable_pool_size: number;
+      base_accuracy: string;
+      effective_accuracy: string;
+      pinned_strength_adjustment: string;
+    }>>`
+      SELECT candidate_count, recognizable_pool_size, base_accuracy,
+             effective_accuracy, pinned_strength_adjustment
+        FROM football_grid_bot_action_audits
+       WHERE match_id = ${match.matchId}
+    `;
+    expect(audits).toHaveLength(1);
+    expect(audits[0].candidate_count).toBe(9);
+    expect(audits[0].recognizable_pool_size).toBe(5);
+    expect(Number(audits[0].base_accuracy)).toBe(0.74);
+    expect(Number(audits[0].effective_accuracy)).toBeCloseTo((0.74 - 0.075) * 0.85, 6);
+    expect(Number(audits[0].pinned_strength_adjustment)).toBe(-0.075);
+  });
+
+  it('folds concurrent same-tier settlements once each and ignores replays', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    await seedBotGovernorTier({ tier: 'Captain' });
+    const first = await createV2BotMatch('Captain');
+    const second = await createV2BotMatch('Captain');
+    await Promise.all([forceCompetitiveBotWin(first), forceCompetitiveBotWin(second)]);
+
+    await Promise.all([
+      footballGridSettlementService.settleMatch(first.matchId),
+      footballGridSettlementService.settleMatch(second.matchId),
+    ]);
+    const beforeGovernor = await db<Array<{ count: number }>>`
+      SELECT count(*)::int AS count
+        FROM football_grid_bot_governor_observations
+       WHERE match_id IN (${first.matchId}, ${second.matchId})
+    `;
+    expect(beforeGovernor[0].count).toBe(0);
+    await Promise.all([
+      footballGridBotGovernorService.observeCompletedMatch(first.matchId),
+      footballGridBotGovernorService.observeCompletedMatch(second.matchId),
+    ]);
+    await Promise.all([
+      footballGridBotGovernorService.observeCompletedMatch(first.matchId),
+      footballGridBotGovernorService.observeCompletedMatch(second.matchId),
+    ]);
+
+    const governor = await db<Array<{
+      observation_count: number;
+      score_ema: string;
+      strength_adjustment: string;
+    }>>`
+      SELECT observation_count, score_ema, strength_adjustment
+        FROM football_grid_bot_governor_state
+       WHERE bot_model_version = 2 AND bot_config_version = 1 AND bot_tier = 'Captain'
+    `;
+    const observations = await db<Array<{ count: number }>>`
+      SELECT count(*)::int AS count
+        FROM football_grid_bot_governor_observations
+       WHERE match_id IN (${first.matchId}, ${second.matchId})
+    `;
+    expect(governor[0].observation_count).toBe(2);
+    expect(Number(governor[0].score_ema)).toBe(1);
+    expect(Number(governor[0].strength_adjustment)).toBe(0);
+    expect(observations[0].count).toBe(2);
+  });
+
   it('persists lifecycle, bilingual answers, idempotent commands, claims, reports, and random rewards', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
     const rewards = await footballGridSettlementService.settleMatch(match.matchId);
-    expect(rewards.get(match.playerA)).toMatchObject({ xp: 70, coins: 300, eligibilityReason: 'eligible' });
-    expect(rewards.get(match.playerB)).toMatchObject({ xp: 50, coins: 150, eligibilityReason: 'eligible' });
+    expect(rewards.get(match.playerA)).toMatchObject({ xp: 70, coins: 700, tp: 50, eligibilityReason: 'eligible' });
+    expect(rewards.get(match.playerB)).toMatchObject({ xp: 50, coins: 250, tp: 10, eligibilityReason: 'eligible' });
     const before = await db<{ coins: number }[]>`SELECT coins FROM users WHERE id = ${match.playerA}`;
     const replayed = await footballGridSettlementService.settleMatch(match.matchId);
     const after = await db<{ coins: number }[]>`SELECT coins FROM users WHERE id = ${match.playerA}`;
-    expect(replayed.get(match.playerA)?.coins).toBe(300);
+    expect(replayed.get(match.playerA)?.coins).toBe(700);
+    expect(replayed.get(match.playerA)?.tp).toBe(50);
     expect(after[0].coins).toBe(before[0].coins);
     const base = await db<{ game_variant: string; status: string; winner_user_id: string; settled: boolean }[]>`
       SELECT game_variant, status, winner_user_id,
@@ -435,8 +653,131 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('private');
     const rewards = await footballGridSettlementService.settleMatch(match.matchId);
-    expect(rewards.get(match.playerA)).toMatchObject({ xp: 70, coins: 0, eligibilityReason: 'friend_match_no_coins' });
-    expect(rewards.get(match.playerB)).toMatchObject({ xp: 50, coins: 0, eligibilityReason: 'friend_match_no_coins' });
+    expect(rewards.get(match.playerA)).toMatchObject({
+      xp: 70,
+      coins: 0,
+      tp: 0,
+      coinEligibilityReason: 'friend_match_no_coins',
+      tpEligibilityReason: 'friend_match_no_points',
+    });
+    expect(rewards.get(match.playerB)).toMatchObject({
+      xp: 50,
+      coins: 0,
+      tp: 0,
+      coinEligibilityReason: 'friend_match_no_coins',
+      tpEligibilityReason: 'friend_match_no_points',
+    });
+  });
+
+  it('keeps TP progressing when coin payouts are disabled', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const match = await playWinningLine('random');
+    const before = await db<Array<{ tic_tac_toe_points: number }>>`
+      SELECT tic_tac_toe_points FROM users WHERE id = ${match.playerA}
+    `;
+    runtimeConfig.FOOTBALL_GRID_COINS_ENABLED = false;
+    try {
+      const rewards = await footballGridSettlementService.settleMatch(match.matchId);
+      expect(rewards.get(match.playerA)).toMatchObject({
+        coins: 0,
+        tp: 50,
+        coinEligibilityReason: 'coins_disabled',
+        tpEligibilityReason: 'eligible',
+      });
+    } finally {
+      runtimeConfig.FOOTBALL_GRID_COINS_ENABLED = true;
+    }
+    const after = await db<Array<{ tic_tac_toe_points: number }>>`
+      SELECT tic_tac_toe_points FROM users WHERE id = ${match.playerA}
+    `;
+    expect(after[0].tic_tac_toe_points).toBe(before[0].tic_tac_toe_points + 50);
+  });
+
+  it('counts TP-only matches toward the reward-velocity risk hold', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const [anchor] = await createUsers();
+    runtimeConfig.FOOTBALL_GRID_COINS_ENABLED = false;
+    try {
+      for (let index = 0; index < 4; index += 1) {
+        const [, opponent] = await createUsers();
+        const prior = await playWinningLine('random', undefined, [anchor, opponent]);
+        expect((await footballGridSettlementService.settleMatch(prior.matchId)).get(anchor)).toMatchObject({
+          tp: 50,
+          coinEligibilityReason: 'coins_disabled',
+          tpEligibilityReason: 'eligible',
+        });
+      }
+      const [, finalOpponent] = await createUsers();
+      const heldMatch = await playWinningLine('random', undefined, [anchor, finalOpponent]);
+      expect((await footballGridSettlementService.settleMatch(heldMatch.matchId)).get(anchor)).toMatchObject({
+        coins: 0,
+        tp: 0,
+        coinEligibilityReason: 'coins_disabled',
+        tpEligibilityReason: 'risk_hold:reward_velocity',
+      });
+      const [held] = await db<Array<{ status: string }>>`
+        SELECT status FROM football_grid_point_events
+         WHERE match_id = ${heldMatch.matchId} AND user_id = ${anchor}
+      `;
+      expect(held.status).toBe('held');
+    } finally {
+      runtimeConfig.FOOTBALL_GRID_COINS_ENABLED = true;
+    }
+  });
+
+  it('replays a no-contest TP verdict without changing its reason', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const [playerA, playerB] = await createUsers();
+    const pairingToken = randomUUID();
+    await footballGridRepo.createPairing({
+      pairingToken,
+      searchAId: randomUUID(),
+      searchBId: randomUUID(),
+      userAId: playerA,
+      userBId: playerB,
+      opponentType: 'human',
+    });
+    const state = (await footballGridService.createMatch({
+      pairingToken,
+      origin: 'random',
+      players: [{ userId: playerA, seat: 1 }, { userId: playerB, seat: 2 }],
+      openerUserId: playerA,
+    })).state;
+    runtimeMatchIds.push(state.matchId);
+    await db`
+      UPDATE football_grid_matches
+         SET phase_deadline_at = now() - interval '1 second'
+       WHERE match_id = ${state.matchId}
+    `;
+    await footballGridService.acknowledgeHandoff({
+      matchId: state.matchId,
+      userId: playerA,
+      expectedStateVersion: state.stateVersion,
+    });
+    const first = await footballGridSettlementService.settleMatch(state.matchId);
+    const replay = await footballGridSettlementService.settleMatch(state.matchId);
+    expect(first.get(playerA)).toMatchObject({ tp: 0, tpEligibilityReason: 'no_contest' });
+    expect(replay.get(playerA)).toMatchObject({ tp: 0, tpEligibilityReason: 'no_contest' });
+  });
+
+  it('keeps TP progressing after the daily coin budget is exhausted', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const match = await playWinningLine('random');
+    await db`
+      INSERT INTO football_grid_coin_events (
+        match_id, user_id, reward_type, amount, status, eligibility_reason, credited_at
+      ) VALUES (
+        ${match.matchId}, ${match.playerA}, 'integration_prior_daily_budget',
+        3300, 'committed', 'integration_budget', now()
+      )
+    `;
+    const rewards = await footballGridSettlementService.settleMatch(match.matchId);
+    expect(rewards.get(match.playerA)).toMatchObject({
+      coins: 0,
+      tp: 50,
+      coinEligibilityReason: 'daily_coin_cap',
+      tpEligibilityReason: 'eligible',
+    });
   });
 
   it('replays terminal delivery after transport loss until each client explicitly acknowledges it', async (context) => {
@@ -728,7 +1069,9 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
   it('holds risk-flagged random coins without crediting the wallet until an audited release', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('random');
-    const before = await db<Array<{ coins: number }>>`SELECT coins FROM users WHERE id = ${match.playerA}`;
+    const before = await db<Array<{ coins: number; tic_tac_toe_points: number }>>`
+      SELECT coins, tic_tac_toe_points FROM users WHERE id = ${match.playerA}
+    `;
     await db`
       INSERT INTO football_grid_reward_risk_decisions (
         match_id, user_id, decision, reason, signals, source
@@ -741,28 +1084,46 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rewards.get(match.playerA)).toMatchObject({
       xp: 70,
       coins: 0,
+      tp: 0,
       eligibilityReason: 'risk_hold:linked_account_review',
     });
     const held = await db<Array<{ id: string; amount: number; status: string }>>`
       SELECT id, amount, status FROM football_grid_coin_events
        WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
     `;
-    expect(held[0]).toMatchObject({ amount: 300, status: 'held' });
-    const whileHeld = await db<Array<{ coins: number }>>`SELECT coins FROM users WHERE id = ${match.playerA}`;
+    expect(held[0]).toMatchObject({ amount: 700, status: 'held' });
+    const heldPoints = await db<Array<{ id: string; amount: number; status: string }>>`
+      SELECT id, amount, status FROM football_grid_point_events
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+    `;
+    expect(heldPoints[0]).toMatchObject({ amount: 50, status: 'held' });
+    const whileHeld = await db<Array<{ coins: number; tic_tac_toe_points: number }>>`
+      SELECT coins, tic_tac_toe_points FROM users WHERE id = ${match.playerA}
+    `;
     expect(whileHeld[0].coins).toBe(before[0].coins);
+    expect(whileHeld[0].tic_tac_toe_points).toBe(before[0].tic_tac_toe_points);
 
     await footballGridAdminService.releaseHeldCoin(
       held[0].id,
       match.playerB,
       'integration release review',
     );
-    const released = await db<Array<{ coins: number }>>`SELECT coins FROM users WHERE id = ${match.playerA}`;
-    expect(released[0].coins).toBe(before[0].coins + 300);
+    await footballGridAdminService.releaseHeldPoints(
+      heldPoints[0].id,
+      match.playerB,
+      'integration points release review',
+    );
+    const released = await db<Array<{ coins: number; tic_tac_toe_points: number }>>`
+      SELECT coins, tic_tac_toe_points FROM users WHERE id = ${match.playerA}
+    `;
+    expect(released[0].coins).toBe(before[0].coins + 700);
+    expect(released[0].tic_tac_toe_points).toBe(before[0].tic_tac_toe_points + 50);
     const credited = await db<Array<{ status: string; credited_at: string | null }>>`
       SELECT status, credited_at FROM football_grid_coin_events WHERE id = ${held[0].id}
     `;
     expect(credited[0].status).toBe('committed');
     expect(credited[0].credited_at).not.toBeNull();
+    expect((await footballGridSettlementService.settleMatch(match.matchId)).get(match.playerA)?.tp).toBe(50);
   });
 
   it('automatically holds coins for linked-device opponents', async (context) => {
@@ -791,17 +1152,33 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
        WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
          AND status = 'held' AND reversal_of IS NULL
     `;
+    const pointEvent = await db<Array<{ id: string }>>`
+      SELECT id FROM football_grid_point_events
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+         AND status = 'held' AND reversal_of IS NULL
+    `;
     await footballGridAdminService.reverseCoin(held[0].id, match.playerB, 'deny linked-device hold');
+    await footballGridAdminService.reversePoints(pointEvent[0].id, match.playerB, 'deny linked-device points hold');
     const afterDenial = await db<Array<{ coins: number }>>`
       SELECT coins FROM users WHERE id = ${match.playerA}
     `;
     expect(afterDenial[0].coins).toBe(originalWallet[0].coins);
     expect((await footballGridSettlementService.settleMatch(match.matchId)).get(match.playerA)?.coins).toBe(0);
-    const eligibility = await db<Array<{ decision: string; reason: string }>>`
-      SELECT decision, reason FROM football_grid_reward_eligibility
+    const eligibility = await db<Array<{
+      decision: string;
+      reason: string;
+      points_decision: string;
+      points_reason: string;
+    }>>`
+      SELECT decision, reason, points_decision, points_reason FROM football_grid_reward_eligibility
        WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
     `;
-    expect(eligibility[0]).toMatchObject({ decision: 'ineligible', reason: 'risk_hold_denied' });
+    expect(eligibility[0]).toMatchObject({
+      decision: 'ineligible',
+      reason: 'risk_hold_denied',
+      points_decision: 'ineligible',
+      points_reason: 'points_reversed',
+    });
   });
 
   it('keeps an old unresolved hold inside the current release budget', async (context) => {
@@ -826,7 +1203,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
         match_id, user_id, reward_type, amount, status, eligibility_reason, created_at
       ) VALUES (
         ${match.matchId}, ${match.playerA}, 'integration_old_unresolved_hold',
-        1250, 'held', 'risk_hold:manual_review', now() - interval '3 days'
+        3000, 'held', 'risk_hold:manual_review', now() - interval '3 days'
       )
     `;
     await expect(footballGridAdminService.releaseHeldCoin(
@@ -886,6 +1263,23 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     await footballGridAdminService.reverseCoin(events[0].id, match.playerB, 'integration reversal');
     const replayed = await footballGridSettlementService.settleMatch(match.matchId);
     expect(replayed.get(match.playerA)?.coins).toBe(0);
+  });
+
+  it('reverses committed TP exactly once and projects the replay as zero', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const match = await playWinningLine('random');
+    await footballGridSettlementService.settleMatch(match.matchId);
+    const [event] = await db<Array<{ id: string }>>`
+      SELECT id FROM football_grid_point_events
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+         AND reversal_of IS NULL
+    `;
+    await footballGridAdminService.reversePoints(event.id, match.playerB, 'integration TP reversal');
+    await expect(
+      footballGridAdminService.reversePoints(event.id, match.playerB, 'duplicate TP reversal'),
+    ).rejects.toThrow('already reversed');
+    const replayed = await footballGridSettlementService.settleMatch(match.matchId);
+    expect(replayed.get(match.playerA)?.tp).toBe(0);
   });
 
   it('keeps the handoff no-show barrier instead of entering reconnect pause', async (context) => {

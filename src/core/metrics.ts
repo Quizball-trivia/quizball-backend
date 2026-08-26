@@ -101,10 +101,19 @@ const footballGridContentExhaustion = meter.createCounter('quizball_football_gri
   description: 'Football Grid match creation attempts with no selectable published board',
 });
 const footballGridRewardEligibility = meter.createCounter('quizball_football_grid_reward_eligibility_total', {
-  description: 'Football Grid reward decisions by reason and origin',
+  description: 'Football Grid coin and TP decisions by reward type, reason, and origin',
 });
 const footballGridPairingRecovery = meter.createCounter('quizball_football_grid_pairing_recovery_total', {
   description: 'Football Grid stale pairing reconciliation outcomes',
+});
+const footballGridBotActions = meter.createCounter('quizball_football_grid_bot_actions_total', {
+  description: 'Football Tic Tac Toe bot actions by pinned tier, policy version, outcome, and scarcity bucket',
+});
+const footballGridBotGovernorObservations = meter.createCounter('quizball_football_grid_bot_governor_observations_total', {
+  description: 'Competitive Football Tic Tac Toe bot outcomes folded into the Grid-only safety governor',
+});
+const footballGridBotGovernorProcessing = meter.createCounter('quizball_football_grid_bot_governor_processing_total', {
+  description: 'Independent Football Tic Tac Toe governor processing outcomes, including retryable failures',
 });
 
 export const appMetrics = {
@@ -135,4 +144,7 @@ export const appMetrics = {
   footballGridContentExhaustion,
   footballGridRewardEligibility,
   footballGridPairingRecovery,
+  footballGridBotActions,
+  footballGridBotGovernorObservations,
+  footballGridBotGovernorProcessing,
 };

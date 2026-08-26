@@ -453,7 +453,7 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
           botReservationFence: selected.reservation.fence,
           botRp: selected.bot.rp,
           botTier: selected.bot.tier,
-          botModelVersion: 1,
+          botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
           botConfigVersion: 1,
           botRngSeed: seed,
           afterCreateInTx: async (tx, matchId) => {

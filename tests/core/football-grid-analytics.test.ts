@@ -65,7 +65,9 @@ describe('Football Grid server analytics', () => {
       averageResponseMs: 4_200,
       xpEarned: 70,
       coinsEarned: 300,
-      rewardEligibilityReason: 'eligible',
+      tpEarned: 50,
+      coinEligibilityReason: 'eligible',
+      tpEligibilityReason: 'eligible',
     });
 
     expect(analytics.trackEvent).toHaveBeenCalledWith(
@@ -81,6 +83,9 @@ describe('Football Grid server analytics', () => {
         average_response_ms: 4_200,
         xp_earned: 70,
         coins_earned: 300,
+        tp_earned: 50,
+        coin_eligibility_reason: 'eligible',
+        tp_eligibility_reason: 'eligible',
       }),
       {
         uuid: 'uuid:football-grid:match_completed:match-1:user-1',
@@ -114,7 +119,9 @@ describe('Football Grid server analytics', () => {
       averageResponseMs: null,
       xpEarned: 0,
       coinsEarned: 0,
-      rewardEligibilityReason: 'no_contest',
+      tpEarned: 0,
+      coinEligibilityReason: 'no_contest',
+      tpEligibilityReason: 'no_contest',
     });
 
     expect(analytics.trackEvent).toHaveBeenCalledWith(

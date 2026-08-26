@@ -708,6 +708,10 @@ export interface AuctionQueuedPlayerSummary {
 export interface AuctionMatchBotSummary {
   seatId: string;
   displayName: string;
+  /** Ms after `serverNow` when this bot pops into the lineup. Bots "arrive"
+   *  at staggered, randomized moments instead of all at once, so the fill
+   *  feels like a real queue. Absent (legacy) = show immediately. */
+  joinDelayMs?: number;
 }
 
 export interface AuctionSearchCancelledPayload {
@@ -823,8 +827,8 @@ export interface AuctionTurnTimeoutPayload {
   matchId: string;
   roundId: string;
   seatId: string;
-  action: 'bid' | 'fold';
-  amount?: number;
+  /** A timeout is always a pass — the opener auto-buy no longer exists. */
+  action: 'fold';
   round: PublicAuctionRoundState;
   stateVersion: number;
 }

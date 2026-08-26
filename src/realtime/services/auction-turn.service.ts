@@ -81,8 +81,7 @@ type AuctionTurnActionOutcome =
     kind: 'turn_timeout';
     state: AuctionMatchState;
     seatId: string;
-    action: 'bid' | 'fold';
-    amount?: number;
+    action: 'fold';
   }
   // The timeout ended the round itself (priced-out opener folded → unsold):
   // there is no current round to report, only the flow advance to drive.
@@ -281,7 +280,7 @@ async function applyAuctionHumanAction(
 
   const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(input.matchId, (current) => {
-    const seat = validateHumanTurnAction(current, userId, kind, context.now());
+    const seat = validateHumanTurnAction(current, userId, context.now());
     const nextState = kind === 'bid'
       ? applyBid(current, seat.seatId, (input as AuctionBidPayload).amount, context)
       : applyFold(current, seat.seatId, context);
@@ -313,26 +312,16 @@ async function applyAuctionTurnTimeout(
 
     const seatId = round.currentTurnSeatId;
     const nextState = applyTurnTimeout(current, context);
-    // Derive what happened from the RESULTING state: a priced-out opener is
-    // folded (and the lot may go unsold) instead of force-bidding the opening
-    // price, so "no leader before" no longer implies "opened at startingPrice".
-    const foldedThisTurn = Boolean(
-      nextState.currentRound
-      && nextState.currentRound.foldedSeatIds.length > round.foldedSeatIds.length
-    );
+    // A timeout is always a pass now — opening turn included (the auto-buy
+    // at startingPrice is gone). The round either continues with the next
+    // bidder or resolves (sold to the standing leader / unsold via reveal).
     const resolvedRound = !nextState.currentRound || nextState.phase !== 'bidding';
 
     return saveAuctionMatchMutation(nextState, (saved) => {
       if (resolvedRound) {
         return { kind: 'round_resolved_timeout', state: saved, seatId };
       }
-      return {
-        kind: 'turn_timeout',
-        state: saved,
-        seatId,
-        action: foldedThisTurn ? 'fold' : 'bid',
-        amount: foldedThisTurn ? undefined : round.startingPrice,
-      };
+      return { kind: 'turn_timeout', state: saved, seatId, action: 'fold' };
     });
   }, {
     now: context.now,
@@ -343,7 +332,6 @@ async function applyAuctionTurnTimeout(
 function validateHumanTurnAction(
   state: AuctionMatchState,
   userId: string,
-  action: 'bid' | 'fold',
   now: Date
 ) {
   const round = state.currentRound;
@@ -372,9 +360,6 @@ function validateHumanTurnAction(
   }
   if (round.highestBidderSeatId === seat.seatId) {
     throw new AuctionActionError('auction_high_bidder_self_bid', 'Current high bidder cannot bid against themselves');
-  }
-  if (action === 'fold' && !round.highestBidderSeatId) {
-    throw new AuctionActionError('auction_opening_bidder_cannot_fold', 'Opening bidder cannot fold');
   }
   return seat;
 }

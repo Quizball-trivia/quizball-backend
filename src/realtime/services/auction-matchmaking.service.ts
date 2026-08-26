@@ -47,13 +47,24 @@ const AUCTION_MM_START_RETRY_MS = 3_000;
 const AUCTION_MM_MAX_START_FAILURES = 3;
 const AUCTION_MM_SEARCH_TTL_SEC = 120;
 // Ranked-style fallback begins after this wait: any empty seats are filled by
-// selected smart-bot profiles and the match starts immediately.
-const AUCTION_ONE_HUMAN_FALLBACK_MS = 10_000;
+// selected smart-bot profiles. The wait is RANDOMIZED per search — a fixed
+// 10s meant every solo queue popped at the same instant, which read as
+// scripted (owner feedback 2026-08-26): sometimes the lobby fills fast,
+// sometimes it drags, like a real queue.
+const AUCTION_FALLBACK_MIN_MS = 5_000;
+const AUCTION_FALLBACK_MAX_MS = 18_000;
+function randomFallbackDelayMs(): number {
+  return harnessDelayMs(
+    AUCTION_FALLBACK_MIN_MS + Math.random() * (AUCTION_FALLBACK_MAX_MS - AUCTION_FALLBACK_MIN_MS),
+    1_000
+  );
+}
 // Server-authoritative ranked-style pre-match sequence once all 3 seats fill.
 // The full connected lineup stays visible first, followed by the showdown and
 // then a five-second countdown shared by every browser.
 const AUCTION_PREMATCH_LINEUP_MS = 2_500;
-const AUCTION_PREMATCH_SHOWDOWN_MS = 2_500;
+// 3s minimum so the showdown always reads, even when every client acks fast.
+const AUCTION_PREMATCH_SHOWDOWN_MS = 3_000;
 const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
@@ -219,7 +230,7 @@ export const auctionMatchmakingService = {
               // the search could wait forever. Re-arm it relative to now.
               const rearmed: QueuedAuctionSearch = {
                 ...existing,
-                fallbackAt: Date.now() + harnessDelayMs(AUCTION_ONE_HUMAN_FALLBACK_MS, 1_000),
+                fallbackAt: Date.now() + randomFallbackDelayMs(),
               };
               await writeSearch(redis, rearmed);
               await scheduleAuctionMatchmakingFill(rearmed);
@@ -249,7 +260,7 @@ export const auctionMatchmakingService = {
             locale: input.locale,
             formation: input.formation,
             queuedAt: now,
-            fallbackAt: now + harnessDelayMs(AUCTION_ONE_HUMAN_FALLBACK_MS, 1_000),
+            fallbackAt: now + randomFallbackDelayMs(),
           };
           await writeSearch(redis, search);
           await scheduleAuctionMatchmakingFill(search);
@@ -574,13 +585,28 @@ function emitMatchFound(
   formation: FormationName
 ): void {
   const serverNowMs = Date.now();
-  const lineupEndsAtMs = serverNowMs + AUCTION_PREMATCH_LINEUP_MS;
+  // Bots pop into the lineup at staggered, randomized moments — sometimes
+  // together, usually seconds apart — instead of materializing as a block.
+  // The lineup stage stretches to cover the last arrival.
+  const togetherRoll = Math.random();
+  let previousDelayMs = 0;
+  const staggeredBots = botPlayers.map((bot, index) => {
+    const joinDelayMs = index === 0
+      ? Math.round(Math.random() * 1_500)
+      : togetherRoll < 0.25
+        ? previousDelayMs
+        : previousDelayMs + Math.round(1_000 + Math.random() * 4_000);
+    previousDelayMs = joinDelayMs;
+    return { ...bot, joinDelayMs };
+  });
+  const maxJoinDelayMs = staggeredBots.reduce((max, bot) => Math.max(max, bot.joinDelayMs), 0);
+  const lineupEndsAtMs = serverNowMs + maxJoinDelayMs + AUCTION_PREMATCH_LINEUP_MS;
   const showdownEndsAtMs = lineupEndsAtMs + AUCTION_PREMATCH_SHOWDOWN_MS;
   const payload: AuctionMatchFoundPayload = {
     matchId,
     humanUserIds: humans.map((human) => human.userId),
-    botCount: botPlayers.length,
-    botPlayers,
+    botCount: staggeredBots.length,
+    botPlayers: staggeredBots,
     locale,
     formation,
     serverNow: new Date(serverNowMs).toISOString(),

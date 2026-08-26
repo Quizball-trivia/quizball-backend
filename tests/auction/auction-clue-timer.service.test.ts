@@ -150,7 +150,7 @@ describe('auction clue reveal timers', () => {
     );
   });
 
-  it('reveals clue 1, emits a hidden clue payload, and schedules clue 2', async () => {
+  it('reveals clue 1 alone (gentle start), then schedules clue 2', async () => {
     const { io, roomEmit } = createIo();
     const { runAuctionClueRevealTimer } = await import('../../src/realtime/services/auction-clue-timer.service.js');
     stateStoreMock.load.mockResolvedValue(matchState());
@@ -164,6 +164,8 @@ describe('auction clue reveal timers', () => {
     }, { context: timerContext });
 
     expect(outcome.kind).toBe('clue_revealed');
+    // The FIRST tick reveals a single clue (the round intro is still fading);
+    // later ticks land in pairs.
     expect(stateStoreMock.save).toHaveBeenCalledWith(
       expect.objectContaining({
         version: 1,

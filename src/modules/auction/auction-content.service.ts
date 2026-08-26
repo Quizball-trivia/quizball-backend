@@ -150,12 +150,13 @@ export const auctionContentService = {
    * least-recently-seen first, rather than discarding the history signal.
    */
   async findRandomPublishedAuctionCardExcludingSeen(
-    options: RandomPublishedAuctionCardOptions
+    options: RandomPublishedAuctionCardOptions,
+    random: () => number = getRandom
   ): Promise<PublishedAuctionCard | null> {
     const seenPlayerIds = options.excludeRecentlySeenFootballPlayerIds ?? [];
-    if (seenPlayerIds.length === 0) return findRandomPublishedAuctionCard(options);
+    if (seenPlayerIds.length === 0) return findRandomPublishedAuctionCard(options, random);
 
-    const fresh = await findRandomPublishedAuctionCard(options);
+    const fresh = await findRandomPublishedAuctionCard(options, random);
     if (fresh) return fresh;
     logger.info(
       {
@@ -172,7 +173,7 @@ export const auctionContentService = {
       excludeRecentlySeenFootballPlayerIds: undefined,
       preferLeastRecentlySeenFootballPlayerIds:
         seenPlayerIds.length > 0 ? seenPlayerIds : undefined,
-    });
+    }, random);
   },
 
   getRecentlySeenFootballPlayerIds: auctionContentRepo.getRecentlySeenFootballPlayerIds,
@@ -192,10 +193,19 @@ export const auctionContentService = {
   assertPublishedAuctionContentAvailable,
 };
 
-// Serve roughly 70% household names, 30% deeper cuts. Uniform picking would
-// drift toward unknowns as generation finishes the long €5-25M tail of the
-// pool; the weighted roll keeps matches recognisable regardless of pool shape.
-const FAME_MIX_WELL_KNOWN_SHARE = 0.7;
+// Serve roughly 80% household names, 20% deeper cuts (raised from 70/30 on
+// 2026-08-26 after player feedback that lots skewed obscure). Uniform picking
+// would drift toward unknowns as generation finishes the long €5-25M tail of
+// the pool; the weighted roll keeps matches recognisable regardless of pool
+// shape. The ≥€25M fame threshold stays put: goalkeepers have only ~20 cards
+// above it, so raising the BAR (rather than the share) would loop the same
+// few GK names.
+const FAME_MIX_WELL_KNOWN_SHARE = 0.9;
+// Within the famous 80%, this fraction of the WHOLE roll prefers VETERAN
+// famous players (age 29+) whose cards carry 2010-2018 scout seasons — the
+// era spread owners asked for (roll < 0.32 veteran-famous, < 0.9 famous,
+// else lesser-known — i.e. 32% / 58% / 10%).
+const FAME_MIX_VETERAN_SHARE = 0.32;
 
 async function findRandomPublishedAuctionCard(
   options: RandomPublishedAuctionCardOptions,
@@ -207,12 +217,20 @@ async function findRandomPublishedAuctionCard(
   for (let attempt = 0; attempt < AUCTION_SNAPSHOT_CARD_ATTEMPTS; attempt += 1) {
     let row: PublishedAuctionCardRow | null;
     if (!options.fameTier) {
+      const roll = random();
       const fameTier: AuctionFameTier =
-        random() < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+        roll < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+      const veteranEra = roll < FAME_MIX_VETERAN_SHARE;
       row = await auctionContentRepo.getRandomPublishedAuctionCard({
         ...options,
         fameTier,
+        ...(veteranEra ? { veteranEra } : {}),
       });
+      // Veteran slice exhausted for this position (GK has only ~21 such
+      // cards) — retry the plain famous tier before going unrestricted.
+      if (!row && veteranEra) {
+        row = await auctionContentRepo.getRandomPublishedAuctionCard({ ...options, fameTier });
+      }
       // The rolled tier is exhausted for this position/exclusion set — fall
       // through to the unrestricted pool rather than failing the round.
       if (!row) {
@@ -265,6 +283,9 @@ export function displayLeagueName(slug: string): string {
 // on any client that falls back to plain clue text.
 const SNAPSHOT_FACETS = ['Goals', 'Assists', 'Market value', 'Age', 'League'] as const;
 const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'Age', 'League'] as const;
+
+/** Authored text hints revealed after the stat facets (clue_1 and clue_2). */
+export const AUCTION_TEXT_HINTS_PER_LOT = 2;
 
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
@@ -346,9 +367,34 @@ async function attachSeasonSnapshots(
   }));
 
   card.snapshots = snapshots;
+
+  // The lot opens at the scout season's REAL market value — the exact figure
+  // the card itself shows ("buy him at his {scout season} price"; profit is
+  // what he became by the scoring season). Historically true by construction,
+  // no synthetic fallback needed, and it leaks nothing: the same number is a
+  // public facet of the scout season. The view's starting_price_eur remains
+  // only as a guard against a malformed snapshot value.
+  const scoutValue = snapshots[0]?.valueEur;
+  if (Number.isFinite(scoutValue) && scoutValue > 0) {
+    card.startingPrice = Math.floor(scoutValue);
+    card.startingPriceEur = Math.floor(scoutValue);
+  }
+
   card.league = snapshots[snapshots.length - 1]?.league ?? null;
+  // Reveal steps: the five stat facets, then up to two of the card's authored
+  // text hints (clue_1/clue_2, already in the match locale). The hint TEXTS
+  // ride the existing revealedClues pacing — the client receives each string
+  // only when its step is revealed, exactly like the facet labels before them.
+  // 721 cards per locale carry facet LABELS ("Goals", "გოლები", ...) in their
+  // clue columns — placeholder rows from the stats pivot, not authored hints.
+  // A real hint is a sentence; the length floor filters the labels out, and a
+  // card without authored hints simply serves the five stat facets alone.
+  const authoredClues = (card.clues ?? [])
+    .filter((text): text is string => typeof text === 'string' && text.trim().length >= 25)
+    .slice(0, AUCTION_TEXT_HINTS_PER_LOT);
   card.clues = [
     ...(card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS),
+    ...authoredClues,
   ];
   return card;
 }

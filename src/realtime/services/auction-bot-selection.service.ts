@@ -52,13 +52,24 @@ export function fabricatedRankedIdentity(displayName: string): { tier: string; r
  * awareness and budget discipline, so a nickname keeps the same recognizable
  * style across matches without revealing that it is automated.
  */
+/**
+ * Auction seats cap bot skill below the roster's ranked range. Full-match
+ * simulation on the real card pool (2026-08-26, 300 matches/cell) showed the
+ * remaining bot edge after the fairness wave is margin discipline, and skill
+ * is the clean knob: vs skill-0.8 bots a casual player wins ~22% and a decent
+ * one ~37%; capping at ~0.55 lifts them to ~31%/~44% (fair = 33%) while sharp
+ * players stay ahead either way. Revisit when auction MMR ships and can pick
+ * the skill per opponent instead of one global cap.
+ */
+export const AUCTION_BOT_SKILL_CAP = 0.55;
+
 export function fabricatedAuctionBotProfile(displayName: string): AuctionBotProfile {
   const skillTrait = stableNameHash(`skill:${displayName}`) / 0xffffffff;
   const consistencyTrait = stableNameHash(`consistency:${displayName}`) / 0xffffffff;
   const personalitySeed = stableNameHash(`personality:${displayName}`) || 1;
 
   return {
-    baseSkill: 0.15 + skillTrait * 0.75,
+    baseSkill: Math.min(AUCTION_BOT_SKILL_CAP, 0.15 + skillTrait * 0.75),
     consistency: 0.2 + consistencyTrait * 0.7,
     personalitySeed,
   };
@@ -128,7 +139,7 @@ export async function reserveAuctionPersistentBots(params: {
         displayName: bot.nickname ?? 'Player',
         avatarUrl: bot.avatar_url ?? generateRankedAiAvatarUrl(96),
         botProfile: {
-          baseSkill: bot.base_skill,
+          baseSkill: Math.min(AUCTION_BOT_SKILL_CAP, bot.base_skill),
           consistency: bot.consistency,
           personalitySeed: Number(bot.personality_seed) || 0,
         },

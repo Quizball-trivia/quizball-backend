@@ -23,8 +23,7 @@ export interface AuctionFoldAcceptedInput {
 
 export interface AuctionTurnTimeoutInput {
   seatId: string;
-  action: 'bid' | 'fold';
-  amount?: number;
+  action: 'fold';
 }
 
 export function requirePublicRound(publicState: PublicAuctionMatchState): PublicAuctionRoundState {
@@ -98,7 +97,6 @@ export function buildTurnTimeoutPayload(
     roundId: round.roundId,
     seatId: input.seatId,
     action: input.action,
-    amount: input.amount,
     round,
     stateVersion: state.version,
   };

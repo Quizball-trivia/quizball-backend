@@ -112,6 +112,14 @@ export interface RandomPublishedAuctionCardOptions {
    * fall back to the unrestricted pool when a tier is exhausted.
    */
   fameTier?: AuctionFameTier;
+  /**
+   * Bias the draw toward VETERAN famous players (age 29+): their long careers
+   * put 2010-2018 scout seasons on the card, so matches aren't wall-to-wall
+   * 2021-generation (owner feedback 2026-08-26). 226 such cards exist
+   * (58 DEF / 75 FWD / 72 MID / 21 GK) — callers must fall back to the plain
+   * famous tier when this thins out for a position.
+   */
+  veteranEra?: boolean;
 }
 
 export type AuctionFameTier = 'well_known' | 'lesser_known';
@@ -122,6 +130,8 @@ export type AuctionFameTier = 'well_known' | 'lesser_known';
  * the long tail of €5-25M players fills the lesser-known 30%.
  */
 export const AUCTION_WELL_KNOWN_VALUE_EUR = 25_000_000;
+/** A career peak this high keeps a faded veteran in the famous tier. */
+export const AUCTION_WELL_KNOWN_PEAK_VALUE_EUR = 30_000_000;
 
 const publishedEligiblePredicate = sql`
   status = 'published'
@@ -208,11 +218,25 @@ export const auctionContentRepo = {
     const positionFilter = options.positionGroup
       ? sql`AND position_group = ${options.positionGroup}`
       : sql``;
+    // Fame is judged by the CAREER, not just today's price tag: an aging star
+    // whose current value decayed (Modric-class veterans) is still a household
+    // name. Judging by current value alone put 293 of the pool's 306 thirty-plus
+    // players in the "lesser known" bucket — players only ever saw the
+    // 2021-generation (owner feedback 2026-08-26). peak >= 30M OR current >=
+    // 25M widens the tier to 641 cards incl. 148 aging stars.
     const fameFilter = options.fameTier === 'well_known'
-      ? sql`AND current_value_eur >= ${AUCTION_WELL_KNOWN_VALUE_EUR}`
+      ? sql`AND (current_value_eur >= ${AUCTION_WELL_KNOWN_VALUE_EUR}
+             OR COALESCE(peak_value_eur, 0) >= ${AUCTION_WELL_KNOWN_PEAK_VALUE_EUR})`
       : options.fameTier === 'lesser_known'
-        ? sql`AND current_value_eur < ${AUCTION_WELL_KNOWN_VALUE_EUR}`
+        ? sql`AND current_value_eur < ${AUCTION_WELL_KNOWN_VALUE_EUR}
+              AND COALESCE(peak_value_eur, 0) < ${AUCTION_WELL_KNOWN_PEAK_VALUE_EUR}`
         : sql``;
+    const eraFilter = options.veteranEra
+      ? sql`AND football_player_id IN (
+          SELECT fp.id FROM football_players fp
+          WHERE fp.date_of_birth <= (CURRENT_DATE - INTERVAL '29 years')
+        )`
+      : sql``;
     const excludeFilter = excludeIds.length > 0
       ? sql`AND football_player_id NOT IN (
           SELECT used.football_player_id
@@ -245,6 +269,7 @@ export const auctionContentRepo = {
         AND locale = ${options.locale}
         ${positionFilter}
         ${fameFilter}
+        ${eraFilter}
         ${excludeFilter}
         ${seenFilter}
       ORDER BY ${leastRecentlySeenOrder} ${difficultyOrder} random()

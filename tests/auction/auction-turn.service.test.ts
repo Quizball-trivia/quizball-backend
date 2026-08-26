@@ -266,20 +266,23 @@ describe('auction turn service', () => {
     });
   });
 
-  it('rejects opener fold without saving', async () => {
-    const { io } = createIo();
+  it('accepts an opener fold (pass) and hands the turn to the next seat', async () => {
+    const { io, roomEmit } = createIo();
     const socket = createSocket();
     const { handleAuctionFold } = await import('../../src/realtime/services/auction-turn.service.js');
     stateStoreMock.load.mockResolvedValue(biddingState());
 
     await handleAuctionFold(io, socket, { matchId: 'match-1' }, { context: timerContext });
 
-    expect(stateStoreMock.save).not.toHaveBeenCalled();
-    expect(socket.emit).toHaveBeenCalledWith('auction:error', {
-      code: 'auction_opening_bidder_cannot_fold',
-      message: 'Opening bidder cannot fold',
-      meta: undefined,
-    });
+    expect(stateStoreMock.save).toHaveBeenCalled();
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    expect(saved.currentRound?.foldedSeatIds).toContain('seat-human');
+    expect(saved.currentRound?.highestBidderSeatId).toBeNull();
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:fold_accepted',
+      expect.objectContaining({ seatId: 'seat-human' })
+    );
+    expect(socket.emit).not.toHaveBeenCalledWith('auction:error', expect.anything());
   });
 
   it('accepts a human fold and reveals the round only after resolution', async () => {
@@ -323,7 +326,7 @@ describe('auction turn service', () => {
     expect(payloadText).toContain('180000000');
   });
 
-  it('auto-bids for opener timeout and schedules the next turn', async () => {
+  it('passes the opener on timeout — never an auto-buy — and schedules the next turn', async () => {
     const { io, roomEmit } = createIo();
     const { runAuctionTurnTimeoutTimer } = await import('../../src/realtime/services/auction-turn.service.js');
     stateStoreMock.load.mockResolvedValue(biddingState());
@@ -342,19 +345,23 @@ describe('auction turn service', () => {
       'auction:turn_timeout',
       expect.objectContaining({
         seatId: 'seat-human',
-        action: 'bid',
-        amount: 30_000_000,
+        action: 'fold',
         stateVersion: 4,
       })
     );
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    expect(saved.currentRound?.highestBidderSeatId).toBeNull();
+    expect(saved.currentRound?.bids).toEqual([]);
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:turn_started',
       expect.objectContaining({ currentTurnSeatId: 'seat-bot-a', stateVersion: 4 })
     );
+    // The passed-to seat faces another OPENING turn (still no standing bid),
+    // so the next timeout uses the opening window, not the raise window.
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_turn_timeout',
       'match-1:round-1:seat-bot-a',
-      new Date('2026-06-20T10:00:15.000Z'),
+      new Date('2026-06-20T10:00:30.000Z'),
       expect.objectContaining({ expectedTurnSeatId: 'seat-bot-a', stateVersion: 4 })
     );
   });
@@ -401,8 +408,8 @@ describe('auction turn service', () => {
 
     expect(outcome.kind).toBe('round_resolved_timeout');
     const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
-    expect(saved.phase).toBe('created');
-    expect(saved.currentRound).toBeNull();
+    expect(saved.phase).toBe('reveal');
+    expect(saved.currentRound?.winnerSeatId).toBeNull();
     // No turn-timeout broadcast: there is no round left to describe, and the
     // old payload builder would have thrown on the missing round AFTER the
     // save, stranding the match without a next-step drive.
@@ -410,10 +417,10 @@ describe('auction turn service', () => {
       'auction:turn_timeout',
       expect.anything()
     );
-    // The flow still advances: the completed round lands in history so the
-    // next step can be created.
-    expect(saved.completedRounds).toHaveLength(1);
-    expect(saved.completedRounds[0].winnerSeatId ?? null).toBeNull();
+    // The unsold round stays current through the reveal (so players see the
+    // passed-on card); the post-reveal advance moves it into history.
+    expect(saved.completedRounds).toHaveLength(0);
+    expect(saved.currentRound?.revealed).toBe(true);
   });
 
   it('does not double-apply duplicate human bids', async () => {

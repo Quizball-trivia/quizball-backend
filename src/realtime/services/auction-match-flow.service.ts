@@ -757,7 +757,29 @@ async function scheduleAuctionClueRevealTimerFromFlow(
 
   const expectedClueIndex = round.clueRevealIndex + 1;
   const clueCount = round.footballer.clues?.length ?? 0;
-  if (expectedClueIndex > clueCount) return;
+  if (expectedClueIndex > clueCount) {
+    // All clues are already out — the round sits in the STUDY window, so a
+    // clue timer would be a no-op. Re-arm the study timer instead (inlined,
+    // like the reveal scheduling below — importing the clue-timer service
+    // here would create an import cycle): without this, a forfeit during
+    // study (whose deferred study timer dies on the forfeit's version bump)
+    // left the match wedged in clue_reveal forever — nothing opened bidding.
+    const context = resolveRealtimeAuctionContext(options);
+    const studyNowMs = context.now().getTime();
+    const studyEndsMs = round.biddingStartsAt ? Date.parse(round.biddingStartsAt) : NaN;
+    await scheduleRealtimeTimer(
+      'auction_clue_study',
+      `${state.matchId}:${round.roundId}`,
+      new Date(Number.isFinite(studyEndsMs) ? Math.max(studyEndsMs, studyNowMs) : studyNowMs + context.clueStudyMs),
+      {
+        kind: 'auction_clue_study',
+        matchId: state.matchId,
+        roundId: round.roundId,
+        stateVersion: state.version,
+      }
+    );
+    return;
+  }
 
   const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
   const dueAt = new Date(nowMs + harnessDelayMs(CLUE_REVEAL_INTERVAL_MS, 50));

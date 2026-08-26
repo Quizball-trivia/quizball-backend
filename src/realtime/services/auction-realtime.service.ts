@@ -295,7 +295,10 @@ async function generateAuctionBotProfiles(
     used.add(displayName.toLowerCase());
     return {
       displayName,
-      avatarUrl: generateRankedAiAvatarUrl(96),
+      // Seed the avatar with the bot's own name: the default random pick
+      // draws from ~23 fixed seeds, so two bots in one lobby often looked
+      // near-identical (owner feedback 2026-08-26).
+      avatarUrl: generateRankedAiAvatarUrl(96, displayName),
       botProfile: fabricatedAuctionBotProfile(displayName),
       ...fabricatedRankedIdentity(displayName),
     };

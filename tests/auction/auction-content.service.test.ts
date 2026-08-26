@@ -82,14 +82,19 @@ describe('auctionContentService', () => {
       positionGroup: 'FWD',
       trueValue: 180_000_000,
       trueValueEur: 180_000_000,
-      startingPrice: 30_000_000,
-      startingPriceEur: 30_000_000,
       currentValueEur: 180_000_000,
       imageUrl: 'https://img.example/haaland.jpg',
     });
-    // Stats-only: served clues are the facet labels, never the authored
-    // sentence texts from the clue-card row.
-    expect(result.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    // The lot opens at the SCOUT season's real market value — the figure the
+    // card itself shows — never the view's fallback price.
+    expect(result.startingPrice).toBe(result.snapshots![0].valueEur);
+    expect(result.startingPriceEur).toBe(result.snapshots![0].valueEur);
+    // Reveal steps: the five stat facets, then the card's first two authored
+    // text hints (paced like facets — each string travels only when revealed).
+    expect(result.clues).toEqual([
+      'Goals', 'Assists', 'Market value', 'Age', 'League',
+      basePublishedCard.clue_1, basePublishedCard.clue_2,
+    ]);
     expect(result.snapshots).toHaveLength(3);
   });
 
@@ -108,7 +113,10 @@ describe('auctionContentService', () => {
     });
 
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(3);
-    expect(result?.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    expect(result?.clues).toEqual([
+      'Goals', 'Assists', 'Market value', 'Age', 'League',
+      basePublishedCard.clue_1, basePublishedCard.clue_2,
+    ]);
     expect(result?.snapshots).toHaveLength(3);
   });
 
@@ -198,15 +206,22 @@ describe('auctionContentService', () => {
     );
   });
 
-  it('rolls the fame mix: 70% well known, 30% lesser known, tier dropped on fallback', async () => {
+  it('rolls the fame mix: 32% veteran-famous, 58% famous, 10% lesser known', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
 
-    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.69);
+    // Low roll: famous tier with the veteran-era bias (2010s scout seasons).
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fameTier: 'well_known', veteranEra: true })
+    );
+
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.89);
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ fameTier: 'well_known' })
     );
+    expect((auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.lastCall?.[0]).not.toHaveProperty('veteranEra');
 
-    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.7);
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.9);
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ fameTier: 'lesser_known' })
     );
@@ -216,10 +231,24 @@ describe('auctionContentService', () => {
       .mockReset()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(basePublishedCard);
-    const result = await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    const result = await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.5);
     expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
     const calls = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls;
     expect(calls[calls.length - 1][0].fameTier).toBeUndefined();
+
+    // Veteran slice exhausted → fall back to plain famous, THEN unrestricted.
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock)
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(basePublishedCard);
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    const chain = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls.map((c) => [c[0].fameTier, c[0].veteranEra]);
+    expect(chain).toEqual([
+      ['well_known', true],
+      ['well_known', undefined],
+      [undefined, undefined],
+    ]);
   });
 
   it('respects an explicit fameTier without re-rolling', async () => {
@@ -265,7 +294,7 @@ describe('auctionContentService', () => {
       positionGroup: 'FWD',
       excludeClueCardIds: [CLUE_CARD_ID],
       excludeRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
-    });
+    }, () => 0.5);
 
     // Never fails the round: falls back to a repeat rather than returning null.
     expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
@@ -287,7 +316,7 @@ describe('auctionContentService', () => {
       locale: 'en',
       positionGroup: 'FWD',
       excludeClueCardIds: [CLUE_CARD_ID],
-    });
+    }, () => 0.5);
 
     expect(result).toBeNull();
     // Tiered pick + unrestricted fallback only — no third history-based query.
@@ -320,7 +349,7 @@ describe('auctionContentService', () => {
     );
   });
 
-  it('accepts a value-decorrelated 10M starting price from the content view', async () => {
+  it('prices the lot at the scout season value, ignoring the view starting price', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue({
       ...basePublishedCard,
       starting_price_eur: 10_000_000,
@@ -328,7 +357,8 @@ describe('auctionContentService', () => {
 
     const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
 
-    expect(result.startingPrice).toBe(10_000_000);
+    expect(result.startingPrice).toBe(result.snapshots![0].valueEur);
+    expect(result.startingPrice).not.toBe(10_000_000);
     expect(result.trueValue).toBe(180_000_000);
   });
 
@@ -338,7 +368,7 @@ describe('auctionContentService', () => {
     { season_label: '2025/26', league_name: 'liga-portugal', age: 24, apps: 31, goals: 3, assists: 9, clean_sheets: null, goals_conceded: null, value_eur: '29000000' },
   ];
 
-  it('attaches season snapshots: 5 facet clues, display league, last value pinned to trueValue', async () => {
+  it('attaches season snapshots: facet + hint clues, display league, last value pinned to trueValue', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
     (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(snapshotRows);
 
@@ -350,7 +380,10 @@ describe('auctionContentService', () => {
     // profit math can never diverge from the ranked score.
     expect(result.snapshots!.at(-1)).toMatchObject({ season: '2025/26', league: 'Primeira Liga', valueEur: result.trueValue });
     expect(result.league).toBe('Primeira Liga');
-    expect(result.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League']);
+    expect(result.clues).toEqual([
+      'Goals', 'Assists', 'Market value', 'Age', 'League',
+      basePublishedCard.clue_1, basePublishedCard.clue_2,
+    ]);
   });
 
   it('rolls the scout season across the career window (final season always scores)', async () => {

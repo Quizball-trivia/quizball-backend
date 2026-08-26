@@ -241,7 +241,17 @@ async function advanceClueRevealState(
     const clue = round.footballer.clues?.[payload.expectedClueIndex - 1];
     if (!clue) return skipAuctionMatchMutation(noop('missing_clue'));
 
-    const revealed = revealNextClue(current, context);
+    // Reveal steps land in PAIRS: with seven steps (five facets + two hints)
+    // one-per-tick made the scouting phase drag, so each tick uncovers two.
+    // Clients render off the round patch (clueRevealIndex), so a single
+    // clue_revealed event advancing the index by two shows both at once.
+    // The FIRST tick stays single: the round intro overlay is still fading
+    // when it lands, and opening with a double reveal read as rushed.
+    let revealed = revealNextClue(current, context);
+    const afterFirst = revealed.currentRound?.clueRevealIndex ?? 0;
+    if (afterFirst > 1 && afterFirst < (revealed.currentRound?.footballer.clues?.length ?? 0)) {
+      revealed = revealNextClue(revealed, context);
+    }
     const revealedRound = revealed.currentRound;
     if (!revealedRound) return skipAuctionMatchMutation(noop('missing_revealed_round'));
 
@@ -249,11 +259,12 @@ async function advanceClueRevealState(
     const allCluesOut = revealedRound.clueRevealIndex >= clueCount;
     const nextState = allCluesOut ? beginClueStudy(revealed, context) : revealed;
 
+    const lastClue = revealedRound.footballer.clues?.[revealedRound.clueRevealIndex - 1] ?? clue;
     return saveAuctionMatchMutation(nextState, (saved) => ({
       kind: allCluesOut ? 'study_started' : 'clue_revealed',
       state: saved,
-      clue,
-      clueIndex: payload.expectedClueIndex,
+      clue: lastClue,
+      clueIndex: revealedRound.clueRevealIndex,
     } as AuctionClueTimerOutcome));
   }, {
     now: context.now,

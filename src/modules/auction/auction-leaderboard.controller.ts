@@ -6,6 +6,7 @@ import type {
   AuctionLeaderboardQuery,
   AuctionUserRankQuery,
 } from './auction-leaderboard.schemas.js';
+import { normalizeSupportedCountryCode } from '../../core/country.js';
 
 export const auctionLeaderboardController = {
   async getLeaderboard(req: Request, res: Response): Promise<void> {
@@ -14,7 +15,11 @@ export const auctionLeaderboardController = {
     let country: string | undefined;
     if (scope === 'country') {
       const user = await usersRepo.getById(req.user!.id);
-      country = user?.country ?? undefined;
+      country = normalizeSupportedCountryCode(user?.country) ?? undefined;
+      if (!country) {
+        res.json({ entries: [] });
+        return;
+      }
     }
 
     const entries = await auctionLeaderboardService.getLeaderboard(limit, offset, country);
@@ -33,7 +38,13 @@ export const auctionLeaderboardController = {
     const { scope } = req.validated.query as AuctionUserRankQuery;
 
     const user = await usersRepo.getById(userId);
-    const country = scope === 'country' ? (user?.country ?? undefined) : undefined;
+    const country = scope === 'country'
+      ? normalizeSupportedCountryCode(user?.country) ?? undefined
+      : undefined;
+    if (scope === 'country' && !country) {
+      res.json(null);
+      return;
+    }
 
     // null = not on the board yet (no AP earned), which the client renders as
     // "unranked" rather than as a position.
@@ -48,7 +59,7 @@ export const auctionLeaderboardController = {
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
       avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
-      country: user?.country ?? null,
+      country: normalizeSupportedCountryCode(user?.country),
       auctionPoints: rankInfo.auctionPoints,
       tier: rankInfo.tier ?? null,
       rank: rankInfo.rank,

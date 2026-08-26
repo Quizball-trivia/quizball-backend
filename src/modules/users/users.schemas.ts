@@ -8,7 +8,7 @@ import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 import { friendStatusSchema } from '../friends/friends.schemas.js';
 import { avatarCustomizationSchema, parseStoredAvatarCustomization } from './avatar-customization.js';
-import { i18nFieldSchema } from '../../http/schemas/shared.js';
+import { countryCodeSchema, i18nFieldSchema } from '../../http/schemas/shared.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -76,7 +76,7 @@ export type AccountDeletionResponse = z.infer<typeof accountDeletionResponseSche
  */
 export const updateProfileSchema = z.object({
   nickname: z.string().min(1).max(50).optional(),
-  country: z.string().min(2).max(100).optional(),
+  country: countryCodeSchema.optional(),
   avatar_url: z.string().url().nullable().optional(),
   avatar_customization: avatarCustomizationSchema.nullable().optional(),
   favorite_club: z.string().min(1).max(100).optional(),

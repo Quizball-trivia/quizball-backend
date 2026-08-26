@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import { logger } from './logger.js';
+import { normalizeSupportedCountryCode } from './country.js';
 
 interface IpApiResponse {
   status: string;
@@ -76,7 +77,7 @@ async function fetchCountryByIp(clientIp: string): Promise<string | null> {
 
     const data = (await res.json()) as IpApiResponse;
     if (data.status === 'success' && data.countryCode) {
-      return data.countryCode.toUpperCase();
+      return normalizeSupportedCountryCode(data.countryCode);
     }
   } catch (err) {
     logger.debug({ err }, 'Geo detection failed — skipping');
@@ -117,8 +118,8 @@ export async function detectCountryFromHeaders(
 ): Promise<string | null> {
   // 1. Cloudflare header (instant, no network call)
   const cfCountry = getHeader(headers, 'cf-ipcountry');
-  const normalizedCfCountry = typeof cfCountry === 'string' ? cfCountry.toUpperCase() : null;
-  if (normalizedCfCountry && normalizedCfCountry.length === 2 && normalizedCfCountry !== 'XX') {
+  const normalizedCfCountry = normalizeSupportedCountryCode(cfCountry);
+  if (normalizedCfCountry) {
     return normalizedCfCountry;
   }
 
@@ -129,7 +130,7 @@ export async function detectCountryFromHeaders(
     const acceptLang = getHeader(headers, 'accept-language');
     if (typeof acceptLang === 'string') {
       const match = acceptLang.match(/[a-z]{2}-([a-z]{2})/i);
-      if (match) return match[1]?.toUpperCase() ?? null;
+      if (match) return normalizeSupportedCountryCode(match[1]);
     }
     return null;
   }

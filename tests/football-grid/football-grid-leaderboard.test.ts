@@ -113,10 +113,12 @@ describe('Tic Tac Toe leaderboard repo', () => {
     expect(dbMocks.sql.taggedCalls[1]?.text).toMatch(/AND u\.country = /);
   });
 
-  it('preserves the stored country representation for exact matching', async () => {
+  it('normalizes a stored country code before exact matching', async () => {
     const list = vi.spyOn(footballGridLeaderboardRepo, 'listLeaderboard').mockResolvedValueOnce([]);
-    await footballGridLeaderboardService.getLeaderboard(50, 0, 'Georgia');
-    expect(list).toHaveBeenCalledWith(50, 0, 'Georgia');
+    usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: ' ge ' });
+    const res = await request(createApp()).get('/api/v1/football-grid/leaderboard?scope=country');
+    expect(res.status).toBe(200);
+    expect(list).toHaveBeenCalledWith(50, 0, 'GE');
   });
 });
 
@@ -153,6 +155,13 @@ describe('GET /api/v1/football-grid/leaderboard', () => {
     const res = await request(createApp()).get('/api/v1/football-grid/leaderboard?limit=500');
     expect(res.status).toBe(422);
   });
+
+  it.each(['10001', '1e100', '9007199254740992'])
+    ('rejects unsafe or excessive offsets: %s', async (offset) => {
+      const res = await request(createApp()).get(`/api/v1/football-grid/leaderboard?offset=${offset}`);
+      expect(res.status).toBe(422);
+      expect(dbMocks.sql.taggedCalls).toHaveLength(0);
+    });
 });
 
 describe('GET /api/v1/football-grid/leaderboard/me', () => {

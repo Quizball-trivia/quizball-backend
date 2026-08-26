@@ -96,4 +96,33 @@ describe('rankedController season reads', () => {
     expect(rankedService.getUserRank).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith(null);
   });
+
+  it('does not turn a missing-country scope into the global ranked leaderboard', async () => {
+    vi.mocked(usersRepo.getById).mockResolvedValue({ id: USER_ID, country: null } as never);
+    const res = response();
+
+    await rankedController.getLeaderboard(request({
+      scope: 'country', limit: 50, offset: 0,
+    }), res);
+
+    expect(rankedService.getLeaderboard).not.toHaveBeenCalled();
+    expect(rankedService.getArchivedLeaderboard).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ entries: [] });
+  });
+
+  it('normalizes a stored country code for archived ranked lookups', async () => {
+    vi.mocked(usersRepo.getById).mockResolvedValue({
+      id: USER_ID,
+      nickname: 'Season Player',
+      avatar_url: null,
+      avatar_customization: null,
+      country: ' ge ',
+    } as never);
+    vi.mocked(rankedService.getArchivedUserRank).mockResolvedValue(null);
+    const res = response();
+
+    await rankedController.getUserRank(request({ scope: 'country', season: BATCH_ID }), res);
+
+    expect(rankedService.getArchivedUserRank).toHaveBeenCalledWith(BATCH_ID, USER_ID, 'GE');
+  });
 });

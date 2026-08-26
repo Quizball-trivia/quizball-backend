@@ -8,6 +8,7 @@ import type {
   RankedUserRankQuery,
 } from './ranked.schemas.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
+import { normalizeSupportedCountryCode } from '../../core/country.js';
 
 function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
   if (total === 0) return { trend: 'same', trendValue: 0 };
@@ -39,7 +40,11 @@ export const rankedController = {
     let country: string | undefined;
     if (scope === 'country') {
       const user = await usersRepo.getById(req.user!.id);
-      country = user?.country ?? undefined;
+      country = normalizeSupportedCountryCode(user?.country) ?? undefined;
+      if (!country) {
+        res.json({ entries: [] });
+        return;
+      }
     }
 
     const entries = season
@@ -64,7 +69,13 @@ export const rankedController = {
     const { scope, season } = req.validated.query as RankedUserRankQuery;
 
     const user = await usersRepo.getById(userId);
-    const country = scope === 'country' ? (user?.country ?? undefined) : undefined;
+    const country = scope === 'country'
+      ? normalizeSupportedCountryCode(user?.country) ?? undefined
+      : undefined;
+    if (scope === 'country' && !country) {
+      res.json(null);
+      return;
+    }
 
     if (season) {
       const rankInfo = await rankedService.getArchivedUserRank(season, userId, country);
@@ -77,7 +88,7 @@ export const rankedController = {
         username: user?.nickname ?? 'Player',
         avatarUrl: user?.avatar_url ?? null,
         avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
-        country: user?.country ?? null,
+        country: normalizeSupportedCountryCode(user?.country),
         rp: rankInfo.rp,
         tier: rankInfo.tier,
         rank: rankInfo.rank,
@@ -105,7 +116,7 @@ export const rankedController = {
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
       avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
-      country: user?.country ?? null,
+      country: normalizeSupportedCountryCode(user?.country),
       rp: profile.rp,
       tier: profile.tier,
       rank: rankInfo.rank,

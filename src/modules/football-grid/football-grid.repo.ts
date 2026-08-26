@@ -100,6 +100,8 @@ export interface FootballGridCommandInboxRow {
   payload_hash: string;
   admitted_at: string;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  processing_fence: string | null;
+  processing_lease_until: string | null;
   retry_count: number;
   next_retry_at: string | null;
   last_error: string | null;
@@ -621,7 +623,7 @@ export const footballGridRepo = {
        UPDATE football_grid_result_deliveries d
           SET status = 'processing', attempt_count = d.attempt_count + 1,
               ack_token = gen_random_uuid(),
-              processing_lease_until = clock_timestamp() + interval '10 seconds',
+              processing_lease_until = clock_timestamp() + interval '60 seconds',
               last_error = null, updated_at = now()
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
@@ -639,7 +641,7 @@ export const footballGridRepo = {
     const rows = await sql<Array<{ match_id: string }>>`
       UPDATE football_grid_result_deliveries
          SET status = 'awaiting_ack', processing_lease_until = null,
-             next_attempt_at = now() + interval '5 seconds', last_error = null, updated_at = now()
+             next_attempt_at = now() + interval '30 seconds', last_error = null, updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId}
          AND terminal_state_version = ${terminalStateVersion}
          AND ack_token = ${ackToken}
@@ -1174,12 +1176,24 @@ export const footballGridRepo = {
     });
   },
 
-  async markPairingFailed(pairingToken: string, reason: string): Promise<void> {
-    await sql`
+  async markPairingFailed(pairingToken: string, reason: string): Promise<boolean> {
+    const rows = await sql<Array<{ pairing_token: string }>>`
       UPDATE football_grid_pairings
          SET status = 'failed', failure_reason = ${reason.slice(0, 500)}, updated_at = now()
        WHERE pairing_token = ${pairingToken} AND status = 'claimed'
+       RETURNING pairing_token
     `;
+    return rows.length === 1;
+  },
+
+  async heartbeatPairing(pairingToken: string): Promise<boolean> {
+    const rows = await sql<Array<{ pairing_token: string }>>`
+      UPDATE football_grid_pairings
+         SET updated_at = now()
+       WHERE pairing_token = ${pairingToken} AND status = 'claimed'
+       RETURNING pairing_token
+    `;
+    return rows.length === 1;
   },
 
   async listStaleClaimedPairings(limit = 50): Promise<Array<{
@@ -1200,9 +1214,9 @@ export const footballGridRepo = {
     }>>`
       SELECT pairing_token, user_a_id, user_b_id, opponent_type,
              search_a_snapshot, search_b_snapshot
-        FROM football_grid_pairings
+       FROM football_grid_pairings
        WHERE status = 'claimed'
-         AND updated_at <= now() - interval '30 seconds'
+         AND updated_at <= now() - interval '90 seconds'
        ORDER BY updated_at ASC
        LIMIT ${limit}
     `;
@@ -1503,12 +1517,20 @@ export const footballGridRepo = {
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
-      await tx.unsafe(
+      const matchedPairing = await tx.unsafe<Array<{ pairing_token: string }>>(
         `UPDATE football_grid_pairings
             SET status = 'matched', match_id = $2, updated_at = now()
-          WHERE pairing_token = $1 AND status IN ('claimed', 'matched')`,
+          WHERE pairing_token = $1 AND status IN ('claimed', 'matched')
+          RETURNING pairing_token`,
         [input.pairingToken, matchId],
       );
+      if (matchedPairing.length !== 1) {
+        // A recovery worker may have expired the claim while the transaction
+        // was preparing the match. Never commit a match behind a failed claim:
+        // rolling back here keeps users from being requeued into an active
+        // session conflict.
+        throw new Error('GRID_PAIRING_CLAIM_LOST');
+      }
       for (const player of input.players) {
         await tx.unsafe(
           `INSERT INTO match_players (match_id, user_id, seat)
@@ -1859,6 +1881,7 @@ export const footballGridRepo = {
     locale?: 'en' | 'ka' | null;
     submittedText?: string | null;
     payloadHash: string;
+    processingFence?: string;
   }): Promise<FootballGridCommandInboxRow> {
     return this.runInTransaction(async (tx) => {
       const rows = await tx.unsafe<GridCommandAdmissionRow[]>(
@@ -1881,8 +1904,8 @@ export const footballGridRepo = {
         if (match.existing_inbox.payload_hash !== input.payloadHash) throw new Error('COMMAND_ID_REUSED');
         return match.existing_inbox;
       }
-      if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
       if (match.state_version !== input.expectedStateVersion) throw new Error('STALE_STATE');
+      if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
       if (match.phase === 'terminal') throw new Error('INVALID_STATE');
       if (input.commandType !== 'forfeit') {
         if (match.status !== 'active' || match.phase !== 'turn') throw new Error('INVALID_STATE');
@@ -1897,8 +1920,15 @@ export const footballGridRepo = {
         `WITH admitted AS (
            INSERT INTO football_grid_command_inbox (
              match_id, actor_user_id, command_id, expected_state_version,
-             turn_number, command_type, cell_index, locale, submitted_text, payload_hash
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             turn_number, command_type, cell_index, locale, submitted_text, payload_hash,
+             status, processing_fence, processing_lease_until, retry_count
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+             CASE WHEN $11::uuid IS NULL THEN 'pending' ELSE 'processing' END,
+             $11,
+             CASE WHEN $11::uuid IS NULL THEN null ELSE now() + interval '30 seconds' END,
+             CASE WHEN $11::uuid IS NULL THEN 0 ELSE 1 END
+           )
            RETURNING *
          ), bound AS (
            UPDATE football_grid_matches
@@ -1918,6 +1948,7 @@ export const footballGridRepo = {
           input.locale ?? null,
           input.submittedText ?? null,
           input.payloadHash,
+          input.processingFence ?? null,
         ],
       );
       if (!inserted[0]) throw new Error('COMMAND_IN_PROGRESS');
@@ -1929,7 +1960,7 @@ export const footballGridRepo = {
     const rows = await sql<FootballGridCommandInboxRow[]>`
       UPDATE football_grid_command_inbox
          SET status = 'processing', processing_fence = ${processingFence},
-             processing_lease_until = now() + interval '10 seconds',
+             processing_lease_until = now() + interval '30 seconds',
              retry_count = retry_count + 1
        WHERE id = ${commandInboxId}
          AND retry_count < 3

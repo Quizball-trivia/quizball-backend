@@ -21,7 +21,7 @@ vi.mock('../../src/core/logger.js', () => ({
 }));
 
 vi.mock('../../src/modules/football-grid/index.js', () => ({
-  FOOTBALL_GRID_HANDOFF_MS: 15_000,
+  FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     offerRematch: (...args: unknown[]) => offerRematchMock(...args),
     createPairing: (...args: unknown[]) => createPairingMock(...args),

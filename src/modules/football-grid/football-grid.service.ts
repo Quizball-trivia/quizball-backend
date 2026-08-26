@@ -232,13 +232,18 @@ function replayTerminalCommandError(inbox: FootballGridCommandInboxRow): Error |
 
 async function processInbox(
   inbox: FootballGridCommandInboxRow,
+  admittedProcessingFence?: string,
 ): Promise<FootballGridCommandResult> {
   const duplicate = await returnDuplicate(inbox);
   if (duplicate) return duplicate;
   const replayedError = replayTerminalCommandError(inbox);
   if (replayedError) throw replayedError;
-  const processingFence = randomUUID();
-  const leased = await footballGridRepo.leaseCommand(inbox.id, processingFence);
+  const processingFence = admittedProcessingFence ?? randomUUID();
+  const leased = admittedProcessingFence
+    && inbox.status === 'processing'
+    && inbox.processing_fence === admittedProcessingFence
+    ? inbox
+    : await footballGridRepo.leaseCommand(inbox.id, processingFence);
   if (!leased) {
     const repeated = await returnDuplicate(inbox);
     if (repeated) return repeated;
@@ -259,15 +264,24 @@ async function processInbox(
         throw new BadRequestError('Answer command is incomplete');
       }
       const content = await getBoardAnswerContent(leased.match_id);
-      const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
       const resolverStartedAt = performance.now();
       resolution = resolveFootballGridAnswer({
         submittedText: leased.submitted_text,
         aliases: content.aliases,
         validPlayerIds: content.validPlayerIdsByCell.get(leased.cell_index) ?? [],
         boardPlayerIds: content.boardPlayerIds,
-        usedPlayerIds,
+        usedPlayerIds: [],
       });
+      // Used-player state cannot affect a wrong or ambiguous answer. Avoid a
+      // database read for those overwhelmingly common paths and consult the
+      // authoritative claim set only when the alias/cell resolution found one
+      // otherwise-correct player.
+      if (resolution.outcome === 'correct' && resolution.playerId) {
+        const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
+        if (usedPlayerIds.includes(resolution.playerId)) {
+          resolution = { ...resolution, outcome: 'already_used' };
+        }
+      }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
     }
 
@@ -388,7 +402,13 @@ export const footballGridService = {
         const existing = previous.players.find((player) => player.userId === input.userId);
         if (!existing) throw new AuthorizationError('Not a Football Grid participant');
         if (existing.handoffAcknowledged) return previous;
-        if (previous.phase !== 'handoff') throw new ConflictError('Football Grid is no longer awaiting handoff');
+        // A delayed match_found can race the durable handoff deadline. Return
+        // the terminal state so realtime delivery can resync/complete the
+        // client instead of turning the late acknowledgement into a fatal 409.
+        if (previous.phase === 'terminal') return previous;
+        if (previous.phase !== 'handoff') {
+          throw new ConflictError('Football Grid is no longer awaiting handoff', { gridCode: 'INVALID_STATE' });
+        }
         assertBarrierVersion(previous, input.userId, input.expectedStateVersion, 'handoff');
         const nowMs = await footballGridRepo.databaseNowMs(tx);
         const phaseDeadlineMs = Date.parse(previous.phaseDeadlineAt ?? '');
@@ -429,7 +449,10 @@ export const footballGridService = {
         const existing = previous.players.find((player) => player.userId === input.userId);
         if (!existing) throw new AuthorizationError('Not a Football Grid participant');
         if (existing.ready) return previous;
-        if (previous.phase !== 'loading') throw new ConflictError('Football Grid is no longer awaiting readiness');
+        if (previous.phase === 'terminal') return previous;
+        if (previous.phase !== 'loading') {
+          throw new ConflictError('Football Grid is no longer awaiting readiness', { gridCode: 'INVALID_STATE' });
+        }
         assertBarrierVersion(previous, input.userId, input.expectedStateVersion, 'ready');
         const nowMs = await footballGridRepo.databaseNowMs(tx);
         const phaseDeadlineMs = Date.parse(previous.phaseDeadlineAt ?? '');
@@ -464,6 +487,7 @@ export const footballGridService = {
     locale: 'en' | 'ka';
   }): Promise<FootballGridCommandResult> {
     try {
+      const processingFence = randomUUID();
       const inbox = await footballGridRepo.admitCommand({
         matchId: input.matchId,
         actorUserId: input.userId,
@@ -480,8 +504,9 @@ export const footballGridService = {
           locale: input.locale,
           expectedStateVersion: input.expectedStateVersion,
         }),
+        processingFence,
       });
-      return await processInbox(inbox);
+      return await processInbox(inbox, processingFence);
     } catch (error) {
       throw toDomainError(error);
     }
@@ -494,6 +519,7 @@ export const footballGridService = {
     expectedStateVersion: number;
   }): Promise<FootballGridCommandResult> {
     try {
+      const processingFence = randomUUID();
       const inbox = await footballGridRepo.admitCommand({
         matchId: input.matchId,
         actorUserId: input.userId,
@@ -501,8 +527,9 @@ export const footballGridService = {
         expectedStateVersion: input.expectedStateVersion,
         commandType: 'pass',
         payloadHash: commandPayloadHash(input),
+        processingFence,
       });
-      return await processInbox(inbox);
+      return await processInbox(inbox, processingFence);
     } catch (error) {
       throw toDomainError(error);
     }

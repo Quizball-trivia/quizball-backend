@@ -34,14 +34,22 @@ const LOCK_KEY = 'lock:football_grid:mm';
 const LOCK_TTL_MS = 12_000;
 const SEARCH_TTL_SEC = 180;
 const MAX_SEARCH_AGE_MS = SEARCH_TTL_SEC * 1_000;
-const MATCH_SCAN_LIMIT = 20;
-const MAX_CONCURRENT_HUMAN_PAIR_STARTS = 6;
+const MATCH_SCAN_LIMIT = 100;
+const MAX_CONCURRENT_HUMAN_PAIR_STARTS = 12;
+const MAX_PAIR_START_FAILURES_PER_SWEEP = 3;
+// One committed batch per lock cycle lets another replica acquire the next
+// cycle while this replica performs its post-commit handoff delivery.
+const MAX_HUMAN_PAIR_BATCHES_PER_SWEEP = 1;
 const REPEAT_SOFT_LIMIT = 3;
 const PAIR_COUNT_CACHE_TTL_SEC = 60;
 const FALLBACK_TIMER_KIND = 'football_grid_matchmaking_fallback' as const;
 const PAIRING_RECOVERY_INTERVAL_MS = 10_000;
+const PAIRING_CLAIM_LEASE_MS = 90_000;
+const PAIRING_HEARTBEAT_INTERVAL_MS = 15_000;
 let pairingRecoveryTimer: NodeJS.Timeout | null = null;
 let pairingRecoveryRunning = false;
+let matchmakingSweepTimer: NodeJS.Timeout | null = null;
+let matchmakingSweepRunning = false;
 
 interface QueuedGridSearch {
   searchId: string;
@@ -50,6 +58,26 @@ interface QueuedGridSearch {
   locale: 'en' | 'ka';
   queuedAt: number;
   fallbackAt: number;
+}
+
+interface HumanPairStart {
+  pairingToken: string;
+  state: FootballGridState;
+  searches: [QueuedGridSearch, QueuedGridSearch];
+}
+
+interface HumanPairBatch {
+  startedPairs: HumanPairStart[];
+  attemptedPairs: number;
+  failedSearchIds: string[];
+  failures: number;
+}
+
+interface BotPairStart {
+  pairingToken: string;
+  state: FootballGridState;
+  search: QueuedGridSearch;
+  botUserId: string;
 }
 
 function searchKey(searchId: string): string {
@@ -240,7 +268,7 @@ async function claimPairingUsers(userIds: string[], pairingToken: string): Promi
   `;
   return await redis.eval(script, {
     keys,
-    arguments: [pairingToken, '30000'],
+    arguments: [pairingToken, String(PAIRING_CLAIM_LEASE_MS)],
   }) === 1;
 }
 
@@ -255,6 +283,37 @@ async function releasePairingUsers(userIds: string[], pairingToken: string): Pro
     return 1
   `;
   await redis.eval(script, { keys, arguments: [pairingToken] });
+}
+
+async function withPairingHeartbeat<T>(pairingToken: string, work: () => Promise<T>): Promise<T> {
+  if (!await footballGridRepo.heartbeatPairing(pairingToken)) {
+    throw new Error('GRID_PAIRING_CLAIM_LOST');
+  }
+  let active = true;
+  let heartbeatRunning = false;
+  const timer = setInterval(() => {
+    if (heartbeatRunning) return;
+    heartbeatRunning = true;
+    void footballGridRepo.heartbeatPairing(pairingToken)
+      .then((renewed) => {
+        if (!renewed && active) {
+          logger.warn({ pairingToken }, 'Football Grid pairing heartbeat lost its claim');
+        }
+      })
+      .catch((error) => {
+        logger.warn({ error, pairingToken }, 'Football Grid pairing heartbeat failed');
+      })
+      .finally(() => {
+        heartbeatRunning = false;
+      });
+  }, PAIRING_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  try {
+    return await work();
+  } finally {
+    active = false;
+    clearInterval(timer);
+  }
 }
 
 async function chooseOpponent(anchor: QueuedGridSearch, candidates: QueuedGridSearch[]): Promise<QueuedGridSearch | null> {
@@ -303,13 +362,13 @@ async function searchesStillExclusivelyQueued(searches: QueuedGridSearch[]): Pro
   });
 }
 
-async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: QueuedGridSearch): Promise<boolean> {
+async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: QueuedGridSearch): Promise<HumanPairStart | null> {
   const paired = await userSessionGuardService.withUserSessionLocks(
     [a.userId, b.userId],
     async () => {
-      if (!await searchesStillExclusivelyQueued([a, b])) return false;
+      if (!await searchesStillExclusivelyQueued([a, b])) return null;
       const pairingToken = randomUUID();
-      if (!await claimPairingUsers([a.userId, b.userId], pairingToken)) return false;
+      if (!await claimPairingUsers([a.userId, b.userId], pairingToken)) return null;
       try {
         let state: FootballGridState;
         try {
@@ -328,15 +387,17 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
           await removeSearch(a);
           await removeSearch(b);
           const openerUserId = randomInt(2) === 0 ? a.userId : b.userId;
-          state = (await footballGridService.createMatch({
-            pairingToken,
-            origin: 'random',
-            players: [
-              { userId: a.userId, seat: 1 },
-              { userId: b.userId, seat: 2 },
-            ],
-            openerUserId,
-          })).state;
+          state = (await withPairingHeartbeat(pairingToken, () => (
+            footballGridService.createMatch({
+              pairingToken,
+              origin: 'random',
+              players: [
+                { userId: a.userId, seat: 1 },
+                { userId: b.userId, seat: 2 },
+              ],
+              openerUserId,
+            })
+          ))).state;
         } catch (error) {
           logger.error({ error, pairingToken, userIds: [a.userId, b.userId] }, 'Football Grid human pairing failed');
           await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
@@ -344,102 +405,155 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
             restoreSearchOrIdle(io, a),
             restoreSearchOrIdle(io, b),
           ]);
-          return false;
+          return null;
         }
-
-        // The match is committed. Socket delivery and metrics are best-effort;
-        // the handoff recovery loop owns redelivery and a transport failure
-        // must never restore the users to queue or stop draining later pairs.
-        try {
-          emitSearchState(io, a.userId, { state: 'matched', searchId: a.searchId });
-          emitSearchState(io, b.userId, { state: 'matched', searchId: b.searchId });
-          await footballGridRealtimeService.emitMatchFound(io, state);
-          appMetrics.footballGridMatches.add(1, { opponent_type: 'human', origin: 'random' });
-          appMetrics.footballGridQueueWaitDuration.record(Date.now() - Math.min(a.queuedAt, b.queuedAt), { opponent_type: 'human' });
-          await Promise.all([
-            userSessionGuardService.emitState(io, a.userId),
-            userSessionGuardService.emitState(io, b.userId),
-          ]);
-        } catch (error) {
-          logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human handoff deferred to recovery');
-        }
-        try {
-          const matchedAt = new Date(Date.parse(state.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS);
-          for (const search of [a, b]) {
-            trackFootballGridQueueLeft({
-              userId: search.userId,
-              searchId: search.searchId,
-              reason: 'matched',
-              queuedAt: new Date(search.queuedAt),
-              leftAt: matchedAt,
-              opponentType: 'human',
-            });
-            trackFootballGridMatchFound({
-              userId: search.userId,
-              matchId: state.matchId,
-              searchId: search.searchId,
-              origin: 'random',
-              opponentType: 'human',
-              queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
-              boardId: state.board.boardId,
-              boardVersion: state.board.boardVersion,
-              occurredAt: matchedAt,
-            });
-          }
-        } catch (error) {
-          logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human pairing analytics failed');
-        }
-        return true;
+        return { pairingToken, state, searches: [a, b] as [QueuedGridSearch, QueuedGridSearch] };
       } finally {
         await releasePairingUsers([a.userId, b.userId], pairingToken).catch(() => {});
       }
     },
     { waitMs: 1_200 },
   );
-  return paired ?? false;
+  return paired ?? null;
 }
 
-async function tryStartHumanPairsLocked(io: QuizballServer): Promise<void> {
-  while (true) {
-    const searches = await listSearches(io);
-    if (searches.length < 2) return;
-    const remaining = [...searches];
-    const pairs: Array<[QueuedGridSearch, QueuedGridSearch]> = [];
-    while (remaining.length >= 2 && pairs.length < MAX_CONCURRENT_HUMAN_PAIR_STARTS) {
-      const anchor = remaining.shift()!;
-      const opponent = await chooseOpponent(anchor, remaining);
-      if (!opponent) break;
-      const opponentIndex = remaining.findIndex((candidate) => candidate.searchId === opponent.searchId);
-      if (opponentIndex < 0) break;
-      remaining.splice(opponentIndex, 1);
-      pairs.push([anchor, opponent]);
+async function deliverHumanPair(io: QuizballServer, result: HumanPairStart): Promise<void> {
+  const { pairingToken, state, searches } = result;
+  const [a, b] = searches;
+  // This function is deliberately invoked only after the global matchmaking
+  // lock has been released. The handoff recovery loop owns redelivery, so all
+  // transport and analytics work is best-effort.
+  try {
+    emitSearchState(io, a.userId, { state: 'matched', searchId: a.searchId });
+    emitSearchState(io, b.userId, { state: 'matched', searchId: b.searchId });
+    await footballGridRealtimeService.emitMatchFound(io, state);
+    appMetrics.footballGridMatches.add(1, { opponent_type: 'human', origin: 'random' });
+    appMetrics.footballGridQueueWaitDuration.record(
+      Date.now() - Math.min(a.queuedAt, b.queuedAt),
+      { opponent_type: 'human' },
+    );
+    void Promise.all([
+      userSessionGuardService.emitState(io, a.userId),
+      userSessionGuardService.emitState(io, b.userId),
+    ]).catch((error) => {
+      logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid session-state refresh deferred');
+    });
+  } catch (error) {
+    logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human handoff deferred to recovery');
+  }
+  try {
+    const deadlineMs = Date.parse(state.phaseDeadlineAt ?? '');
+    const matchedAt = new Date(Number.isFinite(deadlineMs) ? deadlineMs - FOOTBALL_GRID_HANDOFF_MS : Date.now());
+    for (const search of searches) {
+      trackFootballGridQueueLeft({
+        userId: search.userId,
+        searchId: search.searchId,
+        reason: 'matched',
+        queuedAt: new Date(search.queuedAt),
+        leftAt: matchedAt,
+        opponentType: 'human',
+      });
+      trackFootballGridMatchFound({
+        userId: search.userId,
+        matchId: state.matchId,
+        searchId: search.searchId,
+        origin: 'random',
+        opponentType: 'human',
+        queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
+        boardId: state.board.boardId,
+        boardVersion: state.board.boardVersion,
+        occurredAt: matchedAt,
+      });
     }
-    if (pairs.length === 0) return;
-    const outcomes = await Promise.all(pairs.map(([anchor, opponent]) => (
-      startHumanPair(io, anchor, opponent)
-    )));
-    // A failed pair restores its searches. Leave them for a later join/fallback
-    // rather than immediately retrying the same transient conflict in a loop.
-    if (outcomes.some((started) => !started)) return;
+  } catch (error) {
+    logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid human pairing analytics failed');
   }
 }
 
-async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
-  if (isSearchExpired(search)) return false;
-  if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return false;
+async function tryStartHumanPairBatchLocked(
+  io: QuizballServer,
+  excludedSearchIds: ReadonlySet<string>,
+): Promise<HumanPairBatch> {
+  const startedPairs: HumanPairStart[] = [];
+  if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {
+    return { startedPairs, attemptedPairs: 0, failedSearchIds: [], failures: 0 };
+  }
+  const searches = (await listSearches(io))
+    .filter((search) => !excludedSearchIds.has(search.searchId));
+  if (searches.length < 2) {
+    return { startedPairs, attemptedPairs: 0, failedSearchIds: [], failures: 0 };
+  }
+  const remaining = [...searches];
+  const pairs: Array<[QueuedGridSearch, QueuedGridSearch]> = [];
+  while (remaining.length >= 2 && pairs.length < MAX_CONCURRENT_HUMAN_PAIR_STARTS) {
+    const anchor = remaining.shift()!;
+    const opponent = await chooseOpponent(anchor, remaining);
+    if (!opponent) break;
+    const opponentIndex = remaining.findIndex((candidate) => candidate.searchId === opponent.searchId);
+    if (opponentIndex < 0) break;
+    remaining.splice(opponentIndex, 1);
+    pairs.push([anchor, opponent]);
+  }
+  if (pairs.length === 0) {
+    return { startedPairs, attemptedPairs: 0, failedSearchIds: [], failures: 0 };
+  }
+  const outcomes = await Promise.all(pairs.map(([anchor, opponent]) => (
+    startHumanPair(io, anchor, opponent)
+  )));
+  const failedSearchIds: string[] = [];
+  let failures = 0;
+  outcomes.forEach((outcome, index) => {
+    if (outcome) {
+      startedPairs.push(outcome);
+      return;
+    }
+    failures += 1;
+    failedSearchIds.push(pairs[index][0].searchId, pairs[index][1].searchId);
+  });
+  return { startedPairs, attemptedPairs: pairs.length, failedSearchIds, failures };
+}
+
+async function deliverHumanPairs(io: QuizballServer, pairs: HumanPairStart[]): Promise<void> {
+  await Promise.allSettled(pairs.map((pair) => deliverHumanPair(io, pair)));
+}
+
+async function runHumanPairSweep(io: QuizballServer): Promise<boolean> {
+  const failedSearchIds = new Set<string>();
+  let failures = 0;
+  let acquiredAtLeastOnce = false;
+  for (let batchIndex = 0; batchIndex < MAX_HUMAN_PAIR_BATCHES_PER_SWEEP; batchIndex += 1) {
+    const batch = await withMatchmakingLock(() => tryStartHumanPairBatchLocked(io, failedSearchIds));
+    if (batch === null) return acquiredAtLeastOnce;
+    acquiredAtLeastOnce = true;
+
+    // Deliver every committed batch immediately after releasing the global
+    // lock. Deferring all delivery until a multi-batch drain completed let the
+    // 15-second handoff deadline expire before clients ever saw match_found.
+    await deliverHumanPairs(io, batch.startedPairs);
+    for (const searchId of batch.failedSearchIds) failedSearchIds.add(searchId);
+    failures += batch.failures;
+    if (batch.attemptedPairs === 0 || failures >= MAX_PAIR_START_FAILURES_PER_SWEEP) break;
+  }
+  return acquiredAtLeastOnce;
+}
+
+async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promise<BotPairStart | null> {
+  if (isSearchExpired(search)) return null;
+  if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) return null;
+  if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return null;
   const humanProfile = await rankedService.ensureProfile(search.userId);
   const paired = await userSessionGuardService.withUserSessionLocks([search.userId], async () => {
-    if (!await searchesStillExclusivelyQueued([search])) return false;
+    if (!await searchesStillExclusivelyQueued([search])) return null;
     const selected = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: search.userId,
       humanProfile,
       lobbyId: search.searchId,
     });
-    if (!selected) return false;
+    if (!selected) return null;
     const pairingToken = randomUUID();
     if (!await claimPairingUsers([search.userId], pairingToken)) {
       await reservationService.abortLobby(search.searchId, 'match_found_cancel');
-      return false;
+      return null;
     }
     try {
       let state: FootballGridState;
@@ -456,78 +570,84 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
         await removeSearch(search);
         const openerUserId = randomInt(2) === 0 ? search.userId : selected.bot.user_id;
         const seed = randomInt(1, 2_147_483_647);
-        state = (await footballGridService.createMatch({
-          pairingToken,
-          origin: 'random',
-          players: [
-            { userId: search.userId, seat: 1 },
-            { userId: selected.bot.user_id, seat: 2, isBot: true },
-          ],
-          openerUserId,
-          botReservationFence: selected.reservation.fence,
-          botRp: selected.bot.rp,
-          botTier: selected.bot.tier,
-          botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
-          botConfigVersion: 1,
-          botRngSeed: seed,
-          afterCreateInTx: async (tx, matchId) => {
-            const transferred = await reservationService.transferInTx(tx, {
-              botUserId: selected.bot.user_id,
-              lobbyId: search.searchId,
-              matchId,
-            });
-            if (!transferred) throw new Error('GRID_BOT_RESERVATION_LOST');
-            await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, selected.bot.user_id);
-          },
-        })).state;
+        state = (await withPairingHeartbeat(pairingToken, () => (
+          footballGridService.createMatch({
+            pairingToken,
+            origin: 'random',
+            players: [
+              { userId: search.userId, seat: 1 },
+              { userId: selected.bot.user_id, seat: 2, isBot: true },
+            ],
+            openerUserId,
+            botReservationFence: selected.reservation.fence,
+            botRp: selected.bot.rp,
+            botTier: selected.bot.tier,
+            botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
+            botConfigVersion: 1,
+            botRngSeed: seed,
+            afterCreateInTx: async (tx, matchId) => {
+              const transferred = await reservationService.transferInTx(tx, {
+                botUserId: selected.bot.user_id,
+                lobbyId: search.searchId,
+                matchId,
+              });
+              if (!transferred) throw new Error('GRID_BOT_RESERVATION_LOST');
+              await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, selected.bot.user_id);
+            },
+          })
+        ))).state;
       } catch (error) {
         logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
         await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
         await reservationService.abortLobby(search.searchId, 'match_found_cancel');
         await restoreSearchOrIdle(io, search);
-        return false;
+        return null;
       }
-
-      try {
-        await syntheticBotSelectionService.recordRecentlyFaced(search.userId, selected.bot.user_id);
-        emitSearchState(io, search.userId, { state: 'matched', searchId: search.searchId });
-        await footballGridRealtimeService.emitMatchFound(io, state);
-        appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: 'random' });
-        appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
-        await userSessionGuardService.emitState(io, search.userId);
-      } catch (error) {
-        logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot handoff deferred to recovery');
-      }
-      try {
-        const matchedAt = new Date(Date.parse(state.phaseDeadlineAt ?? '') - FOOTBALL_GRID_HANDOFF_MS);
-        trackFootballGridQueueLeft({
-          userId: search.userId,
-          searchId: search.searchId,
-          reason: 'matched',
-          queuedAt: new Date(search.queuedAt),
-          leftAt: matchedAt,
-          opponentType: 'bot',
-        });
-        trackFootballGridMatchFound({
-          userId: search.userId,
-          matchId: state.matchId,
-          searchId: search.searchId,
-          origin: 'random',
-          opponentType: 'bot',
-          queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
-          boardId: state.board.boardId,
-          boardVersion: state.board.boardVersion,
-          occurredAt: matchedAt,
-        });
-      } catch (error) {
-        logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot pairing analytics failed');
-      }
-      return true;
+      return { pairingToken, state, search, botUserId: selected.bot.user_id };
     } finally {
       await releasePairingUsers([search.userId], pairingToken).catch(() => {});
     }
   }, { waitMs: 1_200 });
-  return paired ?? false;
+  return paired ?? null;
+}
+
+async function deliverBotPair(io: QuizballServer, result: BotPairStart): Promise<void> {
+  const { pairingToken, state, search, botUserId } = result;
+  try {
+    await syntheticBotSelectionService.recordRecentlyFaced(search.userId, botUserId);
+    emitSearchState(io, search.userId, { state: 'matched', searchId: search.searchId });
+    await footballGridRealtimeService.emitMatchFound(io, state);
+    appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: 'random' });
+    appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
+    await userSessionGuardService.emitState(io, search.userId);
+  } catch (error) {
+    logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot handoff deferred to recovery');
+  }
+  try {
+    const deadlineMs = Date.parse(state.phaseDeadlineAt ?? '');
+    const matchedAt = new Date(Number.isFinite(deadlineMs) ? deadlineMs - FOOTBALL_GRID_HANDOFF_MS : Date.now());
+    trackFootballGridQueueLeft({
+      userId: search.userId,
+      searchId: search.searchId,
+      reason: 'matched',
+      queuedAt: new Date(search.queuedAt),
+      leftAt: matchedAt,
+      opponentType: 'bot',
+    });
+    trackFootballGridMatchFound({
+      userId: search.userId,
+      matchId: state.matchId,
+      searchId: search.searchId,
+      origin: 'random',
+      opponentType: 'bot',
+      queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
+      boardId: state.board.boardId,
+      boardVersion: state.board.boardVersion,
+      occurredAt: matchedAt,
+    });
+  } catch (error) {
+    logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot pairing analytics failed');
+  }
 }
 
 export const footballGridMatchmakingService = {
@@ -541,13 +661,19 @@ export const footballGridMatchmakingService = {
           .filter((search): search is QueuedGridSearch => search !== null);
         const userIds = humanSearches.map((search) => search.userId);
         if (!searchA || (pairing.opponentType === 'human' && !searchB)) {
-          await footballGridRepo.markPairingFailed(pairing.pairingToken, 'missing_recovery_snapshot');
-          appMetrics.footballGridPairingRecovery.add(1, { outcome: 'missing_snapshot' });
+          const failed = await footballGridRepo.markPairingFailed(pairing.pairingToken, 'missing_recovery_snapshot');
+          appMetrics.footballGridPairingRecovery.add(1, { outcome: failed ? 'missing_snapshot' : 'claim_already_resolved' });
           await releasePairingUsers([pairing.userAId, pairing.userBId], pairing.pairingToken).catch(() => {});
           continue;
         }
         const recovered = await userSessionGuardService.withUserSessionLocks(userIds, async () => {
-          await footballGridRepo.markPairingFailed(pairing.pairingToken, 'recovered_after_interrupted_pairing');
+          const failed = await footballGridRepo.markPairingFailed(
+            pairing.pairingToken,
+            'recovered_after_interrupted_pairing',
+          );
+          // Creation may have committed after the stale list snapshot. A
+          // matched/failed claim must never have its users restored to queue.
+          if (!failed) return false;
           if (pairing.opponentType === 'bot') {
             await reservationService.abortLobby(searchA.searchId, 'match_found_cancel').catch((error) => {
               logger.warn({ error, searchId: searchA.searchId }, 'Football Grid stale bot reservation cleanup failed');
@@ -563,7 +689,11 @@ export const footballGridMatchmakingService = {
           });
           return true;
         }, { waitMs: 1_200 });
-        if (!recovered) continue;
+        if (recovered === null) continue;
+        if (!recovered) {
+          await releasePairingUsers([pairing.userAId, pairing.userBId], pairing.pairingToken).catch(() => {});
+          continue;
+        }
         await releasePairingUsers([pairing.userAId, pairing.userBId], pairing.pairingToken).catch(() => {});
       }
     });
@@ -585,6 +715,32 @@ export const footballGridMatchmakingService = {
     }), PAIRING_RECOVERY_INTERVAL_MS);
     pairingRecoveryTimer.unref?.();
     void run().catch((error) => logger.warn({ error }, 'Football Grid initial pairing recovery failed'));
+  },
+
+  startSweep(io: QuizballServer): void {
+    if (matchmakingSweepTimer || config.FOOTBALL_GRID_MM_SWEEP_MS === 0) return;
+    const run = async () => {
+      if (matchmakingSweepRunning) return;
+      matchmakingSweepRunning = true;
+      try {
+        // A busy distributed lock means another replica is already draining.
+        // That is the expected steady-state path and is intentionally silent.
+        await runHumanPairSweep(io);
+      } finally {
+        matchmakingSweepRunning = false;
+      }
+    };
+    matchmakingSweepTimer = setInterval(() => void run().catch((error) => {
+      logger.warn({ error }, 'Football Grid matchmaking sweep failed');
+    }), config.FOOTBALL_GRID_MM_SWEEP_MS);
+    matchmakingSweepTimer.unref?.();
+    void run().catch((error) => logger.warn({ error }, 'Football Grid initial matchmaking sweep failed'));
+  },
+
+  stopSweep(): void {
+    if (matchmakingSweepTimer) clearInterval(matchmakingSweepTimer);
+    matchmakingSweepTimer = null;
+    matchmakingSweepRunning = false;
   },
 
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka' }): Promise<void> {
@@ -691,9 +847,7 @@ export const footballGridMatchmakingService = {
     if (!transitioned) return;
     // A busy drainer is not an admission failure: this search is already in
     // Redis and its durable fallback timer will retry pairing.
-    await withMatchmakingLock(async () => {
-      await tryStartHumanPairsLocked(io);
-    });
+    await runHumanPairSweep(io);
   },
 
   async handleSearchCancel(io: QuizballServer, socket: QuizballSocket, expectedSearchId: string): Promise<void> {
@@ -737,6 +891,22 @@ export const footballGridMatchmakingService = {
   },
 
   async handleFallbackTimer(io: QuizballServer, searchId: string, userId?: string): Promise<void> {
+    // Give the periodic human drainer first refusal. It releases the global
+    // lock and delivers after every batch, so a fallback cannot sit behind a
+    // long undelivered handoff backlog.
+    const drained = await runHumanPairSweep(io);
+    if (!drained) {
+      const retryUserId = userId ?? (await readSearch(searchId))?.userId;
+      if (!retryUserId) return;
+      await scheduleRealtimeTimer(
+        FALLBACK_TIMER_KIND,
+        searchId,
+        new Date(Date.now() + 250),
+        { kind: FALLBACK_TIMER_KIND, searchId, userId: retryUserId },
+      );
+      return;
+    }
+    let botPair: BotPairStart | null = null;
     const locked = await withMatchmakingLock(async () => {
       const search = await readSearch(searchId);
       if (!search) {
@@ -754,15 +924,22 @@ export const footballGridMatchmakingService = {
         await expireSearch(io, search);
         return;
       }
-      await tryStartHumanPairsLocked(io);
       const remaining = await readSearch(searchId);
       if (!remaining) return;
       if (isSearchExpired(remaining)) {
         await expireSearch(io, remaining);
         return;
       }
-      const started = await startBotPair(io, remaining);
-      if (!started && await readSearch(searchId)) {
+      // Never substitute a bot while another human pair can still be formed.
+      // A later periodic pass will drain those searches in a fresh batch.
+      if ((await listSearches(io)).length >= 2) {
+        const rearmed = { ...remaining, fallbackAt: nextFallbackAt(remaining) };
+        await writeSearch(rearmed);
+        await scheduleFallback(rearmed);
+        return;
+      }
+      botPair = await startBotPair(io, remaining);
+      if (!botPair && await readSearch(searchId)) {
         if (isSearchExpired(remaining)) {
           await expireSearch(io, remaining);
           return;
@@ -772,6 +949,9 @@ export const footballGridMatchmakingService = {
         await scheduleFallback(rearmed);
       }
     });
+    if (locked !== null) {
+      if (botPair) await deliverBotPair(io, botPair);
+    }
     if (locked === null) {
       // The durable timer has fired and is now consumed. Re-arm a short retry
       // without rewriting queue state; if the search was paired meanwhile the

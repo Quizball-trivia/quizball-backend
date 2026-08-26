@@ -234,6 +234,10 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_BOT_FALLBACK_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+  // Each realtime replica periodically attempts to drain the shared Grid
+  // queue. The distributed matchmaking lock makes all but one attempt a cheap
+  // no-op. Set to 0 for an emergency disable without disabling queue joins.
+  FOOTBALL_GRID_MM_SWEEP_MS: z.coerce.number().int().min(0).max(60_000).default(750),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

@@ -113,6 +113,14 @@ describe('Tic Tac Toe leaderboard repo', () => {
     expect(dbMocks.sql.taggedCalls[1]?.text).toMatch(/AND u\.country = /);
   });
 
+  it('defensively clamps direct repository pagination calls', async () => {
+    await footballGridLeaderboardRepo.listLeaderboard(500, Number.MAX_SAFE_INTEGER);
+    expect(dbMocks.sql.taggedCalls[0]?.values).toEqual(expect.arrayContaining([100, 10_000]));
+
+    await footballGridLeaderboardRepo.listLeaderboard(-5, -1);
+    expect(dbMocks.sql.taggedCalls[1]?.values).toEqual(expect.arrayContaining([1, 0]));
+  });
+
   it('normalizes a stored country code before exact matching', async () => {
     const list = vi.spyOn(footballGridLeaderboardRepo, 'listLeaderboard').mockResolvedValueOnce([]);
     usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: ' ge ' });

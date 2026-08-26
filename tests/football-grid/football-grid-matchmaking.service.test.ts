@@ -78,6 +78,7 @@ const state = vi.hoisted(() => ({
   stalePairings: [] as Array<Record<string, unknown>>,
   markPairingFailed: vi.fn(),
   createPairing: vi.fn(),
+  heartbeatPairing: vi.fn(async () => true),
   createMatch: vi.fn(async (input: { players: Array<{ userId: string }> }) => ({
     state: {
       matchId: 'grid-match',
@@ -91,6 +92,7 @@ const state = vi.hoisted(() => ({
   emitSessionState: vi.fn(),
   withUserSessionLocks: vi.fn(),
   matchmakingLockAvailable: true,
+  matchmakingLockHeld: false,
 }));
 
 vi.mock('../../src/core/config.js', () => ({
@@ -99,6 +101,7 @@ vi.mock('../../src/core/config.js', () => ({
     FOOTBALL_GRID_CONTENT_ENABLED: true,
     FOOTBALL_GRID_BOTS_ENABLED: false,
     FOOTBALL_GRID_BOT_FALLBACK_MS: 30_000,
+    FOOTBALL_GRID_MM_SWEEP_MS: 750,
   },
 }));
 vi.mock('../../src/core/logger.js', () => ({
@@ -107,10 +110,15 @@ vi.mock('../../src/core/logger.js', () => ({
 
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => state.redis }));
 vi.mock('../../src/realtime/locks.js', () => ({
-  acquireLock: vi.fn(async () => state.matchmakingLockAvailable
-    ? ({ acquired: true, token: 'mm-lock' })
-    : ({ acquired: false, token: null })),
-  releaseLock: vi.fn(async () => true),
+  acquireLock: vi.fn(async () => {
+    if (!state.matchmakingLockAvailable) return { acquired: false, token: null };
+    state.matchmakingLockHeld = true;
+    return { acquired: true, token: 'mm-lock' };
+  }),
+  releaseLock: vi.fn(async () => {
+    state.matchmakingLockHeld = false;
+    return true;
+  }),
   startLockHeartbeat: vi.fn(() => ({ stop: vi.fn() })),
 }));
 vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
@@ -118,12 +126,13 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
   cancelRealtimeTimer: vi.fn(),
 }));
 vi.mock('../../src/modules/football-grid/index.js', () => ({
-  FOOTBALL_GRID_HANDOFF_MS: 15_000,
+  FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     getActiveMatchIdForUser: vi.fn(async () => null),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>
       new Map(opponentIds.map((opponentId) => [opponentId, 0]))),
     createPairing: (...args: unknown[]) => state.createPairing(...args),
+    heartbeatPairing: (...args: unknown[]) => state.heartbeatPairing(...args),
     listStaleClaimedPairings: vi.fn(async () => state.stalePairings),
     markPairingFailed: (...args: unknown[]) => state.markPairingFailed(...args),
   },
@@ -197,12 +206,16 @@ const io = {
 
 describe('footballGridMatchmakingService session fencing', () => {
   beforeEach(() => {
+    footballGridMatchmakingService.stopSweep();
     vi.clearAllMocks();
     state.redis = new FakeRedis();
     state.lobbyConflictUserId = null;
     state.activeSessionUserId = null;
     state.stalePairings = [];
     state.matchmakingLockAvailable = true;
+    state.matchmakingLockHeld = false;
+    state.heartbeatPairing.mockResolvedValue(true);
+    state.markPairingFailed.mockResolvedValue(true);
     state.createMatch.mockImplementation(async (input: { players: Array<{ userId: string }> }) => ({
       state: {
         matchId: 'grid-1',
@@ -226,6 +239,7 @@ describe('footballGridMatchmakingService session fencing', () => {
       { waitMs: 1_200 },
     );
     expect(state.createMatch).toHaveBeenCalledOnce();
+    expect(state.heartbeatPairing).toHaveBeenCalledOnce();
     expect(state.emitMatchFound).toHaveBeenCalledOnce();
     expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toEqual([]);
   });
@@ -286,6 +300,73 @@ describe('footballGridMatchmakingService session fencing', () => {
     expect(state.createMatch).toHaveBeenCalledTimes(2);
     expect(state.markPairingFailed).not.toHaveBeenCalled();
     expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toEqual([]);
+  });
+
+  it('runs socket delivery only after releasing the global matchmaking lock', async () => {
+    state.emitMatchFound.mockImplementation(async () => {
+      expect(state.matchmakingLockHeld).toBe(false);
+    });
+
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale: 'en' });
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en' });
+
+    expect(state.emitMatchFound).toHaveBeenCalledOnce();
+  });
+
+  it('delivers the first committed batch before creating the next batch', async () => {
+    state.matchmakingLockAvailable = false;
+    for (let index = 0; index < 24; index += 1) {
+      await footballGridMatchmakingService.handleSearchStart(io, socket(`queued-${index}`), { locale: 'en' });
+    }
+    let createsAtFirstDelivery: number | null = null;
+    state.emitMatchFound.mockImplementation(async () => {
+      createsAtFirstDelivery ??= state.createMatch.mock.calls.length;
+    });
+    state.matchmakingLockAvailable = true;
+
+    await footballGridMatchmakingService.handleSearchStart(io, socket('queued-24'), { locale: 'en' });
+
+    expect(createsAtFirstDelivery).toBe(12);
+    expect(state.createMatch).toHaveBeenCalledTimes(12);
+    await footballGridMatchmakingService.handleSearchStart(io, socket('queued-25'), { locale: 'en' });
+    expect(state.createMatch).toHaveBeenCalledTimes(13);
+    expect(state.emitMatchFound).toHaveBeenCalledTimes(13);
+  });
+
+  it('continues draining unrelated pairs when one pair creation fails', async () => {
+    state.matchmakingLockAvailable = false;
+    for (const userId of ['user-a', 'user-b', 'user-c', 'user-d', 'user-e', 'user-f']) {
+      await footballGridMatchmakingService.handleSearchStart(io, socket(userId), { locale: 'en' });
+    }
+    state.createMatch.mockRejectedValueOnce(new Error('transient create failure'));
+    state.matchmakingLockAvailable = true;
+
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-g'), { locale: 'en' });
+
+    expect(state.createMatch).toHaveBeenCalledTimes(3);
+    expect(state.emitMatchFound).toHaveBeenCalledTimes(2);
+    expect(await state.redis!.zRange('football_grid:mm:queue', 0, 20)).toHaveLength(3);
+  });
+
+  it('periodically drains users who queued while another replica held the lock', async () => {
+    vi.useFakeTimers();
+    try {
+      state.matchmakingLockAvailable = false;
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale: 'en' });
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en' });
+      footballGridMatchmakingService.startSweep(io);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.createMatch).not.toHaveBeenCalled();
+
+      state.matchmakingLockAvailable = true;
+      await vi.advanceTimersByTimeAsync(750);
+
+      expect(state.createMatch).toHaveBeenCalledOnce();
+      expect(state.emitMatchFound).toHaveBeenCalledOnce();
+    } finally {
+      footballGridMatchmakingService.stopSweep();
+      vi.useRealTimers();
+    }
   });
 
   it('revalidates both users and refuses pairing when one joined a lobby', async () => {
@@ -359,5 +440,39 @@ describe('footballGridMatchmakingService session fencing', () => {
     );
     expect(await state.redis!.hGet('football_grid:mm:user', 'user-a')).toBe(searchA.searchId);
     expect(await state.redis!.hGet('football_grid:mm:user', 'user-b')).toBeNull();
+  });
+
+  it('keeps pairing fences when recovery cannot acquire the user locks', async () => {
+    const searchA = {
+      searchId: '00000000-0000-4000-8000-000000000201',
+      userId: 'user-a',
+      displayName: 'A',
+      locale: 'en',
+      queuedAt: Date.now() - 95_000,
+      fallbackAt: Date.now() - 90_000,
+    };
+    const searchB = {
+      ...searchA,
+      searchId: '00000000-0000-4000-8000-000000000202',
+      userId: 'user-b',
+      displayName: 'B',
+    };
+    state.stalePairings = [{
+      pairingToken: 'pairing-token',
+      userAId: 'user-a',
+      userBId: 'user-b',
+      opponentType: 'human',
+      searchASnapshot: searchA,
+      searchBSnapshot: searchB,
+    }];
+    await state.redis!.set('session:pairing:user:user-a', 'pairing-token');
+    await state.redis!.set('session:pairing:user:user-b', 'pairing-token');
+    state.withUserSessionLocks.mockResolvedValueOnce(null);
+
+    await footballGridMatchmakingService.reconcileStalePairings(io);
+
+    expect(state.markPairingFailed).not.toHaveBeenCalled();
+    expect(await state.redis!.get('session:pairing:user:user-a')).toBe('pairing-token');
+    expect(await state.redis!.get('session:pairing:user:user-b')).toBe('pairing-token');
   });
 });

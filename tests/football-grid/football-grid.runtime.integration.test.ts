@@ -868,6 +868,11 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       SELECT status FROM football_grid_result_deliveries WHERE match_id = ${match.matchId}
     `;
     expect(awaitingAck.every((row) => row.status === 'awaiting_ack')).toBe(true);
+    const ackLease = await db<Array<{ minimum_seconds: number }>>`
+      SELECT min(extract(epoch FROM (next_attempt_at - clock_timestamp())))::float8 AS minimum_seconds
+        FROM football_grid_result_deliveries WHERE match_id = ${match.matchId}
+    `;
+    expect(ackLease[0].minimum_seconds).toBeGreaterThan(25);
     expect(emitted.filter((entry) => entry.event === 'grid:completed')).toHaveLength(2);
 
     // Model a transport disconnect after the server emit but before either
@@ -1129,6 +1134,55 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     await expect(footballGridService.recoverPendingCommand(inbox)).rejects.toMatchObject({
       details: { gridCode: 'STALE_STATE', duplicate: true },
     });
+  });
+
+  it('atomically acquires the first processing lease during command admission', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const runtime = await createReadyTurn('random');
+    const processingFence = randomUUID();
+    const inbox = await footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId: randomUUID(),
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-admit-and-lease',
+      processingFence,
+    });
+
+    expect(inbox).toMatchObject({
+      status: 'processing',
+      processing_fence: processingFence,
+      retry_count: 1,
+    });
+    await footballGridRepo.cancelCommand({
+      commandInboxId: inbox.id,
+      processingFence,
+      reason: 'integration cleanup',
+      resultCode: 'TEST_CLEANUP',
+    });
+  });
+
+  it('reports a stale command before an unrelated command-in-progress conflict', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const runtime = await createReadyTurn('random');
+    await footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId: randomUUID(),
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-command-in-progress',
+    });
+
+    await expect(footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId: randomUUID(),
+      expectedStateVersion: runtime.stateVersion - 1,
+      commandType: 'pass',
+      payloadHash: 'integration-stale-command',
+    })).rejects.toThrow('STALE_STATE');
   });
 
   it('holds risk-flagged random coins without crediting the wallet until an audited release', async (context) => {
@@ -1652,6 +1706,11 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       expectedStateVersion: handoff.stateVersion,
     });
     expect(lateHandoff).toMatchObject({ phase: 'terminal', completionReason: 'loading_no_show' });
+    await expect(footballGridService.acknowledgeHandoff({
+      matchId: handoff.matchId,
+      userId: handoffB,
+      expectedStateVersion: handoff.stateVersion,
+    })).resolves.toMatchObject({ phase: 'terminal', completionReason: 'loading_no_show' });
 
     const [readyA, readyB] = await createUsers();
     const readyPairing = randomUUID();
@@ -1684,6 +1743,12 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       expectedStateVersion: loading.stateVersion,
     });
     expect(lateReady).toMatchObject({ phase: 'terminal', completionReason: 'loading_no_show' });
+    await expect(footballGridService.markReady({
+      matchId: loading.matchId,
+      userId: readyB,
+      commandId: randomUUID(),
+      expectedStateVersion: loading.stateVersion,
+    })).resolves.toMatchObject({ phase: 'terminal', completionReason: 'loading_no_show' });
 
     const reconnect = await createReadyTurn('random');
     const paused = await footballGridService.markDisconnected(reconnect.matchId, reconnect.playerA, 0);
@@ -1935,5 +2000,40 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       ) AS found
     `;
     expect(rolledBack[0].found).toBe(false);
+  });
+
+  it('rolls back match creation when recovery has already failed the pairing claim', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const players = await createUsers();
+    const pairingToken = randomUUID();
+    await footballGridRepo.createPairing({
+      pairingToken,
+      searchAId: randomUUID(),
+      searchBId: randomUUID(),
+      userAId: players[0],
+      userBId: players[1],
+      opponentType: 'human',
+    });
+    expect(await footballGridRepo.heartbeatPairing(pairingToken)).toBe(true);
+    await footballGridRepo.markPairingFailed(pairingToken, 'forced_recovery_race');
+    expect(await footballGridRepo.heartbeatPairing(pairingToken)).toBe(false);
+
+    await expect(footballGridService.createMatch({
+      pairingToken,
+      origin: 'random',
+      players: [{ userId: players[0], seat: 1 }, { userId: players[1], seat: 2 }],
+      openerUserId: players[0],
+    })).rejects.toThrow('GRID_PAIRING_CLAIM_LOST');
+
+    const [result] = await db<Array<{ grid_matches: number; base_matches: number }>>`
+      SELECT
+        (SELECT count(*)::int FROM football_grid_matches WHERE pairing_token = ${pairingToken}) AS grid_matches,
+        (SELECT count(*)::int FROM matches m
+          WHERE EXISTS (
+            SELECT 1 FROM football_grid_matches gm
+             WHERE gm.match_id = m.id AND gm.pairing_token = ${pairingToken}
+          )) AS base_matches
+    `;
+    expect(result).toEqual({ grid_matches: 0, base_matches: 0 });
   });
 });

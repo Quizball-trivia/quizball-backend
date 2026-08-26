@@ -462,6 +462,10 @@ export const footballGridRealtimeService = {
       const opponentUser = users.get(opponent.userId);
       const playerSockets = await io.in(`user:${player.userId}`).fetchSockets();
       const observationSocket = playerSockets[0];
+      let rewardRiskObservation: {
+        deviceHash: string | null;
+        networkHash: string | null;
+      } | null = null;
       if (!player.isBot && observationSocket) {
         const rawDevice = observationSocket.handshake.headers['x-client-instance-id'];
         const deviceId = Array.isArray(rawDevice) ? rawDevice[0] : rawDevice;
@@ -469,13 +473,10 @@ export const footballGridRealtimeService = {
           headers: observationSocket.handshake.headers,
           socket: { remoteAddress: observationSocket.handshake.address },
         } as never);
-        await footballGridRepo.recordRewardRiskObservation({
-          matchId: state.matchId,
-          userId: player.userId,
+        rewardRiskObservation = {
           deviceHash: riskSignalHash('device', typeof deviceId === 'string' ? deviceId : null),
           networkHash: riskSignalHash('network', trustedClientIp ?? null),
-          source: 'socket_handoff',
-        });
+        };
       }
       for (const playerSocket of playerSockets) {
         await transitionFootballGridSocket(io, {
@@ -499,6 +500,16 @@ export const footballGridRealtimeService = {
         },
         serverNow: new Date().toISOString(),
       });
+      if (rewardRiskObservation) {
+        void footballGridRepo.recordRewardRiskObservation({
+          matchId: state.matchId,
+          userId: player.userId,
+          ...rewardRiskObservation,
+          source: 'socket_handoff',
+        }).catch((error) => {
+          logger.warn({ error, matchId: state.matchId, userId: player.userId }, 'Football Grid risk observation deferred');
+        });
+      }
     }
     await scheduleStateDeadline(state);
     return true;
@@ -724,12 +735,16 @@ export const footballGridRealtimeService = {
   },
 
   async handlePresenceHeartbeat(socket: QuizballSocket, matchId: string): Promise<void> {
-    const previous = await footballGridService.getState(matchId, socket.data.user.id);
     if (socket.data.gridMatchId !== matchId) {
       throw new ConflictError('Socket is not bound to this Football Grid match', {
         gridCode: 'GRID_MATCH_BINDING_MISMATCH',
       });
     }
+    // Steady-state heartbeats only renew the existing fenced Redis lease. The
+    // authoritative DB path is needed solely when that lease is missing (for
+    // example after Redis recovery or an actual reconnect).
+    if (await footballGridPresenceService.refresh(matchId, socket.data.user.id, socket.id)) return;
+    const previous = await footballGridService.getState(matchId, socket.data.user.id);
     await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
     const state = await footballGridService.markReconnected(matchId, socket.data.user.id);
     await scheduleStateDeadline(state);

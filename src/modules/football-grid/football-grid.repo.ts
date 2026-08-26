@@ -31,7 +31,7 @@ interface GridMatchRow {
   winner_user_id: string | null;
   turn_number: number;
   state_version: number;
-  last_event_sequence: number;
+  last_event_sequence: string | number;
   pending_command_id: string | null;
   wrong_answer_visibility: boolean;
   phase_deadline_at: string | null;
@@ -334,12 +334,20 @@ async function insertEvent(
   );
 }
 
+function parseEventSequence(value: string | number): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error('Football Grid event sequence is outside the safe integer range');
+  }
+  return sequence;
+}
+
 async function pauseMatchForFailedCommandInTx(
   tx: TransactionSql,
   matchId: string,
   commandInboxId: string,
 ): Promise<void> {
-  const updated = await tx.unsafe<Array<{ state_version: number; last_event_sequence: number }>>(
+  const updated = await tx.unsafe<Array<{ state_version: number; last_event_sequence: string | number }>>(
     `UPDATE football_grid_matches
         SET status = 'paused', phase = 'service_interruption',
             turn_remaining_ms = CASE
@@ -367,7 +375,7 @@ async function pauseMatchForFailedCommandInTx(
   }
   await insertEvent(tx, {
     matchId,
-    eventSequence: row.last_event_sequence,
+    eventSequence: parseEventSequence(row.last_event_sequence),
     stateVersion: row.state_version,
     eventType: 'service_interruption',
     payload: { commandInboxId },
@@ -1595,10 +1603,11 @@ export const footballGridRepo = {
       };
     },
   ): Promise<void> {
-    const sequence = (await tx.unsafe<Array<{ last_event_sequence: number }>>(
+    const persistedSequence = (await tx.unsafe<Array<{ last_event_sequence: string | number }>>(
       `SELECT last_event_sequence FROM football_grid_matches WHERE match_id = $1 FOR UPDATE`,
       [previous.matchId],
-    ))[0].last_event_sequence + 1;
+    ))[0].last_event_sequence;
+    const sequence = parseEventSequence(persistedSequence) + 1;
     const updated = await tx.unsafe<Array<{ match_id: string }>>(
       `UPDATE football_grid_matches
           SET status = $2, phase = $3, opener_user_id = $4,

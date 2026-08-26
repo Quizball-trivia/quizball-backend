@@ -1031,6 +1031,39 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rows[0].fresh).toBe(true);
   });
 
+  it('increments bigint event sequences numerically through a long match', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const runtime = await createReadyTurn('random');
+    let state = await footballGridService.getState(runtime.matchId, runtime.playerA);
+
+    for (let turn = 0; turn < 20; turn += 1) {
+      const result = await footballGridService.pass({
+        matchId: runtime.matchId,
+        userId: state.currentPlayerUserId!,
+        commandId: randomUUID(),
+        expectedStateVersion: state.stateVersion,
+      });
+      state = result.state;
+    }
+
+    const [sequence] = await db<Array<{
+      last_event_sequence: string;
+      event_count: number;
+      max_event_sequence: string;
+    }>>`
+      SELECT gm.last_event_sequence::text,
+             count(e.event_sequence)::int AS event_count,
+             max(e.event_sequence)::text AS max_event_sequence
+        FROM football_grid_matches gm
+        JOIN football_grid_events e ON e.match_id = gm.match_id
+       WHERE gm.match_id = ${runtime.matchId}
+       GROUP BY gm.match_id, gm.last_event_sequence
+    `;
+    expect(Number(sequence.last_event_sequence)).toBe(sequence.event_count);
+    expect(sequence.max_event_sequence).toBe(sequence.last_event_sequence);
+    expect(Number(sequence.last_event_sequence)).toBeLessThan(100);
+  });
+
   it('enforces command retry backoff and replays a persisted terminal rejection', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');

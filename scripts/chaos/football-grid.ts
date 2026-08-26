@@ -98,6 +98,8 @@ export interface GridFleetSummary {
   socketErrors: number;
   connectionErrors: number;
   disconnectsBeforeCompletion: number;
+  recoveredDisconnects: number;
+  unrecoverableDisconnects: number;
   failureCount: number;
   rewardMismatches: number;
   rewardMismatchReasons: Record<string, number>;
@@ -131,6 +133,8 @@ interface MutableMetrics {
   socketErrors: number;
   connectionErrors: number;
   disconnectsBeforeCompletion: number;
+  recoveredDisconnects: number;
+  unrecoverableDisconnects: number;
   rewardMismatches: number;
   rewardMismatchReasons: Map<string, number>;
   completionReasons: Map<string, number>;
@@ -260,7 +264,8 @@ function emptyMetrics(): MutableMetrics {
     matchUsers: new Map(), matchHumanOnly: new Map(), startedMatches: new Set(),
     completedMatches: new Set(), completedClients: new Set(), completionAcksSent: 0,
     commandResults: 0, wrongAnswers: 0, socketErrors: 0, connectionErrors: 0,
-    disconnectsBeforeCompletion: 0, rewardMismatches: 0,
+    disconnectsBeforeCompletion: 0, recoveredDisconnects: 0,
+    unrecoverableDisconnects: 0, rewardMismatches: 0,
     rewardMismatchReasons: new Map(),
     completionReasons: new Map(), errors: new Map(), searchToFoundMs: [],
     commandAckMs: [], matchDurationMs: [],
@@ -308,6 +313,17 @@ export function footballGridRewardMismatch(input: {
   return `${reason}:expected_${input.expected.xp ?? 'off'}_${input.expected.tp ?? 'off'}_${input.expected.coins ?? 'off'}_got_${rewards.xp}_${rewards.tp}_${rewards.coins}`;
 }
 
+/**
+ * Socket.IO automatically reconnects after network/edge transport failures.
+ * A server-initiated namespace disconnect is terminal until the application
+ * explicitly reconnects, so the load client must not silently forgive it.
+ */
+export function isRecoverableGridDisconnect(reason: string, socketActive: boolean): boolean {
+  return socketActive
+    && reason !== 'io server disconnect'
+    && reason !== 'io client disconnect';
+}
+
 async function runClient(
   user: ChaosUser,
   clientIndex: number,
@@ -333,6 +349,8 @@ async function runClient(
   let completionReceived = false;
   let latestStateVersion = -1;
   let lastConnectError: string | null = null;
+  let hasConnected = false;
+  let awaitingReconnect = false;
   let heartbeat: NodeJS.Timeout | null = null;
   const actedStateVersions = new Set<number>();
   const readyStateVersions = new Set<number>();
@@ -355,6 +373,7 @@ async function runClient(
         finish('failed', `connect_error:${lastConnectError}`);
         return;
       }
+      if (awaitingReconnect) metrics.unrecoverableDisconnects += 1;
       finish('failed', 'client_timeout');
     }, 180_000);
     const complete = () => { clearTimeout(failTimer); finish('completed'); };
@@ -408,6 +427,28 @@ async function runClient(
     socket.on('connect', () => {
       lastConnectError = null;
       metrics.connectedClients.add(user.userId);
+      if (hasConnected) {
+        if (awaitingReconnect) {
+          awaitingReconnect = false;
+          metrics.recoveredDisconnects += 1;
+        }
+        // Match the production hook: versioned handoff/ready commands may have
+        // been lost with the old transport, so let the authoritative resync
+        // snapshot trigger them again. Durable command handling is idempotent.
+        handoffStateVersions.clear();
+        readyStateVersions.clear();
+        actedStateVersions.delete(latestStateVersion);
+        if (currentMatchId) {
+          socket.emit('grid:resync', { matchId: currentMatchId });
+        } else if (phase === 'searching') {
+          // The disconnect handler removes the stale queue membership. A fresh
+          // search either requeues the user or redelivers a match committed
+          // while the transport was down.
+          socket.emit('grid:search_start', { locale: clientIndex % 2 === 0 ? 'en' : 'ka' });
+        }
+        return;
+      }
+      hasConnected = true;
       phase = 'searching';
       searchStartedAt = Date.now();
       metrics.searchesStarted += 1;
@@ -422,10 +463,26 @@ async function runClient(
     socket.on('disconnect', (reason: string) => {
       if (phase !== 'completed' && phase !== 'failed') {
         metrics.disconnectsBeforeCompletion += 1;
+        // Once the result is rendered and acknowledged, the scheduled local
+        // cleanup owns completion; a transport close in that 150ms window is
+        // irrelevant. Otherwise preserve the client and exercise the same
+        // reconnect/resync path as the real UI.
+        if (completionReceived) return;
+        if (isRecoverableGridDisconnect(reason, socket.active)) {
+          awaitingReconnect = true;
+          return;
+        }
+        metrics.unrecoverableDisconnects += 1;
         fail(`disconnect:${reason}`);
       }
     });
-    socket.on('session:blocked', () => fail('session_blocked'));
+    socket.on('session:blocked', (payload: { reason?: string }) => {
+      // Post-connect hydration can briefly race the explicit Grid resync. The
+      // production client keeps its match screen and the server retries the
+      // hydration, so this transition signal is not terminal for the harness.
+      if (payload.reason === 'TRANSITION_IN_PROGRESS' && currentMatchId) return;
+      fail(`session_blocked:${payload.reason ?? 'unknown'}`);
+    });
     socket.on('grid:error', (error: { code?: string; message?: string; meta?: Record<string, unknown> }) => {
       // The completion ACK deliberately unbinds the socket. A heartbeat that
       // was already in flight may observe that unbind; it is not a gameplay
@@ -532,6 +589,8 @@ function summarize(metrics: MutableMetrics, clients: number): GridFleetSummary {
     socketErrors: metrics.socketErrors,
     connectionErrors: metrics.connectionErrors,
     disconnectsBeforeCompletion: metrics.disconnectsBeforeCompletion,
+    recoveredDisconnects: metrics.recoveredDisconnects,
+    unrecoverableDisconnects: metrics.unrecoverableDisconnects,
     failureCount,
     rewardMismatches: metrics.rewardMismatches,
     rewardMismatchReasons: Object.fromEntries(metrics.rewardMismatchReasons),
@@ -579,8 +638,8 @@ export function evaluateFootballGridLoad(
   const unexpectedSocketErrors = Math.max(0, fleet.socketErrors - staleStateErrors);
   if (staleStateErrors >= 5) failures.push(`STALE_STATE errors ${staleStateErrors} >= 5`);
   if (clientTimeouts > allowedClientTimeouts) failures.push(`client timeouts ${clientTimeouts} > ${allowedClientTimeouts}`);
-  if (unexpectedSocketErrors > 0 || fleet.connectionErrors > 0 || fleet.disconnectsBeforeCompletion > 0 || unexpectedClientFailures > 0) {
-    failures.push(`transport failures socket=${fleet.socketErrors} connect=${fleet.connectionErrors} disconnect=${fleet.disconnectsBeforeCompletion} clients=${fleet.failureCount}`);
+  if (unexpectedSocketErrors > 0 || fleet.connectionErrors > 0 || fleet.unrecoverableDisconnects > 0 || unexpectedClientFailures > 0) {
+    failures.push(`transport failures socket=${fleet.socketErrors} connect=${fleet.connectionErrors} transient=${fleet.disconnectsBeforeCompletion} recovered=${fleet.recoveredDisconnects} unrecoverable=${fleet.unrecoverableDisconnects} clients=${fleet.failureCount}`);
   }
   if (fleet.rewardMismatches > 0) failures.push(`reward mismatches ${fleet.rewardMismatches}`);
   if (fleet.percentiles.searchToFoundP50Ms >= 5_000) failures.push(`search p50 ${fleet.percentiles.searchToFoundP50Ms}ms >= 5000ms`);
@@ -668,7 +727,7 @@ async function main(): Promise<void> {
   const appCollector = startAppStatsCollector(target.apiBase, target.bypassToken, 1_000);
   const metrics = emptyMetrics();
   const progress = setInterval(() => {
-    console.log(`[grid] connected=${metrics.connectedClients.size} matched=${metrics.matchedClients.size} matches=${metrics.matchUsers.size} started=${metrics.startedMatches.size} completed=${metrics.completedMatches.size} clients-done=${metrics.completedClients.size} errors=${[...metrics.errors.values()].reduce((sum, count) => sum + count, 0)}`);
+    console.log(`[grid] connected=${metrics.connectedClients.size} matched=${metrics.matchedClients.size} matches=${metrics.matchUsers.size} started=${metrics.startedMatches.size} completed=${metrics.completedMatches.size} clients-done=${metrics.completedClients.size} reconnects=${metrics.recoveredDisconnects}/${metrics.disconnectsBeforeCompletion} errors=${[...metrics.errors.values()].reduce((sum, count) => sum + count, 0)}`);
   }, 10_000);
   await Promise.all(users.map((user, index) => runClient(user, index, args, target, metrics)));
   clearInterval(progress);
@@ -681,7 +740,7 @@ async function main(): Promise<void> {
   const fleet = summarize(metrics, users.length);
   const failures = evaluateFootballGridLoad(fleet, peak, application, args.target === 'staging' ? 2 : 1);
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     campaign: args.campaign,
     target: args.target,

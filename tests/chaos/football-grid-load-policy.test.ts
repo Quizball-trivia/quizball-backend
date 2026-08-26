@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateFootballGridLoad,
   footballGridRewardMismatch,
+  isRecoverableGridDisconnect,
   type GridFleetSummary,
 } from '../../scripts/chaos/football-grid.js';
 import type { AppStatsSummary } from '../../scripts/chaos/app-stats.js';
@@ -28,6 +29,8 @@ function passingFleet(): GridFleetSummary {
     socketErrors: 0,
     connectionErrors: 0,
     disconnectsBeforeCompletion: 0,
+    recoveredDisconnects: 0,
+    unrecoverableDisconnects: 0,
     failureCount: 0,
     rewardMismatches: 0,
     rewardMismatchReasons: {},
@@ -101,6 +104,24 @@ describe('Football Tic Tac Toe load-gate policy', () => {
     fleet.failureCount = 5;
     fleet.errors = { 'grid_error:STALE_STATE': 5 };
     expect(evaluateFootballGridLoad(fleet, null, noAppTelemetry, 0)).toContain('STALE_STATE errors 5 >= 5');
+  });
+
+  it('allows recovered transport churn but rejects an unrecoverable disconnect', () => {
+    const fleet = passingFleet();
+    fleet.disconnectsBeforeCompletion = 212;
+    fleet.recoveredDisconnects = 212;
+    expect(evaluateFootballGridLoad(fleet, null, noAppTelemetry, 0)).toEqual([]);
+
+    fleet.unrecoverableDisconnects = 1;
+    expect(evaluateFootballGridLoad(fleet, null, noAppTelemetry, 0))
+      .toContain('transport failures socket=0 connect=0 transient=212 recovered=212 unrecoverable=1 clients=0');
+  });
+
+  it('only retries disconnect reasons Socket.IO marks as recoverable', () => {
+    expect(isRecoverableGridDisconnect('transport close', true)).toBe(true);
+    expect(isRecoverableGridDisconnect('ping timeout', true)).toBe(true);
+    expect(isRecoverableGridDisconnect('io server disconnect', false)).toBe(false);
+    expect(isRecoverableGridDisconnect('io client disconnect', false)).toBe(false);
   });
 
   it('rejects latency and database pressure beyond the release thresholds', () => {

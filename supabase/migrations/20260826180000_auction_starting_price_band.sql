@@ -62,9 +62,14 @@ SELECT
   COALESCE(app.auction_price_eur, pcgc.auction_price_eur, fp.current_value_eur) AS auction_price_eur,
   COALESCE(
     hist.value_eur,
-    -- Last resort keeps the €500k floor for readability, but the floor may
-    -- never itself breach the 90% cap: for sub-€555k players it produced the
-    -- only openings above value left in the pool (2/1311 on staging).
+    -- Last resort: half of current value rounded to €1M, floored at €500k —
+    -- but the floor may never itself breach the 90% cap, so below ~€555k of
+    -- current value the cap wins and the effective price is 0.9×value (the
+    -- floor produced the only above-value openings left in the pool, 2/1311
+    -- on staging). Sub-€20M openings are expected and correct for declined
+    -- veterans whose CURRENT value is tiny: MIN_PLAYER_COST-based reserve and
+    -- elimination math stays conservative-but-safe, as it was under the old
+    -- €10M hash buckets.
     LEAST(
       GREATEST(
         500000::bigint,

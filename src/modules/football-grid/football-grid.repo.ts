@@ -342,6 +342,14 @@ function parseEventSequence(value: string | number): number {
   return sequence;
 }
 
+function nextEventSequence(value: string | number): number {
+  const sequence = parseEventSequence(value) + 1;
+  if (!Number.isSafeInteger(sequence)) {
+    throw new Error('Football Grid event sequence cannot be incremented safely');
+  }
+  return sequence;
+}
+
 async function pauseMatchForFailedCommandInTx(
   tx: TransactionSql,
   matchId: string,
@@ -1607,7 +1615,7 @@ export const footballGridRepo = {
       `SELECT last_event_sequence FROM football_grid_matches WHERE match_id = $1 FOR UPDATE`,
       [previous.matchId],
     ))[0].last_event_sequence;
-    const sequence = parseEventSequence(persistedSequence) + 1;
+    const sequence = nextEventSequence(persistedSequence);
     const updated = await tx.unsafe<Array<{ match_id: string }>>(
       `UPDATE football_grid_matches
           SET status = $2, phase = $3, opener_user_id = $4,

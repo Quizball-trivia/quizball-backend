@@ -44,24 +44,53 @@ export interface FootballGridCommandResult {
 type FootballGridBoardAnswerContent = Awaited<ReturnType<typeof footballGridRepo.getAliasesForBoard>>;
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
-const boardAnswerCache = new Map<string, { value: FootballGridBoardAnswerContent; expiresAt: number }>();
+type BoardAnswerCacheEntry = {
+  generation: number;
+  value: FootballGridBoardAnswerContent | null;
+  expiresAt: number;
+};
+const boardAnswerCache = new Map<string, BoardAnswerCacheEntry>();
 
-async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
-  const now = Date.now();
-  const cached = boardAnswerCache.get(matchId);
-  if (cached && cached.expiresAt > now) {
-    boardAnswerCache.delete(matchId);
-    boardAnswerCache.set(matchId, cached);
-    return cached.value;
-  }
-  if (cached) boardAnswerCache.delete(matchId);
-  const value = await footballGridRepo.getAliasesForBoard(matchId);
-  boardAnswerCache.set(matchId, { value, expiresAt: now + BOARD_ANSWER_CACHE_TTL_MS });
+function trimBoardAnswerCache(): void {
   while (boardAnswerCache.size > BOARD_ANSWER_CACHE_MAX_ENTRIES) {
     const oldestKey = boardAnswerCache.keys().next().value as string | undefined;
     if (!oldestKey) break;
     boardAnswerCache.delete(oldestKey);
   }
+}
+
+function invalidateBoardAnswerContent(matchId: string): void {
+  const current = boardAnswerCache.get(matchId);
+  boardAnswerCache.delete(matchId);
+  boardAnswerCache.set(matchId, {
+    generation: (current?.generation ?? 0) + 1,
+    value: null,
+    expiresAt: Date.now() + BOARD_ANSWER_CACHE_TTL_MS,
+  });
+  trimBoardAnswerCache();
+}
+
+async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
+  const now = Date.now();
+  const cached = boardAnswerCache.get(matchId);
+  if (cached?.value && cached.expiresAt > now) {
+    boardAnswerCache.delete(matchId);
+    boardAnswerCache.set(matchId, cached);
+    return cached.value;
+  }
+  const generation = cached?.generation ?? 0;
+  if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
+  const value = await footballGridRepo.getAliasesForBoard(matchId);
+  const state = await currentOrThrow(matchId);
+  const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
+  if (state.phase === 'terminal' || latestGeneration !== generation) return value;
+  boardAnswerCache.delete(matchId);
+  boardAnswerCache.set(matchId, {
+    generation,
+    value,
+    expiresAt: Date.now() + BOARD_ANSWER_CACHE_TTL_MS,
+  });
+  trimBoardAnswerCache();
   return value;
 }
 
@@ -218,7 +247,7 @@ async function processInbox(
     });
     const attempt = await footballGridRepo.getAttemptForInbox(inbox.id);
     const persistedState = await currentOrThrow(inbox.match_id);
-    if (persistedState.phase === 'terminal') boardAnswerCache.delete(inbox.match_id);
+    if (persistedState.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
     appMetrics.footballGridCommands.add(1, { outcome: result.outcome, command_type: leased.command_type });
     return { ...result, state: persistedState, attemptId: attempt?.attemptId ?? null };
   } catch (error) {
@@ -291,7 +320,7 @@ export const footballGridService = {
     expectedStateVersion: number;
   }): Promise<FootballGridState> {
     try {
-      return await footballGridRepo.runInTransaction(async (tx) => {
+      const state = await footballGridRepo.runInTransaction(async (tx) => {
         const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
         if (!previous) throw new NotFoundError('Football Grid match not found');
         const existing = previous.players.find((player) => player.userId === input.userId);
@@ -318,6 +347,8 @@ export const footballGridService = {
         });
         return next;
       });
+      if (state.phase === 'terminal') invalidateBoardAnswerContent(input.matchId);
+      return state;
     } catch (error) {
       throw toDomainError(error);
     }
@@ -446,7 +477,7 @@ export const footballGridService = {
     deferred: boolean;
     turnResolution: { actorUserId: string; outcome: 'timeout' } | null;
   }> {
-    return footballGridRepo.runInTransaction(async (tx) => {
+    const result = await footballGridRepo.runInTransaction(async (tx) => {
       const previous = await footballGridRepo.loadStateForUpdate(tx, matchId);
       if (!previous) throw new NotFoundError('Football Grid match not found');
       if (previous.phase === 'terminal' || previous.stateVersion !== expectedStateVersion) {
@@ -510,6 +541,8 @@ export const footballGridService = {
       await footballGridRepo.persistStateInTx(tx, previous, next, { eventType });
       return { state: next, deferred: false, turnResolution };
     });
+    if (result.state.phase === 'terminal') invalidateBoardAnswerContent(matchId);
+    return result;
   },
 
   async reconcileDisconnected(matchId: string, userId: string, expectedPresenceGeneration?: number): Promise<{
@@ -607,7 +640,7 @@ export const footballGridService = {
   },
 
   async cancelAdministratively(matchId: string): Promise<FootballGridState> {
-    return footballGridRepo.runInTransaction(async (tx) => {
+    const state = await footballGridRepo.runInTransaction(async (tx) => {
       const previous = await footballGridRepo.loadStateForUpdate(tx, matchId);
       if (!previous) throw new NotFoundError('Football Grid match not found');
       if (previous.phase === 'terminal') return previous;
@@ -615,6 +648,8 @@ export const footballGridService = {
       await footballGridRepo.persistStateInTx(tx, previous, next, { eventType: 'administrative_cancel' });
       return next;
     });
+    if (state.phase === 'terminal') invalidateBoardAnswerContent(matchId);
+    return state;
   },
 
   /**

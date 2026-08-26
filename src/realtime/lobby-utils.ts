@@ -96,13 +96,14 @@ export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode): num
   return playableMembersForGameMode(gameMode);
 }
 
-export function orderLobbyMembersByJoinTime<T extends { joined_at: string | Date }>(
+export function orderLobbyMembersByJoinTime<T extends { joined_at: string | Date; user_id: string }>(
   members: readonly T[],
 ): T[] {
   const timestamp = (value: string | Date) => value instanceof Date ? value.getTime() : Date.parse(value);
-  return [...members].sort(
-    (left, right) => timestamp(left.joined_at) - timestamp(right.joined_at),
-  );
+  return [...members].sort((left, right) => {
+    const joinedAtOrder = timestamp(left.joined_at) - timestamp(right.joined_at);
+    return joinedAtOrder || left.user_id.localeCompare(right.user_id);
+  });
 }
 
 async function syncFriendlyLobbyModeForMemberCountInternal(

@@ -77,12 +77,23 @@ describe('lobby-utils', () => {
   });
 
   it('orders lobby members when Postgres returns joined_at as Date objects', () => {
-    const later = { userId: 'later', joined_at: new Date('2026-08-26T12:00:01.000Z') };
-    const earlier = { userId: 'earlier', joined_at: new Date('2026-08-26T12:00:00.000Z') };
+    const later = { user_id: 'later', joined_at: new Date('2026-08-26T12:00:01.000Z') };
+    const earlier = { user_id: 'earlier', joined_at: new Date('2026-08-26T12:00:00.000Z') };
 
-    expect(orderLobbyMembersByJoinTime([later, earlier]).map((member) => member.userId)).toEqual([
+    expect(orderLobbyMembersByJoinTime([later, earlier]).map((member) => member.user_id)).toEqual([
       'earlier',
       'later',
+    ]);
+  });
+
+  it('orders equal join timestamps by user ID for stable seat assignment', () => {
+    const joinedAt = new Date('2026-08-26T12:00:00.000Z');
+    const second = { user_id: 'user-b', joined_at: joinedAt };
+    const first = { user_id: 'user-a', joined_at: joinedAt };
+
+    expect(orderLobbyMembersByJoinTime([second, first]).map((member) => member.user_id)).toEqual([
+      'user-a',
+      'user-b',
     ]);
   });
 

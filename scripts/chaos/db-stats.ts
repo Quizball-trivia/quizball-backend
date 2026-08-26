@@ -17,6 +17,7 @@ export interface ActivitySnapshot {
   active: number;
   idle: number;
   idleInTxn: number;
+  longestIdleInTxnSec?: number;
   waitingOnLock: number;
   longestLockWaitSec: number;
   longestActiveSec: number;
@@ -82,6 +83,7 @@ export async function snapshotActivity(
       active: number;
       idle: number;
       idle_in_txn: number;
+      longest_idle_in_txn_sec: number;
       waiting_on_lock: number;
       longest_lock_wait_sec: number;
       longest_active_sec: number;
@@ -99,6 +101,9 @@ export async function snapshotActivity(
       count(*) FILTER (WHERE state = 'active')::int AS active,
       count(*) FILTER (WHERE state = 'idle')::int AS idle,
       count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_txn,
+      COALESCE(round(max(extract(epoch FROM (now() - xact_start)))
+        FILTER (WHERE state = 'idle in transaction')::numeric, 3), 0)::float8
+        AS longest_idle_in_txn_sec,
       count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock,
       COALESCE(round(max(extract(epoch FROM (now() - query_start)))
         FILTER (WHERE wait_event_type = 'Lock'
@@ -119,6 +124,7 @@ export async function snapshotActivity(
     active: r.active,
     idle: r.idle,
     idleInTxn: r.idle_in_txn,
+    longestIdleInTxnSec: r.longest_idle_in_txn_sec,
     waitingOnLock: r.waiting_on_lock,
     longestLockWaitSec: r.longest_lock_wait_sec,
     longestActiveSec: r.longest_active_sec,

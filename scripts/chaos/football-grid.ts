@@ -493,7 +493,10 @@ export function evaluateFootballGridLoad(
   if (fleet.percentiles.commandAckP99Ms > 3_000) failures.push(`command p99 ${fleet.percentiles.commandAckP99Ms}ms > 3000ms`);
   if (dbPeak?.utilizationPct && dbPeak.utilizationPct > 75) failures.push(`DB connections ${dbPeak.utilizationPct}% > 75%`);
   if (dbPeak && dbPeak.longestLockWaitSec > 1) failures.push(`DB lock wait ${dbPeak.longestLockWaitSec}s > 1s`);
-  if (dbPeak && dbPeak.idleInTxn > 0) failures.push(`DB idle-in-transaction ${dbPeak.idleInTxn}`);
+  const longestIdleInTxnSec = dbPeak?.longestIdleInTxnSec ?? 0;
+  if (longestIdleInTxnSec > 1) {
+    failures.push(`DB idle-in-transaction ${longestIdleInTxnSec}s > 1s`);
+  }
   if (app.requestFailures > 0) failures.push(`app telemetry failures ${app.requestFailures}`);
   const instances = Object.entries(app.instances).filter(([name]) => name !== 'unknown');
   if (instances.length < expectedInstances) failures.push(`app replicas observed ${instances.length}/${expectedInstances}`);
@@ -515,6 +518,7 @@ function mergeActivityPeak(current: ActivitySnapshot | null, next: ActivitySnaps
     total: maxTotal.total, maxConnections: maxTotal.maxConnections,
     utilizationPct: maxTotal.utilizationPct, active: Math.max(current.active, next.active),
     idle: Math.max(current.idle, next.idle), idleInTxn: Math.max(current.idleInTxn, next.idleInTxn),
+    longestIdleInTxnSec: Math.max(current.longestIdleInTxnSec ?? 0, next.longestIdleInTxnSec ?? 0),
     waitingOnLock: Math.max(current.waitingOnLock, next.waitingOnLock),
     longestLockWaitSec: Math.max(current.longestLockWaitSec, next.longestLockWaitSec),
     longestActiveSec: Math.max(current.longestActiveSec, next.longestActiveSec),

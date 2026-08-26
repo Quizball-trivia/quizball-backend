@@ -104,16 +104,18 @@ async function countRecentHumanPair(
   tx: TransactionSql,
   userId: string,
   opponentId: string,
+  currentMatchId: string,
 ): Promise<number> {
   const rows = await tx.unsafe<Array<{ count: string }>>(
     `SELECT count(*)::text AS count
        FROM football_grid_matches gm
       WHERE gm.origin = 'random'
         AND gm.status IN ('completed', 'forfeited')
+        AND gm.match_id <> $3
         AND gm.ended_at >= now() - interval '24 hours'
         AND EXISTS (SELECT 1 FROM football_grid_participants p WHERE p.match_id = gm.match_id AND p.user_id = $1)
         AND EXISTS (SELECT 1 FROM football_grid_participants p WHERE p.match_id = gm.match_id AND p.user_id = $2)`,
-    [userId, opponentId],
+    [userId, opponentId, currentMatchId],
   );
   return Number(rows[0]?.count ?? 0);
 }
@@ -304,7 +306,9 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       }
       const opponent = participants.find((candidate) => candidate.user_id !== human.user_id)!;
       const opponentType = opponent.is_bot ? 'bot' : 'human';
-      const repeatedPairCount = opponent.is_bot ? 0 : await countRecentHumanPair(tx, human.user_id, opponent.user_id);
+      const repeatedPairCount = opponent.is_bot
+        ? 0
+        : await countRecentHumanPair(tx, human.user_id, opponent.user_id, matchId);
       const budget = await rollingBudget(tx, human.user_id);
       const risk = (config.FOOTBALL_GRID_COINS_ENABLED || config.FOOTBALL_GRID_POINTS_ENABLED)
         && row.origin === 'random'
@@ -318,7 +322,7 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
         : await readRiskDecision(tx, matchId, human.user_id);
       const proposedCoins = COIN_REWARDS[result];
       let sharedReason = 'eligible';
-      if (opponentType === 'human' && repeatedPairCount > HUMAN_PAIR_DAILY_LIMIT) sharedReason = 'repeated_pair_cap';
+      if (opponentType === 'human' && repeatedPairCount >= HUMAN_PAIR_DAILY_LIMIT) sharedReason = 'repeated_pair_cap';
       else if (opponentType === 'bot' && budget.botMatches >= BOT_MATCH_DAILY_LIMIT) sharedReason = 'bot_match_cap';
       else if (result === 'loss' && !(human.claim_count >= 1 || (human.answer_turn_count >= 2 && durationMs !== null && durationMs >= 45_000))) sharedReason = 'insufficient_participation';
       else if (risk?.decision === 'ineligible') sharedReason = `risk_ineligible:${risk.reason}`;

@@ -403,6 +403,22 @@ export const footballGridRepo = {
     return loadStateWithExecutor(tx, matchId, true);
   },
 
+  async getMatchPhase(matchId: string): Promise<FootballGridState['phase'] | null> {
+    const rows = await sql<Array<{ phase: FootballGridState['phase'] }>>`
+      SELECT phase FROM football_grid_matches WHERE match_id = ${matchId}
+    `;
+    return rows[0]?.phase ?? null;
+  },
+
+  async getClaimedPlayerIds(matchId: string): Promise<string[]> {
+    const rows = await sql<Array<{ football_player_id: string }>>`
+      SELECT football_player_id
+        FROM football_grid_claims
+       WHERE match_id = ${matchId}
+    `;
+    return rows.map((row) => row.football_player_id);
+  },
+
   async databaseNowMs(tx: TransactionSql): Promise<number> {
     const rows = await tx.unsafe<Array<{ now_ms: string }>>(
       `SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS now_ms`,
@@ -1653,6 +1669,16 @@ export const footballGridRepo = {
       throw new Error('Football Grid state version changed during persistence');
     }
     for (const player of next.players) {
+      const prior = previous.players.find((candidate) => candidate.userId === player.userId);
+      if (
+        prior
+        && prior.handoffAcknowledged === player.handoffAcknowledged
+        && prior.ready === player.ready
+        && prior.noActionTimeouts === player.noActionTimeouts
+        && prior.pauseBudgetRemainingMs === player.pauseBudgetRemainingMs
+      ) {
+        continue;
+      }
       await tx.unsafe(
         `UPDATE football_grid_participants
             SET handoff_ack_at = CASE WHEN $3 THEN COALESCE(handoff_ack_at, now()) ELSE null END,
@@ -2062,7 +2088,7 @@ export const footballGridRepo = {
     resolvedPlayerId?: string | null;
     aliasId?: string | null;
     eventType: string;
-  }): Promise<void> {
+  }): Promise<string> {
     const updated = await input.tx.unsafe<Array<{ id: string }>>(
       `UPDATE football_grid_command_inbox
           SET status = 'completed', completed_at = now(), processing_lease_until = null,
@@ -2080,11 +2106,12 @@ export const footballGridRepo = {
       ],
     );
     if (!updated[0]) throw new Error('COMMAND_LEASE_LOST');
-    await input.tx.unsafe(
+    const attempts = await input.tx.unsafe<Array<{ id: string }>>(
       `INSERT INTO football_grid_attempts (
          inbox_id, match_id, actor_user_id, turn_number, cell_index, locale,
          submitted_text, normalized_text, outcome, resolved_player_id, admitted_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id`,
       [
         input.inbox.id,
         input.inbox.match_id,
@@ -2125,6 +2152,7 @@ export const footballGridRepo = {
           }
         : {}),
     });
+    return attempts[0].id;
   },
 
   async reportMissingAnswer(attemptId: string, reportingUserId: string): Promise<string> {

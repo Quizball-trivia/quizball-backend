@@ -204,7 +204,23 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Rolling-deploy gate: ship code/migration with v1, then flip to 2 only once
+  // every replica understands the immutable v2 policy and private audit schema.
+  FOOTBALL_GRID_BOT_MODEL_VERSION: z.coerce.number().int().min(1).max(2).default(1),
+  // Grid-only bot safety loop. New matches pin the current adjustment; turning
+  // this off pins zero while completed matches continue warming the EMA and
+  // reset any stored nerf toward the safe v2 baseline.
+  FOOTBALL_GRID_BOT_GOVERNOR_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
   FOOTBALL_GRID_COINS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Independent rollout gate for the competitive TP ledger/leaderboard. TP
+  // intentionally remains available when coin payouts are paused or capped.
+  FOOTBALL_GRID_POINTS_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
@@ -465,11 +481,11 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
 
   if (
     result.data.NODE_ENV !== "local"
-    && result.data.FOOTBALL_GRID_COINS_ENABLED
+    && (result.data.FOOTBALL_GRID_COINS_ENABLED || result.data.FOOTBALL_GRID_POINTS_ENABLED)
     && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32
   ) {
     throw new ConfigError(
-      "Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins are enabled.",
+      "Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins or points are enabled.",
       { nodeEnv: result.data.NODE_ENV },
     );
   }

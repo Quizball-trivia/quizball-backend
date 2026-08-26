@@ -19,6 +19,8 @@ router.use(authMiddleware, requireRole('admin'));
 router.get('/matches/:matchId/rewards', validate({ params: footballGridAdminMatchParamsSchema }), footballGridAdminController.inspectRewards);
 router.post('/coin-events/:eventId/release', validate({ params: footballGridAdminCoinParamsSchema, body: footballGridAdminReasonSchema }), footballGridAdminController.releaseHeldCoin);
 router.post('/coin-events/:eventId/reverse', validate({ params: footballGridAdminCoinParamsSchema, body: footballGridAdminReasonSchema }), footballGridAdminController.reverseCoin);
+router.post('/point-events/:eventId/release', validate({ params: footballGridAdminCoinParamsSchema, body: footballGridAdminReasonSchema }), footballGridAdminController.releaseHeldPoints);
+router.post('/point-events/:eventId/reverse', validate({ params: footballGridAdminCoinParamsSchema, body: footballGridAdminReasonSchema }), footballGridAdminController.reversePoints);
 router.get('/missing-answer-reports', validate({ query: footballGridAdminReportsQuerySchema }), footballGridAdminController.listReports);
 router.patch('/missing-answer-reports/:reportId', validate({ params: footballGridAdminReportParamsSchema, body: footballGridAdminReportDecisionSchema }), footballGridAdminController.decideReport);
 router.get('/content/quarantines', validate({ query: footballGridAdminQuarantinesQuerySchema }), footballGridAdminController.listQuarantines);

@@ -2,11 +2,12 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 
-const FOOTBALL_GRID_COIN_DAILY_CAP = 1_500;
+// Must match COIN_DAILY_CAP in football-grid-settlement.service.ts.
+const FOOTBALL_GRID_COIN_DAILY_CAP = 3_500;
 
 export const footballGridAdminService = {
   async inspectRewards(matchId: string): Promise<unknown> {
-    const [match, eligibility, events, audit] = await Promise.all([
+    const [match, eligibility, coinEvents, coinAudit, pointEvents, pointAudit] = await Promise.all([
       sql`SELECT m.id, m.status, m.winner_user_id, gm.origin, gm.completion_reason,
                  gm.reward_schedule_version, o.status AS settlement_status, o.attempt_count, o.last_error
             FROM matches m JOIN football_grid_matches gm ON gm.match_id = m.id
@@ -17,9 +18,13 @@ export const footballGridAdminService = {
       sql`SELECT a.* FROM football_grid_coin_event_audit a
             JOIN football_grid_coin_events e ON e.id = a.coin_event_id
            WHERE e.match_id = ${matchId} ORDER BY a.created_at`,
+      sql`SELECT * FROM football_grid_point_events WHERE match_id = ${matchId} ORDER BY created_at`,
+      sql`SELECT a.* FROM football_grid_point_event_audit a
+            JOIN football_grid_point_events e ON e.id = a.point_event_id
+           WHERE e.match_id = ${matchId} ORDER BY a.created_at`,
     ]);
     if (match.length === 0) throw new NotFoundError('Football Grid match not found');
-    return { match: match[0], eligibility, coinEvents: events, audit };
+    return { match: match[0], eligibility, coinEvents, coinAudit, pointEvents, pointAudit };
   },
 
   async releaseHeldCoin(eventId: string, actorUserId: string, reason: string): Promise<void> {
@@ -130,6 +135,119 @@ export const footballGridAdminService = {
           [event.match_id, event.user_id],
         );
       }
+    });
+  },
+
+  async releaseHeldPoints(eventId: string, actorUserId: string, reason: string): Promise<void> {
+    await sql.begin(async (tx) => {
+      const rows = await tx.unsafe<Array<{
+        match_id: string;
+        user_id: string;
+        amount: number;
+        status: string;
+        has_reversal: boolean;
+      }>>(
+        `SELECT e.match_id, e.user_id, e.amount, e.status,
+                EXISTS (SELECT 1 FROM football_grid_point_events r WHERE r.reversal_of = e.id) AS has_reversal
+           FROM football_grid_point_events e WHERE e.id = $1 FOR UPDATE`,
+        [eventId],
+      );
+      const event = rows[0];
+      if (!event) throw new NotFoundError('Football Grid point event not found');
+      if (event.status !== 'held') throw new ConflictError('Only held points can be released');
+      if (event.has_reversal) throw new ConflictError('These held points were already denied');
+      await tx.unsafe(
+        `UPDATE users
+            SET tic_tac_toe_points = tic_tac_toe_points + $2,
+                tic_tac_toe_points_updated_at = now(),
+                updated_at = now()
+          WHERE id = $1`,
+        [event.user_id, event.amount],
+      );
+      await tx.unsafe(
+        `UPDATE football_grid_point_events SET status = 'committed', credited_at = now() WHERE id = $1`,
+        [eventId],
+      );
+      await tx.unsafe(
+        `UPDATE football_grid_reward_eligibility
+            SET points_decision = 'eligible', points_reason = 'risk_hold_released'
+          WHERE match_id = $1 AND user_id = $2 AND points_decision = 'held'`,
+        [event.match_id, event.user_id],
+      );
+      await tx.unsafe(
+        `INSERT INTO football_grid_point_event_audit (
+           point_event_id, action, amount, reason, actor_user_id
+         ) VALUES ($1,'release',$2,$3,$4)`,
+        [eventId, event.amount, reason, actorUserId],
+      );
+    });
+  },
+
+  async reversePoints(eventId: string, actorUserId: string, reason: string): Promise<void> {
+    await sql.begin(async (tx) => {
+      const rows = await tx.unsafe<Array<{
+        id: string;
+        match_id: string;
+        user_id: string;
+        amount: number;
+        status: string;
+        has_reversal: boolean;
+      }>>(
+        `SELECT e.id, e.match_id, e.user_id, e.amount, e.status,
+                EXISTS (SELECT 1 FROM football_grid_point_events r WHERE r.reversal_of = e.id) AS has_reversal
+           FROM football_grid_point_events e WHERE e.id = $1 FOR UPDATE`,
+        [eventId],
+      );
+      const event = rows[0];
+      if (!event) throw new NotFoundError('Football Grid point event not found');
+      if (event.status !== 'committed' && event.status !== 'held') {
+        throw new ConflictError('Only committed or held points can be reversed');
+      }
+      if (event.has_reversal) throw new ConflictError('These points were already reversed');
+      if (event.status === 'committed') {
+        const balances = await tx.unsafe<Array<{ tic_tac_toe_points: number }>>(
+          `SELECT tic_tac_toe_points FROM users WHERE id = $1 FOR UPDATE`,
+          [event.user_id],
+        );
+        if (!balances[0] || balances[0].tic_tac_toe_points < event.amount) {
+          throw new ConflictError('Tic Tac Toe Points balance is too low for an exact reversal');
+        }
+        await tx.unsafe(
+          `UPDATE users
+              SET tic_tac_toe_points = tic_tac_toe_points - $2,
+                  tic_tac_toe_points_updated_at = CASE
+                    WHEN tic_tac_toe_points = $2 THEN NULL ELSE now()
+                  END,
+                  updated_at = now()
+            WHERE id = $1`,
+          [event.user_id, event.amount],
+        );
+      }
+      await tx.unsafe(
+        `INSERT INTO football_grid_point_events (
+           match_id, user_id, reward_type, amount, status, eligibility_reason, reversal_of
+         ) VALUES ($1,$2,$3,$4,'reversed',$5,$6)`,
+        [
+          event.match_id,
+          event.user_id,
+          `football_grid_points_reversal:${event.id}`,
+          event.amount,
+          reason,
+          event.id,
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE football_grid_reward_eligibility
+            SET points_decision = 'ineligible', points_reason = 'points_reversed'
+          WHERE match_id = $1 AND user_id = $2`,
+        [event.match_id, event.user_id],
+      );
+      await tx.unsafe(
+        `INSERT INTO football_grid_point_event_audit (
+           point_event_id, action, amount, reason, actor_user_id
+         ) VALUES ($1,'reverse',$2,$3,$4)`,
+        [eventId, event.amount, reason, actorUserId],
+      );
     });
   },
 

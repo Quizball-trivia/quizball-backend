@@ -17,9 +17,12 @@ Football Grid is deliberately unavailable until every gate below is green:
    synthetic-opponent disclosure is a separate launch gate.
 4. Run the migration contract, content validation, unit/integration tests, and
    a multi-replica socket/load rehearsal in staging.
-5. Enable in order: content, private lobby canary, random human queue, XP,
-   persistent bots, then coins. Do not enable Grid bots unless the shared
-   persistent-bot roster is enabled and populated.
+5. Enable in order, with a completed canary and rollback check between each
+   step: content, private lobby, random human queue, XP, TP/leaderboard,
+   persistent bots, then coins. Ship the bot-governor schema and v2-capable
+   application while `FOOTBALL_GRID_BOT_MODEL_VERSION=1`; flip to version 2
+   only after every replica reports the compatible build. Do not enable Grid
+   bots unless the shared persistent-bot roster is enabled and populated.
 
 The safe defaults are:
 
@@ -28,8 +31,11 @@ FOOTBALL_GRID_CONTENT_ENABLED=false
 FOOTBALL_GRID_QUEUE_ENABLED=false
 FOOTBALL_GRID_LOBBY_ENABLED=false
 FOOTBALL_GRID_BOTS_ENABLED=false
+FOOTBALL_GRID_BOT_MODEL_VERSION=1
+FOOTBALL_GRID_BOT_GOVERNOR_ENABLED=true
 FOOTBALL_GRID_COINS_ENABLED=false
-FOOTBALL_GRID_RISK_HASH_SECRET=<32+ random characters when coins are enabled>
+FOOTBALL_GRID_POINTS_ENABLED=false
+FOOTBALL_GRID_RISK_HASH_SECRET=<32+ random characters when coins or TP are enabled>
 FOOTBALL_GRID_XP_ENABLED=true
 FOOTBALL_GRID_BOT_FALLBACK_MS=10000
 ```
@@ -116,27 +122,31 @@ keeps the delivery in `awaiting_ack` and replays the complete result with a new
 token on retry or terminal resync until that exact ACK is durable.
 
 Friend/private/public/code/challenge matches are exactly two humans and award
-XP only. Random matches can award coins. Bots are persistent roster identities,
-are selected near the human's Ranked RP, and pin tier/RP/model/config/random
-seed into the match. Friend lobbies and rematches never add bots.
+XP only. Random matches can award TP and coins. Bots are persistent roster
+identities, are selected near the human's Ranked RP, and pin tier/RP/model,
+governor adjustment, config, and random seed into the match. Friend lobbies and
+rematches never add bots.
 
 ## Economy and moderation
 
 Grid settlement uses its own transactional outbox and ledgers. It is safe to
 retry. XP is 70/60/50 for win/draw/loss and 20 for a forfeit loss. Random coin
-rewards are 300/200/150 for win/draw/loss; forfeits pay no coins. Controls are a
-1,500 rolling daily coin cap, three paid matches per human pairing per 24 hours,
-five paid bot matches per 24 hours, and a minimum-participation rule for losses.
-Bots never receive Grid rewards.
+rewards are 700/250/250 for win/draw/loss; forfeits pay no coins. The rolling
+coin cap is 3,500 per 24 hours. Random TP rewards are 50/30/10 for
+win/draw/loss; forfeits pay no TP. TP is independently controlled by
+`FOOTBALL_GRID_POINTS_ENABLED` and is not reduced by the coin cap or coin
+feature flag. Coins and TP share the three-rewarded-matches-per-human-pair,
+five-rewarded-bot-matches, minimum-participation, and risk-hold controls. Bots
+never receive Grid rewards.
 
-Coin settlement also requires privacy-preserving handoff observations hashed
-with `FOOTBALL_GRID_RISK_HASH_SECRET`. Network identity comes only from the
+Coin and TP settlement also require privacy-preserving handoff observations
+hashed with `FOOTBALL_GRID_RISK_HASH_SECRET`. Network identity comes only from the
 deployment's trusted client-IP resolver, never a raw client-supplied forwarding
 header. The v1 evaluator holds missing trusted network identity, same-device
 opponents when device identity is available, repeated same-network opponents,
 and abnormal reward velocity for admin review. Device identity is an optional
 additional signal, not a payout requirement. Staging/production refuse to boot
-with Grid coins enabled unless the hash secret is configured.
+with Grid coins or TP enabled unless the hash secret is configured.
 
 Held coin events never credit a wallet and remain inside the rolling cap even
 when older than 24 hours. An audited release rechecks the cap under the user's
@@ -144,11 +154,15 @@ reward-budget lock and records `credited_at`; an audited denial creates a
 reversal without debiting the wallet. Committed rewards age out of the cap from
 their actual credit time, not their original hold time.
 
+Held TP never credits the leaderboard balance. Releasing or reversing held TP
+uses the same replay-safe, audited pattern as coins, but TP has no rolling
+balance cap.
+
 Players can report a rejected attempt at most five times per 24 hours. Reports
 retain the immutable match, release, board, submitted value, and resolver
 context for review. Admin endpoints under `/api/v1/admin/football-grid` inspect
-settlement, release held coins, reverse committed coins with an audit record,
-list reports, and record report decisions. These routes require admin auth.
+settlement, release/reverse coin or TP events with an audit record, list
+reports, and record report decisions. These routes require admin auth.
 Accepting a report also requires a newer published release whose reviewed alias
 and memberships uniquely resolve the submitted answer against both original
 cell criteria; an arbitrary release ID is rejected.
@@ -185,8 +199,9 @@ online completions.
 plus aggregate visit counters. `match_completed` carries duration, result,
 completion reason, origin, human/bot opponent, board/version/difficulty, turns,
 claims, answer-outcome counts, pass/timeout counts, average response time, XP,
-coins, and reward eligibility reason. Retried server events use a deterministic
-UUID and stable occurrence timestamp so PostHog eventually deduplicates them.
+coins, TP, and the separate coin/TP eligibility reasons. Retried server events
+use a deterministic UUID and stable occurrence timestamp so PostHog eventually
+deduplicates them.
 
 Create the staging PostHog dashboard only after the first staging events are
 visible in the data schema. Include:
@@ -241,9 +256,12 @@ while their match is active.
   matches can remain enabled independently.
 - Bot problem: set `FOOTBALL_GRID_BOTS_ENABLED=false`; queued humans continue to
   wait for humans and no ephemeral Grid bot is created.
-- Economy problem: set `FOOTBALL_GRID_COINS_ENABLED=false`; XP and gameplay can
-  continue. Reconcile/reverse via the admin ledger tools, never by directly
-  decrementing a wallet.
+- TP problem: set `FOOTBALL_GRID_POINTS_ENABLED=false`; XP, gameplay, and coins
+  can continue. Reconcile/reverse through the TP ledger admin tools, never by
+  directly changing `users.tic_tac_toe_points`.
+- Coin problem: set `FOOTBALL_GRID_COINS_ENABLED=false`; XP, TP, and gameplay can
+  continue. Reconcile/reverse through the coin ledger admin tools, never by
+  directly decrementing a wallet.
 - Gameplay problem: disable queue and lobby entry. Do not delete active rows;
   the deadline/recovery workers or an explicit administrative no-contest own
   terminalization and reward suppression.

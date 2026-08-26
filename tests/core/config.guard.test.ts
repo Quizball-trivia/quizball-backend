@@ -70,6 +70,26 @@ describe('database resilience configuration', () => {
   });
 });
 
+describe('Football Tic Tac Toe Points rollout configuration', () => {
+  it('ships TP disabled until its ledger migration is deployed', () => {
+    expect(parseConfig(baseEnv()).FOOTBALL_GRID_POINTS_ENABLED).toBe(false);
+  });
+
+  it('requires the reward-risk secret when TP is enabled outside local', () => {
+    const hosted = {
+      NODE_ENV: 'staging',
+      DOCS_ENABLED: 'false',
+      SUPABASE_SMS_HOOK_SECRET: 'test-hook-secret',
+      FOOTBALL_GRID_POINTS_ENABLED: 'true',
+    };
+    expect(() => parseConfig(baseEnv(hosted))).toThrow(/RISK_HASH_SECRET/);
+    expect(() => parseConfig(baseEnv({
+      ...hosted,
+      FOOTBALL_GRID_RISK_HASH_SECRET: 'p'.repeat(32),
+    }))).not.toThrow();
+  });
+});
+
 describe('realtime timer capacity configuration', () => {
   it('defaults to a conservative per-replica worker count', () => {
     expect(parseConfig(baseEnv()).REALTIME_TIMER_HANDLER_CONCURRENCY).toBe(4);

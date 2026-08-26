@@ -6,9 +6,18 @@ import type { Json } from '../../db/types.js';
 import { getMatchXpReward } from '../progression/progression.logic.js';
 import { progressionRepo } from '../progression/progression.repo.js';
 import { reservationService } from '../synthetic-bots/reservation.service.js';
+import { footballGridBotGovernorService } from './football-grid-bot-governor.service.js';
 
-const COIN_REWARDS = { win: 300, draw: 200, loss: 150 } as const;
-const COIN_DAILY_CAP = 1_500;
+// Ranked parity: same win/loss coin payout as RANKED_WIN_COINS /
+// RANKED_LOSS_COINS in season-rp-formula.ts (a draw pays the non-win amount,
+// exactly as a ranked non-win does).
+const COIN_REWARDS = { win: 700, draw: 250, loss: 250 } as const;
+// Tic Tac Toe Points — the grid's own leaderboard currency, mirroring auction
+// AP amounts (1st 50 / 2nd 30 / 3rd 10) mapped onto 1v1 results.
+const TP_REWARDS = { win: 50, draw: 30, loss: 10 } as const;
+// Cap scaled with the ranked-parity amounts so a player can still have the
+// same ~5 rewarded matches per day as under the old 300-coin win.
+const COIN_DAILY_CAP = 3_500;
 const HUMAN_PAIR_DAILY_LIMIT = 3;
 const BOT_MATCH_DAILY_LIMIT = 5;
 const WORKER_INTERVAL_MS = 5_000;
@@ -43,7 +52,13 @@ interface RewardRiskDecision {
 export interface FootballGridRewardResult {
   xp: number;
   coins: number;
+  /** Tic Tac Toe Points — the mode leaderboard currency. */
+  tp: number;
+  /** Backward-compatible primary reason. TP is the competitive progression
+   * reward, so this mirrors tpEligibilityReason. */
   eligibilityReason: string;
+  coinEligibilityReason: string;
+  tpEligibilityReason: string;
 }
 
 let workerTimer: NodeJS.Timeout | null = null;
@@ -121,7 +136,10 @@ async function rollingBudget(tx: TransactionSql, userId: string): Promise<{ coin
                     )), 0)::text AS coins,
        COALESCE((SELECT count(*) FROM football_grid_reward_eligibility
                  WHERE user_id = $1 AND opponent_type = 'bot'
-                   AND decision IN ('eligible','held')
+                   AND (
+                     decision IN ('eligible','held')
+                     OR points_decision IN ('eligible','held')
+                   )
                    AND evaluated_at >= now() - interval '24 hours'), 0)::text AS bot_matches`,
     [userId],
   );
@@ -167,9 +185,12 @@ async function evaluateRiskDecision(
   const opponent = observations.find((observation) => observation.user_id === opponentId);
   const velocityRows = await tx.unsafe<Array<{ count: string }>>(
     `SELECT count(*)::text AS count
-       FROM football_grid_reward_eligibility
+      FROM football_grid_reward_eligibility
       WHERE user_id = $1 AND evaluated_at >= now() - interval '10 minutes'
-        AND decision IN ('eligible', 'held')`,
+        AND (
+          decision IN ('eligible', 'held')
+          OR points_decision IN ('eligible', 'held')
+        )`,
     [userId],
   );
   const velocity = Number(velocityRows[0]?.count ?? 0);
@@ -224,7 +245,9 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
   );
   const row = rows[0];
   if (!row) return new Map();
-  if (row.status === 'completed') return readSettledRewardsInTx(tx, matchId);
+  if (row.status === 'completed') {
+    return readSettledRewardsInTx(tx, matchId);
+  }
   await tx.unsafe(
     `UPDATE football_grid_settlement_outbox
         SET status = 'processing', attempt_count = attempt_count + 1, last_error = null
@@ -240,12 +263,22 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       await tx.unsafe(
         `INSERT INTO football_grid_reward_eligibility (
            match_id, user_id, evaluator_version, opponent_type, origin,
-           participation, decision, reason
-         ) VALUES ($1,$2,1,$3,$4,'{}'::jsonb,'ineligible','no_contest')
+           participation, decision, reason, points_decision, points_reason
+         ) VALUES (
+           $1,$2,1,$3,$4,'{}'::jsonb,
+           'ineligible','no_contest','ineligible','no_contest'
+         )
          ON CONFLICT (match_id, user_id, evaluator_version) DO NOTHING`,
         [matchId, human.user_id, opponent?.is_bot ? 'bot' : 'human', row.origin],
       );
-      results.set(human.user_id, { xp: 0, coins: 0, eligibilityReason: 'no_contest' });
+      results.set(human.user_id, {
+        xp: 0,
+        coins: 0,
+        tp: 0,
+        eligibilityReason: 'no_contest',
+        coinEligibilityReason: 'no_contest',
+        tpEligibilityReason: 'no_contest',
+      });
     }
   } else {
     await lockBudgets(tx, humans.map((human) => human.user_id));
@@ -273,7 +306,8 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       const opponentType = opponent.is_bot ? 'bot' : 'human';
       const repeatedPairCount = opponent.is_bot ? 0 : await countRecentHumanPair(tx, human.user_id, opponent.user_id);
       const budget = await rollingBudget(tx, human.user_id);
-      const risk = config.FOOTBALL_GRID_COINS_ENABLED && row.origin === 'random'
+      const risk = (config.FOOTBALL_GRID_COINS_ENABLED || config.FOOTBALL_GRID_POINTS_ENABLED)
+        && row.origin === 'random'
         ? await evaluateRiskDecision(
             tx,
             matchId,
@@ -283,55 +317,114 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
           )
         : await readRiskDecision(tx, matchId, human.user_id);
       const proposedCoins = COIN_REWARDS[result];
-      let reason = 'eligible';
-      if (!config.FOOTBALL_GRID_COINS_ENABLED) reason = 'coins_disabled';
-      else if (row.origin !== 'random') reason = 'friend_match_no_coins';
-      else if (isForfeitReason(row.completion_reason)) reason = 'forfeit_no_coins';
-      else if (opponentType === 'human' && repeatedPairCount > HUMAN_PAIR_DAILY_LIMIT) reason = 'repeated_pair_cap';
-      else if (opponentType === 'bot' && budget.botMatches >= BOT_MATCH_DAILY_LIMIT) reason = 'bot_match_cap';
-      else if (budget.coins + proposedCoins > COIN_DAILY_CAP) reason = 'daily_coin_cap';
-      else if (result === 'loss' && !(human.claim_count >= 1 || (human.answer_turn_count >= 2 && durationMs !== null && durationMs >= 45_000))) reason = 'insufficient_participation';
-      else if (risk?.decision === 'ineligible') reason = `risk_ineligible:${risk.reason}`;
-      else if (risk?.decision === 'held') reason = `risk_hold:${risk.reason}`;
-      const decision = reason.startsWith('risk_hold:')
+      let sharedReason = 'eligible';
+      if (opponentType === 'human' && repeatedPairCount > HUMAN_PAIR_DAILY_LIMIT) sharedReason = 'repeated_pair_cap';
+      else if (opponentType === 'bot' && budget.botMatches >= BOT_MATCH_DAILY_LIMIT) sharedReason = 'bot_match_cap';
+      else if (result === 'loss' && !(human.claim_count >= 1 || (human.answer_turn_count >= 2 && durationMs !== null && durationMs >= 45_000))) sharedReason = 'insufficient_participation';
+      else if (risk?.decision === 'ineligible') sharedReason = `risk_ineligible:${risk.reason}`;
+      else if (risk?.decision === 'held') sharedReason = `risk_hold:${risk.reason}`;
+
+      let coinReason = sharedReason;
+      if (!config.FOOTBALL_GRID_COINS_ENABLED) coinReason = 'coins_disabled';
+      else if (row.origin !== 'random') coinReason = 'friend_match_no_coins';
+      else if (isForfeitReason(row.completion_reason)) coinReason = 'forfeit_no_coins';
+      else if (budget.coins + proposedCoins > COIN_DAILY_CAP) coinReason = 'daily_coin_cap';
+
+      let pointsReason = sharedReason;
+      if (!config.FOOTBALL_GRID_POINTS_ENABLED) pointsReason = 'points_disabled';
+      else if (row.origin !== 'random') pointsReason = 'friend_match_no_points';
+      else if (isForfeitReason(row.completion_reason)) pointsReason = 'forfeit_no_points';
+
+      const coinDecision = coinReason.startsWith('risk_hold:')
         ? 'held'
-        : reason === 'eligible'
+        : coinReason === 'eligible'
           ? 'eligible'
           : 'ineligible';
-      const eventAmount = decision === 'eligible' || decision === 'held' ? proposedCoins : 0;
-      const coins = decision === 'eligible' ? proposedCoins : 0;
+      const pointsDecision = pointsReason.startsWith('risk_hold:')
+        ? 'held'
+        : pointsReason === 'eligible'
+          ? 'eligible'
+          : 'ineligible';
+      const coinEventAmount = coinDecision === 'eligible' || coinDecision === 'held'
+        ? proposedCoins
+        : 0;
+      const coins = coinDecision === 'eligible' ? proposedCoins : 0;
+      const proposedPoints = TP_REWARDS[result];
+      const pointEventAmount = pointsDecision === 'eligible' || pointsDecision === 'held'
+        ? proposedPoints
+        : 0;
+      const tp = pointsDecision === 'eligible' ? proposedPoints : 0;
       await tx.unsafe(
         `INSERT INTO football_grid_reward_eligibility (
            match_id, user_id, evaluator_version, opponent_type, origin,
            participation, repeated_pair_count, rolling_coin_total,
-           rolling_bot_matches, risk_decision, risk_signals, decision, reason
-         ) VALUES ($1,$2,1,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11,$12)
+           rolling_bot_matches, risk_decision, risk_signals, decision, reason,
+           points_decision, points_reason
+         ) VALUES ($1,$2,1,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14)
          ON CONFLICT (match_id, user_id, evaluator_version) DO NOTHING`,
         [
           matchId, human.user_id, opponentType, row.origin,
           sql.json({ claimCount: human.claim_count, answerTurnCount: human.answer_turn_count, durationMs }),
           repeatedPairCount, budget.coins, budget.botMatches,
-          risk?.decision ?? 'clear', sql.json((risk?.signals ?? {}) as Json), decision, reason,
+          risk?.decision ?? 'clear', sql.json((risk?.signals ?? {}) as Json),
+          coinDecision, coinReason, pointsDecision, pointsReason,
         ],
       );
-      if (eventAmount > 0) {
+      if (coinEventAmount > 0) {
         const inserted = await tx.unsafe<Array<{ amount: number }>>(
           `INSERT INTO football_grid_coin_events (
              match_id, user_id, amount, status, eligibility_reason, credited_at
            ) VALUES ($1,$2,$3,$4,$5,CASE WHEN $4 = 'committed' THEN now() ELSE null END)
            ON CONFLICT (match_id, user_id, reward_type) DO NOTHING
            RETURNING amount`,
-          [matchId, human.user_id, eventAmount, decision === 'held' ? 'held' : 'committed', reason],
+          [matchId, human.user_id, coinEventAmount, coinDecision === 'held' ? 'held' : 'committed', coinReason],
         );
-        if (inserted[0] && decision === 'eligible') {
-          await tx.unsafe(`UPDATE users SET coins = coins + $2, updated_at = now() WHERE id = $1`, [human.user_id, coins]);
+        if (inserted[0] && coinDecision === 'eligible') {
+          await tx.unsafe(
+            `UPDATE users SET coins = coins + $2, updated_at = now() WHERE id = $1`,
+            [human.user_id, coins],
+          );
         }
       }
-      results.set(human.user_id, { xp, coins, eligibilityReason: reason });
+      if (pointEventAmount > 0) {
+        const inserted = await tx.unsafe<Array<{ amount: number }>>(
+          `INSERT INTO football_grid_point_events (
+             match_id, user_id, amount, status, eligibility_reason, credited_at
+           ) VALUES ($1,$2,$3,$4,$5,CASE WHEN $4 = 'committed' THEN now() ELSE null END)
+           ON CONFLICT (match_id, user_id, reward_type) DO NOTHING
+           RETURNING amount`,
+          [matchId, human.user_id, pointEventAmount, pointsDecision === 'held' ? 'held' : 'committed', pointsReason],
+        );
+        if (inserted[0] && pointsDecision === 'eligible') {
+          await tx.unsafe(
+            `UPDATE users
+                SET tic_tac_toe_points = tic_tac_toe_points + $2,
+                    tic_tac_toe_points_updated_at = now(),
+                    updated_at = now()
+              WHERE id = $1`,
+            [human.user_id, tp],
+          );
+        }
+      }
+      results.set(human.user_id, {
+        xp,
+        coins,
+        tp,
+        eligibilityReason: pointsReason,
+        coinEligibilityReason: coinReason,
+        tpEligibilityReason: pointsReason,
+      });
       appMetrics.footballGridRewardEligibility.add(1, {
-        reason,
+        reason: coinReason,
         origin: row.origin,
         opponent_type: opponentType,
+        reward_type: 'coins',
+      });
+      appMetrics.footballGridRewardEligibility.add(1, {
+        reason: pointsReason,
+        origin: row.origin,
+        opponent_type: opponentType,
+        reward_type: 'tp',
       });
     }
   }
@@ -360,15 +453,25 @@ async function readSettledRewardsInTx(
     user_id: string;
     amount: number | null;
     coin_status: string | null;
+    point_amount: number | null;
+    point_status: string | null;
     xp_delta: number | null;
-    reason: string;
+    coin_reason: string;
+    points_reason: string | null;
   }>>(
-    `SELECT e.user_id, c.amount, c.status AS coin_status, x.xp_delta, e.reason
+    `SELECT e.user_id, c.amount, c.status AS coin_status,
+            p.amount AS point_amount, p.status AS point_status,
+            x.xp_delta, e.reason AS coin_reason, e.points_reason
        FROM football_grid_reward_eligibility e
        LEFT JOIN football_grid_coin_events c ON c.match_id = e.match_id AND c.user_id = e.user_id
           AND c.reversal_of IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM football_grid_coin_events reversal WHERE reversal.reversal_of = c.id
+          )
+       LEFT JOIN football_grid_point_events p ON p.match_id = e.match_id AND p.user_id = e.user_id
+          AND p.reversal_of IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM football_grid_point_events reversal WHERE reversal.reversal_of = p.id
           )
        LEFT JOIN user_xp_events x ON x.user_id = e.user_id
           AND x.source_type = 'match_result' AND x.source_key = e.match_id::text
@@ -377,10 +480,14 @@ async function readSettledRewardsInTx(
   );
   const result = new Map<string, FootballGridRewardResult>();
   for (const row of rows) {
+    const pointsReason = row.points_reason ?? 'points_not_recorded';
     result.set(row.user_id, {
       xp: row.xp_delta ?? 0,
       coins: row.coin_status === 'committed' ? row.amount ?? 0 : 0,
-      eligibilityReason: row.reason,
+      tp: row.point_status === 'committed' ? row.point_amount ?? 0 : 0,
+      eligibilityReason: pointsReason,
+      coinEligibilityReason: row.coin_reason,
+      tpEligibilityReason: pointsReason,
     });
   }
   return result;
@@ -398,18 +505,52 @@ async function processPending(): Promise<void> {
        LIMIT ${WORKER_BATCH_SIZE}
     `;
     for (const row of rows) await footballGridSettlementService.settleMatch(row.match_id);
+    await processGovernorBacklog();
   } finally {
     workerRunning = false;
+  }
+}
+
+async function processGovernorBacklog(): Promise<void> {
+  try {
+    const matchIds = await footballGridBotGovernorService
+      .listUnobservedCompletedMatchIds(WORKER_BATCH_SIZE);
+    for (const matchId of matchIds) await processGovernorMatch(matchId);
+  } catch (error) {
+    logger.error({ error }, 'Football Grid bot governor recovery scan failed');
+    appMetrics.footballGridBotGovernorProcessing.add(1, { outcome: 'scan_failed' });
+  }
+}
+
+async function processGovernorMatch(matchId: string): Promise<void> {
+  try {
+    const result = await footballGridBotGovernorService.observeCompletedMatch(matchId);
+    appMetrics.footballGridBotGovernorProcessing.add(1, {
+      outcome: result ? 'observed' : 'skipped_or_replayed',
+    });
+    if (result) {
+      appMetrics.footballGridBotGovernorObservations.add(1, {
+        tier: result.botTier,
+        model_version: String(result.modelVersion),
+        trigger: result.decision.trigger,
+      });
+    }
+  } catch (error) {
+    // Governor calibration is deliberately outside the reward/result critical
+    // path. The completed settlement remains a durable retry source and the
+    // next worker pass will try this match again.
+    logger.error({ error, matchId }, 'Football Grid bot governor processing failed');
+    appMetrics.footballGridBotGovernorProcessing.add(1, { outcome: 'failed' });
   }
 }
 
 export const footballGridSettlementService = {
   async settleMatch(matchId: string): Promise<Map<string, FootballGridRewardResult>> {
     try {
-      const result = await sql.begin((tx) => settleInTx(tx, matchId)) as Map<string, FootballGridRewardResult>;
+      const rewards = await sql.begin((tx) => settleInTx(tx, matchId)) as Map<string, FootballGridRewardResult>;
       await reservationService.releaseIfSettled(matchId, 'completion');
       appMetrics.footballGridSettlements.add(1, { outcome: 'completed' });
-      return result;
+      return rewards;
     } catch (error) {
       logger.error({ error, matchId }, 'Football Grid settlement failed');
       appMetrics.footballGridSettlements.add(1, { outcome: 'failed' });

@@ -12,6 +12,8 @@ import {
   FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS,
   FOOTBALL_GRID_SERVICE_INTERRUPTION_MS,
 } from './football-grid.engine.js';
+import { footballGridBotGovernorService } from './football-grid-bot-governor.service.js';
+import { parseFootballGridBotStrengthAdjustment } from './football-grid-bot-governor.js';
 
 type SqlExecutor = Pick<typeof sql, 'unsafe'> | Pick<TransactionSql, 'unsafe'>;
 
@@ -131,6 +133,68 @@ export interface FootballGridCompletionAnalyticsFacts {
     noActionTimeouts: number;
     averageResponseMs: number | null;
   }>;
+}
+
+export interface FootballGridCuratedSampleCandidate {
+  cellIndex: number;
+  playerId: string;
+  name: string;
+  imageAssetKey: string | null;
+}
+
+export interface FootballGridCuratedCellSamples {
+  cellIndex: number;
+  players: Array<{
+    playerId: string;
+    name: string;
+    imageUrl: null;
+    imageAssetKey: string | null;
+  }>;
+}
+
+/**
+ * Select result examples across the whole board instead of independently per
+ * cell. A recognizable player that qualifies for several intersections is
+ * shown once while distinct alternatives exist, which makes the result screen
+ * demonstrate the breadth of accepted answers instead of repeating one star.
+ */
+export function selectDiverseFootballGridSamples(
+  candidates: FootballGridCuratedSampleCandidate[],
+  maxPerCell = 5,
+): FootballGridCuratedCellSamples[] {
+  const byCell = new Map<number, FootballGridCuratedSampleCandidate[]>();
+  for (const candidate of candidates) {
+    const current = byCell.get(candidate.cellIndex) ?? [];
+    if (!current.some((entry) => entry.playerId === candidate.playerId)) current.push(candidate);
+    byCell.set(candidate.cellIndex, current);
+  }
+
+  const cellIndexes = [...byCell.keys()].sort((left, right) => left - right);
+  const selectedByCell = new Map<number, FootballGridCuratedSampleCandidate[]>();
+  const usedAcrossBoard = new Set<string>();
+
+  for (let sampleIndex = 0; sampleIndex < maxPerCell; sampleIndex += 1) {
+    for (const cellIndex of cellIndexes) {
+      const selected = selectedByCell.get(cellIndex) ?? [];
+      const selectedIds = new Set(selected.map((candidate) => candidate.playerId));
+      const available = (byCell.get(cellIndex) ?? []).filter((candidate) => !selectedIds.has(candidate.playerId));
+      const next = available.find((candidate) => !usedAcrossBoard.has(candidate.playerId)) ?? available[0];
+      if (!next) continue;
+      selected.push(next);
+      selectedByCell.set(cellIndex, selected);
+      usedAcrossBoard.add(next.playerId);
+    }
+  }
+
+  return cellIndexes.map((cellIndex) => ({
+    cellIndex,
+    players: (selectedByCell.get(cellIndex) ?? []).map((candidate) => ({
+      playerId: candidate.playerId,
+      name: candidate.name,
+      imageUrl: null,
+      imageAssetKey: candidate.imageAssetKey,
+    })),
+  }));
 }
 
 function toCriterionView(row: GridCriterionRow): FootballGridCriterionView {
@@ -1303,16 +1367,29 @@ export const footballGridRepo = {
       const nowMs = await this.databaseNowMs(tx);
       const phaseDeadlineAt = new Date(nowMs + FOOTBALL_GRID_HANDOFF_MS).toISOString();
       const bot = input.players.find((player) => player.isBot);
+      const botModelVersion = bot ? input.botModelVersion ?? 1 : null;
+      const botConfigVersion = bot ? input.botConfigVersion ?? 1 : null;
+      const botTier = bot && botModelVersion === 2 && botConfigVersion === 1
+        ? input.botTier ?? 'Reserve'
+        : input.botTier ?? null;
+      const botStrengthAdjustment = bot && botModelVersion === 2 && botConfigVersion === 1
+        ? await footballGridBotGovernorService.pinStrengthAdjustmentInTx(tx, {
+            modelVersion: botModelVersion,
+            configVersion: botConfigVersion,
+            botTier: botTier!,
+          })
+        : null;
       await tx.unsafe(
         `INSERT INTO football_grid_matches (
            match_id, pairing_token, board_id, content_release_id, alias_release_id,
            resolver_policy_version, board_checksum, status, phase, origin, series_id,
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
-           bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed
+           bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
+           bot_strength_adjustment
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
          )`,
         [
           matchId,
@@ -1331,10 +1408,11 @@ export const footballGridRepo = {
           bot?.userId ?? null,
           input.botReservationFence ?? null,
           input.botRp ?? null,
-          input.botTier ?? null,
-          input.botModelVersion ?? null,
-          input.botConfigVersion ?? null,
+          botTier,
+          botModelVersion,
+          botConfigVersion,
           input.botRngSeed ?? null,
+          botStrengthAdjustment,
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -1410,6 +1488,7 @@ export const footballGridRepo = {
     configVersion: number;
     rngSeed: number;
     reservationFence: number;
+    strengthAdjustment: number;
   } | null> {
     const rows = await sql<Array<{
       bot_user_id: string;
@@ -1419,23 +1498,32 @@ export const footballGridRepo = {
       bot_config_version: number | null;
       bot_rng_seed: string | number | null;
       bot_reservation_fence: string | number | null;
+      bot_strength_adjustment: string | number | null;
     }>>`
       SELECT bot_user_id, bot_rp, bot_tier, bot_model_version,
-             bot_config_version, bot_rng_seed, bot_reservation_fence
+             bot_config_version, bot_rng_seed, bot_reservation_fence,
+             bot_strength_adjustment
         FROM football_grid_matches
        WHERE match_id = ${matchId} AND bot_user_id IS NOT NULL
          AND bot_reservation_fence IS NOT NULL
     `;
     const row = rows[0];
     if (!row) return null;
+    const modelVersion = row.bot_model_version ?? 1;
+    const configVersion = row.bot_config_version ?? 1;
+    const strengthAdjustment = parseFootballGridBotStrengthAdjustment(
+      row.bot_strength_adjustment,
+      { required: modelVersion === 2 && configVersion === 1 },
+    );
     return {
       botUserId: row.bot_user_id,
       botRp: row.bot_rp ?? 500,
       botTier: row.bot_tier ?? 'Reserve',
-      modelVersion: row.bot_model_version ?? 1,
-      configVersion: row.bot_config_version ?? 1,
+      modelVersion,
+      configVersion,
       rngSeed: Number(row.bot_rng_seed ?? 1),
       reservationFence: Number(row.bot_reservation_fence),
+      strengthAdjustment,
     };
   },
 
@@ -1467,13 +1555,17 @@ export const footballGridRepo = {
       `SELECT a.cell_index, a.football_player_id
          FROM football_grid_matches gm
          JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+         JOIN football_players fp ON fp.id = a.football_player_id
         WHERE gm.match_id = $1
           AND a.cell_index = ANY($2::smallint[])
           AND NOT EXISTS (
             SELECT 1 FROM football_grid_claims c
              WHERE c.match_id = gm.match_id AND c.football_player_id = a.football_player_id
           )
-        ORDER BY a.cell_index, a.recognizable_rank ASC NULLS LAST, a.football_player_id`,
+        ORDER BY a.cell_index, a.is_sample DESC,
+                 a.recognizable_rank ASC NULLS LAST,
+                 fp.fame_score DESC NULLS LAST,
+                 a.football_player_id`,
       [matchId, cellIndexes],
     );
     const result = new Map<number, string[]>();
@@ -2177,40 +2269,25 @@ export const footballGridRepo = {
       name: string;
       image_asset_key: string | null;
     }>>`
-      SELECT ranked.cell_index, ranked.football_player_id, ranked.name, ranked.image_asset_key
-        FROM (
-          SELECT a.cell_index, a.football_player_id,
-                 COALESCE(a.player_name_en, fp.name) AS name,
-                 a.image_asset_key,
-                 row_number() OVER (
-                   PARTITION BY a.cell_index
-                   ORDER BY a.is_sample DESC, a.recognizable_rank ASC NULLS LAST, fp.fame_score DESC NULLS LAST
-                 ) AS sample_no
-            FROM football_grid_matches gm
-            JOIN football_grid_board_answers a ON a.board_id = gm.board_id
-            JOIN football_players fp ON fp.id = a.football_player_id
-           WHERE gm.match_id = ${matchId}
-        ) ranked
-       WHERE ranked.sample_no <= 5
-       ORDER BY ranked.cell_index, ranked.sample_no
+      SELECT a.cell_index, a.football_player_id,
+             COALESCE(a.player_name_en, fp.name) AS name,
+             a.image_asset_key
+        FROM football_grid_matches gm
+        JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+        JOIN football_players fp ON fp.id = a.football_player_id
+       WHERE gm.match_id = ${matchId}
+       ORDER BY a.cell_index,
+                a.is_sample DESC,
+                a.recognizable_rank ASC NULLS LAST,
+                fp.fame_score DESC NULLS LAST,
+                a.football_player_id
     `;
-    const cells = new Map<number, Array<{
-      playerId: string;
-      name: string;
-      imageUrl: null;
-      imageAssetKey: string | null;
-    }>>();
-    for (const row of rows) {
-      const players = cells.get(row.cell_index) ?? [];
-      players.push({
-        playerId: row.football_player_id,
-        name: row.name,
-        imageUrl: null,
-        imageAssetKey: row.image_asset_key,
-      });
-      cells.set(row.cell_index, players);
-    }
-    return [...cells.entries()].map(([cellIndex, players]) => ({ cellIndex, players }));
+    return selectDiverseFootballGridSamples(rows.map((row) => ({
+      cellIndex: row.cell_index,
+      playerId: row.football_player_id,
+      name: row.name,
+      imageAssetKey: row.image_asset_key,
+    })));
   },
 };
 

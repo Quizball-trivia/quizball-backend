@@ -145,9 +145,9 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     validPlayerIdsByCell,
     boardPlayerIds,
   };
-  const state = await currentOrThrow(matchId);
+  const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
-  if (state.phase === 'terminal' || latestGeneration !== generation) return value;
+  if (phase === 'terminal' || phase === null || latestGeneration !== generation) return value;
   boardAnswerCache.delete(matchId);
   boardAnswerCache.set(matchId, {
     generation,
@@ -259,14 +259,14 @@ async function processInbox(
         throw new BadRequestError('Answer command is incomplete');
       }
       const content = await getBoardAnswerContent(leased.match_id);
-      const preState = await currentOrThrow(leased.match_id);
+      const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
       const resolverStartedAt = performance.now();
       resolution = resolveFootballGridAnswer({
         submittedText: leased.submitted_text,
         aliases: content.aliases,
         validPlayerIds: content.validPlayerIdsByCell.get(leased.cell_index) ?? [],
         boardPlayerIds: content.boardPlayerIds,
-        usedPlayerIds: preState.claims.map((claim) => claim.footballPlayerId),
+        usedPlayerIds,
       });
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
     }
@@ -295,7 +295,7 @@ async function processInbox(
       } else {
         throw new BadRequestError('Unsupported Football Grid command');
       }
-      await footballGridRepo.finishCommandInTx({
+      const attemptId = await footballGridRepo.finishCommandInTx({
         tx,
         inbox: leased,
         processingFence,
@@ -307,13 +307,11 @@ async function processInbox(
         aliasId: resolution?.aliasId ?? null,
         eventType: outcome === 'correct' ? 'cell_claimed' : `turn_${outcome}`,
       });
-      return { outcome, state: next, resolvedPlayerId: resolution?.playerId ?? null, attemptId: null, duplicate: false };
+      return { outcome, state: next, resolvedPlayerId: resolution?.playerId ?? null, attemptId, duplicate: false };
     });
-    const attempt = await footballGridRepo.getAttemptForInbox(inbox.id);
-    const persistedState = await currentOrThrow(inbox.match_id);
-    if (persistedState.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
+    if (result.state.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
     appMetrics.footballGridCommands.add(1, { outcome: result.outcome, command_type: leased.command_type });
-    return { ...result, state: persistedState, attemptId: attempt?.attemptId ?? null };
+    return result;
   } catch (error) {
     const domainError = toDomainError(error);
     if (domainError instanceof BadRequestError || domainError instanceof ConflictError || domainError instanceof AuthorizationError) {

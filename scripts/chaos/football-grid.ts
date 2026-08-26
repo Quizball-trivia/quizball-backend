@@ -282,6 +282,7 @@ async function runClient(
   let searchStartedAt = 0;
   let matchStartedAt = 0;
   let currentMatchId: string | null = null;
+  let completionReceived = false;
   let latestStateVersion = -1;
   let heartbeat: NodeJS.Timeout | null = null;
   const actedStateVersions = new Set<number>();
@@ -362,9 +363,14 @@ async function runClient(
       }
     });
     socket.on('session:blocked', () => fail('session_blocked'));
-    socket.on('grid:error', (error: { code?: string; message?: string }) => {
+    socket.on('grid:error', (error: { code?: string; message?: string; meta?: Record<string, unknown> }) => {
+      // The completion ACK deliberately unbinds the socket. A heartbeat that
+      // was already in flight may observe that unbind; it is not a gameplay
+      // failure and the production UI also stops heartbeats on completion.
+      if (completionReceived && error.meta?.gridCode === 'GRID_MATCH_BINDING_MISMATCH') return;
       metrics.socketErrors += 1;
-      fail(`grid_error:${error.code ?? 'unknown'}`);
+      const gridCode = typeof error.meta?.gridCode === 'string' ? error.meta.gridCode : null;
+      fail(`grid_error:${gridCode ?? error.code ?? 'unknown'}`);
     });
     socket.on('grid:match_found', (payload: { matchId: string; state: GridState }) => {
       currentMatchId = payload.matchId;
@@ -405,6 +411,11 @@ async function runClient(
     });
     socket.on('grid:completed', (payload: CompletedPayload) => {
       if (payload.matchId !== currentMatchId) return;
+      completionReceived = true;
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
+      }
       metrics.completedClients.add(user.userId);
       metrics.completedMatches.add(payload.matchId);
       bump(metrics.completionReasons, payload.state.completionReason ?? 'unknown');

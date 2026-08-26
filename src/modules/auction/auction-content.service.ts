@@ -287,6 +287,11 @@ const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'A
 /** Authored text hints revealed after the stat facets (clue_1 and clue_2). */
 export const AUCTION_TEXT_HINTS_PER_LOT = 2;
 
+/** A lot may open at most this fraction of its hidden current value: buying
+ *  at the opening price must never be a built-in loss. Mirrors the ≤90% cap
+ *  the pricing view applies to its own fallback season pick. */
+export const AUCTION_MAX_OPENING_VALUE_RATIO = 0.9;
+
 /** A snapshot lot needs history to hide in and a value arc to gamble on. */
 const MIN_SNAPSHOT_SEASONS = 3;
 
@@ -370,12 +375,21 @@ async function attachSeasonSnapshots(
 
   // The lot opens at the scout season's REAL market value — the exact figure
   // the card itself shows ("buy him at his {scout season} price"; profit is
-  // what he became by the scoring season). Historically true by construction,
-  // no synthetic fallback needed, and it leaks nothing: the same number is a
-  // public facet of the scout season. The view's starting_price_eur remains
-  // only as a guard against a malformed snapshot value.
+  // what he became by the scoring season) — but ONLY when that price leaves
+  // bidding headroom. A veteran's glory-season price sits ABOVE his hidden
+  // current value (42% of draws under the fame mix), which made buying at
+  // the opening a guaranteed loss: bots estimated the decline and passed,
+  // humans anchored on the displayed price and bled (prod 2026-08-26: median
+  // human profit −50M, 1 win in 41). Overpriced lots instead keep the view's
+  // starting_price_eur — a different real career season already capped at
+  // the same ratio — so every opening is a live deal and the auction stays a
+  // "how much MORE is he worth" contest.
   const scoutValue = snapshots[0]?.valueEur;
-  if (Number.isFinite(scoutValue) && scoutValue > 0) {
+  if (
+    Number.isFinite(scoutValue)
+    && scoutValue > 0
+    && scoutValue <= AUCTION_MAX_OPENING_VALUE_RATIO * card.trueValue
+  ) {
     card.startingPrice = Math.floor(scoutValue);
     card.startingPriceEur = Math.floor(scoutValue);
   }

@@ -342,8 +342,8 @@ describe('auctionMatchmakingService', () => {
         botCount: 0,
         serverNow: '2026-06-20T10:00:00.000Z',
         lineupEndsAt: '2026-06-20T10:00:02.500Z',
-        showdownEndsAt: '2026-06-20T10:00:05.000Z',
-        countdownEndsAt: '2026-06-20T10:00:10.000Z',
+        showdownEndsAt: '2026-06-20T10:00:05.500Z',
+        countdownEndsAt: '2026-06-20T10:00:10.500Z',
       })
     );
     const foundCall = roomEmit.mock.calls.findIndex(
@@ -394,7 +394,8 @@ describe('auctionMatchmakingService', () => {
 
     // One bot completes the table, so start immediately. This avoids exposing
     // an anonymous staged-bot label while the real smart bot is being selected.
-    vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
+    // (The bot fallback delay is randomized 5-18s now — jump past the max.)
+    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId,
@@ -417,7 +418,8 @@ describe('auctionMatchmakingService', () => {
       expect.objectContaining({
         humanUserIds: ['u1', 'u2'],
         botCount: 1,
-        botPlayers: [{ seatId: 'seat-bot-1', displayName: 'Smart Bot 1' }],
+        // Bots now carry a randomized lineup join delay (staggered arrivals).
+        botPlayers: [{ seatId: 'seat-bot-1', displayName: 'Smart Bot 1', joinDelayMs: expect.any(Number) }],
         locale: 'en',
       })
     );
@@ -464,7 +466,8 @@ describe('auctionMatchmakingService', () => {
     const firstSearchId = scheduledSearchIds()[0];
     vi.setSystemTime(new Date('2026-06-20T10:00:11.000Z'));
     await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
-    vi.setSystemTime(new Date('2026-06-20T10:00:12.000Z'));
+    // Randomized 5-18s fallback: jump past the max before the fill tick.
+    vi.setSystemTime(new Date('2026-06-20T10:00:31.000Z'));
 
     // The selected smart bot is the final seat, so there is no anonymous
     // placeholder step or second fill timer.
@@ -493,7 +496,7 @@ describe('auctionMatchmakingService', () => {
 
     // Like ranked fallback, the server selects the actual named opponents
     // before telling the client those seats are occupied.
-    vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
+    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId,
@@ -513,8 +516,8 @@ describe('auctionMatchmakingService', () => {
         humanUserIds: ['u1'],
         botCount: 2,
         botPlayers: [
-          { seatId: 'seat-bot-1', displayName: 'Smart Bot 1' },
-          { seatId: 'seat-bot-2', displayName: 'Smart Bot 2' },
+          { seatId: 'seat-bot-1', displayName: 'Smart Bot 1', joinDelayMs: expect.any(Number) },
+          { seatId: 'seat-bot-2', displayName: 'Smart Bot 2', joinDelayMs: expect.any(Number) },
         ],
       })
     );

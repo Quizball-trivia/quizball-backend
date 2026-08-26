@@ -150,12 +150,13 @@ export const auctionContentService = {
    * least-recently-seen first, rather than discarding the history signal.
    */
   async findRandomPublishedAuctionCardExcludingSeen(
-    options: RandomPublishedAuctionCardOptions
+    options: RandomPublishedAuctionCardOptions,
+    random: () => number = getRandom
   ): Promise<PublishedAuctionCard | null> {
     const seenPlayerIds = options.excludeRecentlySeenFootballPlayerIds ?? [];
-    if (seenPlayerIds.length === 0) return findRandomPublishedAuctionCard(options);
+    if (seenPlayerIds.length === 0) return findRandomPublishedAuctionCard(options, random);
 
-    const fresh = await findRandomPublishedAuctionCard(options);
+    const fresh = await findRandomPublishedAuctionCard(options, random);
     if (fresh) return fresh;
     logger.info(
       {
@@ -172,7 +173,7 @@ export const auctionContentService = {
       excludeRecentlySeenFootballPlayerIds: undefined,
       preferLeastRecentlySeenFootballPlayerIds:
         seenPlayerIds.length > 0 ? seenPlayerIds : undefined,
-    });
+    }, random);
   },
 
   getRecentlySeenFootballPlayerIds: auctionContentRepo.getRecentlySeenFootballPlayerIds,
@@ -199,7 +200,12 @@ export const auctionContentService = {
 // shape. The ≥€25M fame threshold stays put: goalkeepers have only ~20 cards
 // above it, so raising the BAR (rather than the share) would loop the same
 // few GK names.
-const FAME_MIX_WELL_KNOWN_SHARE = 0.8;
+const FAME_MIX_WELL_KNOWN_SHARE = 0.9;
+// Within the famous 80%, this fraction of the WHOLE roll prefers VETERAN
+// famous players (age 29+) whose cards carry 2010-2018 scout seasons — the
+// era spread owners asked for (roll < 0.32 veteran-famous, < 0.9 famous,
+// else lesser-known — i.e. 32% / 58% / 10%).
+const FAME_MIX_VETERAN_SHARE = 0.32;
 
 async function findRandomPublishedAuctionCard(
   options: RandomPublishedAuctionCardOptions,
@@ -211,12 +217,20 @@ async function findRandomPublishedAuctionCard(
   for (let attempt = 0; attempt < AUCTION_SNAPSHOT_CARD_ATTEMPTS; attempt += 1) {
     let row: PublishedAuctionCardRow | null;
     if (!options.fameTier) {
+      const roll = random();
       const fameTier: AuctionFameTier =
-        random() < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+        roll < FAME_MIX_WELL_KNOWN_SHARE ? 'well_known' : 'lesser_known';
+      const veteranEra = roll < FAME_MIX_VETERAN_SHARE;
       row = await auctionContentRepo.getRandomPublishedAuctionCard({
         ...options,
         fameTier,
+        ...(veteranEra ? { veteranEra } : {}),
       });
+      // Veteran slice exhausted for this position (GK has only ~21 such
+      // cards) — retry the plain famous tier before going unrestricted.
+      if (!row && veteranEra) {
+        row = await auctionContentRepo.getRandomPublishedAuctionCard({ ...options, fameTier });
+      }
       // The rolled tier is exhausted for this position/exclusion set — fall
       // through to the unrestricted pool rather than failing the round.
       if (!row) {
@@ -371,8 +385,12 @@ async function attachSeasonSnapshots(
   // text hints (clue_1/clue_2, already in the match locale). The hint TEXTS
   // ride the existing revealedClues pacing — the client receives each string
   // only when its step is revealed, exactly like the facet labels before them.
+  // 721 cards per locale carry facet LABELS ("Goals", "გოლები", ...) in their
+  // clue columns — placeholder rows from the stats pivot, not authored hints.
+  // A real hint is a sentence; the length floor filters the labels out, and a
+  // card without authored hints simply serves the five stat facets alone.
   const authoredClues = (card.clues ?? [])
-    .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+    .filter((text): text is string => typeof text === 'string' && text.trim().length >= 25)
     .slice(0, AUCTION_TEXT_HINTS_PER_LOT);
   card.clues = [
     ...(card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS),

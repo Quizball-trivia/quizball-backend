@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isSupportedIsoCountryCode } from '../../core/country.js';
+import { SUPPORTED_ISO_COUNTRY_CODES } from '../../core/country.js';
 
 export const MAX_LEADERBOARD_OFFSET = 10_000;
 
@@ -21,14 +21,12 @@ export const leaderboardOffsetSchema = z.coerce
  * the API boundary; names, private labels, legacy aliases and unknown codes do
  * not enter `users.country`.
  */
-export const countryCodeSchema = z
-  .string()
-  .trim()
-  .length(2, { message: 'Country must be an ISO 3166-1 alpha-2 code' })
-  .transform((value) => value.toUpperCase())
-  .refine(isSupportedIsoCountryCode, {
-    message: 'Country must be a supported ISO 3166-1 alpha-2 code',
-  });
+export const countryCodeSchema = z.preprocess(
+  (value) => typeof value === 'string' ? value.trim().toUpperCase() : value,
+  z.enum(SUPPORTED_ISO_COUNTRY_CODES, {
+    errorMap: () => ({ message: 'Country must be a supported ISO 3166-1 alpha-2 code' }),
+  }),
+);
 
 /**
  * i18n field schema - object with ISO 639-1 language codes as keys.

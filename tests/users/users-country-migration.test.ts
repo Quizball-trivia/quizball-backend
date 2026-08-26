@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { SUPPORTED_ISO_COUNTRY_CODES } from '../../src/core/country.js';
 
 function migration(name: string): string {
   return readFileSync(new URL(`../../supabase/migrations/${name}`, import.meta.url), 'utf8');
@@ -12,7 +13,9 @@ describe('users country-code constraint migrations', () => {
   it('adds the hot-table constraint idempotently without validating under the DDL lock', () => {
     expect(expansion).toContain("SET LOCAL lock_timeout = '5s'");
     expect(expansion).toContain("conname = 'users_country_iso2_check'");
-    expect(expansion).toContain("country IS NULL OR country ~ '^[A-Z]{2}$'");
+    const migrationCodes = [...expansion.matchAll(/'([A-Z]{2})'/g)].map((match) => match[1]);
+    expect(migrationCodes).toEqual([...SUPPORTED_ISO_COUNTRY_CODES]);
+    expect(expansion).toContain('country = ANY (ARRAY[');
     expect(expansion).toContain('NOT VALID');
     expect(expansion).not.toContain('VALIDATE CONSTRAINT');
     expect(expansion).not.toContain('UPDATE public.users');

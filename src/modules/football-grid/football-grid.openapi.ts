@@ -21,6 +21,7 @@ export function registerFootballGridOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Football Tic Tac Toe leaderboard', schema: footballGridLeaderboardResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 
@@ -35,6 +36,7 @@ export function registerFootballGridOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Rank information, or null when unranked', schema: footballGridUserRankResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 }

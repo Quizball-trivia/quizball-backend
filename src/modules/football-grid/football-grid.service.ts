@@ -286,8 +286,9 @@ async function processInbox(
     }
 
     const result = await footballGridRepo.runInTransaction(async (tx) => {
-      const previous = await footballGridRepo.loadStateForUpdate(tx, leased.match_id);
-      if (!previous) throw new NotFoundError('Football Grid match not found');
+      const loaded = await footballGridRepo.loadStateForUpdateAtDatabaseTime(tx, leased.match_id);
+      if (!loaded) throw new NotFoundError('Football Grid match not found');
+      const { state: previous, databaseNowMs } = loaded;
       if (previous.stateVersion !== leased.expected_state_version) {
         throw new ConflictError('Football Grid state changed while command was pending', { gridCode: 'STALE_STATE' });
       }
@@ -295,7 +296,7 @@ async function processInbox(
       let outcome: FootballGridCommandResult['outcome'];
       if (leased.command_type === 'pass') {
         outcome = 'pass';
-        next = passTurn(previous, leased.actor_user_id, leased.expected_state_version, await footballGridRepo.databaseNowMs(tx));
+        next = passTurn(previous, leased.actor_user_id, leased.expected_state_version, databaseNowMs);
       } else if (leased.command_type === 'answer' && resolution) {
         outcome = resolution.outcome;
         next = applyResolvedAnswer(previous, {
@@ -304,7 +305,7 @@ async function processInbox(
           cellIndex: leased.cell_index!,
           outcome: resolution.outcome,
           footballPlayerId: resolution.playerId,
-          nowMs: await footballGridRepo.databaseNowMs(tx),
+          nowMs: databaseNowMs,
         });
       } else {
         throw new BadRequestError('Unsupported Football Grid command');

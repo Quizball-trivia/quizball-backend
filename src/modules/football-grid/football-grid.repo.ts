@@ -41,6 +41,7 @@ interface GridMatchRow {
   paused_from_phase: 'countdown' | 'turn' | null;
   reconnect_deadline_at: string | null;
   completion_reason: FootballGridState['completionReason'];
+  database_now?: string;
 }
 
 interface GridParticipantRow {
@@ -290,17 +291,26 @@ async function loadBoard(executor: SqlExecutor, boardId: string): Promise<Footba
   }
 }
 
-async function loadStateWithExecutor(
+interface LoadedGridState {
+  state: FootballGridState;
+  databaseNowMs: number;
+}
+
+async function loadStateRecordWithExecutor(
   executor: SqlExecutor,
   matchId: string,
   lock: boolean,
-): Promise<FootballGridState | null> {
+): Promise<LoadedGridState | null> {
   const matches = await executor.unsafe<GridMatchRow[]>(
-    `SELECT * FROM football_grid_matches WHERE match_id = $1${lock ? ' FOR UPDATE' : ''}`,
+    `SELECT *, clock_timestamp() AS database_now
+       FROM football_grid_matches
+      WHERE match_id = $1${lock ? ' FOR UPDATE' : ''}`,
     [matchId],
   );
   const match = matches[0];
   if (!match) return null;
+  const databaseNowMs = Date.parse(match.database_now ?? '');
+  if (!Number.isFinite(databaseNowMs)) throw new Error('Football Grid database clock is unavailable');
   const [related, board] = await Promise.all([
     executor.unsafe<GridRelatedStateRow[]>(
       `SELECT
@@ -337,7 +347,7 @@ async function loadStateWithExecutor(
   const participants = related[0]?.participants ?? [];
   const claims = related[0]?.claims ?? [];
   if (participants.length !== 2) throw new Error(`Football Grid match ${matchId} has invalid roster`);
-  return {
+  const state: FootballGridState = {
     matchId,
     status: match.status,
     phase: match.phase,
@@ -373,6 +383,15 @@ async function loadStateWithExecutor(
     reconnectDeadlineAt: match.reconnect_deadline_at,
     completionReason: match.completion_reason,
   };
+  return { state, databaseNowMs };
+}
+
+async function loadStateWithExecutor(
+  executor: SqlExecutor,
+  matchId: string,
+  lock: boolean,
+): Promise<FootballGridState | null> {
+  return (await loadStateRecordWithExecutor(executor, matchId, lock))?.state ?? null;
 }
 
 async function insertEvent(
@@ -458,6 +477,13 @@ export const footballGridRepo = {
 
   async loadStateForUpdate(tx: TransactionSql, matchId: string): Promise<FootballGridState | null> {
     return loadStateWithExecutor(tx, matchId, true);
+  },
+
+  async loadStateForUpdateAtDatabaseTime(
+    tx: TransactionSql,
+    matchId: string,
+  ): Promise<LoadedGridState | null> {
+    return loadStateRecordWithExecutor(tx, matchId, true);
   },
 
   async getMatchPhase(matchId: string): Promise<FootballGridState['phase'] | null> {
@@ -1454,18 +1480,19 @@ export const footballGridRepo = {
       );
       const release = releases[0];
       if (!release) throw new Error('Selected Football Grid release is not published');
-      const baseMatches = await tx.unsafe<Array<{ id: string }>>(
+      const baseMatches = await tx.unsafe<Array<{ id: string; database_now: string }>>(
         `INSERT INTO matches (
            id, lobby_id, mode, game_variant, status, category_a_id, category_b_id,
            current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
          ) VALUES (
            gen_random_uuid(), $1, 'friendly', 'football_grid', 'active', null, null,
            0, 0, '{"variant":"football_grid"}'::jsonb, null, false, now()
-         ) RETURNING id`,
+         ) RETURNING id, clock_timestamp() AS database_now`,
         [input.lobbyId],
       );
       const matchId = baseMatches[0].id;
-      const nowMs = await this.databaseNowMs(tx);
+      const nowMs = Date.parse(baseMatches[0].database_now);
+      if (!Number.isFinite(nowMs)) throw new Error('Football Grid database clock is unavailable');
       const phaseDeadlineAt = new Date(nowMs + FOOTBALL_GRID_HANDOFF_MS).toISOString();
       const bot = input.players.find((player) => player.isBot);
       const botModelVersion = bot ? input.botModelVersion ?? 1 : null;
@@ -1531,32 +1558,40 @@ export const footballGridRepo = {
         // session conflict.
         throw new Error('GRID_PAIRING_CLAIM_LOST');
       }
-      for (const player of input.players) {
-        await tx.unsafe(
-          `INSERT INTO match_players (match_id, user_id, seat)
-           VALUES ($1, $2, $3)`,
-          [matchId, player.userId, player.seat],
-        );
-        await tx.unsafe(
-          `INSERT INTO football_grid_participants (
+      const [firstPlayer, secondPlayer] = input.players;
+      await tx.unsafe(
+        `WITH roster(user_id, seat, is_bot) AS (
+           VALUES
+             ($2::uuid, $3::smallint, $4::boolean),
+             ($5::uuid, $6::smallint, $7::boolean)
+         ), inserted_match_players AS (
+           INSERT INTO match_players (match_id, user_id, seat)
+           SELECT $1, user_id, seat FROM roster
+         ), inserted_participants AS (
+           INSERT INTO football_grid_participants (
              match_id, user_id, seat, is_bot, handoff_ack_at, ready_at,
              pause_budget_remaining_ms, reward_eligibility_type
-           ) VALUES (
-             $1, $2, $3, $4,
-             CASE WHEN $4 THEN now() ELSE null END,
-             CASE WHEN $4 THEN now() ELSE null END,
-             $5, CASE WHEN $4 THEN 'bot' ELSE 'human' END
-           )`,
-          [matchId, player.userId, player.seat, player.isBot ?? false, FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS],
-        );
-        if (!player.isBot) {
-          await tx.unsafe(
-            `INSERT INTO football_grid_board_exposures (user_id, board_id, match_id)
-             VALUES ($1, $2, $3)`,
-            [player.userId, board.id, matchId],
-          );
-        }
-      }
+           )
+           SELECT $1, user_id, seat, is_bot,
+                  CASE WHEN is_bot THEN now() ELSE null END,
+                  CASE WHEN is_bot THEN now() ELSE null END,
+                  $8, CASE WHEN is_bot THEN 'bot' ELSE 'human' END
+             FROM roster
+         )
+         INSERT INTO football_grid_board_exposures (user_id, board_id, match_id)
+         SELECT user_id, $9, $1 FROM roster WHERE NOT is_bot`,
+        [
+          matchId,
+          firstPlayer.userId,
+          firstPlayer.seat,
+          firstPlayer.isBot ?? false,
+          secondPlayer.userId,
+          secondPlayer.seat,
+          secondPlayer.isBot ?? false,
+          FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS,
+          board.id,
+        ],
+      );
       if (input.seriesId) {
         const openerSeat = input.players.find((player) => player.userId === input.openerUserId)?.seat ?? 1;
         const seriesUpdate = await tx.unsafe<Array<{ id: string }>>(

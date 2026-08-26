@@ -86,6 +86,7 @@ describe('Football Tic Tac Toe load-gate policy', () => {
         active: 30,
         idle: 49,
         idleInTxn: 1,
+        longestIdleInTxnSec: 1.1,
         waitingOnLock: 2,
         longestLockWaitSec: 1.1,
         longestActiveSec: 2,
@@ -101,7 +102,27 @@ describe('Football Tic Tac Toe load-gate policy', () => {
       'command p99 3001ms > 3000ms',
       'DB connections 80% > 75%',
       'DB lock wait 1.1s > 1s',
-      'DB idle-in-transaction 1',
+      'DB idle-in-transaction 1.1s > 1s',
     ]));
+  });
+
+  it('allows short transaction gaps that are gone before they can become stuck', () => {
+    expect(evaluateFootballGridLoad(
+      passingFleet(),
+      {
+        total: 20,
+        active: 5,
+        idle: 10,
+        idleInTxn: 5,
+        longestIdleInTxnSec: 0.2,
+        waitingOnLock: 0,
+        longestLockWaitSec: 0,
+        longestActiveSec: 0.3,
+        maxConnections: 60,
+        utilizationPct: 33.3,
+      },
+      noAppTelemetry,
+      0,
+    )).toEqual([]);
   });
 });

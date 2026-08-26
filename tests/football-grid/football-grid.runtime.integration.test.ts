@@ -649,6 +649,38 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(await buildFinalResultsPayload(match.matchId, 1)).toBeNull();
   });
 
+  it('does not count the settling match as a prior same-network pairing', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const players = await createUsers();
+    const first = await playWinningLine('random', undefined, players);
+    await db`
+      UPDATE football_grid_reward_risk_observations
+         SET network_hash = 'shared-network'
+       WHERE match_id = ${first.matchId}
+    `;
+    const firstRewards = await footballGridSettlementService.settleMatch(first.matchId);
+    expect(firstRewards.get(first.playerA)).toMatchObject({ coins: 700, tp: 50, eligibilityReason: 'eligible' });
+    expect(firstRewards.get(first.playerB)).toMatchObject({ coins: 250, tp: 10, eligibilityReason: 'eligible' });
+
+    const repeat = await playWinningLine('random', undefined, players);
+    await db`
+      UPDATE football_grid_reward_risk_observations
+         SET network_hash = 'shared-network'
+       WHERE match_id = ${repeat.matchId}
+    `;
+    const repeatRewards = await footballGridSettlementService.settleMatch(repeat.matchId);
+    expect(repeatRewards.get(repeat.playerA)).toMatchObject({
+      coins: 0,
+      tp: 0,
+      eligibilityReason: 'risk_hold:linked_network_repeat',
+    });
+    expect(repeatRewards.get(repeat.playerB)).toMatchObject({
+      coins: 0,
+      tp: 0,
+      eligibilityReason: 'risk_hold:linked_network_repeat',
+    });
+  });
+
   it('awards XP but no coins for a private friend match', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const match = await playWinningLine('private');

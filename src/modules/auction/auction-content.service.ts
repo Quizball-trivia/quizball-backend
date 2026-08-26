@@ -392,6 +392,16 @@ async function attachSeasonSnapshots(
   ) {
     card.startingPrice = Math.floor(scoutValue);
     card.startingPriceEur = Math.floor(scoutValue);
+  } else {
+    logger.debug(
+      {
+        footballPlayerId: card.footballPlayerId,
+        scoutValue,
+        trueValue: card.trueValue,
+        startingPrice: card.startingPrice,
+      },
+      'Auction scout price rejected as guaranteed-loss opening; view fallback kept'
+    );
   }
 
   card.league = snapshots[snapshots.length - 1]?.league ?? null;

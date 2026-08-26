@@ -386,6 +386,35 @@ describe('auctionContentService', () => {
     expect(result.trueValue).toBe(4_000_000);
   });
 
+  it('accepts a scout price exactly at 90% of the hidden value (inclusive cap)', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue([
+      { season_label: '2023/24', league_name: 'premier-league', age: 23, apps: 30, goals: 20, assists: 5, clean_sheets: null, goals_conceded: null, value_eur: '162000000' },
+      { season_label: '2024/25', league_name: 'premier-league', age: 24, apps: 32, goals: 28, assists: 7, clean_sheets: null, goals_conceded: null, value_eur: 150_000_000 },
+      { season_label: '2025/26', league_name: 'premier-league', age: 25, apps: 31, goals: 26, assists: 6, clean_sheets: null, goals_conceded: null, value_eur: 180_000_000 },
+    ]);
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    // 162M === 0.9 * 180M — the boundary must be ACCEPTED, and a string-typed
+    // value_eur row must survive the numeric comparison.
+    expect(result.startingPrice).toBe(162_000_000);
+  });
+
+  it('falls back when the scout price is just above the cap on a rising career', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue([
+      { season_label: '2023/24', league_name: 'premier-league', age: 23, apps: 30, goals: 20, assists: 5, clean_sheets: null, goals_conceded: null, value_eur: 171_000_000 },
+      { season_label: '2024/25', league_name: 'premier-league', age: 24, apps: 32, goals: 28, assists: 7, clean_sheets: null, goals_conceded: null, value_eur: 175_000_000 },
+      { season_label: '2025/26', league_name: 'premier-league', age: 25, apps: 31, goals: 26, assists: 6, clean_sheets: null, goals_conceded: null, value_eur: 180_000_000 },
+    ]);
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    // 171M is 95% of 180M — above the 90% cap, so the view price must win.
+    expect(result.startingPrice).toBe(30_000_000);
+  });
+
   const snapshotRows = [
     { season_label: '2020/21', league_name: 'laliga', age: 19, apps: 20, goals: 3, assists: 1, clean_sheets: null, goals_conceded: null, value_eur: '5000000' },
     { season_label: '2021/22', league_name: 'laliga', age: 20, apps: 30, goals: 8, assists: 4, clean_sheets: null, goals_conceded: null, value_eur: '20000000' },

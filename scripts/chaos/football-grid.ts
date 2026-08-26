@@ -282,6 +282,7 @@ async function runClient(
   let searchStartedAt = 0;
   let matchStartedAt = 0;
   let currentMatchId: string | null = null;
+  let latestStateVersion = -1;
   let heartbeat: NodeJS.Timeout | null = null;
   const actedStateVersions = new Set<number>();
   const readyStateVersions = new Set<number>();
@@ -302,8 +303,14 @@ async function runClient(
     const complete = () => { clearTimeout(failTimer); finish('completed'); };
     const fail = (reason: string) => { clearTimeout(failTimer); finish('failed', reason); };
 
-    const handleState = (state: GridState) => {
-      if (!currentMatchId || state.matchId !== currentMatchId) return;
+  const handleState = (state: GridState) => {
+    if (!currentMatchId || state.matchId !== currentMatchId) return;
+    // Socket.IO preserves order per connection, but Redis fan-out from multiple
+    // backend replicas can deliver an older state after a newer one. Mirror the
+    // production store's monotonic guard so the load client never submits a
+    // command from a state the real UI would discard.
+    if (state.stateVersion < latestStateVersion) return;
+    latestStateVersion = Math.max(latestStateVersion, state.stateVersion);
       if (state.phase === 'loading' && !state.players.find((player) => player.userId === user.userId)?.ready) {
         if (readyStateVersions.has(state.stateVersion)) return;
         readyStateVersions.add(state.stateVersion);

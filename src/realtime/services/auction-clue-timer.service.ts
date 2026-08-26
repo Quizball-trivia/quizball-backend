@@ -245,8 +245,11 @@ async function advanceClueRevealState(
     // one-per-tick made the scouting phase drag, so each tick uncovers two.
     // Clients render off the round patch (clueRevealIndex), so a single
     // clue_revealed event advancing the index by two shows both at once.
+    // The FIRST tick stays single: the round intro overlay is still fading
+    // when it lands, and opening with a double reveal read as rushed.
     let revealed = revealNextClue(current, context);
-    if ((revealed.currentRound?.clueRevealIndex ?? 0) < (revealed.currentRound?.footballer.clues?.length ?? 0)) {
+    const afterFirst = revealed.currentRound?.clueRevealIndex ?? 0;
+    if (afterFirst > 1 && afterFirst < (revealed.currentRound?.footballer.clues?.length ?? 0)) {
       revealed = revealNextClue(revealed, context);
     }
     const revealedRound = revealed.currentRound;

@@ -206,15 +206,22 @@ describe('auctionContentService', () => {
     );
   });
 
-  it('rolls the fame mix: 80% well known, 20% lesser known, tier dropped on fallback', async () => {
+  it('rolls the fame mix: 32% veteran-famous, 58% famous, 10% lesser known', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
 
-    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.79);
+    // Low roll: famous tier with the veteran-era bias (2010s scout seasons).
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fameTier: 'well_known', veteranEra: true })
+    );
+
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.89);
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ fameTier: 'well_known' })
     );
+    expect((auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.lastCall?.[0]).not.toHaveProperty('veteranEra');
 
-    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.8);
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.9);
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ fameTier: 'lesser_known' })
     );
@@ -224,10 +231,24 @@ describe('auctionContentService', () => {
       .mockReset()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(basePublishedCard);
-    const result = await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    const result = await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.5);
     expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
     const calls = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls;
     expect(calls[calls.length - 1][0].fameTier).toBeUndefined();
+
+    // Veteran slice exhausted → fall back to plain famous, THEN unrestricted.
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock)
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(basePublishedCard);
+    await auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' }, () => 0.1);
+    const chain = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls.map((c) => [c[0].fameTier, c[0].veteranEra]);
+    expect(chain).toEqual([
+      ['well_known', true],
+      ['well_known', undefined],
+      [undefined, undefined],
+    ]);
   });
 
   it('respects an explicit fameTier without re-rolling', async () => {
@@ -273,7 +294,7 @@ describe('auctionContentService', () => {
       positionGroup: 'FWD',
       excludeClueCardIds: [CLUE_CARD_ID],
       excludeRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
-    });
+    }, () => 0.5);
 
     // Never fails the round: falls back to a repeat rather than returning null.
     expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
@@ -295,7 +316,7 @@ describe('auctionContentService', () => {
       locale: 'en',
       positionGroup: 'FWD',
       excludeClueCardIds: [CLUE_CARD_ID],
-    });
+    }, () => 0.5);
 
     expect(result).toBeNull();
     // Tiered pick + unrestricted fallback only — no third history-based query.

@@ -62,6 +62,11 @@ interface GridClaimRow {
   turn_number: number;
 }
 
+interface GridRelatedStateRow {
+  participants: GridParticipantRow[];
+  claims: GridClaimRow[];
+}
+
 interface GridBoardRow {
   id: string;
   version: number;
@@ -209,7 +214,22 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView {
   };
 }
 
-async function loadBoard(executor: SqlExecutor, boardId: string): Promise<FootballGridBoardView> {
+const BOARD_VIEW_CACHE_TTL_MS = 60 * 60_000;
+const BOARD_VIEW_CACHE_MAX_ENTRIES = 1_024;
+const boardViewCache = new Map<string, {
+  expiresAt: number;
+  value: Promise<FootballGridBoardView>;
+}>();
+
+function trimBoardViewCache(): void {
+  while (boardViewCache.size > BOARD_VIEW_CACHE_MAX_ENTRIES) {
+    const oldestKey = boardViewCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    boardViewCache.delete(oldestKey);
+  }
+}
+
+async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promise<FootballGridBoardView> {
   const boards = await executor.unsafe<GridBoardRow[]>(
     `SELECT id, version, release_id, row_criteria, column_criteria, canonical_checksum
        FROM football_grid_boards
@@ -240,6 +260,29 @@ async function loadBoard(executor: SqlExecutor, boardId: string): Promise<Footba
   };
 }
 
+async function loadBoard(executor: SqlExecutor, boardId: string): Promise<FootballGridBoardView> {
+  const now = Date.now();
+  const cached = boardViewCache.get(boardId);
+  if (cached && cached.expiresAt > now) {
+    boardViewCache.delete(boardId);
+    boardViewCache.set(boardId, cached);
+    return cached.value;
+  }
+  if (cached) boardViewCache.delete(boardId);
+  const entry = {
+    expiresAt: now + BOARD_VIEW_CACHE_TTL_MS,
+    value: loadBoardUncached(executor, boardId),
+  };
+  boardViewCache.set(boardId, entry);
+  trimBoardViewCache();
+  try {
+    return await entry.value;
+  } catch (error) {
+    if (boardViewCache.get(boardId) === entry) boardViewCache.delete(boardId);
+    throw error;
+  }
+}
+
 async function loadStateWithExecutor(
   executor: SqlExecutor,
   matchId: string,
@@ -251,26 +294,41 @@ async function loadStateWithExecutor(
   );
   const match = matches[0];
   if (!match) return null;
-  const [participants, claims, board] = await Promise.all([
-    executor.unsafe<GridParticipantRow[]>(
-      `SELECT user_id, seat, is_bot, handoff_ack_at, ready_at,
-              no_action_timeout_count, pause_budget_remaining_ms
-         FROM football_grid_participants
-        WHERE match_id = $1
-        ORDER BY seat`,
-      [matchId],
-    ),
-    executor.unsafe<GridClaimRow[]>(
-      `SELECT c.cell_index, c.football_player_id, fp.name AS display_name,
-              fp.image_url, c.claimant_user_id, c.turn_number
-         FROM football_grid_claims c
-         JOIN football_players fp ON fp.id = c.football_player_id
-        WHERE c.match_id = $1
-        ORDER BY c.created_at, c.cell_index`,
+  const [related, board] = await Promise.all([
+    executor.unsafe<GridRelatedStateRow[]>(
+      `SELECT
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'user_id', p.user_id,
+             'seat', p.seat,
+             'is_bot', p.is_bot,
+             'handoff_ack_at', p.handoff_ack_at,
+             'ready_at', p.ready_at,
+             'no_action_timeout_count', p.no_action_timeout_count,
+             'pause_budget_remaining_ms', p.pause_budget_remaining_ms
+           ) ORDER BY p.seat)
+             FROM football_grid_participants p
+            WHERE p.match_id = $1
+         ), '[]'::jsonb) AS participants,
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'cell_index', c.cell_index,
+             'football_player_id', c.football_player_id,
+             'display_name', fp.name,
+             'image_url', fp.image_url,
+             'claimant_user_id', c.claimant_user_id,
+             'turn_number', c.turn_number
+           ) ORDER BY c.created_at, c.cell_index)
+             FROM football_grid_claims c
+             JOIN football_players fp ON fp.id = c.football_player_id
+            WHERE c.match_id = $1
+         ), '[]'::jsonb) AS claims`,
       [matchId],
     ),
     loadBoard(executor, match.board_id),
   ]);
+  const participants = related[0]?.participants ?? [];
+  const claims = related[0]?.claims ?? [];
   if (participants.length !== 2) throw new Error(`Football Grid match ${matchId} has invalid roster`);
   return {
     matchId,
@@ -338,14 +396,6 @@ function parseEventSequence(value: string | number): number {
   const sequence = Number(value);
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
     throw new Error('Football Grid event sequence is outside the safe integer range');
-  }
-  return sequence;
-}
-
-function nextEventSequence(value: string | number): number {
-  const sequence = parseEventSequence(value) + 1;
-  if (!Number.isSafeInteger(sequence)) {
-    throw new Error('Football Grid event sequence cannot be incremented safely');
   }
   return sequence;
 }
@@ -1625,26 +1675,25 @@ export const footballGridRepo = {
         aliasId: string | null;
         locale: 'en' | 'ka';
       };
+      pendingCommandId?: string;
     },
   ): Promise<void> {
-    const persistedSequence = (await tx.unsafe<Array<{ last_event_sequence: string | number }>>(
-      `SELECT last_event_sequence FROM football_grid_matches WHERE match_id = $1 FOR UPDATE`,
-      [previous.matchId],
-    ))[0].last_event_sequence;
-    const sequence = nextEventSequence(persistedSequence);
-    const updated = await tx.unsafe<Array<{ match_id: string }>>(
+    const updated = await tx.unsafe<Array<{ match_id: string; last_event_sequence: string | number }>>(
       `UPDATE football_grid_matches
           SET status = $2, phase = $3, opener_user_id = $4,
               current_player_user_id = $5, winner_user_id = $6,
-              turn_number = $7, state_version = $8, last_event_sequence = $9,
+              turn_number = $7, state_version = $8,
+              last_event_sequence = last_event_sequence + $9,
               phase_deadline_at = $10, turn_deadline_at = $11,
               turn_remaining_ms = $12, paused_at = $13,
               reconnect_deadline_at = $14, completion_reason = $15,
               paused_from_phase = $17,
+              pending_command_id = CASE WHEN $18::uuid IS NULL THEN pending_command_id ELSE NULL END,
               bot_action_deadline_at = null,
               updated_at = now(), ended_at = CASE WHEN $3 = 'terminal' THEN now() ELSE ended_at END
         WHERE match_id = $1 AND state_version = $16
-        RETURNING match_id`,
+          AND ($18::uuid IS NULL OR pending_command_id = $18)
+        RETURNING match_id, last_event_sequence`,
       [
         previous.matchId,
         next.status,
@@ -1654,7 +1703,7 @@ export const footballGridRepo = {
         next.winnerUserId,
         next.turnNumber,
         next.stateVersion,
-        sequence,
+        1,
         next.phaseDeadlineAt,
         next.turnDeadlineAt,
         next.turnRemainingMs,
@@ -1663,11 +1712,13 @@ export const footballGridRepo = {
         next.completionReason,
         previous.stateVersion,
         next.pausedFromPhase ?? null,
+        input.pendingCommandId ?? null,
       ],
     );
     if (updated.length !== 1) {
       throw new Error('Football Grid state version changed during persistence');
     }
+    const sequence = parseEventSequence(updated[0].last_event_sequence);
     for (const player of next.players) {
       const prior = previous.players.find((candidate) => candidate.userId === player.userId);
       if (
@@ -2126,14 +2177,9 @@ export const footballGridRepo = {
         input.inbox.admitted_at,
       ],
     );
-    await input.tx.unsafe(
-      `UPDATE football_grid_matches
-          SET pending_command_id = null
-        WHERE match_id = $1 AND pending_command_id = $2`,
-      [input.inbox.match_id, input.inbox.id],
-    );
     await this.persistStateInTx(input.tx, input.previous, input.next, {
       eventType: input.eventType,
+      pendingCommandId: input.inbox.id,
       eventPayload: {
         actorUserId: input.inbox.actor_user_id,
         cellIndex: input.inbox.cell_index,

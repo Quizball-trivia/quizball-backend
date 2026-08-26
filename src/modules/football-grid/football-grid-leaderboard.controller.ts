@@ -6,6 +6,7 @@ import type {
   FootballGridLeaderboardQuery,
   FootballGridUserRankQuery,
 } from './football-grid-leaderboard.schemas.js';
+import { normalizeSupportedCountryCode } from '../../core/country.js';
 
 export const footballGridLeaderboardController = {
   async getLeaderboard(req: Request, res: Response): Promise<void> {
@@ -13,7 +14,7 @@ export const footballGridLeaderboardController = {
     let country: string | undefined;
     if (scope === 'country') {
       const user = await usersRepo.getById(req.user!.id);
-      country = user?.country || undefined;
+      country = normalizeSupportedCountryCode(user?.country) ?? undefined;
       if (!country) {
         res.json({ entries: [] });
         return;
@@ -35,7 +36,7 @@ export const footballGridLeaderboardController = {
     const { scope } = req.validated.query as FootballGridUserRankQuery;
     const user = await usersRepo.getById(userId);
     const country = scope === 'country'
-      ? user?.country || undefined
+      ? normalizeSupportedCountryCode(user?.country) ?? undefined
       : undefined;
     if (scope === 'country' && !country) {
       res.json(null);
@@ -53,7 +54,7 @@ export const footballGridLeaderboardController = {
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
       avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
-      country: user?.country ?? null,
+      country: normalizeSupportedCountryCode(user?.country),
       ticTacToePoints: rankInfo.ticTacToePoints,
       tier: rankInfo.tier ?? null,
       rank: rankInfo.rank,

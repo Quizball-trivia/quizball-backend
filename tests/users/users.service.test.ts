@@ -345,6 +345,27 @@ describe('usersService.getPublicProfile', () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes country codes when the service is called outside HTTP validation', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', { country: ' ge ' });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', { country: 'GE' });
+  });
+
+  it.each(['Georgia', 'ZZ', 'My Private Country'])
+    ('rejects unsupported country values before writing: %s', async (country) => {
+      const { usersService } = await import('../../src/modules/users/users.service.js');
+
+      await expect(
+        usersService.updateProfile('user-target-id', { country })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        details: { field: 'country', reason: 'unsupported_country_code' },
+      });
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
   it('allows local admin avatar customization preview with unowned paid items', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
 

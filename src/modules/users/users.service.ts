@@ -42,6 +42,7 @@ import {
 import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
 import { trackAccountCreated } from '../../core/analytics.js';
 import type { CampaignAttribution } from '../../core/campaign-attribution.js';
+import { normalizeSupportedCountryCode } from '../../core/country.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
@@ -184,8 +185,9 @@ async function buildIdentityBackfill(
 ): Promise<UpdateUserData> {
   const backfill: UpdateUserData = {};
   const phoneNumber = normalizeOptionalText(identity.phoneNumber);
-  if (!user.country && detectedCountry) {
-    backfill.country = detectedCountry;
+  const detectedCountryCode = normalizeSupportedCountryCode(detectedCountry);
+  if (!user.country && detectedCountryCode) {
+    backfill.country = detectedCountryCode;
   }
   if (phoneNumber) {
     if (user.phone_number !== phoneNumber) {
@@ -336,13 +338,14 @@ export const usersService = {
       };
     },
   ): Promise<User> {
+    const detectedCountryCode = normalizeSupportedCountryCode(detectedCountry);
     // 1. Check cache first
     const cached = await getCachedUser(identity.provider, identity.subject);
     if (cached) {
       assertUserAccountActive(cached);
 
       // Backfill missing fields for existing users
-      const backfill = await buildIdentityBackfill(cached, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(cached, identity, detectedCountryCode);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
@@ -370,7 +373,7 @@ export const usersService = {
       assertUserAccountActive(existingUser);
 
       // Backfill missing fields for existing users
-      const backfill = await buildIdentityBackfill(existingUser, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(existingUser, identity, detectedCountryCode);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);
@@ -425,7 +428,7 @@ export const usersService = {
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
         nickname: proposedNickname,
-        country: detectedCountry ?? undefined,
+        country: detectedCountryCode ?? undefined,
       },
       {
         provider: identity.provider,
@@ -436,7 +439,7 @@ export const usersService = {
     const newUser = creation.user;
 
     logger.info(
-      { userId: newUser.id, provider: identity.provider, country: detectedCountry },
+      { userId: newUser.id, provider: identity.provider, country: detectedCountryCode },
       'Created new user and identity'
     );
 
@@ -688,6 +691,17 @@ export const usersService = {
     const updateData: typeof data = { ...data };
     let nicknameChange: { from: string | null; to: string } | null = null;
     let currentUser: User | null = null;
+
+    if (typeof data.country === 'string') {
+      const country = normalizeSupportedCountryCode(data.country);
+      if (!country) {
+        throw new BadRequestError('Country must be a supported ISO 3166-1 alpha-2 code', {
+          field: 'country',
+          reason: 'unsupported_country_code',
+        });
+      }
+      updateData.country = country;
+    }
 
     if (typeof data.nickname === 'string') {
       const nickname = data.nickname.trim();

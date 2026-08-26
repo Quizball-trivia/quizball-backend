@@ -160,6 +160,16 @@ describe('GET /api/v1/auction/leaderboard', () => {
     const res = await request(createApp()).get('/api/v1/auction/leaderboard?limit=500');
     expect(res.status).toBe(422);
   });
+
+  it('does not fall back to the global board when country scope has no valid country', async () => {
+    usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: null });
+
+    const res = await request(createApp()).get('/api/v1/auction/leaderboard?scope=country');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ entries: [] });
+    expect(dbMocks.sql.taggedCalls).toHaveLength(0);
+  });
 });
 
 describe('GET /api/v1/auction/leaderboard/me', () => {
@@ -185,5 +195,15 @@ describe('GET /api/v1/auction/leaderboard/me', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toBeNull();
+  });
+
+  it('returns null without querying the global rank when country scope has no valid country', async () => {
+    usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: 'ZZ' });
+
+    const res = await request(createApp()).get('/api/v1/auction/leaderboard/me?scope=country');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+    expect(dbMocks.sql.taggedCalls).toHaveLength(0);
   });
 });

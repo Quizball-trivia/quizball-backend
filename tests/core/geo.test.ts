@@ -11,6 +11,15 @@ describe('detectCountryFromHeaders', () => {
     await expect(detectCountryFromHeaders({ 'cf-ipcountry': 'ge' }, '203.0.113.10')).resolves.toBe('GE');
   });
 
+  it.each(['ZZ', 'T1', 'XX'])('rejects unsupported Cloudflare country values: %s', async (country) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
+
+    await expect(
+      detectCountryFromHeaders({ 'cf-ipcountry': country }, '198.51.100.40')
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('uses accept-language as a localhost fallback', async () => {
     await expect(detectCountryFromHeaders({ 'accept-language': 'en-MA,en;q=0.9' }, '127.0.0.1')).resolves.toBe('MA');
   });
@@ -55,5 +64,14 @@ describe('detectCountryFromHeaders', () => {
     await expect(detectCountryFromHeaders({}, '198.51.100.30')).resolves.toBeNull();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an unsupported country code returned by the fallback provider', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'success', country: 'Unknown', countryCode: 'ZZ' }),
+    } as Response);
+
+    await expect(detectCountryFromHeaders({}, '198.51.100.50')).resolves.toBeNull();
   });
 });

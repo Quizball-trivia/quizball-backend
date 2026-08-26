@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { leaderboardOffsetSchema } from '../../http/schemas/shared.js';
 
 export const auctionLeaderboardQuerySchema = z.object({
   scope: z.enum(['global', 'country']).optional().default('global'),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
-  offset: z.coerce.number().int().nonnegative().optional().default(0),
+  offset: leaderboardOffsetSchema,
 });
 
 export type AuctionLeaderboardQuery = z.infer<typeof auctionLeaderboardQuerySchema>;

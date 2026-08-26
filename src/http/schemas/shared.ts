@@ -1,4 +1,34 @@
 import { z } from 'zod';
+import { isSupportedIsoCountryCode } from '../../core/country.js';
+
+export const MAX_LEADERBOARD_OFFSET = 10_000;
+
+/**
+ * OFFSET pagination is retained for the current leaderboard UI, but bounded so
+ * callers cannot force deep scans, numeric overflows, or unbounded cache keys.
+ */
+export const leaderboardOffsetSchema = z.coerce
+  .number()
+  .int()
+  .safe()
+  .nonnegative()
+  .max(MAX_LEADERBOARD_OFFSET)
+  .optional()
+  .default(0);
+
+/**
+ * Canonical persisted country code. Lowercase/whitespace variants normalize at
+ * the API boundary; names, private labels, legacy aliases and unknown codes do
+ * not enter `users.country`.
+ */
+export const countryCodeSchema = z
+  .string()
+  .trim()
+  .length(2, { message: 'Country must be an ISO 3166-1 alpha-2 code' })
+  .transform((value) => value.toUpperCase())
+  .refine(isSupportedIsoCountryCode, {
+    message: 'Country must be a supported ISO 3166-1 alpha-2 code',
+  });
 
 /**
  * i18n field schema - object with ISO 639-1 language codes as keys.

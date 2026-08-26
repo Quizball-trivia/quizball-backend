@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { leaderboardOffsetSchema } from '../../http/schemas/shared.js';
 
 export const rankedTierSchema = z.enum([
   'Academy',
@@ -32,7 +33,7 @@ export type RankedProfileResponse = z.infer<typeof rankedProfileResponseSchema>;
 export const rankedLeaderboardQuerySchema = z.object({
   scope: z.enum(['global', 'country']).optional().default('global'),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
-  offset: z.coerce.number().int().nonnegative().optional().default(0),
+  offset: leaderboardOffsetSchema,
   season: z.string().uuid().optional(),
 });
 

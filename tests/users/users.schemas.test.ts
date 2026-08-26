@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   toPublicProfileResponse,
   toUserResponse,
+  updateProfileSchema,
   userIdParamSchema,
   type PublicProfileData,
 } from '../../src/modules/users/users.schemas.js';
@@ -37,6 +38,17 @@ describe('userIdParamSchema', () => {
     const result = userIdParamSchema.safeParse({});
     expect(result.success).toBe(false);
   });
+});
+
+describe('updateProfileSchema country', () => {
+  it('trims and uppercases supported ISO-2 country codes', () => {
+    expect(updateProfileSchema.parse({ country: ' ge ' })).toEqual({ country: 'GE' });
+  });
+
+  it.each(['Georgia', 'My Private Country', 'ZZ', 'UK', 'G3', ''])
+    ('rejects non-ISO or unsupported country input: %s', (country) => {
+      expect(updateProfileSchema.safeParse({ country }).success).toBe(false);
+    });
 });
 
 describe('toPublicProfileResponse', () => {

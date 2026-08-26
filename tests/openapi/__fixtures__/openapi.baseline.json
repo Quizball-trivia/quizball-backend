@@ -11942,6 +11942,7 @@
               "type": "integer",
               "nullable": true,
               "minimum": 0,
+              "maximum": 10000,
               "default": 0
             },
             "required": false,
@@ -14362,7 +14363,7 @@
                   "country": {
                     "type": "string",
                     "minLength": 2,
-                    "maxLength": 100
+                    "maxLength": 2
                   },
                   "avatar_url": {
                     "type": "string",
@@ -22553,6 +22554,7 @@
               "type": "integer",
               "nullable": true,
               "minimum": 0,
+              "maximum": 10000,
               "default": 0
             },
             "required": false,
@@ -23658,6 +23660,7 @@
               "type": "integer",
               "nullable": true,
               "minimum": 0,
+              "maximum": 10000,
               "default": 0
             },
             "required": false,

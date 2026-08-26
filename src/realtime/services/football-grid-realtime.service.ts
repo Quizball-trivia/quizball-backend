@@ -68,7 +68,8 @@ async function scheduleStateDeadline(state: FootballGridState): Promise<void> {
     ]);
     return;
   }
-  const botRuntime = await footballGridRepo.getBotRuntime(state.matchId);
+  const hasBot = state.players.some((player) => player.isBot);
+  const botRuntime = hasBot ? await footballGridRepo.getBotRuntime(state.matchId) : null;
   if (botRuntime) {
     await syntheticBotsRepo.heartbeatReservationFenced({
       botUserId: botRuntime.botUserId,

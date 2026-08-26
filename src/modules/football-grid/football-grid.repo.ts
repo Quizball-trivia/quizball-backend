@@ -107,6 +107,11 @@ export interface FootballGridCommandInboxRow {
   result_payload: Record<string, unknown> | null;
 }
 
+interface GridCommandAdmissionRow extends GridMatchRow {
+  database_now: string;
+  existing_inbox: FootballGridCommandInboxRow | null;
+}
+
 export interface FootballGridResultDeliveryRow {
   match_id: string;
   user_id: string;
@@ -1773,7 +1778,13 @@ export const footballGridRepo = {
       );
     }
     const terminal = next.phase === 'terminal';
-    if (!terminal) {
+    if (
+      !terminal
+      && (
+        (previous.phase === 'loading' && next.phase === 'countdown')
+        || next.turnNumber % 5 === 0
+      )
+    ) {
       // Generic session cleanup uses the base match activity clock. Keep it in
       // lockstep with the Grid-owned row so a legitimately long game is never
       // mistaken for a 15-minute orphan. The loading -> countdown boundary is
@@ -1850,20 +1861,25 @@ export const footballGridRepo = {
     payloadHash: string;
   }): Promise<FootballGridCommandInboxRow> {
     return this.runInTransaction(async (tx) => {
-      const rows = await tx.unsafe<GridMatchRow[]>(
-        `SELECT * FROM football_grid_matches WHERE match_id = $1 FOR UPDATE`,
-        [input.matchId],
+      const rows = await tx.unsafe<GridCommandAdmissionRow[]>(
+        `SELECT gm.*, clock_timestamp() AS database_now,
+                (
+                  SELECT to_jsonb(i)
+                    FROM football_grid_command_inbox i
+                   WHERE i.match_id = $1
+                     AND i.actor_user_id = $2
+                     AND i.command_id = $3
+                ) AS existing_inbox
+           FROM football_grid_matches gm
+          WHERE gm.match_id = $1
+          FOR UPDATE OF gm`,
+        [input.matchId, input.actorUserId, input.commandId],
       );
       const match = rows[0];
       if (!match) throw new Error('Football Grid match not found');
-      const existing = await tx.unsafe<FootballGridCommandInboxRow[]>(
-        `SELECT * FROM football_grid_command_inbox
-          WHERE match_id = $1 AND actor_user_id = $2 AND command_id = $3`,
-        [input.matchId, input.actorUserId, input.commandId],
-      );
-      if (existing[0]) {
-        if (existing[0].payload_hash !== input.payloadHash) throw new Error('COMMAND_ID_REUSED');
-        return existing[0];
+      if (match.existing_inbox) {
+        if (match.existing_inbox.payload_hash !== input.payloadHash) throw new Error('COMMAND_ID_REUSED');
+        return match.existing_inbox;
       }
       if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
       if (match.state_version !== input.expectedStateVersion) throw new Error('STALE_STATE');
@@ -1871,18 +1887,26 @@ export const footballGridRepo = {
       if (input.commandType !== 'forfeit') {
         if (match.status !== 'active' || match.phase !== 'turn') throw new Error('INVALID_STATE');
         if (match.current_player_user_id !== input.actorUserId) throw new Error('NOT_YOUR_TURN');
-        const deadlineRows = await tx.unsafe<Array<{ on_time: boolean }>>(
-          `SELECT clock_timestamp() <= $1::timestamptz AS on_time`,
-          [match.turn_deadline_at],
-        );
-        if (!deadlineRows[0]?.on_time) throw new Error('LATE_COMMAND');
+        const databaseNowMs = Date.parse(match.database_now);
+        const deadlineMs = Date.parse(match.turn_deadline_at ?? '');
+        if (!Number.isFinite(databaseNowMs) || !Number.isFinite(deadlineMs) || databaseNowMs > deadlineMs) {
+          throw new Error('LATE_COMMAND');
+        }
       }
       const inserted = await tx.unsafe<FootballGridCommandInboxRow[]>(
-        `INSERT INTO football_grid_command_inbox (
-           match_id, actor_user_id, command_id, expected_state_version,
-           turn_number, command_type, cell_index, locale, submitted_text, payload_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING *`,
+        `WITH admitted AS (
+           INSERT INTO football_grid_command_inbox (
+             match_id, actor_user_id, command_id, expected_state_version,
+             turn_number, command_type, cell_index, locale, submitted_text, payload_hash
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           RETURNING *
+         ), bound AS (
+           UPDATE football_grid_matches
+              SET pending_command_id = (SELECT id FROM admitted)
+            WHERE match_id = $1 AND pending_command_id IS NULL
+            RETURNING match_id
+         )
+         SELECT admitted.* FROM admitted JOIN bound ON true`,
         [
           input.matchId,
           input.actorUserId,
@@ -1896,10 +1920,7 @@ export const footballGridRepo = {
           input.payloadHash,
         ],
       );
-      await tx.unsafe(
-        `UPDATE football_grid_matches SET pending_command_id = $2 WHERE match_id = $1`,
-        [input.matchId, inserted[0].id],
-      );
+      if (!inserted[0]) throw new Error('COMMAND_IN_PROGRESS');
       return inserted[0];
     });
   },
@@ -2140,12 +2161,20 @@ export const footballGridRepo = {
     aliasId?: string | null;
     eventType: string;
   }): Promise<string> {
-    const updated = await input.tx.unsafe<Array<{ id: string }>>(
-      `UPDATE football_grid_command_inbox
-          SET status = 'completed', completed_at = now(), processing_lease_until = null,
-              result_code = $3, result_payload = $4::jsonb
-        WHERE id = $1 AND status = 'processing' AND processing_fence = $2
-        RETURNING id`,
+    const attempts = await input.tx.unsafe<Array<{ id: string }>>(
+      `WITH completed AS (
+         UPDATE football_grid_command_inbox
+            SET status = 'completed', completed_at = now(), processing_lease_until = null,
+                result_code = $3, result_payload = $4::jsonb
+          WHERE id = $1 AND status = 'processing' AND processing_fence = $2
+          RETURNING id
+       )
+       INSERT INTO football_grid_attempts (
+         inbox_id, match_id, actor_user_id, turn_number, cell_index, locale,
+         submitted_text, normalized_text, outcome, resolved_player_id, admitted_at
+       ) SELECT $1,$5,$6,$7,$8,$9,$10,$11,$3,$12,$13
+           FROM completed
+       RETURNING id`,
       [
         input.inbox.id,
         input.processingFence,
@@ -2154,17 +2183,6 @@ export const footballGridRepo = {
           outcome: input.outcome,
           resolvedPlayerId: input.resolvedPlayerId ?? null,
         }),
-      ],
-    );
-    if (!updated[0]) throw new Error('COMMAND_LEASE_LOST');
-    const attempts = await input.tx.unsafe<Array<{ id: string }>>(
-      `INSERT INTO football_grid_attempts (
-         inbox_id, match_id, actor_user_id, turn_number, cell_index, locale,
-         submitted_text, normalized_text, outcome, resolved_player_id, admitted_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING id`,
-      [
-        input.inbox.id,
         input.inbox.match_id,
         input.inbox.actor_user_id,
         input.inbox.turn_number,
@@ -2172,11 +2190,11 @@ export const footballGridRepo = {
         input.inbox.locale,
         input.inbox.submitted_text,
         input.normalizedText ?? null,
-        input.outcome,
         input.resolvedPlayerId ?? null,
         input.inbox.admitted_at,
       ],
     );
+    if (!attempts[0]) throw new Error('COMMAND_LEASE_LOST');
     await this.persistStateInTx(input.tx, input.previous, input.next, {
       eventType: input.eventType,
       pendingCommandId: input.inbox.id,

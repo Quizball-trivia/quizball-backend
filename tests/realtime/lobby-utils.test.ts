@@ -8,6 +8,7 @@ import {
   emitLobbyState,
   maxMembersForFriendlyGameMode,
   normalizeFriendlyGameMode,
+  orderLobbyMembersByJoinTime,
   playableMembersForFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCount,
   syncFriendlyLobbyModeForMemberCountLocked,
@@ -73,6 +74,16 @@ describe('lobby-utils', () => {
     expect(playableMembersForFriendlyGameMode('friendly_possession')).toBe(2);
     expect(playableMembersForFriendlyGameMode('ranked_sim')).toBe(2);
     expect(playableMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
+  });
+
+  it('orders lobby members when Postgres returns joined_at as Date objects', () => {
+    const later = { userId: 'later', joined_at: new Date('2026-08-26T12:00:01.000Z') };
+    const earlier = { userId: 'earlier', joined_at: new Date('2026-08-26T12:00:00.000Z') };
+
+    expect(orderLobbyMembersByJoinTime([later, earlier]).map((member) => member.userId)).toEqual([
+      'earlier',
+      'later',
+    ]);
   });
 
   it('EDGE 1/5: a 3-member auction lobby is never auto-promoted to party quiz', async () => {

@@ -90,6 +90,7 @@ const state = vi.hoisted(() => ({
   emitMatchFound: vi.fn(),
   emitSessionState: vi.fn(),
   withUserSessionLocks: vi.fn(),
+  matchmakingLockAvailable: true,
 }));
 
 vi.mock('../../src/core/config.js', () => ({
@@ -106,7 +107,9 @@ vi.mock('../../src/core/logger.js', () => ({
 
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => state.redis }));
 vi.mock('../../src/realtime/locks.js', () => ({
-  acquireLock: vi.fn(async () => ({ acquired: true, token: 'mm-lock' })),
+  acquireLock: vi.fn(async () => state.matchmakingLockAvailable
+    ? ({ acquired: true, token: 'mm-lock' })
+    : ({ acquired: false, token: null })),
   releaseLock: vi.fn(async () => true),
   startLockHeartbeat: vi.fn(() => ({ stop: vi.fn() })),
 }));
@@ -199,6 +202,16 @@ describe('footballGridMatchmakingService session fencing', () => {
     state.lobbyConflictUserId = null;
     state.activeSessionUserId = null;
     state.stalePairings = [];
+    state.matchmakingLockAvailable = true;
+    state.createMatch.mockImplementation(async (input: { players: Array<{ userId: string }> }) => ({
+      state: {
+        matchId: 'grid-1',
+        players: input.players,
+        phase: 'handoff',
+        board: { boardId: 'board-1', boardVersion: 1 },
+      },
+      created: true,
+    }));
     state.withUserSessionLocks.mockImplementation(async (_userIds, work) => work());
     state.emitSessionState.mockResolvedValue(undefined);
   });
@@ -215,6 +228,51 @@ describe('footballGridMatchmakingService session fencing', () => {
     expect(state.createMatch).toHaveBeenCalledOnce();
     expect(state.emitMatchFound).toHaveBeenCalledOnce();
     expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toEqual([]);
+  });
+
+  it('keeps a search queued when another replica is draining matchmaking', async () => {
+    state.matchmakingLockAvailable = false;
+    const userSocket = socket('queued-user');
+
+    await footballGridMatchmakingService.handleSearchStart(io, userSocket, { locale: 'en' });
+
+    expect(await state.redis!.hGet('football_grid:mm:user', 'queued-user')).not.toBeNull();
+    expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toHaveLength(1);
+    expect(userSocket.emit).not.toHaveBeenCalledWith(
+      'grid:error',
+      expect.objectContaining({ code: 'GRID_SEARCH_BUSY' }),
+    );
+  });
+
+  it('starts independent queued pairs concurrently under one drain lock', async () => {
+    state.matchmakingLockAvailable = false;
+    for (const userId of ['user-a', 'user-b', 'user-c', 'user-d']) {
+      await footballGridMatchmakingService.handleSearchStart(io, socket(userId), { locale: 'en' });
+    }
+
+    let activeCreates = 0;
+    let peakCreates = 0;
+    state.createMatch.mockImplementation(async (input: { players: Array<{ userId: string }> }) => {
+      activeCreates += 1;
+      peakCreates = Math.max(peakCreates, activeCreates);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeCreates -= 1;
+      return {
+        state: {
+          matchId: `grid-${input.players[0].userId}`,
+          players: input.players,
+          phase: 'handoff',
+          board: { boardId: 'board-1', boardVersion: 1 },
+        },
+        created: true,
+      };
+    });
+    state.matchmakingLockAvailable = true;
+
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-e'), { locale: 'en' });
+
+    expect(state.createMatch).toHaveBeenCalledTimes(2);
+    expect(peakCreates).toBe(2);
   });
 
   it('keeps a committed pair and continues draining after post-commit handoff failure', async () => {

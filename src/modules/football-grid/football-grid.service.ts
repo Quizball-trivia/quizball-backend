@@ -41,6 +41,30 @@ export interface FootballGridCommandResult {
   duplicate: boolean;
 }
 
+type FootballGridBoardAnswerContent = Awaited<ReturnType<typeof footballGridRepo.getAliasesForBoard>>;
+const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
+const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
+const boardAnswerCache = new Map<string, { value: FootballGridBoardAnswerContent; expiresAt: number }>();
+
+async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
+  const now = Date.now();
+  const cached = boardAnswerCache.get(matchId);
+  if (cached && cached.expiresAt > now) {
+    boardAnswerCache.delete(matchId);
+    boardAnswerCache.set(matchId, cached);
+    return cached.value;
+  }
+  if (cached) boardAnswerCache.delete(matchId);
+  const value = await footballGridRepo.getAliasesForBoard(matchId);
+  boardAnswerCache.set(matchId, { value, expiresAt: now + BOARD_ANSWER_CACHE_TTL_MS });
+  while (boardAnswerCache.size > BOARD_ANSWER_CACHE_MAX_ENTRIES) {
+    const oldestKey = boardAnswerCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    boardAnswerCache.delete(oldestKey);
+  }
+  return value;
+}
+
 function commandPayloadHash(payload: Record<string, unknown>): string {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
@@ -141,7 +165,7 @@ async function processInbox(
       if (leased.cell_index === null || !leased.locale || !leased.submitted_text) {
         throw new BadRequestError('Answer command is incomplete');
       }
-      const content = await footballGridRepo.getAliasesForBoard(leased.match_id);
+      const content = await getBoardAnswerContent(leased.match_id);
       const preState = await currentOrThrow(leased.match_id);
       const resolverStartedAt = performance.now();
       resolution = resolveFootballGridAnswer({
@@ -194,6 +218,7 @@ async function processInbox(
     });
     const attempt = await footballGridRepo.getAttemptForInbox(inbox.id);
     const persistedState = await currentOrThrow(inbox.match_id);
+    if (persistedState.phase === 'terminal') boardAnswerCache.delete(inbox.match_id);
     appMetrics.footballGridCommands.add(1, { outcome: result.outcome, command_type: leased.command_type });
     return { ...result, state: persistedState, attemptId: attempt?.attemptId ?? null };
   } catch (error) {

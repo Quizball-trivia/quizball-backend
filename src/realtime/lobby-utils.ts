@@ -96,6 +96,15 @@ export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode): num
   return playableMembersForGameMode(gameMode);
 }
 
+export function orderLobbyMembersByJoinTime<T extends { joined_at: string | Date }>(
+  members: readonly T[],
+): T[] {
+  const timestamp = (value: string | Date) => value instanceof Date ? value.getTime() : Date.parse(value);
+  return [...members].sort(
+    (left, right) => timestamp(left.joined_at) - timestamp(right.joined_at),
+  );
+}
+
 async function syncFriendlyLobbyModeForMemberCountInternal(
   lobbyId: string,
   options?: { clearReadyOnPartyTransition?: boolean }

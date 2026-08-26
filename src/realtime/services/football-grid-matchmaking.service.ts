@@ -35,6 +35,7 @@ const LOCK_TTL_MS = 12_000;
 const SEARCH_TTL_SEC = 180;
 const MAX_SEARCH_AGE_MS = SEARCH_TTL_SEC * 1_000;
 const MATCH_SCAN_LIMIT = 20;
+const MAX_CONCURRENT_HUMAN_PAIR_STARTS = 6;
 const REPEAT_SOFT_LIMIT = 3;
 const PAIR_COUNT_CACHE_TTL_SEC = 60;
 const FALLBACK_TIMER_KIND = 'football_grid_matchmaking_fallback' as const;
@@ -401,12 +402,25 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
 async function tryStartHumanPairsLocked(io: QuizballServer): Promise<void> {
   while (true) {
     const searches = await listSearches(io);
-    const anchor = searches[0];
-    if (!anchor || searches.length < 2) return;
-    const opponent = await chooseOpponent(anchor, searches.slice(1));
-    if (!opponent) return;
-    const started = await startHumanPair(io, anchor, opponent);
-    if (!started) return;
+    if (searches.length < 2) return;
+    const remaining = [...searches];
+    const pairs: Array<[QueuedGridSearch, QueuedGridSearch]> = [];
+    while (remaining.length >= 2 && pairs.length < MAX_CONCURRENT_HUMAN_PAIR_STARTS) {
+      const anchor = remaining.shift()!;
+      const opponent = await chooseOpponent(anchor, remaining);
+      if (!opponent) break;
+      const opponentIndex = remaining.findIndex((candidate) => candidate.searchId === opponent.searchId);
+      if (opponentIndex < 0) break;
+      remaining.splice(opponentIndex, 1);
+      pairs.push([anchor, opponent]);
+    }
+    if (pairs.length === 0) return;
+    const outcomes = await Promise.all(pairs.map(([anchor, opponent]) => (
+      startHumanPair(io, anchor, opponent)
+    )));
+    // A failed pair restores its searches. Leave them for a later join/fallback
+    // rather than immediately retrying the same transient conflict in a loop.
+    if (outcomes.some((started) => !started)) return;
   }
 }
 
@@ -613,8 +627,11 @@ export const footballGridMatchmakingService = {
       }
       // 'gone', cancelled, or resumable-but-terminalized: fresh search.
     }
-    const locked = await withMatchmakingLock(async () => {
-      const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {
+    // Queue admission is per-user and does not need the global pairing lock.
+    // Keeping it behind the global lock made a burst behave like a try-lock:
+    // every caller except the current match creator was rejected instead of
+    // being durably queued.
+    const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {
         const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
         if (!prepared.ok) {
           userSessionGuardService.emitBlocked(socket, {
@@ -666,14 +683,17 @@ export const footballGridMatchmakingService = {
           fallbackAt: new Date(search.fallbackAt).toISOString(),
         });
         return true;
-      }, { waitMs: 1_200 });
-      if (transitioned === null) {
-        socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Tic Tac Toe search is already changing. Please retry.' });
-        return;
-      }
-      if (transitioned) await tryStartHumanPairsLocked(io);
+    }, { waitMs: 1_200 });
+    if (transitioned === null) {
+      socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Tic Tac Toe search is already changing. Please retry.' });
+      return;
+    }
+    if (!transitioned) return;
+    // A busy drainer is not an admission failure: this search is already in
+    // Redis and its durable fallback timer will retry pairing.
+    await withMatchmakingLock(async () => {
+      await tryStartHumanPairsLocked(io);
     });
-    if (locked === null) socket.emit('grid:error', { code: 'GRID_SEARCH_BUSY', message: 'Matchmaking is busy. Please retry.' });
   },
 
   async handleSearchCancel(io: QuizballServer, socket: QuizballSocket, expectedSearchId: string): Promise<void> {
@@ -717,7 +737,7 @@ export const footballGridMatchmakingService = {
   },
 
   async handleFallbackTimer(io: QuizballServer, searchId: string, userId?: string): Promise<void> {
-    await withMatchmakingLock(async () => {
+    const locked = await withMatchmakingLock(async () => {
       const search = await readSearch(searchId);
       if (!search) {
         if (userId) {
@@ -752,6 +772,19 @@ export const footballGridMatchmakingService = {
         await scheduleFallback(rearmed);
       }
     });
+    if (locked === null) {
+      // The durable timer has fired and is now consumed. Re-arm a short retry
+      // without rewriting queue state; if the search was paired meanwhile the
+      // next callback simply observes that it is gone.
+      const retryUserId = userId ?? (await readSearch(searchId))?.userId;
+      if (!retryUserId) return;
+      await scheduleRealtimeTimer(
+        FALLBACK_TIMER_KIND,
+        searchId,
+        new Date(Date.now() + 250),
+        { kind: FALLBACK_TIMER_KIND, searchId, userId: retryUserId },
+      );
+    }
   },
 
   async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {

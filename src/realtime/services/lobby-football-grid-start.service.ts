@@ -10,7 +10,7 @@ import {
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbyChallengeInvitationsRepo } from '../../modules/lobbies/lobby-challenge-invitations.repo.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { emitLobbyState } from '../lobby-utils.js';
+import { emitLobbyState, orderLobbyMembersByJoinTime } from '../lobby-utils.js';
 import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
@@ -32,10 +32,14 @@ export async function startFootballGridMatchFromLobby(
   const pairingToken = randomUUID();
   const isChallenge = await lobbyChallengeInvitationsRepo.existsForLobby(input.lobbyId);
   const origin = isChallenge ? 'challenge' : input.isPublic ? 'public' : input.inviteCode ? 'code' : 'private';
-  const seriesId = await footballGridRepo.createSeries({ origin, lobbyId: input.lobbyId });
-  const [first, second] = members.sort((a, b) => a.joined_at.localeCompare(b.joined_at));
+  // postgres.js decodes timestamptz values as Date instances at runtime even
+  // though the generated lobby row contract exposes ISO strings. Normalize
+  // through Date so both representations preserve deterministic seat order.
+  const [first, second] = orderLobbyMembersByJoinTime(members);
+  let seriesId: string | null = null;
   let createdState: Awaited<ReturnType<typeof footballGridService.createMatch>>['state'];
   try {
+    seriesId = await footballGridRepo.createSeries({ origin, lobbyId: input.lobbyId });
     await footballGridRepo.createPairing({
       pairingToken,
       searchAId: input.lobbyId,
@@ -85,7 +89,7 @@ export async function startFootballGridMatchFromLobby(
     });
     createdState = state;
   } catch (error) {
-    await footballGridRepo.closeSeries(seriesId).catch(() => {});
+    if (seriesId) await footballGridRepo.closeSeries(seriesId).catch(() => {});
     await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
     throw error;
   }

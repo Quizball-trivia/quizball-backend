@@ -8,6 +8,7 @@ import {
   emitLobbyState,
   maxMembersForFriendlyGameMode,
   normalizeFriendlyGameMode,
+  orderLobbyMembersByJoinTime,
   playableMembersForFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCount,
   syncFriendlyLobbyModeForMemberCountLocked,
@@ -73,6 +74,27 @@ describe('lobby-utils', () => {
     expect(playableMembersForFriendlyGameMode('friendly_possession')).toBe(2);
     expect(playableMembersForFriendlyGameMode('ranked_sim')).toBe(2);
     expect(playableMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
+  });
+
+  it('orders lobby members when Postgres returns joined_at as Date objects', () => {
+    const later = { user_id: 'later', joined_at: new Date('2026-08-26T12:00:01.000Z') };
+    const earlier = { user_id: 'earlier', joined_at: new Date('2026-08-26T12:00:00.000Z') };
+
+    expect(orderLobbyMembersByJoinTime([later, earlier]).map((member) => member.user_id)).toEqual([
+      'earlier',
+      'later',
+    ]);
+  });
+
+  it('orders equal join timestamps by user ID for stable seat assignment', () => {
+    const joinedAt = new Date('2026-08-26T12:00:00.000Z');
+    const second = { user_id: 'user-b', joined_at: joinedAt };
+    const first = { user_id: 'user-a', joined_at: joinedAt };
+
+    expect(orderLobbyMembersByJoinTime([second, first]).map((member) => member.user_id)).toEqual([
+      'user-a',
+      'user-b',
+    ]);
   });
 
   it('EDGE 1/5: a 3-member auction lobby is never auto-promoted to party quiz', async () => {

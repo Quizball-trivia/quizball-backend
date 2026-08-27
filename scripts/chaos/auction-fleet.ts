@@ -378,11 +378,12 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
       socket.on('auction:player_forfeited', (payload: { matchId: string; userId: string }) => {
         touch();
         metrics.playerForfeitSignals += 1;
-        cleanForfeitMatchIds.add(payload.matchId);
+        const isCurrentMatch = phase === 'playing' && payload.matchId === matchId;
+        if (isCurrentMatch) cleanForfeitMatchIds.add(payload.matchId);
         if (activeMatchedUserToMatch.get(payload.userId) === payload.matchId) {
           activeMatchedUserToMatch.delete(payload.userId);
         }
-        if (WAVE_MODE && payload.userId === user.userId) {
+        if (WAVE_MODE && isCurrentMatch && payload.userId === user.userId) {
           metrics.cleanForfeits += 1;
           finish('finished');
         }
@@ -527,7 +528,8 @@ async function main(): Promise<void> {
     console.log(`  report → ${path}`);
   }
   const wavePassed = !WAVE_MODE || (
-    uniqueMatchedUsers.size === users.length
+    users.length === SOCKETS
+    && uniqueMatchedUsers.size === users.length
     && summary.percentiles.searchToFoundMs.p95 <= 20_000
     && summary.humanSeatShare >= 0.9
     && metrics.stranded === 0

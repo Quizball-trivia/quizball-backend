@@ -110,6 +110,7 @@ interface ClaimedAuctionGroup {
 interface ClaimStartJob {
   io: QuizballServer;
   claim: ClaimedAuctionGroup;
+  generation: number;
   resolve: () => void;
 }
 
@@ -119,6 +120,7 @@ let recoveryTimer: NodeJS.Timeout | null = null;
 let drainRunning = false;
 let recoveryRunning = false;
 let activeClaimStarts = 0;
+let claimStartGeneration = 0;
 const pendingClaimStarts: ClaimStartJob[] = [];
 
 export interface AuctionSearchStartServiceInput {
@@ -162,6 +164,11 @@ export const auctionMatchmakingService = {
     drainTimer = null;
     recoveryTimer = null;
     matchmakingIo = null;
+    drainRunning = false;
+    recoveryRunning = false;
+    activeClaimStarts = 0;
+    claimStartGeneration += 1;
+    for (const job of pendingClaimStarts.splice(0)) job.resolve();
   },
 
   async handleSearchStart(
@@ -282,15 +289,24 @@ export const auctionMatchmakingService = {
         const lockOutcome = await withAuctionMatchmakingLock(async () => {
           // The pre-lock guards are STALE by now (the bounded wait can be
           // seconds; a previous search may have committed into a match in the
-          // meantime) — recheck the live-match index inside the lock or a
-          // duplicate search sneaks in behind the user's own match.
+          // meantime) — recheck both the pairing fence and live-match index
+          // inside the lock or a duplicate search can sneak in behind the
+          // user's own claim/match.
+          const pairingFence = await redis.get(sharedPairingUserKey(user.id));
+          if (pairingFence) {
+            return {
+              claims: [] as ClaimedAuctionGroup[], search: null, group: [], reattached: false,
+              queueDepth: 0, pairingBlocked: true,
+            };
+          }
           const activeNow = await auctionStateStore
             .getActiveMatchIdForUser(user.id)
             .catch(() => null);
           if (activeNow && (await isUserInLiveAuctionMatch(activeNow, user.id))) {
             await rejoinAuctionMatch(io, socket, activeNow).catch(() => {});
             return {
-              claims: [] as ClaimedAuctionGroup[], search: null, group: [], reattached: false, queueDepth: 0,
+              claims: [] as ClaimedAuctionGroup[], search: null, group: [], reattached: false,
+              queueDepth: 0, pairingBlocked: false,
             };
           }
           const existingSearchId = await redis.hGet(AUCTION_MM_USER_MAP_KEY, user.id);
@@ -308,7 +324,10 @@ export const auctionMatchmakingService = {
               const queued = await listQueuedSearches(redis);
               const group = queueGroupForSearch(queued, rearmed.searchId);
               const claims = await claimFullHumanMatchesLocked(redis);
-              return { claims, search: rearmed, group, reattached: true, queueDepth: queued.length };
+              return {
+                claims, search: rearmed, group, reattached: true,
+                queueDepth: queued.length, pairingBlocked: false,
+              };
             }
             await redis.hDel(AUCTION_MM_USER_MAP_KEY, user.id);
           }
@@ -328,7 +347,10 @@ export const auctionMatchmakingService = {
           const queued = await listQueuedSearches(redis);
           const group = queueGroupForSearch(queued, search.searchId);
           const claims = await claimFullHumanMatchesLocked(redis);
-          return { claims, search, group, reattached: false, queueDepth: queued.length };
+          return {
+            claims, search, group, reattached: false,
+            queueDepth: queued.length, pairingBlocked: false,
+          };
         });
         // Lock still busy after the bounded wait: the client got NOTHING —
         // surface a retryable error instead of a silent non-search.
@@ -336,6 +358,15 @@ export const auctionMatchmakingService = {
           emitAuctionError(socket, {
             code: 'AUCTION_SEARCH_BUSY',
             message: 'Auction matchmaking is busy. Please retry.',
+          });
+          return;
+        }
+        if (lockOutcome.pairingBlocked) {
+          userSessionGuardService.emitBlocked(socket, {
+            reason: 'ACTIVE_MATCH',
+            message: 'Your match is starting',
+            operation: 'auction:search_start',
+            stateSnapshot: snapshot,
           });
           return;
         }
@@ -708,7 +739,7 @@ function availableClaimStartSlots(): number {
 
 function enqueueClaimStart(io: QuizballServer, claim: ClaimedAuctionGroup): Promise<void> {
   return new Promise((resolve) => {
-    pendingClaimStarts.push({ io, claim, resolve });
+    pendingClaimStarts.push({ io, claim, generation: claimStartGeneration, resolve });
     pumpClaimStarts();
   });
 }
@@ -717,6 +748,10 @@ function pumpClaimStarts(): void {
   while (activeClaimStarts < AUCTION_MM_MAX_CONCURRENT_STARTS) {
     const job = pendingClaimStarts.shift();
     if (!job) return;
+    if (job.generation !== claimStartGeneration) {
+      job.resolve();
+      continue;
+    }
     activeClaimStarts += 1;
     void startClaimedGroup(job.io, job.claim)
       .catch((error) => {
@@ -726,7 +761,9 @@ function pumpClaimStarts(): void {
         );
       })
       .finally(() => {
-        activeClaimStarts = Math.max(0, activeClaimStarts - 1);
+        if (job.generation === claimStartGeneration) {
+          activeClaimStarts = Math.max(0, activeClaimStarts - 1);
+        }
         job.resolve();
         pumpClaimStarts();
       });

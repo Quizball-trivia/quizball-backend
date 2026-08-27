@@ -416,6 +416,37 @@ describe('auctionMatchmakingService', () => {
     }));
   });
 
+  it('does not create a search when a pairing fence appears before the queue lock', async () => {
+    const { io } = createIo();
+    sessionGuardMock.userSessionGuardService.prepareForQueueJoin.mockImplementationOnce(async () => {
+      redisMock.client!.strings.set('session:pairing:user:u1', 'claim-in-flight');
+      return {
+        ok: true,
+        snapshot: {
+          state: 'IDLE',
+          activeMatchId: null,
+          waitingLobbyId: null,
+          queueSearchId: null,
+          openLobbyIds: [],
+          resolvedAt: '2026-06-20T10:00:00.000Z',
+        },
+      };
+    });
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+
+    expect(redisMock.client!.hashes.get('auction:mm:user')?.u1).toBeUndefined();
+    expect(timerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
+    expect(sessionGuardMock.userSessionGuardService.emitBlocked).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        reason: 'ACTIVE_MATCH',
+        message: 'Your match is starting',
+        operation: 'auction:search_start',
+      }),
+    );
+  });
+
   it('matches two humans across locales, then immediately seats a named bot on the fill tick', async () => {
     const { io, roomEmit } = createIo();
 

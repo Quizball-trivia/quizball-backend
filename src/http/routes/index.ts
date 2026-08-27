@@ -35,6 +35,7 @@ import { auctionRoutes } from './auction.routes.js';
 import { adminAuctionRoutes } from './admin-auction.routes.js';
 import { adminPlayerClueCardsRoutes } from './admin-player-clue-cards.routes.js';
 import { adminAuctionPipelineRoutes } from './admin-auction-pipeline.routes.js';
+import { adminRetentionRoutes } from './admin-retention.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -80,6 +81,7 @@ router.use('/api/v1/auction', auctionRoutes);
 router.use('/api/v1/admin/auction', adminAuctionRoutes);
 router.use('/api/v1/admin/player-clue-cards', adminPlayerClueCardsRoutes);
 router.use('/api/v1/admin/auction-pipeline', adminAuctionPipelineRoutes);
+router.use('/api/v1/admin/retention', adminRetentionRoutes);
 router.use('/api/v1/feedback', feedbackRoutes);
 router.use('/api/v1/email', emailRoutes);
 router.use('/api/v1/campaign-quizzes', campaignQuizzesRoutes);

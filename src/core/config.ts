@@ -351,6 +351,20 @@ const configSchema = z.object({
     .transform((value) => value.split(",").map((part) => part.trim()).filter(Boolean))
     .pipe(z.array(z.string().uuid()).max(50)),
 
+  // Durable 3/7/14/30/60-day reactivation journey. The database configuration,
+  // PostHog flag and this environment switch must all permit work; false is a
+  // deployment-safe default and mobile marketing remains separately locked.
+  REACTIVATION_JOURNEY_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  REACTIVATION_JOURNEY_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
+  REACTIVATION_JOURNEY_USER_ID_ALLOWLIST: z
+    .string()
+    .default("")
+    .transform((value) => value.split(",").map((part) => part.trim()).filter(Boolean))
+    .pipe(z.array(z.string().uuid()).max(50)),
+
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),
   DOCS_USERNAME: z.string().optional(),

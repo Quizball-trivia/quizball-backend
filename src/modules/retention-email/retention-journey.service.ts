@@ -25,7 +25,7 @@ async function evaluateVariant(
       journeyConfig.feature_flag_key,
       candidate.user_id,
       {
-        personProperties: { country: 'GE' },
+        personProperties: { country: candidate.country ?? '' },
         sendFeatureFlagEvents: false,
       },
     );
@@ -75,6 +75,7 @@ export async function assignReactivationJourneyCandidates(): Promise<number> {
       (Date.parse(enrollment.entered_at) - Date.parse(enrollment.last_match_started_at))
       / (24 * 60 * 60 * 1_000),
     ));
+    const normalizedCountry = candidate.country?.trim().toUpperCase() || 'UNKNOWN';
     const properties = {
       journey_key: enrollment.journey_key,
       journey_version: enrollment.journey_version,
@@ -82,6 +83,8 @@ export async function assignReactivationJourneyCandidates(): Promise<number> {
       entry_milestone_days: enrollment.entry_milestone_days,
       inactivity_days: inactivityDays,
       lifetime_matches: enrollment.lifetime_matches,
+      country_code: normalizedCountry,
+      content_language: normalizedCountry === 'GE' ? 'ka' : 'en',
       channel: variant === 'test' ? 'email' : 'holdout',
     };
     trackEvent('$feature_flag_called', enrollment.user_id, {
@@ -116,12 +119,15 @@ export async function scheduleReactivationJourneySteps(): Promise<{
     const assignment = await retentionJourneyRepo.insertDueStep({ config: journeyConfig, step });
     if (!assignment) continue;
     scheduled += 1;
+    const normalizedCountry = step.country?.trim().toUpperCase() || 'UNKNOWN';
     trackEvent('reactivation_journey_step_scheduled', step.user_id, {
       journey_key: step.journey_key,
       journey_version: step.journey_version,
       variant: step.variant,
       milestone_days: step.milestone_days,
       destination: assignment.destination_path,
+      country_code: normalizedCountry,
+      content_language: normalizedCountry === 'GE' ? 'ka' : 'en',
       channel: 'email',
     }, {
       uuid: stableAnalyticsEventUuid(`reactivation-journey:scheduled:${assignment.id}`),

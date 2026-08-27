@@ -14,6 +14,7 @@ export type RetentionEmailCandidate = {
   email: string;
   nickname: string | null;
   preferred_language: string;
+  country: string | null;
   tournament_id: string | null;
   entry_closes_at: string | null;
   message_kind: RetentionEmailMessageKind;
@@ -105,6 +106,7 @@ export const retentionEmailRepo = {
         u.email,
         u.nickname,
         u.preferred_language,
+        u.country,
         t.id AS tournament_id,
         t.entry_closes_at::text AS entry_closes_at,
         'weekend_league'::text AS message_kind,
@@ -190,6 +192,7 @@ export const retentionEmailRepo = {
         u.email,
         u.nickname,
         u.preferred_language,
+        u.country,
         NULL::uuid AS tournament_id,
         NULL::text AS entry_closes_at,
         'dormant_comeback'::text AS message_kind,
@@ -303,6 +306,7 @@ export const retentionEmailRepo = {
       email: input.candidate.email,
       nickname: input.candidate.nickname,
       preferred_language: input.candidate.preferred_language,
+      country: input.candidate.country,
       entry_closes_at: input.candidate.entry_closes_at,
     };
   },
@@ -335,7 +339,10 @@ export const retentionEmailRepo = {
                 AND u.deleted_at IS NULL
                 AND u.pending_deletion_at IS NULL
                 AND u.is_banned = false
-                AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+                AND (
+                  a.message_kind = 'dormant_journey'
+                  OR UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+                )
             ) THEN 'user_ineligible'
             WHEN a.message_kind = 'weekend_league' AND EXISTS (
               SELECT 1 FROM wl_entries e
@@ -370,7 +377,10 @@ export const retentionEmailRepo = {
               AND u.deleted_at IS NULL
               AND u.pending_deletion_at IS NULL
               AND u.is_banned = false
-              AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+              AND (
+                a.message_kind = 'dormant_journey'
+                OR UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+              )
           )
           OR (a.message_kind = 'weekend_league' AND EXISTS (
             SELECT 1 FROM wl_entries e
@@ -409,6 +419,7 @@ export const retentionEmailRepo = {
           u.email,
           u.nickname,
           u.preferred_language,
+          u.country,
           t.entry_closes_at,
           CASE
             WHEN t.config->>'qp_target' ~ '^[0-9]{1,6}$'
@@ -452,7 +463,10 @@ export const retentionEmailRepo = {
           AND u.deleted_at IS NULL
           AND u.pending_deletion_at IS NULL
           AND u.is_banned = false
-          AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+          AND (
+            a.message_kind = 'dormant_journey'
+            OR UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
+          )
           AND (
             a.message_kind IN ('dormant_comeback', 'dormant_journey')
             OR (t.status = 'entry_open' AND t.entry_closes_at > NOW())
@@ -504,7 +518,8 @@ export const retentionEmailRepo = {
       FROM candidate
       WHERE a.id = candidate.id
       RETURNING a.*, candidate.email, candidate.nickname,
-                candidate.preferred_language, candidate.entry_closes_at::text
+                candidate.preferred_language, candidate.country,
+                candidate.entry_closes_at::text
     `;
     return row ?? null;
   },

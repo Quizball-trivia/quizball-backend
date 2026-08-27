@@ -33,6 +33,7 @@ export type JourneyCandidate = {
   email: string;
   nickname: string | null;
   preferred_language: string;
+  country: string | null;
   last_match_started_at: string;
   lifetime_matches: number;
   entry_milestone_days: JourneyMilestone;
@@ -114,6 +115,7 @@ export const retentionJourneyRepo = {
           u.email,
           u.nickname,
           u.preferred_language,
+          u.country,
           MAX(m.started_at) AS last_match_started_at,
           COUNT(DISTINCT m.id)::int AS lifetime_matches
         FROM users u
@@ -121,7 +123,6 @@ export const retentionJourneyRepo = {
         JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
         WHERE u.email IS NOT NULL
           AND BTRIM(u.email) <> ''
-          AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
           AND u.is_ai = false
           AND u.is_seed = false
           AND u.is_deleted = false
@@ -132,13 +133,14 @@ export const retentionJourneyRepo = {
             ${input.userIdAllowlist.length === 0}
             OR u.id = ANY(${sql.array(input.userIdAllowlist)}::uuid[])
           )
-        GROUP BY u.id, u.email, u.nickname, u.preferred_language
+        GROUP BY u.id, u.email, u.nickname, u.preferred_language, u.country
       )
       SELECT
         a.user_id,
         a.email,
         a.nickname,
         a.preferred_language,
+        a.country,
         a.last_match_started_at::text,
         a.lifetime_matches,
         CASE
@@ -248,6 +250,7 @@ export const retentionJourneyRepo = {
       email: input.candidate.email,
       nickname: input.candidate.nickname,
       preferred_language: input.candidate.preferred_language,
+      country: input.candidate.country,
       lifetime_matches: input.candidate.lifetime_matches,
     };
   },
@@ -284,7 +287,6 @@ export const retentionJourneyRepo = {
               AND u.is_ai = false AND u.is_seed = false
               AND u.is_deleted = false AND u.deleted_at IS NULL
               AND u.pending_deletion_at IS NULL AND u.is_banned = false
-              AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
           )
         )
       RETURNING e.id
@@ -308,6 +310,7 @@ export const retentionJourneyRepo = {
         u.email,
         u.nickname,
         u.preferred_language,
+        u.country,
         activity.lifetime_matches,
         due.milestone_days
       FROM retention_journey_enrollments e
@@ -426,6 +429,7 @@ export const retentionJourneyRepo = {
       email: input.step.email,
       nickname: input.step.nickname,
       preferred_language: input.step.preferred_language,
+      country: input.step.country,
       entry_closes_at: null,
     };
   },
@@ -442,8 +446,7 @@ export const retentionJourneyRepo = {
         FROM users u
         JOIN match_players mp ON mp.user_id = u.id
         JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
-        WHERE UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
-          AND u.is_ai = false AND u.is_seed = false
+        WHERE u.is_ai = false AND u.is_seed = false
           AND u.is_deleted = false AND u.deleted_at IS NULL
           AND u.pending_deletion_at IS NULL AND u.is_banned = false
         GROUP BY u.id, u.email, u.phone_verified_at

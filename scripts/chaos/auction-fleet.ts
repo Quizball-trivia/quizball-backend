@@ -40,6 +40,8 @@ const RAMP_SEC = numFlag('ramp-s', numFlag('ramp', Math.min(120, SOCKETS)));
 const OFFSET = numFlag('offset', 0);
 const API_OVERRIDE = flagValue('api', '');
 const REPORT = flagValue('report', '');
+const AUTH_CACHE = flagValue('auth-cache', '');
+const PREPARE_ONLY = args.includes('--prepare-only');
 const MATCH_START_TIMEOUT_MS = WAVE_MODE ? 60_000 : 180_000;
 const MATCH_FINISH_TIMEOUT_MS = 25 * 60_000; // 21 rounds x ~45s + slack
 const STALL_TIMEOUT_MS = 150_000; // no auction event at all for this long = stranded
@@ -437,22 +439,37 @@ async function main(): Promise<void> {
   console.log('━'.repeat(72));
   if (!serviceRoleKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY missing.');
 
-  console.log(`Provisioning ${SOCKETS} confirmed test users…`);
-  const users = await provisionUsers({
-    apiBase,
-    supabaseUrl,
-    serviceRoleKey,
-    count: SOCKETS,
-    startIndex: OFFSET,
-    password: 'ChaosTest12345!',
-    emailPrefix: 'chaos',
-    emailDomain: 'quizball.io',
-    concurrency: 10,
-    loginIntervalMs: 2_200,
-    bypassToken,
-  });
+  let users: ChaosUser[];
+  if (AUTH_CACHE && existsSync(resolve(AUTH_CACHE))) {
+    const cached = JSON.parse(readFileSync(resolve(AUTH_CACHE), 'utf8')) as ChaosUser[];
+    users = cached.slice(0, SOCKETS);
+    if (users.length < SOCKETS || users.some((user) => !user.token || !user.userId)) {
+      throw new Error(`Auth cache has ${users.length}/${SOCKETS} usable users.`);
+    }
+    console.log(`Loaded ${users.length} users from the local auth cache.`);
+  } else {
+    console.log(`Provisioning ${SOCKETS} confirmed test users…`);
+    users = await provisionUsers({
+      apiBase,
+      supabaseUrl,
+      serviceRoleKey,
+      count: SOCKETS,
+      startIndex: OFFSET,
+      password: 'ChaosTest12345!',
+      emailPrefix: 'chaos',
+      emailDomain: 'quizball.io',
+      concurrency: 10,
+      loginIntervalMs: 2_200,
+      bypassToken,
+    });
+    if (AUTH_CACHE) {
+      writeFileSync(resolve(AUTH_CACHE), JSON.stringify(users), { mode: 0o600 });
+      console.log(`  → local auth cache written (${users.length} users).`);
+    }
+  }
   console.log(`  → ${users.length} users authenticated.`);
   if (users.length < SOCKETS) console.log(`  ! only ${users.length}/${SOCKETS} usable — running with those.`);
+  if (PREPARE_ONLY) return;
 
   const startedAt = new Date();
   const progress = setInterval(() => {

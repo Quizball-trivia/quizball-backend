@@ -74,6 +74,7 @@ const candidate = {
   email: 'player@example.com',
   nickname: 'Nika',
   preferred_language: 'ka',
+  country: 'GE',
   last_match_started_at: '2026-08-12T08:00:00.000Z',
   lifetime_matches: 12,
   entry_milestone_days: 14 as const,
@@ -117,6 +118,8 @@ describe('durable reactivation journey', () => {
         $feature_flag_response: 'control',
         channel: 'holdout',
         entry_milestone_days: 14,
+        country_code: 'GE',
+        content_language: 'ka',
       }),
       expect.any(Object),
     );
@@ -158,7 +161,12 @@ describe('durable reactivation journey', () => {
     expect(trackEventMock).toHaveBeenCalledWith(
       'reactivation_journey_step_scheduled',
       candidate.user_id,
-      expect.objectContaining({ milestone_days: 14, destination: '/auction' }),
+      expect.objectContaining({
+        milestone_days: 14,
+        destination: '/auction',
+        country_code: 'GE',
+        content_language: 'ka',
+      }),
       expect.any(Object),
     );
   });

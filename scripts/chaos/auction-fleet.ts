@@ -277,6 +277,10 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         if (new Set(humanSeatUserIds).size !== humanSeatUserIds.length) {
           metrics.duplicateSeatViolations += 1;
         }
+        const seatIds = payload.state.seats.map((seat) => seat.seatId);
+        if (new Set(seatIds).size !== seatIds.length) {
+          metrics.duplicateSeatViolations += 1;
+        }
         phase = 'playing';
         if (WAVE_MODE) {
           // The wave gate targets matchmaking, not 21-round content throughput.
@@ -385,7 +389,6 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         }
         if (WAVE_MODE && isCurrentMatch && payload.userId === user.userId) {
           metrics.cleanForfeits += 1;
-          finish('finished');
         }
       });
       socket.on('auction:error', (payload: { code?: string }) => {
@@ -476,9 +479,11 @@ async function main(): Promise<void> {
   }));
   clearInterval(progress);
 
-  const terminalClients = metrics.matchesFinished + metrics.cleanForfeits;
+  const terminalClients = metrics.matchesFinished;
   const completionRate = metrics.matchesStarted > 0 ? (terminalClients / metrics.matchesStarted) * 100 : 0;
-  const terminalMatchIds = new Set([...finishedMatchIds, ...cleanForfeitMatchIds]);
+  // A player-forfeited signal is only a pending cleanup marker. A match counts
+  // as terminal for the wave gate only after the server emits match_finished.
+  const terminalMatchIds = new Set(finishedMatchIds);
   const uniqueCompletionRate = startedMatchIds.size > 0
     ? (terminalMatchIds.size / startedMatchIds.size) * 100
     : 0;
@@ -527,6 +532,7 @@ async function main(): Promise<void> {
     writeFileSync(path, JSON.stringify(summary, null, 2));
     console.log(`  report → ${path}`);
   }
+  const unexpectedErrorCount = [...metrics.errors.values()].reduce((sum, count) => sum + count, 0);
   const wavePassed = !WAVE_MODE || (
     users.length === SOCKETS
     && uniqueMatchedUsers.size === users.length
@@ -535,6 +541,7 @@ async function main(): Promise<void> {
     && metrics.stranded === 0
     && metrics.startTimeouts === 0
     && metrics.duplicateSeatViolations === 0
+    && unexpectedErrorCount === 0
     && uniqueCompletionRate >= 95
   );
   process.exit(metrics.stranded === 0 && metrics.startTimeouts === 0 && wavePassed ? 0 : 1);

@@ -357,6 +357,8 @@ describe('auctionMatchmakingService', () => {
     vi.setSystemTime(new Date('2026-06-20T10:00:00.000Z'));
     redisMock.client = new FakeRedis();
     vi.clearAllMocks();
+    lockMock.acquireLock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    lockMock.releaseLock.mockResolvedValue(undefined);
     contentServiceMock.assertPublishedAuctionContentAvailable.mockResolvedValue(undefined);
   });
 
@@ -428,6 +430,30 @@ describe('auctionMatchmakingService', () => {
       status: 'completed',
       matchId,
     }));
+  });
+
+  it('retries claim ownership validation after matchmaking lock contention', async () => {
+    const { io } = createIo();
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
+
+    let contendedAttempts = 0;
+    lockMock.releaseLock.mockImplementationOnce(async () => {
+      contendedAttempts = 12;
+    });
+    lockMock.acquireLock.mockImplementation(async () => {
+      if (contendedAttempts > 0) {
+        contendedAttempts -= 1;
+        return { acquired: false, token: null };
+      }
+      return { acquired: true, token: 'lock-token' };
+    });
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledTimes(1);
   });
 
   it('does not create a search when a pairing fence appears before the queue lock', async () => {
@@ -722,6 +748,34 @@ describe('auctionMatchmakingService', () => {
     expect(searchRows).toHaveLength(3);
     expect(searchRows.every((row) => row.status === 'queued' && row.startFailures === '1')).toBe(true);
     expect(sessionGuardMock.userSessionGuardService.releaseActivityFences).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits one terminal event when a start failure exhausts retries', async () => {
+    const { io, roomEmit } = createIo();
+    startMatchMock.startAuctionMatchForHumans
+      .mockRejectedValueOnce(new Error('permanent start failure 1'))
+      .mockRejectedValueOnce(new Error('permanent start failure 2'))
+      .mockRejectedValueOnce(new Error('permanent start failure 3'));
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+    await vi.advanceTimersByTimeAsync(0);
+    auctionMatchmakingService.start(io);
+    await vi.advanceTimersByTimeAsync(600);
+
+    for (const userId of ['u1', 'u2', 'u3']) {
+      expect(roomEmit).toHaveBeenCalledWith(
+        `user:${userId}`,
+        'auction:error',
+        expect.anything(),
+      );
+      expect(roomEmit).not.toHaveBeenCalledWith(
+        `user:${userId}`,
+        'auction:search_cancelled',
+        expect.anything(),
+      );
+    }
   });
 
   it('recovers an expired abandoned claim and preserves its queuedAt', async () => {

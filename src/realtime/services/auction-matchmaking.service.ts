@@ -635,6 +635,7 @@ async function startClaimedGroup(
   io: QuizballServer,
   claim: ClaimedAuctionGroup,
   heartbeat: { stop: () => void },
+  generation: number,
 ): Promise<void> {
   // Production kill switch: claims can already be queued in this replica's
   // bounded worker pool when AUCTION_ENABLED flips off. Cancel those claims
@@ -651,14 +652,31 @@ async function startClaimedGroup(
   // Pending jobs renew their lease while waiting for a worker slot. Recheck
   // the durable claim and both ownership fences immediately before creating
   // any match state so a recovered/stale job cannot start a duplicate match.
-  let ownsClaim: boolean;
-  try {
-    ownsClaim = await renewClaimLease(claim);
-  } catch (error) {
-    heartbeat.stop();
-    throw error;
+  let ownership: ClaimLeaseRenewalResult = 'contended';
+  while (ownership === 'contended') {
+    if (generation !== claimStartGeneration) {
+      heartbeat.stop();
+      return;
+    }
+    try {
+      ownership = await renewClaimLease(claim);
+    } catch (error) {
+      heartbeat.stop();
+      throw error;
+    }
+    if (ownership === 'contended') {
+      logger.warn(
+        { claimToken: claim.claimToken, matchId: claim.matchId },
+        'Auction claimed match ownership check contended; retrying',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
-  if (!ownsClaim) {
+  if (generation !== claimStartGeneration) {
+    heartbeat.stop();
+    return;
+  }
+  if (ownership === 'lost') {
     logger.warn(
       { claimToken: claim.claimToken, matchId: claim.matchId },
       'Auction claimed match start skipped because claim ownership was lost',
@@ -740,7 +758,7 @@ async function startClaimedGroup(
     // retries exhausted) must NOT eject users from the queue — the searches
     // were already claimed, so REQUEUE them with a fresh fill timer and only
     // give up (with a client-visible error) after repeated failures.
-    const { requeued, dropped } = await requeueFailedClaim(claim);
+    const { requeued, dropped } = await requeueFailedClaim(claim, null);
 
     const payload = toAuctionErrorPayload(error, {
       fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
@@ -792,7 +810,7 @@ function pumpClaimStarts(): void {
       continue;
     }
     activeClaimStarts += 1;
-    void startClaimedGroup(job.io, job.claim, job.heartbeat)
+    void startClaimedGroup(job.io, job.claim, job.heartbeat, job.generation)
       .catch((error) => {
         logger.error(
           { error, claimToken: job.claim.claimToken },
@@ -969,9 +987,11 @@ function startClaimHeartbeat(claim: ClaimedAuctionGroup): { stop: () => void } {
   return { stop: () => clearInterval(timer) };
 }
 
-async function renewClaimLease(claim: ClaimedAuctionGroup): Promise<boolean> {
+type ClaimLeaseRenewalResult = 'renewed' | 'lost' | 'contended';
+
+async function renewClaimLease(claim: ClaimedAuctionGroup): Promise<ClaimLeaseRenewalResult> {
   const redis = getRedisClient();
-  if (!redis?.isOpen) return false;
+  if (!redis?.isOpen) return 'lost';
   const renewed = await withAuctionMatchmakingLock(async () => {
     const row = await redis.hGetAll(claimKey(claim.claimToken));
     if (row.status !== 'claimed' || row.matchId !== claim.matchId) return false;
@@ -991,15 +1011,16 @@ async function renewClaimLease(claim: ClaimedAuctionGroup): Promise<boolean> {
       .exec();
     return true;
   });
+  if (renewed === null) return 'contended';
   if (renewed) {
     const fencesRenewed = await userSessionGuardService.renewActivityFences(
       claim.searches.map((search) => search.userId),
       claim.claimToken,
       AUCTION_MM_CLAIM_LEASE_MS,
     );
-    return fencesRenewed;
+    return fencesRenewed ? 'renewed' : 'lost';
   }
-  return false;
+  return 'lost';
 }
 
 async function completeClaim(

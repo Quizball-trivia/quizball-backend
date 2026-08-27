@@ -21,6 +21,11 @@ import { io, type Socket } from 'socket.io-client';
 import { resolve } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { provisionUsers, type ChaosUser } from './auth.js';
+import { AUCTION_SEAT_COUNT } from '../../src/modules/auction/auction.constants.js';
+import type {
+  ClientToServerEvents,
+  ServerToClientEvents,
+} from '../../src/realtime/socket.types.js';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? __dirname, '../..');
 
@@ -121,7 +126,7 @@ const jitter = (min: number, max: number) => min + Math.random() * (max - min);
 // ── One fleet client ─────────────────────────────────────────────────────────
 async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
   for (let matchIndex = 0; matchIndex < MATCHES_PER_CLIENT; matchIndex += 1) {
-    const socket: Socket = io(apiBase, {
+    const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(apiBase, {
       transports: ['websocket'],
       auth: { token: user.token },
       forceNew: true,
@@ -249,18 +254,17 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         }
       });
 
-      socket.on('auction:match_started', (payload: {
-        matchId: string;
-        state: { seats: Array<{ seatId: string; userId?: string | null; isBot?: boolean }> };
-      }) => {
+      socket.on('auction:match_started', (payload) => {
         touch();
         matchId = payload.matchId;
         mySeatId = payload.state.seats.find((seat) => seat.userId === user.userId)?.seatId ?? null;
         matchStartedAt = Date.now();
         metrics.matchesStarted += 1;
         startedMatchIds.add(payload.matchId);
+        const announcedHumanUserIds = measuredMatchRosters.get(payload.matchId) ?? [];
+        const announcedHumanUserIdSet = new Set(announcedHumanUserIds);
         const humanSeatUserIds = payload.state.seats
-          .filter((seat) => !seat.isBot && seat.userId)
+          .filter((seat) => seat.userId && announcedHumanUserIdSet.has(seat.userId))
           .map((seat) => seat.userId as string);
         if (!measuredStartedSeatMatches.has(payload.matchId)) {
           measuredStartedSeatMatches.add(payload.matchId);
@@ -279,6 +283,9 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         }
         const seatIds = payload.state.seats.map((seat) => seat.seatId);
         if (new Set(seatIds).size !== seatIds.length) {
+          metrics.duplicateSeatViolations += 1;
+        }
+        if (payload.state.seats.length !== AUCTION_SEAT_COUNT) {
           metrics.duplicateSeatViolations += 1;
         }
         phase = 'playing';
@@ -400,7 +407,7 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         touch();
         metrics.matchesFinished += 1;
         const terminalMatchId = payload.matchId ?? matchId;
-        if (terminalMatchId) {
+        if (terminalMatchId && startedMatchIds.has(terminalMatchId)) {
           finishedMatchIds.add(terminalMatchId);
           for (const humanUserId of measuredMatchRosters.get(terminalMatchId) ?? []) {
             if (activeMatchedUserToMatch.get(humanUserId) === terminalMatchId) {

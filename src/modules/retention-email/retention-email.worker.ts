@@ -6,6 +6,10 @@ import {
   assignRetentionEmailCandidates,
   deliverRetentionEmails,
 } from './retention-email.service.js';
+import {
+  assignReactivationJourneyCandidates,
+  scheduleReactivationJourneySteps,
+} from './retention-journey.service.js';
 
 const TICK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -14,17 +18,27 @@ let inFlight: Promise<void> | null = null;
 async function tick(): Promise<void> {
   if (
     (!config.RETENTION_EMAIL_EXPERIMENT_ENABLED
-      && !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED)
+      && !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED
+      && !config.REACTIVATION_JOURNEY_ENABLED)
     || !config.RESEND_WEBHOOK_SECRET
     || !emailEnabled()
     || !emailUnsubEnabled()
   ) return;
   const weekendLeagueAssigned = await assignRetentionEmailCandidates();
   const dormantAssigned = await assignDormantComebackEmailCandidates();
+  const journeyAssigned = await assignReactivationJourneyCandidates();
+  const journey = await scheduleReactivationJourneySteps();
   const sent = await deliverRetentionEmails();
-  if (weekendLeagueAssigned > 0 || dormantAssigned > 0 || sent > 0) {
+  if (
+    weekendLeagueAssigned > 0
+    || dormantAssigned > 0
+    || journeyAssigned > 0
+    || journey.exited > 0
+    || journey.scheduled > 0
+    || sent > 0
+  ) {
     logger.info(
-      { weekendLeagueAssigned, dormantAssigned, sent },
+      { weekendLeagueAssigned, dormantAssigned, journeyAssigned, ...journey, sent },
       'Retention email experiments tick completed',
     );
   }
@@ -34,7 +48,8 @@ export function startRetentionEmailWorker(): void {
   if (
     timer
     || (!config.RETENTION_EMAIL_EXPERIMENT_ENABLED
-      && !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED)
+      && !config.DORMANT_COMEBACK_EMAIL_EXPERIMENT_ENABLED
+      && !config.REACTIVATION_JOURNEY_ENABLED)
   ) return;
   logger.info('Retention email experiment worker started');
   const run = () => {

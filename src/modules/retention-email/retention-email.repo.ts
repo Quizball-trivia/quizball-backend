@@ -2,7 +2,12 @@ import { sql } from '../../db/index.js';
 
 export type RetentionEmailVariant = 'control' | 'test';
 export type RetentionEmailCtaState = 'qualifying' | 'qualified' | 'comeback';
-export type RetentionEmailMessageKind = 'weekend_league' | 'dormant_comeback';
+export type RetentionEmailMessageKind = 'weekend_league' | 'dormant_comeback' | 'dormant_journey';
+export type RetentionEmailDestination =
+  | '/play'
+  | '/weekend-league'
+  | '/daily/challenges'
+  | '/auction';
 
 export type RetentionEmailCandidate = {
   user_id: string;
@@ -15,8 +20,11 @@ export type RetentionEmailCandidate = {
   qp_remaining: number;
   lifetime_matches: number;
   cta_state: RetentionEmailCtaState;
-  destination_path: '/play' | '/weekend-league';
+  destination_path: RetentionEmailDestination;
   last_match_started_at: string;
+  journey_enrollment_id?: string | null;
+  milestone_days?: 3 | 7 | 14 | 30 | 60 | null;
+  scheduled_for?: string | null;
 };
 
 export type RetentionEmailAssignment = RetentionEmailCandidate & {
@@ -36,9 +44,11 @@ export type RetentionEmailClickAssignment = {
   variant: RetentionEmailVariant;
   message_kind: RetentionEmailMessageKind;
   cta_state: RetentionEmailCtaState;
-  destination_path: '/play' | '/weekend-league';
+  destination_path: RetentionEmailDestination;
   send_status: string;
   clicked_at: string | null;
+  journey_enrollment_id: string | null;
+  milestone_days: 3 | 7 | 14 | 30 | 60 | null;
 };
 
 export type RetentionEmailUnsubscribeAttribution = {
@@ -55,7 +65,9 @@ export type RetentionEmailProviderAttribution = {
   variant: RetentionEmailVariant;
   message_kind: RetentionEmailMessageKind;
   cta_state: RetentionEmailCtaState;
-  destination_path: '/play' | '/weekend-league';
+  destination_path: RetentionEmailDestination;
+  journey_enrollment_id: string | null;
+  milestone_days: 3 | 7 | 14 | 30 | 60 | null;
 };
 
 export const retentionEmailRepo = {
@@ -386,7 +398,10 @@ export const retentionEmailRepo = {
     `;
   },
 
-  async claimOne(maxAttempts: number): Promise<RetentionEmailAssignment | null> {
+  async claimOne(
+    maxAttempts: number,
+    reactivationJourneyEnabled = false,
+  ): Promise<RetentionEmailAssignment | null> {
     const [row] = await sql<RetentionEmailAssignment[]>`
       WITH candidate AS (
         SELECT
@@ -415,7 +430,20 @@ export const retentionEmailRepo = {
         ) qp
         WHERE a.variant = 'test'
           AND a.send_status = 'pending'
+          AND COALESCE(a.scheduled_for, a.assigned_at) <= NOW()
           AND a.attempts < ${maxAttempts}
+          AND (
+            a.message_kind <> 'dormant_journey'
+            OR (${reactivationJourneyEnabled} AND EXISTS (
+              SELECT 1
+              FROM retention_journey_enrollments journey
+              JOIN retention_journey_configs journey_config
+                ON journey_config.journey_key = journey.journey_key
+              WHERE journey.id = a.journey_enrollment_id
+                AND journey.status = 'active'
+                AND journey_config.status IN ('canary', 'live')
+            ))
+          )
           AND u.email IS NOT NULL
           AND BTRIM(u.email) <> ''
           AND u.is_ai = false
@@ -426,12 +454,12 @@ export const retentionEmailRepo = {
           AND u.is_banned = false
           AND UPPER(BTRIM(COALESCE(u.country, ''))) = 'GE'
           AND (
-            a.message_kind = 'dormant_comeback'
+            a.message_kind IN ('dormant_comeback', 'dormant_journey')
             OR (t.status = 'entry_open' AND t.entry_closes_at > NOW())
           )
           AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = a.user_id)
           AND (
-            a.message_kind = 'dormant_comeback'
+            a.message_kind IN ('dormant_comeback', 'dormant_journey')
             OR NOT EXISTS (
               SELECT 1 FROM wl_entries e
               WHERE e.tournament_id = a.tournament_id AND e.user_id = a.user_id
@@ -511,7 +539,8 @@ export const retentionEmailRepo = {
   async getClickAssignment(id: string): Promise<RetentionEmailClickAssignment | null> {
     const [row] = await sql<RetentionEmailClickAssignment[]>`
       SELECT id, user_id, campaign_key, variant, message_kind, cta_state,
-             destination_path, send_status, clicked_at::text
+             destination_path, send_status, clicked_at::text,
+             journey_enrollment_id, milestone_days
       FROM retention_email_assignments
       WHERE id = ${id}
       LIMIT 1
@@ -628,7 +657,8 @@ export const retentionEmailRepo = {
         FROM matched, inserted
         WHERE a.id = matched.id
         RETURNING a.id, a.user_id, a.campaign_key, a.variant,
-                  a.message_kind, a.cta_state, a.destination_path
+                  a.message_kind, a.cta_state, a.destination_path,
+                  a.journey_enrollment_id, a.milestone_days
       ), suppressed AS (
         INSERT INTO email_unsubscribes (user_id, source)
         SELECT user_id, ${`resend:${deliveryStatus}`}

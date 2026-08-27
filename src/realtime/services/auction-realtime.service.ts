@@ -14,10 +14,12 @@ import {
   auctionStateStore,
 } from '../../modules/auction/auction-state.store.js';
 import {
+  auctionMatchOrigin,
   toPublicAuctionMatchState,
   type AuctionMatchOrigin,
   type PublicAuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
+import { trackAuctionMatchStarted } from '../../core/analytics/game-events.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import {
   AUCTION_FIRST_ROUND_UI_READY_CEILING_MS,
@@ -215,6 +217,21 @@ export async function startAuctionMatchForHumans(
     throw error;
   }
   const publicState = toPublicAuctionMatchState(saved);
+
+  // Analytics: one `match_started` per human seat. Emitted after the state is
+  // durably saved so a match that dies during seating never reports a start.
+  for (const player of input.humanPlayers) {
+    trackAuctionMatchStarted({
+      userId: player.userId,
+      matchId: saved.matchId,
+      origin: auctionMatchOrigin(saved),
+      humanCount: input.humanPlayers.length,
+      botCount: bots.length,
+      locale: input.locale,
+      formation: saved.formation,
+      occurredAt: saved.createdAt,
+    });
+  }
 
   // The OPENING card counts as seen too (later rounds record in the match-flow
   // step): without this the 30-day cross-match no-repeat skipped round 1. The

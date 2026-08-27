@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
 import { ErrorCode } from '../../core/errors.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
@@ -595,8 +596,18 @@ function emitMatchFound(
     // Single server-chosen instant so all clients finish the countdown in sync.
     countdownEndsAt: new Date(showdownEndsAtMs + AUCTION_PREMATCH_COUNTDOWN_MS).toISOString(),
   };
+  const foundAt = new Date(serverNowMs);
   for (const human of humans) {
     io.to(`user:${human.userId}`).emit('auction:match_found', payload);
+    trackAuctionMatchFound({
+      userId: human.userId,
+      matchId,
+      humanCount: humans.length,
+      botCount: staggeredBots.length,
+      locale,
+      formation,
+      occurredAt: foundAt,
+    });
   }
 }
 

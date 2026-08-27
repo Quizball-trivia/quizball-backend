@@ -601,3 +601,147 @@ export function trackFootballGridRematchResponse(params: {
     occurredAt: params.occurredAt,
   });
 }
+
+// ── Auction (3-seat bidding mode) ────────────────────────────────────────────
+// Auction shipped to production with no analytics at all, so the mode was
+// invisible in PostHog while ranked, friendly, daily challenges and even
+// Football Grid had funnel coverage. These mirror the Football Grid shape:
+// the canonical `match_started` / `match_completed` names carrying
+// `mode: 'auction'` (so auction lands in the existing cross-mode dashboards)
+// plus one auction-specific pre-match event.
+//
+// Emitted per HUMAN seat only. Bot seats have synthetic `is_ai` user ids that
+// would inflate person counts, so bot presence travels as a property
+// (`bot_count` / `opponent_is_ai`) rather than as extra actors. `trackEvent`
+// also drops known AI distinct ids, but skipping them at the call site keeps
+// the intent explicit and saves the lookup.
+
+export type AuctionAnalyticsOrigin = 'queue' | 'lobby';
+
+/** Auction profit/value figures are reconstructed from match state and can be
+ *  NaN on a state that predates a scoring field. Never ship NaN to PostHog —
+ *  it lands as a string and poisons numeric aggregations. */
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function durationMsBetween(
+  startedAt: string | Date,
+  endedAt: string | Date,
+): number | null {
+  const startedAtMs = new Date(startedAt).getTime();
+  const endedAtMs = new Date(endedAt).getTime();
+  return Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+    ? Math.max(0, endedAtMs - startedAtMs)
+    : null;
+}
+
+export function trackAuctionMatchFound(params: {
+  userId: string;
+  matchId: string;
+  humanCount: number;
+  botCount: number;
+  locale: 'en' | 'ka';
+  formation: string;
+  occurredAt?: string | Date;
+}): void {
+  const occurredAt = params.occurredAt ?? new Date();
+  trackEvent('auction_match_found', params.userId, {
+    match_id: params.matchId,
+    mode: 'auction',
+    variant: 'auction',
+    human_count: params.humanCount,
+    bot_count: params.botCount,
+    opponent_is_ai: params.botCount > 0,
+    locale: params.locale,
+    formation: params.formation,
+  }, {
+    uuid: stableAnalyticsEventUuid(`auction:match-found:${params.matchId}:${params.userId}`),
+    occurredAt,
+  });
+}
+
+export function trackAuctionMatchStarted(params: {
+  userId: string;
+  matchId: string;
+  origin: AuctionAnalyticsOrigin;
+  humanCount: number;
+  botCount: number;
+  locale: 'en' | 'ka';
+  formation: string;
+  occurredAt: string | Date;
+}): void {
+  trackEvent('match_started', params.userId, {
+    match_id: params.matchId,
+    mode: 'auction',
+    variant: 'auction',
+    origin: params.origin,
+    human_count: params.humanCount,
+    bot_count: params.botCount,
+    opponent_is_ai: params.botCount > 0,
+    locale: params.locale,
+    formation: params.formation,
+  }, {
+    uuid: stableAnalyticsEventUuid(`auction:match-started:${params.matchId}:${params.userId}`),
+    occurredAt: params.occurredAt,
+  });
+}
+
+export interface TrackAuctionMatchCompletedOptions {
+  userId: string;
+  matchId: string;
+  origin: AuctionAnalyticsOrigin;
+  /** 1 = winner. Ties share a rank, so placement is not always unique. */
+  placement: number;
+  seatCount: number;
+  humanCount: number;
+  botCount: number;
+  /** Squad value minus spend. Can be negative; NaN on legacy state. */
+  profit: number;
+  /** Profit scaled by chemistry — the figure seats are actually ranked on. */
+  adjustedProfit: number;
+  chemistry: number;
+  totalTrueValue: number;
+  budgetRemaining: number;
+  squadComplete: boolean;
+  forfeited: boolean;
+  roundsPlayed: number;
+  coinsEarned: number;
+  /** null when the match awards no Auction Points at all (friendly/lobby). */
+  auctionPointsEarned: number | null;
+  startedAt: string | Date;
+  endedAt: string | Date;
+}
+
+export function trackAuctionMatchCompleted(
+  params: TrackAuctionMatchCompletedOptions,
+): void {
+  const durationMs = durationMsBetween(params.startedAt, params.endedAt);
+  trackEvent('match_completed', params.userId, {
+    match_id: params.matchId,
+    mode: 'auction',
+    variant: 'auction',
+    origin: params.origin,
+    placement: params.placement,
+    won: params.placement === 1,
+    seat_count: params.seatCount,
+    human_count: params.humanCount,
+    bot_count: params.botCount,
+    opponent_is_ai: params.botCount > 0,
+    profit: finiteOrNull(params.profit),
+    adjusted_profit: finiteOrNull(params.adjustedProfit),
+    chemistry: finiteOrNull(params.chemistry),
+    total_true_value: finiteOrNull(params.totalTrueValue),
+    budget_remaining: finiteOrNull(params.budgetRemaining),
+    squad_complete: params.squadComplete,
+    forfeited: params.forfeited,
+    rounds_played: params.roundsPlayed,
+    coins_earned: params.coinsEarned,
+    auction_points_earned: params.auctionPointsEarned,
+    duration_ms: durationMs,
+    duration_sec: durationMs === null ? null : durationMs / 1_000,
+  }, {
+    uuid: stableAnalyticsEventUuid(`auction:match-completed:${params.matchId}:${params.userId}`),
+    occurredAt: params.endedAt,
+  });
+}

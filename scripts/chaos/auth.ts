@@ -205,9 +205,14 @@ export async function loginChaosUser(
     user?: { provider_sub?: string };
   };
   if (!res.ok || !body.access_token) {
-    // 5xx is the auth stack buckling under the login storm, not a bad
-    // credential — worth the retry lane.
-    throw new ChaosLoginError(`login ${email} failed: ${res.status}`, res.status, res.status >= 500);
+    // Rate limits and 5xx responses are preparation pressure, not bad
+    // credentials. Keep them in the retry lane so they never contaminate the
+    // measured matchmaking window.
+    throw new ChaosLoginError(
+      `login ${email} failed: ${res.status}`,
+      res.status,
+      res.status === 429 || res.status >= 500,
+    );
   }
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
@@ -411,13 +416,18 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
     // Keep source-IP throttling and transient Auth 5xx/introspection failures
     // in preparation traffic out of the measured run. Credential/schema
     // failures remain immediate hard failures.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       await waitForLoginSlot();
       try {
         const { token, userId } = await loginChaosUser(cfg, email);
         return { email, password: cfg.password, token, userId } satisfies ChaosUser;
       } catch (error) {
-        if (!(error instanceof ChaosLoginError) || !error.retryable || attempt === 6) {
+        if (
+          !(error instanceof ChaosLoginError)
+          || !error.retryable
+          || attempt === maxAttempts - 1
+        ) {
           throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));

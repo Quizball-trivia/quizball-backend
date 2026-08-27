@@ -218,21 +218,6 @@ export async function startAuctionMatchForHumans(
   }
   const publicState = toPublicAuctionMatchState(saved);
 
-  // Analytics: one `match_started` per human seat. Emitted after the state is
-  // durably saved so a match that dies during seating never reports a start.
-  for (const player of input.humanPlayers) {
-    trackAuctionMatchStarted({
-      userId: player.userId,
-      matchId: saved.matchId,
-      origin: auctionMatchOrigin(saved),
-      humanCount: input.humanPlayers.length,
-      botCount: bots.length,
-      locale: input.locale,
-      formation: saved.formation,
-      occurredAt: saved.createdAt,
-    });
-  }
-
   // The OPENING card counts as seen too (later rounds record in the match-flow
   // step): without this the 30-day cross-match no-repeat skipped round 1. The
   // scout-season rotation needs nothing here — selection claims its cursor.
@@ -261,12 +246,32 @@ export async function startAuctionMatchForHumans(
     seats: saved.seats,
   });
 
+  const startedAt = new Date().toISOString();
   const startedPayload: AuctionMatchStartedPayload = {
     matchId: saved.matchId,
     locale: input.locale,
     state: publicState,
-    serverNow: new Date().toISOString(),
+    serverNow: startedAt,
   };
+
+  // Analytics: one `match_started` per human seat, stamped with the same
+  // instant the clients are told the match began. Deliberately AFTER
+  // `beforeStartEvents` — that callback is what emits `auction_match_found`,
+  // so tracking any earlier (or stamping with `saved.createdAt`) would order
+  // the start ahead of the found event and invert the funnel.
+  for (const player of input.humanPlayers) {
+    trackAuctionMatchStarted({
+      userId: player.userId,
+      matchId: saved.matchId,
+      origin: auctionMatchOrigin(saved),
+      humanCount: input.humanPlayers.length,
+      botCount: bots.length,
+      locale: input.locale,
+      formation: saved.formation,
+      occurredAt: startedAt,
+    });
+  }
+
   const roundPayload = buildRoundStartedPayload(publicState);
 
   io.to(`match:${saved.matchId}`).emit('auction:match_started', startedPayload);

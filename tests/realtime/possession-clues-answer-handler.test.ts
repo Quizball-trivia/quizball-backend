@@ -43,8 +43,11 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
 }));
 
 vi.mock('../../src/realtime/possession-match-flow.js', () => ({
+  // Swallow like the real fireAndForget does — without the catch, the
+  // capture-write-fails test's rejected mock escapes as an unhandled
+  // rejection and flakes whole CI runs on timing.
   fireAndForget: (_label: string, work: () => Promise<void>) => {
-    void work();
+    void work().catch(() => {});
   },
   resolvePossessionRound: (...args: unknown[]) => resolvePossessionRoundMock(...args),
 }));

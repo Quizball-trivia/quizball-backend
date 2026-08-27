@@ -153,6 +153,16 @@ export const retentionJourneyRepo = {
         AND a.last_match_started_at <= NOW() - INTERVAL '3 days'
         AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = a.user_id)
         AND NOT EXISTS (
+          SELECT 1 FROM retention_email_assignments recent
+          WHERE recent.user_id = a.user_id
+            AND recent.assigned_at >= NOW() - make_interval(days => ${input.config.email_frequency_days})
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM wl_email_log legacy
+          WHERE legacy.user_id = a.user_id
+            AND legacy.sent_at >= NOW() - make_interval(days => ${input.config.email_frequency_days})
+        )
+        AND NOT EXISTS (
           SELECT 1
           FROM retention_journey_enrollments e
           WHERE e.journey_key = ${input.config.journey_key}

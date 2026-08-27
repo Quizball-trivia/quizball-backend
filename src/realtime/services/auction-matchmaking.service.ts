@@ -685,6 +685,18 @@ async function startClaimedGroup(
     return;
   }
 
+  // The ownership check can wait through lock contention. Auction may be
+  // disabled during that wait, so recheck the production kill switch at the
+  // final boundary before creating any match state.
+  if (!config.AUCTION_ENABLED) {
+    try {
+      await cancelClaimForDisabledMode(io, claim);
+    } finally {
+      heartbeat.stop();
+    }
+    return;
+  }
+
   const oldest = claim.searches[0];
   const humans = claim.searches.map((search) => ({
     userId: search.userId,

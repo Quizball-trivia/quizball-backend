@@ -456,6 +456,42 @@ describe('auctionMatchmakingService', () => {
     expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledTimes(1);
   });
 
+  it('honors the kill switch when it changes during an ownership retry', async () => {
+    const { config } = await import('../../src/core/config.js');
+    const { io, roomEmit } = createIo();
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
+
+    let contendedAttempts = 0;
+    lockMock.releaseLock.mockImplementationOnce(async () => {
+      contendedAttempts = 12;
+    });
+    lockMock.acquireLock.mockImplementation(async () => {
+      if (contendedAttempts > 0) {
+        contendedAttempts -= 1;
+        return { acquired: false, token: null };
+      }
+      return { acquired: true, token: 'lock-token' };
+    });
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+    (config as { AUCTION_ENABLED: boolean }).AUCTION_ENABLED = false;
+    try {
+      await vi.advanceTimersByTimeAsync(5_100);
+    } finally {
+      (config as { AUCTION_ENABLED: boolean }).AUCTION_ENABLED = true;
+    }
+
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+    for (const userId of ['u1', 'u2', 'u3']) {
+      expect(roomEmit).toHaveBeenCalledWith(
+        `user:${userId}`,
+        'auction:search_cancelled',
+        expect.objectContaining({ reason: 'cancelled' }),
+      );
+    }
+  });
+
   it('does not create a search when a pairing fence appears before the queue lock', async () => {
     const { io } = createIo();
     sessionGuardMock.userSessionGuardService.prepareForQueueJoin.mockImplementationOnce(async () => {

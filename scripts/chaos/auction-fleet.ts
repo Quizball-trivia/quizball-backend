@@ -405,14 +405,19 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
 
       socket.on('auction:match_finished', (payload: { matchId?: string }) => {
         touch();
-        metrics.matchesFinished += 1;
         const terminalMatchId = payload.matchId ?? matchId;
-        if (terminalMatchId && startedMatchIds.has(terminalMatchId)) {
-          finishedMatchIds.add(terminalMatchId);
-          for (const humanUserId of measuredMatchRosters.get(terminalMatchId) ?? []) {
-            if (activeMatchedUserToMatch.get(humanUserId) === terminalMatchId) {
-              activeMatchedUserToMatch.delete(humanUserId);
-            }
+        if (
+          phase !== 'playing'
+          || !terminalMatchId
+          || terminalMatchId !== matchId
+          || !startedMatchIds.has(terminalMatchId)
+        ) return;
+
+        metrics.matchesFinished += 1;
+        finishedMatchIds.add(terminalMatchId);
+        for (const humanUserId of measuredMatchRosters.get(terminalMatchId) ?? []) {
+          if (activeMatchedUserToMatch.get(humanUserId) === terminalMatchId) {
+            activeMatchedUserToMatch.delete(humanUserId);
           }
         }
         if (matchStartedAt > 0) {

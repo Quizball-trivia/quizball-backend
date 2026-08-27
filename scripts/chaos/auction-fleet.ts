@@ -291,12 +291,17 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
           // The wave gate targets matchmaking, not 21-round content throughput.
           // Exercise the real explicit-forfeit cleanup after seating so every
           // started client reaches a verified terminal path without a 25-minute
-          // fleet run.
+          // fleet run. Stagger forfeits by human seat order: firing all three
+          // concurrently creates an artificial mutation race where the final
+          // seat can observe an already-finished state before its own forfeit
+          // signal is broadcast. Sequential departures model an orderly clean
+          // exit and still finish each wave match within seconds.
+          const humanSeatOrdinal = Math.max(0, humanSeatUserIds.indexOf(user.userId));
           setTimeout(() => {
             if (phase === 'playing' && matchId) {
               socket.emit('auction:forfeit', { matchId });
             }
-          }, jitter(1_500, 4_000));
+          }, 1_500 + humanSeatOrdinal * 5_000 + jitter(0, 500));
         }
       });
 

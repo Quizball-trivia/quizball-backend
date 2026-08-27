@@ -407,7 +407,10 @@ export async function deliverRetentionEmails(): Promise<number> {
 
   let sent = 0;
   for (let count = 0; count < config.RETENTION_EMAIL_BATCH_SIZE; count += 1) {
-    const assignment = await retentionEmailRepo.claimOne(MAX_ATTEMPTS);
+    const assignment = await retentionEmailRepo.claimOne(
+      MAX_ATTEMPTS,
+      config.REACTIVATION_JOURNEY_ENABLED,
+    );
     if (!assignment) break;
     const clickUrl = retentionEmailClickUrl(assignment);
     const unsubUrl = retentionEmailUnsubscribeUrl(assignment.id, assignment.user_id);

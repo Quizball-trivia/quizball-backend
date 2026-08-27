@@ -1,3 +1,4 @@
+import { trackAuctionMatchCompleted } from '../../core/analytics/game-events.js';
 import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -131,6 +132,7 @@ export async function persistFinishedAuctionMatch(
           placement: ranking.rank,
           isBot,
           forfeited: Boolean(ranking.player?.forfeited),
+          ranking,
         };
       })
     );
@@ -184,6 +186,45 @@ export async function persistFinishedAuctionMatch(
       apByUserId[row.userId] = points;
       if (points <= 0) continue;
       await matchesRepo.addAuctionPoints(row.userId, points);
+    }
+
+    // Analytics: one `match_completed` per human seat, carrying placement and
+    // the scoring figures — this is what makes auction bot balance answerable
+    // in PostHog instead of by hand-written SQL against prod. Deliberately
+    // AFTER the reward loop so coins/AP are known, and wrapped in its own
+    // try/catch: rewards are already granted at this point, so an analytics
+    // failure must not fall through to the outer catch and report NO_REWARDS.
+    try {
+      const humanSeats = seatRows.filter((row) => !row.isBot);
+      const botSeatCount = seatRows.length - humanSeats.length;
+      for (const row of humanSeats) {
+        trackAuctionMatchCompleted({
+          userId: row.userId,
+          matchId: state.matchId,
+          origin: auctionMatchOrigin(state),
+          placement: row.placement,
+          seatCount: seatRows.length,
+          humanCount: humanSeats.length,
+          botCount: botSeatCount,
+          profit: row.ranking.profit,
+          adjustedProfit: row.ranking.adjustedProfit,
+          chemistry: row.ranking.chemistry,
+          totalTrueValue: row.ranking.totalTrueValue,
+          budgetRemaining: row.ranking.budgetRemaining,
+          squadComplete: Boolean(row.ranking.isComplete),
+          forfeited: row.forfeited,
+          roundsPlayed: state.completedRounds.length,
+          coinsEarned: coinsByUserId[row.userId] ?? 0,
+          auctionPointsEarned: apByUserId ? (apByUserId[row.userId] ?? 0) : null,
+          startedAt: state.createdAt,
+          endedAt: state.updatedAt,
+        });
+      }
+    } catch (error) {
+      logger.warn(
+        { error, matchId: state.matchId },
+        'Failed to emit auction match analytics'
+      );
     }
 
     logger.info(

@@ -14,10 +14,12 @@ import {
   auctionStateStore,
 } from '../../modules/auction/auction-state.store.js';
 import {
+  auctionMatchOrigin,
   toPublicAuctionMatchState,
   type AuctionMatchOrigin,
   type PublicAuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
+import { trackAuctionMatchStarted } from '../../core/analytics/game-events.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import {
   AUCTION_FIRST_ROUND_UI_READY_CEILING_MS,
@@ -244,12 +246,32 @@ export async function startAuctionMatchForHumans(
     seats: saved.seats,
   });
 
+  const startedAt = new Date().toISOString();
   const startedPayload: AuctionMatchStartedPayload = {
     matchId: saved.matchId,
     locale: input.locale,
     state: publicState,
-    serverNow: new Date().toISOString(),
+    serverNow: startedAt,
   };
+
+  // Analytics: one `match_started` per human seat, stamped with the same
+  // instant the clients are told the match began. Deliberately AFTER
+  // `beforeStartEvents` — that callback is what emits `auction_match_found`,
+  // so tracking any earlier (or stamping with `saved.createdAt`) would order
+  // the start ahead of the found event and invert the funnel.
+  for (const player of input.humanPlayers) {
+    trackAuctionMatchStarted({
+      userId: player.userId,
+      matchId: saved.matchId,
+      origin: auctionMatchOrigin(saved),
+      humanCount: input.humanPlayers.length,
+      botCount: bots.length,
+      locale: input.locale,
+      formation: saved.formation,
+      occurredAt: startedAt,
+    });
+  }
+
   const roundPayload = buildRoundStartedPayload(publicState);
 
   io.to(`match:${saved.matchId}`).emit('auction:match_started', startedPayload);

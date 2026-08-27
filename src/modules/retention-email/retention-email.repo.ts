@@ -429,6 +429,18 @@ export const retentionEmailRepo = {
           AND a.send_status = 'pending'
           AND COALESCE(a.scheduled_for, a.assigned_at) <= NOW()
           AND a.attempts < ${maxAttempts}
+          AND (
+            a.message_kind <> 'dormant_journey'
+            OR EXISTS (
+              SELECT 1
+              FROM retention_journey_enrollments journey
+              JOIN retention_journey_configs journey_config
+                ON journey_config.journey_key = journey.journey_key
+              WHERE journey.id = a.journey_enrollment_id
+                AND journey.status = 'active'
+                AND journey_config.status IN ('canary', 'live')
+            )
+          )
           AND u.email IS NOT NULL
           AND BTRIM(u.email) <> ''
           AND u.is_ai = false

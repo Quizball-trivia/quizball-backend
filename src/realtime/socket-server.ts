@@ -605,6 +605,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   footballGridRematchService.startRecovery(io);
   footballGridRealtimeService.startCommandRecovery(io);
   footballGridMatchmakingService.startRecovery(io);
+  footballGridMatchmakingService.startSweep(io);
 
   // A deploy can land inside an in-process round-transition window (ready-ack
   // gates, inter-question delay) — re-arm timers for every active match so no

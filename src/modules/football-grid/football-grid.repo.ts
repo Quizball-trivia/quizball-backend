@@ -41,6 +41,7 @@ interface GridMatchRow {
   paused_from_phase: 'countdown' | 'turn' | null;
   reconnect_deadline_at: string | null;
   completion_reason: FootballGridState['completionReason'];
+  database_now?: string;
 }
 
 interface GridParticipantRow {
@@ -100,6 +101,8 @@ export interface FootballGridCommandInboxRow {
   payload_hash: string;
   admitted_at: string;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  processing_fence: string | null;
+  processing_lease_until: string | null;
   retry_count: number;
   next_retry_at: string | null;
   last_error: string | null;
@@ -107,9 +110,9 @@ export interface FootballGridCommandInboxRow {
   result_payload: Record<string, unknown> | null;
 }
 
-interface GridCommandAdmissionRow extends GridMatchRow {
-  database_now: string;
-  existing_inbox: FootballGridCommandInboxRow | null;
+interface GridCommandAdmissionResultRow {
+  inbox: FootballGridCommandInboxRow | null;
+  error_code: string | null;
 }
 
 export interface FootballGridResultDeliveryRow {
@@ -288,17 +291,26 @@ async function loadBoard(executor: SqlExecutor, boardId: string): Promise<Footba
   }
 }
 
-async function loadStateWithExecutor(
+interface LoadedGridState {
+  state: FootballGridState;
+  databaseNowMs: number;
+}
+
+async function loadStateRecordWithExecutor(
   executor: SqlExecutor,
   matchId: string,
   lock: boolean,
-): Promise<FootballGridState | null> {
+): Promise<LoadedGridState | null> {
   const matches = await executor.unsafe<GridMatchRow[]>(
-    `SELECT * FROM football_grid_matches WHERE match_id = $1${lock ? ' FOR UPDATE' : ''}`,
+    `SELECT *, clock_timestamp() AS database_now
+       FROM football_grid_matches
+      WHERE match_id = $1${lock ? ' FOR UPDATE' : ''}`,
     [matchId],
   );
   const match = matches[0];
   if (!match) return null;
+  const databaseNowMs = Date.parse(match.database_now ?? '');
+  if (!Number.isFinite(databaseNowMs)) throw new Error('Football Grid database clock is unavailable');
   const [related, board] = await Promise.all([
     executor.unsafe<GridRelatedStateRow[]>(
       `SELECT
@@ -335,7 +347,7 @@ async function loadStateWithExecutor(
   const participants = related[0]?.participants ?? [];
   const claims = related[0]?.claims ?? [];
   if (participants.length !== 2) throw new Error(`Football Grid match ${matchId} has invalid roster`);
-  return {
+  const state: FootballGridState = {
     matchId,
     status: match.status,
     phase: match.phase,
@@ -371,6 +383,15 @@ async function loadStateWithExecutor(
     reconnectDeadlineAt: match.reconnect_deadline_at,
     completionReason: match.completion_reason,
   };
+  return { state, databaseNowMs };
+}
+
+async function loadStateWithExecutor(
+  executor: SqlExecutor,
+  matchId: string,
+  lock: boolean,
+): Promise<FootballGridState | null> {
+  return (await loadStateRecordWithExecutor(executor, matchId, lock))?.state ?? null;
 }
 
 async function insertEvent(
@@ -456,6 +477,13 @@ export const footballGridRepo = {
 
   async loadStateForUpdate(tx: TransactionSql, matchId: string): Promise<FootballGridState | null> {
     return loadStateWithExecutor(tx, matchId, true);
+  },
+
+  async loadStateForUpdateAtDatabaseTime(
+    tx: TransactionSql,
+    matchId: string,
+  ): Promise<LoadedGridState | null> {
+    return loadStateRecordWithExecutor(tx, matchId, true);
   },
 
   async getMatchPhase(matchId: string): Promise<FootballGridState['phase'] | null> {
@@ -621,7 +649,7 @@ export const footballGridRepo = {
        UPDATE football_grid_result_deliveries d
           SET status = 'processing', attempt_count = d.attempt_count + 1,
               ack_token = gen_random_uuid(),
-              processing_lease_until = clock_timestamp() + interval '10 seconds',
+              processing_lease_until = clock_timestamp() + interval '60 seconds',
               last_error = null, updated_at = now()
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
@@ -639,7 +667,7 @@ export const footballGridRepo = {
     const rows = await sql<Array<{ match_id: string }>>`
       UPDATE football_grid_result_deliveries
          SET status = 'awaiting_ack', processing_lease_until = null,
-             next_attempt_at = now() + interval '5 seconds', last_error = null, updated_at = now()
+             next_attempt_at = now() + interval '30 seconds', last_error = null, updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId}
          AND terminal_state_version = ${terminalStateVersion}
          AND ack_token = ${ackToken}
@@ -1174,12 +1202,24 @@ export const footballGridRepo = {
     });
   },
 
-  async markPairingFailed(pairingToken: string, reason: string): Promise<void> {
-    await sql`
+  async markPairingFailed(pairingToken: string, reason: string): Promise<boolean> {
+    const rows = await sql<Array<{ pairing_token: string }>>`
       UPDATE football_grid_pairings
          SET status = 'failed', failure_reason = ${reason.slice(0, 500)}, updated_at = now()
        WHERE pairing_token = ${pairingToken} AND status = 'claimed'
+       RETURNING pairing_token
     `;
+    return rows.length === 1;
+  },
+
+  async heartbeatPairing(pairingToken: string): Promise<boolean> {
+    const rows = await sql<Array<{ pairing_token: string }>>`
+      UPDATE football_grid_pairings
+         SET updated_at = now()
+       WHERE pairing_token = ${pairingToken} AND status = 'claimed'
+       RETURNING pairing_token
+    `;
+    return rows.length === 1;
   },
 
   async listStaleClaimedPairings(limit = 50): Promise<Array<{
@@ -1200,9 +1240,9 @@ export const footballGridRepo = {
     }>>`
       SELECT pairing_token, user_a_id, user_b_id, opponent_type,
              search_a_snapshot, search_b_snapshot
-        FROM football_grid_pairings
+       FROM football_grid_pairings
        WHERE status = 'claimed'
-         AND updated_at <= now() - interval '30 seconds'
+         AND updated_at <= now() - interval '90 seconds'
        ORDER BY updated_at ASC
        LIMIT ${limit}
     `;
@@ -1440,18 +1480,19 @@ export const footballGridRepo = {
       );
       const release = releases[0];
       if (!release) throw new Error('Selected Football Grid release is not published');
-      const baseMatches = await tx.unsafe<Array<{ id: string }>>(
+      const baseMatches = await tx.unsafe<Array<{ id: string; database_now: string }>>(
         `INSERT INTO matches (
            id, lobby_id, mode, game_variant, status, category_a_id, category_b_id,
            current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
          ) VALUES (
            gen_random_uuid(), $1, 'friendly', 'football_grid', 'active', null, null,
            0, 0, '{"variant":"football_grid"}'::jsonb, null, false, now()
-         ) RETURNING id`,
+         ) RETURNING id, clock_timestamp() AS database_now`,
         [input.lobbyId],
       );
       const matchId = baseMatches[0].id;
-      const nowMs = await this.databaseNowMs(tx);
+      const nowMs = Date.parse(baseMatches[0].database_now);
+      if (!Number.isFinite(nowMs)) throw new Error('Football Grid database clock is unavailable');
       const phaseDeadlineAt = new Date(nowMs + FOOTBALL_GRID_HANDOFF_MS).toISOString();
       const bot = input.players.find((player) => player.isBot);
       const botModelVersion = bot ? input.botModelVersion ?? 1 : null;
@@ -1503,38 +1544,54 @@ export const footballGridRepo = {
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
-      await tx.unsafe(
+      const matchedPairing = await tx.unsafe<Array<{ pairing_token: string }>>(
         `UPDATE football_grid_pairings
             SET status = 'matched', match_id = $2, updated_at = now()
-          WHERE pairing_token = $1 AND status IN ('claimed', 'matched')`,
+          WHERE pairing_token = $1 AND status IN ('claimed', 'matched')
+          RETURNING pairing_token`,
         [input.pairingToken, matchId],
       );
-      for (const player of input.players) {
-        await tx.unsafe(
-          `INSERT INTO match_players (match_id, user_id, seat)
-           VALUES ($1, $2, $3)`,
-          [matchId, player.userId, player.seat],
-        );
-        await tx.unsafe(
-          `INSERT INTO football_grid_participants (
+      if (matchedPairing.length !== 1) {
+        // A recovery worker may have expired the claim while the transaction
+        // was preparing the match. Never commit a match behind a failed claim:
+        // rolling back here keeps users from being requeued into an active
+        // session conflict.
+        throw new Error('GRID_PAIRING_CLAIM_LOST');
+      }
+      const [firstPlayer, secondPlayer] = input.players;
+      await tx.unsafe(
+        `WITH roster(user_id, seat, is_bot) AS (
+           VALUES
+             ($2::uuid, $3::smallint, $4::boolean),
+             ($5::uuid, $6::smallint, $7::boolean)
+         ), inserted_match_players AS (
+           INSERT INTO match_players (match_id, user_id, seat)
+           SELECT $1, user_id, seat FROM roster
+         ), inserted_participants AS (
+           INSERT INTO football_grid_participants (
              match_id, user_id, seat, is_bot, handoff_ack_at, ready_at,
              pause_budget_remaining_ms, reward_eligibility_type
-           ) VALUES (
-             $1, $2, $3, $4,
-             CASE WHEN $4 THEN now() ELSE null END,
-             CASE WHEN $4 THEN now() ELSE null END,
-             $5, CASE WHEN $4 THEN 'bot' ELSE 'human' END
-           )`,
-          [matchId, player.userId, player.seat, player.isBot ?? false, FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS],
-        );
-        if (!player.isBot) {
-          await tx.unsafe(
-            `INSERT INTO football_grid_board_exposures (user_id, board_id, match_id)
-             VALUES ($1, $2, $3)`,
-            [player.userId, board.id, matchId],
-          );
-        }
-      }
+           )
+           SELECT $1, user_id, seat, is_bot,
+                  CASE WHEN is_bot THEN now() ELSE null END,
+                  CASE WHEN is_bot THEN now() ELSE null END,
+                  $8, CASE WHEN is_bot THEN 'bot' ELSE 'human' END
+             FROM roster
+         )
+         INSERT INTO football_grid_board_exposures (user_id, board_id, match_id)
+         SELECT user_id, $9, $1 FROM roster WHERE NOT is_bot`,
+        [
+          matchId,
+          firstPlayer.userId,
+          firstPlayer.seat,
+          firstPlayer.isBot ?? false,
+          secondPlayer.userId,
+          secondPlayer.seat,
+          secondPlayer.isBot ?? false,
+          FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS,
+          board.id,
+        ],
+      );
       if (input.seriesId) {
         const openerSeat = input.players.find((player) => player.userId === input.openerUserId)?.seat ?? 1;
         const seriesUpdate = await tx.unsafe<Array<{ id: string }>>(
@@ -1859,77 +1916,103 @@ export const footballGridRepo = {
     locale?: 'en' | 'ka' | null;
     submittedText?: string | null;
     payloadHash: string;
+    processingFence?: string;
   }): Promise<FootballGridCommandInboxRow> {
-    return this.runInTransaction(async (tx) => {
-      const rows = await tx.unsafe<GridCommandAdmissionRow[]>(
-        `SELECT gm.*, clock_timestamp() AS database_now,
-                (
-                  SELECT to_jsonb(i)
-                    FROM football_grid_command_inbox i
-                   WHERE i.match_id = $1
-                     AND i.actor_user_id = $2
-                     AND i.command_id = $3
-                ) AS existing_inbox
+    // Admission is a single statement so the match-row lock, idempotency
+    // lookup, deadline check, inbox insert and pending-command fence share one
+    // atomic snapshot. The previous implementation opened a transaction only
+    // for these two statements, adding BEGIN/SET LOCAL/COMMIT pool occupancy to
+    // every gameplay command before the real state-transition transaction.
+    const rows = await sql.unsafe<GridCommandAdmissionResultRow[]>(
+      `WITH locked_match AS MATERIALIZED (
+         SELECT gm.*, clock_timestamp() AS database_now
            FROM football_grid_matches gm
           WHERE gm.match_id = $1
-          FOR UPDATE OF gm`,
-        [input.matchId, input.actorUserId, input.commandId],
-      );
-      const match = rows[0];
-      if (!match) throw new Error('Football Grid match not found');
-      if (match.existing_inbox) {
-        if (match.existing_inbox.payload_hash !== input.payloadHash) throw new Error('COMMAND_ID_REUSED');
-        return match.existing_inbox;
-      }
-      if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
-      if (match.state_version !== input.expectedStateVersion) throw new Error('STALE_STATE');
-      if (match.phase === 'terminal') throw new Error('INVALID_STATE');
-      if (input.commandType !== 'forfeit') {
-        if (match.status !== 'active' || match.phase !== 'turn') throw new Error('INVALID_STATE');
-        if (match.current_player_user_id !== input.actorUserId) throw new Error('NOT_YOUR_TURN');
-        const databaseNowMs = Date.parse(match.database_now);
-        const deadlineMs = Date.parse(match.turn_deadline_at ?? '');
-        if (!Number.isFinite(databaseNowMs) || !Number.isFinite(deadlineMs) || databaseNowMs > deadlineMs) {
-          throw new Error('LATE_COMMAND');
-        }
-      }
-      const inserted = await tx.unsafe<FootballGridCommandInboxRow[]>(
-        `WITH admitted AS (
-           INSERT INTO football_grid_command_inbox (
-             match_id, actor_user_id, command_id, expected_state_version,
-             turn_number, command_type, cell_index, locale, submitted_text, payload_hash
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           RETURNING *
-         ), bound AS (
-           UPDATE football_grid_matches
-              SET pending_command_id = (SELECT id FROM admitted)
-            WHERE match_id = $1 AND pending_command_id IS NULL
-            RETURNING match_id
+          FOR UPDATE OF gm
+       ), existing AS MATERIALIZED (
+         SELECT i.*
+           FROM football_grid_command_inbox i
+           JOIN locked_match gm ON gm.match_id = i.match_id
+          WHERE i.actor_user_id = $2
+            AND i.command_id = $3
+       ), decision AS MATERIALIZED (
+         SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM locked_match) THEN 'MATCH_NOT_FOUND'
+           WHEN EXISTS (SELECT 1 FROM existing WHERE payload_hash <> $9) THEN 'COMMAND_ID_REUSED'
+           WHEN EXISTS (SELECT 1 FROM existing) THEN null
+           WHEN (SELECT state_version FROM locked_match) <> $4 THEN 'STALE_STATE'
+           WHEN (SELECT pending_command_id FROM locked_match) IS NOT NULL THEN 'COMMAND_IN_PROGRESS'
+           WHEN (SELECT phase FROM locked_match) = 'terminal' THEN 'INVALID_STATE'
+           WHEN $5 <> 'forfeit' AND (
+             (SELECT status FROM locked_match) <> 'active'
+             OR (SELECT phase FROM locked_match) <> 'turn'
+           ) THEN 'INVALID_STATE'
+           WHEN $5 <> 'forfeit' AND (SELECT current_player_user_id FROM locked_match) <> $2 THEN 'NOT_YOUR_TURN'
+           WHEN $5 <> 'forfeit' AND (
+             (SELECT turn_deadline_at FROM locked_match) IS NULL
+             OR (SELECT database_now FROM locked_match) > (SELECT turn_deadline_at FROM locked_match)
+           ) THEN 'LATE_COMMAND'
+           ELSE null
+         END AS error_code
+       ), admitted AS (
+         INSERT INTO football_grid_command_inbox (
+           match_id, actor_user_id, command_id, expected_state_version,
+           turn_number, command_type, cell_index, locale, submitted_text, payload_hash,
+           status, processing_fence, processing_lease_until, retry_count
          )
-         SELECT admitted.* FROM admitted JOIN bound ON true`,
-        [
-          input.matchId,
-          input.actorUserId,
-          input.commandId,
-          input.expectedStateVersion,
-          match.turn_number,
-          input.commandType,
-          input.cellIndex ?? null,
-          input.locale ?? null,
-          input.submittedText ?? null,
-          input.payloadHash,
-        ],
-      );
-      if (!inserted[0]) throw new Error('COMMAND_IN_PROGRESS');
-      return inserted[0];
-    });
+         SELECT $1,$2,$3,$4,gm.turn_number,$5,$6,$7,$8,$9,
+                CASE WHEN $10::uuid IS NULL THEN 'pending' ELSE 'processing' END,
+                $10,
+                CASE WHEN $10::uuid IS NULL THEN null ELSE now() + interval '30 seconds' END,
+                CASE WHEN $10::uuid IS NULL THEN 0 ELSE 1 END
+           FROM locked_match gm
+           JOIN decision d ON d.error_code IS NULL
+          WHERE NOT EXISTS (SELECT 1 FROM existing)
+         RETURNING *
+       ), bound AS (
+         UPDATE football_grid_matches gm
+            SET pending_command_id = admitted.id
+           FROM admitted
+          WHERE gm.match_id = $1 AND gm.pending_command_id IS NULL
+         RETURNING admitted.id
+       ), selected AS (
+         SELECT to_jsonb(existing) AS inbox FROM existing
+         UNION ALL
+         SELECT to_jsonb(admitted) AS inbox
+           FROM admitted JOIN bound ON bound.id = admitted.id
+       )
+       SELECT (SELECT inbox FROM selected LIMIT 1) AS inbox,
+              CASE
+                WHEN decision.error_code IS NOT NULL THEN decision.error_code
+                WHEN NOT EXISTS (SELECT 1 FROM selected) THEN 'COMMAND_IN_PROGRESS'
+                ELSE null
+              END AS error_code
+         FROM decision`,
+      [
+        input.matchId,
+        input.actorUserId,
+        input.commandId,
+        input.expectedStateVersion,
+        input.commandType,
+        input.cellIndex ?? null,
+        input.locale ?? null,
+        input.submittedText ?? null,
+        input.payloadHash,
+        input.processingFence ?? null,
+      ],
+    );
+    const result = rows[0];
+    if (!result || result.error_code === 'MATCH_NOT_FOUND') throw new Error('Football Grid match not found');
+    if (result.error_code) throw new Error(result.error_code);
+    if (!result.inbox) throw new Error('COMMAND_IN_PROGRESS');
+    return result.inbox;
   },
 
   async leaseCommand(commandInboxId: string, processingFence: string): Promise<FootballGridCommandInboxRow | null> {
     const rows = await sql<FootballGridCommandInboxRow[]>`
       UPDATE football_grid_command_inbox
          SET status = 'processing', processing_fence = ${processingFence},
-             processing_lease_until = now() + interval '10 seconds',
+             processing_lease_until = now() + interval '30 seconds',
              retry_count = retry_count + 1
        WHERE id = ${commandInboxId}
          AND retry_count < 3

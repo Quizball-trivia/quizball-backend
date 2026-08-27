@@ -19,6 +19,11 @@ export const footballGridLeaderboardRepo = {
     offset: number,
     country?: string,
   ): Promise<FootballGridLeaderboardEntry[]> {
+    // Treat the schema as the first line of defence, not the only one. Direct
+    // service/repository callers and future endpoints cannot create unbounded
+    // scans or arbitrary cache-key cardinality.
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(Number.isSafeInteger(limit) ? limit : 50)));
+    const safeOffset = Math.min(10_000, Math.max(0, Math.trunc(Number.isSafeInteger(offset) ? offset : 0)));
     const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
     return sql<FootballGridLeaderboardEntry[]>`
       SELECT
@@ -36,8 +41,8 @@ export const footballGridLeaderboardRepo = {
       ORDER BY u.tic_tac_toe_points DESC,
                u.tic_tac_toe_points_updated_at ASC,
                u.id ASC
-      LIMIT ${limit}
-      OFFSET ${offset}
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
     `;
   },
 

@@ -7,6 +7,7 @@ vi.mock('../../src/core/logger.js', () => ({
 
 const listStaleActiveMatchesMock = vi.fn();
 const getMatchMock = vi.fn();
+const isActiveMatchStaleMock = vi.fn();
 const abandonMatchRepoMock = vi.fn();
 const hasUpdatedAtTriggerMock = vi.fn();
 const abandonMatchServiceMock = vi.fn();
@@ -30,6 +31,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     listStaleActiveMatches: (...a: unknown[]) => listStaleActiveMatchesMock(...a),
     getMatch: (...a: unknown[]) => getMatchMock(...a),
+    isActiveMatchStale: (...a: unknown[]) => isActiveMatchStaleMock(...a),
     abandonMatch: (...a: unknown[]) => abandonMatchRepoMock(...a),
     hasUpdatedAtTrigger: (...a: unknown[]) => hasUpdatedAtTriggerMock(...a),
   },
@@ -175,6 +177,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetTriggerCache();
   hasUpdatedAtTriggerMock.mockResolvedValue(true);
+  isActiveMatchStaleMock.mockResolvedValue(true);
   acquireLockMock.mockResolvedValue({ acquired: true, token: 'tok' });
   releaseLockMock.mockResolvedValue(true);
   redisExistsMock.mockResolvedValue(0);
@@ -207,6 +210,19 @@ describe('stale-match-sweeper', () => {
     expect(getMatchMock).not.toHaveBeenCalled();
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks variant-aware activity under the match lock and skips a freshly persisted Grid match', async () => {
+    const staleSnapshot = match({ game_variant: 'football_grid' } as Partial<MatchRow>);
+    listStaleActiveMatchesMock.mockResolvedValue([staleSnapshot]);
+    getMatchMock.mockResolvedValue(staleSnapshot);
+    isActiveMatchStaleMock.mockResolvedValue(false);
+
+    await runSweep(io);
+
+    expect(isActiveMatchStaleMock).toHaveBeenCalledWith('match-1', 15 * 60 * 1_000);
+    expect(listMatchPlayersMock).not.toHaveBeenCalled();
+    expect(abandonMatchRepoMock).not.toHaveBeenCalled();
   });
 
   it('no-ops entirely when the updated_at trigger is missing (never queries for stale matches)', async () => {

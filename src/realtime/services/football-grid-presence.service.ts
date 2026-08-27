@@ -147,6 +147,29 @@ export const footballGridPresenceService = {
     await schedule(matchId, userId, generation, expiresAt);
   },
 
+  async refresh(matchId: string, userId: string, socketId: string): Promise<boolean> {
+    const redis = getRedisClient();
+    if (!redis?.isOpen) return false;
+    ensureNodeHeartbeat();
+    const expiresAt = Date.now() + LEASE_MS;
+    const generation = await withLeaseLock(matchId, userId, async () => {
+      const existing = parseLease(await redis.hGet(key(matchId, userId), socketId) ?? '');
+      if (existing?.generation === null || existing?.generation === undefined) return null;
+      await redis.multi()
+        .hSet(key(matchId, userId), socketId, JSON.stringify({
+          expiresAt,
+          nodeId: NODE_ID,
+          generation: existing.generation,
+        }))
+        .expire(key(matchId, userId), KEY_TTL_SEC)
+        .exec();
+      return existing.generation;
+    });
+    if (generation === null) return false;
+    await schedule(matchId, userId, generation, expiresAt);
+    return true;
+  },
+
   async detach(matchId: string, userId: string, socketId: string): Promise<void> {
     const redis = getRedisClient();
     if (!redis?.isOpen) return;

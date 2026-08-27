@@ -127,11 +127,8 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
   );
 }
 
-// The sweeper's staleness signal (matches.updated_at) is only trustworthy when
-// the BEFORE-UPDATE trigger maintaining it is present. If a deploy lands before
-// the migration that adds it, updated_at would be frozen at match creation and
-// the sweeper could mistake a live match for an orphan. So we verify the trigger
-// exists before ANY sweep (including the boot sweep) and no-op until it does.
+// Non-Grid variants still rely on matches.updated_at, so the sweeper remains
+// gated on its maintenance trigger. Grid uses football_grid_matches.updated_at.
 // Cached after the first positive check; re-probed while still missing.
 let updatedAtTriggerVerified = false;
 
@@ -174,6 +171,10 @@ async function runSweep(io: QuizballServer): Promise<void> {
       // have resolved it between the list query and now.
       const fresh = await matchesRepo.getMatch(match.id);
       if (!fresh || fresh.status !== 'active') continue;
+      // Re-check the variant-aware activity timestamp under the per-match lock.
+      // Grid persists football_grid_matches.updated_at on every state write,
+      // while its generic matches row is intentionally updated less often.
+      if (!await matchesRepo.isActiveMatchStale(match.id, STALE_AGE_MS)) continue;
       await resolveStaleMatch(io, fresh);
     } catch (error) {
       logger.warn({ error, matchId: match.id }, 'Stale sweeper failed to resolve match');

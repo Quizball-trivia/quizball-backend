@@ -200,6 +200,13 @@ export const retentionJourneyRepo = {
           WHERE e.journey_key = ${input.config.journey_key}
             AND e.entered_at >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'
         ) < ${input.config.daily_assignment_cap}
+        AND EXISTS (
+          SELECT 1 FROM retention_journey_configs current_config
+          WHERE current_config.journey_key = ${input.config.journey_key}
+            AND current_config.version = ${input.config.version}
+            AND current_config.status IN ('canary', 'live')
+            AND current_config.assignment_cap > 0
+        )
       )
       INSERT INTO retention_journey_enrollments (
         journey_key,
@@ -359,6 +366,12 @@ export const retentionJourneyRepo = {
             AND a.variant = 'test'
             AND a.assigned_at >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'
         ) < ${input.config.daily_send_cap}
+        AND EXISTS (
+          SELECT 1 FROM retention_journey_configs current_config
+          WHERE current_config.journey_key = ${input.config.journey_key}
+            AND current_config.version = ${input.config.version}
+            AND current_config.status IN ('canary', 'live')
+        )
       )
       INSERT INTO retention_email_assignments (
         campaign_key,

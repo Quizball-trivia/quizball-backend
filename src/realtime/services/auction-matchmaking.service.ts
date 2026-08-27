@@ -373,7 +373,9 @@ export const auctionMatchmakingService = {
               : 'Auction matchmaking search joined',
           );
         }
-        await Promise.all(lockOutcome.claims.map((claim) => enqueueClaimStart(io, claim)));
+        // Claim ownership is durable. Do not hold the per-user transition lock
+        // while the bounded worker pool creates and hands off the match.
+        for (const claim of lockOutcome.claims) void enqueueClaimStart(io, claim);
       },
       {
         code: 'AUCTION_SEARCH_BUSY',
@@ -740,6 +742,11 @@ async function runPeriodicDrain(): Promise<void> {
   if (!io || !redis?.isOpen || available <= 0) return;
   drainRunning = true;
   try {
+    // Every replica polls this shared queue. Avoid serializing on the global
+    // claim lock when there are not enough humans to form a match.
+    const depth = await redis.zCard(AUCTION_MM_QUEUE_KEY).catch(() => 0);
+    setAuctionMatchmakingQueueDepth(depth);
+    if (depth < 3) return;
     const claims = await withAuctionMatchmakingLock(() => (
       claimFullHumanMatchesLocked(redis, available)
     ));
@@ -1067,6 +1074,14 @@ async function requeueFailedClaim(
   }
   if (io && scheduled.length > 0) {
     emitAllQueueStatuses(io, await listQueuedSearches(redis));
+  }
+  if (io) {
+    for (const search of scheduleDropped) {
+      io.to(`user:${search.userId}`).emit('auction:search_cancelled', {
+        searchId: search.searchId,
+        reason: 'cancelled',
+      } satisfies AuctionSearchCancelledPayload);
+    }
   }
   return { requeued: scheduled, dropped: scheduleDropped };
 }

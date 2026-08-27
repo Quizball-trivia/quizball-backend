@@ -21,7 +21,9 @@ const rankedHumanMatches = meter.createCounter('quizball_ranked_human_matches_to
 let auctionMatchmakingQueueDepthValue = 0;
 const auctionMatchmakingQueueDepth = meter.createObservableGauge(
   'quizball_auction_matchmaking_queue_depth',
-  { description: 'Current number of queued Auction searches on this shared fleet' },
+  {
+    description: 'Shared Auction queue depth last observed by this replica; aggregate with max, not sum',
+  },
 );
 auctionMatchmakingQueueDepth.addCallback((result) => {
   result.observe(auctionMatchmakingQueueDepthValue);

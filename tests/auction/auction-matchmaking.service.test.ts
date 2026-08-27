@@ -586,6 +586,7 @@ describe('auctionMatchmakingService', () => {
     await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
     vi.setSystemTime(new Date('2026-06-20T10:00:02.000Z'));
     await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+    await vi.advanceTimersByTimeAsync(0);
 
     const queue = redisMock.client!.zsets.get('auction:mm:queue');
     expect(queue?.size).toBe(3);
@@ -635,6 +636,44 @@ describe('auctionMatchmakingService', () => {
     );
     expect(redisMock.client!.hashes.get('auction:mm:claim:abandoned-claim')).toEqual(
       expect.objectContaining({ status: 'requeued' }),
+    );
+  });
+
+  it('notifies a recovered search when its final retry is dropped', async () => {
+    const { io, roomEmit } = createIo();
+    const search = {
+      searchId: 'exhausted-search',
+      userId: 'u1',
+      displayName: 'One',
+      locale: 'en',
+      queuedAt: Date.parse('2026-06-20T09:59:50.000Z'),
+      fallbackAt: Date.parse('2026-06-20T09:59:55.000Z'),
+      startFailures: 2,
+    };
+    redisMock.client!.hashes.set('auction:mm:claim:exhausted-claim', {
+      claimToken: 'exhausted-claim',
+      matchId: 'exhausted-claim',
+      status: 'claimed',
+      claimedAt: String(Date.parse('2026-06-20T09:59:00.000Z')),
+      leaseUntil: String(Date.parse('2026-06-20T09:59:59.000Z')),
+      snapshot: JSON.stringify([search]),
+    });
+    redisMock.client!.zsets.set('auction:mm:claims', new Map([
+      ['exhausted-claim', Date.parse('2026-06-20T09:59:59.000Z')],
+    ]));
+    redisMock.client!.hashes.set('auction:mm:claim:user', { u1: 'exhausted-claim' });
+    redisMock.client!.strings.set('session:pairing:user:u1', 'exhausted-claim');
+
+    auctionMatchmakingService.start(io);
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(redisMock.client!.hashes.get('auction:mm:search:exhausted-search')).toEqual(
+      expect.objectContaining({ status: 'failed' }),
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'user:u1',
+      'auction:search_cancelled',
+      expect.objectContaining({ searchId: 'exhausted-search', reason: 'cancelled' }),
     );
   });
 

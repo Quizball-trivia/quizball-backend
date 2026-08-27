@@ -103,7 +103,9 @@ const metrics: Metrics = {
   searchToFoundMs: [], bidAckMs: [], foldAckMs: [], matchDurationSec: [], roundsPerMatch: [],
 };
 const measuredMatchRosters = new Map<string, string[]>();
-const matchedUserToMatch = new Map<string, string>();
+const measuredStartedSeatMatches = new Set<string>();
+const activeMatchedUserToMatch = new Map<string, string>();
+const uniqueMatchedUsers = new Set<string>();
 const startedMatchIds = new Set<string>();
 const finishedMatchIds = new Set<string>();
 const cleanForfeitMatchIds = new Set<string>();
@@ -225,17 +227,15 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         const humanUserIds = payload.humanUserIds ?? [];
         if (!measuredMatchRosters.has(payload.matchId)) {
           measuredMatchRosters.set(payload.matchId, [...humanUserIds]);
-          metrics.humanSeats += humanUserIds.length;
-          metrics.totalSeats += humanUserIds.length + Math.max(0, payload.botCount ?? 0);
           if (new Set(humanUserIds).size !== humanUserIds.length) {
             metrics.duplicateSeatViolations += 1;
           }
           for (const humanUserId of humanUserIds) {
-            const previousMatchId = matchedUserToMatch.get(humanUserId);
+            const previousMatchId = activeMatchedUserToMatch.get(humanUserId);
             if (previousMatchId && previousMatchId !== payload.matchId) {
               metrics.duplicateSeatViolations += 1;
             } else {
-              matchedUserToMatch.set(humanUserId, payload.matchId);
+              activeMatchedUserToMatch.set(humanUserId, payload.matchId);
             }
           }
         } else {
@@ -262,6 +262,18 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         const humanSeatUserIds = payload.state.seats
           .filter((seat) => !seat.isBot && seat.userId)
           .map((seat) => seat.userId as string);
+        if (!measuredStartedSeatMatches.has(payload.matchId)) {
+          measuredStartedSeatMatches.add(payload.matchId);
+          metrics.humanSeats += humanSeatUserIds.length;
+          metrics.totalSeats += payload.state.seats.length;
+          for (const humanUserId of humanSeatUserIds) uniqueMatchedUsers.add(humanUserId);
+
+          const announced = [...(measuredMatchRosters.get(payload.matchId) ?? [])].sort();
+          const started = [...humanSeatUserIds].sort();
+          if (announced.join(',') !== started.join(',')) {
+            metrics.duplicateSeatViolations += 1;
+          }
+        }
         if (new Set(humanSeatUserIds).size !== humanSeatUserIds.length) {
           metrics.duplicateSeatViolations += 1;
         }
@@ -270,12 +282,14 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
           // The wave gate targets matchmaking, not 21-round content throughput.
           // Exercise the real explicit-forfeit cleanup after seating so every
           // started client reaches a verified terminal path without a 25-minute
-          // fleet run.
+          // fleet run. Stagger by human seat so cleanup does not manufacture a
+          // three-way concurrent-forfeit race.
+          const humanSeatOrdinal = Math.max(0, humanSeatUserIds.indexOf(user.userId));
           setTimeout(() => {
             if (phase === 'playing' && matchId) {
               socket.emit('auction:forfeit', { matchId });
             }
-          }, jitter(1_500, 4_000));
+          }, 1_500 + humanSeatOrdinal * 5_000 + jitter(0, 500));
         }
       });
 
@@ -365,6 +379,9 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         touch();
         metrics.playerForfeitSignals += 1;
         cleanForfeitMatchIds.add(payload.matchId);
+        if (activeMatchedUserToMatch.get(payload.userId) === payload.matchId) {
+          activeMatchedUserToMatch.delete(payload.userId);
+        }
         if (WAVE_MODE && payload.userId === user.userId) {
           metrics.cleanForfeits += 1;
           finish('finished');
@@ -375,10 +392,18 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         bump(metrics.errors, `auction:${payload?.code ?? 'unknown'}`);
       });
 
-      socket.on('auction:match_finished', () => {
+      socket.on('auction:match_finished', (payload: { matchId?: string }) => {
         touch();
         metrics.matchesFinished += 1;
-        if (matchId) finishedMatchIds.add(matchId);
+        const terminalMatchId = payload.matchId ?? matchId;
+        if (terminalMatchId) {
+          finishedMatchIds.add(terminalMatchId);
+          for (const humanUserId of measuredMatchRosters.get(terminalMatchId) ?? []) {
+            if (activeMatchedUserToMatch.get(humanUserId) === terminalMatchId) {
+              activeMatchedUserToMatch.delete(humanUserId);
+            }
+          }
+        }
         if (matchStartedAt > 0) {
           metrics.matchDurationSec.push(Math.round((Date.now() - matchStartedAt) / 1000));
           metrics.roundsPerMatch.push(roundsSeen);
@@ -472,7 +497,7 @@ async function main(): Promise<void> {
       finished: finishedMatchIds.size,
       cleanForfeit: cleanForfeitMatchIds.size,
     },
-    uniqueMatchedUsers: matchedUserToMatch.size,
+    uniqueMatchedUsers: uniqueMatchedUsers.size,
     humanSeatShare: metrics.totalSeats > 0 ? metrics.humanSeats / metrics.totalSeats : 0,
     terminalClientRate: completionRate / 100,
     terminalUniqueMatchRate: uniqueCompletionRate / 100,
@@ -502,7 +527,7 @@ async function main(): Promise<void> {
     console.log(`  report → ${path}`);
   }
   const wavePassed = !WAVE_MODE || (
-    matchedUserToMatch.size === users.length
+    uniqueMatchedUsers.size === users.length
     && summary.percentiles.searchToFoundMs.p95 <= 20_000
     && summary.humanSeatShare >= 0.9
     && metrics.stranded === 0

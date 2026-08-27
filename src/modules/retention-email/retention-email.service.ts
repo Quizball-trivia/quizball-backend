@@ -91,7 +91,7 @@ export function buildRetentionEmail(
   unsubscribeUrl: string,
   now = new Date(),
 ): { subject: string; html: string } {
-  const georgian = assignment.preferred_language.toLowerCase().startsWith('ka');
+  const georgian = retentionEmailLanguage(assignment) === 'ka';
   const nickname = assignment.nickname?.trim()
     ? escapeHtml(assignment.nickname.trim())
     : null;
@@ -249,11 +249,19 @@ export function buildRetentionEmail(
   };
 }
 
+function retentionEmailLanguage(assignment: RetentionEmailAssignment): 'ka' | 'en' {
+  if (assignment.message_kind === 'dormant_journey') {
+    return assignment.country?.trim().toUpperCase() === 'GE' ? 'ka' : 'en';
+  }
+  return assignment.preferred_language.toLowerCase().startsWith('ka') ? 'ka' : 'en';
+}
+
 function assignmentAnalyticsProperties(assignment: RetentionEmailAssignment) {
   const inactivityDays = Math.max(0, Math.floor(
     (Date.parse(assignment.assigned_at) - Date.parse(assignment.last_match_started_at))
     / (24 * 60 * 60 * 1_000),
   ));
+  const countryCode = assignment.country?.trim().toUpperCase() || 'UNKNOWN';
   return {
     campaign_key: assignment.campaign_key,
     variant: assignment.variant,
@@ -266,6 +274,8 @@ function assignmentAnalyticsProperties(assignment: RetentionEmailAssignment) {
     inactivity_days: inactivityDays,
     journey_enrollment_id: assignment.journey_enrollment_id ?? null,
     milestone_days: assignment.milestone_days ?? null,
+    country_code: countryCode,
+    content_language: retentionEmailLanguage(assignment),
   };
 }
 
@@ -280,7 +290,7 @@ async function evaluateVariant(
       featureFlagKey,
       candidate.user_id,
       {
-        personProperties: { country: 'GE' },
+        personProperties: { country: candidate.country ?? '' },
         sendFeatureFlagEvents: false,
       },
     );

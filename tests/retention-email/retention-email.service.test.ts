@@ -91,6 +91,7 @@ const candidate = (userId: string) => ({
   email: `${userId}@example.com`,
   nickname: 'Nika',
   preferred_language: 'ka',
+  country: 'GE',
   tournament_id: '11111111-1111-4111-8111-111111111111',
   entry_closes_at: '2026-08-25T12:00:00.000Z',
   message_kind: 'weekend_league' as const,
@@ -299,6 +300,41 @@ describe('retention email experiment', () => {
     expect(email.subject).toContain('Auction');
     expect(email.html).toContain('ითამაშე Auction');
     expect(email.html).not.toMatch(/coin|მონეტ|free item|უფასო/i);
+  });
+
+  it('uses database country for journey language instead of the language preference', () => {
+    const baseJourney = {
+      ...assignment(),
+      tournament_id: null,
+      entry_closes_at: null,
+      message_kind: 'dormant_journey' as const,
+      cta_state: 'comeback' as const,
+      destination_path: '/auction' as const,
+      qp_remaining: 0,
+      journey_enrollment_id: '88888888-8888-4888-8888-888888888888',
+      milestone_days: 14 as const,
+      scheduled_for: '2026-08-24T12:00:00.000Z',
+    };
+    const georgian = buildRetentionEmail(
+      { ...baseJourney, country: 'GE', preferred_language: 'en' },
+      'https://api.quizball.test/click',
+      'https://api.quizball.test/unsubscribe',
+    );
+    const english = buildRetentionEmail(
+      { ...baseJourney, country: 'GR', preferred_language: 'ka' },
+      'https://api.quizball.test/click',
+      'https://api.quizball.test/unsubscribe',
+    );
+    const missingCountry = buildRetentionEmail(
+      { ...baseJourney, country: null, preferred_language: 'ka' },
+      'https://api.quizball.test/click',
+      'https://api.quizball.test/unsubscribe',
+    );
+
+    expect(georgian.html).toContain('ითამაშე Auction');
+    expect(english.html).toContain('Play Auction');
+    expect(english.html).not.toContain('ითამაშე Auction');
+    expect(missingCountry.html).toContain('Play Auction');
   });
 
   it('records an idempotent click and redirects only to the stored destination', async () => {

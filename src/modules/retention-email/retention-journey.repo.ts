@@ -158,6 +158,10 @@ export const retentionJourneyRepo = {
           WHERE e.journey_key = ${input.config.journey_key}
             AND e.journey_version = ${input.config.version}
             AND e.user_id = a.user_id
+            AND (
+              e.status = 'active'
+              OR e.baseline_last_match_started_at = a.last_match_started_at
+            )
         )
       ORDER BY hashtextextended(a.user_id::text || ${input.config.journey_key}, 0), a.user_id
       LIMIT ${input.limit}

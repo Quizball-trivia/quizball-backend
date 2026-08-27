@@ -87,6 +87,14 @@ interface Metrics {
   playerForfeitSignals: number;
   errors: Map<string, number>;
   disconnects: Map<string, number>;
+  clientFailures: Array<{
+    clientIndex: number;
+    userId: string;
+    matchId: string | null;
+    phase: string;
+    reason: string;
+    idleMs: number;
+  }>;
   searchToFoundMs: number[];
   bidAckMs: number[];
   foldAckMs: number[];
@@ -100,6 +108,7 @@ const metrics: Metrics = {
   duplicateSeatViolations: 0, humanSeats: 0, totalSeats: 0,
   forfeitedCleanups: 0, playerForfeitSignals: 0,
   errors: new Map(), disconnects: new Map(),
+  clientFailures: [],
   searchToFoundMs: [], bidAckMs: [], foldAckMs: [], matchDurationSec: [], roundsPerMatch: [],
 };
 const measuredMatchRosters = new Map<string, string[]>();
@@ -140,6 +149,16 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
     const done = new Promise<void>((resolveDone) => {
       const finish = (outcome: 'finished' | 'failed', reason?: string) => {
         if (phase === 'finished' || phase === 'failed') return;
+        if (outcome === 'failed' && reason) {
+          metrics.clientFailures.push({
+            clientIndex,
+            userId: user.userId,
+            matchId,
+            phase,
+            reason,
+            idleMs: Math.max(0, Date.now() - lastEventAt),
+          });
+        }
         phase = outcome;
         if (outcome === 'failed' && reason) bump(metrics.errors, `client:${reason}`);
         socket.disconnect();

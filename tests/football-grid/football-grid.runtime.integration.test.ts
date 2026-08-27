@@ -1163,6 +1163,67 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     });
   });
 
+  it('keeps single-statement command admission idempotent without orphaning rejected commands', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const runtime = await createReadyTurn('random');
+    const commandId = randomUUID();
+    const firstFence = randomUUID();
+    const first = await footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId,
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-single-statement-admission',
+      processingFence: firstFence,
+    });
+
+    const replay = await footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId,
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-single-statement-admission',
+      processingFence: randomUUID(),
+    });
+    expect(replay).toMatchObject({ id: first.id, processing_fence: firstFence });
+
+    await expect(footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId,
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-reused-command-id',
+      processingFence: randomUUID(),
+    })).rejects.toThrow('COMMAND_ID_REUSED');
+
+    const rejectedCommandId = randomUUID();
+    await expect(footballGridRepo.admitCommand({
+      matchId: runtime.matchId,
+      actorUserId: runtime.playerA,
+      commandId: rejectedCommandId,
+      expectedStateVersion: runtime.stateVersion,
+      commandType: 'pass',
+      payloadHash: 'integration-command-in-progress-rejection',
+      processingFence: randomUUID(),
+    })).rejects.toThrow('COMMAND_IN_PROGRESS');
+    const rejectedRows = await db<Array<{ count: number }>>`
+      SELECT count(*)::int AS count
+        FROM football_grid_command_inbox
+       WHERE match_id = ${runtime.matchId} AND command_id = ${rejectedCommandId}
+    `;
+    expect(rejectedRows[0].count).toBe(0);
+
+    await footballGridRepo.cancelCommand({
+      commandInboxId: first.id,
+      processingFence: firstFence,
+      reason: 'integration cleanup',
+      resultCode: 'TEST_CLEANUP',
+    });
+  });
+
   it('reports a stale command before an unrelated command-in-progress conflict', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const runtime = await createReadyTurn('random');

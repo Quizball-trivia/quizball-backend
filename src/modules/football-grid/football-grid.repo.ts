@@ -110,9 +110,9 @@ export interface FootballGridCommandInboxRow {
   result_payload: Record<string, unknown> | null;
 }
 
-interface GridCommandAdmissionRow extends GridMatchRow {
-  database_now: string;
-  existing_inbox: FootballGridCommandInboxRow | null;
+interface GridCommandAdmissionResultRow {
+  inbox: FootballGridCommandInboxRow | null;
+  error_code: string | null;
 }
 
 export interface FootballGridResultDeliveryRow {
@@ -1918,77 +1918,94 @@ export const footballGridRepo = {
     payloadHash: string;
     processingFence?: string;
   }): Promise<FootballGridCommandInboxRow> {
-    return this.runInTransaction(async (tx) => {
-      const rows = await tx.unsafe<GridCommandAdmissionRow[]>(
-        `SELECT gm.*, clock_timestamp() AS database_now,
-                (
-                  SELECT to_jsonb(i)
-                    FROM football_grid_command_inbox i
-                   WHERE i.match_id = $1
-                     AND i.actor_user_id = $2
-                     AND i.command_id = $3
-                ) AS existing_inbox
+    // Admission is a single statement so the match-row lock, idempotency
+    // lookup, deadline check, inbox insert and pending-command fence share one
+    // atomic snapshot. The previous implementation opened a transaction only
+    // for these two statements, adding BEGIN/SET LOCAL/COMMIT pool occupancy to
+    // every gameplay command before the real state-transition transaction.
+    const rows = await sql.unsafe<GridCommandAdmissionResultRow[]>(
+      `WITH locked_match AS MATERIALIZED (
+         SELECT gm.*, clock_timestamp() AS database_now
            FROM football_grid_matches gm
           WHERE gm.match_id = $1
-          FOR UPDATE OF gm`,
-        [input.matchId, input.actorUserId, input.commandId],
-      );
-      const match = rows[0];
-      if (!match) throw new Error('Football Grid match not found');
-      if (match.existing_inbox) {
-        if (match.existing_inbox.payload_hash !== input.payloadHash) throw new Error('COMMAND_ID_REUSED');
-        return match.existing_inbox;
-      }
-      if (match.state_version !== input.expectedStateVersion) throw new Error('STALE_STATE');
-      if (match.pending_command_id) throw new Error('COMMAND_IN_PROGRESS');
-      if (match.phase === 'terminal') throw new Error('INVALID_STATE');
-      if (input.commandType !== 'forfeit') {
-        if (match.status !== 'active' || match.phase !== 'turn') throw new Error('INVALID_STATE');
-        if (match.current_player_user_id !== input.actorUserId) throw new Error('NOT_YOUR_TURN');
-        const databaseNowMs = Date.parse(match.database_now);
-        const deadlineMs = Date.parse(match.turn_deadline_at ?? '');
-        if (!Number.isFinite(databaseNowMs) || !Number.isFinite(deadlineMs) || databaseNowMs > deadlineMs) {
-          throw new Error('LATE_COMMAND');
-        }
-      }
-      const inserted = await tx.unsafe<FootballGridCommandInboxRow[]>(
-        `WITH admitted AS (
-           INSERT INTO football_grid_command_inbox (
-             match_id, actor_user_id, command_id, expected_state_version,
-             turn_number, command_type, cell_index, locale, submitted_text, payload_hash,
-             status, processing_fence, processing_lease_until, retry_count
-           ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-             CASE WHEN $11::uuid IS NULL THEN 'pending' ELSE 'processing' END,
-             $11,
-             CASE WHEN $11::uuid IS NULL THEN null ELSE now() + interval '30 seconds' END,
-             CASE WHEN $11::uuid IS NULL THEN 0 ELSE 1 END
-           )
-           RETURNING *
-         ), bound AS (
-           UPDATE football_grid_matches
-              SET pending_command_id = (SELECT id FROM admitted)
-            WHERE match_id = $1 AND pending_command_id IS NULL
-            RETURNING match_id
+          FOR UPDATE OF gm
+       ), existing AS MATERIALIZED (
+         SELECT i.*
+           FROM football_grid_command_inbox i
+           JOIN locked_match gm ON gm.match_id = i.match_id
+          WHERE i.actor_user_id = $2
+            AND i.command_id = $3
+       ), decision AS MATERIALIZED (
+         SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM locked_match) THEN 'MATCH_NOT_FOUND'
+           WHEN EXISTS (SELECT 1 FROM existing WHERE payload_hash <> $9) THEN 'COMMAND_ID_REUSED'
+           WHEN EXISTS (SELECT 1 FROM existing) THEN null
+           WHEN (SELECT state_version FROM locked_match) <> $4 THEN 'STALE_STATE'
+           WHEN (SELECT pending_command_id FROM locked_match) IS NOT NULL THEN 'COMMAND_IN_PROGRESS'
+           WHEN (SELECT phase FROM locked_match) = 'terminal' THEN 'INVALID_STATE'
+           WHEN $5 <> 'forfeit' AND (
+             (SELECT status FROM locked_match) <> 'active'
+             OR (SELECT phase FROM locked_match) <> 'turn'
+           ) THEN 'INVALID_STATE'
+           WHEN $5 <> 'forfeit' AND (SELECT current_player_user_id FROM locked_match) <> $2 THEN 'NOT_YOUR_TURN'
+           WHEN $5 <> 'forfeit' AND (
+             (SELECT turn_deadline_at FROM locked_match) IS NULL
+             OR (SELECT database_now FROM locked_match) > (SELECT turn_deadline_at FROM locked_match)
+           ) THEN 'LATE_COMMAND'
+           ELSE null
+         END AS error_code
+       ), admitted AS (
+         INSERT INTO football_grid_command_inbox (
+           match_id, actor_user_id, command_id, expected_state_version,
+           turn_number, command_type, cell_index, locale, submitted_text, payload_hash,
+           status, processing_fence, processing_lease_until, retry_count
          )
-         SELECT admitted.* FROM admitted JOIN bound ON true`,
-        [
-          input.matchId,
-          input.actorUserId,
-          input.commandId,
-          input.expectedStateVersion,
-          match.turn_number,
-          input.commandType,
-          input.cellIndex ?? null,
-          input.locale ?? null,
-          input.submittedText ?? null,
-          input.payloadHash,
-          input.processingFence ?? null,
-        ],
-      );
-      if (!inserted[0]) throw new Error('COMMAND_IN_PROGRESS');
-      return inserted[0];
-    });
+         SELECT $1,$2,$3,$4,gm.turn_number,$5,$6,$7,$8,$9,
+                CASE WHEN $10::uuid IS NULL THEN 'pending' ELSE 'processing' END,
+                $10,
+                CASE WHEN $10::uuid IS NULL THEN null ELSE now() + interval '30 seconds' END,
+                CASE WHEN $10::uuid IS NULL THEN 0 ELSE 1 END
+           FROM locked_match gm
+           JOIN decision d ON d.error_code IS NULL
+          WHERE NOT EXISTS (SELECT 1 FROM existing)
+         RETURNING *
+       ), bound AS (
+         UPDATE football_grid_matches gm
+            SET pending_command_id = admitted.id
+           FROM admitted
+          WHERE gm.match_id = $1 AND gm.pending_command_id IS NULL
+         RETURNING admitted.id
+       ), selected AS (
+         SELECT to_jsonb(existing) AS inbox FROM existing
+         UNION ALL
+         SELECT to_jsonb(admitted) AS inbox
+           FROM admitted JOIN bound ON bound.id = admitted.id
+       )
+       SELECT (SELECT inbox FROM selected LIMIT 1) AS inbox,
+              CASE
+                WHEN decision.error_code IS NOT NULL THEN decision.error_code
+                WHEN NOT EXISTS (SELECT 1 FROM selected) THEN 'COMMAND_IN_PROGRESS'
+                ELSE null
+              END AS error_code
+         FROM decision`,
+      [
+        input.matchId,
+        input.actorUserId,
+        input.commandId,
+        input.expectedStateVersion,
+        input.commandType,
+        input.cellIndex ?? null,
+        input.locale ?? null,
+        input.submittedText ?? null,
+        input.payloadHash,
+        input.processingFence ?? null,
+      ],
+    );
+    const result = rows[0];
+    if (!result || result.error_code === 'MATCH_NOT_FOUND') throw new Error('Football Grid match not found');
+    if (result.error_code) throw new Error(result.error_code);
+    if (!result.inbox) throw new Error('COMMAND_IN_PROGRESS');
+    return result.inbox;
   },
 
   async leaseCommand(commandInboxId: string, processingFence: string): Promise<FootballGridCommandInboxRow | null> {

@@ -41,6 +41,7 @@ import { feedbackRoutes } from './feedback.routes.js';
 import { emailRoutes } from './email.routes.js';
 import { campaignQuizzesRoutes } from './campaign-quizzes.routes.js';
 import { adminCampaignQuizzesRoutes } from './admin-campaign-quizzes.routes.js';
+import { adminRetentionRoutes } from './admin-retention.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -89,6 +90,7 @@ router.use('/api/v1/admin/leaderboard', adminLeaderboardRoutes);
 router.use('/api/v1/admin/auction', adminAuctionRoutes);
 router.use('/api/v1/admin/player-clue-cards', adminPlayerClueCardsRoutes);
 router.use('/api/v1/admin/auction-pipeline', adminAuctionPipelineRoutes);
+router.use('/api/v1/admin/retention', adminRetentionRoutes);
 router.use('/api/v1/admin/agents', adminAgentsRoutes);
 router.use('/api/v1/admin/football-grid', adminFootballGridRoutes);
 router.use('/api/v1/admin/translation', translationRoutes);

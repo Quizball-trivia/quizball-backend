@@ -49,6 +49,9 @@ vi.mock('../../src/core/config.js', () => ({
     DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES: 3,
     DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP: 200,
     DORMANT_COMEBACK_EMAIL_USER_ID_ALLOWLIST: [],
+    REACTIVATION_JOURNEY_ENABLED: true,
+    REACTIVATION_JOURNEY_BATCH_SIZE: 25,
+    REACTIVATION_JOURNEY_USER_ID_ALLOWLIST: [],
     RESEND_WEBHOOK_SECRET: 'whsec_test',
     API_BASE_URL: 'https://api.quizball.test',
     PUBLIC_SITE_ORIGIN: 'https://quizball.test',
@@ -272,6 +275,30 @@ describe('retention email experiment', () => {
     expect(email.subject).toContain('Quizball');
     expect(email.html).toContain('ითამაშე ახლა');
     expect(email.html).not.toMatch(/QP|coin|მონეტ|free item|უფასო|უიქენდ/i);
+  });
+
+  it('builds milestone-specific journey copy and never invents a reward', () => {
+    const value = {
+      ...assignment(),
+      tournament_id: null,
+      entry_closes_at: null,
+      message_kind: 'dormant_journey' as const,
+      cta_state: 'comeback' as const,
+      destination_path: '/auction' as const,
+      qp_remaining: 0,
+      journey_enrollment_id: '88888888-8888-4888-8888-888888888888',
+      milestone_days: 14 as const,
+      scheduled_for: '2026-08-24T12:00:00.000Z',
+    };
+    const email = buildRetentionEmail(
+      value,
+      'https://api.quizball.test/click',
+      'https://api.quizball.test/unsubscribe',
+    );
+
+    expect(email.subject).toContain('Auction');
+    expect(email.html).toContain('ითამაშე Auction');
+    expect(email.html).not.toMatch(/coin|მონეტ|free item|უფასო/i);
   });
 
   it('records an idempotent click and redirects only to the stored destination', async () => {

@@ -8,6 +8,7 @@ function idle(userId: string): SessionStatePayload {
     state: 'IDLE',
     activeMatchId: null,
     waitingLobbyId: null,
+    primaryLobbyStatus: null,
     queueSearchId: null,
     openLobbyIds: [],
     resolvedAt: userId,

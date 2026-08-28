@@ -1068,6 +1068,7 @@ export interface SessionStatePayload {
   state: SessionStateKind;
   activeMatchId: string | null;
   waitingLobbyId: string | null;
+  primaryLobbyStatus: 'waiting' | 'active' | null;
   queueSearchId: string | null;
   openLobbyIds: string[];
   resolvedAt: string;

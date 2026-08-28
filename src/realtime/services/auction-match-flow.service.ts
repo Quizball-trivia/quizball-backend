@@ -63,6 +63,7 @@ import {
 } from './auction-ui-ready.service.js';
 import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 import { decideAuctionBotSoloPick } from './auction-bot-profile.js';
+import { teardownFinishedLobbyAuction } from './auction-lobby-teardown.service.js';
 
 const AUCTION_REVEAL_UI_READY_CEILING_MS = 6_000;
 const AUCTION_CONTENT_FETCH_ATTEMPTS = 3;
@@ -367,6 +368,12 @@ export async function emitAuctionStepStarted(
     );
     emitMatchFinished(io, state, rewards);
     await auctionStateStore.clearIndexes(state);
+    await teardownFinishedLobbyAuction(io, state).catch((error) => {
+      logger.error(
+        { error, matchId: state.matchId, lobbyId: state.sourceLobbyId },
+        'Failed to tear down finished auction lobby'
+      );
+    });
     // Terminal choke point for EVERY finish — the normal 11-round end and the
     // last-human-forfeit finish both land here — so persistent-bot reservations
     // are freed exactly once, after persistence has written their history rows.

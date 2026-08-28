@@ -10,6 +10,7 @@ import {
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
 
 type FakeRedis = {
+  isOpen: boolean;
   zRangeByScore: ReturnType<typeof vi.fn>;
   eval: ReturnType<typeof vi.fn>;
   hGet: ReturnType<typeof vi.fn>;
@@ -29,6 +30,11 @@ const getLobbyByIdMock = vi.fn();
 const buildLobbyStateMock = vi.fn();
 const listOpenLobbiesForUserMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
+const getActiveMatchForLobbyMock = vi.fn();
+const removeLobbyMemberMock = vi.fn();
+const deleteLobbyMock = vi.fn();
+const countLobbyMembersMock = vi.fn();
+const listLobbyMembersMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const ensureProfileMock = vi.fn();
 const ensureProfilesMock = vi.fn();
@@ -79,12 +85,18 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
         await listOpenLobbiesForUserMock(userId),
       ] as const))
     ),
+    removeMember: (...args: unknown[]) => removeLobbyMemberMock(...args),
+    deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
+    countMembers: (...args: unknown[]) => countLobbyMembersMock(...args),
+    listMembersWithUser: (...args: unknown[]) => listLobbyMembersMock(...args),
+    setHostUser: vi.fn(),
   },
 }));
 
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
+    getActiveMatchForLobby: (...args: unknown[]) => getActiveMatchForLobbyMock(...args),
     getActiveMatchesForUsers: async (userIds: string[]) => {
       const entries = await Promise.all(userIds.map(async (userId) => [
         userId,
@@ -213,6 +225,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     absentUserIds.clear();
 
     redisMock = {
+      isOpen: true,
       zRangeByScore: vi.fn().mockResolvedValue([]),
       eval: vi.fn().mockResolvedValue([]),
       hGet: vi.fn().mockResolvedValue(null),
@@ -254,6 +267,11 @@ describe('ranked-matchmaking.service queue behavior', () => {
     addMemberMock.mockResolvedValue(undefined);
     listOpenLobbiesForUserMock.mockResolvedValue([]);
     getActiveMatchForUserMock.mockResolvedValue(null);
+    getActiveMatchForLobbyMock.mockResolvedValue(null);
+    removeLobbyMemberMock.mockResolvedValue(undefined);
+    deleteLobbyMock.mockResolvedValue(undefined);
+    countLobbyMembersMock.mockResolvedValue(0);
+    listLobbyMembersMock.mockResolvedValue([{ user_id: 'u1', is_ai: false }]);
     getLobbyByIdMock.mockImplementation(async (lobbyId: string) => ({
       id: lobbyId,
       mode: 'ranked',
@@ -476,6 +494,88 @@ describe('ranked-matchmaking.service queue behavior', () => {
       'session:state',
       expect.objectContaining({ waitingLobbyId: 'lobby-draft' })
     );
+  });
+
+  it('heals a stranded active friendly auction before joining the ranked queue', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    const openLobbies = [{
+      ...makeOpenLobby('stranded-auction', 'active'),
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeLobbyMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction');
+    expect(redisMock.multi).toHaveBeenCalledTimes(1);
+    expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+    expect(userEmit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ state: 'IN_QUEUE', waitingLobbyId: null })
+    );
+  });
+
+  it('ignores a queue join while the user sits in a live waiting lobby instead of dissolving it', async () => {
+    // A reload while in a lobby can make the client re-emit a stale
+    // queue_join; that must never remove the user from a live lobby.
+    const service = await loadService();
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const prepareSpy = vi.spyOn(userSessionGuardService, 'prepareForQueueJoin');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    listOpenLobbiesForUserMock.mockResolvedValue([makeOpenLobby('lobby-live-wait', 'waiting')]);
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).not.toHaveBeenCalled();
+    expect(redisMock.multi).not.toHaveBeenCalled();
+    expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    expect(userEmit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'lobby-live-wait' })
+    );
+    prepareSpy.mockRestore();
+  });
+
+  it('skips the active-lobby heal when the user session lock is held', async () => {
+    const service = await loadService();
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const prepareSpy = vi.spyOn(userSessionGuardService, 'prepareForQueueJoin');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      ...makeOpenLobby('locked-stale-auction', 'active'),
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }]);
+    acquireLockMock.mockResolvedValue({ acquired: false });
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(acquireLockMock).toHaveBeenCalledWith('lock:user:session:u1', 4000);
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    expect(redisMock.multi).not.toHaveBeenCalled();
+    expect(userEmit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ waitingLobbyId: 'locked-stale-auction' })
+    );
+    prepareSpy.mockRestore();
   });
 
   it('still rejects an idle user with no tickets via INSUFFICIENT_TICKETS', async () => {

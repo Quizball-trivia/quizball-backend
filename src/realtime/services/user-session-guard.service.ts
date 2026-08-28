@@ -7,7 +7,7 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import type { LobbyWithJoinedAt } from '../../modules/lobbies/lobbies.types.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
-import { trackMatchAbandoned } from '../../core/analytics/game-events.js';
+import { trackMatchAbandoned, trackStaleLobbyHealed } from '../../core/analytics/game-events.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
@@ -29,8 +29,10 @@ import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
-import { footballGridService } from '../../modules/football-grid/index.js';
+import { footballGridRepo, footballGridService } from '../../modules/football-grid/index.js';
 import { footballGridRealtimeService } from './football-grid-realtime.service.js';
+import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
+import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -49,6 +51,7 @@ const GRID_SEARCH_KEY_PREFIX = 'football_grid:mm:search:';
 const SHARED_PAIRING_USER_KEY_PREFIX = 'session:pairing:user:';
 const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 const STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS = 90 * 1000;
+const STALE_ACTIVE_LOBBY_MS = 30 * 60 * 1000;
 
 const SIMPLE_MM_CANCEL_SEARCH_SCRIPT = `
 local queueKey = KEYS[1]
@@ -111,6 +114,11 @@ type ResolveContext = {
 
 function toSnapshot(context: ResolveContext): SessionStatePayload {
   const primaryLobby = context.waitingLobbies[0] ?? context.activeLobbies[0] ?? null;
+  const primaryLobbyStatus = context.waitingLobbies[0]
+    ? 'waiting'
+    : context.activeLobbies[0]
+      ? 'active'
+      : null;
   const indicatorCount =
     Number(Boolean(context.activeMatch?.id)) +
     Number(Boolean(context.queueSearchId)) +
@@ -135,6 +143,7 @@ function toSnapshot(context: ResolveContext): SessionStatePayload {
     state,
     activeMatchId: context.activeMatch?.id ?? null,
     waitingLobbyId: primaryLobby?.id ?? null,
+    primaryLobbyStatus,
     queueSearchId: context.queueSearchId,
     openLobbyIds: context.openLobbies.map((lobby) => lobby.id),
     resolvedAt: new Date().toISOString(),
@@ -296,6 +305,121 @@ async function hasAnyPairingInFlight(userId: string): Promise<boolean> {
     `${SHARED_PAIRING_USER_KEY_PREFIX}${userId}`,
   ]);
   return count > 0;
+}
+
+async function hasLiveLobbyAuctionState(lobbyId: string): Promise<boolean> {
+  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+  const humanUserIds = members
+    .filter((member) => !member.is_ai)
+    .map((member) => member.user_id);
+  const matchIds = await Promise.all(
+    humanUserIds.map((memberUserId) => auctionStateStore.getActiveMatchIdForUser(memberUserId))
+  );
+  for (const matchId of new Set(matchIds.filter((value): value is string => Boolean(value)))) {
+    const state = await auctionStateStore.load(matchId);
+    if (
+      state
+      && state.origin === 'lobby'
+      && state.phase !== 'finished'
+      // Legacy in-flight states (pre-sourceLobbyId deploy) can't be matched to
+      // a lobby, so any live member auction keeps the lobby conservatively live.
+      && (!state.sourceLobbyId || state.sourceLobbyId === lobbyId)
+      && state.seats.some((seat) => (
+        !seat.isBot
+        && !seat.forfeited
+        && Boolean(seat.userId)
+        && humanUserIds.includes(seat.userId as string)
+      ))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function hasLiveDraftPhaseState(lobbyId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+  const [phaseKeyCount, ...pending] = await Promise.all([
+    redis.exists([
+      `draft:starting:${lobbyId}`,
+      `draft:pause:${lobbyId}`,
+      `draft:grace:${lobbyId}`,
+      `draft:complete:lock:${lobbyId}`,
+    ]),
+    hasPendingRealtimeTimer('draft_ai_ban', lobbyId),
+    hasPendingRealtimeTimer('draft_auto_ban', lobbyId),
+    hasPendingRealtimeTimer('draft_grace_expiry', lobbyId),
+  ]);
+  return phaseKeyCount > 0 || pending.some(Boolean);
+}
+
+/**
+ * Ranked-sim drafts keep sockets attached to the lobby through normal pick/ban turns, while
+ * lobby auctions clear `socket.data.lobbyId` at match start and rely on auction phase state.
+ * Football Grid lobbies are live while their series is open (active, or rematch window not
+ * yet expired) — series close resets the lobby to waiting, so a long-idle active grid lobby
+ * means the close path was lost. Cleanup requires those signals to be absent and more than
+ * 30 minutes of DB inactivity.
+ */
+async function isActiveLobbyLive(
+  io: QuizballServer,
+  lobby: LobbyWithJoinedAt,
+): Promise<boolean> {
+  if (lobby.mode === 'ranked') return true;
+
+  try {
+    const sockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
+    if (sockets.some((socket) => socket.data.lobbyId === lobby.id)) return true;
+  } catch (error) {
+    logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect active lobby socket presence');
+    return true;
+  }
+
+  if (lobby.game_mode === 'football_grid') {
+    try {
+      if (await footballGridRepo.hasOpenSeriesForLobby(lobby.id)) return true;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect Football Grid series state');
+      return true;
+    }
+  }
+
+  if (lobby.game_mode === 'auction' || lobby.game_mode === 'ranked_sim') {
+    const redis = getRedisClient();
+    if (!redis?.isOpen) return true;
+    try {
+      const hasPhaseState = lobby.game_mode === 'auction'
+        ? await hasLiveLobbyAuctionState(lobby.id)
+        : await hasLiveDraftPhaseState(lobby.id);
+      if (hasPhaseState) return true;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id, gameMode: lobby.game_mode }, 'Failed to inspect active lobby phase state');
+      return true;
+    }
+  }
+
+  const updatedAtMs = Date.parse(lobby.updated_at);
+  return !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS;
+}
+
+async function everyActiveLobbyIsDead(
+  io: QuizballServer,
+  lobbies: LobbyWithJoinedAt[],
+): Promise<boolean> {
+  if (lobbies.length === 0) return false;
+  const liveStates = await Promise.all(lobbies.map((lobby) => isActiveLobbyLive(io, lobby)));
+  return liveStates.every((live) => !live);
+}
+
+async function firstLiveActiveLobby(
+  io: QuizballServer,
+  lobbies: LobbyWithJoinedAt[],
+): Promise<LobbyWithJoinedAt | null> {
+  for (const lobby of lobbies) {
+    if (await isActiveLobbyLive(io, lobby)) return lobby;
+  }
+  return null;
 }
 
 async function cleanupStaleOrphanActiveMatch(
@@ -699,7 +823,17 @@ async function cleanupOpenLobbies(
 
     const activeMatchForLobby = await matchesRepo.getActiveMatchForLobby(lobby.id);
     if (!activeMatchForLobby) {
+      if (await isActiveLobbyLive(io, lobby)) {
+        continue;
+      }
       await removeUserFromLobby(io, lobby, userId, 'cleanup_stale_active_lobby');
+      trackStaleLobbyHealed({
+        userId,
+        lobbyId: lobby.id,
+        mode: lobby.mode,
+        gameMode: lobby.game_mode,
+        idleMs: Date.now() - Date.parse(lobby.updated_at),
+      });
       continue;
     }
 
@@ -1024,7 +1158,10 @@ export const userSessionGuardService = {
       return this.resolveState(userId);
     }
 
-    const keepLobbyId = context.waitingLobbies[0]?.id ?? context.activeLobbies[0]?.id;
+    const liveActiveLobby = context.waitingLobbies.length === 0 && context.activeLobbies.length > 0
+      ? await firstLiveActiveLobby(io, context.activeLobbies)
+      : null;
+    const keepLobbyId = context.waitingLobbies[0]?.id ?? liveActiveLobby?.id;
     if (context.queueSearchId && keepLobbyId) {
       await cancelAllQueueSearches(userId);
     }
@@ -1114,6 +1251,14 @@ export const userSessionGuardService = {
         message: 'Your match is starting',
       };
     }
+    if (context.activeLobbies.length > 0) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'You are already in an active draft',
+      };
+    }
     return { ok: true, snapshot };
   },
 
@@ -1121,10 +1266,12 @@ export const userSessionGuardService = {
     io: QuizballServer,
     userId: string,
     requestedQueue: 'ranked' | 'auction' | 'grid' = 'ranked',
+    options?: { preserveWaitingLobbies?: boolean },
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
     // Queue join is a flash-traffic path. A clean user only needs one context
     // read; the generic connect preparation used to resolve the same match and
     // lobby state repeatedly before resolving it yet again below.
+    const cleanupStartedAtMs = Date.now();
     let context = await resolveContext(userId);
     if (context.activeMatch) {
       await cleanupStaleOrphanActiveMatch(io, userId, context);
@@ -1163,13 +1310,33 @@ export const userSessionGuardService = {
       };
     }
 
-    if (context.activeLobbies.length > 0) {
+    // A reload while sitting in a live lobby can make the client re-emit a
+    // stale queue_join; ranked opts in to preserving the lobby membership so
+    // that automatic re-emit never dissolves a real lobby (auction/grid keep
+    // the leave-lobby-and-queue semantics).
+    if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
       return {
         ok: false,
         snapshot,
         reason: 'ACTIVE_MATCH',
-        message: 'You are already in an active draft',
+        message: 'You are already in a lobby',
       };
+    }
+
+    if (context.activeLobbies.length > 0) {
+      if (await everyActiveLobbyIsDead(io, context.activeLobbies)) {
+        await cleanupOpenLobbies(io, userId, { cleanupStartedAtMs });
+        context = await resolveContext(userId);
+        snapshot = toSnapshot(context);
+      }
+      if (context.activeLobbies.length > 0) {
+        return {
+          ok: false,
+          snapshot,
+          reason: 'ACTIVE_MATCH',
+          message: 'You are already in an active draft',
+        };
+      }
     }
 
     if (snapshot.state === 'IN_QUEUE' && context.queueKind !== requestedQueue) {
@@ -1190,7 +1357,7 @@ export const userSessionGuardService = {
     // actual lobby/queue state.
     if (context.openLobbies.length > 0 || context.queueSearchId) {
       if (context.queueSearchId) await cancelAllQueueSearches(userId);
-      await cleanupOpenLobbies(io, userId);
+      await cleanupOpenLobbies(io, userId, { cleanupStartedAtMs });
       context = await resolveContext(userId);
       snapshot = toSnapshot(context);
     }

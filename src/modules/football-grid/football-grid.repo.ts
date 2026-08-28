@@ -1077,6 +1077,18 @@ export const footballGridRepo = {
     return rows.map((row) => row.user_id);
   },
 
+  async hasOpenSeriesForLobby(lobbyId: string): Promise<boolean> {
+    const rows = await sql<Array<{ live: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1 FROM football_grid_series
+         WHERE lobby_id = ${lobbyId}
+           AND (status = 'active'
+             OR (status = 'rematch_pending' AND rematch_expires_at > now()))
+      ) AS live
+    `;
+    return Boolean(rows[0]?.live);
+  },
+
   async listPendingRematches(limit = 200, afterSeriesId: string | null = null): Promise<Array<{
     seriesId: string;
     seriesVersion: number;

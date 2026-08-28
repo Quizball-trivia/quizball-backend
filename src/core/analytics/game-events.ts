@@ -120,6 +120,21 @@ export function trackLobbyLeft(
   });
 }
 
+export function trackStaleLobbyHealed(params: {
+  userId: string;
+  lobbyId: string;
+  mode: string;
+  gameMode: string;
+  idleMs: number;
+}): void {
+  trackEvent('stale_lobby_healed', params.userId, {
+    lobby_id: params.lobbyId,
+    mode: params.mode,
+    game_mode: params.gameMode,
+    idle_ms: params.idleMs,
+  });
+}
+
 // Ranked Queue Events
 interface RankedQueueClientContext {
   source?: string | null;

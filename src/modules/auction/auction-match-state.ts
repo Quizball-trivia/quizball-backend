@@ -77,6 +77,7 @@ export interface AuctionMatchState {
   version: number;
   locale?: 'en' | 'ka';
   origin?: AuctionMatchOrigin;
+  sourceLobbyId?: string;
   phase: AuctionMatchPhase;
   formation: FormationName;
   seats: AuctionPlayer[];
@@ -132,7 +133,7 @@ export type PublicAuctionPlayerRanking = Omit<AuctionPlayerRanking, 'isBot' | 'p
 
 export type PublicAuctionMatchState = Omit<
   AuctionMatchState,
-  'seats' | 'currentRound' | 'completedRounds' | 'soloPick' | 'rankings'
+  'sourceLobbyId' | 'seats' | 'currentRound' | 'completedRounds' | 'soloPick' | 'rankings'
 > & {
   seats: PublicAuctionPlayer[];
   currentRound: PublicAuctionRoundState | null;
@@ -176,8 +177,9 @@ export function findAuctionSeatByUserId(
 }
 
 export function toPublicAuctionMatchState(state: AuctionMatchState): PublicAuctionMatchState {
+  const { sourceLobbyId: _sourceLobbyId, ...publicState } = state;
   return {
-    ...state,
+    ...publicState,
     seats: state.seats.map(toPublicAuctionPlayer),
     rankings: toPublicAuctionRankings(state.rankings),
     currentRound: state.currentRound ? toPublicAuctionRound(state.currentRound) : null,

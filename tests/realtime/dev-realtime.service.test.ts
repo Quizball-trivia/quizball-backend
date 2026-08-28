@@ -88,6 +88,7 @@ describe('devRealtimeService.handleQuickMatch', () => {
         state: 'IDLE',
         activeMatchId: null,
         waitingLobbyId: null,
+        primaryLobbyStatus: null,
         queueSearchId: null,
       },
     });

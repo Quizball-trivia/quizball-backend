@@ -67,6 +67,7 @@ export interface CreateInitialAuctionMatchInput {
   formation?: FormationName;
   locale?: 'en' | 'ka';
   origin?: AuctionMatchOrigin;
+  sourceLobbyId?: string;
   context?: AuctionEngineContext;
 }
 
@@ -127,6 +128,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
     version: 0,
     locale: input.locale ?? 'en',
     origin: input.origin ?? 'queue',
+    ...(input.sourceLobbyId ? { sourceLobbyId: input.sourceLobbyId } : {}),
     phase: 'created',
     formation,
     seats,

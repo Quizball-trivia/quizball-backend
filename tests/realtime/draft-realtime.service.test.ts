@@ -102,6 +102,7 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
       state: 'IDLE',
       activeMatchId: null,
       waitingLobbyId: null,
+      primaryLobbyStatus: null,
       queueSearchId: null,
       openLobbyIds: [],
       resolvedAt: new Date().toISOString(),

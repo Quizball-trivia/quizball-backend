@@ -92,6 +92,7 @@ export interface StartAuctionMatchForHumansInput {
   locale: AuctionContentLocale;
   /** Defaults to 'queue'; the lobby path passes 'lobby' so it awards no AP. */
   origin?: AuctionMatchOrigin;
+  sourceLobbyId?: string;
   sourceSocket?: QuizballSocket;
 }
 
@@ -191,6 +192,7 @@ export async function startAuctionMatchForHumans(
       formation: undefined,
       locale: input.locale,
       origin: input.origin ?? 'queue',
+      sourceLobbyId: input.sourceLobbyId,
       context,
     });
 

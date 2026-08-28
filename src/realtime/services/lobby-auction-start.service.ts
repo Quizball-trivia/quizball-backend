@@ -95,6 +95,7 @@ export async function startAuctionMatchFromLobby(
       locale: input.locale ?? 'en',
       // Friendly: marks the match so the finish path awards no Auction Points.
       origin: 'lobby',
+      sourceLobbyId: lobbyId,
       sourceSocket: socket,
     });
     matchId = saved.matchId;

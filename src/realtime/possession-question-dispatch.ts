@@ -880,6 +880,7 @@ export async function sendPossessionMatchQuestion(
       previousQuestionKind,
       clueCount,
       postReadyAck: preloaded?.postReadyAck,
+      phaseKind: runtimePhaseKind,
     });
 
     state.currentQuestion = {
@@ -1043,6 +1044,7 @@ export async function resumePossessionMatchQuestion(
     qIndex,
     state: cache.statePayload,
     questionKind: currentQuestion.kind,
+    phaseKind: currentQuestion.phaseKind,
   });
 
   currentQuestion.shownAt = playableAt.toISOString();

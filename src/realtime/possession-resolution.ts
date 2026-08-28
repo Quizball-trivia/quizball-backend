@@ -261,11 +261,26 @@ export function applyPenaltyResolution(
   const keeperAnswer = answerByUserId.get(keeperUserId ?? '');
   const shooterPoints = shooterAnswer?.points_earned ?? 0;
   const keeperPoints = keeperAnswer?.points_earned ?? 0;
+  const shooterCorrect = shooterAnswer?.is_correct ?? false;
+  const keeperCorrect = keeperAnswer?.is_correct ?? false;
 
-  // The shooter must beat the keeper outright. Equal points are a save,
-  // regardless of answer time or player seat.
-  const isGoal = shooterPoints > keeperPoints;
-
+  // A correct shot against a wrong keeper is always a goal, even when the
+  // shooter's answer was slow enough to floor to 0 points. Otherwise points
+  // decide the duel — but points are stepped in 10-point buckets with a full-
+  // points grace window, so two fast correct answers tie CONSTANTLY. With a
+  // tie as a plain save, equally-good players could never score and prod
+  // shootouts ran to 18-40 kicks at 0-0. Break point-ties on raw answer time
+  // (faster correct answer wins); an exact-ms tie still favours the keeper.
+  // Both-wrong stays a miss: the shooter must at least be correct to score.
+  const shooterTimeMs = shooterAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
+  const keeperTimeMs = keeperAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
+  const tieBrokenByTime =
+    shooterCorrect &&
+    keeperCorrect &&
+    shooterPoints === keeperPoints &&
+    shooterTimeMs < keeperTimeMs;
+  const isGoal =
+    (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints || tieBrokenByTime;
   let goalScoredByUserId: string | null = null;
   if (isGoal) {
     if (shooterSeat === 1) state.penaltyGoals.seat1 += 1;

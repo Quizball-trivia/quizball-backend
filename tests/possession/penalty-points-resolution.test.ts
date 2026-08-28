@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
-import type { CachedAnswer, CachedPlayer, MatchCache } from '../../src/realtime/match-cache.js';
-import { toCachedAnswerByUserId } from '../../src/realtime/possession-payload-mappers.js';
+import type { CachedPlayer } from '../../src/realtime/match-cache.js';
 import { applyPenaltyResolution } from '../../src/realtime/possession-resolution.js';
 import type { Seat } from '../../src/realtime/possession-state.js';
 
@@ -36,60 +35,20 @@ function penaltyState() {
 
 function answers(seat1Points: number, seat2Points: number) {
   return new Map([
-    [
-      'seat-1',
-      {
-        is_correct: seat1Points > 0,
-        time_ms: 5_000,
-        points_earned: seat1Points,
-      },
-    ],
-    [
-      'seat-2',
-      {
-        is_correct: seat2Points > 0,
-        time_ms: 500,
-        points_earned: seat2Points,
-      },
-    ],
+    ['seat-1', {
+      is_correct: seat1Points > 0,
+      time_ms: 5_000,
+      points_earned: seat1Points,
+    }],
+    ['seat-2', {
+      is_correct: seat2Points > 0,
+      time_ms: 500,
+      points_earned: seat2Points,
+    }],
   ]);
 }
 
-function cachedAnswer(userId: string, pointsEarned: number, timeMs: number): CachedAnswer {
-  return {
-    userId,
-    questionKind: 'multipleChoice',
-    selectedIndex: 0,
-    isCorrect: true,
-    timeMs,
-    pointsEarned,
-    phaseKind: 'penalty',
-    phaseRound: 1,
-    shooterSeat: 1,
-    answeredAt: null,
-  };
-}
-
 describe('penalty points resolution', () => {
-  it('uses points propagated by the cached-answer mapper', () => {
-    const cache: Pick<MatchCache, 'answers'> = {
-      answers: {
-        'seat-1': cachedAnswer('seat-1', 80, 5_000),
-        'seat-2': cachedAnswer('seat-2', 70, 500),
-      },
-    };
-    const state = penaltyState();
-    const result = applyPenaltyResolution(
-      state,
-      players(),
-      toCachedAnswerByUserId(cache),
-      1
-    );
-
-    expect(result.goalScoredByUserId).toBe('seat-1');
-    expect(state.penaltyGoals.seat1).toBe(1);
-  });
-
   it.each([
     { shooterSeat: 1 as Seat, seat1Points: 80, seat2Points: 70, scorer: 'seat-1' },
     { shooterSeat: 2 as Seat, seat1Points: 70, seat2Points: 80, scorer: 'seat-2' },
@@ -104,7 +63,7 @@ describe('penalty points resolution', () => {
       state,
       players(),
       answers(seat1Points, seat2Points),
-      shooterSeat
+      shooterSeat,
     );
 
     expect(result.goalScoredByUserId).toBe(scorer);
@@ -125,7 +84,7 @@ describe('penalty points resolution', () => {
       state,
       players(),
       answers(seat1Points, seat2Points),
-      shooterSeat
+      shooterSeat,
     );
 
     expect(result.goalScoredByUserId).toBeNull();
@@ -133,12 +92,25 @@ describe('penalty points resolution', () => {
     expect(state.penalty.attempts?.[`seat${shooterSeat}`]).toEqual(['miss']);
   });
 
-  it.each([1, 2] as const)('gives a 100–100 tie to the keeper: shooter seat %s', (shooterSeat) => {
+  // The answers() helper gives seat-1 a 5000ms answer and seat-2 a 500ms one,
+  // so a 100-100 tie now resolves on time: the faster player scores as shooter
+  // and saves as keeper (tie-break added for the 0-0 marathon bug — see
+  // penalty-tiebreak.test.ts).
+  it('resolves a 100–100 tie against the SLOWER shooter (seat 1, 5000ms vs 500ms)', () => {
     const state = penaltyState();
-    const result = applyPenaltyResolution(state, players(), answers(100, 100), shooterSeat);
+    const result = applyPenaltyResolution(state, players(), answers(100, 100), 1);
 
     expect(result.goalScoredByUserId).toBeNull();
     expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 0 });
-    expect(state.penalty.attempts?.[`seat${shooterSeat}`]).toEqual(['miss']);
+    expect(state.penalty.attempts?.seat1).toEqual(['miss']);
+  });
+
+  it('resolves a 100–100 tie for the FASTER shooter (seat 2, 500ms vs 5000ms)', () => {
+    const state = penaltyState();
+    const result = applyPenaltyResolution(state, players(), answers(100, 100), 2);
+
+    expect(result.goalScoredByUserId).toBe('seat-2');
+    expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 1 });
+    expect(state.penalty.attempts?.seat2).toEqual(['goal']);
   });
 });

@@ -202,6 +202,7 @@ export function computeResumedPossessionTiming(params: {
   qIndex: number;
   state: PossessionStatePayload;
   questionKind: MatchQuestionKind;
+  phaseKind?: 'normal' | 'last_attack' | 'penalty' | 'shot';
 }): { playableAt: Date; deadlineAt: Date } {
   const shownAtMs = params.shownAtRaw ? new Date(params.shownAtRaw).getTime() : Number.NaN;
   const deadlineAtMs = params.deadlineAtRaw ? new Date(params.deadlineAtRaw).getTime() : Number.NaN;
@@ -211,6 +212,7 @@ export function computeResumedPossessionTiming(params: {
       qIndex: params.qIndex,
       state: params.state,
       questionKind: params.questionKind,
+      phaseKind: params.phaseKind,
     });
   }
 

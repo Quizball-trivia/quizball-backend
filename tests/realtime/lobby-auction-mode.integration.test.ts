@@ -737,7 +737,7 @@ describe('lobby auction mode', () => {
     const host = createSocket('e8-host');
     const guestA = createSocket('e8-a');
     const guestB = createSocket('e8-b');
-    const { inviteCode } = await createAuctionLobby(host);
+    const { lobbyId, inviteCode } = await createAuctionLobby(host);
     await guestA.trigger('lobby:join_by_code', { inviteCode });
     await guestB.trigger('lobby:join_by_code', { inviteCode });
     await readyAll([host, guestA, guestB]);
@@ -750,6 +750,7 @@ describe('lobby auction mode', () => {
       humanPlayers: Array<{ userId: string; displayName: string; avatarCustomization: unknown }>;
       locale: string;
       origin: string;
+      sourceLobbyId: string;
       sourceSocket: unknown;
     };
     expect(input.humanPlayers).toEqual([
@@ -760,6 +761,7 @@ describe('lobby auction mode', () => {
     expect(input.locale).toBe('en');
     // Friendly: stamped as a lobby match so the finish path awards no AP.
     expect(input.origin).toBe('lobby');
+    expect(input.sourceLobbyId).toBe(lobbyId);
 
     // Friendly economy: the auction lobby path never touches the store service.
     const storeService = await import('../../src/modules/store/store.service.js');

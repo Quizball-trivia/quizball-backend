@@ -44,6 +44,23 @@ const schedulerMock = vi.hoisted(() => ({
 const persistenceMock = vi.hoisted(() => ({
   persistFinishedAuctionMatch: vi.fn(async () => ({})),
 }));
+const lobbyRepoMock = vi.hoisted(() => ({
+  listMembersWithUser: vi.fn(),
+  setLobbyStatus: vi.fn(),
+  removeMembers: vi.fn(),
+}));
+const sessionGuardMock = vi.hoisted(() => ({
+  emitState: vi.fn(),
+}));
+const lockMock = vi.hoisted(() => ({
+  acquireLock: vi.fn(),
+  releaseLock: vi.fn(),
+}));
+
+vi.mock('../../src/realtime/locks.js', () => ({
+  acquireLock: (...args: unknown[]) => lockMock.acquireLock(...args),
+  releaseLock: (...args: unknown[]) => lockMock.releaseLock(...args),
+}));
 
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/modules/auction/index.js')>();
@@ -76,6 +93,14 @@ vi.mock('../../src/realtime/services/auction-persistence.service.js', () => ({
   persistFinishedAuctionMatch: persistenceMock.persistFinishedAuctionMatch,
 }));
 
+vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
+  lobbiesRepo: lobbyRepoMock,
+}));
+
+vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
+  userSessionGuardService: sessionGuardMock,
+}));
+
 const context: AuctionEngineContext = {
   now: () => new Date('2026-06-20T10:00:00.000Z'),
   random: () => 0,
@@ -85,11 +110,15 @@ const context: AuctionEngineContext = {
 let idCounter = 0;
 let persisted: AuctionMatchState | null = null;
 
-function createIo() {
+function createIo(matchSockets: Array<{
+  data: { matchId?: string };
+  leave: ReturnType<typeof vi.fn>;
+}> = []) {
   const roomEmit = vi.fn();
   const to = vi.fn(() => ({ emit: roomEmit }));
+  const inFn = vi.fn(() => ({ fetchSockets: vi.fn(async () => matchSockets) }));
   return {
-    io: { to } as unknown as QuizballServer,
+    io: { to, in: inFn } as unknown as QuizballServer,
     roomEmit,
   };
 }
@@ -196,6 +225,8 @@ describe('auction match flow service', () => {
     idCounter = 0;
     persisted = null;
     vi.clearAllMocks();
+    lockMock.acquireLock.mockImplementation(async (key: string) => ({ acquired: true, token: `t:${key}` }));
+    lockMock.releaseLock.mockResolvedValue(true);
     stateStoreMock.withLock.mockImplementation(async (_matchId: string, fn: () => Promise<unknown>) => fn());
     stateStoreMock.load.mockImplementation(async () => persisted);
     installAuctionStateStoreMutationMock(stateStoreMock);
@@ -205,6 +236,18 @@ describe('auction match flow service', () => {
     });
     stateStoreMock.clearIndexes.mockResolvedValue(undefined);
     contentServiceMock.getRecentlySeenFootballPlayerIds.mockResolvedValue([]);
+    lobbyRepoMock.listMembersWithUser.mockResolvedValue([]);
+    lobbyRepoMock.setLobbyStatus.mockResolvedValue(undefined);
+    lobbyRepoMock.removeMembers.mockResolvedValue(undefined);
+    sessionGuardMock.emitState.mockResolvedValue({
+      state: 'IDLE',
+      activeMatchId: null,
+      waitingLobbyId: null,
+      primaryLobbyStatus: null,
+      queueSearchId: null,
+      openLobbyIds: [],
+      resolvedAt: '2026-08-28T12:00:00.000Z',
+    });
   });
 
   afterEach(() => {
@@ -826,6 +869,82 @@ describe('auction match flow service', () => {
     };
     // Absent (not an empty object) so the client hides AP for friendlies.
     expect(payload.apByUserId).toBeUndefined();
+  });
+
+  it('closes a finished lobby auction and releases every member to idle state', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const matchSocket = { data: { matchId: 'match-1' }, leave: vi.fn() };
+    const { io, roomEmit } = createIo([matchSocket]);
+    contentServiceMock.findRandomPublishedAuctionCard.mockResolvedValue(null);
+    lobbyRepoMock.listMembersWithUser.mockResolvedValue([
+      { user_id: 'user-1' },
+      { user_id: 'user-2' },
+    ]);
+    const lobbyState = startInitialState();
+    persisted = {
+      ...lobbyState,
+      origin: 'lobby',
+      sourceLobbyId: 'lobby-1',
+      phase: 'created',
+      seats: lobbyState.seats.map((seat) => (
+        seat.isBot ? seat : { ...seat, forfeited: true }
+      )),
+    };
+
+    persisted = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    const finishEmitOrder = roomEmit.mock.invocationCallOrder[
+      roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_finished')
+    ];
+    expect(persisted.phase).toBe('finished');
+    expect(lobbyRepoMock.setLobbyStatus).toHaveBeenCalledWith('lobby-1', 'closed');
+    expect(lobbyRepoMock.removeMembers).toHaveBeenCalledWith('lobby-1', ['user-1', 'user-2']);
+    expect(finishEmitOrder).toBeLessThan(lobbyRepoMock.setLobbyStatus.mock.invocationCallOrder[0]);
+    expect(matchSocket.leave).toHaveBeenCalledWith('match:match-1');
+    expect(matchSocket.data.matchId).toBeUndefined();
+    expect(sessionGuardMock.emitState).toHaveBeenCalledWith(io, 'user-1');
+    expect(sessionGuardMock.emitState).toHaveBeenCalledWith(io, 'user-2');
+  });
+
+  it('skips teardown when the lobby lock is contended and leaves state for the heal', async () => {
+    const { teardownFinishedLobbyAuction } = await import('../../src/realtime/services/auction-lobby-teardown.service.js');
+    const { io } = createIo();
+    lockMock.acquireLock.mockResolvedValue({ acquired: false, token: null });
+    const state: AuctionMatchState = {
+      ...startInitialState(),
+      origin: 'lobby',
+      sourceLobbyId: 'lobby-1',
+      phase: 'finished',
+      rankings: [],
+    };
+
+    await teardownFinishedLobbyAuction(io, state);
+
+    expect(lobbyRepoMock.setLobbyStatus).not.toHaveBeenCalled();
+    expect(lobbyRepoMock.removeMembers).not.toHaveBeenCalled();
+  });
+
+  it('replays finished lobby teardown safely after the lobby is already clean', async () => {
+    const { teardownFinishedLobbyAuction } = await import('../../src/realtime/services/auction-lobby-teardown.service.js');
+    const { io } = createIo();
+    const state: AuctionMatchState = {
+      ...startInitialState(),
+      origin: 'lobby',
+      sourceLobbyId: 'lobby-1',
+      phase: 'finished',
+      rankings: [],
+    };
+    lobbyRepoMock.listMembersWithUser
+      .mockResolvedValueOnce([{ user_id: 'user-1' }])
+      .mockResolvedValueOnce([]);
+
+    await teardownFinishedLobbyAuction(io, state);
+    await teardownFinishedLobbyAuction(io, state);
+
+    expect(lobbyRepoMock.setLobbyStatus).toHaveBeenCalledTimes(2);
+    expect(lobbyRepoMock.removeMembers).toHaveBeenNthCalledWith(1, 'lobby-1', ['user-1']);
+    expect(lobbyRepoMock.removeMembers).toHaveBeenNthCalledWith(2, 'lobby-1', []);
+    expect(sessionGuardMock.emitState).toHaveBeenCalledTimes(1);
   });
 
   it('retries transient content failures and leaves the match recoverable instead of finishing', async () => {

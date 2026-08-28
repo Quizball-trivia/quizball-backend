@@ -75,6 +75,18 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   },
 }));
 
+const hasOpenSeriesForLobbyMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/modules/football-grid/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/modules/football-grid/index.js')>();
+  return {
+    ...actual,
+    footballGridRepo: {
+      ...actual.footballGridRepo,
+      hasOpenSeriesForLobby: (...args: unknown[]) => hasOpenSeriesForLobbyMock(...args),
+    },
+  };
+});
+
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
@@ -419,6 +431,399 @@ describe('user-session-guard.service', () => {
     expect(result.snapshot.state).toBe('IN_WAITING_LOBBY');
     expect(result.snapshot.waitingLobbyId).toBe('draft-lobby');
     expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('heals a stranded active friendly auction before queue join', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const openLobbies = [{
+      id: 'stranded-auction',
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      status: 'active' as const,
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction');
+  });
+
+  it('blocks queue join when an old friendly auction still has live phase state', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      id: 'live-auction-lobby',
+      mode: 'friendly',
+      game_mode: 'auction',
+      status: 'active',
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+      get: vi.fn(async (key: string) => {
+        if (key === 'auction:user:u1:match' || key === 'auction:user:u2:match') return 'auction-match';
+        if (key === 'auction:match:auction-match') {
+          return JSON.stringify({
+            matchId: 'auction-match',
+            origin: 'lobby',
+            phase: 'bidding',
+            seats: [
+              { userId: 'u1', isBot: false, forfeited: false },
+              { userId: 'u2', isBot: false, forfeited: false },
+            ],
+          });
+        }
+        return null;
+      }),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'ACTIVE_MATCH',
+      snapshot: { state: 'IN_WAITING_LOBBY', waitingLobbyId: 'live-auction-lobby' },
+    });
+    expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an unparseable timestamp', 'not-a-timestamp'],
+    ['the exact 30-minute boundary', 'boundary'],
+  ])('keeps an active lobby live at %s', async (_caseName, updatedAt) => {
+    const nowMs = Date.parse('2026-08-28T12:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      id: 'conservative-lobby',
+      mode: 'friendly',
+      game_mode: 'auction',
+      status: 'active',
+      host_user_id: 'u1',
+      updated_at: updatedAt === 'boundary'
+        ? new Date(nowMs - 30 * 60_000).toISOString()
+        : updatedAt,
+      joined_at: new Date(nowMs - 31 * 60_000).toISOString(),
+    }]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'ACTIVE_MATCH',
+      snapshot: { waitingLobbyId: 'conservative-lobby', primaryLobbyStatus: 'active' },
+    });
+    expect(removeMemberMock).not.toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
+
+  it('preserves a lobby membership created while queue-join liveness is probed', async () => {
+    const cleanupStartedAtMs = Date.parse('2026-08-28T12:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(cleanupStartedAtMs);
+    const staleLobby = {
+      id: 'stale-auction',
+      mode: 'friendly',
+      game_mode: 'auction',
+      status: 'active',
+      host_user_id: 'u1',
+      updated_at: new Date(cleanupStartedAtMs - 31 * 60_000).toISOString(),
+      joined_at: new Date(cleanupStartedAtMs - 31 * 60_000).toISOString(),
+    };
+    const freshLobby = {
+      id: 'fresh-lobby',
+      mode: 'friendly',
+      game_mode: 'friendly_possession',
+      status: 'waiting',
+      host_user_id: 'other-user',
+      updated_at: new Date(cleanupStartedAtMs + 1).toISOString(),
+      joined_at: new Date(cleanupStartedAtMs + 1).toISOString(),
+    };
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock
+      .mockResolvedValueOnce([staleLobby])
+      .mockResolvedValueOnce([staleLobby, freshLobby])
+      .mockResolvedValueOnce([freshLobby])
+      .mockResolvedValueOnce([freshLobby])
+      .mockResolvedValueOnce([freshLobby]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(removeMemberMock).toHaveBeenCalledWith('stale-auction', 'u1');
+    expect(removeMemberMock).not.toHaveBeenCalledWith('fresh-lobby', 'u1');
+    expect(result).toMatchObject({ ok: false, snapshot: { waitingLobbyId: 'fresh-lobby' } });
+    nowSpy.mockRestore();
+  });
+
+  it('heals a stranded lobby whose member is auctioning from a different lobby', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const openLobbies = [{
+      id: 'stranded-cross-lobby',
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      status: 'active' as const,
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+      get: vi.fn(async (key: string) => {
+        if (key === 'auction:user:u1:match' || key === 'auction:user:u2:match') return 'auction-match';
+        if (key === 'auction:match:auction-match') {
+          return JSON.stringify({
+            matchId: 'auction-match',
+            origin: 'lobby',
+            sourceLobbyId: 'a-different-lobby',
+            phase: 'bidding',
+            seats: [
+              { userId: 'u1', isBot: false, forfeited: false },
+              { userId: 'u2', isBot: false, forfeited: false },
+            ],
+          });
+        }
+        return null;
+      }),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-cross-lobby', 'u1');
+  });
+
+  it('keeps an active lobby live when its own auction is running', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      id: 'own-lobby',
+      mode: 'friendly',
+      game_mode: 'auction',
+      status: 'active',
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+      get: vi.fn(async (key: string) => {
+        if (key === 'auction:user:u1:match' || key === 'auction:user:u2:match') return 'auction-match';
+        if (key === 'auction:match:auction-match') {
+          return JSON.stringify({
+            matchId: 'auction-match',
+            origin: 'lobby',
+            sourceLobbyId: 'own-lobby',
+            phase: 'bidding',
+            seats: [
+              { userId: 'u1', isBot: false, forfeited: false },
+              { userId: 'u2', isBot: false, forfeited: false },
+            ],
+          });
+        }
+        return null;
+      }),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({ ok: false, reason: 'ACTIVE_MATCH' });
+    expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks queue join while a Football Grid lobby series is open', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    hasOpenSeriesForLobbyMock.mockResolvedValue(true);
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      id: 'grid-lobby-live',
+      mode: 'friendly',
+      game_mode: 'football_grid',
+      status: 'active',
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }]);
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+      get: vi.fn().mockResolvedValue(null),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(hasOpenSeriesForLobbyMock).toHaveBeenCalledWith('grid-lobby-live');
+    expect(result).toMatchObject({ ok: false, reason: 'ACTIVE_MATCH' });
+    expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('heals a stranded Football Grid lobby whose series is gone', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    hasOpenSeriesForLobbyMock.mockResolvedValue(false);
+    const openLobbies = [{
+      id: 'grid-lobby-dead',
+      mode: 'friendly' as const,
+      game_mode: 'football_grid' as const,
+      status: 'active' as const,
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+      get: vi.fn().mockResolvedValue(null),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
+    expect(removeMemberMock).toHaveBeenCalledWith('grid-lobby-dead', 'u1');
+  });
+
+  it('heals a stranded active friendly auction during connect recovery', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const openLobbies = [{
+      id: 'stranded-connect-auction',
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      status: 'active' as const,
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
+
+    expect(snapshot).toMatchObject({ state: 'IDLE', waitingLobbyId: null });
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-connect-auction', 'u1');
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-connect-auction');
+  });
+
+  it('heals a stranded active friendly auction before lobby entry', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const openLobbies = [{
+      id: 'stranded-entry-auction',
+      mode: 'friendly' as const,
+      game_mode: 'auction' as const,
+      status: 'active' as const,
+      host_user_id: 'u1',
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+    getRedisClientMock.mockReturnValue({
+      isOpen: true,
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+      exists: vi.fn().mockResolvedValue(0),
+    });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForLobbyEntry(io, 'u1');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-entry-auction', 'u1');
   });
 
   it('uses one session-context read for an idle ranked queue join', async () => {

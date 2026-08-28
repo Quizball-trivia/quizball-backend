@@ -486,6 +486,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         state: 'IDLE',
         activeMatchId: null,
         waitingLobbyId: null,
+        primaryLobbyStatus: null,
         queueSearchId: null,
         openLobbyIds: [],
         resolvedAt: new Date().toISOString(),

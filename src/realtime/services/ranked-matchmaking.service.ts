@@ -124,6 +124,7 @@ function emitQueuedSessionState(
     state: 'IN_QUEUE',
     activeMatchId: null,
     waitingLobbyId: null,
+    primaryLobbyStatus: null,
     queueSearchId: searchId,
     openLobbyIds: [],
     resolvedAt: new Date().toISOString(),
@@ -242,6 +243,7 @@ async function notifyClaimedSearchFailure(
 type RankedMatchmakingSessionBlock = {
   activeMatchId: string | null;
   waitingLobbyId: string | null;
+  primaryLobbyStatus: 'waiting' | 'active' | null;
   queueSearchId: string | null;
   state: string;
 };
@@ -274,6 +276,7 @@ async function getRankedMatchmakingSessionBlocks(
     return [userId, {
       activeMatchId: snapshot.activeMatchId,
       waitingLobbyId: snapshot.waitingLobbyId,
+      primaryLobbyStatus: snapshot.primaryLobbyStatus,
       queueSearchId: snapshot.queueSearchId,
       state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
     }];
@@ -373,6 +376,7 @@ function emitCreatedRankedSessionStates(
       state: 'IN_WAITING_LOBBY',
       activeMatchId: null,
       waitingLobbyId: lobbyId,
+      primaryLobbyStatus: 'waiting',
       queueSearchId: null,
       openLobbyIds: [lobbyId],
       resolvedAt,
@@ -1396,7 +1400,35 @@ export const rankedMatchmakingService = {
       // re-emit authoritative state and let the rejoin flow own the UX.
       // (A bare queueSearchId is NOT handled here: the debounce/resume logic
       // below re-emits the search with the correct REMAINING duration.)
-      const earlySessionBlock = await getRankedMatchmakingSessionBlock(userId);
+      let earlySessionBlock = await getRankedMatchmakingSessionBlock(userId);
+      const lobbyOnlySessionBlock = Boolean(
+        earlySessionBlock?.waitingLobbyId
+        && earlySessionBlock.primaryLobbyStatus === 'active'
+        && !earlySessionBlock.activeMatchId
+        && !earlySessionBlock.queueSearchId
+        && earlySessionBlock.state !== 'PAIRING_IN_FLIGHT'
+        && earlySessionBlock.state !== 'CORRUPT_MULTI_STATE'
+      );
+      if (earlySessionBlock && lobbyOnlySessionBlock) {
+        const prepared = await userSessionGuardService.withUserSessionLock(
+          userId,
+          () => userSessionGuardService.prepareForQueueJoin(io, userId, 'ranked', {
+            preserveWaitingLobbies: true,
+          }),
+          { waitMs: 0 },
+        );
+        if (prepared) {
+          earlySessionBlock = prepared.ok ? null : {
+            activeMatchId: prepared.snapshot.activeMatchId,
+            waitingLobbyId: prepared.snapshot.waitingLobbyId,
+            primaryLobbyStatus: prepared.snapshot.primaryLobbyStatus,
+            queueSearchId: prepared.snapshot.queueSearchId,
+            state: prepared.snapshot.state === 'IDLE' && prepared.reason === 'ACTIVE_MATCH'
+              ? 'PAIRING_IN_FLIGHT'
+              : prepared.snapshot.state,
+          };
+        }
+      }
       if (
         earlySessionBlock &&
         (earlySessionBlock.activeMatchId ||

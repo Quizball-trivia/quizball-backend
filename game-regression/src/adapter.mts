@@ -186,6 +186,17 @@ export class FakeIo {
     return true;
   }
 
+  /**
+   * Cross-replica broadcast (match-ui-ready-gate forwards non-owned acks this
+   * way). The harness is single-process — there IS no other replica — so this
+   * only records the event for the trace; the local gate owner path already
+   * handled owned acks before reaching serverSideEmit.
+   */
+  serverSideEmit(event: string, ...args: unknown[]): boolean {
+    this._trace.record('server->room', `serverSide:${event}`, args, '*');
+    return true;
+  }
+
   _socketsIn(room: string | null): FakeSocket[] {
     if (room === null) return [...this.allSockets];
     return [...(this.roomIndex.get(room) ?? new Set())];

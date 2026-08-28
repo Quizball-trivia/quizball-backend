@@ -92,17 +92,25 @@ describe('penalty points resolution', () => {
     expect(state.penalty.attempts?.[`seat${shooterSeat}`]).toEqual(['miss']);
   });
 
-  it.each([1, 2] as const)('gives a 100–100 tie to the keeper: shooter seat %s', (shooterSeat) => {
+  // The answers() helper gives seat-1 a 5000ms answer and seat-2 a 500ms one,
+  // so a 100-100 tie now resolves on time: the faster player scores as shooter
+  // and saves as keeper (tie-break added for the 0-0 marathon bug — see
+  // penalty-tiebreak.test.ts).
+  it('resolves a 100–100 tie against the SLOWER shooter (seat 1, 5000ms vs 500ms)', () => {
     const state = penaltyState();
-    const result = applyPenaltyResolution(
-      state,
-      players(),
-      answers(100, 100),
-      shooterSeat,
-    );
+    const result = applyPenaltyResolution(state, players(), answers(100, 100), 1);
 
     expect(result.goalScoredByUserId).toBeNull();
     expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 0 });
-    expect(state.penalty.attempts?.[`seat${shooterSeat}`]).toEqual(['miss']);
+    expect(state.penalty.attempts?.seat1).toEqual(['miss']);
+  });
+
+  it('resolves a 100–100 tie for the FASTER shooter (seat 2, 500ms vs 5000ms)', () => {
+    const state = penaltyState();
+    const result = applyPenaltyResolution(state, players(), answers(100, 100), 2);
+
+    expect(result.goalScoredByUserId).toBe('seat-2');
+    expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 1 });
+    expect(state.penalty.attempts?.seat2).toEqual(['goal']);
   });
 });

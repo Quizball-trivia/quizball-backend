@@ -128,8 +128,18 @@ export function getQuestionPreAnswerDelayMs(params: {
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
   previousQuestionKind?: MatchQuestionKind;
   postReadyAck?: boolean;
+  phaseKind?: 'normal' | 'last_attack' | 'penalty' | 'shot';
 }): number {
   const { qIndex, state, previousQuestionKind, postReadyAck } = params;
+  // Penalty rounds get ONE fixed read window, independent of the dispatch path
+  // (ready-ack race vs. generic timer) and of what question came before. The
+  // per-path variance made the reveal feel random round to round — sometimes
+  // options were up the instant the question appeared, sometimes seconds late
+  // (player report: "1st instant, 2nd late; you need time to read"). The value
+  // matches the pre-fix generic path so overall shootout pacing is unchanged.
+  if (params.phaseKind === 'penalty') {
+    return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
+  }
   // First question has a dedicated intro overlay before reveal.
   if (qIndex === 0) {
     return FRONTEND_FIRST_QUESTION_INTRO_MS + FRONTEND_REVEAL_MS;
@@ -180,6 +190,7 @@ export function buildPlayableQuestionTiming(params: {
   previousQuestionKind?: MatchQuestionKind;
   clueCount?: number;
   postReadyAck?: boolean;
+  phaseKind?: 'normal' | 'last_attack' | 'penalty' | 'shot';
 }): {
   playableAt: Date;
   deadlineAt: Date;

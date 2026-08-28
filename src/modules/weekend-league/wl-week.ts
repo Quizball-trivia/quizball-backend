@@ -14,23 +14,20 @@ export const WL_QP_WIN = 25;
 export const WL_QP_LOSS = 10;
 export const WL_QP_TARGET = 200;
 
-/** Accrual window: Monday 00:00 GE ≤ t < Friday 12:00 GE. */
 /**
  * QP is a RUNNING balance — every ranked match accrues, every day (the old
  * Mon–Fri window predates the running-balance pivot and silently zeroed
  * weekend grinding). Retained for the entry-cutoff boundary only.
  */
 export function isInQpWindow(endedAt: Date): boolean {
-  const ge = new Date(endedAt.getTime() + GE_OFFSET_MS);
-  const day = ge.getUTCDay();
-  if (day >= 1 && day <= 4) return true;
-  return day === 5 && ge.getUTCHours() < 12;
+  const day = new Date(endedAt.getTime() + GE_OFFSET_MS).getUTCDay();
+  return day >= 1 && day <= 5; // Mon 00:00 GE ≤ t < Sat 00:00 GE
 }
 
 /**
  * The event week a match's QP arrives in time for, as 'YYYY-MM-DD' (that
- * week's Saturday, GE). Entry closes Friday 12:00 GE, so matches played
- * after the cutoff — late Friday, Saturday, Sunday — credit the NEXT
+ * week's Saturday, GE). Entry closes Friday 24:00 GE, so matches played
+ * after the cutoff — Saturday, Sunday — credit the NEXT
  * event's week. Display context only: the balance itself sums the ledger
  * since the player's last ticket claim, regardless of week.
  */
@@ -39,8 +36,8 @@ export function weekKeyFor(endedAt: Date): string | null {
   const day = ge.getUTCDay(); // 0 Sun … 6 Sat
   let daysToSaturday = (6 - day + 7) % 7; // this week's Saturday
   if (!isInQpWindow(endedAt)) {
-    // Past the Friday-noon cutoff: roll to the next event's Saturday.
-    daysToSaturday = day === 6 ? 7 : day === 0 ? 6 : daysToSaturday + 7;
+    // Past the Friday-midnight cutoff: roll to the next event's Saturday.
+    daysToSaturday = day === 6 ? 7 : 6;
   }
   const saturday = new Date(ge.getTime() + daysToSaturday * DAY_MS);
   return saturday.toISOString().slice(0, 10);
@@ -87,7 +84,7 @@ function scheduleForSaturday(saturdayGeDate: Date): WlEventSchedule {
   return {
     weekKey,
     entryOpensAtMs: saturdayMidnightUtc - 5 * DAY_MS,            // Mon 00:00 GE
-    entryClosesAtMs: saturdayMidnightUtc - DAY_MS + 12 * 3600_000, // Fri 12:00 GE
+    entryClosesAtMs: saturdayMidnightUtc,                        // Fri 24:00 GE
     qualifierStartsAtMs: saturdayMidnightUtc + 14 * 3600_000,    // Sat 14:00 GE
     finalStartsAtMs: saturdayMidnightUtc + DAY_MS + 14 * 3600_000, // Sun 14:00 GE
   };

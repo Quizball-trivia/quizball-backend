@@ -9779,7 +9779,8 @@
                     "type": "string",
                     "enum": [
                       "en",
-                      "ka"
+                      "ka",
+                      "es"
                     ]
                   }
                 },
@@ -23072,7 +23073,8 @@
                     "type": "string",
                     "enum": [
                       "en",
-                      "ka"
+                      "ka",
+                      "es"
                     ]
                   },
                   "promptVersion": {
@@ -23169,7 +23171,8 @@
                     "type": "string",
                     "enum": [
                       "en",
-                      "ka"
+                      "ka",
+                      "es"
                     ]
                   },
                   "promptVersion": {

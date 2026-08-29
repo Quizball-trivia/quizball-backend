@@ -8,6 +8,14 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SEARCH_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
 const API_BASE = 'https://www.googleapis.com/webmasters/v3/sites';
 
+const SPANISH_SOURCE_SLUGS: Record<string, string> = {
+  'adivina-el-jugador': 'guess-the-player',
+  'trayectoria-del-jugador': 'career-path',
+  'escudos-de-futbol': 'club-badges',
+  'seleccion-argentina': 'argentina',
+  'seleccion-espanola': 'spain',
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 const cachedMetrics = new Map<
   number,
@@ -78,12 +86,22 @@ async function accessToken(): Promise<string> {
   return cachedToken.value;
 }
 
-function slugFromPageUrl(value: string): string | null {
+export function campaignQuizSlugFromPageUrl(
+  value: string,
+  siteOrigin = config.PUBLIC_SITE_ORIGIN,
+): string | null {
   try {
     const url = new URL(value);
-    if (url.origin !== new URL(config.PUBLIC_SITE_ORIGIN).origin) return null;
-    const match = url.pathname.match(/^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/);
-    return match?.[1] ?? null;
+    if (url.origin !== new URL(siteOrigin).origin) return null;
+
+    const englishOrGeorgian = url.pathname.match(
+      /^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/,
+    );
+    if (englishOrGeorgian?.[1]) return englishOrGeorgian[1];
+
+    const spanish = url.pathname.match(/^\/es\/quiz-de-futbol\/([a-z0-9-]+)\/?$/);
+    if (!spanish?.[1]) return null;
+    return SPANISH_SOURCE_SLUGS[spanish[1]] ?? spanish[1];
   } catch {
     return null;
   }
@@ -120,7 +138,11 @@ export const campaignQuizSearchConsoleService = {
           type: 'web',
           dimensions: ['page'],
           dimensionFilterGroups: [{
-            filters: [{ dimension: 'page', operator: 'contains', expression: '/football-quiz/' }],
+            filters: [{
+              dimension: 'page',
+              operator: 'includingRegex',
+              expression: '/(football-quiz|quiz-de-futbol)/',
+            }],
           }],
           rowLimit: 25_000,
         }),
@@ -145,7 +167,7 @@ export const campaignQuizSearchConsoleService = {
     const bySlug = new Map<string, AdminCampaignQuizSearchConsoleResponse['pages'][number]>();
     const positionImpressionsBySlug = new Map<string, number>();
     for (const row of payload?.rows ?? []) {
-      const slug = row.keys?.[0] ? slugFromPageUrl(row.keys[0]) : null;
+      const slug = row.keys?.[0] ? campaignQuizSlugFromPageUrl(row.keys[0]) : null;
       if (!slug) continue;
       const previous = bySlug.get(slug);
       const clicks = Number(row.clicks) || 0;

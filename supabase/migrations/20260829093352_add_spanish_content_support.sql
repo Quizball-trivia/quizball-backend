@@ -19,6 +19,7 @@ ALTER TABLE public.campaign_quizzes
   ADD COLUMN IF NOT EXISTS es_about_heading TEXT,
   ADD COLUMN IF NOT EXISTS es_about_blocks JSONB,
   ADD COLUMN IF NOT EXISTS es_hero_image_alt TEXT,
+  ADD COLUMN IF NOT EXISTS es_og_image_alt TEXT,
   ADD COLUMN IF NOT EXISTS es_score_cta TEXT,
   ADD COLUMN IF NOT EXISTS es_footer_banner_text TEXT,
   ADD COLUMN IF NOT EXISTS es_footer_button_label TEXT;

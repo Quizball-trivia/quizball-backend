@@ -282,7 +282,7 @@ function toPageContent(
     seo_title: spanish ? quiz.es_seo_title ?? quiz.seo_title : quiz.seo_title,
     meta_description: interpolateCount(spanish ? quiz.es_meta_description ?? quiz.meta_description : quiz.meta_description, count),
     og_image_url: publicCampaignQuizImageUrl(quiz.og_image_url),
-    og_image_alt: quiz.og_image_alt,
+    og_image_alt: spanish ? quiz.es_og_image_alt ?? quiz.og_image_alt : quiz.og_image_alt,
     breadcrumb_label: spanish ? quiz.es_breadcrumb_label ?? quiz.breadcrumb_label : quiz.breadcrumb_label,
     locale_mode: quiz.locale_mode,
     ka_seo_title: quiz.ka_seo_title,

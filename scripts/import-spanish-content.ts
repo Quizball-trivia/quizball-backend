@@ -51,7 +51,7 @@ const SCALAR_TARGETS: Record<string, { key: string; columns: ReadonlySet<string>
     columns: new Set([
       'es_title', 'es_h1', 'es_seo_title', 'es_meta_description',
       'es_breadcrumb_label', 'es_lede', 'es_about_heading', 'es_about_blocks',
-      'es_hero_image_alt', 'es_score_cta', 'es_footer_banner_text',
+      'es_hero_image_alt', 'es_og_image_alt', 'es_score_cta', 'es_footer_banner_text',
       'es_footer_button_label',
     ]),
   },

@@ -23,8 +23,15 @@ ALTER TABLE public.campaign_quizzes
   ADD COLUMN IF NOT EXISTS es_footer_banner_text TEXT,
   ADD COLUMN IF NOT EXISTS es_footer_button_label TEXT;
 
-ALTER TABLE public.goal_choreographies
-  ADD COLUMN IF NOT EXISTS match_label_es TEXT;
+-- Goal celebrations are not installed in every environment yet. Keep the
+-- Spanish campaign migration deployable where that optional feature is absent.
+DO $$
+BEGIN
+  IF to_regclass('public.goal_choreographies') IS NOT NULL THEN
+    EXECUTE 'ALTER TABLE public.goal_choreographies ADD COLUMN IF NOT EXISTS match_label_es TEXT';
+  END IF;
+END
+$$;
 
 COMMENT ON COLUMN public.campaign_quizzes.es_about_blocks IS
   'Spanish equivalent of about_blocks; source content remains unchanged.';

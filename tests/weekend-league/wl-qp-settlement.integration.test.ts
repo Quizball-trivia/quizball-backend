@@ -66,7 +66,8 @@ async function qpRows(userId: string) {
 
 // Wednesday 18:00 Georgia (14:00 UTC) of the week whose Saturday is 2026-08-01.
 const IN_WINDOW = new Date('2026-07-29T14:00:00Z');
-// Saturday inside the same week — outside the accrual window.
+// Saturday of the same week — past the Friday-midnight cutoff, so QP rolls
+// to the NEXT event's week (running balance: weekend grinding never evaporates).
 const OUT_OF_WINDOW = new Date('2026-08-01T14:00:00Z');
 
 beforeAll(async () => {
@@ -149,7 +150,7 @@ describe('WL QP settlement accrual', () => {
     ]);
   });
 
-  it('accrues nothing for matches ended outside the Mon–Fri window', async ({ skip }) => {
+  it('credits a post-cutoff (Saturday) match to the NEXT event week', async ({ skip }) => {
     if (!dbAvailable) skip();
     const winner = await seedUser(`wlqp-sat-w-${Date.now()}`, false);
     const loser = await seedUser(`wlqp-sat-l-${Date.now()}`, false);
@@ -158,13 +159,33 @@ describe('WL QP settlement accrual', () => {
     await rankedService.settleCompletedRankedMatch(matchId);
 
     const w = await qpRows(winner);
-    expect(w.awards).toEqual([]);
-    expect(w.totals).toEqual([]);
-    // RP itself must still have settled — only QP is window-gated.
+    expect(w.totals).toEqual([
+      { week_key: '2026-08-08', points: 25, wins: 1, losses: 0 },
+    ]);
     const rp = await sql<{ user_id: string }[]>`
       SELECT user_id FROM ranked_rp_changes WHERE match_id = ${matchId}
     `;
     expect(rp.length).toBe(2);
+  });
+
+  it('cutoff boundary: Friday 23:59 GE is this week, Saturday 00:00 GE the next', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    // 2026-07-31T23:59:59.999 GE = 19:59:59.999Z; Sat 00:00 GE = 20:00Z.
+    const before = await seedUser(`wlqp-b-${Date.now()}`, false);
+    const beforeOpp = await seedUser(`wlqp-bo-${Date.now()}`, false);
+    const m1 = await seedCompletedMatch(before, beforeOpp, new Date('2026-07-31T19:59:59.999Z'));
+    await rankedService.settleCompletedRankedMatch(m1);
+    expect((await qpRows(before)).totals).toEqual([
+      { week_key: '2026-08-01', points: 25, wins: 1, losses: 0 },
+    ]);
+
+    const after = await seedUser(`wlqp-a2-${Date.now()}`, false);
+    const afterOpp = await seedUser(`wlqp-ao-${Date.now()}`, false);
+    const m2 = await seedCompletedMatch(after, afterOpp, new Date('2026-07-31T20:00:00.000Z'));
+    await rankedService.settleCompletedRankedMatch(m2);
+    expect((await qpRows(after)).totals).toEqual([
+      { week_key: '2026-08-08', points: 25, wins: 1, losses: 0 },
+    ]);
   });
 
   it('repo-level replay of the IDENTICAL settlement input awards QP once (gate test)', async ({ skip }) => {

@@ -59,7 +59,7 @@ function html(unsubUrl: string): string {
     </p>
     <div style="background: #f6f8f6; border-radius: 12px; padding: 14px 16px; margin: 0 0 18px;">
       <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">1.</b>&nbsp; ითამაშე რეიტინგული კვირის განმავლობაში და დააგროვე <b>200 QP</b></p>
-      <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">2.</b>&nbsp; დარეგისტრირდი ივენთების გვერდზე — რეგისტრაცია იხურება <b>პარასკევს 12:00-ზე</b></p>
+      <p style="margin: 0 0 10px; color: #111; line-height: 1.5;"><b style="color:#38B60E;">2.</b>&nbsp; დარეგისტრირდი ივენთების გვერდზე — რეგისტრაცია იხურება <b>პარასკევს შუაღამისას (24:00)</b></p>
       <p style="margin: 0; color: #111; line-height: 1.5;"><b style="color:#38B60E;">3.</b>&nbsp; შაბათ-კვირას გაიარე ჩექინი <b>13:50–14:00</b> და ითამაშე ⚽</p>
     </div>
     <p style="margin: 0 0 20px; color: #444; line-height: 1.5;">
@@ -69,7 +69,7 @@ function html(unsubUrl: string): string {
     <h3 style="margin: 26px 0 4px; color: #888; font-weight: 600; font-size: 15px;">The Weekend League runs every week!</h3>
     <p style="margin: 0 0 16px; color: #888; line-height: 1.5; font-size: 14px;">
       Qualifiers every Saturday 14:00, the final on Sunday 14:00. Play ranked during the week to collect
-      200 QP, register before Friday 12:00, check in 13:50–14:00 and play. Top 3 earn permanent champion
+      200 QP, register before Friday midnight, check in 13:50–14:00 and play. Top 3 earn permanent champion
       medals. This week: Sat Aug 15 &amp; Sun Aug 16.
     </p>
     <p style="margin: 20px 0 0; color: #bbb; font-size: 12px; line-height: 1.5;">

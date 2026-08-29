@@ -15,12 +15,12 @@ describe('weekKeyFor', () => {
     expect(weekKeyFor(geDate('2026-07-26T23:59:59'))).toBe('2026-08-01'); // Sunday rolls to next event
   });
 
-  it('maps Friday 11:59:59 GE to that week Saturday', () => {
-    expect(weekKeyFor(geDate('2026-07-31T11:59:59'))).toBe('2026-08-01');
+  it('maps Friday 23:59:59 GE to that week Saturday', () => {
+    expect(weekKeyFor(geDate('2026-07-31T23:59:59'))).toBe('2026-08-01');
   });
 
-  it('maps Friday 12:00:00 GE (exclusive upper bound) to null', () => {
-    expect(weekKeyFor(geDate('2026-07-31T12:00:00'))).toBe('2026-08-08'); // after Friday cutoff → next event
+  it('maps Saturday 00:00:00 GE (exclusive upper bound) to the next event', () => {
+    expect(weekKeyFor(geDate('2026-08-01T00:00:00'))).toBe('2026-08-08');
   });
 
   it('maps Saturday and Sunday to null', () => {

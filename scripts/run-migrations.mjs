@@ -214,7 +214,34 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+// Transient pool exhaustion must not fail a deploy outright: Supavisor's
+// session pooler caps clients at 15, and ad-hoc scripts/psql sessions can
+// briefly saturate it (three consecutive staging deploys died on
+// EMAXCONNSESSION on 2026-08-25 with zero pending migrations). Retry with
+// backoff for connection-shaped errors only; real migration failures — SQL
+// errors, validation, bad files — still fail on the first attempt.
+const RETRYABLE = /EMAXCONNSESSION|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CONNECT_TIMEOUT|max clients/i;
+const MAX_ATTEMPTS = 5;
+
+async function run() {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await main();
+      return;
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (attempt >= MAX_ATTEMPTS || !RETRYABLE.test(msg)) throw err;
+      const delayMs = Math.min(60_000, 5_000 * 2 ** (attempt - 1))
+        + Math.floor(Math.random() * 2_000);
+      console.warn(
+        `[migrate] Attempt ${attempt}/${MAX_ATTEMPTS} hit a transient connection error (${msg}); retrying in ${Math.round(delayMs / 1000)}s`,
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+run().catch((err) => {
   console.error('[migrate] Migration failed:', err?.message ?? err);
   process.exit(1);
 });

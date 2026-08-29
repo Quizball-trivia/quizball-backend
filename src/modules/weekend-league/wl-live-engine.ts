@@ -35,7 +35,6 @@ import { wlEventsRepo } from './wl-events.repo.js';
 import { wlRedis, wlRedisNowMs } from './wl-redis.js';
 import { wlConfigFrom } from './wl-config.js';
 import {
-  WL_FINALISTS,
   WL_MONEY_DROP_BUDGET,
   WL_MONEY_DROP_WINDOW_STEPS,
   WL_PUT_IN_ORDER_WINDOW_STEPS,
@@ -531,7 +530,10 @@ export const wlLiveEngineInternals = {
       const key = typeof row.answer === 'string' ? row.answer : JSON.stringify(row.answer);
       distribution[key] = (distribution[key] ?? 0) + 1;
     }
-    const board = await this.topBoard(tournamentId, run.game_index, WL_FINALISTS);
+    // FULL field, not top-24: outside the truncated board the client could
+    // only show "#25+" — every player deserves an exact live rank (owner
+    // call 2026-08-25; a 124-row board is ~10KB pre-brotli, fine on the wire).
+    const board = await this.topBoard(tournamentId, run.game_index, Number.MAX_SAFE_INTEGER);
     const [content] = await sql<Array<{ evaluation: unknown }>>`
       SELECT evaluation FROM wl_questions WHERE question_id = ${run.question_id}
     `;
@@ -1153,7 +1155,7 @@ export async function wlSubscribeSnapshot(
   if (!t) return null;
   const stage = t.stage ?? {};
   const gameIndex = Number.isFinite(Number(stage['current_game'])) ? Number(stage['current_game']) : 0;
-  const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, WL_FINALISTS);
+  const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, Number.MAX_SAFE_INTEGER);
   const redisNow = await wlRedisNowMs();
 
   const persisted = { points: t.my_points };

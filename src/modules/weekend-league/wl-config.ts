@@ -18,10 +18,12 @@ export const wlTournamentConfigSchema = z.object({
   /** 1 = launch scoring (30/40-pt steps, 300-pt who-am-i, 1000 max).
    *  2 = ranked-parity scoring (every question 0-100 on the ranked curve,
    *      who-am-i 100..20 by clue, 2100 max) — 2026-08-25 rework.
+   *  3 = v2 + career_path pays flat 100 on correct (typed round, no speed
+   *      decay), 45s breaks, 20s put-in-order — 2026-08-25 weekend fixes.
    *  NOTE: scoring itself reads deployment-global constants, not this field;
    *  the version documents which rules were live so past results stay
-   *  interpretable. Readers accept both. */
-  rules_version: z.union([z.literal(1), z.literal(2)]),
+   *  interpretable. Readers accept all. */
+  rules_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   launch_edition: z.boolean(),
   /** Which engine drives this tournament. 'stub' is for orchestration tests
    *  only and is refused for real (non-test) tournaments at runtime. */
@@ -46,7 +48,7 @@ export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;
 
 export function buildWlConfig(overrides: Partial<WlTournamentConfig> = {}): WlTournamentConfig {
   return wlTournamentConfigSchema.parse({
-    rules_version: 2,
+    rules_version: 3,
     launch_edition: false,
     engine: 'live',
     qp_target: WL_QP_TARGET,

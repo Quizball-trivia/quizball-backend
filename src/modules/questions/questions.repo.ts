@@ -7,12 +7,13 @@ import { logger } from '../../core/logger.js';
  * SECURITY: Only these pre-defined SQL fragments can be used in queries.
  * This prevents SQL injection when using sql.unsafe() with locale-based accessors.
  */
-const ALLOWED_LOCALES = ['en', 'ka'] as const;
+const ALLOWED_LOCALES = ['en', 'ka', 'es'] as const;
 type AllowedLocale = typeof ALLOWED_LOCALES[number];
 
 const LOCALE_PROMPT_ACCESSORS: Record<AllowedLocale, string> = {
   en: `q.prompt->>'en'`,
   ka: `q.prompt->>'ka'`,
+  es: `q.prompt->>'es'`,
 };
 
 function getLocaleAccessor(locale: string): string {

@@ -35,6 +35,18 @@ export interface CampaignQuizRow {
   ka_meta_description: string | null;
   ka_h1: string | null;
   ka_lede: string | null;
+  es_title: string | null;
+  es_h1: string | null;
+  es_seo_title: string | null;
+  es_meta_description: string | null;
+  es_breadcrumb_label: string | null;
+  es_lede: string | null;
+  es_about_heading: string | null;
+  es_about_blocks: CampaignQuizAboutBlock[] | null;
+  es_hero_image_alt: string | null;
+  es_score_cta: string | null;
+  es_footer_banner_text: string | null;
+  es_footer_button_label: string | null;
   scheduled_publish_at: string | null;
   published_at: string | null;
   unpublished_at: string | null;
@@ -64,6 +76,8 @@ export interface CampaignQuizRelatedRow {
   breadcrumb_label: string;
   hero_image_url: string | null;
   hero_image_alt: string | null;
+  es_breadcrumb_label: string | null;
+  es_hero_image_alt: string | null;
 }
 
 export interface CampaignQuizHubRow {
@@ -77,6 +91,11 @@ export interface CampaignQuizHubRow {
   updated_at: string;
   hub_order: number;
   is_hub_pinned: boolean;
+  es_h1: string | null;
+  es_breadcrumb_label: string | null;
+  es_hero_image_alt: string | null;
+  es_seo_title: string | null;
+  es_meta_description: string | null;
 }
 
 export interface AdminCampaignQuizRevisionRow {
@@ -360,7 +379,12 @@ export const campaignQuizzesRepo = {
         locale_mode,
         updated_at,
         hub_order,
-        is_hub_pinned
+        is_hub_pinned,
+        es_h1,
+        es_breadcrumb_label,
+        es_hero_image_alt,
+        es_seo_title,
+        es_meta_description
       FROM campaign_quizzes
       WHERE ${publicWindowSql()}
       ORDER BY page_category, is_hub_pinned DESC, hub_order, published_at, slug
@@ -407,7 +431,9 @@ export const campaignQuizzesRepo = {
         related.slug,
         related.breadcrumb_label,
         related.hero_image_url,
-        related.hero_image_alt
+        related.hero_image_alt,
+        related.es_breadcrumb_label,
+        related.es_hero_image_alt
       FROM campaign_quiz_related_pages relation
       JOIN campaign_quizzes related ON related.slug = relation.related_slug
       WHERE relation.quiz_slug = ${slug}

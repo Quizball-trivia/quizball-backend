@@ -34,13 +34,16 @@ const question = {
   id: '6c6b8d10-8b8e-4d12-9a10-000000000001',
   display_order: 1,
   difficulty: 'easy' as const,
-  prompt: { en: 'Who managed Liverpool?' },
-  explanation: { en: 'Jürgen Klopp managed Liverpool.' },
+  prompt: { en: 'Who managed Liverpool?', es: '¿Quién entrenó al Liverpool?' },
+  explanation: {
+    en: 'Jürgen Klopp managed Liverpool.',
+    es: 'Jürgen Klopp entrenó al Liverpool.',
+  },
   payload: {
     type: 'mcq_single',
     options: [
-      { id: 'a', text: { en: 'Rafael Benítez' }, is_correct: false },
-      { id: 'b', text: { en: 'Jürgen Klopp' }, is_correct: true },
+      { id: 'a', text: { en: 'Rafael Benítez', es: 'Rafael Benítez' }, is_correct: false },
+      { id: 'b', text: { en: 'Jürgen Klopp', es: 'Jürgen Klopp' }, is_correct: true },
       { id: 'c', text: { en: 'Brendan Rodgers' }, is_correct: false },
       { id: 'd', text: { en: 'Steven Gerrard' }, is_correct: false },
     ],
@@ -74,6 +77,18 @@ const quizRow = {
   ka_meta_description: null,
   ka_h1: null,
   ka_lede: null,
+  es_title: 'Quiz del Liverpool',
+  es_h1: 'Quiz del Liverpool',
+  es_seo_title: 'Quiz del Liverpool | QuizBall',
+  es_meta_description: 'Quiz del Liverpool gratis.',
+  es_breadcrumb_label: 'Quiz del Liverpool',
+  es_lede: null,
+  es_about_heading: null,
+  es_about_blocks: null,
+  es_hero_image_alt: null,
+  es_score_cta: null,
+  es_footer_banner_text: null,
+  es_footer_button_label: null,
   scheduled_publish_at: null,
   published_at: new Date().toISOString(),
   unpublished_at: null,
@@ -392,6 +407,32 @@ describe('campaignQuizzesService', () => {
     });
   });
 
+  it('serves a balanced ten-question round from the curated fifteen-question pool', async () => {
+    const rows = Array.from({ length: 15 }, (_, index) => {
+      const difficulty: 'easy' | 'medium' | 'hard' =
+        index < 5 ? 'easy' : index < 10 ? 'medium' : 'hard';
+
+      return {
+        ...question,
+        id: `6c6b8d10-8b8e-4d12-9a10-${String(index + 1).padStart(12, '0')}`,
+        display_order: index + 1,
+        difficulty,
+      };
+    });
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue(rows);
+
+    const quiz = await campaignQuizzesService.getQuiz('liverpool');
+
+    expect(quiz.total_questions).toBe(10);
+    expect(quiz.questions).toHaveLength(10);
+    expect(quiz.questions.map((item) => item.position)).toEqual([
+      1, 2, 3, 4, 6, 7, 8, 11, 12, 13,
+    ]);
+    expect(quiz.questions.filter((item) => item.difficulty === 'easy')).toHaveLength(4);
+    expect(quiz.questions.filter((item) => item.difficulty === 'medium')).toHaveLength(3);
+    expect(quiz.questions.filter((item) => item.difficulty === 'hard')).toHaveLength(3);
+  });
+
   it('reveals the correct option only after an answer is submitted', async () => {
     await expect(
       campaignQuizzesService.answer('liverpool', question.id, 'a'),
@@ -399,6 +440,21 @@ describe('campaignQuizzesService', () => {
       correct: false,
       correct_option_id: 'b',
       explanation: 'Jürgen Klopp managed Liverpool.',
+    });
+  });
+
+  it('serves Spanish prompts and explanations when requested', async () => {
+    const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'es');
+
+    expect(quiz.questions[0].prompt).toBe('¿Quién entrenó al Liverpool?');
+    expect(quiz.questions[0].options.slice(0, 2)).toEqual([
+      { id: 'a', text: 'Rafael Benítez' },
+      { id: 'b', text: 'Jürgen Klopp' },
+    ]);
+    await expect(
+      campaignQuizzesService.answer('liverpool', question.id, 'a', undefined, 'es'),
+    ).resolves.toMatchObject({
+      explanation: 'Jürgen Klopp entrenó al Liverpool.',
     });
   });
 

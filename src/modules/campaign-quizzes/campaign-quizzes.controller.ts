@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import type {
   CampaignQuizAnswerBody,
+  CampaignQuizLocaleQuery,
   CampaignQuizListQuery,
   CampaignQuizPreviewQuery,
   CampaignQuizRatingBody,
@@ -22,19 +23,21 @@ export const campaignQuizzesController = {
 
   async getQuiz(req: Request, res: Response): Promise<void> {
     const { slug } = req.validated.params as CampaignQuizSlugParams;
-    const { preview } = req.validated.query as CampaignQuizPreviewQuery;
-    res.json(await campaignQuizzesService.getQuiz(slug, preview));
+    const { preview, locale } = req.validated.query as CampaignQuizPreviewQuery;
+    res.json(await campaignQuizzesService.getQuiz(slug, preview, locale));
   },
 
   async answer(req: Request, res: Response): Promise<void> {
     const { slug } = req.validated.params as CampaignQuizSlugParams;
     const body = req.validated.body as CampaignQuizAnswerBody;
+    const { locale } = req.validated.query as CampaignQuizLocaleQuery;
     res.json(
       await campaignQuizzesService.answer(
         slug,
         body.question_id,
         body.selected_option_id,
         body.preview_token,
+        locale,
       ),
     );
   },

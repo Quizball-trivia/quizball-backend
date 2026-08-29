@@ -13,6 +13,7 @@ export {
   campaignQuizListQuerySchema,
   campaignQuizPreviewQuerySchema,
   campaignQuizSlugParamsSchema,
+  campaignQuizLocaleQuerySchema,
   campaignQuizAnswerBodySchema,
   campaignQuizRatingBodySchema,
   adminCampaignQuizRevisionParamsSchema,

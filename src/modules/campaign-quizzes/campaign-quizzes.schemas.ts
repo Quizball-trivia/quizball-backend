@@ -8,6 +8,10 @@ export const campaignQuizSlugParamsSchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
 });
 
+export const campaignQuizLocaleQuerySchema = z.object({
+  locale: z.enum(['en', 'ka', 'es']).optional().default('en'),
+});
+
 export const campaignQuizAnswerBodySchema = z.object({
   question_id: z.string().uuid(),
   selected_option_id: z.string().min(1).max(80),
@@ -20,10 +24,11 @@ export const campaignQuizRatingBodySchema = z.object({
 
 export const campaignQuizPreviewQuerySchema = z.object({
   preview: z.string().uuid().optional(),
+  locale: z.enum(['en', 'ka', 'es']).optional().default('en'),
 });
 
 export const campaignQuizListQuerySchema = z.object({
-  locale: z.enum(['en', 'ka']).default('en'),
+  locale: z.enum(['en', 'ka', 'es']).default('en'),
 });
 
 const nullableUrlSchema = z
@@ -174,6 +179,7 @@ export const adminCampaignQuizRevisionParamsSchema = campaignQuizSlugParamsSchem
 });
 
 export type CampaignQuizSlugParams = z.infer<typeof campaignQuizSlugParamsSchema>;
+export type CampaignQuizLocaleQuery = z.infer<typeof campaignQuizLocaleQuerySchema>;
 export type CampaignQuizAnswerBody = z.infer<typeof campaignQuizAnswerBodySchema>;
 export type CampaignQuizRatingBody = z.infer<typeof campaignQuizRatingBodySchema>;
 export type CampaignQuizPreviewQuery = z.infer<typeof campaignQuizPreviewQuerySchema>;

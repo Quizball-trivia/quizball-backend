@@ -90,7 +90,7 @@ const dailyChallengeSettingsSchemas = {
   footballLogic: footballLogicSettingsSchema,
 } as const;
 
-const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka'] as const;
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es'] as const;
 const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
@@ -120,6 +120,9 @@ function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
   }
   if (normalized === 'ka' || normalized.startsWith('ka-')) {
     return 'ka';
+  }
+  if (normalized === 'es' || normalized.startsWith('es-')) {
+    return 'es';
   }
   return 'en';
 }

@@ -460,6 +460,17 @@ async function main() {
 
     const planPath = path.resolve(argValue('plan') ?? '../quizball-question-agents/output/spanish-translation/import-plan.json');
     const { model, items } = await loadPlan(planPath);
+    const referencedTables = [...new Set(items.map((item) => item.table).filter((table): table is string => Boolean(table)))];
+    const existingTableRows = referencedTables.length === 0
+      ? []
+      : await sql<{ table_name: string }[]>`
+          SELECT table_name
+          FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = ANY(${referencedTables})
+        `;
+    const existingTables = new Set(existingTableRows.map((row) => row.table_name));
+    const importableItems = items.filter((item) => !item.table || existingTables.has(item.table));
+    const ignoredMissingTableOperations = items.length - importableItems.length;
     const apply = hasArg('apply');
     const overwrite = hasArg('overwrite');
     const backup: Backup = {
@@ -473,13 +484,13 @@ async function main() {
       localeRowIds: [],
     };
 
-    const jsonbItems = items.filter((item) => item.storage === 'jsonb_locale');
-    const scalarItems = items.filter((item) => item.storage === 'scalar_column_needed' || item.storage === 'parallel_jsonb_column_needed');
-    const localeItems = items.filter((item) => item.storage === 'locale_row_needed');
+    const jsonbItems = importableItems.filter((item) => item.storage === 'jsonb_locale');
+    const scalarItems = importableItems.filter((item) => item.storage === 'scalar_column_needed' || item.storage === 'parallel_jsonb_column_needed');
+    const localeItems = importableItems.filter((item) => item.storage === 'locale_row_needed');
     const jsonb = await planJsonbChanges(sql, jsonbItems, overwrite, backup);
     const scalar = await planScalarChanges(sql, scalarItems, overwrite, backup);
     const localeRows = await planLocaleRows(sql, localeItems, model, backup);
-    const ignored = items.length - jsonbItems.length - scalarItems.length - localeItems.length;
+    const ignored = importableItems.length - jsonbItems.length - scalarItems.length - localeItems.length;
 
     const report = {
       mode: apply ? 'apply' : 'dry-run',
@@ -489,6 +500,7 @@ async function main() {
       model,
       operations: items.length,
       ignoredCodeOperations: ignored,
+      ignoredMissingTableOperations,
       jsonb: jsonb.stats,
       scalar: scalar.stats,
       localeRows: localeRows.stats,

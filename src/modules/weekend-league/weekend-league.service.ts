@@ -3,6 +3,7 @@ import { sql } from '../../db/index.js';
 import { tierFromRp } from '../ranked/season-rp-formula.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
 import { wlConfigFrom } from './wl-config.js';
+import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
 import type {
   WlCheckinResponse,
@@ -77,11 +78,13 @@ async function loadQp(
 
 export const weekendLeagueService = {
   /**
-   * Public qualifier standings for the CURRENT tournament: cumulative board
-   * of the newest game that has results (rank, points, advanced), joined with
-   * nickname/avatar/country and the ranked tier. Empty before any game ends.
-   * Feeds the Weekend League tab's standings table (it launched with a
-   * hardcoded [] — owner report the morning after).
+   * Public standings for the CURRENT tournament. During the qualifier this is
+   * the CUMULATIVE board — total points across all qualifier games, faster
+   * total time breaking ties, `advanced` = made the top-24 cut (owner report
+   * 2026-08-29: the tab showed only game 3's scores, which read as the whole
+   * qualifier). Once the final has results, the final's own board takes over —
+   * the championship is decided by that single game. Empty before any game
+   * ends. Feeds the Weekend League tab's standings table.
    */
   async standings(): Promise<{
     tournament_id: string | null;
@@ -101,20 +104,52 @@ export const weekendLeagueService = {
     if (latest?.game_index == null) {
       return { tournament_id: tournament.id, game_index: null, entries: [] };
     }
-    const rows = await sql<Array<{
-      user_id: string; nickname: string | null; avatar_url: string | null;
-      country: string | null; rp: number | null; rank: number; score: number;
-      advanced: boolean;
-    }>>`
-      SELECT r.user_id, u.nickname, u.avatar_url, u.country,
-             p.rp::int AS rp, r.rank, r.score, r.advanced
-      FROM wl_game_results r
-      JOIN users u ON u.id = r.user_id
-      LEFT JOIN ranked_profiles p ON p.user_id = r.user_id
-      WHERE r.tournament_id = ${tournament.id} AND r.game_index = ${latest.game_index}
-      ORDER BY r.rank
-      LIMIT 100
-    `;
+    const isFinalBoard = latest.game_index >= WL_FINAL_GAME_INDEX;
+    const rows = isFinalBoard
+      ? await sql<Array<{
+          user_id: string; nickname: string | null; avatar_url: string | null;
+          country: string | null; rp: number | null; rank: number; score: number;
+          advanced: boolean;
+        }>>`
+          SELECT r.user_id, u.nickname, u.avatar_url, u.country,
+                 p.rp::int AS rp, r.rank, r.score, r.advanced
+          FROM wl_game_results r
+          JOIN users u ON u.id = r.user_id
+          LEFT JOIN ranked_profiles p ON p.user_id = r.user_id
+          WHERE r.tournament_id = ${tournament.id} AND r.game_index = ${latest.game_index}
+          ORDER BY r.rank
+          LIMIT 100
+        `
+      : await sql<Array<{
+          user_id: string; nickname: string | null; avatar_url: string | null;
+          country: string | null; rp: number | null; rank: number; score: number;
+          advanced: boolean;
+        }>>`
+          WITH agg AS (
+            SELECT user_id,
+                   sum(score)::int AS total,
+                   sum(time_ms_total)::bigint AS total_time
+            FROM wl_game_results
+            WHERE tournament_id = ${tournament.id}
+              AND game_index < ${WL_FINAL_GAME_INDEX}
+            GROUP BY user_id
+          ),
+          alive AS (
+            SELECT user_id, advanced FROM wl_game_results
+            WHERE tournament_id = ${tournament.id} AND game_index = ${latest.game_index}
+          )
+          SELECT a.user_id, u.nickname, u.avatar_url, u.country,
+                 p.rp::int AS rp,
+                 rank() OVER (ORDER BY a.total DESC, a.total_time ASC)::int AS rank,
+                 a.total AS score,
+                 coalesce(al.advanced, false) AS advanced
+          FROM agg a
+          JOIN users u ON u.id = a.user_id
+          LEFT JOIN ranked_profiles p ON p.user_id = a.user_id
+          LEFT JOIN alive al ON al.user_id = a.user_id
+          ORDER BY rank
+          LIMIT 100
+        `;
     return {
       tournament_id: tournament.id,
       game_index: latest.game_index,

@@ -21,6 +21,7 @@ vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
     getRevision: vi.fn(),
     publish: vi.fn(),
     getPublishedQuiz: vi.fn(),
+    listPublishedPages: vi.fn(),
     getRating: vi.fn(),
     upsertRating: vi.fn(),
     upsertGuestRating: vi.fn(),
@@ -446,6 +447,7 @@ describe('campaignQuizzesService', () => {
   it('serves Spanish prompts and explanations when requested', async () => {
     const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'es');
 
+    expect(quiz.title).toBe('Quiz del Liverpool');
     expect(quiz.questions[0].prompt).toBe('¿Quién entrenó al Liverpool?');
     expect(quiz.questions[0].options.slice(0, 2)).toEqual([
       { id: 'a', text: 'Rafael Benítez' },
@@ -455,6 +457,70 @@ describe('campaignQuizzesService', () => {
       campaignQuizzesService.answer('liverpool', question.id, 'a', undefined, 'es'),
     ).resolves.toMatchObject({
       explanation: 'Jürgen Klopp entrenó al Liverpool.',
+    });
+  });
+
+  it('lists only campaign pages with publishable Spanish SEO content', async () => {
+    vi.mocked(campaignQuizzesRepo.listPublishedPages).mockResolvedValue([
+      {
+        slug: 'liverpool', page_category: 'team', h1: 'Liverpool Quiz',
+        breadcrumb_label: 'Liverpool Quiz', hero_image_url: null,
+        hero_image_alt: 'Liverpool artwork', locale_mode: 'en_only',
+        updated_at: new Date().toISOString(), hub_order: 1, is_hub_pinned: true,
+        es_h1: 'Quiz del Liverpool', es_breadcrumb_label: 'Quiz del Liverpool',
+        es_hero_image_alt: 'Ilustración del Liverpool',
+        es_seo_title: 'Quiz del Liverpool | QuizBall',
+        es_meta_description: 'Quiz del Liverpool gratis.',
+      },
+      {
+        slug: 'untranslated', page_category: 'team', h1: 'English only',
+        breadcrumb_label: 'English only', hero_image_url: null,
+        hero_image_alt: '', locale_mode: 'en_only',
+        updated_at: new Date().toISOString(), hub_order: 2, is_hub_pinned: false,
+        es_h1: null, es_breadcrumb_label: null, es_hero_image_alt: null,
+        es_seo_title: null, es_meta_description: null,
+      },
+    ]);
+
+    await expect(campaignQuizzesService.listPublished('es')).resolves.toEqual([
+      expect.objectContaining({
+        slug: 'liverpool',
+        h1: 'Quiz del Liverpool',
+        breadcrumb_label: 'Quiz del Liverpool',
+        hero_image_alt: 'Ilustración del Liverpool',
+      }),
+    ]);
+  });
+
+  it('returns localized Spanish campaign-page fields', async () => {
+    vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue({
+      ...quizRow,
+      lede: 'English lede',
+      about_heading: 'English heading',
+      about_blocks: [{ id: 'intro', type: 'paragraph', text: 'English body' }],
+      score_cta: 'You scored {score}.',
+      footer_banner_text: 'Play ranked.',
+      hero_image_url: 'categories/liverpool-v2.webp',
+      hero_image_alt: 'Liverpool artwork',
+      meta_description: 'English meta',
+      es_lede: 'Introducción en español',
+      es_about_heading: 'Sobre este quiz',
+      es_about_blocks: [{ id: 'intro', type: 'paragraph', text: 'Contenido en español' }],
+      es_score_cta: 'Has acertado {score}.',
+      es_footer_banner_text: 'Juega la clasificatoria.',
+      es_footer_button_label: 'Jugar ahora',
+      es_hero_image_alt: 'Ilustración del Liverpool',
+    });
+
+    const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'es');
+    expect(quiz.page).toMatchObject({
+      h1: 'Quiz del Liverpool',
+      lede: 'Introducción en español',
+      about_heading: 'Sobre este quiz',
+      about_blocks: [{ text: 'Contenido en español' }],
+      score_cta: 'Has acertado {score}.',
+      footer_button_label: 'Jugar ahora',
+      seo_title: 'Quiz del Liverpool | QuizBall',
     });
   });
 

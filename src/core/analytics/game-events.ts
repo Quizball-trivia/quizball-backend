@@ -443,7 +443,7 @@ export function trackAuctionMatchFound(params: {
   matchId: string;
   humanCount: number;
   botCount: number;
-  locale: 'en' | 'ka';
+  locale: 'en' | 'ka' | 'es';
   formation: string;
   occurredAt?: string | Date;
 }): void {
@@ -469,7 +469,7 @@ export function trackAuctionMatchStarted(params: {
   origin: AuctionAnalyticsOrigin;
   humanCount: number;
   botCount: number;
-  locale: 'en' | 'ka';
+  locale: 'en' | 'ka' | 'es';
   formation: string;
   occurredAt: string | Date;
 }): void {

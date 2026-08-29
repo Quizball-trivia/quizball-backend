@@ -65,7 +65,7 @@ export interface CreateInitialAuctionMatchInput {
     rp?: number | null;
   }[];
   formation?: FormationName;
-  locale?: 'en' | 'ka';
+  locale?: 'en' | 'ka' | 'es';
   origin?: AuctionMatchOrigin;
   sourceLobbyId?: string;
   context?: AuctionEngineContext;

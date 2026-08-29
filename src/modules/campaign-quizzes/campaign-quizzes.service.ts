@@ -74,6 +74,9 @@ type CampaignPayload = Extract<
   ParsedQuestionPayload,
   { type: 'mcq_single' | 'true_false' | 'clue_chain' | 'career_path' }
 >;
+type CampaignLocale = 'en' | 'ka' | 'es';
+const CAMPAIGN_QUIZ_QUESTION_LIMIT = 10;
+const CAMPAIGN_QUIZ_DIFFICULTY_LIMITS = { easy: 4, medium: 3, hard: 3 } as const;
 
 function parseCampaignQuestion(row: CampaignQuizQuestionRow): CampaignPayload {
   const parsed = questionPayloadSchema.safeParse(row.payload);
@@ -98,21 +101,25 @@ function guestRatingKey(slug: string, clientIp: string): string {
   return stableHash(`campaign-rating:${config.SUPABASE_JWT_SECRET}:${slug}:${clientIp}`);
 }
 
-function generatedAnswer(payload: CampaignPayload): string | null {
+function generatedAnswer(payload: CampaignPayload, locale: CampaignLocale = 'en'): string | null {
   if (payload.type !== 'clue_chain' && payload.type !== 'career_path') return null;
-  return localizedText(payload.display_answer);
+  return localizedText(payload.display_answer, locale);
 }
 
-function generatedOptions(row: CampaignQuizQuestionRow, rows: CampaignQuizQuestionRow[]) {
+function generatedOptions(
+  row: CampaignQuizQuestionRow,
+  rows: CampaignQuizQuestionRow[],
+  locale: CampaignLocale = 'en',
+) {
   const payload = parseCampaignQuestion(row);
-  const correctAnswer = generatedAnswer(payload);
+  const correctAnswer = generatedAnswer(payload, locale);
   if (!correctAnswer) throw new BadRequestError('Campaign quiz question has no display answer');
 
   const distractors = rows
     .filter((candidate) => candidate.id !== row.id)
     .map((candidate) => {
       try {
-        return generatedAnswer(parseCampaignQuestion(candidate));
+        return generatedAnswer(parseCampaignQuestion(candidate), locale);
       } catch (error) {
         if (error instanceof BadRequestError) return null;
         throw error;
@@ -145,10 +152,11 @@ function generatedOptions(row: CampaignQuizQuestionRow, rows: CampaignQuizQuesti
 function toPublicQuestion(
   row: CampaignQuizQuestionRow,
   rows: CampaignQuizQuestionRow[],
+  locale: CampaignLocale = 'en',
 ): CampaignQuizQuestionResponse {
   const payload = parseCampaignQuestion(row);
-  const prompt = localizedText(row.prompt);
-  if (!prompt) throw new BadRequestError('Campaign quiz question has no English prompt');
+  const prompt = localizedText(row.prompt, locale);
+  if (!prompt) throw new BadRequestError(`Campaign quiz question has no ${locale} prompt`);
 
   if (payload.type === 'mcq_single' || payload.type === 'true_false') {
     return {
@@ -161,12 +169,12 @@ function toPublicQuestion(
       image_url: payload.type === 'mcq_single' ? payload.image?.url ?? null : null,
       options: payload.options.map((option) => ({
         id: option.id,
-        text: localizedText(option.text) ?? '',
+        text: localizedText(option.text, locale) ?? '',
       })),
     };
   }
 
-  const options = generatedOptions(row, rows);
+  const options = generatedOptions(row, rows, locale);
   return {
     id: row.id,
     position: row.display_order,
@@ -176,11 +184,11 @@ function toPublicQuestion(
     details:
       payload.type === 'clue_chain'
         ? payload.clues
-            .map((clue) => localizedText(clue.content))
+            .map((clue) => localizedText(clue.content, locale))
             .filter((clue): clue is string => Boolean(clue))
             .filter((clue) => clue !== prompt)
         : payload.clubs
-            .map((club) => localizedText(club))
+            .map((club) => localizedText(club, locale))
             .filter((club): club is string => Boolean(club)),
     image_url: null,
     options: options.map((option) => ({ id: option.id, text: option.text })),
@@ -195,6 +203,31 @@ function normalizeRating(
     average: average !== null && Number.isFinite(average) ? average : null,
     count: Number(rating.count) || 0,
   };
+}
+
+function selectRoundQuestions(
+  questions: CampaignQuizQuestionResponse[],
+): CampaignQuizQuestionResponse[] {
+  const selected = (Object.keys(CAMPAIGN_QUIZ_DIFFICULTY_LIMITS) as Array<
+    keyof typeof CAMPAIGN_QUIZ_DIFFICULTY_LIMITS
+  >).flatMap((difficulty) =>
+    questions
+      .filter((question) => question.difficulty === difficulty)
+      .slice(0, CAMPAIGN_QUIZ_DIFFICULTY_LIMITS[difficulty]),
+  );
+
+  if (selected.length < CAMPAIGN_QUIZ_QUESTION_LIMIT) {
+    const selectedIds = new Set(selected.map((question) => question.id));
+    selected.push(
+      ...questions
+        .filter((question) => !selectedIds.has(question.id))
+        .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT - selected.length),
+    );
+  }
+
+  return selected
+    .sort((left, right) => left.position - right.position)
+    .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT);
 }
 
 function interpolateCount(value: string | null, count: number): string {
@@ -221,27 +254,32 @@ function toPageContent(
   quiz: CampaignQuizRow,
   related: CampaignQuizRelatedRow[],
   count: number,
+  locale: CampaignLocale = 'en',
 ): CampaignQuizPageContentResponse | null {
   if (!hasManagedContent(quiz)) return null;
+  const spanish = locale === 'es';
+  const aboutBlocks = spanish && quiz.es_about_blocks?.length
+    ? quiz.es_about_blocks
+    : quiz.about_blocks;
   return {
     category: quiz.page_category,
-    h1: quiz.h1,
-    lede: interpolateCount(quiz.lede, count),
-    about_heading: quiz.about_heading ?? '',
-    about_blocks: quiz.about_blocks.map((block) => ({
+    h1: spanish ? quiz.es_h1 ?? quiz.h1 : quiz.h1,
+    lede: interpolateCount(spanish ? quiz.es_lede ?? quiz.lede : quiz.lede, count),
+    about_heading: spanish ? quiz.es_about_heading ?? quiz.about_heading ?? '' : quiz.about_heading ?? '',
+    about_blocks: aboutBlocks.map((block) => ({
       ...block,
       text: interpolateCount(block.text, count),
     })),
-    score_cta: interpolateCount(quiz.score_cta, count),
-    footer_banner_text: quiz.footer_banner_text ?? '',
-    footer_button_label: quiz.footer_button_label,
+    score_cta: interpolateCount(spanish ? quiz.es_score_cta ?? quiz.score_cta : quiz.score_cta, count),
+    footer_banner_text: spanish ? quiz.es_footer_banner_text ?? quiz.footer_banner_text ?? '' : quiz.footer_banner_text ?? '',
+    footer_button_label: spanish ? quiz.es_footer_button_label ?? quiz.footer_button_label : quiz.footer_button_label,
     hero_image_url: publicCampaignQuizImageUrl(quiz.hero_image_url),
-    hero_image_alt: quiz.hero_image_alt ?? '',
-    seo_title: quiz.seo_title,
-    meta_description: interpolateCount(quiz.meta_description, count),
+    hero_image_alt: spanish ? quiz.es_hero_image_alt ?? quiz.hero_image_alt ?? '' : quiz.hero_image_alt ?? '',
+    seo_title: spanish ? quiz.es_seo_title ?? quiz.seo_title : quiz.seo_title,
+    meta_description: interpolateCount(spanish ? quiz.es_meta_description ?? quiz.meta_description : quiz.meta_description, count),
     og_image_url: publicCampaignQuizImageUrl(quiz.og_image_url),
     og_image_alt: quiz.og_image_alt,
-    breadcrumb_label: quiz.breadcrumb_label,
+    breadcrumb_label: spanish ? quiz.es_breadcrumb_label ?? quiz.breadcrumb_label : quiz.breadcrumb_label,
     locale_mode: quiz.locale_mode,
     ka_seo_title: quiz.ka_seo_title,
     ka_meta_description: quiz.ka_meta_description
@@ -251,9 +289,9 @@ function toPageContent(
     ka_lede: quiz.ka_lede ? interpolateCount(quiz.ka_lede, count) : null,
     related_pages: related.map((page) => ({
       slug: page.slug,
-      breadcrumb_label: page.breadcrumb_label,
+      breadcrumb_label: spanish ? page.es_breadcrumb_label ?? page.breadcrumb_label : page.breadcrumb_label,
       hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-      hero_image_alt: page.hero_image_alt ?? '',
+      hero_image_alt: spanish ? page.es_hero_image_alt ?? page.hero_image_alt ?? '' : page.hero_image_alt ?? '',
     })),
     updated_at: quiz.updated_at,
   };
@@ -456,17 +494,23 @@ async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaig
 }
 
 export const campaignQuizzesService = {
-  async listPublished(locale: 'en' | 'ka'): Promise<CampaignQuizHubPageResponse[]> {
+  async listPublished(locale: CampaignLocale): Promise<CampaignQuizHubPageResponse[]> {
     const pages = await campaignQuizzesRepo.listPublishedPages();
     return pages
-      .filter((page) => locale === 'en' || page.locale_mode === 'en_ka')
+      .filter((page) => {
+        if (locale === 'ka') return page.locale_mode === 'en_ka';
+        if (locale === 'es') {
+          return Boolean(page.es_h1 && page.es_seo_title && page.es_meta_description);
+        }
+        return true;
+      })
       .map((page) => ({
         slug: page.slug,
         category: page.page_category,
-        h1: page.h1,
-        breadcrumb_label: page.breadcrumb_label,
+        h1: locale === 'es' ? page.es_h1 ?? page.h1 : page.h1,
+        breadcrumb_label: locale === 'es' ? page.es_breadcrumb_label ?? page.breadcrumb_label : page.breadcrumb_label,
         hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-        hero_image_alt: page.hero_image_alt ?? '',
+        hero_image_alt: locale === 'es' ? page.es_hero_image_alt ?? page.hero_image_alt ?? '' : page.hero_image_alt ?? '',
         locale_mode: page.locale_mode,
         updated_at: page.updated_at,
       }));
@@ -485,7 +529,11 @@ export const campaignQuizzesService = {
     };
   },
 
-  async getQuiz(slug: string, previewToken?: string): Promise<CampaignQuizResponse> {
+  async getQuiz(
+    slug: string,
+    previewToken?: string,
+    locale: CampaignLocale = 'en',
+  ): Promise<CampaignQuizResponse> {
     const quiz = await campaignQuizzesRepo.getVisibleQuiz(slug, previewToken);
     if (!quiz) throw new NotFoundError('Campaign quiz not found');
 
@@ -494,19 +542,20 @@ export const campaignQuizzesService = {
       campaignQuizzesRepo.getRating(slug),
       campaignQuizzesRepo.getRelatedPages(slug),
     ]);
-    const questions = rows.flatMap((row) => {
+    const availableQuestions = rows.flatMap((row) => {
       try {
-        return [toPublicQuestion(row, rows)];
+        return [toPublicQuestion(row, rows, locale)];
       } catch (error) {
         if (!(error instanceof BadRequestError)) throw error;
         logger.warn({ quizSlug: slug, questionId: row.id, errorMessage: error.message }, 'Skipping invalid campaign quiz question');
         return [];
       }
     });
+    const questions = selectRoundQuestions(availableQuestions);
 
     return {
       slug: quiz.slug,
-      title: quiz.title,
+      title: locale === 'es' ? quiz.es_title ?? quiz.title : quiz.title,
       total_questions: questions.length,
       difficulty_counts: {
         easy: questions.filter((question) => question.difficulty === 'easy').length,
@@ -515,7 +564,7 @@ export const campaignQuizzesService = {
       },
       questions,
       rating: normalizeRating(rating),
-      page: toPageContent(quiz, related, questions.length),
+      page: toPageContent(quiz, related, questions.length, locale),
     };
   },
 
@@ -524,6 +573,7 @@ export const campaignQuizzesService = {
     questionId: string,
     selectedOptionId: string,
     previewToken?: string,
+    locale: CampaignLocale = 'en',
   ): Promise<CampaignQuizAnswerResponse> {
     const quiz = await campaignQuizzesRepo.getVisibleQuiz(slug, previewToken);
     if (!quiz) throw new NotFoundError('Campaign quiz not found');
@@ -534,16 +584,21 @@ export const campaignQuizzesService = {
     const payload = parseCampaignQuestion(row);
     const options = payload.type === 'mcq_single' || payload.type === 'true_false'
       ? payload.options.map((option) => ({ id: option.id, isCorrect: option.is_correct }))
-      : generatedOptions(row, rows);
+      : generatedOptions(row, rows, locale);
     const selected = options.find((option) => option.id === selectedOptionId);
     if (!selected) throw new BadRequestError('Selected option is not valid for this question');
     const correct = options.find((option) => option.isCorrect);
     if (!correct) throw new BadRequestError('Campaign quiz question has no correct option');
-    const generated = generatedAnswer(payload);
+    const generated = generatedAnswer(payload, locale);
     return {
       correct: selected.isCorrect,
       correct_option_id: correct.id,
-      explanation: localizedText(row.explanation) ?? (generated ? `Correct answer: ${generated}.` : null),
+      explanation: localizedText(row.explanation, locale)
+        ?? (generated
+          ? locale === 'es'
+            ? `Respuesta correcta: ${generated}.`
+            : `Correct answer: ${generated}.`
+          : null),
     };
   },
 

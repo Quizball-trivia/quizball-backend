@@ -3,6 +3,7 @@ import { validate } from '../middleware/validate.js';
 import { optionalAuthMiddleware } from '../middleware/auth.js';
 import {
   campaignQuizAnswerBodySchema,
+  campaignQuizLocaleQuerySchema,
   campaignQuizListQuerySchema,
   campaignQuizPreviewQuerySchema,
   campaignQuizRatingBodySchema,
@@ -39,6 +40,7 @@ router.post(
   '/:slug/answers',
   validate({
     params: campaignQuizSlugParamsSchema,
+    query: campaignQuizLocaleQuerySchema,
     body: campaignQuizAnswerBodySchema,
   }),
   campaignQuizzesController.answer,

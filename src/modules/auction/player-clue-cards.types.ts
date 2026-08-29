@@ -1,7 +1,7 @@
 export type ClueCardDifficulty = 'easy' | 'medium' | 'hard';
 export type ClueCardStatus = 'draft' | 'needs_review' | 'approved' | 'published' | 'rejected';
 export type ClueCardSource = 'generated' | 'manual' | 'cms' | 'imported';
-export type ClueCardLocale = 'en' | 'ka';
+export type ClueCardLocale = 'en' | 'ka' | 'es';
 export type MatchStatus = 'matched' | 'ambiguous' | 'unmatched';
 export type MatchConfidence = 'high' | 'medium' | 'low';
 export type MatchMethod = 'exact' | 'normalized' | 'alias';

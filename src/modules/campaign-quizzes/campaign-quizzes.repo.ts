@@ -44,6 +44,7 @@ export interface CampaignQuizRow {
   es_about_heading: string | null;
   es_about_blocks: CampaignQuizAboutBlock[] | null;
   es_hero_image_alt: string | null;
+  es_og_image_alt: string | null;
   es_score_cta: string | null;
   es_footer_banner_text: string | null;
   es_footer_button_label: string | null;

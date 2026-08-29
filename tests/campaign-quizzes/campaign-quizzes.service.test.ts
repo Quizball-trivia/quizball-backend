@@ -87,6 +87,7 @@ const quizRow = {
   es_about_heading: null,
   es_about_blocks: null,
   es_hero_image_alt: null,
+  es_og_image_alt: null,
   es_score_cta: null,
   es_footer_banner_text: null,
   es_footer_button_label: null,
@@ -509,6 +510,8 @@ describe('campaignQuizzesService', () => {
       es_footer_banner_text: 'Juega la clasificatoria.',
       es_footer_button_label: 'Jugar ahora',
       es_hero_image_alt: 'Ilustración del Liverpool',
+      es_og_image_alt: 'Vista previa del quiz del Liverpool',
+      og_image_alt: 'Liverpool quiz preview',
     });
 
     const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'es');
@@ -520,6 +523,7 @@ describe('campaignQuizzesService', () => {
       score_cta: 'Has acertado {score}.',
       footer_button_label: 'Jugar ahora',
       seo_title: 'Quiz del Liverpool | QuizBall',
+      og_image_alt: 'Vista previa del quiz del Liverpool',
     });
   });
 

@@ -89,18 +89,18 @@ function authenticateAs(role: 'admin' | 'player'): void {
 const mockMcqPayload = {
   type: 'mcq_single' as const,
   options: [
-    { id: '11111111-1111-1111-1111-111111111111', text: { en: '2' }, is_correct: false },
-    { id: '22222222-2222-2222-2222-222222222222', text: { en: '3' }, is_correct: false },
-    { id: '33333333-3333-3333-3333-333333333333', text: { en: '4' }, is_correct: true },
-    { id: '44444444-4444-4444-4444-444444444444', text: { en: '5' }, is_correct: false },
+    { id: '11111111-1111-1111-1111-111111111111', text: { en: '2', ka: '2' }, is_correct: false },
+    { id: '22222222-2222-2222-2222-222222222222', text: { en: '3', ka: '3' }, is_correct: false },
+    { id: '33333333-3333-3333-3333-333333333333', text: { en: '4', ka: '4' }, is_correct: true },
+    { id: '44444444-4444-4444-4444-444444444444', text: { en: '5', ka: '5' }, is_correct: false },
   ],
 };
 
 const mockTrueFalsePayload = {
   type: 'true_false' as const,
   options: [
-    { id: 'true', text: { en: 'True' }, is_correct: true },
-    { id: 'false', text: { en: 'False' }, is_correct: false },
+    { id: 'true', text: { en: 'True', ka: 'მართალია' }, is_correct: true },
+    { id: 'false', text: { en: 'False', ka: 'ტყუილია' }, is_correct: false },
   ],
 };
 

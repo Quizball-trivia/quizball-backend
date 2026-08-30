@@ -85,3 +85,11 @@ export const BACKOFF_MIN_SAMPLE = 30;
 export const PARAMS_FINAL_PROB_CAP = 0.93;
 export const PARAMS_SKILL_CAP = 4.0; // logit theta hard cap
 export const PARAMS_MIN_ANSWER_TIME_MS = 600; // absolute floor for sampled times
+
+/**
+ * Percentile grid the f(RP) curve knots are built on (buildFCurve). Shared by
+ * the calibration script (knot construction) and the runtime skillPercentile
+ * inversion — they must never drift, or a bot's percentile would be read off
+ * the wrong grid.
+ */
+export const FCURVE_PERCENTILES = [0.05, 0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 0.95] as const;

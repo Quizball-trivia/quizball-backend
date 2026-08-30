@@ -1,5 +1,7 @@
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import { deleteQuestionImageByUrl } from '../questions/question-image-storage.service.js';
+import { questionsRepo } from '../questions/questions.repo.js';
+import { validateQuestionContent, blockingIssues, formatIssues } from '../questions/question-content-validation.js';
 import {
   agentsRepo,
   type AgentJobRow,
@@ -420,6 +422,19 @@ export const agentsService = {
   },
 
   async approveQuestion(questionId: string): Promise<void> {
+    // Review approval is a publish path — it must pass the same deterministic
+    // gate as every other status flip to published.
+    const question = await questionsRepo.getById(questionId);
+    if (!question) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    const issues = blockingIssues(validateQuestionContent({
+      type: question.type,
+      prompt: question.prompt,
+      explanation: question.explanation,
+      payload: question.payload,
+    }));
+    if (issues.length > 0) {
+      throw new BadRequestError(`Question fails publish validation: ${formatIssues(issues)}`);
+    }
     const ok = await agentsRepo.setQuestionStatus(questionId, 'published');
     if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
   },

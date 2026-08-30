@@ -27,6 +27,7 @@ import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
 import postgres from 'postgres';
 import { storeQuestionPayloadImages, type QuestionImageIngestCache } from './question-image-storage.service.js';
+import { validateQuestionContent, blockingIssues, formatIssues } from './question-content-validation.js';
 
 const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
@@ -41,6 +42,24 @@ const normalizePayload = (payload: Json | undefined, context: string): Json | un
 
   return normalized as Json;
 };
+
+function assertPublishableContent(input: {
+  id?: string;
+  type: string;
+  prompt: unknown;
+  explanation?: unknown;
+  payload: unknown;
+}): void {
+  const issues = validateQuestionContent(input);
+  const blockers = blockingIssues(issues);
+  const review = issues.filter((issue) => issue.severity === 'review');
+  if (review.length > 0) {
+    logger.info({ questionId: input.id, issues: review }, 'Question content review signals');
+  }
+  if (blockers.length > 0) {
+    throw new BadRequestError(`Question fails publish validation: ${formatIssues(blockers)}`);
+  }
+}
 
 async function assertQuestionIsNotCampaignManaged(id: string): Promise<void> {
   if (await questionsRepo.isCampaignQuizManaged(id)) {
@@ -97,6 +116,15 @@ export const questionsService = {
       normalizePayload(data.payload, 'create'),
       { categorySlug: category.slug }
     );
+
+    if ((data.status ?? 'draft') === 'published') {
+      assertPublishableContent({
+        type: data.type,
+        prompt: data.prompt,
+        explanation: data.explanation,
+        payload: normalizedPayload ?? null,
+      });
+    }
 
     // Create question with payload atomically
     const question = await questionsRepo.createWithPayload(data, normalizedPayload);
@@ -188,6 +216,22 @@ export const questionsService = {
       }
     }
 
+    const effectiveStatus = data.status ?? existing.status;
+    const contentTouched = data.prompt !== undefined
+      || data.explanation !== undefined
+      || data.payload !== undefined
+      || data.type !== undefined
+      || data.status !== undefined;
+    if (effectiveStatus === 'published' && contentTouched) {
+      assertPublishableContent({
+        id,
+        type: data.type ?? existing.type,
+        prompt: data.prompt ?? existing.prompt,
+        explanation: data.explanation ?? existing.explanation,
+        payload: normalizedPayload !== undefined ? normalizedPayload : existing.payload,
+      });
+    }
+
     let updatedQuestion: QuestionWithPayload | null;
 
     // Use atomic update when payload is provided
@@ -246,6 +290,16 @@ export const questionsService = {
       throw new NotFoundError('Question not found');
     }
     const category = userId ? await categoriesRepo.getById(existing.category_id) : null;
+
+    if (status === 'published') {
+      assertPublishableContent({
+        id,
+        type: existing.type,
+        prompt: existing.prompt,
+        explanation: existing.explanation,
+        payload: existing.payload,
+      });
+    }
 
     await questionsRepo.updateStatus(id, status);
     invalidateCategoryCache();
@@ -448,6 +502,15 @@ export const questionsService = {
           explanation: questions[i].explanation,
           createdBy,
         };
+
+        if (questionData.status === 'published') {
+          assertPublishableContent({
+            type: questionData.type,
+            prompt: questionData.prompt,
+            explanation: questionData.explanation,
+            payload: storedPayload ?? null,
+          });
+        }
 
         const question = await questionsRepo.createWithPayload(
           questionData,

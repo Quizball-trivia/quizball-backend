@@ -38,6 +38,7 @@ import {
   HARD_SKILL_CAP,
   HARD_THETA_CEILING_FALLBACK,
 } from '../modules/bots/calibration/hard-clamps.js';
+import { FCURVE_PERCENTILES } from '../modules/bots/calibration/constants.js';
 import { clamp } from './scoring.js';
 
 /**
@@ -385,6 +386,36 @@ function cappedSkillFraction(params: BotModelParams, inputs: PersistentBotSkillI
 }
 
 /**
+ * The bot's percentile within the S1 latent-skill distribution, read by
+ * inverting the pinned f(RP) curve: its knots sit at FCURVE_PERCENTILES, so
+ * piecewise-linear interpolation of the capped deterministic theta over the
+ * knot skills yields a real percentile (sigmoid(theta) is NOT one — theta is a
+ * mean-zero Rasch coordinate). Clamped to the knot grid [0.05, 0.95]; a pin
+ * whose curve does not match the grid falls back to the sigmoid proxy rather
+ * than guessing.
+ */
+export function skillPercentile(params: BotModelParams, inputs: PersistentBotSkillInputs): number {
+  const cap = effectiveSkillCap(params, inputs.thetaCeilingBound);
+  const theta = clamp(baseSkillTheta(params, inputs), -cap, cap);
+  const skills = params.fCurve.map((knot) => knot.skill);
+  const monotonic = skills.every((skill, i) => i === 0 || skill >= skills[i - 1]);
+  if (skills.length !== FCURVE_PERCENTILES.length || !monotonic) {
+    return clamp(sigmoid(theta), FCURVE_PERCENTILES[0], FCURVE_PERCENTILES[FCURVE_PERCENTILES.length - 1]);
+  }
+  if (theta <= skills[0]) return FCURVE_PERCENTILES[0];
+  const last = skills.length - 1;
+  if (theta >= skills[last]) return FCURVE_PERCENTILES[last];
+  for (let i = 1; i <= last; i += 1) {
+    if (theta <= skills[i]) {
+      const span = skills[i] - skills[i - 1];
+      const t = span > 0 ? (theta - skills[i - 1]) / span : 1;
+      return FCURVE_PERCENTILES[i - 1] + t * (FCURVE_PERCENTILES[i] - FCURVE_PERCENTILES[i - 1]);
+    }
+  }
+  return FCURVE_PERCENTILES[last];
+}
+
+/**
  * Sample from an index->count histogram (as stored in format_stats) using a
  * seeded uniform. Returns the sampled integer index. Empty histogram -> null.
  */
@@ -396,6 +427,52 @@ export function sampleHistogram(hist: Record<string, number>, next: () => number
   const total = entries.reduce((s, [, v]) => s + v, 0);
   if (total <= 0) return null;
   let r = next() * total;
+  for (const [k, v] of entries) {
+    r -= v;
+    if (r <= 0) return k;
+  }
+  return entries[entries.length - 1][0];
+}
+
+/**
+ * Sample from a histogram at the bot's skill percentile s. Buckets are ordered
+ * worst→best OUTCOME by `scoreOf` (ties by key); the seeded uniform is warped
+ * u' = u^alpha with alpha = clamp(((1−s)/s)^TILT_STRENGTH, 1/2, 2) before
+ * inverting the empirical CDF. The exponent is SOFTENED and clamped tight:
+ * a raw (1−s)/s tilt collapses the distribution onto the best/worst bucket at
+ * the roster extremes (a weak bot would answer at the LAST clue 67% of the
+ * time — a new robotic tell). At 0.35/[1/2,2] the tilt is monotone in s with
+ * max total-variation 0.25 from the human shares (replayed against the PROD
+ * clue prior across the roster RP range), and the extreme-band shapes land
+ * near the per-band human index shares from the believability monitor.
+ * s = 0.5 gives alpha = 1 — identical DRAW-COUNT always, and identical
+ * DECISIONS when scoreOf is increasing in the key (countdown/PIO); for clues
+ * scoreOf reverses the bucket order, so individual draws can land on a
+ * different index than sampleHistogram did while the marginal distribution at
+ * s = 0.5 is unchanged. Higher s biases toward
+ * this question's better real-player outcomes WITHOUT changing the support:
+ * the question's own difficulty shape is preserved. The alpha clamp keeps
+ * every bot's draws spread across the distribution (never deterministic
+ * best/worst). Consumes exactly one draw, like sampleHistogram, so stream
+ * alignment with older code is preserved.
+ */
+const TILT_STRENGTH = 0.35;
+
+export function sampleHistogramAtSkill(
+  hist: Record<string, number>,
+  next: () => number,
+  s: number,
+  scoreOf: (key: number) => number,
+): number | null {
+  const entries = Object.entries(hist)
+    .map(([k, v]) => [Number(k), v] as const)
+    .filter(([k, v]) => Number.isFinite(k) && v > 0)
+    .sort((a, b) => (scoreOf(a[0]) - scoreOf(b[0])) || (a[0] - b[0]));
+  const total = entries.reduce((sum, [, v]) => sum + v, 0);
+  if (total <= 0) return null;
+  const sc = clamp(s, 0.01, 0.99);
+  const alpha = clamp(Math.pow((1 - sc) / sc, TILT_STRENGTH), 1 / 2, 2);
+  let r = Math.pow(next(), alpha) * total;
   for (const [k, v] of entries) {
     r -= v;
     if (r <= 0) return k;
@@ -475,13 +552,16 @@ export function decideCountdownFoundCount(
   const total = Math.max(1, totalGroups);
   const maxFound = maxCountdownFoundForCeiling(params, totalGroups);
   if (maxFound === 0) {
-    // Coarse all-or-nothing: even 1 found exceeds the ceiling. Gate success.
-    return ceilingSuccessGate(params, keys, 'countdown') ? total : 0;
+    // Coarse all-or-nothing: even 1 found exceeds the ceiling. Gate success at
+    // min(ceiling, skill) so a weak bot succeeds less often than a strong one
+    // (this branch used to be the last fully skill-insensitive path).
+    const p = Math.min(ceilingScoreFraction(params), cappedSkillFraction(params, inputs));
+    return ceilingSuccessGate(params, keys, 'countdown', p) ? total : 0;
   }
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:countdown:${params.source.batchId}`);
   let found: number;
   if (foundCountDistribution && Object.keys(foundCountDistribution).length > 0) {
-    found = sampleHistogram(foundCountDistribution, next) ?? 0;
+    found = sampleHistogramAtSkill(foundCountDistribution, next, skillPercentile(params, inputs), (k) => k) ?? 0;
   } else {
     found = Math.round(total * cappedSkillFraction(params, inputs));
   }
@@ -524,7 +604,7 @@ export function decidePutInOrderCorrectCount(
     : priorHist;
   let count: number;
   if (hist) {
-    count = sampleHistogram(hist, next) ?? 0;
+    count = sampleHistogramAtSkill(hist, next, skillPercentile(params, inputs), (k) => k) ?? 0;
   } else {
     count = Math.round(totalItems * cappedSkillFraction(params, inputs));
   }
@@ -648,6 +728,31 @@ function clueScore(solved: boolean, index: number): number {
 }
 
 /**
+ * Difficulty link for clue questions: maps a question's measured SOLVE RATE onto
+ * the theta scale (beta), so P(solve) = sigmoid(theta_bot − beta_q). Fitted on
+ * PROD clue_guess_evaluations (attempt-level, humans only, rejected guesses
+ * re-evaluated against post-backfill accepted answers with the live matcher) —
+ * see scripts/bot-calibration/clue-solve-rates.ts, which prints the fit and its
+ * per-theta-band calibration table. Frozen like PROD_CLUE_INDEX_PRIOR; refit
+ * whenever the matcher or the alias corpus changes materially.
+ *
+ * Fit 2026-08-30 on 110,295 eligible ranked attempts (60d window, same
+ * match/user exclusions as the calibration aggregation, at-attempt-time RP
+ * from ranked_rp_changes, leave-one-out predictors, 20% question holdout):
+ * global attempt solve rate 0.551. HELD-OUT calibration by question-rate band:
+ * hard [0,0.25) actual 0.117 vs predicted 0.110; every band within 4pp.
+ */
+export const CLUE_DIFFICULTY_LINK = { intercept: 0.30, slope: -1.60 };
+
+/** Below this many measured attempts a question's solve rate is noise — use the legacy gate. */
+export const CLUE_SOLVE_MIN_SAMPLES = 8;
+
+export interface ClueSolveStats {
+  rate: number;
+  samples: number;
+}
+
+/**
  * Clue chain decision: whether the bot solves, and at which reveal index (0-based;
  * lower = solved from fewer clues = better). Sampled from the calibrated reveal
  * distribution (or a skill-scaled fallback), then bounded so the SCORE respects
@@ -662,6 +767,7 @@ export function decideClue(
   clueRevealIndexDistribution: Record<string, number> | undefined,
   clueCount: number,
   keys: { botId: string; matchId: string; questionId: string },
+  clueSolve?: ClueSolveStats | null,
 ): { solved: boolean; index: number } {
   const maxIndex = Math.max(0, clueCount - 1);
 
@@ -674,7 +780,9 @@ export function decideClue(
     : priorHist;
   let index: number;
   if (hist) {
-    index = sampleHistogram(hist, next) ?? maxIndex;
+    // Skill-tilted: a weak bot's solves cluster at deeper reveals, a strong
+    // bot's at shallower ones, within this question's real human index shares.
+    index = sampleHistogramAtSkill(hist, next, skillPercentile(params, inputs), (k) => clueScore(true, k)) ?? maxIndex;
   } else {
     const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
@@ -688,12 +796,27 @@ export function decideClue(
   // index carries its own gate and the mix is bounded regardless of the shares.
   // Flooring the index was the robotic tell: it forced every solve to index ≥ 1,
   // i.e. ≥10s of clue-slice offset.
-  const solved = ceilingSuccessGate(
-    params,
-    keys,
-    'clue',
-    ceilingGateProbability(params, clueScore(true, index)),
-  );
+  //
+  // SOLVE probability is skill × difficulty when the question has a measured
+  // solve rate: p = min(sigmoid(theta − beta_q), ceilingP) as ONE Bernoulli —
+  // a single min-composed draw, NOT two stacked gates (that would multiply the
+  // probabilities and depress solve rates below both bounds). Before this, the
+  // gate used ceilingP alone: every bot in a batch solved every clue question
+  // at the same rate, regardless of the question ("genius Reserve bot").
+  const ceilingP = ceilingGateProbability(params, clueScore(true, index));
+  let solveP = ceilingP;
+  if (
+    clueSolve
+    && Number.isFinite(clueSolve.rate) && clueSolve.rate >= 0 && clueSolve.rate <= 1
+    && Number.isFinite(clueSolve.samples) && clueSolve.samples >= CLUE_SOLVE_MIN_SAMPLES
+  ) {
+    const beta = CLUE_DIFFICULTY_LINK.intercept
+      + CLUE_DIFFICULTY_LINK.slope * logit(clamp(clueSolve.rate, 0.02, 0.98));
+    const cap = effectiveSkillCap(params, inputs.thetaCeilingBound);
+    const theta = clamp(baseSkillTheta(params, inputs), -cap, cap);
+    solveP = Math.min(sigmoid(theta - beta), ceilingP);
+  }
+  const solved = ceilingSuccessGate(params, keys, 'clue', solveP);
   return { solved, index };
 }
 

@@ -1,0 +1,264 @@
+{
+  "comment": "Conformance table for the typed-answer matcher. Every implementation (backend possession v2 today; web daily when it adopts the shared matcher) must produce these verdicts. legacy = v1 verdict (pinned so v1 regressions are caught too), v2 = matcher v2 verdict. Cases come from the Shavski report forensics and the review threat-model (short particles, near-name collisions, countdown ambiguity).",
+  "cases": [
+    {
+      "note": "exact Georgian full name",
+      "guess": "კაილ უოკერი",
+      "accepted": [
+        "Kyle Walker",
+        "კაილ უოკერი"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "typed surname from full-name alias (whole word)",
+      "guess": "უოკერი",
+      "accepted": [
+        "Kyle Walker",
+        "კაილ უოკერი"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "joined spelling vs FULL-NAME-ONLY accepted list (THE დიმარია bug — legacy typo can't bridge the full name)",
+      "guess": "დიმარია",
+      "accepted": [
+        "Angel Di Maria",
+        "ანხელ დი მარია"
+      ],
+      "legacy": false,
+      "v2": true
+    },
+    {
+      "note": "spaced guess against joined accepted form",
+      "guess": "დი მარია",
+      "accepted": [
+        "Angel Di Maria",
+        "ანხელ დი მარია"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "latin joined spelling vs full-name-only list",
+      "guess": "dimaria",
+      "accepted": [
+        "Angel Di Maria"
+      ],
+      "legacy": false,
+      "v2": true
+    },
+    {
+      "note": "alternative transliteration STILL rejected (alias expansion is step 6, not the matcher)",
+      "guess": "ვალკერი",
+      "accepted": [
+        "Kyle Walker",
+        "კაილ უოკერი"
+      ],
+      "legacy": false,
+      "v2": false
+    },
+    {
+      "note": "bare particle must not match (THE დი hole)",
+      "guess": "დი",
+      "accepted": [
+        "Angel Di Maria",
+        "ანხელ დი მარია"
+      ],
+      "legacy": true,
+      "v2": false
+    },
+    {
+      "note": "bare latin particle must not match",
+      "guess": "de",
+      "accepted": [
+        "Frenkie de Jong",
+        "ფრენკი დე იონგი"
+      ],
+      "legacy": true,
+      "v2": false
+    },
+    {
+      "note": "van alone must not match",
+      "guess": "ვან",
+      "accepted": [
+        "Virgil van Dijk",
+        "ვირჯილ ვან დაიკი"
+      ],
+      "legacy": true,
+      "v2": false
+    },
+    {
+      "note": "digit-bearing short alias stays accepted",
+      "guess": "R9",
+      "accepted": [
+        "Ronaldo",
+        "R9",
+        "რონალდო"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "r9 inside a longer alias (whole word, digit exemption)",
+      "guess": "r9",
+      "accepted": [
+        "Ronaldo (R9)"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "accent-insensitive Spanish",
+      "guess": "di maria",
+      "accepted": [
+        "Ángel Di María"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "typo within budget still accepted",
+      "guess": "უოკეი",
+      "accepted": [
+        "კაილ უოკერი"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "different player name stays rejected",
+      "guess": "მილნერი",
+      "accepted": [
+        "Kyle Walker",
+        "კაილ უოკერი"
+      ],
+      "legacy": false,
+      "v2": false
+    },
+    {
+      "note": "short joined form (<5 chars) rejected by the spaceless guard; typo budget can't reach either",
+      "guess": "აბვგ",
+      "accepted": [
+        "აბ ვგ ჩემპიონი"
+      ],
+      "legacy": false,
+      "v2": false
+    },
+    {
+      "note": "empty guess",
+      "guess": "   ",
+      "accepted": [
+        "Kyle Walker"
+      ],
+      "legacy": false,
+      "v2": false
+    },
+    {
+      "note": "surname with punctuation noise",
+      "guess": "უოკერი!",
+      "accepted": [
+        "კაილ უოკერი"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "three-char real surname allowed by whole-word guard",
+      "guess": "კანე",
+      "accepted": [
+        "ჰარი კანე"
+      ],
+      "legacy": true,
+      "v2": true
+    }
+  ],
+  "countdownCases": [
+    {
+      "note": "guess matching two groups at equal strength is ambiguous in both matchers",
+      "guess": "რონალდო",
+      "groups": [
+        {
+          "id": "g1",
+          "display": {
+            "en": "Cristiano Ronaldo"
+          },
+          "accepted": [
+            "Cristiano Ronaldo",
+            "კრიშტიანუ რონალდო"
+          ]
+        },
+        {
+          "id": "g2",
+          "display": {
+            "en": "Ronaldo Nazario"
+          },
+          "accepted": [
+            "Ronaldo Nazario",
+            "რონალდო ნაზარიო"
+          ]
+        }
+      ],
+      "legacy": null,
+      "v2": null
+    },
+    {
+      "note": "joined Georgian surname claims its group (legacy reaches it via typo distance 1; v2 via spaceless)",
+      "guess": "დემარია",
+      "groups": [
+        {
+          "id": "g1",
+          "display": {
+            "en": "Di Maria"
+          },
+          "accepted": [
+            "Di Maria",
+            "დე მარია"
+          ]
+        },
+        {
+          "id": "g2",
+          "display": {
+            "en": "Messi"
+          },
+          "accepted": [
+            "Messi",
+            "მესი"
+          ]
+        }
+      ],
+      "legacy": "g1",
+      "v2": "g1"
+    },
+    {
+      "note": "bare particle can no longer prefix-claim a group under v2",
+      "guess": "დე",
+      "groups": [
+        {
+          "id": "g1",
+          "display": {
+            "en": "De Jong"
+          },
+          "accepted": [
+            "Frenkie de Jong",
+            "დე იონგი"
+          ]
+        },
+        {
+          "id": "g2",
+          "display": {
+            "en": "Messi"
+          },
+          "accepted": [
+            "Messi",
+            "მესი"
+          ]
+        }
+      ],
+      "legacy": "g1",
+      "v2": null
+    }
+  ]
+}

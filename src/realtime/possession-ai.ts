@@ -18,6 +18,7 @@ import {
   decidePutInOrderCorrectCount,
   resolveQuestionStats,
   topCohortSpeedFloorMs,
+  type ClueSolveStats,
   type PersistentBotSkillInputs,
 } from './persistent-bot-gameplay.js';
 import { acquireLock, releaseLock } from './locks.js';
@@ -208,6 +209,21 @@ function readHist(
     if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Extract the measured clue solve-rate pair from format_stats. Strict: the rate
+ * must be a finite number in [0,1] and samples a finite non-negative integer —
+ * anything else (strings, nulls, negatives, out-of-range) returns null and the
+ * decision takes the exact legacy path.
+ */
+function readClueSolve(formatStats: Record<string, unknown> | null): ClueSolveStats | null {
+  if (!formatStats) return null;
+  const rate = formatStats.cluesSolveRate;
+  const samples = formatStats.cluesSolveSamples;
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 1) return null;
+  if (typeof samples !== 'number' || !Number.isFinite(samples) || samples < 0 || !Number.isInteger(samples)) return null;
+  return { rate, samples };
 }
 
 function parseAiDelayProfile(value: unknown): AiDelayProfile | null {
@@ -438,7 +454,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       // coarse 1-clue question can score 100, so it must sometimes NOT solve to
       // respect the ceiling) and the reveal index it solves at.
       const dist = readHist(formatStats, 'clueRevealIndexDistribution');
-      const clue = decideClue(model.params, model.inputs, dist, clueCount ?? 1, keys);
+      const clue = decideClue(model.params, model.inputs, dist, clueCount ?? 1, keys, readClueSolve(formatStats));
       return { isCorrect: clue.solved, clueIndex: clue.index, answerTimeMs: mcq.answerTimeMs };
     }
     return { isCorrect: mcq.isCorrect, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
@@ -489,7 +505,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       botId: model.botUserId,
       matchId,
       questionId,
-    });
+    }, readClueSolve(stats?.formatStats ?? null));
   }
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
@@ -698,8 +714,20 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
       ? (() => {
           const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
+          // Reading floor: a bot must not answer before it could plausibly have
+          // READ the clue that just appeared — the instant index-0 answer on a
+          // long clue was a visible tell. Floor scales with the revealed clue's
+          // text length, bounded inside the slice so the slice arithmetic (and
+          // the deadline clamp below, which may still pull the final-slice
+          // answer earlier — accepted edge) is never violated.
+          const clueText = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
+            ? (options.evaluation.clues[plannedClueIndex]?.content?.en
+              ?? options.evaluation.clues[plannedClueIndex]?.content?.ka ?? '')
+            : '';
+          const readFloorMs = Math.min(clueSliceMs - 250, 900 + clueText.length * 25);
+          const withinSlice = clamp(aiThinkTimeMs, Math.max(0, readFloorMs), clueSliceMs - 250);
           return clamp(
-            Math.round(clueSliceMs * plannedClueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
+            Math.round(clueSliceMs * plannedClueIndex + withinSlice),
             0,
             questionTimeMsForDelay
           );

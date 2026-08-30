@@ -36,6 +36,7 @@ import { openReadOnlyDb } from './readonly-db.js';
 import { fetchAccuracyByDifficulty, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, resolveBatch, withBatchRetry } from './queries.js';
 import { fitLatentSkill, predictProb, type LatentAnswer, type LatentFitResult } from '../../src/modules/bots/calibration/latent-skill.js';
 import { buildFCurve, percentile, rocAuc, calibrationCurve, logNormalTimeStats, linearFit, logit } from '../../src/modules/bots/calibration/math.js';
+import { FCURVE_PERCENTILES } from '../../src/modules/bots/calibration/constants.js';
 import { aggregateQuestionStats } from '../../src/modules/bots/calibration/aggregate.js';
 import { botModelParamsSchema, CALIBRATION_SCHEMA_VERSION, type BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import { TIMING_CLEAN_WINDOW_START, PARAMS_FINAL_PROB_CAP, PARAMS_SKILL_CAP, PARAMS_MIN_ANSWER_TIME_MS } from '../../src/modules/bots/calibration/constants.js';
@@ -72,7 +73,7 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-const FCURVE_PERCENTILES = [0.05, 0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 0.95];
+
 const SPEED_FLOOR_PERCENTILES = [0.1, 0.25, 0.5];
 
 /** Seeded xorshift for a reproducible holdout split. */

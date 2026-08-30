@@ -50,3 +50,50 @@ describe('createReadyGateRegistry', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('dispatchOnTimeout', () => {
+  it('uses the timeout dispatch when the ceiling expires with missing acks', () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createReadyGateRegistry<number>();
+      const acked = vi.fn();
+      const timedOut = vi.fn();
+      registry.open({
+        scopeId: 'm1',
+        token: 1,
+        waitingUserIds: ['u1'],
+        ceilingMs: 5_000,
+        dispatch: acked,
+        dispatchOnTimeout: timedOut,
+      });
+      vi.advanceTimersByTime(5_001);
+      expect(timedOut).toHaveBeenCalledTimes(1);
+      expect(acked).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the normal dispatch when every ack arrives before the ceiling', () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createReadyGateRegistry<number>();
+      const acked = vi.fn();
+      const timedOut = vi.fn();
+      registry.open({
+        scopeId: 'm2',
+        token: 2,
+        waitingUserIds: ['u1'],
+        ceilingMs: 5_000,
+        dispatch: acked,
+        dispatchOnTimeout: timedOut,
+      });
+      registry.acknowledge('u1', 'm2', 2);
+      vi.advanceTimersByTime(6_000);
+      expect(acked).toHaveBeenCalledTimes(1);
+      expect(timedOut).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

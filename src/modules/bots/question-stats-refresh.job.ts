@@ -88,14 +88,34 @@ export async function refreshQuestionStats(
             median_time_ms    = EXCLUDED.median_time_ms,
             log_time_sigma    = EXCLUDED.log_time_sigma,
             timing_samples    = EXCLUDED.timing_samples,
-            format_stats      = EXCLUDED.format_stats,
+            -- clue solve-rate fields come from clue_guess_evaluations via
+            -- scripts/bot-calibration/clue-solve-rates.ts, NOT this aggregation;
+            -- a wholesale replace would silently erase them (Sol High)
+            format_stats      = EXCLUDED.format_stats
+              || (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
+                  FROM jsonb_each(coalesce(question_stats.format_stats, '{}'::jsonb))
+                  WHERE key IN ('cluesSolveRate', 'cluesSolveSamples')),
             refreshed_at      = EXCLUDED.refreshed_at
         `;
       }
-      // Delete-not-present: drop obsolete question rows.
-      const delQ = questionIds.length > 0
-        ? await tx`DELETE FROM question_stats WHERE question_id <> ALL(${questionIds}::uuid[])`
-        : await tx`DELETE FROM question_stats`;
+      // Delete-not-present: drop obsolete question rows — EXCEPT rows carrying
+      // clue solve-rate calibration, which is produced by a different corpus
+      // (clue-solve-rates.ts) and may legitimately cover questions this
+      // aggregation saw no eligible answers for. Spared rows get their
+      // aggregation fields RESET, not kept: a stale smoothed_accuracy would
+      // otherwise keep feeding decideMcq via the question-scope backoff forever.
+      const notPresent = questionIds.length > 0
+        ? tx`question_id <> ALL(${questionIds}::uuid[])`
+        : tx`true`;
+      const delQ = await tx`DELETE FROM question_stats
+        WHERE ${notPresent} AND NOT (coalesce(format_stats, '{}'::jsonb) ? 'cluesSolveRate')`;
+      await tx`UPDATE question_stats
+        SET answers_count = 0, correct_count = 0, smoothed_accuracy = NULL,
+            median_time_ms = NULL, log_time_sigma = NULL, timing_samples = 0,
+            format_stats = format_stats - 'clueRevealIndexDistribution'
+                                        - 'countdownFoundCountDistribution'
+                                        - 'putInOrderCorrectCountDistribution'
+        WHERE ${notPresent} AND coalesce(format_stats, '{}'::jsonb) ? 'cluesSolveRate'`;
       questionRowsDeleted = delQ.count ?? 0;
 
       for (const r of result.backoffStats) {

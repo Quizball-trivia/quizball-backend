@@ -46,6 +46,15 @@ export interface CaptureClueGuessInput {
   timeMs: number | null;
   clueIndex: number | null;
   isAi: boolean;
+  /**
+   * Which matcher produced isCorrect. When v2 scored, the stored matchRule /
+   * rejectReason must describe the v2 verdict — otherwise a v1-rules
+   * explanation contradicts the row (e.g. a guard-rejected "de" would read
+   * matchRule=wholeWord with isCorrect=false).
+   */
+  scoringMatcher?: 'v1' | 'v2';
+  /** v2 match kind when v2 scored the guess correct; null when it rejected. */
+  v2MatchKind?: string | null;
   /** Injectable for deterministic tests. */
   random?: number;
 }
@@ -61,6 +70,13 @@ export async function captureClueGuessEvaluation(input: CaptureClueGuessInput): 
   if (input.giveUp) return false;
   if (!input.isCorrect || shouldCaptureAccept(input.random)) {
     const explanation = explainClueGuess(input.guess, input.acceptedAnswers);
+    const v2Scored = input.scoringMatcher === 'v2';
+    const matchRule = v2Scored
+      ? (input.isCorrect ? `v2:${input.v2MatchKind ?? 'unknown'}` : null)
+      : explanation.matchedRule;
+    const rejectReason = v2Scored
+      ? (input.isCorrect ? null : (explanation.rejectReason ?? 'v2:no-match'))
+      : explanation.rejectReason;
 
     await clueGuessEvaluationsRepo.insert({
       matchId: input.matchId,
@@ -73,9 +89,9 @@ export async function captureClueGuessEvaluation(input: CaptureClueGuessInput): 
       normalizedAcceptedAnswers: input.acceptedAnswers.map((answer) => normalizeAnswer(answer)),
       isCorrect: input.isCorrect,
       giveUp: input.giveUp,
-      matchRule: explanation.matchedRule,
+      matchRule,
       matchDistance: explanation.matchDistance,
-      rejectReason: explanation.rejectReason,
+      rejectReason,
       candidateDetail: explanation.candidates,
       timeMs: input.timeMs,
       clueIndex: input.clueIndex,

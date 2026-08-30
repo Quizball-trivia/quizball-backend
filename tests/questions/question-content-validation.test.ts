@@ -247,6 +247,26 @@ describe('validateQuestionContent', () => {
       expect(codes(blockingIssues(issues))).toContain('tied-matchup');
     });
 
+    it('blocks missing or non-numeric matchup values', () => {
+      const issues = validateQuestionContent({
+        type: 'high_low',
+        prompt: prompt('Who has more titles?'),
+        payload: {
+          type: 'high_low',
+          stat_label: prompt('Titles'),
+          matchups: [
+            {
+              id: 'm1',
+              left_name: { en: 'Milan', ka: 'მილანი' },
+              right_name: { en: 'Inter', ka: 'ინტერი' },
+              right_value: 7,
+            },
+          ],
+        },
+      });
+      expect(codes(blockingIssues(issues))).toContain('invalid-matchup-value');
+    });
+
     it('blocks duplicate option texts', () => {
       const issues = validateQuestionContent({
         type: 'mcq_single',

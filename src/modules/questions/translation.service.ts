@@ -485,25 +485,33 @@ export const translationService = {
   },
 
   async getAgentBackfillCounts(): Promise<{ questions: number; categories: number; agentTotal: number }> {
-    // drafts only — must match the redo-drafts wipe scope or the CMS progress
-    // strip waits forever for published rows this run will never touch
+    // Counts the FULL agent translation scope (drafts + published with missing
+    // Georgian). Both consumers converge to zero against this: the agents
+    // backfill fills missing ka on drafts AND published, and redo-drafts wipes
+    // drafts then translates the same union (wiped drafts + untranslated
+    // published fill-only) — see translateRedoDrafts.
     const [qr] = await sql<{ n: number }[]>`
       SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.status = 'draft'
+      WHERE q.status IN ('draft', 'published')
         AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
          OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
          OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
     `;
-    // total agent questions the redo-drafts wipe would re-translate (drafts only —
-    // published rows are never wiped in place)
+    // total a redo-drafts run processes: every draft (wiped + re-translated)
+    // plus published rows with missing Georgian (filled only, never wiped)
     const [tr] = await sql<{ n: number }[]>`
       SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
       WHERE q.status = 'draft'
+         OR (q.status = 'published'
+             AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+              OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+              OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')))
     `;
     return { questions: qr?.n ?? 0, categories: 0, agentTotal: tr?.n ?? 0 };
   },

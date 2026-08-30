@@ -332,7 +332,16 @@ function validateHighLow(payload: Record<string, unknown>, issues: QuestionConte
     const m = matchup as { left_name?: unknown; right_name?: unknown; left_value?: unknown; right_value?: unknown };
     requireLocales(m.left_name, `payload.matchups[${index}].left_name`, issues);
     requireLocales(m.right_name, `payload.matchups[${index}].right_name`, issues);
-    if (Number(m.left_value) === Number(m.right_value)) {
+    const left = Number(m.left_value);
+    const right = Number(m.right_value);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+      issues.push({
+        code: 'invalid-matchup-value',
+        path: `payload.matchups[${index}]`,
+        severity: 'block',
+        message: 'left_value and right_value must both be finite numbers',
+      });
+    } else if (left === right) {
       issues.push({
         code: 'tied-matchup',
         path: `payload.matchups[${index}]`,

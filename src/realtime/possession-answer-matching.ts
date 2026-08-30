@@ -383,17 +383,22 @@ function spacelessForm(normalized: string): string {
 }
 
 function wholeWordAllowed(normalizedInput: string): boolean {
-  // Every token must clear the guard OR at least one token must carry real
-  // name content — a compound particle phrase ("de la", "van der") is as
-  // meaningless a guess as a bare particle.
+  // Stoplist-only gate: at least one token must be a non-particle. A length
+  // floor here silently rejected legitimate 2-letter surnames ("Demba Ba",
+  // "Ze Roberto") — content the replay corpus can never surface — and a v2
+  // reject in 'on' mode looks like an ordinary wrong answer, so that loss
+  // would be invisible. The particles we actually fear are all enumerable.
+  // countdownMatchV2's PREFIX fallback keeps a length floor separately
+  // (unlimited countdown guesses make 2-letter prefix fishing cheap).
   const tokens = answerTokens(normalizedInput);
   if (tokens.length === 0) return false;
-  const tokenAllowed = (token: string): boolean => {
-    if (PARTICLE_STOPLIST.has(token)) return false;
-    if (codePointLength(token) >= MIN_WHOLE_WORD_LENGTH) return true;
-    return /\d/.test(token);
-  };
-  return tokens.some(tokenAllowed);
+  return tokens.some((token) => !PARTICLE_STOPLIST.has(token));
+}
+
+/** Prefix fishing on countdown is cheap (unlimited guesses) — keep a floor there. */
+function prefixGuessAllowed(normalizedInput: string): boolean {
+  if (!wholeWordAllowed(normalizedInput)) return false;
+  return codePointLength(normalizedInput) >= MIN_WHOLE_WORD_LENGTH || /\d/.test(normalizedInput);
 }
 
 function matchNormalizedAcceptedAnswerV2(
@@ -403,28 +408,39 @@ function matchNormalizedAcceptedAnswerV2(
   if (!normalizedAccepted) return null;
   if (normalizedInput === normalizedAccepted) return { kind: 'exact', distance: 0 };
 
-  // Spaceless: the joined input must EQUAL the joined form of a contiguous
-  // multi-token span of the accepted answer ("დიმარია" ↔ the "დი მარია" part
-  // of "ანხელ დი მარია"). Exact equality only — never a substring — and the
-  // joined form must be ≥ SPACELESS_MIN_LENGTH code points.
+  // Spaceless: the input's joined form must EQUAL the joined form of the full
+  // accepted answer or of a contiguous multi-token span of it ("დიმარია" ↔
+  // the "დი მარია" part of "ანხელ დი მარია"; "van dijk" ↔ "vandijk").
+  // Symmetric in spacing on BOTH sides, exact equality only — never a
+  // substring — and the joined form must be ≥ SPACELESS_MIN_LENGTH points.
   const inputSpaceless = spacelessForm(normalizedInput);
-  if (codePointLength(inputSpaceless) >= SPACELESS_MIN_LENGTH && !normalizedInput.includes(' ')) {
+  if (codePointLength(inputSpaceless) >= SPACELESS_MIN_LENGTH) {
     const tokens = answerTokens(normalizedAccepted);
+    const nonParticle = tokens.map((token) => !PARTICLE_STOPLIST.has(token));
+    // A matched span must carry real name content — "vander" joined from the
+    // particles of "van der Vaart" identifies nobody, same rule as whole-word.
+    if (
+      inputSpaceless === spacelessForm(normalizedAccepted)
+      && nonParticle.some(Boolean)
+    ) {
+      return { kind: 'spaceless', distance: 0 };
+    }
     for (let start = 0; start < tokens.length - 1; start += 1) {
       let joined = tokens[start];
+      let hasContent = nonParticle[start];
       for (let end = start + 1; end < tokens.length; end += 1) {
         joined += tokens[end];
-        if (joined === inputSpaceless) return { kind: 'spaceless', distance: 0 };
+        hasContent = hasContent || nonParticle[end];
+        if (joined === inputSpaceless && hasContent) return { kind: 'spaceless', distance: 0 };
         if (joined.length > inputSpaceless.length) break;
       }
     }
-  } else if (
-    normalizedInput.includes(' ')
-    && inputSpaceless === spacelessForm(normalizedAccepted)
-    && codePointLength(inputSpaceless) >= SPACELESS_MIN_LENGTH
-  ) {
-    // Spaced input against a joined accepted form ("van dijk" ↔ "vandijk").
-    return { kind: 'spaceless', distance: 0 };
+    // Mirror: a spaced input matching one joined accepted TOKEN
+    // ("ter stegen" ↔ the "terstegen" token inside "marc terstegen").
+    if (normalizedInput.includes(' ')) {
+      const index = tokens.indexOf(inputSpaceless);
+      if (index >= 0 && nonParticle[index]) return { kind: 'spaceless', distance: 0 };
+    }
   }
 
   if (wholeWordAllowed(normalizedInput) && containsWholeWord(normalizedAccepted, normalizedInput)) {
@@ -517,7 +533,7 @@ export function countdownMatchV2(
     }
   }
 
-  if (normalizedGuess.length >= MIN_PREFIX_LENGTH && wholeWordAllowed(normalizedGuess)) {
+  if (normalizedGuess.length >= MIN_PREFIX_LENGTH && prefixGuessAllowed(normalizedGuess)) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {

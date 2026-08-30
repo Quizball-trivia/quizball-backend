@@ -111,3 +111,30 @@ describe('review-driven guards', () => {
     expect(countdownMatchV2(evaluation, 'vandijk', new Set())).toBeNull();
   });
 });
+
+describe('deep-reasoner-driven guards', () => {
+  it('2-letter real surnames are accepted (stoplist-only gate, no length floor)', () => {
+    expect(fuzzyMatchesAnswerV2('ba', ['Demba Ba'])).toBe(true);
+    expect(fuzzyMatchesAnswerV2('ბა', ['დემბა ბა'])).toBe(true);
+    expect(fuzzyMatchesAnswerV2('ze', ['Ze Roberto'])).toBe(true);
+  });
+
+  it('typo path cannot leak particles back in', () => {
+    expect(fuzzyMatchesAnswerV2('derr', ['Rafael van der Vaart'])).toBe(false);
+  });
+
+  it('rank preference: spaceless in one accepted answer beats wholeWord in another', () => {
+    // Pins V2_KIND_RANK: spaceless (an exact-equivalence match) outranks a
+    // whole-word token match found in a different accepted answer.
+    const result = matchAnswerV2('დიმარია', ['დიმარია მეორეხელი', 'ანხელ დი მარია']);
+    expect(result?.kind).toBe('spaceless');
+    expect(result?.matchedAnswer).toBe('ანხელ დი მარია');
+    const wholeWordOnly = matchAnswerV2('დიმარია', ['დიმარია მეორეხელი']);
+    expect(wholeWordOnly?.kind).toBe('wholeWord');
+  });
+
+  it('spaced input matches a joined accepted token (mirror case)', () => {
+    expect(fuzzyMatchesAnswerV2('ter stegen', ['Marc terstegen'])).toBe(true);
+    expect(fuzzyMatchesAnswerV2('van dijk', ['Virgil vandijk'])).toBe(true);
+  });
+});

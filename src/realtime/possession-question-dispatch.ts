@@ -693,6 +693,11 @@ export async function scheduleNextPossessionQuestion(
         phaseKind === 'penalty' ? PENALTY_ROUND_READY_ACK_CEILING_MS : GOAL_ROUND_READY_ACK_CEILING_MS,
       ),
       dispatch: () => dispatch({ postReadyAck: true }),
+      // Ceiling hit = at least one client never acked (backgrounded tab, dead
+      // socket). That client's animations may still be mid-flight, so fall
+      // back to the FULL fixed pre-answer window rather than the short
+      // post-ack reveal — otherwise the silent client gets ~3s total.
+      dispatchOnTimeout: () => dispatch({ postReadyAck: false }),
       onTimeout: (missing) => {
         logger.debug({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
       },

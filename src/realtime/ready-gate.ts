@@ -33,6 +33,10 @@ export function createReadyGateRegistry<Token>() {
     waitingUserIds: Iterable<string>;
     ceilingMs: number;
     dispatch: () => void;
+    /** Called instead of `dispatch` when the ceiling expires with acks still
+     *  missing. Lets the caller give a silent client a different (longer)
+     *  pre-answer window than an acknowledged one. Defaults to `dispatch`. */
+    dispatchOnTimeout?: () => void;
     onTimeout?: (missingUserIds: string[]) => void;
   }): void {
     clear(params.scopeId);
@@ -46,7 +50,7 @@ export function createReadyGateRegistry<Token>() {
     const timeoutId = setTimeout(() => {
       pendingReadyGates.delete(params.scopeId);
       params.onTimeout?.([...waitingUserIds]);
-      params.dispatch();
+      (params.dispatchOnTimeout ?? params.dispatch)();
     }, params.ceilingMs);
 
     pendingReadyGates.set(params.scopeId, {

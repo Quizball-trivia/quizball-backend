@@ -138,6 +138,16 @@ export function getQuestionPreAnswerDelayMs(params: {
   // (player report: "1st instant, 2nd late; you need time to read"). The value
   // matches the pre-fix generic path so overall shootout pacing is unchanged.
   if (params.phaseKind === 'penalty') {
+    // Dispatched from the ready-ack gate: the client told us its penalty
+    // choreography is done, so only the read/reveal window remains — the
+    // player gets a full FRONTEND_REVEAL_MS of visible reading time no matter
+    // how long the animations ran (2026-08-30 report: fixed 6s clock gave
+    // fast high-scoring players ZERO read time because the bar-battle
+    // swallowed it). The no-ack fallback keeps the full fixed window so a
+    // silent/legacy client still gets a sane pace via the gate's ceiling.
+    if (postReadyAck) {
+      return FRONTEND_REVEAL_MS;
+    }
     return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
   }
   // First question has a dedicated intro overlay before reveal.

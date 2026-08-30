@@ -85,6 +85,14 @@ const QUESTION_HISTORY_WINDOW_DAYS = 14;
 const IMAGE_MCQ_SLOT_INDEX = 3;
 const GOAL_ROUND_READY_ACK_CEILING_MS =
   FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
+// Penalty rounds gate on the same client ready-ack as goal rounds. Their
+// post-kick choreography (kick contact + ball flight + GOAL/SAVE splash +
+// score flight + a bar-battle whose length SCALES with points) is long and
+// VARIABLE — a fixed server clock left fast, high-scoring players with zero
+// visible reading time because the animations swallowed the whole window
+// (player report 2026-08-30). Ceiling = the longest realistic sequence
+// (~3.7s fixed + ~2.5s bar battle + 1.6s transition) + slack.
+const PENALTY_ROUND_READY_ACK_CEILING_MS = 10_000;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
 
@@ -650,7 +658,10 @@ export async function scheduleNextPossessionQuestion(
     });
   };
 
-  if (goalScoredBySeat && phaseKind !== 'penalty') {
+  // Goal rounds AND penalty rounds both have long, variable client-side
+  // result choreography, so both wait for the client's ready ack (with a
+  // ceiling) instead of racing a fixed timer against animations.
+  if (goalScoredBySeat || phaseKind === 'penalty') {
     const humanUserIds: string[] = [];
     if (cache) {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
@@ -678,7 +689,9 @@ export async function scheduleNextPossessionQuestion(
       // Harness has no real client to send the post-goal ready ack, so it would
       // sit the full ~9s ceiling on EVERY goal. Collapse the ceiling under
       // fast-timers (prod untouched) so goals don't dominate match time.
-      ceilingMs: harnessDelayMs(GOAL_ROUND_READY_ACK_CEILING_MS),
+      ceilingMs: harnessDelayMs(
+        phaseKind === 'penalty' ? PENALTY_ROUND_READY_ACK_CEILING_MS : GOAL_ROUND_READY_ACK_CEILING_MS,
+      ),
       dispatch: () => dispatch({ postReadyAck: true }),
       onTimeout: (missing) => {
         logger.debug({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');

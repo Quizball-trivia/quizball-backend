@@ -21,8 +21,23 @@ import {
 import {
   clueIndexForTimeMs,
   countdownMatch,
+  countdownMatchV2,
   fuzzyMatchesAnswer,
+  matchAnswerV2,
 } from './possession-answer-matching.js';
+import { config } from '../core/config.js';
+
+// A countdown accepts unlimited guesses and a v2-only match never enters
+// foundIds in shadow mode, so the same divergent guess can be resent all
+// round — log each unique (match, question, user, guess) once, bounded.
+const countdownDivergenceLogged = new Set<string>();
+function markCountdownDivergenceLogged(matchId: string, qIndex: number, userId: string, guess: string): boolean {
+  const key = `${matchId}:${qIndex}:${userId}:${guess.slice(0, 60).toLowerCase()}`;
+  if (countdownDivergenceLogged.has(key)) return false;
+  if (countdownDivergenceLogged.size >= 10_000) countdownDivergenceLogged.clear();
+  countdownDivergenceLogged.add(key);
+  return true;
+}
 import {
   emitMatchBusy,
   emitRedisUnavailable,
@@ -459,7 +474,30 @@ export async function handlePossessionCountdownGuess(
   const alreadyFound = await countdownGetFound(matchId, userId);
   const foundIds = new Set(alreadyFound);
 
-  const matched = countdownMatch(question.evaluation, guess, foundIds);
+  const countdownMode = config.ANSWER_MATCHER_V2;
+  const matchedV1 = countdownMatch(question.evaluation, guess, foundIds);
+  const matchedV2 = countdownMode !== 'off' ? countdownMatchV2(question.evaluation, guess, foundIds) : null;
+  const matched = countdownMode === 'on' ? matchedV2 : matchedV1;
+  if (
+    countdownMode !== 'off'
+    && (matchedV1?.id ?? null) !== (matchedV2?.id ?? null)
+    && markCountdownDivergenceLogged(matchId, qIndex, userId, guess)
+  ) {
+    logger.info(
+      {
+        eventName: 'answer_matcher_divergence',
+        matchId,
+        qIndex,
+        userId,
+        matcherMode: countdownMode,
+        format: 'countdown',
+        v1GroupId: matchedV1?.id ?? null,
+        v2GroupId: matchedV2?.id ?? null,
+        ...answerInputLogFields(guess),
+      },
+      'v1/v2 countdown matcher verdicts diverge'
+    );
+  }
   if (!matched) {
     logger.debug(
       {
@@ -850,6 +888,8 @@ export async function handlePossessionCluesAnswer(
     answerCount: number;
     /** Instrumentation only: the exact set the matcher compared against. */
     acceptedAnswers: string[];
+    scoringMatcher: 'v1' | 'v2';
+    v2MatchKind: string | null;
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
@@ -939,7 +979,25 @@ export async function handlePossessionCluesAnswer(
       question.evaluation.acceptedAnswers,
       question.evaluation.displayAnswer
     );
-    const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, acceptedAnswers);
+    const matcherMode = config.ANSWER_MATCHER_V2;
+    const v2Match = !giveUp && matcherMode !== 'off' ? matchAnswerV2(guess, acceptedAnswers) : null;
+    const v1Correct = !giveUp && fuzzyMatchesAnswer(guess, acceptedAnswers);
+    const isCorrect = matcherMode === 'on' ? v2Match !== null : v1Correct;
+    if (matcherMode !== 'off' && (v2Match !== null) !== v1Correct) {
+      logger.info(
+        {
+          eventName: 'answer_matcher_divergence',
+          matchId,
+          qIndex,
+          userId,
+          matcherMode,
+          v1Correct,
+          v2Kind: v2Match?.kind ?? null,
+          ...answerInputLogFields(guess),
+        },
+        'v1/v2 answer matcher verdicts diverge'
+      );
+    }
     const expectedCount = getExpectedUserIds(cache).length;
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 
@@ -995,6 +1053,8 @@ export async function handlePossessionCluesAnswer(
         expectedCount,
         answerCount: currentAnswerCount,
         acceptedAnswers,
+        scoringMatcher: matcherMode === 'on' ? 'v2' as const : 'v1' as const,
+        v2MatchKind: v2Match?.kind ?? null,
       },
     };
   });
@@ -1062,6 +1122,8 @@ export async function handlePossessionCluesAnswer(
       timeMs: committed.answerTimeMs,
       clueIndex: committed.clueIndex,
       isAi: socket.data.user.is_ai === true,
+      scoringMatcher: committed.scoringMatcher,
+      v2MatchKind: committed.v2MatchKind,
     });
   });
 

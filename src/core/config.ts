@@ -40,6 +40,13 @@ const configSchema = z.object({
     z.string().min(1).optional(),
   ),
 
+  // Typed-answer matcher rollout: 'on' scores with the v2 matcher, 'shadow'
+  // scores with v1 while logging v1/v2 divergences (v2 verdicts are also
+  // recomputable offline from clue_guess_evaluations via
+  // scripts/monitors/matcher-v2-shadow-report.ts), 'off' disables v2 entirely.
+  // Shadow-by-default so a prod deploy observes before it changes scoring.
+  ANSWER_MATCHER_V2: z.enum(['on', 'shadow', 'off']).default('shadow'),
+
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),

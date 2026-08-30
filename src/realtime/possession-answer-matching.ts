@@ -339,3 +339,196 @@ export function clueIndexForTimeMs(clueCount: number, timeMs: number, questionTi
   const sliceMs = questionTimeMs / clueCount;
   return clamp(Math.floor(timeMs / sliceMs), 0, clueCount - 1);
 }
+
+// ---------------------------------------------------------------------------
+// Matcher v2 — closes the two failure classes measured in the Shavski report
+// while tightening the false-positive hole the fix would otherwise widen:
+//   1. spaceless: a joined spelling matches its spaced accepted form
+//      (დიმარია ↔ დი მარია) as an ADDITIONAL EXACT-ONLY comparison — it never
+//      participates in whole-word, alias, typo or prefix logic, and both
+//      spaceless forms must be ≥ SPACELESS_MIN_LENGTH code points.
+//   2. whole-word guard: a bare token must be ≥ MIN_WHOLE_WORD_LENGTH code
+//      points and not a name particle — before this, typing just "დი" matched
+//      "დი მარია". Digit-bearing short aliases ("R9") stay allowed.
+// Legacy behavior is preserved verbatim in the v1 functions above; callers
+// choose per the ANSWER_MATCHER_V2 config ('on' scores with v2, 'shadow'
+// scores with v1 and records the v2 verdict, 'off' ignores v2).
+// ---------------------------------------------------------------------------
+
+export const ANSWER_MATCHER_VERSION = 2;
+
+const SPACELESS_MIN_LENGTH = 5;
+const MIN_WHOLE_WORD_LENGTH = 3;
+
+/** Name particles that must never count as a whole-word match on their own. */
+const PARTICLE_STOPLIST = new Set([
+  'de', 'di', 'da', 'la', 'el', 'van', 'von', 'der', 'den', 'dos', 'del', 'jr', 'junior',
+  'ter', 'ten', 'das', 'bin', 'ben', 'dem', 'le', 'du', 'al',
+  'დე', 'დი', 'და', 'ლა', 'ელ', 'ვან', 'ფონ', 'დერ', 'დენ', 'დოს', 'დელ', 'უმცროსი',
+  'ტერ', 'ტენ', 'დას', 'ბინ', 'ბენ', 'დემ', 'ლე', 'დიუ', 'ალ',
+]);
+
+export type AnswerMatchKind = AcceptedAnswerMatchKind | 'spaceless';
+
+export interface AnswerMatchResult {
+  kind: AnswerMatchKind;
+  matchedAnswer: string;
+  distance: number;
+}
+
+const codePointLength = (value: string): number => [...value].length;
+
+function spacelessForm(normalized: string): string {
+  return normalized.replace(/ /g, '');
+}
+
+function wholeWordAllowed(normalizedInput: string): boolean {
+  // Every token must clear the guard OR at least one token must carry real
+  // name content — a compound particle phrase ("de la", "van der") is as
+  // meaningless a guess as a bare particle.
+  const tokens = answerTokens(normalizedInput);
+  if (tokens.length === 0) return false;
+  const tokenAllowed = (token: string): boolean => {
+    if (PARTICLE_STOPLIST.has(token)) return false;
+    if (codePointLength(token) >= MIN_WHOLE_WORD_LENGTH) return true;
+    return /\d/.test(token);
+  };
+  return tokens.some(tokenAllowed);
+}
+
+function matchNormalizedAcceptedAnswerV2(
+  normalizedInput: string,
+  normalizedAccepted: string
+): { kind: AnswerMatchKind; distance: number } | null {
+  if (!normalizedAccepted) return null;
+  if (normalizedInput === normalizedAccepted) return { kind: 'exact', distance: 0 };
+
+  // Spaceless: the joined input must EQUAL the joined form of a contiguous
+  // multi-token span of the accepted answer ("დიმარია" ↔ the "დი მარია" part
+  // of "ანხელ დი მარია"). Exact equality only — never a substring — and the
+  // joined form must be ≥ SPACELESS_MIN_LENGTH code points.
+  const inputSpaceless = spacelessForm(normalizedInput);
+  if (codePointLength(inputSpaceless) >= SPACELESS_MIN_LENGTH && !normalizedInput.includes(' ')) {
+    const tokens = answerTokens(normalizedAccepted);
+    for (let start = 0; start < tokens.length - 1; start += 1) {
+      let joined = tokens[start];
+      for (let end = start + 1; end < tokens.length; end += 1) {
+        joined += tokens[end];
+        if (joined === inputSpaceless) return { kind: 'spaceless', distance: 0 };
+        if (joined.length > inputSpaceless.length) break;
+      }
+    }
+  } else if (
+    normalizedInput.includes(' ')
+    && inputSpaceless === spacelessForm(normalizedAccepted)
+    && codePointLength(inputSpaceless) >= SPACELESS_MIN_LENGTH
+  ) {
+    // Spaced input against a joined accepted form ("van dijk" ↔ "vandijk").
+    return { kind: 'spaceless', distance: 0 };
+  }
+
+  if (wholeWordAllowed(normalizedInput) && containsWholeWord(normalizedAccepted, normalizedInput)) {
+    return { kind: 'wholeWord', distance: 0 };
+  }
+  if (hasTokenAliasMatch(normalizedInput, normalizedAccepted)) {
+    return { kind: 'alias', distance: 0 };
+  }
+
+  if (normalizedInput.length < 4) return null;
+
+  const typoTargets = [normalizedAccepted, ...answerTokens(normalizedAccepted)];
+  let bestTypo: { kind: AnswerMatchKind; distance: number } | null = null;
+  for (const target of typoTargets) {
+    const allowedDistance = maxTypoDistance(target);
+    if (allowedDistance <= 0) continue;
+    const distance = levenshtein(normalizedInput, target);
+    if (distance <= allowedDistance) {
+      if (!bestTypo || distance < bestTypo.distance) bestTypo = { kind: 'typo', distance };
+    }
+  }
+  return bestTypo;
+}
+
+const V2_KIND_RANK: Record<AnswerMatchKind, number> = {
+  exact: 4,
+  spaceless: 3,
+  wholeWord: 2,
+  alias: 2,
+  typo: 1,
+};
+
+export function matchAnswerV2(input: string, acceptedAnswers: string[]): AnswerMatchResult | null {
+  const normalizedInput = normalizeAnswer(input);
+  if (!normalizedInput) return null;
+
+  let best: AnswerMatchResult | null = null;
+  for (const acceptedAnswer of acceptedAnswers) {
+    const match = matchNormalizedAcceptedAnswerV2(normalizedInput, normalizeAnswer(acceptedAnswer));
+    if (!match) continue;
+    if (
+      !best
+      || V2_KIND_RANK[match.kind] > V2_KIND_RANK[best.kind]
+      || (V2_KIND_RANK[match.kind] === V2_KIND_RANK[best.kind] && match.distance < best.distance)
+    ) {
+      best = { kind: match.kind, matchedAnswer: acceptedAnswer, distance: match.distance };
+    }
+  }
+  return best;
+}
+
+export function fuzzyMatchesAnswerV2(input: string, acceptedAnswers: string[]): boolean {
+  return matchAnswerV2(input, acceptedAnswers) !== null;
+}
+
+/**
+ * Countdown matching under v2 rules. Same shape as countdownMatch: candidates
+ * are ranked by match kind; a guess matching MORE THAN ONE answer group at the
+ * same strength is ambiguous and rejected; the prefix fallback is unchanged
+ * except that it now respects the whole-word guard (a bare particle can no
+ * longer prefix-claim a group).
+ */
+export function countdownMatchV2(
+  evaluation: Extract<MatchQuestionEvaluation, { kind: 'countdown' }>,
+  guess: string,
+  foundIds: Set<string>
+): { id: string; display: Record<string, string> } | null {
+  const normalizedGuess = normalizeAnswer(guess);
+  if (!normalizedGuess) return null;
+
+  const candidates: Array<{ id: string; display: Record<string, string>; match: AnswerMatchResult }> = [];
+  for (const answerGroup of evaluation.answerGroups) {
+    const match = matchAnswerV2(guess, answerGroup.acceptedAnswers);
+    if (match) candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
+  }
+
+  // exact + spaceless share ONE ambiguity tier: separator removal is an exact
+  // equivalence, so a guess exact in group A and spaceless in group B is the
+  // same string resolving to two answers — ambiguous, not claimable.
+  const kindTiers: AnswerMatchKind[][] = [['exact', 'spaceless'], ['wholeWord'], ['alias'], ['typo']];
+  for (const tier of kindTiers) {
+    const matchesForTier = candidates.filter((candidate) => tier.includes(candidate.match.kind));
+    if (matchesForTier.length > 0) {
+      const uniqueGroupIds = new Set(matchesForTier.map((candidate) => candidate.id));
+      if (uniqueGroupIds.size !== 1) return null;
+      const candidate = matchesForTier[0];
+      if (!foundIds.has(candidate.id)) {
+        return { id: candidate.id, display: candidate.display };
+      }
+    }
+  }
+
+  if (normalizedGuess.length >= MIN_PREFIX_LENGTH && wholeWordAllowed(normalizedGuess)) {
+    const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
+    for (const answerGroup of evaluation.answerGroups) {
+      if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
+        prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
+      }
+    }
+    if (prefixCandidates.length === 1) {
+      const candidate = prefixCandidates[0];
+      if (!foundIds.has(candidate.id)) return candidate;
+    }
+  }
+
+  return null;
+}

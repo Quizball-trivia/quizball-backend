@@ -890,6 +890,7 @@ export async function handlePossessionCluesAnswer(
     acceptedAnswers: string[];
     scoringMatcher: 'v1' | 'v2';
     v2MatchKind: string | null;
+    v2MatchDistance: number | null;
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
@@ -1055,6 +1056,7 @@ export async function handlePossessionCluesAnswer(
         acceptedAnswers,
         scoringMatcher: matcherMode === 'on' ? 'v2' as const : 'v1' as const,
         v2MatchKind: v2Match?.kind ?? null,
+        v2MatchDistance: v2Match?.distance ?? null,
       },
     };
   });
@@ -1124,6 +1126,7 @@ export async function handlePossessionCluesAnswer(
       isAi: socket.data.user.is_ai === true,
       scoringMatcher: committed.scoringMatcher,
       v2MatchKind: committed.v2MatchKind,
+      v2MatchDistance: committed.v2MatchDistance,
     });
   });
 

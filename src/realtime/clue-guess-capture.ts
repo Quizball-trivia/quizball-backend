@@ -55,6 +55,8 @@ export interface CaptureClueGuessInput {
   scoringMatcher?: 'v1' | 'v2';
   /** v2 match kind when v2 scored the guess correct; null when it rejected. */
   v2MatchKind?: string | null;
+  /** v2 match distance when v2 scored the guess correct. */
+  v2MatchDistance?: number | null;
   /** Injectable for deterministic tests. */
   random?: number;
 }
@@ -74,9 +76,16 @@ export async function captureClueGuessEvaluation(input: CaptureClueGuessInput): 
     const matchRule = v2Scored
       ? (input.isCorrect ? `v2:${input.v2MatchKind ?? 'unknown'}` : null)
       : explanation.matchedRule;
+    // The most diagnostic reject class is v1-accepted-but-v2-guard-killed —
+    // tag it explicitly; a plain v1 reject explanation carries over otherwise.
     const rejectReason = v2Scored
-      ? (input.isCorrect ? null : (explanation.rejectReason ?? 'v2:no-match'))
+      ? (input.isCorrect
+        ? null
+        : (explanation.matchedRule !== null ? 'v2:guard-reject' : explanation.rejectReason))
       : explanation.rejectReason;
+    const matchDistance = v2Scored
+      ? (input.isCorrect ? (input.v2MatchDistance ?? 0) : null)
+      : explanation.matchDistance;
 
     await clueGuessEvaluationsRepo.insert({
       matchId: input.matchId,
@@ -90,7 +99,7 @@ export async function captureClueGuessEvaluation(input: CaptureClueGuessInput): 
       isCorrect: input.isCorrect,
       giveUp: input.giveUp,
       matchRule,
-      matchDistance: explanation.matchDistance,
+      matchDistance,
       rejectReason,
       candidateDetail: explanation.candidates,
       timeMs: input.timeMs,

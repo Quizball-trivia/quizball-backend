@@ -371,7 +371,13 @@ export const questionsController = {
     }
     translationService
       .clearDraftGeorgian()
-      .then((ids) => translationService.translateQuestions(ids))
+      .then(async (wipedIds) => {
+        // Union with untranslated published agent questions: those are FILLED
+        // only (never wiped), so the shared scope=agents progress count — which
+        // spans drafts AND published — converges to zero for this run too.
+        const untranslated = await translationService.agentUntranslatedIds();
+        return translationService.translateQuestions([...new Set([...wipedIds, ...untranslated])]);
+      })
       .then((result) => logger.info(result, 'Agent re-translation completed'))
       .catch((err) => logger.error({ error: err }, 'Agent re-translation failed'));
     res.json({ status: 'started', total: counts.agentTotal, remaining: counts.agentTotal, categories: 0 });

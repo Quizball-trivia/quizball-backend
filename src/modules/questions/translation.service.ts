@@ -485,6 +485,11 @@ export const translationService = {
   },
 
   async getAgentBackfillCounts(): Promise<{ questions: number; categories: number; agentTotal: number }> {
+    // Counts the FULL agent translation scope (drafts + published with missing
+    // Georgian). Both consumers converge to zero against this: the agents
+    // backfill fills missing ka on drafts AND published, and redo-drafts wipes
+    // drafts then translates the same union (wiped drafts + untranslated
+    // published fill-only) — see translateRedoDrafts.
     const [qr] = await sql<{ n: number }[]>`
       SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
@@ -495,12 +500,18 @@ export const translationService = {
          OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
          OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
     `;
-    // total agent questions the OVERWRITE mode would re-translate (draft + published)
+    // total a redo-drafts run processes: every draft (wiped + re-translated)
+    // plus published rows with missing Georgian (filled only, never wiped)
     const [tr] = await sql<{ n: number }[]>`
       SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
-      WHERE q.status IN ('draft', 'published')
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status = 'draft'
+         OR (q.status = 'published'
+             AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+              OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+              OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')))
     `;
     return { questions: qr?.n ?? 0, categories: 0, agentTotal: tr?.n ?? 0 };
   },
@@ -528,12 +539,12 @@ export const translationService = {
   /**
    * Backfill: translate ALL questions that have "en" but no "ka".
    */
-  // Strip every Georgian value from AGENT-GENERATED questions (drafts AND
-  // approved) so the standard backfill re-translates them from scratch. Scoped
-  // by the agents.tasks join — the wider question bank (hand-written Georgian)
-  // is untouchable. NOTE: published agent questions briefly lose their Georgian
-  // until the background run refills them — fine on staging; before prod
-  // go-live this should chunk (wipe+translate 50 at a time).
+  // Strip every Georgian value from AGENT-GENERATED drafts so the standard
+  // backfill re-translates them from scratch. Scoped by the agents.tasks join —
+  // the wider question bank (hand-written Georgian) is untouchable. Published
+  // rows are deliberately excluded: wiping them left live questions without
+  // Georgian whenever the refill run failed mid-way. Re-translating published
+  // content must go through a copy-and-swap flow, never in-place invalidation.
   async clearDraftGeorgian(): Promise<string[]> {
     const wipeKa = (node: unknown): unknown => {
       if (Array.isArray(node)) return node.map(wipeKa);
@@ -554,7 +565,7 @@ export const translationService = {
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.status IN ('draft', 'published')
+      WHERE q.status = 'draft'
     `;
     const ids: string[] = [];
     for (const row of rows) {
@@ -640,13 +651,26 @@ async function applyTranslation(
   },
   translation: TranslationOutput
 ): Promise<void> {
-  const newPrompt = original.prompt[TARGET_LOCALE]
-    ? original.prompt
-    : { ...original.prompt, [TARGET_LOCALE]: translation.prompt };
+  // The provider response crosses a JSON boundary — a malformed reply can put an
+  // object where a string belongs, which downstream tooling stringifies into
+  // "[object Object]" inside live content. Only plain non-empty strings may land.
+  const asTranslatedString = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === 'undefined' || trimmed === 'null' || trimmed === 'NaN') return null;
+    if (trimmed.includes('[object Object]')) return null;
+    return value;
+  };
 
+  const translatedPrompt = asTranslatedString(translation.prompt);
+  const newPrompt = original.prompt[TARGET_LOCALE] || !translatedPrompt
+    ? original.prompt
+    : { ...original.prompt, [TARGET_LOCALE]: translatedPrompt };
+
+  const translatedExplanation = asTranslatedString(translation.explanation);
   const newExplanation =
-    translation.explanation && original.explanation && !original.explanation[TARGET_LOCALE]
-      ? { ...original.explanation, [TARGET_LOCALE]: translation.explanation }
+    translatedExplanation && original.explanation && !original.explanation[TARGET_LOCALE]
+      ? { ...original.explanation, [TARGET_LOCALE]: translatedExplanation }
       : original.explanation;
 
   let newPayload: QuestionPayload | null = original.payload;
@@ -656,7 +680,8 @@ async function applyTranslation(
         descriptor,
         text: translation.options?.[index],
       }))
-      .filter((entry): entry is { descriptor: TranslationFieldDescriptor; text: string } => Boolean(entry.text));
+      .filter((entry): entry is { descriptor: TranslationFieldDescriptor; text: string } =>
+        typeof entry.text === 'string' && entry.text.trim().length > 0 && !entry.text.includes('[object Object]'));
 
     if (translatedEntries.length > 0) {
       const payload = structuredClone(original.payload) as QuestionPayload;

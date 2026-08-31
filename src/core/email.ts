@@ -1,10 +1,10 @@
 /**
  * Transactional email — minimal sender behind an env switch.
  *
- * RESEND_API_KEY set   → sends through the Resend HTTP API.
- * RESEND_API_KEY unset → disabled: callers get `false` and must NOT record
- *                        the send as done (so enabling the key later lets
- *                        still-relevant sends go out).
+ * Production + RESEND_API_KEY set → sends through the Resend HTTP API.
+ * Every non-production environment → disabled, even if a provider key was
+ * accidentally copied into it. Callers get `false` and must NOT record the
+ * send as done.
  *
  * EMAIL_FROM controls the sender identity (the domain must be verified with
  * the provider first, e.g. "Quizball <league@quizball.io>").
@@ -14,8 +14,16 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 import { logger } from './logger.js';
 
+function activeResendApiKey(): string | null {
+  // Railway environments can be cloned from production, including variables.
+  // NODE_ENV is the final safety boundary: staging/local must never contact
+  // real recipients even when a live provider key is accidentally present.
+  if (process.env.NODE_ENV !== 'prod') return null;
+  return process.env.RESEND_API_KEY?.trim() || null;
+}
+
 export function emailEnabled(): boolean {
-  return Boolean(process.env.RESEND_API_KEY);
+  return activeResendApiKey() !== null;
 }
 
 const PUBLIC_API_FALLBACK = 'https://quizball-backend-production.up.railway.app';
@@ -99,7 +107,7 @@ export async function sendEmailDetailed(input: {
   idempotencyKey?: string;
   headers?: Record<string, string>;
 }): Promise<EmailSendResult> {
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = activeResendApiKey();
   if (!apiKey) return { accepted: false, messageId: null };
   const from = process.env.EMAIL_FROM ?? 'Quizball <league@quizball.io>';
   try {

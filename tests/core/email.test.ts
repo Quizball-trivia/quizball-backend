@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
 import {
+  emailEnabled,
   emailLinkToken,
   sendEmail,
   sendEmailDetailed,
@@ -10,6 +11,7 @@ import {
 
 describe('email transport and signed campaign links', () => {
   beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'prod');
     vi.stubEnv('EMAIL_UNSUB_SECRET', 's'.repeat(32));
     vi.stubEnv('RESEND_API_KEY', 're_test');
   });
@@ -53,5 +55,20 @@ describe('email transport and signed campaign links', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.resend.com/emails', expect.objectContaining({
       headers: expect.objectContaining({ 'idempotency-key': 'assignment-1' }),
     }));
+  });
+
+  it('hard-disables delivery outside production even when a live provider key is present', async () => {
+    vi.stubEnv('NODE_ENV', 'staging');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(emailEnabled()).toBe(false);
+    await expect(sendEmailDetailed({
+      to: 'player@example.com',
+      subject: 'Must not leave staging',
+      html: '<p>Blocked</p>',
+    })).resolves.toEqual({ accepted: false, messageId: null });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -853,6 +853,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       MOCK_USER,
       'email',
       undefined,
+      undefined,
     );
   });
 
@@ -902,6 +903,36 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       MOCK_USER,
       'google',
       attribution,
+      undefined,
+    );
+  });
+
+  it('passes UTM attribution to the canonical account-created event', async () => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue(null);
+    createWithIdentityMock.mockResolvedValue({ user: MOCK_USER, created: true });
+    const utm = {
+      utm_source: 'tiktok',
+      utm_medium: 'creator',
+      utm_campaign: 'quizball-launch',
+      captured_at: '2026-08-30T18:00:00.000Z',
+    };
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    }, undefined, {
+      accountCreation: { method: 'google', utm },
+    });
+
+    expect(trackAccountCreatedMock).toHaveBeenCalledWith(
+      MOCK_USER,
+      'google',
+      undefined,
+      utm,
     );
   });
 

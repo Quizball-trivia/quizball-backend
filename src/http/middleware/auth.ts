@@ -9,6 +9,10 @@ import {
   CAMPAIGN_ATTRIBUTION_HEADER,
   parseCampaignAttribution,
 } from '../../core/campaign-attribution.js';
+import {
+  UTM_ATTRIBUTION_HEADER,
+  parseUtmAttribution,
+} from '../../core/utm-attribution.js';
 
 /**
  * Extract bearer token from Authorization header.
@@ -79,9 +83,11 @@ export async function authMiddleware(
     const attribution = parseCampaignAttribution(
       req.headers[CAMPAIGN_ATTRIBUTION_HEADER],
     );
+    const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
     const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
       accountCreation: {
         attribution,
+        utm,
       },
     });
 

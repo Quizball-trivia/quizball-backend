@@ -254,6 +254,7 @@ function resolveAuthMethod(session: AuthSession): string {
 async function getOrCreateProvisionedIdentity(
   session: AuthSession,
   emitLoginAnalytics: boolean,
+  context?: AuthRequestContext,
 ): Promise<void> {
   const identity = getProvisioningIdentity(session);
   const method = resolveAuthMethod(session);
@@ -263,7 +264,7 @@ async function getOrCreateProvisionedIdentity(
     onUserCreated: () => {
       created = true;
     },
-    accountCreation: { method },
+    accountCreation: { method, utm: context?.utm ?? null },
   });
 
   if (!created && emitLoginAnalytics && user?.id) {
@@ -281,12 +282,13 @@ async function getOrCreateProvisionedIdentity(
 async function provisionIdentityWithRetry(
   session: AuthSession,
   emitLoginAnalytics = false,
+  context?: AuthRequestContext,
 ): Promise<void> {
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= PROVISION_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      await getOrCreateProvisionedIdentity(session, emitLoginAnalytics);
+      await getOrCreateProvisionedIdentity(session, emitLoginAnalytics, context);
       logger.info(
         {
           provider: session.provider,
@@ -370,9 +372,12 @@ function isPendingDeletionAuthenticationError(error: unknown): boolean {
   );
 }
 
-async function provisionIdentityOrThrowSession(session: AuthSession): Promise<void> {
+async function provisionIdentityOrThrowSession(
+  session: AuthSession,
+  context?: AuthRequestContext,
+): Promise<void> {
   try {
-    await provisionIdentityWithRetry(session, true);
+    await provisionIdentityWithRetry(session, true, context);
   } catch (error) {
     if (isPendingDeletionAuthenticationError(error) && session.refreshToken) {
       throw new PendingDeletionSessionError(session);
@@ -420,7 +425,7 @@ export const authService = {
         }
       }
       if (session.accessToken) {
-        await provisionIdentityOrThrowSession(session);
+        await provisionIdentityOrThrowSession(session, context);
       }
       return session;
     });
@@ -436,7 +441,7 @@ export const authService = {
         request.password,
         ...optionalAuthContext(context),
       );
-      await provisionIdentityOrThrowSession(session);
+      await provisionIdentityOrThrowSession(session, context);
       return session;
     });
   },
@@ -491,7 +496,7 @@ export const authService = {
       if (request.restore_pending_deletion) {
         await restorePendingDeletionForSession(session);
       } else {
-        await provisionIdentityOrThrowSession(session);
+        await provisionIdentityOrThrowSession(session, context);
       }
       return session;
     });
@@ -536,7 +541,7 @@ export const authService = {
       if (restorePendingDeletion) {
         await restorePendingDeletionForSession(session);
       } else {
-        await provisionIdentityOrThrowSession(session);
+        await provisionIdentityOrThrowSession(session, context);
       }
       return session;
     });

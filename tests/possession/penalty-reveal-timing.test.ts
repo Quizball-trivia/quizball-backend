@@ -27,20 +27,32 @@ function penaltyDelay(overrides: Partial<Parameters<typeof getQuestionPreAnswerD
 }
 
 describe('penalty pre-answer delay is deterministic', () => {
-  it('is identical whether or not the round was dispatched from a ready ack', () => {
-    expect(penaltyDelay({ postReadyAck: true })).toBe(penaltyDelay({ postReadyAck: false }));
+  // 2026-08-30 revision: penalty rounds now dispatch through the ready-ack
+  // gate (like goal rounds), because the client's post-kick choreography is
+  // long and VARIABLE — a single fixed window gave fast, high-scoring players
+  // zero visible read time (the animations swallowed it; player report).
+  // Determinism now means: a fixed READ window anchored to the moment the
+  // client said its animations finished — not a fixed clock from dispatch.
+  it('gives exactly the reveal window after a ready ack, and the full fixed window without one', () => {
+    expect(penaltyDelay({ postReadyAck: true })).toBe(FRONTEND_REVEAL_MS);
+    expect(penaltyDelay({ postReadyAck: false })).toBe(
+      FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS,
+    );
   });
 
-  it('is unaffected by the previous question having been a special', () => {
-    expect(penaltyDelay({ previousQuestionKind: 'countdown' })).toBe(
-      penaltyDelay({ previousQuestionKind: 'multipleChoice' }),
-    );
-    expect(penaltyDelay({ previousQuestionKind: 'clues' })).toBe(
-      penaltyDelay({ previousQuestionKind: 'multipleChoice' }),
-    );
+  it('is unaffected by the previous question having been a special (both ack paths)', () => {
+    for (const postReadyAck of [true, false]) {
+      expect(penaltyDelay({ previousQuestionKind: 'countdown', postReadyAck })).toBe(
+        penaltyDelay({ previousQuestionKind: 'multipleChoice', postReadyAck }),
+      );
+      expect(penaltyDelay({ previousQuestionKind: 'clues', postReadyAck })).toBe(
+        penaltyDelay({ previousQuestionKind: 'multipleChoice', postReadyAck }),
+      );
+    }
   });
 
-  it('is identical across regulation and deep sudden-death rounds', () => {
+  it('is identical across regulation and deep sudden-death rounds (both ack paths)', () => {
+    expect(penaltyDelay({ qIndex: 12, postReadyAck: true })).toBe(penaltyDelay({ qIndex: 29, postReadyAck: true }));
     expect(penaltyDelay({ qIndex: 12 })).toBe(penaltyDelay({ qIndex: 29 }));
   });
 
@@ -48,7 +60,7 @@ describe('penalty pre-answer delay is deterministic', () => {
     expect(penaltyDelay({ postReadyAck: true })).toBeGreaterThanOrEqual(FRONTEND_REVEAL_MS);
   });
 
-  it('matches the pre-fix generic path (hold + transition + reveal), so match pacing is unchanged', () => {
+  it('no-ack fallback matches the generic path (hold + transition + reveal), so ceiling-hit pacing is sane', () => {
     expect(penaltyDelay()).toBe(
       FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS,
     );

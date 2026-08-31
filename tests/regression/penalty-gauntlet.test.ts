@@ -185,3 +185,49 @@ describeLocal('regression: penalty gauntlet (tie-break + timing)', () => {
     expect(arithmetic.goals.seat2).toBe(0);
   }, 180_000);
 });
+
+describeLocal('regression: penalty ready-ack gate', () => {
+  afterEach(async () => {
+    const { teardownRun } = await import('../../game-regression/src/runner.mjs');
+    await teardownRun();
+  });
+
+  it('silent clients (no ready acks at all) still get every penalty round via the ceiling and the shootout completes', async () => {
+    const { bootFriendlyLobbyMatch, playLobbyMatch } = await import('../../game-regression/src/runner.mjs');
+    const { computePenaltyShootout } = await import('../../game-regression/src/penalty-arithmetic.mjs');
+
+    const run = await bootFriendlyLobbyMatch(bootOptions);
+    expect(run.matchId).toBeTruthy();
+
+    // Penalty rounds now dispatch through the client ready-ack gate. A client
+    // that NEVER acks (backgrounded tab, dead socket) must not stall the
+    // shootout: the gate's ceiling has to advance every round on its own.
+    await playLobbyMatch(run, {
+      maxMs: 160_000,
+      skipReadyAcks: true,
+      answerPlan: fixedSpeedDuelPlan([600, 900]),
+    });
+
+    expect(run.trace.byEvent('match:final_results').length).toBeGreaterThan(0);
+    const state = await loadPenaltyState(run.matchId!);
+    const arithmetic = computePenaltyShootout({
+      attempts: state.penalty?.attempts,
+      kicksTaken: state.penalty?.kicksTaken,
+      round: undefined,
+      suddenDeath: state.penalty?.suddenDeath,
+    });
+    expect(arithmetic.errors).toEqual([]);
+    expect(arithmetic.winnerSeat).toBe(1);
+    // Every penalty question the server dispatched must carry a full timing
+    // window — the ceiling fallback path builds the same shape as the ack path.
+    const penaltyQuestions = run.trace
+      .byEvent('match:question')
+      .map((event) => event.payload as { phaseKind?: string; playableAt?: string; deadlineAt?: string })
+      .filter((payload) => payload.phaseKind === 'penalty');
+    expect(penaltyQuestions.length).toBeGreaterThan(0);
+    for (const question of penaltyQuestions) {
+      expect(Number.isFinite(new Date(question.playableAt ?? '').getTime())).toBe(true);
+      expect(Number.isFinite(new Date(question.deadlineAt ?? '').getTime())).toBe(true);
+    }
+  }, 200_000);
+});

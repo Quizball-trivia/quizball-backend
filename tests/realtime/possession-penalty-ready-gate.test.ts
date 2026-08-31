@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
+import {
+  FRONTEND_GOAL_CELEBRATION_MS,
+  FRONTEND_RESULT_HOLD_MS,
+  FRONTEND_TRANSITION_DELAY_MS,
+} from '../../src/realtime/possession-state.js';
 import type { MatchCache } from '../../src/realtime/match-cache.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
@@ -160,6 +165,9 @@ describe('penalty rounds and the ready-ack gate', () => {
     });
     expect(openMock).toHaveBeenCalledTimes(1);
     const params = openMock.mock.calls[0][0] as { ceilingMs: number };
-    expect(params.ceilingMs).not.toBe(10_000);
+    // Goal rounds keep their own ceiling (hold + transition + celebration + 2s slack).
+    expect(params.ceilingMs).toBe(
+      FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000,
+    );
   });
 });

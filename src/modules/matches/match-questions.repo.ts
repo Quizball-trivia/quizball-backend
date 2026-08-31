@@ -414,24 +414,36 @@ export const matchQuestionsRepo = {
   },
 
   /**
-   * Pick random published image-MCQ candidates for a match from the given
-   * categories (the drafted/banned-survivor categories of the current half).
+   * Pick random published image-MCQ candidates for a match. When categoryIds
+   * is present, selection stays within the drafted/banned-survivor categories
+   * of the current half. An omitted/empty list deliberately searches the
+   * global ranked pool as the Q4 image-only anti-stall fallback.
    * Unlike getRandomQuestionCandidatesForMatch this requires a non-empty image
    * payload. Still respects active categories and excludes questions already
    * used in the match.
    */
   async getRandomImageMcqCandidatesForMatch(params: {
     matchId: string;
-    categoryIds: string[];
+    categoryIds?: string[];
     limit?: number;
   }): Promise<RandomQuestionCandidate[]> {
+    const categoryIds = params.categoryIds ?? [];
     return withSpan('db.matches.getRandomImageMcqCandidatesForMatch', {
       'db.operation.name': 'select',
       'quizball.match_id': params.matchId,
-      'quizball.category_count': params.categoryIds.length,
+      'quizball.category_count': categoryIds.length,
+      'quizball.global_fallback': categoryIds.length === 0,
     }, async (span) => {
       const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
       const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
+
+      const categoryPredicate = categoryIds.length > 0
+        ? 'q.category_id = ANY($2::uuid[]) AND'
+        : '';
+      const limitPlaceholder = categoryIds.length > 0 ? '$3' : '$2';
+      const values = categoryIds.length > 0
+        ? [params.matchId, categoryIds, params.limit ?? 1]
+        : [params.matchId, params.limit ?? 1];
 
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
@@ -440,8 +452,8 @@ export const matchQuestionsRepo = {
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
         ${NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW}
-        WHERE q.category_id = ANY($2::uuid[])
-          AND c.is_active = true
+        WHERE ${categoryPredicate}
+          c.is_active = true
           AND q.status = 'published'
           AND q.visibility = 'public'
           AND q.ranked_eligible = true
@@ -455,13 +467,9 @@ export const matchQuestionsRepo = {
               AND mq.question_id = q.id
           )
         ORDER BY ${RANDOM_ORDER_SQL}
-        LIMIT $3
+        LIMIT ${limitPlaceholder}
         `,
-        [
-          params.matchId,
-          params.categoryIds,
-          params.limit ?? 1,
-        ],
+        values,
       );
       span.setAttribute('quizball.question_found', rows.length > 0);
       span.setAttribute('quizball.question_candidate_count', rows.length);

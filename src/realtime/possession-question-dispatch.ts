@@ -403,10 +403,11 @@ function isImageMcqSlot(state: PossessionStatePayload): boolean {
  * normal question) so its image URL rides every match:state of the half and
  * the client can preload it long before the image slot (Q4) starts.
  *
- * Idempotent per half: undefined = not attempted yet; null = attempted but the
- * drafted categories have no image MCQ (the slot will fall back to a normal
- * MCQ). Mutates `state` — the caller persists it via the regular cache/state
- * writes of the dispatch flow.
+ * Once selected, the reservation is stable for the half. A legacy/null
+ * reservation is retried so matches created before the global fallback was
+ * deployed can repair themselves before Q4. Drafted categories are preferred,
+ * then a global ranked image question is reserved so Q4 stays image-only.
+ * Mutates `state` — the caller persists it via the regular cache/state writes.
  */
 async function ensureImageMcqReservedForHalf(
   matchId: string,
@@ -416,19 +417,35 @@ async function ensureImageMcqReservedForHalf(
   if (state.phase !== 'NORMAL_PLAY') return;
   const halfKey = state.half === 1 ? 'half1' : 'half2';
   const reservations = state.imageMcq ?? (state.imageMcq = {});
-  if (reservations[halfKey] !== undefined) return;
+  if (reservations[halfKey]) return;
 
-  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+  const categoryRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
     matchId,
     categoryIds,
     limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
   });
-  const picked = pickFirstValidCandidate(rows, 'mcq_single', {
+  let picked = pickFirstValidCandidate(categoryRows, 'mcq_single', {
     matchId,
     imageMcqReservation: true,
     half: state.half,
     categoryIds,
   });
+  let reservationSource: 'drafted_categories' | 'global_fallback' | 'unavailable' =
+    picked ? 'drafted_categories' : 'unavailable';
+
+  if (!picked) {
+    const globalRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+      matchId,
+      limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+    });
+    picked = pickFirstValidCandidate(globalRows, 'mcq_single', {
+      matchId,
+      imageMcqReservation: true,
+      half: state.half,
+      globalFallback: true,
+    });
+    if (picked) reservationSource = 'global_fallback';
+  }
 
   reservations[halfKey] = picked?.imageUrl
     ? { questionId: picked.questionId, imageUrl: picked.imageUrl }
@@ -438,21 +455,22 @@ async function ensureImageMcqReservedForHalf(
       matchId,
       half: state.half,
       categoryIds,
+      reservationSource,
       reservedQuestionId: picked?.questionId ?? null,
       reservedImageUrl: picked?.imageUrl ?? null,
     },
     picked?.imageUrl
       ? 'Image MCQ reserved for half'
-      : 'No image MCQ available to reserve for half'
+      : 'No ranked image MCQ available to reserve for half'
   );
 }
 
 /**
  * For the image-MCQ slot, prefer the question reserved for this half (whose
  * image the client has been preloading); if it has become invalid/used,
- * re-pick a random published image MCQ from the drafted categories. Returns
- * null (→ caller falls back to a normal MCQ) when the pool is
- * empty/exhausted, so the match never stalls.
+ * re-pick a random published image MCQ from the drafted categories, then from
+ * the global ranked image pool. Returns null only when the entire image pool
+ * is empty/exhausted, preserving a final anti-stall fallback in the caller.
  */
 async function pickImageMcqForState(
   matchId: string,
@@ -478,15 +496,26 @@ async function pickImageMcqForState(
     );
   }
 
-  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+  const categoryRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
     matchId,
     categoryIds,
     limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
   });
-  return pickFirstValidCandidate(rows, 'mcq_single', {
+  const categoryPick = pickFirstValidCandidate(categoryRows, 'mcq_single', {
     matchId,
     imageMcqSlot: true,
     categoryIds,
+  });
+  if (categoryPick) return categoryPick;
+
+  const globalRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+    matchId,
+    limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+  });
+  return pickFirstValidCandidate(globalRows, 'mcq_single', {
+    matchId,
+    imageMcqSlot: true,
+    globalFallback: true,
   });
 }
 
@@ -501,7 +530,7 @@ async function maybePickQuestionForState(
     if (imagePicked) return imagePicked;
     logger.warn(
       { matchId, imageMcqSlot: true, categoryIds },
-      'No image MCQ available for Q4 slot; falling back to a normal MCQ'
+      'Entire ranked image MCQ pool exhausted for Q4 slot; using anti-stall normal MCQ fallback'
     );
     // fall through to the normal mcq_single path below
   }

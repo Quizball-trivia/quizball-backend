@@ -7,6 +7,9 @@ const getMatchCacheOrRebuildMock = vi.fn();
 const getMatchMock = vi.fn();
 const getRecentlySeenQuestionIdsMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const getRandomImageMcqCandidatesForMatchMock = vi.fn();
+const getImageMcqCandidateForMatchByIdMock = vi.fn();
+const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
@@ -26,9 +29,9 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
     getRecentlySeenQuestionIds: (...args: unknown[]) => getRecentlySeenQuestionIdsMock(...args),
     getRandomQuestionCandidatesForMatch: (...args: unknown[]) => getRandomQuestionCandidatesForMatchMock(...args),
-    getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
-    getImageMcqCandidateForMatchById: vi.fn(async () => []),
-    insertMatchQuestionIfMissing: vi.fn(),
+    getRandomImageMcqCandidatesForMatch: (...args: unknown[]) => getRandomImageMcqCandidatesForMatchMock(...args),
+    getImageMcqCandidateForMatchById: (...args: unknown[]) => getImageMcqCandidateForMatchByIdMock(...args),
+    insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
     setQuestionTiming: vi.fn(),
   },
 }));
@@ -122,6 +125,9 @@ describe('possession question exhaustion', () => {
     getMatchMock.mockResolvedValue({ status: 'active' });
     getRecentlySeenQuestionIdsMock.mockResolvedValue([]);
     getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
+    getRandomImageMcqCandidatesForMatchMock.mockResolvedValue([]);
+    getImageMcqCandidateForMatchByIdMock.mockResolvedValue([]);
+    insertMatchQuestionIfMissingMock.mockResolvedValue(null);
     completePossessionMatchMock.mockResolvedValue({
       matchId: 'match-exhausted',
       winnerId: 'user-1',
@@ -154,5 +160,55 @@ describe('possession question exhaustion', () => {
     await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 6)).resolves.toBeNull();
 
     expect(completePossessionMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the global ranked image pool when Q4 categories have no image MCQ', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.statePayload.normalQuestionsAnsweredInHalf = 3;
+    cache.statePayload.imageMcq = { half1: null };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const globalImageQuestion = {
+      id: 'question-global-image',
+      category_id: 'category-global',
+      prompt: { en: 'Image question' },
+      difficulty: 'medium',
+      payload: {
+        type: 'mcq_single',
+        image: {
+          url: 'https://cdn.example.com/q4.webp',
+          width: 1200,
+          height: 800,
+        },
+        options: [
+          { id: 'a', text: { en: 'A' }, is_correct: true },
+          { id: 'b', text: { en: 'B' }, is_correct: false },
+          { id: 'c', text: { en: 'C' }, is_correct: false },
+          { id: 'd', text: { en: 'D' }, is_correct: false },
+        ],
+      },
+    };
+    getRandomImageMcqCandidatesForMatchMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([globalImageQuestion]);
+    getImageMcqCandidateForMatchByIdMock.mockResolvedValueOnce([globalImageQuestion]);
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 3)).resolves.toBeNull();
+
+    expect(getRandomImageMcqCandidatesForMatchMock).toHaveBeenNthCalledWith(1, {
+      matchId: cache.matchId,
+      categoryIds: expect.any(Array),
+      limit: 50,
+    });
+    expect(getRandomImageMcqCandidatesForMatchMock).toHaveBeenNthCalledWith(2, {
+      matchId: cache.matchId,
+      limit: 50,
+    });
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: cache.matchId,
+      qIndex: 3,
+      questionId: 'question-global-image',
+      categoryId: 'category-global',
+    }));
   });
 });

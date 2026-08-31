@@ -1023,6 +1023,9 @@ export async function playLobbyMatch(
     answerMode?: AnswerMode;
     answerPlan?: LobbyAnswerPlanner;
     chaosPlan?: ChaosPlan;
+    /** Never send match:ready_for_next_question — models silent/backgrounded
+     *  clients so the server's ready-gate CEILING path is what advances rounds. */
+    skipReadyAcks?: boolean;
   } = {},
 ): Promise<void> {
   const { trace, seats } = run;
@@ -1099,7 +1102,10 @@ export async function playLobbyMatch(
       }
     }
 
-    if (run.variant === 'friendly_possession') {
+    if (opts.skipReadyAcks) {
+      // Silent clients: no ready acks at all — every gated round must advance
+      // via the ceiling.
+    } else if (run.variant === 'friendly_possession') {
       ackPossessionReadyForNextQuestionFromTrace(
         trace,
         seats.map((seat) => ({ userId: seat.userId })),

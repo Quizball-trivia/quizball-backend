@@ -237,7 +237,7 @@ const configSchema = z.object({
   RETENTION_EMAIL_MAX_INACTIVE_DAYS: z.coerce.number().int().min(2).max(60).default(7),
   RETENTION_EMAIL_FREQUENCY_DAYS: z.coerce.number().int().min(1).max(90).default(7),
   RETENTION_EMAIL_MIN_LEAD_HOURS: z.coerce.number().int().min(1).max(72).default(18),
-  RETENTION_EMAIL_MAX_LEAD_HOURS: z.coerce.number().int().min(2).max(96).default(24),
+  RETENTION_EMAIL_MAX_LEAD_HOURS: z.coerce.number().int().min(2).max(168).default(24),
   RETENTION_EMAIL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
   // Hard campaign-wide assignment cap. Zero is intentionally safe: even if
   // the worker switch is enabled, nobody is assigned until a rollout cap is

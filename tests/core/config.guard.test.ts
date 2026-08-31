@@ -220,6 +220,15 @@ describe('retention email experiment configuration', () => {
     }))).toThrow(/DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS/);
   });
 
+  it('allows a Weekend League email lead window up to seven days', () => {
+    const parsed = parseConfig(baseEnv({
+      RETENTION_EMAIL_MIN_LEAD_HOURS: '18',
+      RETENTION_EMAIL_MAX_LEAD_HOURS: '120',
+    }));
+
+    expect(parsed.RETENTION_EMAIL_MAX_LEAD_HOURS).toBe(120);
+  });
+
   it('accepts a bounded rollout cap and UUID allowlist', () => {
     const parsed = parseConfig(baseEnv({
       RETENTION_EMAIL_ASSIGNMENT_CAP: '20',

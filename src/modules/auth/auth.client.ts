@@ -3,6 +3,8 @@ import type { AuthSession } from './auth.schemas.js';
 export interface AuthRequestContext {
   /** Trusted end-user address selected by our ingress, never raw caller XFF. */
   clientIp?: string;
+  /** First-touch campaign tags from the client, for signup attribution only. */
+  utm?: import('../../core/utm-attribution.js').UtmAttribution | null;
 }
 
 /**

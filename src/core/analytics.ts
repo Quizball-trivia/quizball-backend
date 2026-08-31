@@ -6,6 +6,10 @@ import {
   campaignAttributionProperties,
   type CampaignAttribution,
 } from './campaign-attribution.js';
+import {
+  utmAttributionProperties,
+  type UtmAttribution,
+} from './utm-attribution.js';
 
 let posthogClient: PostHog | null = null;
 
@@ -239,6 +243,7 @@ export function trackAccountCreated(
   user: AnalyticsUserProfile,
   method: string,
   attribution?: CampaignAttribution | null,
+  utm?: UtmAttribution | null,
 ): void {
   identifyUserProfile(user);
 
@@ -246,6 +251,7 @@ export function trackAccountCreated(
     method,
     is_new_user: true,
     ...(attribution ? campaignAttributionProperties(attribution) : {}),
+    ...(utm ? utmAttributionProperties(utm) : {}),
   });
 }
 

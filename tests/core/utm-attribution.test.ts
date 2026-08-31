@@ -94,3 +94,30 @@ describe('utmAttributionProperties', () => {
     });
   });
 });
+
+describe('authRequestContext carries UTM for the signup path', () => {
+  it('includes parsed UTM alongside the client IP', async () => {
+    const { authRequestContext } = await import('../../src/http/client-ip.js');
+    const req = {
+      headers: {
+        'x-real-ip': '203.0.113.7',
+        'x-quizball-utm': encode(valid),
+      },
+      socket: {},
+    } as never;
+    const context = authRequestContext(req);
+    expect(context?.utm).toEqual(valid);
+  });
+
+  it('returns a context with UTM even when no trusted client IP is present', async () => {
+    const { authRequestContext } = await import('../../src/http/client-ip.js');
+    const req = { headers: { 'x-quizball-utm': encode(valid) }, socket: {} } as never;
+    expect(authRequestContext(req)?.utm).toEqual(valid);
+  });
+
+  it('returns undefined when neither IP nor UTM is present', async () => {
+    const { authRequestContext } = await import('../../src/http/client-ip.js');
+    const req = { headers: {}, socket: {} } as never;
+    expect(authRequestContext(req)).toBeUndefined();
+  });
+});

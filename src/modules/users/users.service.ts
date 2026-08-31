@@ -333,6 +333,7 @@ export const usersService = {
     opts?: {
       onUserCreated?: (user: User) => void;
       accountCreation?: {
+        utm?: import('../../core/utm-attribution.js').UtmAttribution | null;
         method?: string;
         attribution?: CampaignAttribution | null;
       };
@@ -454,6 +455,7 @@ export const usersService = {
         newUser,
         opts?.accountCreation?.method ?? resolveIdentityAuthMethod(identity),
         opts?.accountCreation?.attribution,
+        opts?.accountCreation?.utm,
       );
       opts?.onUserCreated?.(newUser);
     }

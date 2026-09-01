@@ -94,6 +94,7 @@ export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHaving
  * Assumes `c` aliases `categories`.
  */
 export const MATCHMAKING_CATEGORY_EXCLUSIONS = sql`
+  AND c.campaign_only = false
   AND c.slug NOT LIKE 'daily-challenges%'
   AND c.slug NOT IN (
     'daily', 'daily-quiz', 'daily-challenge', 'career-path', 'career_path',

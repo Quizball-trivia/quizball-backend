@@ -73,6 +73,10 @@ export const guessTheGoalRepo = {
           SELECT 1 FROM guess_the_goal_sessions ss
           WHERE ss.user_id = ${userId} AND ss.goal_id = g.id
         ) ASC,
+        -- Curated onboarding: the famous five come first for everyone, then
+        -- the pool randomizes. Applies within the never-seen tier, so a
+        -- returning player is never forced back through the intro.
+        g.featured_rank ASC NULLS LAST,
         random()
       LIMIT 1
     `;

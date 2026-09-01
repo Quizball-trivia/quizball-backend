@@ -222,9 +222,15 @@ async function replaceManualQuestions(
 
   await tx`DELETE FROM campaign_quiz_questions WHERE quiz_slug = ${slug}`;
 
+  // campaign_only permanently bars the category from matchmaking (see
+  // MATCHMAKING_CATEGORY_EXCLUSIONS) even if it is later activated or gains
+  // ranked-eligible questions. Only the INSERT branch sets it: on a slug
+  // conflict the existing category may be a genuine ranked category that
+  // happens to share the campaign slug (premier-league, liverpool, ...) and
+  // must never be flagged.
   await tx`
-    INSERT INTO categories (slug, name, is_active)
-    VALUES (${slug}, ${sql.json({ en: internalName })}, FALSE)
+    INSERT INTO categories (slug, name, is_active, campaign_only)
+    VALUES (${slug}, ${sql.json({ en: internalName })}, FALSE, TRUE)
     ON CONFLICT (slug) DO UPDATE
     SET
       is_active = CASE

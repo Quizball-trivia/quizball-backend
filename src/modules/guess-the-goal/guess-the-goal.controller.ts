@@ -42,6 +42,19 @@ export const guessTheGoalController = {
     );
   },
 
+  /** Admin-only test lever: wipe today's attempts so the daily limit and the
+   *  featured intro can be replayed without waiting for midnight. */
+  async resetTodayDev(req: Request, res: Response): Promise<void> {
+    const removed = await guessTheGoalService.resetTodayForUser(req.user!.id);
+    res.json({ removed });
+  },
+
+  /** Admin-only content browser: every published goal with board + video,
+   *  regardless of what the caller has solved — for auditing the pool. */
+  async allGoalsDev(_req: Request, res: Response): Promise<void> {
+    noStore(res).json(await guessTheGoalService.getAllGoalsDev());
+  },
+
   async stats(req: Request, res: Response): Promise<void> {
     noStore(res).json(await guessTheGoalService.getStats(req.user!.id));
   },

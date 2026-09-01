@@ -25,5 +25,15 @@ export const GGT_XP_PER_POINT = 0.5;
  *  solves still pay XP but no coins. */
 export const GGT_DAILY_COIN_CAP = 300;
 
+/** Hard daily play limit — distinct from the coin cap above, which only stops
+ *  rewards. Once this many goals have been STARTED today the mode is closed
+ *  until the next reset, so the pool lasts and the mode stays a daily ritual. */
+export const GGT_DAILY_GOAL_LIMIT = 5;
+
+/** The player-facing day boundary is Georgia local midnight (the daily
+ *  challenge uses the same one), NOT UTC — a UTC reset would land at 04:00
+ *  for players and read as arbitrary. */
+export const GGT_DAY_TIMEZONE = 'Asia/Tbilisi';
+
 export const GGT_REWARD_EVENT = 'guess_the_goal_reward';
 export const GGT_XP_SOURCE = 'guess_the_goal_solve';

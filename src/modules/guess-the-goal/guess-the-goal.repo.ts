@@ -13,6 +13,66 @@ export const guessTheGoalRepo = {
     await exec(tx)`SELECT pg_advisory_xact_lock(hashtextextended(${'ggt:' + userId}, 0))`;
   },
 
+  /**
+   * Goals STARTED so far in the player's local day. Counts sessions, not
+   * solves: opening a goal spends an attempt whether or not it is answered,
+   * otherwise a player could reroll until they recognise one.
+   *
+   * `started_at` is timestamptz, so the comparison converts to the game's
+   * timezone rather than the server's — the boundary must be the same clock
+   * the player sees.
+   */
+  async countSessionsStartedToday(
+    tx: TransactionSql,
+    userId: string,
+    timezone: string
+  ): Promise<number> {
+    const [row] = await exec(tx)<{ n: number }[]>`
+      SELECT count(*)::int AS n
+        FROM guess_the_goal_sessions
+       WHERE user_id = ${userId}
+         AND (started_at AT TIME ZONE ${timezone})::date
+             = (now() AT TIME ZONE ${timezone})::date
+    `;
+    return row?.n ?? 0;
+  },
+
+  /** Dev reset: remove today's sessions + their solves for one user. */
+  async deleteTodaySessions(
+    tx: TransactionSql,
+    userId: string,
+    timezone: string
+  ): Promise<number> {
+    await exec(tx)`
+      DELETE FROM guess_the_goal_solves s
+      USING guess_the_goal_sessions sess
+      WHERE s.session_id = sess.id AND sess.user_id = ${userId}
+        AND (sess.started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+    `;
+    // The reward ledger's idempotency keys (ggt:<user>:<goal>...) must go too,
+    // or replaying a reset goal collides on uq_store_tx_guess_the_goal_idempotency
+    // and 500s. Scoped to TODAY's sessions' goals — earlier days' rows are the
+    // user's lifetime earnings history. Dev lever only — the route is admin-gated.
+    await exec(tx)`
+      DELETE FROM store_transaction_logs t
+      USING guess_the_goal_sessions sess
+      WHERE t.event_type = 'guess_the_goal_reward'
+        AND sess.user_id = ${userId}
+        AND (sess.started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+        AND t.idempotency_key LIKE 'ggt:' || ${userId} || ':' || sess.goal_id || '%'
+    `;
+    const rows = await exec(tx)`
+      DELETE FROM guess_the_goal_sessions
+      WHERE user_id = ${userId}
+        AND (started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+      RETURNING id
+    `;
+    return rows.length;
+  },
+
   async getPublishedGoal(goalId: string): Promise<GoalChoreographyRow | null> {
     const [row] = await sql<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies
@@ -49,6 +109,10 @@ export const guessTheGoalRepo = {
           SELECT 1 FROM guess_the_goal_sessions ss
           WHERE ss.user_id = ${userId} AND ss.goal_id = g.id
         ) ASC,
+        -- Curated onboarding: the famous five come first for everyone, then
+        -- the pool randomizes. Applies within the never-seen tier, so a
+        -- returning player is never forced back through the intro.
+        g.featured_rank ASC NULLS LAST,
         random()
       LIMIT 1
     `;
@@ -212,12 +276,20 @@ export const guessTheGoalRepo = {
       solved_at: string;
       points: number | null;
       bonus_correct: boolean | null;
+      players: unknown;
+      steps: unknown;
+      clip_start_s: number | null;
+      clip_end_s: number | null;
     }>
   > {
+    // Board data comes from the LIVE choreography, not the frozen session
+    // snapshot: solved goals have nothing left to hide, and content fixes
+    // should reach the collection immediately.
     return exec(tx)`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
-             sess.goal_snapshot->>'video_url' AS video_url,
+             COALESCE(g.mirrored_url, sess.goal_snapshot->>'mirrored_url', sess.goal_snapshot->>'video_url') AS video_url,
+             g.players, g.steps, g.clip_start_s, g.clip_end_s,
              s.solved_at, sess.points, sess.bonus_correct
       FROM guess_the_goal_solves s
       JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
@@ -233,6 +305,10 @@ export const guessTheGoalRepo = {
         solved_at: string;
         points: number | null;
         bonus_correct: boolean | null;
+        players: unknown;
+        steps: unknown;
+        clip_start_s: number | null;
+        clip_end_s: number | null;
       }>
     >;
   },

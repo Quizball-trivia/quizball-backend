@@ -49,6 +49,9 @@ export interface GoalChoreographyRow {
   goal_ordinal: number;
   schema_version: number;
   video_url: string | null;
+  /** Our own copy on the CDN. Preferred over video_url, which rights holders
+   *  can make un-embeddable at any time; video_url stays for attribution. */
+  mirrored_url: string | null;
   /** Verified goal window in the source upload (embed plays exactly this). */
   clip_start_s: number | null;
   clip_end_s: number | null;
@@ -68,6 +71,7 @@ export interface GoalSnapshot {
   title: I18nText;
   fun_fact: I18nText | null;
   video_url: string | null;
+  mirrored_url?: string | null;
   clip_start_s?: number | null;
   clip_end_s?: number | null;
   players: ChoreographyPlayer[];

@@ -90,6 +90,8 @@ const configSchema = z.object({
   // unlimited sudden-death behavior; staging can validate a finite bound
   // before any production gameplay-policy decision is made.
   POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: z.coerce.number().int().min(0).max(20).default(0),
+  /** Auth requests per 15 min per IP. Carrier NAT puts a whole city on one IP. */
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).max(10_000).default(400),
   RANKED_HUMAN_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

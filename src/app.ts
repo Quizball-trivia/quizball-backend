@@ -160,10 +160,14 @@ export function createApp(): Express {
     });
     app.use('/api/v1', apiLimiter);
 
-    // Stricter Rate Limiting for auth routes
+    // Stricter Rate Limiting for auth routes. Georgian mobile carriers NAT many
+    // users behind one public IP, so a creator stream drove a whole audience
+    // into this shared bucket (2026-08-31: 26 x 429 in one minute, surfacing to
+    // users as "verification failed"). Per-IP stays as abuse protection; the
+    // ceiling is sized for a crowd arriving at once.
     const authLimiter = rateLimit({
       windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 100, // 100 requests per window per IP
+      max: config.RATE_LIMIT_AUTH_MAX,
       standardHeaders: true,
       legacyHeaders: false,
       skip: skipForChaos,

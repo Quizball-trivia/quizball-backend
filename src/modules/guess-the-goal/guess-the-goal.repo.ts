@@ -37,6 +37,29 @@ export const guessTheGoalRepo = {
     return row?.n ?? 0;
   },
 
+  /** Dev reset: remove today's sessions + their solves for one user. */
+  async deleteTodaySessions(
+    tx: TransactionSql,
+    userId: string,
+    timezone: string
+  ): Promise<number> {
+    await exec(tx)`
+      DELETE FROM guess_the_goal_solves s
+      USING guess_the_goal_sessions sess
+      WHERE s.session_id = sess.id AND sess.user_id = ${userId}
+        AND (sess.started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+    `;
+    const rows = await exec(tx)`
+      DELETE FROM guess_the_goal_sessions
+      WHERE user_id = ${userId}
+        AND (started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+      RETURNING id
+    `;
+    return rows.length;
+  },
+
   async getPublishedGoal(goalId: string): Promise<GoalChoreographyRow | null> {
     const [row] = await sql<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies

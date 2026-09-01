@@ -560,6 +560,16 @@ export const guessTheGoalService = {
     });
   },
 
+  /** Dev/admin reset: deletes today's sessions (and their solves, so the
+   *  featured order and first-solve rewards replay too). Test lever only —
+   *  the route is role-gated. */
+  async resetTodayForUser(userId: string): Promise<number> {
+    return sql.begin(async (tx) => {
+      await guessTheGoalRepo.acquireUserStartLock(tx, userId);
+      return guessTheGoalRepo.deleteTodaySessions(tx, userId, GGT_DAY_TIMEZONE);
+    });
+  },
+
   async getStats(userId: string): Promise<{
     solved: number;
     total: number;

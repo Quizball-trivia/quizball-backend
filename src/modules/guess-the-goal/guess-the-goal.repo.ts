@@ -13,6 +13,30 @@ export const guessTheGoalRepo = {
     await exec(tx)`SELECT pg_advisory_xact_lock(hashtextextended(${'ggt:' + userId}, 0))`;
   },
 
+  /**
+   * Goals STARTED so far in the player's local day. Counts sessions, not
+   * solves: opening a goal spends an attempt whether or not it is answered,
+   * otherwise a player could reroll until they recognise one.
+   *
+   * `started_at` is timestamptz, so the comparison converts to the game's
+   * timezone rather than the server's — the boundary must be the same clock
+   * the player sees.
+   */
+  async countSessionsStartedToday(
+    tx: TransactionSql,
+    userId: string,
+    timezone: string
+  ): Promise<number> {
+    const [row] = await exec(tx)<{ n: number }[]>`
+      SELECT count(*)::int AS n
+        FROM guess_the_goal_sessions
+       WHERE user_id = ${userId}
+         AND (started_at AT TIME ZONE ${timezone})::date
+             = (now() AT TIME ZONE ${timezone})::date
+    `;
+    return row?.n ?? 0;
+  },
+
   async getPublishedGoal(goalId: string): Promise<GoalChoreographyRow | null> {
     const [row] = await sql<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies

@@ -9,6 +9,8 @@ import {
   GGT_BONUS_POINTS,
   GGT_COINS_PER_POINT,
   GGT_DAILY_COIN_CAP,
+  GGT_DAILY_GOAL_LIMIT,
+  GGT_DAY_TIMEZONE,
   GGT_FULL_POINTS_SECONDS,
   GGT_GRACE_MS,
   GGT_MAX_POINTS,
@@ -163,6 +165,7 @@ function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
     title: { en: goal.title.en, ka: goal.title.ka ?? null },
     fun_fact: goal.fun_fact ? { en: goal.fun_fact.en, ka: goal.fun_fact.ka ?? null } : null,
     video_url: goal.video_url ?? null,
+    mirrored_url: goal.mirrored_url ?? null,
     clip_start_s: goal.clip_start_s ?? null,
     clip_end_s: goal.clip_end_s ?? null,
     players,
@@ -328,7 +331,7 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
     revealed_moves: session.revealed_moves ?? 0,
     title: snapshot.title,
     fun_fact: snapshot.fun_fact,
-    video_url: snapshot.video_url ?? null,
+    video_url: snapshot.mirrored_url ?? snapshot.video_url ?? null,
     clip_start_s: snapshot.clip_start_s ?? null,
     clip_end_s: snapshot.clip_end_s ?? null,
     awards: mainAwards(session),
@@ -354,6 +357,22 @@ export const guessTheGoalService = {
           // as satisfied rather than silently starting a fresh session.
           throw new ConflictError('Session for this nonce already finished');
         }
+      }
+
+      // Checked after the nonce path so a retried request never burns an
+      // attempt, and inside the per-user start lock so two parallel starts
+      // cannot both pass the count.
+      const startedToday = await guessTheGoalRepo.countSessionsStartedToday(
+        tx,
+        userId,
+        GGT_DAY_TIMEZONE
+      );
+      if (startedToday >= GGT_DAILY_GOAL_LIMIT) {
+        throw new ConflictError('Daily goal limit reached', {
+          code: 'GGT_DAILY_LIMIT_REACHED',
+          limit: GGT_DAILY_GOAL_LIMIT,
+          startedToday,
+        });
       }
 
       const open = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
@@ -462,7 +481,7 @@ export const guessTheGoalService = {
         revealed_moves: revealed,
         title: snapshot.title,
         fun_fact: snapshot.fun_fact,
-        video_url: snapshot.video_url ?? null,
+        video_url: snapshot.mirrored_url ?? snapshot.video_url ?? null,
         clip_start_s: snapshot.clip_start_s ?? null,
         clip_end_s: snapshot.clip_end_s ?? null,
         awards,
@@ -546,11 +565,15 @@ export const guessTheGoalService = {
     pool_exhausted: boolean;
     coins_today: number;
     daily_coin_cap: number;
+    goals_today: number;
+    daily_goal_limit: number;
+    daily_limit_reached: boolean;
   }> {
-    const [solved, total, coinsToday] = await Promise.all([
+    const [solved, total, coinsToday, goalsToday] = await Promise.all([
       guessTheGoalRepo.countSolved(userId),
       guessTheGoalRepo.countPublished(),
       sql.begin((tx) => guessTheGoalRepo.coinsGrantedToday(tx, userId)),
+      sql.begin((tx) => guessTheGoalRepo.countSessionsStartedToday(tx, userId, GGT_DAY_TIMEZONE)),
     ]);
     return {
       solved,
@@ -560,6 +583,11 @@ export const guessTheGoalService = {
       pool_exhausted: total > 0 && solved >= total,
       coins_today: coinsToday,
       daily_coin_cap: GGT_DAILY_COIN_CAP,
+      // Surfaced so the client can show "3 of 5 left" and disable PLAY before
+      // the player taps into a rejection.
+      goals_today: goalsToday,
+      daily_goal_limit: GGT_DAILY_GOAL_LIMIT,
+      daily_limit_reached: goalsToday >= GGT_DAILY_GOAL_LIMIT,
     };
   },
 

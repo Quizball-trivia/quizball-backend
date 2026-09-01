@@ -16,6 +16,7 @@ const insertSolveMock = vi.fn();
 const coinsGrantedTodayMock = vi.fn();
 const countSolvedMock = vi.fn();
 const countPublishedMock = vi.fn();
+const countSessionsStartedTodayMock = vi.fn();
 
 vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
   guessTheGoalRepo: {
@@ -35,6 +36,7 @@ vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
     coinsGrantedToday: (...a: unknown[]) => coinsGrantedTodayMock(...a),
     countSolved: (...a: unknown[]) => countSolvedMock(...a),
     countPublished: (...a: unknown[]) => countPublishedMock(...a),
+    countSessionsStartedToday: (...a: unknown[]) => countSessionsStartedTodayMock(...a),
     runInTransaction: (cb: (tx: unknown) => unknown) => cb({}),
   },
 }));
@@ -163,6 +165,7 @@ beforeEach(() => {
   countSolvedMock.mockResolvedValue(3);
   countPublishedMock.mockResolvedValue(31);
   coinsGrantedTodayMock.mockResolvedValue(0);
+  countSessionsStartedTodayMock.mockResolvedValue(0);
   hasSeenGoalMock.mockResolvedValue(false);
   addCoinsInTxMock.mockResolvedValue({ coins: 500 });
   insertTransactionLogInTxMock.mockResolvedValue({});
@@ -225,6 +228,25 @@ describe('startSession', () => {
     getSessionByNonceMock.mockResolvedValue(makeSession({ state: 'complete', client_nonce: 'n1' }));
     await expect(guessTheGoalService.startSession(USER, 'n1')).rejects.toThrow(/already finished/);
     expect(insertSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a new goal once the daily limit is reached', async () => {
+    getSessionByNonceMock.mockResolvedValue(null);
+    countSessionsStartedTodayMock.mockResolvedValue(5);
+
+    await expect(guessTheGoalService.startSession(USER, 'n3')).rejects.toThrow(/Daily goal limit/);
+    expect(insertSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('still starts a goal on the last remaining attempt', async () => {
+    getSessionByNonceMock.mockResolvedValue(null);
+    countSessionsStartedTodayMock.mockResolvedValue(4);
+    getOpenSessionForUpdateMock.mockResolvedValue(null);
+    pickNextGoalMock.mockResolvedValue(makeGoal());
+    insertSessionMock.mockResolvedValue(makeSession());
+
+    await guessTheGoalService.startSession(USER, 'n4');
+    expect(insertSessionMock).toHaveBeenCalled();
   });
 
   it('abandons a previous open session before starting a new one', async () => {

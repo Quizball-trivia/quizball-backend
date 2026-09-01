@@ -279,9 +279,17 @@ describe('guess', () => {
     expect(addCoinsInTxMock).toHaveBeenCalledWith({}, USER, 25);
   });
 
-  it('late guess scores the floor', async () => {
+  it('a late correct guess still pays full points (no time decay)', async () => {
     const startedAt = new Date(Date.now() - 60_000);
     getOpenSessionForUpdateMock.mockResolvedValue(makeSession({ started_at: startedAt }));
+    insertSolveMock.mockResolvedValue(true);
+
+    const outcome = await guessTheGoalService.guess(USER, 'session-1', 'a');
+    expect(outcome.points).toBe(100);
+  });
+
+  it('a replayed goal is still clamped to the reduced max', async () => {
+    getOpenSessionForUpdateMock.mockResolvedValue(makeSession({ max_points: 40 }));
     insertSolveMock.mockResolvedValue(true);
 
     const outcome = await guessTheGoalService.guess(USER, 'session-1', 'a');

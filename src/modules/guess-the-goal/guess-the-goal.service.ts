@@ -4,7 +4,7 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors
 import { storeRepo } from '../store/store.repo.js';
 import { progressionRepo } from '../progression/progression.repo.js';
 import { guessTheGoalRepo } from './guess-the-goal.repo.js';
-import { buildTimings, pointsForElapsed, revealedMovesAt } from './guess-the-goal.timing.js';
+import { buildTimings, revealedMovesAt } from './guess-the-goal.timing.js';
 import {
   GGT_BONUS_POINTS,
   GGT_COINS_PER_POINT,
@@ -437,9 +437,10 @@ export const guessTheGoalService = {
       );
 
       const correct = option.is_correct;
-      const points = correct
-        ? pointsForElapsed(elapsed, session.max_points, GGT_MIN_POINTS, GGT_FULL_POINTS_SECONDS)
-        : 0;
+      // Owner decision 2026-09-01: no time decay — a correct guess pays the
+      // session's full max_points. The anti-farm clamp survives because a
+      // previously seen goal already had max_points reduced at session start.
+      const points = correct ? session.max_points : 0;
 
       const hasBonus = correct && snapshot.bonus != null;
       const nextState: 'guessed' | 'complete' = hasBonus ? 'guessed' : 'complete';
@@ -568,6 +569,9 @@ export const guessTheGoalService = {
     goals_today: number;
     daily_goal_limit: number;
     daily_limit_reached: boolean;
+    /** Most coins a player can still take from this mode today, for the Daily
+     *  Challenges hub counter. First solves only; bonus included. */
+    daily_max_coins: number;
   }> {
     const [solved, total, coinsToday, goalsToday] = await Promise.all([
       guessTheGoalRepo.countSolved(userId),
@@ -588,6 +592,12 @@ export const guessTheGoalService = {
       goals_today: goalsToday,
       daily_goal_limit: GGT_DAILY_GOAL_LIMIT,
       daily_limit_reached: goalsToday >= GGT_DAILY_GOAL_LIMIT,
+      daily_max_coins: Math.min(
+        GGT_DAILY_COIN_CAP,
+        GGT_DAILY_GOAL_LIMIT
+          * (Math.floor(GGT_MAX_POINTS * GGT_COINS_PER_POINT)
+            + Math.floor(GGT_BONUS_POINTS * GGT_COINS_PER_POINT))
+      ),
     };
   },
 
@@ -604,6 +614,9 @@ export const guessTheGoalService = {
     xp_earned: number;
     daily_coin_cap: number;
     coins_today: number;
+    goals_today: number;
+    daily_goal_limit: number;
+    daily_limit_reached: boolean;
     goals: Array<{
       title: I18nText;
       year: number;
@@ -615,7 +628,7 @@ export const guessTheGoalService = {
     }>;
     locked: Record<string, number>;
   }> {
-    const [rows, locked, earnings, coinsToday] = (await sql.begin(
+    const [rows, locked, earnings, coinsToday, goalsToday] = (await sql.begin(
       'isolation level repeatable read read only',
       (tx) =>
         Promise.all([
@@ -623,11 +636,13 @@ export const guessTheGoalService = {
           guessTheGoalRepo.unsolvedCounts(tx, userId),
           guessTheGoalRepo.lifetimeEarnings(tx, userId),
           guessTheGoalRepo.coinsGrantedToday(tx, userId),
+          guessTheGoalRepo.countSessionsStartedToday(tx, userId, GGT_DAY_TIMEZONE),
         ])
     )) as [
       Awaited<ReturnType<typeof guessTheGoalRepo.solvedGalleryRows>>,
       Record<string, number>,
       { coins: number; xp: number },
+      number,
       number,
     ];
     const goals = rows.map((row) => ({
@@ -648,6 +663,9 @@ export const guessTheGoalService = {
       xp_earned: earnings.xp,
       daily_coin_cap: GGT_DAILY_COIN_CAP,
       coins_today: coinsToday,
+      goals_today: goalsToday,
+      daily_goal_limit: GGT_DAILY_GOAL_LIMIT,
+      daily_limit_reached: goalsToday >= GGT_DAILY_GOAL_LIMIT,
       goals,
       locked,
     };

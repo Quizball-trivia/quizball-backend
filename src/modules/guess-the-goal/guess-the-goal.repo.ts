@@ -52,11 +52,16 @@ export const guessTheGoalRepo = {
     `;
     // The reward ledger's idempotency keys (ggt:<user>:<goal>...) must go too,
     // or replaying a reset goal collides on uq_store_tx_guess_the_goal_idempotency
-    // and 500s. Dev lever only — the route is admin-gated.
+    // and 500s. Scoped to TODAY's sessions' goals — earlier days' rows are the
+    // user's lifetime earnings history. Dev lever only — the route is admin-gated.
     await exec(tx)`
-      DELETE FROM store_transaction_logs
-      WHERE event_type = 'guess_the_goal_reward'
-        AND idempotency_key LIKE 'ggt:' || ${userId} || ':%'
+      DELETE FROM store_transaction_logs t
+      USING guess_the_goal_sessions sess
+      WHERE t.event_type = 'guess_the_goal_reward'
+        AND sess.user_id = ${userId}
+        AND (sess.started_at AT TIME ZONE ${timezone})::date
+            = (now() AT TIME ZONE ${timezone})::date
+        AND t.idempotency_key LIKE 'ggt:' || ${userId} || ':' || sess.goal_id || '%'
     `;
     const rows = await exec(tx)`
       DELETE FROM guess_the_goal_sessions
@@ -273,6 +278,8 @@ export const guessTheGoalRepo = {
       bonus_correct: boolean | null;
       players: unknown;
       steps: unknown;
+      clip_start_s: number | null;
+      clip_end_s: number | null;
     }>
   > {
     // Board data comes from the LIVE choreography, not the frozen session
@@ -281,8 +288,8 @@ export const guessTheGoalRepo = {
     return exec(tx)`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
-             COALESCE(g.mirrored_url, sess.goal_snapshot->>'video_url') AS video_url,
-             g.players, g.steps,
+             COALESCE(g.mirrored_url, sess.goal_snapshot->>'mirrored_url', sess.goal_snapshot->>'video_url') AS video_url,
+             g.players, g.steps, g.clip_start_s, g.clip_end_s,
              s.solved_at, sess.points, sess.bonus_correct
       FROM guess_the_goal_solves s
       JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
@@ -300,6 +307,8 @@ export const guessTheGoalRepo = {
         bonus_correct: boolean | null;
         players: unknown;
         steps: unknown;
+        clip_start_s: number | null;
+        clip_end_s: number | null;
       }>
     >;
   },

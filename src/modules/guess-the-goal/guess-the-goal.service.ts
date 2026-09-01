@@ -636,9 +636,13 @@ export const guessTheGoalService = {
       goals_today: goalsToday,
       daily_goal_limit: GGT_DAILY_GOAL_LIMIT,
       daily_limit_reached: goalsToday >= GGT_DAILY_GOAL_LIMIT,
+      // Bounded by what can actually still pay out: only first solves earn, so
+      // a cleared pool contributes 0. goals_today is added back so the day's
+      // ceiling doesn't shrink as it is being earned (slight overestimate when
+      // today's sessions were replays or misses — acceptable for a hub label).
       daily_max_coins: Math.min(
         GGT_DAILY_COIN_CAP,
-        GGT_DAILY_GOAL_LIMIT
+        Math.min(GGT_DAILY_GOAL_LIMIT, Math.max(0, total - solved) + goalsToday)
           * (Math.floor(GGT_MAX_POINTS * GGT_COINS_PER_POINT)
             + Math.floor(GGT_BONUS_POINTS * GGT_COINS_PER_POINT))
       ),
@@ -671,6 +675,8 @@ export const guessTheGoalService = {
       solved_at: string;
       players: unknown;
       steps: unknown;
+      clip_start_s: number | null;
+      clip_end_s: number | null;
     }>;
     locked: Record<string, number>;
   }> {
@@ -701,6 +707,8 @@ export const guessTheGoalService = {
       solved_at: new Date(row.solved_at).toISOString(),
       players: row.players,
       steps: row.steps,
+      clip_start_s: row.clip_start_s,
+      clip_end_s: row.clip_end_s,
     }));
     const lockedTotal = Object.values(locked).reduce((sum, n) => sum + n, 0);
     return {

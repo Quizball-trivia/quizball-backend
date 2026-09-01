@@ -118,6 +118,8 @@ export interface FootballGridBoardCandidate {
   version: number;
   checksum: string;
   difficulty: FootballGridDifficulty;
+  /** League pack; 'european' (default) is the full mix. */
+  theme?: string;
   rows: [FootballGridCriterionView, FootballGridCriterionView, FootballGridCriterionView];
   columns: [FootballGridCriterionView, FootballGridCriterionView, FootballGridCriterionView];
   cells: Array<{

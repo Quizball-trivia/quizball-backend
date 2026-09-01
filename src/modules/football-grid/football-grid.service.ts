@@ -360,6 +360,7 @@ export const footballGridService = {
     pairingToken: string;
     lobbyId?: string | null;
     origin: FootballGridOrigin;
+    theme?: string;
     players: Array<{ userId: string; seat: 1 | 2; isBot?: boolean }>;
     openerUserId: string;
     seriesId?: string | null;

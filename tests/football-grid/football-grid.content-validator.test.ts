@@ -66,7 +66,7 @@ describe('football grid content validation', () => {
     board.cells[4].recognizablePlayerIds = [board.cells[4].playerIds[0]];
     const result = validateFootballGridBoard(board);
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('Cell 3 has fewer than nine distinct answers');
+    expect(result.errors).toContain('Cell 3 has fewer than 9 distinct answers');
     expect(result.errors).toContain('Cell 4 has fewer than two recognizable answers');
   });
 

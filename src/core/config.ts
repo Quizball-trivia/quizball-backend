@@ -238,6 +238,10 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+  FOOTBALL_GRID_PACK_PREVIEW_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
   FOOTBALL_GRID_CONTENT_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

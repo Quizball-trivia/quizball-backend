@@ -23,6 +23,7 @@ import { getRedisClient } from '../redis.js';
 import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type { FootballGridSearchStatePayload } from '../socket.types.js';
+import { FOOTBALL_GRID_THEMES, type FootballGridTheme } from '../schemas/football-grid.schemas.js';
 import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 
@@ -56,6 +57,7 @@ interface QueuedGridSearch {
   userId: string;
   displayName: string;
   locale: 'en' | 'ka';
+  theme: FootballGridTheme;
   queuedAt: number;
   fallbackAt: number;
 }
@@ -191,7 +193,12 @@ function parseSearchSnapshot(value: Record<string, unknown> | null): QueuedGridS
     || typeof value.queuedAt !== 'number'
     || typeof value.fallbackAt !== 'number'
   ) return null;
-  return value as unknown as QueuedGridSearch;
+  // Pre-themes snapshots (and any unknown theme) fall back to the default
+  // pack rather than being dropped from recovery.
+  const theme = FOOTBALL_GRID_THEMES.includes(value.theme as FootballGridTheme)
+    ? value.theme as FootballGridTheme
+    : 'european';
+  return { ...(value as unknown as QueuedGridSearch), theme };
 }
 
 async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
@@ -317,7 +324,9 @@ async function withPairingHeartbeat<T>(pairingToken: string, work: () => Promise
 }
 
 async function chooseOpponent(anchor: QueuedGridSearch, candidates: QueuedGridSearch[]): Promise<QueuedGridSearch | null> {
-  const eligible = candidates.filter((candidate) => candidate.userId !== anchor.userId);
+  const eligible = candidates.filter((candidate) => (
+    candidate.userId !== anchor.userId && candidate.theme === anchor.theme
+  ));
   const oldestFallback = eligible[0] ?? null;
   if (!oldestFallback) return null;
   const redis = getRedisClient();
@@ -391,6 +400,7 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
             footballGridService.createMatch({
               pairingToken,
               origin: 'random',
+              theme: a.theme,
               players: [
                 { userId: a.userId, seat: 1 },
                 { userId: b.userId, seat: 2 },
@@ -488,7 +498,12 @@ async function tryStartHumanPairBatchLocked(
   while (remaining.length >= 2 && pairs.length < MAX_CONCURRENT_HUMAN_PAIR_STARTS) {
     const anchor = remaining.shift()!;
     const opponent = await chooseOpponent(anchor, remaining);
-    if (!opponent) break;
+    // Opponents are theme-scoped, so an anchor with no same-theme partner is
+    // unpairable THIS pass while later searches may still pair with each other.
+    // Stopping the batch here would let one lone searcher on an unpopular pack
+    // block every other pack's pairs (and their bot fallback, which defers
+    // while >=2 same-theme searches are queued) until the searches expired.
+    if (!opponent) continue;
     const opponentIndex = remaining.findIndex((candidate) => candidate.searchId === opponent.searchId);
     if (opponentIndex < 0) break;
     remaining.splice(opponentIndex, 1);
@@ -574,6 +589,7 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
           footballGridService.createMatch({
             pairingToken,
             origin: 'random',
+            theme: search.theme,
             players: [
               { userId: search.userId, seat: 1 },
               { userId: selected.bot.user_id, seat: 2, isBot: true },
@@ -743,7 +759,7 @@ export const footballGridMatchmakingService = {
     matchmakingSweepRunning = false;
   },
 
-  async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka' }): Promise<void> {
+  async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
     const userId = socket.data.user.id;
     appMetrics.footballGridQueueJoins.add(1);
     if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {
@@ -801,7 +817,12 @@ export const footballGridMatchmakingService = {
         const existingId = await redis.hGet(USER_MAP_KEY, userId);
         if (existingId) {
           const existing = await readSearch(existingId);
-          if (existing && !isSearchExpired(existing)) {
+          // A queued search for a DIFFERENT pack must not be resumed: the user
+          // picked a new pack in the modal and would silently be served the old
+          // one. Drop it and fall through to a fresh search.
+          if (existing && existing.theme !== input.theme) {
+            await removeSearch(existing);
+          } else if (existing && !isSearchExpired(existing)) {
             emitSearchState(io, userId, {
               state: 'searching', searchId: existing.searchId,
               queuedAt: new Date(existing.queuedAt).toISOString(),
@@ -819,6 +840,7 @@ export const footballGridMatchmakingService = {
           userId,
           displayName: socket.data.user.nickname ?? 'Player',
           locale: input.locale,
+          theme: input.theme,
           queuedAt: now,
           fallbackAt: Math.min(
             now + MAX_SEARCH_AGE_MS,
@@ -932,7 +954,11 @@ export const footballGridMatchmakingService = {
       }
       // Never substitute a bot while another human pair can still be formed.
       // A later periodic pass will drain those searches in a fresh batch.
-      if ((await listSearches(io)).length >= 2) {
+      // Only SAME-THEME searches can pair (tryStartHumanPairBatchLocked
+      // anchors on theme), so the deferral must count same-theme only — a
+      // theme-blind count let two players on different packs starve each
+      // other's bot fallback until their searches expired.
+      if ((await listSearches(io)).filter((search) => search.theme === remaining.theme).length >= 2) {
         const rearmed = { ...remaining, fallbackAt: nextFallbackAt(remaining) };
         await writeSearch(rearmed);
         await scheduleFallback(rearmed);

@@ -191,10 +191,13 @@ export const footballGridRematchService = {
           opponentType: 'human',
         });
         const opener = accepted.players.find((player) => player.seat === accepted.openerSeat)!;
+        // A rematch stays on the pack the series started on.
+        const theme = await footballGridRepo.getMatchTheme(input.matchId);
         return (await footballGridService.createMatch({
           pairingToken: accepted.pairingToken,
           lobbyId: accepted.lobbyId,
           origin: accepted.origin,
+          theme,
           players: accepted.players,
           openerUserId: opener.userId,
           seriesId: accepted.seriesId,

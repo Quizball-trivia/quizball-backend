@@ -7,7 +7,9 @@ import type {
 } from './football-grid.types.js';
 
 export const FOOTBALL_GRID_TURN_MS = 20_000;
-export const FOOTBALL_GRID_COUNTDOWN_MS = 3_000;
+// 5s: long enough for the pre-match showdown + board build-in animation the
+// web client plays during this phase (owner request 2026-08-27).
+export const FOOTBALL_GRID_COUNTDOWN_MS = 5_000;
 export const FOOTBALL_GRID_HANDOFF_MS = 30_000;
 export const FOOTBALL_GRID_READY_MS = 20_000;
 export const FOOTBALL_GRID_RECONNECT_MS = 30_000;

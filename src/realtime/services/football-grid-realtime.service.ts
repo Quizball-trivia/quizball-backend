@@ -341,6 +341,34 @@ export const footballGridRealtimeService = {
     return recoverTerminalResultDeliveries(io, matchId ?? null);
   },
 
+  /**
+   * Page-reload recovery (auction parity): a fresh socket has no client-side
+   * matchId to resync with, so the server looks the active match up and runs
+   * the normal resync flow — join, mark present, adjudicate an expired pause,
+   * re-emit state (or redeliver the terminal result).
+   */
+  /**
+   * Live-match rejoin is owned by rejoinActiveMatchOnConnect (it dispatches to
+   * handleResync for the football_grid variant), so this must NOT resync — a
+   * second resync on the same socket re-adjudicates the reconnect deadline and
+   * can rotate an in-flight result ACK token.
+   *
+   * The gap it does close: a match that terminalized while the user was away is
+   * no longer "active", so no rejoin path touches it, and its result sits on the
+   * recovery worker's backoff (measured ~27s late). Make those due on connect.
+   */
+  async flushPendingGridResultsOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+    if (await footballGridRepo.getActiveMatchIdForUser(userId)) return;
+    const pending = await footballGridRepo.listUndeliveredResultMatchIds(userId);
+    if (pending.length === 0) return;
+    await Promise.all(pending.map(async (pendingMatchId) => {
+      await footballGridRepo.makeResultDeliveryDue(pendingMatchId, userId);
+      await recoverTerminalResultDeliveries(io, pendingMatchId);
+    }));
+  },
+
   async publishState(io: QuizballServer, state: FootballGridState): Promise<void> {
     await scheduleStateDeadline(state);
     await emitState(io, state);

@@ -723,6 +723,16 @@ export const footballGridRepo = {
     `;
   },
 
+  async listUndeliveredResultMatchIds(userId: string): Promise<string[]> {
+    const rows = await sql<Array<{ match_id: string }>>`
+      SELECT match_id FROM football_grid_result_deliveries
+       WHERE user_id = ${userId} AND status <> 'delivered'
+       ORDER BY created_at DESC
+       LIMIT 3
+    `;
+    return rows.map((row) => row.match_id);
+  },
+
   async deferResultDelivery(input: {
     matchId: string;
     userId: string;
@@ -1375,15 +1385,24 @@ export const footballGridRepo = {
     }));
   },
 
+  async getMatchTheme(matchId: string): Promise<string> {
+    const rows = await sql<Array<{ theme: string }>>`
+      SELECT theme FROM football_grid_matches WHERE match_id = ${matchId}
+    `;
+    return rows[0]?.theme ?? 'european';
+  },
+
   async selectBoardIdForUsers(
     tx: TransactionSql,
     humanUserIds: string[],
+    theme = 'european',
   ): Promise<string | null> {
     const rows = await tx.unsafe<{ id: string }[]>(
       `SELECT b.id
          FROM football_grid_boards b
          JOIN football_grid_content_releases r ON r.id = b.release_id
         WHERE r.status = 'published'
+          AND b.theme = $2
           AND NOT EXISTS (
             SELECT 1
               FROM football_grid_content_quarantines q
@@ -1411,7 +1430,7 @@ export const footballGridRepo = {
           ) ASC NULLS FIRST,
           random()
         LIMIT 1`,
-      [humanUserIds],
+      [humanUserIds, theme],
     );
     return rows[0]?.id ?? null;
   },
@@ -1420,6 +1439,7 @@ export const footballGridRepo = {
     pairingToken: string;
     lobbyId: string | null;
     origin: FootballGridOrigin;
+    theme?: string;
     players: Array<{ userId: string; seat: 1 | 2; isBot?: boolean }>;
     openerUserId: string;
     seriesId?: string | null;
@@ -1476,7 +1496,13 @@ export const footballGridRepo = {
         throw new Error('GRID_ACTIVE_SESSION_CONFLICT');
       }
       const humanUserIds = input.players.filter((player) => !player.isBot).map((player) => player.userId);
-      const boardId = await this.selectBoardIdForUsers(tx, humanUserIds);
+      const theme = input.theme ?? 'european';
+      let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme);
+      if (!boardId && theme !== 'european') {
+        // A pack whose boards are not yet published (or got quarantined) must
+        // not strand two matched players: serve the European mix instead.
+        boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european');
+      }
       if (!boardId) throw new Error('No published Football Grid board is available');
       const boards = await tx.unsafe<GridBoardRow[]>(
         `SELECT id, version, release_id, row_criteria, column_criteria, canonical_checksum
@@ -1526,10 +1552,10 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment
+           bot_strength_adjustment, theme
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
          )`,
         [
           matchId,
@@ -1553,6 +1579,7 @@ export const footballGridRepo = {
           botConfigVersion,
           input.botRngSeed ?? null,
           botStrengthAdjustment,
+          theme,
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -2475,7 +2502,7 @@ export const footballGridRepo = {
     }>>`
       SELECT a.cell_index, a.football_player_id,
              COALESCE(a.player_name_en, fp.name) AS name,
-             a.image_asset_key
+             COALESCE(NULLIF(a.image_asset_key, 'players/unknown.webp'), fp.image_url) AS image_asset_key
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id

@@ -33,6 +33,7 @@ router.post(
 );
 router.get('/stats', guessTheGoalController.stats);
 router.delete('/dev/reset-today', requireRole('admin'), guessTheGoalController.resetTodayDev);
+router.get('/dev/all-goals', requireRole('admin'), guessTheGoalController.allGoalsDev);
 router.get('/gallery', guessTheGoalController.gallery);
 
 export { router as guessTheGoalRoutes };

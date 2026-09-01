@@ -49,6 +49,12 @@ export const guessTheGoalController = {
     res.json({ removed });
   },
 
+  /** Admin-only content browser: every published goal with board + video,
+   *  regardless of what the caller has solved — for auditing the pool. */
+  async allGoalsDev(_req: Request, res: Response): Promise<void> {
+    noStore(res).json(await guessTheGoalService.getAllGoalsDev());
+  },
+
   async stats(req: Request, res: Response): Promise<void> {
     noStore(res).json(await guessTheGoalService.getStats(req.user!.id));
   },

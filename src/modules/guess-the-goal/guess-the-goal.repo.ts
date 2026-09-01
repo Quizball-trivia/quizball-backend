@@ -271,12 +271,18 @@ export const guessTheGoalRepo = {
       solved_at: string;
       points: number | null;
       bonus_correct: boolean | null;
+      players: unknown;
+      steps: unknown;
     }>
   > {
+    // Board data comes from the LIVE choreography, not the frozen session
+    // snapshot: solved goals have nothing left to hide, and content fixes
+    // should reach the collection immediately.
     return exec(tx)`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
              COALESCE(g.mirrored_url, sess.goal_snapshot->>'video_url') AS video_url,
+             g.players, g.steps,
              s.solved_at, sess.points, sess.bonus_correct
       FROM guess_the_goal_solves s
       JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
@@ -292,6 +298,8 @@ export const guessTheGoalRepo = {
         solved_at: string;
         points: number | null;
         bonus_correct: boolean | null;
+        players: unknown;
+        steps: unknown;
       }>
     >;
   },

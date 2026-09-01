@@ -570,6 +570,40 @@ export const guessTheGoalService = {
     });
   },
 
+  /** Admin content browser: the full published pool with boards and clips.
+   *  Never reachable by players — route is role-gated. */
+  async getAllGoalsDev(): Promise<{
+    goals: Array<{
+      title: I18nText;
+      year: number;
+      difficulty: string;
+      featured_rank: number | null;
+      video_url: string | null;
+      players: unknown;
+      steps: unknown;
+    }>;
+  }> {
+    const rows = await sql<
+      Array<{
+        title: I18nText;
+        year: number;
+        difficulty: string;
+        featured_rank: number | null;
+        video_url: string | null;
+        players: unknown;
+        steps: unknown;
+      }>
+    >`
+      SELECT title, year, difficulty, featured_rank,
+             COALESCE(mirrored_url, video_url) AS video_url,
+             players, steps
+      FROM goal_choreographies
+      WHERE status = 'published'
+      ORDER BY featured_rank ASC NULLS LAST, difficulty, slug
+    `;
+    return { goals: rows };
+  },
+
   async getStats(userId: string): Promise<{
     solved: number;
     total: number;
@@ -635,6 +669,8 @@ export const guessTheGoalService = {
       bonus_correct: boolean | null;
       video_url: string | null;
       solved_at: string;
+      players: unknown;
+      steps: unknown;
     }>;
     locked: Record<string, number>;
   }> {
@@ -663,6 +699,8 @@ export const guessTheGoalService = {
       bonus_correct: row.bonus_correct,
       video_url: row.video_url,
       solved_at: new Date(row.solved_at).toISOString(),
+      players: row.players,
+      steps: row.steps,
     }));
     const lockedTotal = Object.values(locked).reduce((sum, n) => sum + n, 0);
     return {

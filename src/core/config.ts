@@ -114,6 +114,12 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Guess the Goal (solo knowledge mini-game). Ships DISABLED; the flag blocks
+  // only NEW sessions — open sessions can always finish.
+  GUESS_THE_GOAL_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   // Hard ceiling on the RP gap between a human and the roster bot selected for
   // them. Selection widens ±150 → ±BOT_PAIRING_MAX_RP_GAP and then STOPS: a
   // human with no bot inside the ceiling falls back to the ephemeral path rather

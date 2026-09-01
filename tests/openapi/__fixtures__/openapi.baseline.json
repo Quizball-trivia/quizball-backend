@@ -1184,7 +1184,8 @@
               "leaderboard_reset",
               "admin_ticket_window_reset",
               "admin_account_ban",
-              "admin_account_unban"
+              "admin_account_unban",
+              "guess_the_goal_reward"
             ]
           },
           "outcome": {
@@ -1317,7 +1318,8 @@
                     "leaderboard_reset",
                     "admin_ticket_window_reset",
                     "admin_account_ban",
-                    "admin_account_unban"
+                    "admin_account_unban",
+                    "guess_the_goal_reward"
                   ]
                 },
                 "outcome": {
@@ -11898,7 +11900,8 @@
                 "leaderboard_reset",
                 "admin_ticket_window_reset",
                 "admin_account_ban",
-                "admin_account_unban"
+                "admin_account_unban",
+                "guess_the_goal_reward"
               ]
             },
             "required": false,
@@ -11990,7 +11993,8 @@
                               "leaderboard_reset",
                               "admin_ticket_window_reset",
                               "admin_account_ban",
-                              "admin_account_unban"
+                              "admin_account_unban",
+                              "guess_the_goal_reward"
                             ]
                           },
                           "outcome": {

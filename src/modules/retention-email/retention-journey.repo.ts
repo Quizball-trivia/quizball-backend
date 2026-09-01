@@ -270,7 +270,10 @@ export const retentionJourneyRepo = {
       SET status = 'exited',
           exited_at = NOW(),
           exit_reason = CASE
-            WHEN latest_activity.latest_match > e.baseline_last_match_started_at THEN 'returned'
+            -- A return must happen after enrollment. Comparing against the
+            -- baseline timestamp can create false positives when a timestamp
+            -- loses sub-millisecond precision while crossing the JS boundary.
+            WHEN latest_activity.latest_match > e.entered_at THEN 'returned'
             WHEN EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
               THEN 'unsubscribed'
             ELSE 'user_ineligible'
@@ -278,7 +281,7 @@ export const retentionJourneyRepo = {
       FROM latest_activity
       WHERE e.id = latest_activity.id
         AND (
-          latest_activity.latest_match > e.baseline_last_match_started_at
+          latest_activity.latest_match > e.entered_at
           OR EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
           OR NOT EXISTS (
             SELECT 1 FROM users u

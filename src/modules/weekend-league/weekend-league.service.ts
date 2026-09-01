@@ -15,6 +15,8 @@ import type {
 const COUNTS_CACHE_TTL_SECONDS = 5;
 /** The hall of fame only changes when an event completes — once a week. */
 const HALL_OF_FAME_CACHE_TTL_SECONDS = 300;
+/** Bounded history — the payload must not grow with every season played. */
+const HALL_OF_FAME_MAX_EDITIONS = 12;
 
 // These parsers MUST stay semantically identical to the SQL predicates in
 // weekend-league.repo.enter() — the SQL authorizes, these only report. Both
@@ -188,20 +190,35 @@ export const weekendLeagueService = {
     }>;
   }> {
     return getOrLoadJson('wl:hall-of-fame', HALL_OF_FAME_CACHE_TTL_SECONDS, async () => {
-      const podiumRows = await sql<Array<{
+      // Entrant counts are grouped ONCE per edition, not re-counted per podium
+      // row; the two independent statements run concurrently. `editions` is
+      // bounded so the payload cannot grow without limit as seasons accumulate.
+      const podiumsQuery = sql<Array<{
         week_key: string; rank: number; nickname: string | null;
         avatar_url: string | null; score: number; entrants: number;
       }>>`
-        SELECT t.week_key::text, r.rank, u.nickname, u.avatar_url, r.score,
-               (SELECT count(*)::int FROM wl_entries e WHERE e.tournament_id = t.id) AS entrants
+        WITH recent AS (
+          SELECT id, week_key FROM wl_tournaments
+          WHERE is_test = false AND status = 'completed'
+          ORDER BY week_key DESC
+          LIMIT ${HALL_OF_FAME_MAX_EDITIONS}
+        ),
+        entrant_counts AS (
+          SELECT e.tournament_id, count(*)::int AS entrants
+          FROM wl_entries e
+          WHERE e.tournament_id IN (SELECT id FROM recent)
+          GROUP BY e.tournament_id
+        )
+        SELECT rc.week_key::text, r.rank, u.nickname, u.avatar_url, r.score,
+               COALESCE(ec.entrants, 0) AS entrants
         FROM wl_game_results r
-        JOIN wl_tournaments t ON t.id = r.tournament_id
+        JOIN recent rc ON rc.id = r.tournament_id
         JOIN users u ON u.id = r.user_id
-        WHERE t.is_test = false AND t.status = 'completed'
-          AND r.game_index = ${WL_FINAL_GAME_INDEX} AND r.rank <= 3
-        ORDER BY t.week_key DESC, r.rank
+        LEFT JOIN entrant_counts ec ON ec.tournament_id = r.tournament_id
+        WHERE r.game_index = ${WL_FINAL_GAME_INDEX} AND r.rank <= 3
+        ORDER BY rc.week_key DESC, r.rank
       `;
-      const allTimeRows = await sql<Array<{
+      const allTimeQuery = sql<Array<{
         nickname: string | null; avatar_url: string | null;
         gold: number; silver: number; bronze: number; finals_played: number;
       }>>`
@@ -220,6 +237,7 @@ export const weekendLeagueService = {
         ORDER BY gold DESC, silver DESC, bronze DESC, finals_played DESC
         LIMIT 10
       `;
+      const [podiumRows, allTimeRows] = await Promise.all([podiumsQuery, allTimeQuery]);
 
       const byWeek = new Map<string, { week_key: string; entrants: number; podium: Array<{ rank: number; nickname: string | null; avatar_url: string | null; points: number }> }>();
       for (const row of podiumRows) {

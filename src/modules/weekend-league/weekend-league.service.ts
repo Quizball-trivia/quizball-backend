@@ -13,6 +13,8 @@ import type {
 } from './weekend-league.schemas.js';
 
 const COUNTS_CACHE_TTL_SECONDS = 5;
+/** The hall of fame only changes when an event completes — once a week. */
+const HALL_OF_FAME_CACHE_TTL_SECONDS = 300;
 
 // These parsers MUST stay semantically identical to the SQL predicates in
 // weekend-league.repo.enter() — the SQL authorizes, these only report. Both
@@ -164,6 +166,73 @@ export const weekendLeagueService = {
         advanced: r.advanced,
       })),
     };
+  },
+
+  /**
+   * Past champions + the all-time medal table, for the events page.
+   *
+   * Ranked by MEDALS, never by summed points: the 2026-08-25 ranked-parity
+   * rework roughly 2.4x'd per-game scores, so totals across editions are not
+   * comparable. Points are shown per edition only, where they mean something.
+   * Bots are excluded — a roster bot must never appear in the hall of fame.
+   */
+  async hallOfFame(): Promise<{
+    editions: Array<{
+      week_key: string;
+      podium: Array<{ rank: number; nickname: string | null; avatar_url: string | null; points: number }>;
+      entrants: number;
+    }>;
+    all_time: Array<{
+      nickname: string | null; avatar_url: string | null;
+      gold: number; silver: number; bronze: number; finals_played: number;
+    }>;
+  }> {
+    return getOrLoadJson('wl:hall-of-fame', HALL_OF_FAME_CACHE_TTL_SECONDS, async () => {
+      const podiumRows = await sql<Array<{
+        week_key: string; rank: number; nickname: string | null;
+        avatar_url: string | null; score: number; entrants: number;
+      }>>`
+        SELECT t.week_key::text, r.rank, u.nickname, u.avatar_url, r.score,
+               (SELECT count(*)::int FROM wl_entries e WHERE e.tournament_id = t.id) AS entrants
+        FROM wl_game_results r
+        JOIN wl_tournaments t ON t.id = r.tournament_id
+        JOIN users u ON u.id = r.user_id
+        WHERE t.is_test = false AND t.status = 'completed'
+          AND r.game_index = ${WL_FINAL_GAME_INDEX} AND r.rank <= 3
+        ORDER BY t.week_key DESC, r.rank
+      `;
+      const allTimeRows = await sql<Array<{
+        nickname: string | null; avatar_url: string | null;
+        gold: number; silver: number; bronze: number; finals_played: number;
+      }>>`
+        SELECT u.nickname, u.avatar_url,
+               count(*) FILTER (WHERE r.rank = 1)::int AS gold,
+               count(*) FILTER (WHERE r.rank = 2)::int AS silver,
+               count(*) FILTER (WHERE r.rank = 3)::int AS bronze,
+               count(*)::int AS finals_played
+        FROM wl_game_results r
+        JOIN wl_tournaments t ON t.id = r.tournament_id
+        JOIN users u ON u.id = r.user_id
+        WHERE t.is_test = false AND t.status = 'completed'
+          AND r.game_index = ${WL_FINAL_GAME_INDEX} AND u.is_ai = false
+        GROUP BY u.nickname, u.avatar_url
+        HAVING count(*) FILTER (WHERE r.rank <= 3) > 0
+        ORDER BY gold DESC, silver DESC, bronze DESC, finals_played DESC
+        LIMIT 10
+      `;
+
+      const byWeek = new Map<string, { week_key: string; entrants: number; podium: Array<{ rank: number; nickname: string | null; avatar_url: string | null; points: number }> }>();
+      for (const row of podiumRows) {
+        const edition = byWeek.get(row.week_key)
+          ?? { week_key: row.week_key, entrants: row.entrants, podium: [] };
+        edition.podium.push({
+          rank: row.rank, nickname: row.nickname,
+          avatar_url: row.avatar_url, points: row.score,
+        });
+        byWeek.set(row.week_key, edition);
+      }
+      return { editions: [...byWeek.values()], all_time: allTimeRows };
+    });
   },
 
 

@@ -4,6 +4,7 @@ export const xpEventSourceTypeEnum = z.enum([
   'daily_challenge_completion',
   'match_result',
   'objective_reward',
+  'guess_the_goal_solve',
 ]);
 
 export const progressionResponseSchema = z.object({

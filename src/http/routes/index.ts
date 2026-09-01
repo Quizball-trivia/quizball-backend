@@ -36,6 +36,7 @@ import { adminAuctionRoutes } from './admin-auction.routes.js';
 import { adminPlayerClueCardsRoutes } from './admin-player-clue-cards.routes.js';
 import { adminAuctionPipelineRoutes } from './admin-auction-pipeline.routes.js';
 import { adminRetentionRoutes } from './admin-retention.routes.js';
+import { guessTheGoalRoutes } from './guess-the-goal.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -86,5 +87,6 @@ router.use('/api/v1/feedback', feedbackRoutes);
 router.use('/api/v1/email', emailRoutes);
 router.use('/api/v1/campaign-quizzes', campaignQuizzesRoutes);
 router.use('/api/v1/admin/campaign-quizzes', adminCampaignQuizzesRoutes);
+router.use('/api/v1/guess-the-goal', guessTheGoalRoutes);
 
 export const routes = router;

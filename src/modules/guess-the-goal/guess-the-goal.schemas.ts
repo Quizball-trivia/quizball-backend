@@ -31,7 +31,10 @@ const i18nTextSchema = z.object({
   ka: z.string().min(1).max(300).nullable().optional(),
 });
 
-const coordSchema = z.tuple([z.number().min(0).max(68), z.number().min(0).max(105)]);
+// x may run slightly beyond the touchlines (the board draws a 3-unit green
+// margin): some famous goals genuinely leave the pitch — Bale ran around
+// Bartra OUTSIDE the line in the 2014 Copa final — and the diagram must too.
+const coordSchema = z.tuple([z.number().min(-3).max(71), z.number().min(0).max(105)]);
 
 const optionSchema = z.object({
   id: z.string().min(1).max(32),

@@ -245,7 +245,7 @@ export const guessTheGoalRepo = {
     return exec(tx)`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
-             sess.goal_snapshot->>'video_url' AS video_url,
+             COALESCE(g.mirrored_url, sess.goal_snapshot->>'video_url') AS video_url,
              s.solved_at, sess.points, sess.bonus_correct
       FROM guess_the_goal_solves s
       JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'

@@ -42,7 +42,5 @@ WHERE slug IN (
   'sunderland'
 );
 
--- Partial index: matchmaking filters on campaign_only = false over the whole
--- category table, so index the small excluded set rather than the common case.
-CREATE INDEX IF NOT EXISTS idx_categories_campaign_only
-  ON public.categories (id) WHERE campaign_only = true;
+-- No index: categories is small and matchmaking filters campaign_only = false,
+-- which a partial index on the true-set could not serve anyway.

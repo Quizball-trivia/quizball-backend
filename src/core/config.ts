@@ -75,6 +75,8 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /** Auth requests per 15 min per IP. Carrier NAT puts a whole city on one IP. */
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).max(10_000).default(400),
   RANKED_HUMAN_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

@@ -50,6 +50,14 @@ export const guessTheGoalRepo = {
         AND (sess.started_at AT TIME ZONE ${timezone})::date
             = (now() AT TIME ZONE ${timezone})::date
     `;
+    // The reward ledger's idempotency keys (ggt:<user>:<goal>...) must go too,
+    // or replaying a reset goal collides on uq_store_tx_guess_the_goal_idempotency
+    // and 500s. Dev lever only — the route is admin-gated.
+    await exec(tx)`
+      DELETE FROM store_transaction_logs
+      WHERE event_type = 'guess_the_goal_reward'
+        AND idempotency_key LIKE 'ggt:' || ${userId} || ':%'
+    `;
     const rows = await exec(tx)`
       DELETE FROM guess_the_goal_sessions
       WHERE user_id = ${userId}

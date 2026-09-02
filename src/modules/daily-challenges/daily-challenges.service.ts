@@ -288,19 +288,22 @@ async function getOrCreateDailyFifaCardSet(
   count: number,
   challengeType: DailyChallengeType
 ): Promise<FifaCardRow[]> {
-  let set = await dailyChallengesRepo.getDailyFifaCardSet(day);
-  if (!set) {
-    const picked = await dailyChallengesRepo.pickFifaCardsForNewDay(count, FIFA_CARDS_ROTATION_SALT);
-    ensureEnough(picked, 1, challengeType, { needed: count });
-    await dailyChallengesRepo.createDailyFifaCardSet(day, picked);
-    set = (await dailyChallengesRepo.getDailyFifaCardSet(day)) ?? { challenge_day: day, card_ids: picked };
-  }
+  const set =
+    (await dailyChallengesRepo.getDailyFifaCardSet(day))
+    ?? (await dailyChallengesRepo.allocateDailyFifaCardSet(day, count, FIFA_CARDS_ROTATION_SALT));
+  // A short pool still yields a playable (smaller) round; an empty one is a
+  // content outage, reported like any other type's missing content.
+  ensureEnough(set.card_ids, 1, challengeType, { needed: count, challengeDay: day });
+
   const rows = await dailyChallengesRepo.listFifaCardsByIds(set.card_ids);
   const byId = new Map(rows.map((row) => [row.id, row]));
-  const ordered = set.card_ids
-    .map((id) => byId.get(id))
-    .filter((row): row is FifaCardRow => row != null);
-  return ensureEnough(ordered, 1, challengeType, { challengeDay: day });
+  const ordered = set.card_ids.map((id) => byId.get(id));
+  if (ordered.some((row) => row == null) || new Set(set.card_ids).size !== set.card_ids.length) {
+    // Dangling or duplicate ids in a stored set mean the row was hand-edited
+    // badly; refuse to serve a half-set rather than silently shrinking it.
+    throw new DailyChallengeContentUnavailableError({ challengeType, challengeDay: day, reason: 'corrupt_daily_set' });
+  }
+  return ordered as FifaCardRow[];
 }
 
 function toFifaSessionCard(card: FifaCardRow, locale?: string) {
@@ -327,9 +330,12 @@ function toFifaSessionCard(card: FifaCardRow, locale?: string) {
 }
 
 /**
- * Per-card outcomes are client-reported, so they are only accepted when they
- * refer to exactly today's served set (no unknown or duplicate cards), and the
- * score can never exceed what the reported solves are worth.
+ * FIFA Cards completion is only accepted with one outcome per card of today's
+ * served set — no missing, unknown or duplicate cards — and the score is
+ * derived from the reported solves rather than taken from the client. Without
+ * a served set there is nothing to complete. (The individual `solved` flags
+ * are still client-reported; server-side guess validation is a platform-wide
+ * follow-up shared with every other daily type.)
  */
 async function reconcileFifaCardsOutcomes(
   challengeType: DailyChallengeType,
@@ -337,12 +343,18 @@ async function reconcileFifaCardsOutcomes(
   score: number,
   outcomes: DailyChallengeCardOutcomeInput[] | undefined
 ): Promise<{ score: number; outcomes: DailyChallengeCardOutcomeInput[] }> {
-  if (challengeType !== 'fifaCards' || !outcomes || outcomes.length === 0) {
+  if (challengeType !== 'fifaCards') {
     return { score, outcomes: [] };
   }
   const set = await dailyChallengesRepo.getDailyFifaCardSet(day);
-  if (!set) {
+  if (!set || set.card_ids.length === 0) {
     throw new ValidationError('No FIFA Cards set has been served today', { challengeDay: day });
+  }
+  if (!outcomes || outcomes.length !== set.card_ids.length) {
+    throw new ValidationError("FIFA Cards completion must report one outcome per card in today's set", {
+      expected: set.card_ids.length,
+      received: outcomes?.length ?? 0,
+    });
   }
   const allowed = new Set(set.card_ids);
   const seen = new Set<string>();
@@ -356,7 +368,7 @@ async function reconcileFifaCardsOutcomes(
     seen.add(outcome.cardId);
   }
   const solved = outcomes.filter((outcome) => outcome.solved).length;
-  return { score: Math.min(score, solved * FIFA_CARDS_POINTS_PER_SOLVE), outcomes };
+  return { score: solved * FIFA_CARDS_POINTS_PER_SOLVE, outcomes };
 }
 
 function ensureEnough<T>(

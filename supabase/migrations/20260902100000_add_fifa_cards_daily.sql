@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS fifa_cards (
   face_source TEXT NOT NULL DEFAULT 'none',
   difficulty TEXT NOT NULL DEFAULT 'medium',
   is_active BOOLEAN NOT NULL DEFAULT true,
+  -- true when the generator import retired this card (it fell out of the
+  -- dataset); a later import that brings it back re-activates it. Manual
+  -- deactivations (false here) are never touched by imports.
+  generator_retired BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_fifa_cards_face_source CHECK (face_source IN ('own', 'name-match', 'none')),
@@ -42,7 +46,8 @@ CREATE TRIGGER trg_fifa_cards_updated_at
 CREATE TABLE IF NOT EXISTS daily_fifa_card_sets (
   challenge_day DATE PRIMARY KEY,
   card_ids UUID[] NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_daily_fifa_card_sets_size CHECK (cardinality(card_ids) BETWEEN 1 AND 10)
 );
 
 -- Per-card result of a completed round, validated against that day's set.
@@ -59,10 +64,19 @@ CREATE TABLE IF NOT EXISTS daily_challenge_card_outcomes (
 
 CREATE INDEX IF NOT EXISTS idx_daily_challenge_card_outcomes_card ON daily_challenge_card_outcomes (card_id);
 
+-- Backend-only tables: the API reaches them through its own DB role; nothing
+-- should be readable through the Data API (RLS on, no policies, browser roles revoked).
 ALTER TABLE fifa_cards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_fifa_card_sets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_challenge_card_outcomes ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.fifa_cards FROM anon, authenticated;
+REVOKE ALL ON TABLE public.daily_fifa_card_sets FROM anon, authenticated;
+REVOKE ALL ON TABLE public.daily_challenge_card_outcomes FROM anon, authenticated;
 
+-- Expand the challenge_type CHECKs. Added NOT VALID then validated separately:
+-- adding a validated CHECK scans the whole table under an ACCESS EXCLUSIVE
+-- lock, which on daily_challenge_completions would block live completions
+-- for the duration; VALIDATE only takes SHARE UPDATE EXCLUSIVE.
 ALTER TABLE daily_challenge_configs
   DROP CONSTRAINT IF EXISTS chk_daily_challenge_type;
 ALTER TABLE daily_challenge_configs
@@ -70,7 +84,8 @@ ALTER TABLE daily_challenge_configs
   CHECK (challenge_type IN (
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
     'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards'
-  ));
+  )) NOT VALID;
+ALTER TABLE daily_challenge_configs VALIDATE CONSTRAINT chk_daily_challenge_type;
 
 ALTER TABLE daily_challenge_completions
   DROP CONSTRAINT IF EXISTS chk_daily_completion_type;
@@ -79,7 +94,8 @@ ALTER TABLE daily_challenge_completions
   CHECK (challenge_type IN (
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
     'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards'
-  ));
+  )) NOT VALID;
+ALTER TABLE daily_challenge_completions VALIDATE CONSTRAINT chk_daily_completion_type;
 
 -- Seeded INACTIVE: the tile appears only once the card pool is populated and
 -- an operator flips is_active (data step, see runbook).

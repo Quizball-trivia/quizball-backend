@@ -490,47 +490,67 @@ export const dailyChallengesRepo = {
     return row ?? null;
   },
 
-  /** Idempotent: a concurrent first request of the day loses the race harmlessly. */
-  async createDailyFifaCardSet(challengeDay: string, cardIds: string[]): Promise<void> {
-    await sql`
-      INSERT INTO daily_fifa_card_sets (challenge_day, card_ids)
-      VALUES (${challengeDay}::date, ${sql.array(cardIds)}::uuid[])
-      ON CONFLICT (challenge_day) DO NOTHING
-    `;
-  },
-
   /**
-   * Cards for a new day: never-served active cards first, in a stable
-   * salted-hash order so the rotation is deterministic but not alphabetical;
-   * when the pool is exhausted, fall back to the least recently served.
+   * Materialise the day's set if it doesn't exist yet and return it. Runs under
+   * a transaction-level advisory lock so two allocations (same day racing, or
+   * adjacent days around the UTC rollover) can never both pick the same
+   * never-served cards: history is read and the row inserted atomically.
+   *
+   * Never-served active cards come first in a stable salted-hash order (a
+   * deterministic rotation that isn't alphabetical); only when the pool is
+   * exhausted are the least recently served recycled.
    */
-  async pickFifaCardsForNewDay(count: number, salt: string): Promise<string[]> {
-    const unseen = await sql<{ id: string }[]>`
-      SELECT c.id
-      FROM fifa_cards c
-      WHERE c.is_active
-        AND NOT EXISTS (SELECT 1 FROM daily_fifa_card_sets s WHERE c.id = ANY(s.card_ids))
-      ORDER BY md5(${salt} || c.id::text)
-      LIMIT ${count}
-    `;
-    const picked = unseen.map((row) => row.id);
-    if (picked.length >= count) return picked;
+  async allocateDailyFifaCardSet(challengeDay: string, count: number, salt: string): Promise<DailyFifaCardSetRow> {
+    return sql.begin(async (tx) => {
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('daily_fifa_card_sets:allocate'))`);
 
-    const remaining = count - picked.length;
-    const recycled = await sql<{ id: string }[]>`
-      SELECT c.id
-      FROM fifa_cards c
-      LEFT JOIN LATERAL (
-        SELECT max(s.challenge_day) AS last_day
-        FROM daily_fifa_card_sets s
-        WHERE c.id = ANY(s.card_ids)
-      ) served ON true
-      WHERE c.is_active
-        AND NOT (c.id = ANY(${sql.array(picked.length > 0 ? picked : ['00000000-0000-0000-0000-000000000000'])}::uuid[]))
-      ORDER BY served.last_day ASC NULLS FIRST, md5(${salt} || c.id::text)
-      LIMIT ${remaining}
-    `;
-    return [...picked, ...recycled.map((row) => row.id)];
+      const [existing] = await tx.unsafe<DailyFifaCardSetRow[]>(
+        `SELECT challenge_day::text AS challenge_day, card_ids FROM daily_fifa_card_sets WHERE challenge_day = $1::date`,
+        [challengeDay]
+      );
+      if (existing) return existing;
+
+      const unseen = await tx.unsafe<{ id: string }[]>(
+        `
+        SELECT c.id
+        FROM fifa_cards c
+        WHERE c.is_active
+          AND NOT EXISTS (SELECT 1 FROM daily_fifa_card_sets s WHERE c.id = ANY(s.card_ids))
+        ORDER BY md5($1 || c.id::text)
+        LIMIT $2
+        `,
+        [salt, count]
+      );
+      const picked = unseen.map((row) => row.id);
+      if (picked.length < count) {
+        const recycled = await tx.unsafe<{ id: string }[]>(
+          `
+          SELECT c.id
+          FROM fifa_cards c
+          LEFT JOIN LATERAL (
+            SELECT max(s.challenge_day) AS last_day
+            FROM daily_fifa_card_sets s
+            WHERE c.id = ANY(s.card_ids)
+          ) served ON true
+          WHERE c.is_active
+            AND NOT (c.id = ANY($1::uuid[]))
+          ORDER BY served.last_day ASC NULLS FIRST, md5($2 || c.id::text)
+          LIMIT $3
+          `,
+          [picked, salt, count - picked.length]
+        );
+        picked.push(...recycled.map((row) => row.id));
+      }
+      if (picked.length === 0) {
+        return { challenge_day: challengeDay, card_ids: [] };
+      }
+
+      await tx.unsafe(
+        `INSERT INTO daily_fifa_card_sets (challenge_day, card_ids) VALUES ($1::date, $2::uuid[])`,
+        [challengeDay, picked]
+      );
+      return { challenge_day: challengeDay, card_ids: picked };
+    }) as Promise<DailyFifaCardSetRow>;
   },
 
   async createCardOutcomesInTx(

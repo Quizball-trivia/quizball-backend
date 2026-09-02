@@ -20516,6 +20516,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid completion (e.g. FIFA Cards outcomes missing, unknown or duplicate, or no set served today)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Not authenticated",
             "content": {

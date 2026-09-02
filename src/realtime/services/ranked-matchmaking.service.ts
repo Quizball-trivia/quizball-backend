@@ -1403,7 +1403,8 @@ export const rankedMatchmakingService = {
       let earlySessionBlock = await getRankedMatchmakingSessionBlock(userId);
       const lobbyOnlySessionBlock = Boolean(
         earlySessionBlock?.waitingLobbyId
-        && earlySessionBlock.primaryLobbyStatus === 'active'
+        && (earlySessionBlock.primaryLobbyStatus === 'active'
+          || earlySessionBlock.primaryLobbyStatus === 'waiting')
         && !earlySessionBlock.activeMatchId
         && !earlySessionBlock.queueSearchId
         && earlySessionBlock.state !== 'PAIRING_IN_FLIGHT'

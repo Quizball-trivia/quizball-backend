@@ -528,9 +528,9 @@ describe('ranked-matchmaking.service queue behavior', () => {
   it('ignores a queue join while the user sits in a live waiting lobby instead of dissolving it', async () => {
     // A reload while in a lobby can make the client re-emit a stale
     // queue_join; that must never remove the user from a live lobby.
+    // (prepareForQueueJoin now runs the liveness check for waiting lobbies,
+    // so it IS called — what matters is that the live lobby is preserved.)
     const service = await loadService();
-    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
-    const prepareSpy = vi.spyOn(userSessionGuardService, 'prepareForQueueJoin');
     const io = createIoMock();
     const socket = createSocketMock('u1');
     listOpenLobbiesForUserMock.mockResolvedValue([makeOpenLobby('lobby-live-wait', 'waiting')]);
@@ -539,7 +539,6 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
     expect(removeLobbyMemberMock).not.toHaveBeenCalled();
-    expect(prepareSpy).not.toHaveBeenCalled();
     expect(deleteLobbyMock).not.toHaveBeenCalled();
     expect(redisMock.multi).not.toHaveBeenCalled();
     expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
@@ -547,7 +546,58 @@ describe('ranked-matchmaking.service queue behavior', () => {
       'session:state',
       expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'lobby-live-wait' })
     );
-    prepareSpy.mockRestore();
+  });
+
+  it('heals an abandoned stale waiting friendly lobby instead of blocking ranked forever', async () => {
+    // Stranded-lobby leak (PostHog alert 2026-09-02): a user left dangling in
+    // lobby_members of a waiting friendly lobby was blocked from ranked for
+    // DAYS (lobby 8e6d040b: 34 ignored joins on Aug 26 alone) until batch
+    // cleanup. A waiting lobby with no live sockets and >30min of inactivity
+    // is dead — heal it and let the user play.
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    const openLobbies = [{
+      ...makeOpenLobby('stranded-friendly', 'waiting'),
+      mode: 'friendly' as const,
+      game_mode: 'friendly_possession' as const,
+      updated_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      joined_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...openLobbies]);
+    removeLobbyMemberMock.mockImplementation(async () => {
+      openLobbies.splice(0, openLobbies.length);
+    });
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-friendly', 'u1');
+    expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+  });
+
+  it('still preserves a FRESH waiting lobby with no sockets (reload window)', async () => {
+    // A page reload briefly drops the socket; a fresh waiting lobby must not
+    // be dissolved by the stale queue_join the client re-emits on restore.
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    listOpenLobbiesForUserMock.mockResolvedValue([{
+      ...makeOpenLobby('fresh-friendly-wait', 'waiting'),
+      mode: 'friendly' as const,
+      game_mode: 'friendly_possession' as const,
+    }]);
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).not.toHaveBeenCalled();
+    expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    expect(userEmit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'fresh-friendly-wait' })
+    );
   });
 
   it('skips the active-lobby heal when the user session lock is held', async () => {

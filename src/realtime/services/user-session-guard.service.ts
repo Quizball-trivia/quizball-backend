@@ -1313,14 +1313,22 @@ export const userSessionGuardService = {
     // A reload while sitting in a live lobby can make the client re-emit a
     // stale queue_join; ranked opts in to preserving the lobby membership so
     // that automatic re-emit never dissolves a real lobby (auction/grid keep
-    // the leave-lobby-and-queue semantics).
+    // the leave-lobby-and-queue semantics). A waiting lobby with no live
+    // socket and >30min of DB inactivity is abandoned, not live — preserving
+    // it blocked users from ranked for days (stranded-lobby leak, 2026-09-02:
+    // one user hit 34 ignored joins in a day off a lobby dead since Aug 25).
     if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
-      return {
-        ok: false,
-        snapshot,
-        reason: 'ACTIVE_MATCH',
-        message: 'You are already in a lobby',
-      };
+      if (!(await everyActiveLobbyIsDead(io, context.waitingLobbies))) {
+        return {
+          ok: false,
+          snapshot,
+          reason: 'ACTIVE_MATCH',
+          message: 'You are already in a lobby',
+        };
+      }
+      await cleanupOpenLobbies(io, userId, { cleanupStartedAtMs });
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
     }
 
     if (context.activeLobbies.length > 0) {

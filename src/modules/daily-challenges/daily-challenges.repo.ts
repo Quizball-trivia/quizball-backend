@@ -5,9 +5,12 @@ import { storeRepo } from '../store/store.repo.js';
 import type { WalletRow } from '../store/store.types.js';
 import type {
   DailyChallengeAvailableCategoryRow,
+  DailyChallengeCardOutcomeInput,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
   DailyChallengeType,
+  DailyFifaCardSetRow,
+  FifaCardRow,
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
@@ -37,6 +40,7 @@ export interface DailyChallengesTransactionRepo {
     challengeDay: string,
     coinsAwarded: number
   ): Promise<boolean>;
+  createCardOutcomes(completionId: string, outcomes: DailyChallengeCardOutcomeInput[]): Promise<void>;
 }
 
 export const dailyChallengesRepo = {
@@ -51,6 +55,8 @@ export const dailyChallengesRepo = {
         dailyChallengesRepo.listDistinctCompletionDaysInTx(tx, userId, throughDay, limit),
       createStreakBonusAward: (userId, challengeDay, coinsAwarded) =>
         dailyChallengesRepo.createStreakBonusAwardInTx(tx, userId, challengeDay, coinsAwarded),
+      createCardOutcomes: (completionId, outcomes) =>
+        dailyChallengesRepo.createCardOutcomesInTx(tx, completionId, outcomes),
     })) as Promise<T>;
   },
 
@@ -464,5 +470,86 @@ export const dailyChallengesRepo = {
       ${difficultyCoverageClause}
       ORDER BY COUNT(*) DESC, c.slug ASC
     `;
+  },
+
+  // ---- FIFA Cards -----------------------------------------------------------
+
+  async listFifaCardsByIds(ids: string[]): Promise<FifaCardRow[]> {
+    if (ids.length === 0) return [];
+    return sql<FifaCardRow[]>`
+      SELECT * FROM fifa_cards WHERE id = ANY(${sql.array(ids)}::uuid[])
+    `;
+  },
+
+  async getDailyFifaCardSet(challengeDay: string): Promise<DailyFifaCardSetRow | null> {
+    const [row] = await sql<DailyFifaCardSetRow[]>`
+      SELECT challenge_day::text AS challenge_day, card_ids
+      FROM daily_fifa_card_sets
+      WHERE challenge_day = ${challengeDay}::date
+    `;
+    return row ?? null;
+  },
+
+  /** Idempotent: a concurrent first request of the day loses the race harmlessly. */
+  async createDailyFifaCardSet(challengeDay: string, cardIds: string[]): Promise<void> {
+    await sql`
+      INSERT INTO daily_fifa_card_sets (challenge_day, card_ids)
+      VALUES (${challengeDay}::date, ${sql.array(cardIds)}::uuid[])
+      ON CONFLICT (challenge_day) DO NOTHING
+    `;
+  },
+
+  /**
+   * Cards for a new day: never-served active cards first, in a stable
+   * salted-hash order so the rotation is deterministic but not alphabetical;
+   * when the pool is exhausted, fall back to the least recently served.
+   */
+  async pickFifaCardsForNewDay(count: number, salt: string): Promise<string[]> {
+    const unseen = await sql<{ id: string }[]>`
+      SELECT c.id
+      FROM fifa_cards c
+      WHERE c.is_active
+        AND NOT EXISTS (SELECT 1 FROM daily_fifa_card_sets s WHERE c.id = ANY(s.card_ids))
+      ORDER BY md5(${salt} || c.id::text)
+      LIMIT ${count}
+    `;
+    const picked = unseen.map((row) => row.id);
+    if (picked.length >= count) return picked;
+
+    const remaining = count - picked.length;
+    const recycled = await sql<{ id: string }[]>`
+      SELECT c.id
+      FROM fifa_cards c
+      LEFT JOIN LATERAL (
+        SELECT max(s.challenge_day) AS last_day
+        FROM daily_fifa_card_sets s
+        WHERE c.id = ANY(s.card_ids)
+      ) served ON true
+      WHERE c.is_active
+        AND NOT (c.id = ANY(${sql.array(picked.length > 0 ? picked : ['00000000-0000-0000-0000-000000000000'])}::uuid[]))
+      ORDER BY served.last_day ASC NULLS FIRST, md5(${salt} || c.id::text)
+      LIMIT ${remaining}
+    `;
+    return [...picked, ...recycled.map((row) => row.id)];
+  },
+
+  async createCardOutcomesInTx(
+    tx: TransactionSql,
+    completionId: string,
+    outcomes: DailyChallengeCardOutcomeInput[]
+  ): Promise<void> {
+    if (outcomes.length === 0) return;
+    await tx.unsafe(
+      `
+      INSERT INTO daily_challenge_card_outcomes (completion_id, card_id, solved, clues_revealed)
+      SELECT $1::uuid, v.card_id::uuid, v.solved, v.clues_revealed
+      FROM jsonb_to_recordset($2::jsonb) AS v(card_id text, solved boolean, clues_revealed int)
+      ON CONFLICT (completion_id, card_id) DO NOTHING
+      `,
+      [
+        completionId,
+        JSON.stringify(outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed }))),
+      ]
+    );
   },
 };

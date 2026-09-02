@@ -25,6 +25,7 @@ import {
   careerPathSettingsSchema,
   cluesSettingsSchema,
   countdownSettingsSchema,
+  fifaCardsSettingsSchema,
   footballLogicSettingsSchema,
   highLowSettingsSchema,
   imposterSettingsSchema,
@@ -36,12 +37,15 @@ import {
 } from './daily-challenges.schemas.js';
 import type {
   DailyChallengeAvailableCategoryRow,
+  DailyChallengeCardOutcomeInput,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
   DailyChallengeLocalizedText,
   DailyChallengeType,
+  FifaCardRow,
   QuestionContentRow,
 } from './daily-challenges.types.js';
+import { buildFifaFaceUrl } from './fifa-face-url.js';
 
 function getDailyChallengeDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -89,6 +93,7 @@ const dailyChallengeSettingsSchemas = {
   careerPath: careerPathSettingsSchema,
   highLow: highLowSettingsSchema,
   footballLogic: footballLogicSettingsSchema,
+  fifaCards: fifaCardsSettingsSchema,
 } as const;
 
 const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es'] as const;
@@ -269,6 +274,91 @@ async function markQuestionsServed(
   }
 }
 
+const FIFA_CARDS_POINTS_PER_SOLVE = 10;
+const FIFA_CARDS_ROTATION_SALT = 'fifa-cards-rotation-v1';
+
+/**
+ * Everyone plays the same cards on a given (UTC) day. The set is materialised on
+ * the day's first request from never-served cards (stable salted-hash order),
+ * recycling least-recently-served cards only once the pool is exhausted; a
+ * concurrent first request loses the insert race harmlessly and re-reads.
+ */
+async function getOrCreateDailyFifaCardSet(
+  day: string,
+  count: number,
+  challengeType: DailyChallengeType
+): Promise<FifaCardRow[]> {
+  let set = await dailyChallengesRepo.getDailyFifaCardSet(day);
+  if (!set) {
+    const picked = await dailyChallengesRepo.pickFifaCardsForNewDay(count, FIFA_CARDS_ROTATION_SALT);
+    ensureEnough(picked, 1, challengeType, { needed: count });
+    await dailyChallengesRepo.createDailyFifaCardSet(day, picked);
+    set = (await dailyChallengesRepo.getDailyFifaCardSet(day)) ?? { challenge_day: day, card_ids: picked };
+  }
+  const rows = await dailyChallengesRepo.listFifaCardsByIds(set.card_ids);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const ordered = set.card_ids
+    .map((id) => byId.get(id))
+    .filter((row): row is FifaCardRow => row != null);
+  return ensureEnough(ordered, 1, challengeType, { challengeDay: day });
+}
+
+function toFifaSessionCard(card: FifaCardRow, locale?: string) {
+  const name = locale === 'ka' && card.name_ka ? card.name_ka : card.name;
+  const acceptedAnswers = Array.from(
+    new Set([card.name, card.name_ka ?? '', ...card.accepted].map((value) => value.trim()).filter(Boolean))
+  );
+  return {
+    id: card.id,
+    edition: card.edition,
+    editionLabel: card.edition_label,
+    name,
+    acceptedAnswers,
+    overall: card.overall,
+    position: card.position,
+    nation: card.nation,
+    nationCode: card.nation_code,
+    league: card.league,
+    club: card.club,
+    stats: { pac: card.pac, sho: card.sho, pas: card.pas, dri: card.dri, def: card.def, phy: card.phy },
+    faceUrl: buildFifaFaceUrl(card.photo_id, card.photo_ver),
+    difficulty: card.difficulty,
+  };
+}
+
+/**
+ * Per-card outcomes are client-reported, so they are only accepted when they
+ * refer to exactly today's served set (no unknown or duplicate cards), and the
+ * score can never exceed what the reported solves are worth.
+ */
+async function reconcileFifaCardsOutcomes(
+  challengeType: DailyChallengeType,
+  day: string,
+  score: number,
+  outcomes: DailyChallengeCardOutcomeInput[] | undefined
+): Promise<{ score: number; outcomes: DailyChallengeCardOutcomeInput[] }> {
+  if (challengeType !== 'fifaCards' || !outcomes || outcomes.length === 0) {
+    return { score, outcomes: [] };
+  }
+  const set = await dailyChallengesRepo.getDailyFifaCardSet(day);
+  if (!set) {
+    throw new ValidationError('No FIFA Cards set has been served today', { challengeDay: day });
+  }
+  const allowed = new Set(set.card_ids);
+  const seen = new Set<string>();
+  for (const outcome of outcomes) {
+    if (!allowed.has(outcome.cardId)) {
+      throw new ValidationError("Outcome references a card that is not in today's set", { cardId: outcome.cardId });
+    }
+    if (seen.has(outcome.cardId)) {
+      throw new ValidationError('Duplicate card outcome', { cardId: outcome.cardId });
+    }
+    seen.add(outcome.cardId);
+  }
+  const solved = outcomes.filter((outcome) => outcome.solved).length;
+  return { score: Math.min(score, solved * FIFA_CARDS_POINTS_PER_SOLVE), outcomes };
+}
+
 function ensureEnough<T>(
   items: T[],
   needed: number,
@@ -322,7 +412,7 @@ function getDefinitionDescription(challengeType: DailyChallengeType, locale?: st
   return getDefinitionText(getDefinition(challengeType).description, locale);
 }
 
-function getQuestionTypeForChallenge(challengeType: DailyChallengeType): QuestionType {
+function getQuestionTypeForChallenge(challengeType: DailyChallengeType): QuestionType | null {
   switch (challengeType) {
     case 'moneyDrop':
       return 'mcq_single';
@@ -342,6 +432,9 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
       return 'high_low';
     case 'footballLogic':
       return 'football_logic';
+    case 'fifaCards':
+      // Cards live in fifa_cards, not in the questions pool.
+      return null;
   }
 }
 
@@ -361,6 +454,7 @@ const COINS_PER_SCORE_POINT: Record<DailyChallengeType, number> = {
   clues: 20,
   putInOrder: 20,
   footballLogic: 20,
+  fifaCards: 1, // 10 points per solved card → at most 100 coins/day
 };
 
 const MONEY_DROP_COIN_CAP = 1500;
@@ -391,7 +485,7 @@ export function getMaxScoreForCompletion(challengeType: DailyChallengeType, sett
   if (!parsed.success) {
     throw new ValidationError('Invalid daily challenge settings', parsed.error.flatten());
   }
-  const s = parsed.data as unknown as { questionCount?: number; roundCount?: number; startingMoney?: number };
+  const s = parsed.data as unknown as { questionCount?: number; roundCount?: number; startingMoney?: number; cardCount?: number };
   const questionCount = s.questionCount ?? 20;
   const roundCount = s.roundCount ?? 10;
 
@@ -412,6 +506,8 @@ export function getMaxScoreForCompletion(challengeType: DailyChallengeType, sett
     case 'highLow':
       // One point per round cleared (HighLowGame.resolveRound), not per matchup.
       return roundCount;
+    case 'fifaCards':
+      return (s.cardCount ?? 10) * FIFA_CARDS_POINTS_PER_SOLVE;
   }
 }
 
@@ -559,9 +655,9 @@ function getQuestionClue(explanation: Json | null, locale?: string): string | nu
 }
 
 async function listAvailableCategoriesForChallenge(challengeType: DailyChallengeType) {
-  const rows = await dailyChallengesRepo.listAvailableCategoriesByQuestionType(
-    getQuestionTypeForChallenge(challengeType)
-  );
+  const questionType = getQuestionTypeForChallenge(challengeType);
+  if (!questionType) return [];
+  const rows = await dailyChallengesRepo.listAvailableCategoriesByQuestionType(questionType);
   return rows.map(toAvailableCategoryOption);
 }
 
@@ -1153,6 +1249,24 @@ export const dailyChallengesService = {
       };
     }
 
+    if (challengeType === 'fifaCards') {
+      const settings = fifaCardsSettingsSchema.parse(config.settings);
+      const cards = await getOrCreateDailyFifaCardSet(day, settings.cardCount, challengeType);
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        cardCount: cards.length,
+        pointsPerSolve: FIFA_CARDS_POINTS_PER_SOLVE,
+        cards: cards.map((card) => toFifaSessionCard(card, locale)),
+      };
+    }
+
+    if (challengeType !== 'footballLogic') {
+      throw new NotFoundError('Daily challenge not available');
+    }
+
     const settings = footballLogicSettingsSchema.parse(config.settings);
     await ensureActiveCategories(config.challenge_type, settings.categoryIds);
 
@@ -1199,7 +1313,8 @@ export const dailyChallengesService = {
   async completeChallenge(
     userId: string,
     challengeType: DailyChallengeType,
-    score: number
+    score: number,
+    outcomes?: DailyChallengeCardOutcomeInput[]
   ) {
     const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
@@ -1208,7 +1323,13 @@ export const dailyChallengesService = {
     }
     // The client reports its own score; clamp it to what this challenge can
     // legitimately produce before it turns into coins or gets recorded.
-    const cappedScore = clampScoreForCompletion(challengeType, score, config.settings);
+    const clampedScore = clampScoreForCompletion(challengeType, score, config.settings);
+    const { score: cappedScore, outcomes: validatedOutcomes } = await reconcileFifaCardsOutcomes(
+      challengeType,
+      day,
+      clampedScore,
+      outcomes
+    );
     const coinsAwarded = getCoinsAwardedForCompletion(challengeType, cappedScore);
     const configuredStreakBonus = comebackBonusCoins();
 
@@ -1220,8 +1341,9 @@ export const dailyChallengesService = {
 
       const completionDaysBefore = await txRepo.listDistinctCompletionDays(userId, day, 370);
 
+      let completionId: string | null = null;
       try {
-        await txRepo.createCompletion({
+        const created = await txRepo.createCompletion({
           userId,
           challengeType,
           challengeDay: day,
@@ -1229,11 +1351,16 @@ export const dailyChallengesService = {
           coinsAwarded,
           xpAwarded: config.xp_reward,
         });
+        completionId = created?.id ?? null;
       } catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
           throwAlreadyCompleted(challengeType);
         }
         throw error;
+      }
+
+      if (completionId && validatedOutcomes.length > 0) {
+        await txRepo.createCardOutcomes(completionId, validatedOutcomes);
       }
 
       const completedYesterday = completionDaysBefore.includes(addUtcDays(day, -1));

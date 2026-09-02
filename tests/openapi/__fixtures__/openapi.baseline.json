@@ -5222,7 +5222,8 @@
               "imposter",
               "careerPath",
               "highLow",
-              "footballLogic"
+              "footballLogic",
+              "fifaCards"
             ]
           },
           "title": {
@@ -5244,7 +5245,8 @@
               "users",
               "route",
               "trendingUp",
-              "image"
+              "image",
+              "cards"
             ]
           },
           "coinReward": {
@@ -5588,6 +5590,34 @@
             "required": [
               "questionCount",
               "secondsPerQuestion",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "cardCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "fifaCards"
+                ]
+              }
+            },
+            "required": [
+              "cardCount",
               "challengeType"
             ]
           }
@@ -6540,6 +6570,153 @@
               "secondsPerQuestion",
               "questions"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "fifaCards"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cardCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "pointsPerSolve": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "cards": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "edition": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "editionLabel": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "acceptedAnswers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "overall": {
+                      "type": "integer"
+                    },
+                    "position": {
+                      "type": "string"
+                    },
+                    "nation": {
+                      "type": "string"
+                    },
+                    "nationCode": {
+                      "type": "string"
+                    },
+                    "league": {
+                      "type": "string"
+                    },
+                    "club": {
+                      "type": "string"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "properties": {
+                        "pac": {
+                          "type": "integer"
+                        },
+                        "sho": {
+                          "type": "integer"
+                        },
+                        "pas": {
+                          "type": "integer"
+                        },
+                        "dri": {
+                          "type": "integer"
+                        },
+                        "def": {
+                          "type": "integer"
+                        },
+                        "phy": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pac",
+                        "sho",
+                        "pas",
+                        "dri",
+                        "def",
+                        "phy"
+                      ]
+                    },
+                    "faceUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "edition",
+                    "editionLabel",
+                    "name",
+                    "acceptedAnswers",
+                    "overall",
+                    "position",
+                    "nation",
+                    "nationCode",
+                    "league",
+                    "club",
+                    "stats",
+                    "faceUrl",
+                    "difficulty"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "cardCount",
+              "pointsPerSolve",
+              "cards"
+            ]
           }
         ]
       },
@@ -6557,7 +6734,8 @@
               "imposter",
               "careerPath",
               "highLow",
-              "footballLogic"
+              "footballLogic",
+              "fifaCards"
             ]
           },
           "completedToday": {
@@ -6682,7 +6860,8 @@
               "imposter",
               "careerPath",
               "highLow",
-              "footballLogic"
+              "footballLogic",
+              "fifaCards"
             ]
           },
           "reset": {
@@ -6711,7 +6890,8 @@
               "imposter",
               "careerPath",
               "highLow",
-              "footballLogic"
+              "footballLogic",
+              "fifaCards"
             ]
           },
           "title": {
@@ -6733,7 +6913,8 @@
               "users",
               "route",
               "trendingUp",
-              "image"
+              "image",
+              "cards"
             ]
           },
           "coinReward": {
@@ -7064,6 +7245,34 @@
                 "required": [
                   "questionCount",
                   "secondsPerQuestion",
+                  "challengeType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "categoryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "default": []
+                  },
+                  "cardCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10
+                  },
+                  "challengeType": {
+                    "type": "string",
+                    "enum": [
+                      "fifaCards"
+                    ]
+                  }
+                },
+                "required": [
+                  "cardCount",
                   "challengeType"
                 ]
               }
@@ -18790,7 +18999,8 @@
                               "imposter",
                               "careerPath",
                               "highLow",
-                              "footballLogic"
+                              "footballLogic",
+                              "fifaCards"
                             ]
                           },
                           "title": {
@@ -18812,7 +19022,8 @@
                               "users",
                               "route",
                               "trendingUp",
-                              "image"
+                              "image",
+                              "cards"
                             ]
                           },
                           "coinReward": {
@@ -18891,7 +19102,8 @@
                 "imposter",
                 "careerPath",
                 "highLow",
-                "footballLogic"
+                "footballLogic",
+                "fifaCards"
               ]
             },
             "required": true,
@@ -19816,6 +20028,153 @@
                         "secondsPerQuestion",
                         "questions"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "fifaCards"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "cardCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "pointsPerSolve": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "cards": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "edition": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "editionLabel": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "acceptedAnswers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "minItems": 1
+                              },
+                              "overall": {
+                                "type": "integer"
+                              },
+                              "position": {
+                                "type": "string"
+                              },
+                              "nation": {
+                                "type": "string"
+                              },
+                              "nationCode": {
+                                "type": "string"
+                              },
+                              "league": {
+                                "type": "string"
+                              },
+                              "club": {
+                                "type": "string"
+                              },
+                              "stats": {
+                                "type": "object",
+                                "properties": {
+                                  "pac": {
+                                    "type": "integer"
+                                  },
+                                  "sho": {
+                                    "type": "integer"
+                                  },
+                                  "pas": {
+                                    "type": "integer"
+                                  },
+                                  "dri": {
+                                    "type": "integer"
+                                  },
+                                  "def": {
+                                    "type": "integer"
+                                  },
+                                  "phy": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "pac",
+                                  "sho",
+                                  "pas",
+                                  "dri",
+                                  "def",
+                                  "phy"
+                                ]
+                              },
+                              "faceUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "edition",
+                              "editionLabel",
+                              "name",
+                              "acceptedAnswers",
+                              "overall",
+                              "position",
+                              "nation",
+                              "nationCode",
+                              "league",
+                              "club",
+                              "stats",
+                              "faceUrl",
+                              "difficulty"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "cardCount",
+                        "pointsPerSolve",
+                        "cards"
+                      ]
                     }
                   ]
                 }
@@ -20024,7 +20383,8 @@
                 "imposter",
                 "careerPath",
                 "highLow",
-                "footballLogic"
+                "footballLogic",
+                "fifaCards"
               ]
             },
             "required": true,
@@ -20043,6 +20403,32 @@
                     "type": "integer",
                     "minimum": 0,
                     "default": 0
+                  },
+                  "outcomes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "cardId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "solved": {
+                          "type": "boolean"
+                        },
+                        "cluesRevealed": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 3,
+                          "default": 0
+                        }
+                      },
+                      "required": [
+                        "cardId",
+                        "solved"
+                      ]
+                    },
+                    "maxItems": 10
                   }
                 }
               }
@@ -20068,7 +20454,8 @@
                         "imposter",
                         "careerPath",
                         "highLow",
-                        "footballLogic"
+                        "footballLogic",
+                        "fifaCards"
                       ]
                     },
                     "completedToday": {
@@ -20186,7 +20573,8 @@
                 "imposter",
                 "careerPath",
                 "highLow",
-                "footballLogic"
+                "footballLogic",
+                "fifaCards"
               ]
             },
             "required": true,
@@ -20213,7 +20601,8 @@
                         "imposter",
                         "careerPath",
                         "highLow",
-                        "footballLogic"
+                        "footballLogic",
+                        "fifaCards"
                       ]
                     },
                     "reset": {
@@ -20289,7 +20678,8 @@
                               "imposter",
                               "careerPath",
                               "highLow",
-                              "footballLogic"
+                              "footballLogic",
+                              "fifaCards"
                             ]
                           },
                           "title": {
@@ -20311,7 +20701,8 @@
                               "users",
                               "route",
                               "trendingUp",
-                              "image"
+                              "image",
+                              "cards"
                             ]
                           },
                           "coinReward": {
@@ -20644,6 +21035,34 @@
                                   "secondsPerQuestion",
                                   "challengeType"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "cardCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 10
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fifaCards"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "cardCount",
+                                  "challengeType"
+                                ]
                               }
                             ]
                           },
@@ -20774,7 +21193,8 @@
                 "imposter",
                 "careerPath",
                 "highLow",
-                "footballLogic"
+                "footballLogic",
+                "fifaCards"
               ]
             },
             "required": true,

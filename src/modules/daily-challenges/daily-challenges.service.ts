@@ -365,6 +365,57 @@ const COINS_PER_SCORE_POINT: Record<DailyChallengeType, number> = {
 
 const MONEY_DROP_COIN_CAP = 1500;
 
+/**
+ * Per-round ceilings for the two types whose score is bounded by payload
+ * content rather than settings (countdown counts every answer found across a
+ * round's answer groups; highLow counts every correct matchup). Payloads have
+ * no schema maximum, so these are deliberately generous gameplay ceilings —
+ * their job is to stop minted scores, not to referee a perfect round.
+ */
+const COUNTDOWN_MAX_ANSWERS_PER_ROUND = 25;
+const HIGH_LOW_MAX_MATCHUPS_PER_ROUND = 25;
+const CLUES_MAX_POINTS_PER_QUESTION = 100;
+const PUT_IN_ORDER_POINTS_PER_ROUND = 100;
+
+/**
+ * Highest score a legitimate round of this type can produce, derived from the
+ * challenge's settings. Falls back to the schema maxima when settings are
+ * missing or unparseable so completion never fails on a config problem — the
+ * cap only ever narrows what the client is allowed to claim.
+ */
+export function getMaxScoreForCompletion(challengeType: DailyChallengeType, settings: unknown): number {
+  const schema = dailyChallengeSettingsSchemas[challengeType];
+  const parsed = schema.safeParse(settings);
+  const s = parsed.success
+    ? (parsed.data as unknown as { questionCount?: number; roundCount?: number; startingMoney?: number })
+    : null;
+  const questionCount = s?.questionCount ?? 20;
+  const roundCount = s?.roundCount ?? 10;
+
+  switch (challengeType) {
+    case 'moneyDrop':
+      return s?.startingMoney ?? 100000;
+    case 'trueFalse':
+    case 'imposter':
+    case 'careerPath':
+    case 'footballLogic':
+      return questionCount;
+    case 'clues':
+      return questionCount * CLUES_MAX_POINTS_PER_QUESTION;
+    case 'putInOrder':
+      return roundCount * PUT_IN_ORDER_POINTS_PER_ROUND;
+    case 'countdown':
+      return roundCount * COUNTDOWN_MAX_ANSWERS_PER_ROUND;
+    case 'highLow':
+      return roundCount * HIGH_LOW_MAX_MATCHUPS_PER_ROUND;
+  }
+}
+
+function clampScoreForCompletion(challengeType: DailyChallengeType, score: number, settings: unknown): number {
+  const normalizedScore = Math.max(0, Math.floor(score));
+  return Math.min(normalizedScore, getMaxScoreForCompletion(challengeType, settings));
+}
+
 function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: number): number {
   const normalizedScore = Math.max(0, Math.floor(score));
 
@@ -1151,7 +1202,10 @@ export const dailyChallengesService = {
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
     }
-    const coinsAwarded = getCoinsAwardedForCompletion(challengeType, score);
+    // The client reports its own score; clamp it to what this challenge can
+    // legitimately produce before it turns into coins or gets recorded.
+    const cappedScore = clampScoreForCompletion(challengeType, score, config.settings);
+    const coinsAwarded = getCoinsAwardedForCompletion(challengeType, cappedScore);
     const configuredStreakBonus = comebackBonusCoins();
 
     return dailyChallengesRepo.runInTransaction(async (txRepo) => {
@@ -1167,7 +1221,7 @@ export const dailyChallengesService = {
           userId,
           challengeType,
           challengeDay: day,
-          score,
+          score: cappedScore,
           coinsAwarded,
           xpAwarded: config.xp_reward,
         });

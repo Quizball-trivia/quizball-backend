@@ -1517,3 +1517,59 @@ describe('dailyChallengesService', () => {
     });
   });
 });
+
+describe('dailyChallengesService completion score cap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: unknown) => Promise<unknown>) =>
+      callback({
+        getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
+        createCompletion: (...args: unknown[]) => createCompletionMock(...args),
+        addCoins: (...args: unknown[]) => addCoinsMock(...args),
+        grantXp: (...args: unknown[]) => grantXpMock(...args),
+        listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+        createStreakBonusAward: (...args: unknown[]) => createStreakBonusAwardMock(...args),
+      })
+    );
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listDistinctCompletionDaysMock.mockResolvedValue([]);
+    createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+    addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+    grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+  });
+
+  it.each([
+    // [type, settings, claimed score, recorded score, coins]
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 1_000_000, 10, 5000],
+    ['trueFalse', { categoryIds: [], questionCount: 8, secondsPerQuestion: 20 }, 50, 8, 1600],
+    ['careerPath', { categoryIds: [], questionCount: 5, secondsPerQuestion: 20 }, 3, 3, 900],
+    ['clues', { categoryIds: [], questionCount: 5, secondsPerClueStep: 10 }, 9999, 500, 10000],
+    ['putInOrder', { categoryIds: [], roundCount: 4, itemsPerRound: 5 }, 900, 400, 8000],
+    ['countdown', { categoryIds: [], roundCount: 3, secondsPerRound: 60 }, 500, 75, 5625],
+    ['highLow', { categoryIds: [], roundCount: 2, secondsPerRound: 60 }, 500, 50, 20000],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 5000, 1200, 1200],
+    ['footballLogic', { categoryIds: [], questionCount: 6, secondsPerQuestion: 20 }, -4, 0, 0],
+  ] as const)(
+    'clamps %s to what its settings allow (claimed %d → recorded %d, %d coins)',
+    async (challengeType, settings, claimed, recorded, coins) => {
+      getConfigMock.mockResolvedValue({ challenge_type: challengeType, is_active: true, coin_reward: 1, xp_reward: 15, settings });
+
+      const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+      const result = await dailyChallengesService.completeChallenge('user-1', challengeType, claimed);
+
+      expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: recorded, coinsAwarded: coins }));
+      expect(result.coinsAwarded).toBe(coins);
+    }
+  );
+
+  it('falls back to the schema maxima when settings are missing so completion still succeeds', async () => {
+    getConfigMock.mockResolvedValue({ challenge_type: 'imposter', is_active: true, coin_reward: 1, xp_reward: 15 });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'imposter', 1_000_000);
+
+    // questionCount schema max is 20 → 20 × 500
+    expect(result.coinsAwarded).toBe(10_000);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 20 }));
+  });
+});

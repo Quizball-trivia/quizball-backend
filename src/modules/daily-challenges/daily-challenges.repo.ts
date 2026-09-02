@@ -1,5 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
+import { selectDailyFifaCardIds, type FifaCardCandidate } from './fifa-card-selection.js';
 import { progressionRepo, type GrantXpInput, type GrantXpResult } from '../progression/progression.repo.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { WalletRow } from '../store/store.types.js';
@@ -510,37 +511,22 @@ export const dailyChallengesRepo = {
       );
       if (existing) return existing;
 
-      const unseen = await tx.unsafe<{ id: string }[]>(
+      // Difficulty-balanced pick (3 veryHard / 3 hard / 4 medium-easy + >=5 old
+      // for a 10-card round) done in TS over the active pool + each card's last
+      // served day; see selectDailyFifaCardIds.
+      const candidates = await tx.unsafe<FifaCardCandidate[]>(
         `
-        SELECT c.id
+        SELECT c.id::text AS id, c.difficulty, c.edition, c.name,
+               (
+                 SELECT max(s.challenge_day)::text
+                 FROM daily_fifa_card_sets s
+                 WHERE c.id = ANY(s.card_ids)
+               ) AS last_served_day
         FROM fifa_cards c
         WHERE c.is_active
-          AND NOT EXISTS (SELECT 1 FROM daily_fifa_card_sets s WHERE c.id = ANY(s.card_ids))
-        ORDER BY md5($1 || c.id::text)
-        LIMIT $2
-        `,
-        [salt, count]
+        `
       );
-      const picked = unseen.map((row) => row.id);
-      if (picked.length < count) {
-        const recycled = await tx.unsafe<{ id: string }[]>(
-          `
-          SELECT c.id
-          FROM fifa_cards c
-          LEFT JOIN LATERAL (
-            SELECT max(s.challenge_day) AS last_day
-            FROM daily_fifa_card_sets s
-            WHERE c.id = ANY(s.card_ids)
-          ) served ON true
-          WHERE c.is_active
-            AND NOT (c.id = ANY($1::uuid[]))
-          ORDER BY served.last_day ASC NULLS FIRST, md5($2 || c.id::text)
-          LIMIT $3
-          `,
-          [picked, salt, count - picked.length]
-        );
-        picked.push(...recycled.map((row) => row.id));
-      }
+      const picked = selectDailyFifaCardIds(candidates, count, salt, challengeDay);
       if (picked.length === 0) {
         return { challenge_day: challengeDay, card_ids: [] };
       }

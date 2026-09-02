@@ -5376,7 +5376,8 @@
                       "enum": [
                         "easy",
                         "medium",
-                        "hard"
+                        "hard",
+                        "veryHard"
                       ]
                     }
                   },
@@ -17778,7 +17779,8 @@
                                 "enum": [
                                   "easy",
                                   "medium",
-                                  "hard"
+                                  "hard",
+                                  "veryHard"
                                 ]
                               }
                             },

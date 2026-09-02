@@ -53,6 +53,22 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
   },
 }));
 
+
+// Configs in production always carry parseable settings (the completion cap
+// fails closed without them); give mocked configs a generous, valid default.
+function defaultSettingsFor(challengeType: string) {
+  const base = { categoryIds: [] as string[] };
+  switch (challengeType) {
+    case 'moneyDrop': return { ...base, questionCount: 20, secondsPerQuestion: 30, startingMoney: 100000 };
+    case 'countdown': return { ...base, roundCount: 10, secondsPerRound: 60 };
+    case 'putInOrder': return { ...base, roundCount: 10, itemsPerRound: 5 };
+    case 'highLow': return { ...base, roundCount: 10, secondsPerRound: 60 };
+    case 'clues': return { ...base, questionCount: 20, secondsPerClueStep: 10 };
+    case 'fifaCards': return { ...base, cardCount: 10 };
+    default: return { ...base, questionCount: 20, secondsPerQuestion: 30 };
+  }
+}
+
 describe('dailyChallengesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1222,6 +1238,7 @@ describe('dailyChallengesService', () => {
         is_active: true,
         coin_reward: 999,
         xp_reward: 15,
+        settings: defaultSettingsFor(challengeType),
       });
       getCompletionForUserOnDayMock.mockResolvedValue(null);
       createCompletionMock.mockResolvedValue({ id: 'completion-1' });
@@ -1242,7 +1259,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 999,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1301,7 +1319,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 20,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1354,7 +1373,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 500,
       xp_reward: 20,
-    });
+        settings: defaultSettingsFor('moneyDrop'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1388,7 +1408,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 80,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockRejectedValue({ code: '23505' });
 
@@ -1545,8 +1566,15 @@ describe('dailyChallengesService completion score cap', () => {
     ['careerPath', { categoryIds: [], questionCount: 5, secondsPerQuestion: 20 }, 3, 3, 900],
     ['clues', { categoryIds: [], questionCount: 5, secondsPerClueStep: 10 }, 9999, 500, 10000],
     ['putInOrder', { categoryIds: [], roundCount: 4, itemsPerRound: 5 }, 900, 400, 8000],
-    ['countdown', { categoryIds: [], roundCount: 3, secondsPerRound: 60 }, 500, 75, 5625],
-    ['highLow', { categoryIds: [], roundCount: 2, secondsPerRound: 60 }, 500, 50, 20000],
+    // the client plays exactly 2 countdown rounds, so a 3-round config still caps at 2 × 25
+    ['countdown', { categoryIds: [], roundCount: 3, secondsPerRound: 60 }, 500, 50, 3750],
+    // one point per round cleared
+    ['highLow', { categoryIds: [], roundCount: 2, secondsPerRound: 60 }, 500, 2, 800],
+    // boundaries: exact max passes untouched, max + 1 is clamped
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 10, 10, 5000],
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 11, 10, 5000],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 1200, 1200, 1200],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 1201, 1200, 1200],
     ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 5000, 1200, 1200],
     ['footballLogic', { categoryIds: [], questionCount: 6, secondsPerQuestion: 20 }, -4, 0, 0],
   ] as const)(
@@ -1562,14 +1590,13 @@ describe('dailyChallengesService completion score cap', () => {
     }
   );
 
-  it('falls back to the schema maxima when settings are missing so completion still succeeds', async () => {
-    getConfigMock.mockResolvedValue({ challenge_type: 'imposter', is_active: true, coin_reward: 1, xp_reward: 15 });
+  it('fails closed when settings are missing or invalid — no session could have been issued', async () => {
+    getConfigMock.mockResolvedValue({ challenge_type: 'imposter', is_active: true, coin_reward: 1, xp_reward: 15,
+      });
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
-    const result = await dailyChallengesService.completeChallenge('user-1', 'imposter', 1_000_000);
-
-    // questionCount schema max is 20 → 20 × 500
-    expect(result.coinsAwarded).toBe(10_000);
-    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 20 }));
+    await expect(dailyChallengesService.completeChallenge('user-1', 'imposter', 1_000_000)).rejects.toThrow(/Invalid daily challenge settings/);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(addCoinsMock).not.toHaveBeenCalled();
   });
 });

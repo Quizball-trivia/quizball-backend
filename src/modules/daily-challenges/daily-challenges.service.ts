@@ -373,28 +373,31 @@ const MONEY_DROP_COIN_CAP = 1500;
  * their job is to stop minted scores, not to referee a perfect round.
  */
 const COUNTDOWN_MAX_ANSWERS_PER_ROUND = 25;
-const HIGH_LOW_MAX_MATCHUPS_PER_ROUND = 25;
+// The daily Countdown client plays exactly two rounds regardless of config
+// (CountdownGame.tsx slices to 2), so extra configured rounds can't score.
+const COUNTDOWN_PLAYED_ROUNDS = 2;
 const CLUES_MAX_POINTS_PER_QUESTION = 100;
 const PUT_IN_ORDER_POINTS_PER_ROUND = 100;
 
 /**
  * Highest score a legitimate round of this type can produce, derived from the
- * challenge's settings. Falls back to the schema maxima when settings are
- * missing or unparseable so completion never fails on a config problem — the
- * cap only ever narrows what the client is allowed to claim.
+ * challenge's settings. Settings that don't parse fail closed: a session could
+ * never have been issued from them (getChallengeSession parses strictly), so a
+ * completion against them is not a real round.
  */
 export function getMaxScoreForCompletion(challengeType: DailyChallengeType, settings: unknown): number {
   const schema = dailyChallengeSettingsSchemas[challengeType];
   const parsed = schema.safeParse(settings);
-  const s = parsed.success
-    ? (parsed.data as unknown as { questionCount?: number; roundCount?: number; startingMoney?: number })
-    : null;
-  const questionCount = s?.questionCount ?? 20;
-  const roundCount = s?.roundCount ?? 10;
+  if (!parsed.success) {
+    throw new ValidationError('Invalid daily challenge settings', parsed.error.flatten());
+  }
+  const s = parsed.data as unknown as { questionCount?: number; roundCount?: number; startingMoney?: number };
+  const questionCount = s.questionCount ?? 20;
+  const roundCount = s.roundCount ?? 10;
 
   switch (challengeType) {
     case 'moneyDrop':
-      return s?.startingMoney ?? 100000;
+      return s.startingMoney ?? 100000;
     case 'trueFalse':
     case 'imposter':
     case 'careerPath':
@@ -405,9 +408,10 @@ export function getMaxScoreForCompletion(challengeType: DailyChallengeType, sett
     case 'putInOrder':
       return roundCount * PUT_IN_ORDER_POINTS_PER_ROUND;
     case 'countdown':
-      return roundCount * COUNTDOWN_MAX_ANSWERS_PER_ROUND;
+      return Math.min(roundCount, COUNTDOWN_PLAYED_ROUNDS) * COUNTDOWN_MAX_ANSWERS_PER_ROUND;
     case 'highLow':
-      return roundCount * HIGH_LOW_MAX_MATCHUPS_PER_ROUND;
+      // One point per round cleared (HighLowGame.resolveRound), not per matchup.
+      return roundCount;
   }
 }
 

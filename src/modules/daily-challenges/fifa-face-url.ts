@@ -1,38 +1,17 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../../core/config.js';
-import { logger } from '../../core/logger.js';
 
 /**
- * Face photos are served by the web app's /api/fifa-face proxy. The backend
- * signs each (id, version) pair so the proxy can verify the request refers to a
- * card we actually serve, without shipping the card dataset to the proxy and
- * without letting the route be used to enumerate the upstream CDN. No expiry:
- * the signature only asserts "this is one of ours", and a static URL keeps the
- * proxy's long-lived CDN caching intact.
+ * Card faces are mirrored into our own Supabase storage bucket
+ * (imgs/fifa-faces/<photoId>_<photoVer>.webp, see
+ * frontend-web-next/scripts/fifa/mirror-faces.py and the agents' discover job),
+ * so the game never depends on SoFIFA at runtime. The URL is derived by
+ * convention; the web card falls back to its silhouette if an object is missing.
  */
-let warnedMissingSecret = false;
-
-export function fifaFaceSignature(photoId: number, photoVer: string, secret: string): string {
-  return createHmac('sha256', secret).update(`${photoId}:${photoVer}`).digest('hex').slice(0, 32);
-}
+export const FIFA_FACES_BUCKET_PATH = 'imgs/fifa-faces';
 
 export function buildFifaFaceUrl(photoId: number | null, photoVer: string | null): string | null {
   if (!photoId || !photoVer) return null;
-  const secret = config.FIFA_FACE_SIGNING_SECRET;
-  if (!secret) {
-    if (!warnedMissingSecret) {
-      warnedMissingSecret = true;
-      logger.warn('FIFA_FACE_SIGNING_SECRET is not set; FIFA card sessions are served without face URLs');
-    }
-    return null;
-  }
-  const sig = fifaFaceSignature(photoId, photoVer, secret);
-  return `/api/fifa-face?id=${photoId}&v=${encodeURIComponent(photoVer)}&sig=${sig}`;
-}
-
-/** Constant-time check used by tests and any server-side consumer of the signature. */
-export function verifyFifaFaceSignature(photoId: number, photoVer: string, sig: string, secret: string): boolean {
-  const expected = Buffer.from(fifaFaceSignature(photoId, photoVer, secret));
-  const given = Buffer.from(sig);
-  return expected.length === given.length && timingSafeEqual(expected, given);
+  const base = (config.SUPABASE_URL ?? '').replace(/\/+$/, '');
+  if (!base) return null;
+  return `${base}/storage/v1/object/public/${FIFA_FACES_BUCKET_PATH}/${photoId}_${encodeURIComponent(photoVer)}.webp`;
 }

@@ -49,7 +49,7 @@ export const dailyChallengesController = {
   async complete(req: Request, res: Response): Promise<void> {
     const { challengeType } = req.validated.params as DailyChallengeParam;
     const body = req.validated.body as CompleteDailyChallengeBody;
-    const result = await dailyChallengesService.completeChallenge(req.user!.id, challengeType, body.score);
+    const result = await dailyChallengesService.completeChallenge(req.user!.id, challengeType, body.score, body.outcomes);
     res.json(result);
   },
 

@@ -257,7 +257,10 @@ const configSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   // HMAC key for signed FIFA-card face URLs served by the web app's /api/fifa-face
   // proxy. Shared with the web deployment; unset -> cards ship without a face URL.
-  FIFA_FACE_SIGNING_SECRET: z.string().min(16).optional(),
+  FIFA_FACE_SIGNING_SECRET: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().min(16).optional()
+  ),
   SUPABASE_AUTH_IP_FORWARDING_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

@@ -105,7 +105,7 @@ export function registerDailyChallengesOpenApi(registry: OpenAPIRegistry): void 
     body: completeDailyChallengeBodySchema,
     responses: {
       200: { description: 'Completion recorded and rewards granted', schema: completeDailyChallengeResponseSchema },
-      400: { description: 'Invalid completion (e.g. FIFA Cards outcomes missing, unknown or duplicate, or no set served today)', schema: errorResponseSchema },
+      422: { description: 'Invalid completion (e.g. FIFA Cards outcomes missing, unknown or duplicate, or no set served today)', schema: errorResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       404: { description: 'Challenge not available', schema: errorResponseSchema },
       409: { description: 'Already completed today', schema: errorResponseSchema },

@@ -73,10 +73,9 @@ REVOKE ALL ON TABLE public.fifa_cards FROM anon, authenticated;
 REVOKE ALL ON TABLE public.daily_fifa_card_sets FROM anon, authenticated;
 REVOKE ALL ON TABLE public.daily_challenge_card_outcomes FROM anon, authenticated;
 
--- Expand the challenge_type CHECKs. Added NOT VALID then validated separately:
--- adding a validated CHECK scans the whole table under an ACCESS EXCLUSIVE
--- lock, which on daily_challenge_completions would block live completions
--- for the duration; VALIDATE only takes SHARE UPDATE EXCLUSIVE.
+-- Expand the challenge_type CHECKs as NOT VALID here (instant, no table scan);
+-- the next migration validates them outside a transaction so the scan holds
+-- only SHARE UPDATE EXCLUSIVE and never blocks live completions.
 ALTER TABLE daily_challenge_configs
   DROP CONSTRAINT IF EXISTS chk_daily_challenge_type;
 ALTER TABLE daily_challenge_configs
@@ -85,7 +84,6 @@ ALTER TABLE daily_challenge_configs
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
     'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards'
   )) NOT VALID;
-ALTER TABLE daily_challenge_configs VALIDATE CONSTRAINT chk_daily_challenge_type;
 
 ALTER TABLE daily_challenge_completions
   DROP CONSTRAINT IF EXISTS chk_daily_completion_type;
@@ -95,7 +93,6 @@ ALTER TABLE daily_challenge_completions
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
     'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards'
   )) NOT VALID;
-ALTER TABLE daily_challenge_completions VALIDATE CONSTRAINT chk_daily_completion_type;
 
 -- Seeded INACTIVE: the tile appears only once the card pool is populated and
 -- an operator flips is_active (data step, see runbook).

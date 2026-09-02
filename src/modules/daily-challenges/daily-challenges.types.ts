@@ -9,7 +9,8 @@ export type DailyChallengeType =
   | 'imposter'
   | 'careerPath'
   | 'highLow'
-  | 'footballLogic';
+  | 'footballLogic'
+  | 'fifaCards';
 
 export type DailyChallengeIconToken =
   | 'dollarSign'
@@ -20,7 +21,8 @@ export type DailyChallengeIconToken =
   | 'users'
   | 'route'
   | 'trendingUp'
-  | 'image';
+  | 'image'
+  | 'cards';
 
 export interface DailyChallengeLocalizedText {
   en: string;
@@ -55,6 +57,44 @@ export interface DailyChallengeCompletionRow {
   coins_awarded: number;
   xp_awarded: number;
   completed_at: string;
+}
+
+export interface FifaCardRow {
+  id: string;
+  source_key: string;
+  edition: string;
+  edition_label: string;
+  name: string;
+  name_ka: string | null;
+  accepted: string[];
+  overall: number;
+  position: string;
+  nation: string;
+  nation_code: string;
+  league: string;
+  club: string;
+  pac: number;
+  sho: number;
+  pas: number;
+  dri: number;
+  def: number;
+  phy: number;
+  photo_id: number | null;
+  photo_ver: string | null;
+  face_source: 'own' | 'name-match' | 'none';
+  difficulty: 'easy' | 'medium' | 'hard';
+  is_active: boolean;
+}
+
+export interface DailyFifaCardSetRow {
+  challenge_day: string;
+  card_ids: string[];
+}
+
+export interface DailyChallengeCardOutcomeInput {
+  cardId: string;
+  solved: boolean;
+  cluesRevealed: number;
 }
 
 export interface QuestionContentRow {

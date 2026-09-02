@@ -10,6 +10,7 @@ export const dailyChallengeTypeEnum = z.enum([
   'careerPath',
   'highLow',
   'footballLogic',
+  'fifaCards',
 ]);
 
 export const dailyChallengeMetadataSchema = z.object({
@@ -26,6 +27,7 @@ export const dailyChallengeMetadataSchema = z.object({
     'route',
     'trendingUp',
     'image',
+    'cards',
   ]),
   coinReward: z.number().int().nonnegative(),
   xpReward: z.number().int().nonnegative(),
@@ -99,6 +101,13 @@ const footballLogicSettingsBaseSchema = z.object({
   secondsPerQuestion: z.number().int().min(5).max(120),
 });
 
+// FIFA Cards draws from the fifa_cards pool, not from questions; categoryIds is
+// kept (always empty) so the settings union stays shape-compatible.
+const fifaCardsSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  cardCount: z.number().int().min(1).max(10),
+});
+
 export const moneyDropSettingsSchema = moneyDropSettingsBaseSchema;
 export const trueFalseSettingsSchema = trueFalseSettingsBaseSchema;
 export const countdownSettingsSchema = countdownSettingsBaseSchema;
@@ -108,6 +117,7 @@ export const imposterSettingsSchema = imposterSettingsBaseSchema;
 export const careerPathSettingsSchema = careerPathSettingsBaseSchema;
 export const highLowSettingsSchema = highLowSettingsBaseSchema;
 export const footballLogicSettingsSchema = footballLogicSettingsBaseSchema;
+export const fifaCardsSettingsSchema = fifaCardsSettingsBaseSchema;
 
 const moneyDropSettingsOpenApiSchema = moneyDropSettingsBaseSchema.extend({
   challengeType: z.literal('moneyDrop'),
@@ -136,6 +146,9 @@ const highLowSettingsOpenApiSchema = highLowSettingsBaseSchema.extend({
 const footballLogicSettingsOpenApiSchema = footballLogicSettingsBaseSchema.extend({
   challengeType: z.literal('footballLogic'),
 });
+const fifaCardsSettingsOpenApiSchema = fifaCardsSettingsBaseSchema.extend({
+  challengeType: z.literal('fifaCards'),
+});
 
 export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType', [
   moneyDropSettingsOpenApiSchema,
@@ -147,6 +160,7 @@ export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType'
   careerPathSettingsOpenApiSchema,
   highLowSettingsOpenApiSchema,
   footballLogicSettingsOpenApiSchema,
+  fifaCardsSettingsOpenApiSchema,
 ]);
 
 export const dailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema.extend({
@@ -280,6 +294,29 @@ const footballLogicQuestionSchema = z.object({
   explanation: z.string().nullable(),
 });
 
+const fifaCardSessionCardSchema = z.object({
+  id: z.string().uuid(),
+  edition: z.string().min(1),
+  editionLabel: z.string().min(1),
+  /** Display name revealed once solved. */
+  name: z.string().min(1),
+  /** Accepted answers (typo/accent/transliteration tolerant on the client). */
+  acceptedAnswers: z.array(z.string().min(1)).min(1),
+  overall: z.number().int(),
+  position: z.string(),
+  nation: z.string(),
+  nationCode: z.string(),
+  league: z.string(),
+  club: z.string(),
+  stats: z.object({
+    pac: z.number().int(), sho: z.number().int(), pas: z.number().int(),
+    dri: z.number().int(), def: z.number().int(), phy: z.number().int(),
+  }),
+  /** Signed, app-relative face URL for the reveal; null when no photo is available. */
+  faceUrl: z.string().nullable(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+});
+
 export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challengeType', [
   z.object({
     challengeType: z.literal('moneyDrop'),
@@ -354,10 +391,26 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     secondsPerQuestion: z.number().int().positive(),
     questions: z.array(footballLogicQuestionSchema).min(1),
   }),
+  z.object({
+    challengeType: z.literal('fifaCards'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    cardCount: z.number().int().positive(),
+    pointsPerSolve: z.number().int().positive(),
+    cards: z.array(fifaCardSessionCardSchema).min(1),
+  }),
 ]);
+
+export const dailyChallengeCardOutcomeSchema = z.object({
+  cardId: z.string().uuid(),
+  solved: z.boolean(),
+  cluesRevealed: z.number().int().min(0).max(3).default(0),
+});
 
 export const completeDailyChallengeBodySchema = z.object({
   score: z.number().int().nonnegative().default(0),
+  /** Per-card results (FIFA Cards only); validated against the day's set server-side. */
+  outcomes: z.array(dailyChallengeCardOutcomeSchema).max(10).optional(),
 });
 
 export const completeDailyChallengeResponseSchema = z.object({
@@ -424,6 +477,8 @@ export type ImposterSettings = z.infer<typeof imposterSettingsSchema>;
 export type CareerPathSettings = z.infer<typeof careerPathSettingsSchema>;
 export type HighLowSettings = z.infer<typeof highLowSettingsSchema>;
 export type FootballLogicSettings = z.infer<typeof footballLogicSettingsSchema>;
+export type FifaCardsSettings = z.infer<typeof fifaCardsSettingsSchema>;
+export type DailyChallengeCardOutcome = z.infer<typeof dailyChallengeCardOutcomeSchema>;
 export type DailyChallengeSettings = z.infer<typeof dailyChallengeSettingsSchema>;
 export type AdminDailyChallengeCategoryOption = z.infer<typeof adminDailyChallengeCategoryOptionSchema>;
 export type DailyChallengeSessionResponse = z.infer<typeof dailyChallengeSessionResponseSchema>;

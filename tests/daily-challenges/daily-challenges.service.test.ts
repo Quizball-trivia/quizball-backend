@@ -1662,8 +1662,8 @@ describe('dailyChallengesService fifaCards', () => {
     expect(session.cards.map((card) => card.id)).toEqual([CARD_B, CARD_A]);
     expect(session.pointsPerSolve).toBe(10);
     expect(session.cards[0].acceptedAnswers).toEqual(['Kevin De Bruyne', 'Bruyne']);
-    // no signing secret in tests → no face URL rather than an unverifiable one
-    expect(session.cards[0].faceUrl).toBeNull();
+    // faces are served from our own storage bucket by convention
+    expect(session.cards[0].faceUrl).toMatch(/\/imgs\/fifa-faces\/239085_24\.webp$/);
   });
 
   it('reuses an existing set without picking new cards', async () => {

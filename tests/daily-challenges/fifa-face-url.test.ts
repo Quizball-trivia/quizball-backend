@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { fifaFaceSignature, verifyFifaFaceSignature } from '../../src/modules/daily-challenges/fifa-face-url.js';
+import '../setup.js';
+import { buildFifaFaceUrl } from '../../src/modules/daily-challenges/fifa-face-url.js';
 
-describe('fifa face url signing', () => {
-  it('signs deterministically and verifies in constant time', () => {
-    const sig = fifaFaceSignature(158023, '24', 'test-secret-0123456789');
-    expect(sig).toHaveLength(32);
-    expect(fifaFaceSignature(158023, '24', 'test-secret-0123456789')).toBe(sig);
-    expect(verifyFifaFaceSignature(158023, '24', sig, 'test-secret-0123456789')).toBe(true);
-    expect(verifyFifaFaceSignature(158023, '25', sig, 'test-secret-0123456789')).toBe(false);
-    expect(verifyFifaFaceSignature(158024, '24', sig, 'test-secret-0123456789')).toBe(false);
-    expect(verifyFifaFaceSignature(158023, '24', sig, 'another-secret-0123456789')).toBe(false);
-    expect(verifyFifaFaceSignature(158023, '24', sig.slice(0, 10), 'test-secret-0123456789')).toBe(false);
+describe('fifa face url', () => {
+  it('points at the mirrored face in our storage bucket', () => {
+    const url = buildFifaFaceUrl(158023, '24');
+    expect(url).toMatch(/^https?:\/\/.+\/storage\/v1\/object\/public\/imgs\/fifa-faces\/158023_24\.webp$/);
+  });
+  it('is null without a photo', () => {
+    expect(buildFifaFaceUrl(null, '24')).toBeNull();
+    expect(buildFifaFaceUrl(158023, null)).toBeNull();
   });
 });

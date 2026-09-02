@@ -314,7 +314,7 @@ const fifaCardSessionCardSchema = z.object({
   }),
   /** Signed, app-relative face URL for the reveal; null when no photo is available. */
   faceUrl: z.string().nullable(),
-  difficulty: z.enum(['easy', 'medium', 'hard']),
+  difficulty: z.enum(['easy', 'medium', 'hard', 'veryHard']),
 });
 
 export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challengeType', [

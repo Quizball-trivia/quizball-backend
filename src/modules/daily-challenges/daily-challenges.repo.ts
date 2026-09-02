@@ -566,9 +566,11 @@ export const dailyChallengesRepo = {
       FROM jsonb_to_recordset($2::jsonb) AS v(card_id text, solved boolean, clues_revealed int)
       ON CONFLICT (completion_id, card_id) DO NOTHING
       `,
+      // postgres.js serialises a jsonb parameter itself; pre-stringifying would
+      // hand Postgres a JSON *string* ("cannot call jsonb_to_recordset on a non-array").
       [
         completionId,
-        JSON.stringify(outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed }))),
+        outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed })),
       ]
     );
   },

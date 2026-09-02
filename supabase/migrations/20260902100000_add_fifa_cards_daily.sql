@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS fifa_cards (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_fifa_cards_face_source CHECK (face_source IN ('own', 'name-match', 'none')),
-  CONSTRAINT chk_fifa_cards_difficulty CHECK (difficulty IN ('easy', 'medium', 'hard')),
+  CONSTRAINT chk_fifa_cards_difficulty CHECK (difficulty IN ('easy', 'medium', 'hard', 'veryHard')),
   CONSTRAINT chk_fifa_cards_overall CHECK (overall BETWEEN 40 AND 99)
 );
 

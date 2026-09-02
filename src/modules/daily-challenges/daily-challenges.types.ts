@@ -82,7 +82,7 @@ export interface FifaCardRow {
   photo_id: number | null;
   photo_ver: string | null;
   face_source: 'own' | 'name-match' | 'none';
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty: 'easy' | 'medium' | 'hard' | 'veryHard';
   is_active: boolean;
 }
 

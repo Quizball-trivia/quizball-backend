@@ -5,9 +5,12 @@ import { storeRepo } from '../store/store.repo.js';
 import type { WalletRow } from '../store/store.types.js';
 import type {
   DailyChallengeAvailableCategoryRow,
+  DailyChallengeCardOutcomeInput,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
   DailyChallengeType,
+  DailyFifaCardSetRow,
+  FifaCardRow,
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
@@ -37,6 +40,7 @@ export interface DailyChallengesTransactionRepo {
     challengeDay: string,
     coinsAwarded: number
   ): Promise<boolean>;
+  createCardOutcomes(completionId: string, outcomes: DailyChallengeCardOutcomeInput[]): Promise<void>;
 }
 
 export const dailyChallengesRepo = {
@@ -51,6 +55,8 @@ export const dailyChallengesRepo = {
         dailyChallengesRepo.listDistinctCompletionDaysInTx(tx, userId, throughDay, limit),
       createStreakBonusAward: (userId, challengeDay, coinsAwarded) =>
         dailyChallengesRepo.createStreakBonusAwardInTx(tx, userId, challengeDay, coinsAwarded),
+      createCardOutcomes: (completionId, outcomes) =>
+        dailyChallengesRepo.createCardOutcomesInTx(tx, completionId, outcomes),
     })) as Promise<T>;
   },
 
@@ -464,5 +470,108 @@ export const dailyChallengesRepo = {
       ${difficultyCoverageClause}
       ORDER BY COUNT(*) DESC, c.slug ASC
     `;
+  },
+
+  // ---- FIFA Cards -----------------------------------------------------------
+
+  async listFifaCardsByIds(ids: string[]): Promise<FifaCardRow[]> {
+    if (ids.length === 0) return [];
+    return sql<FifaCardRow[]>`
+      SELECT * FROM fifa_cards WHERE id = ANY(${sql.array(ids)}::uuid[])
+    `;
+  },
+
+  async getDailyFifaCardSet(challengeDay: string): Promise<DailyFifaCardSetRow | null> {
+    const [row] = await sql<DailyFifaCardSetRow[]>`
+      SELECT challenge_day::text AS challenge_day, card_ids
+      FROM daily_fifa_card_sets
+      WHERE challenge_day = ${challengeDay}::date
+    `;
+    return row ?? null;
+  },
+
+  /**
+   * Materialise the day's set if it doesn't exist yet and return it. Runs under
+   * a transaction-level advisory lock so two allocations (same day racing, or
+   * adjacent days around the UTC rollover) can never both pick the same
+   * never-served cards: history is read and the row inserted atomically.
+   *
+   * Never-served active cards come first in a stable salted-hash order (a
+   * deterministic rotation that isn't alphabetical); only when the pool is
+   * exhausted are the least recently served recycled.
+   */
+  async allocateDailyFifaCardSet(challengeDay: string, count: number, salt: string): Promise<DailyFifaCardSetRow> {
+    return sql.begin(async (tx) => {
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('daily_fifa_card_sets:allocate'))`);
+
+      const [existing] = await tx.unsafe<DailyFifaCardSetRow[]>(
+        `SELECT challenge_day::text AS challenge_day, card_ids FROM daily_fifa_card_sets WHERE challenge_day = $1::date`,
+        [challengeDay]
+      );
+      if (existing) return existing;
+
+      const unseen = await tx.unsafe<{ id: string }[]>(
+        `
+        SELECT c.id
+        FROM fifa_cards c
+        WHERE c.is_active
+          AND NOT EXISTS (SELECT 1 FROM daily_fifa_card_sets s WHERE c.id = ANY(s.card_ids))
+        ORDER BY md5($1 || c.id::text)
+        LIMIT $2
+        `,
+        [salt, count]
+      );
+      const picked = unseen.map((row) => row.id);
+      if (picked.length < count) {
+        const recycled = await tx.unsafe<{ id: string }[]>(
+          `
+          SELECT c.id
+          FROM fifa_cards c
+          LEFT JOIN LATERAL (
+            SELECT max(s.challenge_day) AS last_day
+            FROM daily_fifa_card_sets s
+            WHERE c.id = ANY(s.card_ids)
+          ) served ON true
+          WHERE c.is_active
+            AND NOT (c.id = ANY($1::uuid[]))
+          ORDER BY served.last_day ASC NULLS FIRST, md5($2 || c.id::text)
+          LIMIT $3
+          `,
+          [picked, salt, count - picked.length]
+        );
+        picked.push(...recycled.map((row) => row.id));
+      }
+      if (picked.length === 0) {
+        return { challenge_day: challengeDay, card_ids: [] };
+      }
+
+      await tx.unsafe(
+        `INSERT INTO daily_fifa_card_sets (challenge_day, card_ids) VALUES ($1::date, $2::uuid[])`,
+        [challengeDay, picked]
+      );
+      return { challenge_day: challengeDay, card_ids: picked };
+    }) as Promise<DailyFifaCardSetRow>;
+  },
+
+  async createCardOutcomesInTx(
+    tx: TransactionSql,
+    completionId: string,
+    outcomes: DailyChallengeCardOutcomeInput[]
+  ): Promise<void> {
+    if (outcomes.length === 0) return;
+    await tx.unsafe(
+      `
+      INSERT INTO daily_challenge_card_outcomes (completion_id, card_id, solved, clues_revealed)
+      SELECT $1::uuid, v.card_id::uuid, v.solved, v.clues_revealed
+      FROM jsonb_to_recordset($2::jsonb) AS v(card_id text, solved boolean, clues_revealed int)
+      ON CONFLICT (completion_id, card_id) DO NOTHING
+      `,
+      // postgres.js serialises a jsonb parameter itself; pre-stringifying would
+      // hand Postgres a JSON *string* ("cannot call jsonb_to_recordset on a non-array").
+      [
+        completionId,
+        outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed })),
+      ]
+    );
   },
 };

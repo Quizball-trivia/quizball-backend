@@ -24,6 +24,10 @@ const getPendingReminderMock = vi.fn();
 const canReceiveReminderEmailMock = vi.fn();
 const upsertReminderMock = vi.fn();
 const cancelReminderMock = vi.fn();
+const getDailyFifaCardSetMock = vi.fn();
+const allocateDailyFifaCardSetMock = vi.fn();
+const listFifaCardsByIdsMock = vi.fn();
+const createCardOutcomesMock = vi.fn();
 
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
   dailyChallengesRepo: {
@@ -44,6 +48,9 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     canReceiveReminderEmail: (...args: unknown[]) => canReceiveReminderEmailMock(...args),
     upsertReminder: (...args: unknown[]) => upsertReminderMock(...args),
     cancelReminder: (...args: unknown[]) => cancelReminderMock(...args),
+    getDailyFifaCardSet: (...args: unknown[]) => getDailyFifaCardSetMock(...args),
+    allocateDailyFifaCardSet: (...args: unknown[]) => allocateDailyFifaCardSetMock(...args),
+    listFifaCardsByIds: (...args: unknown[]) => listFifaCardsByIdsMock(...args),
   },
 }));
 
@@ -52,6 +59,22 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
     listByIds: (...args: unknown[]) => listByIdsMock(...args),
   },
 }));
+
+
+// Configs in production always carry parseable settings (the completion cap
+// fails closed without them); give mocked configs a generous, valid default.
+function defaultSettingsFor(challengeType: string) {
+  const base = { categoryIds: [] as string[] };
+  switch (challengeType) {
+    case 'moneyDrop': return { ...base, questionCount: 20, secondsPerQuestion: 30, startingMoney: 100000 };
+    case 'countdown': return { ...base, roundCount: 10, secondsPerRound: 60 };
+    case 'putInOrder': return { ...base, roundCount: 10, itemsPerRound: 5 };
+    case 'highLow': return { ...base, roundCount: 10, secondsPerRound: 60 };
+    case 'clues': return { ...base, questionCount: 20, secondsPerClueStep: 10 };
+    case 'fifaCards': return { ...base, cardCount: 10 };
+    default: return { ...base, questionCount: 20, secondsPerQuestion: 30 };
+  }
+}
 
 describe('dailyChallengesService', () => {
   beforeEach(() => {
@@ -1222,6 +1245,7 @@ describe('dailyChallengesService', () => {
         is_active: true,
         coin_reward: 999,
         xp_reward: 15,
+        settings: defaultSettingsFor(challengeType),
       });
       getCompletionForUserOnDayMock.mockResolvedValue(null);
       createCompletionMock.mockResolvedValue({ id: 'completion-1' });
@@ -1242,7 +1266,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 999,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1301,7 +1326,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 20,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1354,7 +1380,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 500,
       xp_reward: 20,
-    });
+        settings: defaultSettingsFor('moneyDrop'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockResolvedValue({
       id: 'completion-1',
@@ -1388,7 +1415,8 @@ describe('dailyChallengesService', () => {
       is_active: true,
       coin_reward: 80,
       xp_reward: 15,
-    });
+        settings: defaultSettingsFor('countdown'),
+      });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
     createCompletionMock.mockRejectedValue({ code: '23505' });
 
@@ -1515,5 +1543,211 @@ describe('dailyChallengesService', () => {
       challengeType: 'moneyDrop',
       reset: true,
     });
+  });
+});
+
+describe('dailyChallengesService completion score cap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: unknown) => Promise<unknown>) =>
+      callback({
+        getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
+        createCompletion: (...args: unknown[]) => createCompletionMock(...args),
+        addCoins: (...args: unknown[]) => addCoinsMock(...args),
+        grantXp: (...args: unknown[]) => grantXpMock(...args),
+        listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+        createStreakBonusAward: (...args: unknown[]) => createStreakBonusAwardMock(...args),
+      })
+    );
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listDistinctCompletionDaysMock.mockResolvedValue([]);
+    createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+    addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+    grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+  });
+
+  it.each([
+    // [type, settings, claimed score, recorded score, coins]
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 1_000_000, 10, 5000],
+    ['trueFalse', { categoryIds: [], questionCount: 8, secondsPerQuestion: 20 }, 50, 8, 1600],
+    ['careerPath', { categoryIds: [], questionCount: 5, secondsPerQuestion: 20 }, 3, 3, 900],
+    ['clues', { categoryIds: [], questionCount: 5, secondsPerClueStep: 10 }, 9999, 500, 10000],
+    ['putInOrder', { categoryIds: [], roundCount: 4, itemsPerRound: 5 }, 900, 400, 8000],
+    // the client plays exactly 2 countdown rounds, so a 3-round config still caps at 2 × 25
+    ['countdown', { categoryIds: [], roundCount: 3, secondsPerRound: 60 }, 500, 50, 3750],
+    // one point per round cleared
+    ['highLow', { categoryIds: [], roundCount: 2, secondsPerRound: 60 }, 500, 2, 800],
+    // boundaries: exact max passes untouched, max + 1 is clamped
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 10, 10, 5000],
+    ['imposter', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20 }, 11, 10, 5000],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 1200, 1200, 1200],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 1201, 1200, 1200],
+    ['moneyDrop', { categoryIds: [], questionCount: 10, secondsPerQuestion: 20, startingMoney: 1200 }, 5000, 1200, 1200],
+    ['footballLogic', { categoryIds: [], questionCount: 6, secondsPerQuestion: 20 }, -4, 0, 0],
+  ] as const)(
+    'clamps %s to what its settings allow (claimed %d → recorded %d, %d coins)',
+    async (challengeType, settings, claimed, recorded, coins) => {
+      getConfigMock.mockResolvedValue({ challenge_type: challengeType, is_active: true, coin_reward: 1, xp_reward: 15, settings });
+
+      const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+      const result = await dailyChallengesService.completeChallenge('user-1', challengeType, claimed);
+
+      expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: recorded, coinsAwarded: coins }));
+      expect(result.coinsAwarded).toBe(coins);
+    }
+  );
+
+  it('fails closed when settings are missing or invalid — no session could have been issued', async () => {
+    getConfigMock.mockResolvedValue({ challenge_type: 'imposter', is_active: true, coin_reward: 1, xp_reward: 15,
+      });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await expect(dailyChallengesService.completeChallenge('user-1', 'imposter', 1_000_000)).rejects.toThrow(/Invalid daily challenge settings/);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(addCoinsMock).not.toHaveBeenCalled();
+  });
+});
+
+const CARD_A = '11111111-1111-4111-8111-111111111111';
+const CARD_B = '22222222-2222-4222-8222-222222222222';
+const CARD_C = '33333333-3333-4333-8333-333333333333';
+function fifaCardRow(id: string, name: string, overall: number) {
+  return {
+    id, source_key: `sofifa:fc24:${name}`, edition: 'FC24', edition_label: 'FC 24', name, name_ka: null,
+    accepted: [name, name.split(' ').at(-1)!], overall, position: 'ST', nation: 'Norway', nation_code: 'no',
+    league: 'Premier League', club: 'Manchester City', pac: 89, sho: 91, pas: 66, dri: 80, def: 45, phy: 88,
+    photo_id: 239085, photo_ver: '24', face_source: 'own', difficulty: 'easy', is_active: true,
+  };
+}
+const FIFA_CONFIG = {
+  challenge_type: 'fifaCards', is_active: true, coin_reward: 100, xp_reward: 40,
+  settings: { challengeType: 'fifaCards', categoryIds: [], cardCount: 2 },
+};
+
+describe('dailyChallengesService fifaCards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listRecentlyServedQuestionsMock.mockResolvedValue([]);
+    getConfigMock.mockResolvedValue(FIFA_CONFIG);
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listDistinctCompletionDaysMock.mockResolvedValue([]);
+    createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+    addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+    grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+    createCardOutcomesMock.mockResolvedValue(undefined);
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: unknown) => Promise<unknown>) =>
+      callback({
+        getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
+        createCompletion: (...args: unknown[]) => createCompletionMock(...args),
+        addCoins: (...args: unknown[]) => addCoinsMock(...args),
+        grantXp: (...args: unknown[]) => grantXpMock(...args),
+        listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+        createStreakBonusAward: (...args: unknown[]) => createStreakBonusAwardMock(...args),
+        createCardOutcomes: (...args: unknown[]) => createCardOutcomesMock(...args),
+      })
+    );
+  });
+
+  it("materialises the day's set on first request and serves it in stored order", async () => {
+    getDailyFifaCardSetMock.mockResolvedValue(null);
+    allocateDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_B, CARD_A] });
+    listFifaCardsByIdsMock.mockResolvedValue([fifaCardRow(CARD_A, 'Erling Haaland', 91), fifaCardRow(CARD_B, 'Kevin De Bruyne', 91)]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'fifaCards', 'en');
+
+    expect(allocateDailyFifaCardSetMock).toHaveBeenCalledWith(expect.any(String), 2, expect.any(String));
+    expect(session.challengeType).toBe('fifaCards');
+    if (session.challengeType !== 'fifaCards') throw new Error('unreachable');
+    expect(session.cards.map((card) => card.id)).toEqual([CARD_B, CARD_A]);
+    expect(session.pointsPerSolve).toBe(10);
+    expect(session.cards[0].acceptedAnswers).toEqual(['Kevin De Bruyne', 'Bruyne']);
+    // faces are served from our own storage bucket by convention
+    expect(session.cards[0].faceUrl).toMatch(/\/imgs\/fifa-faces\/239085_24\.webp$/);
+  });
+
+  it('reuses an existing set without picking new cards', async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A] });
+    listFifaCardsByIdsMock.mockResolvedValue([fifaCardRow(CARD_A, 'Erling Haaland', 91)]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'fifaCards', 'en');
+
+    expect(allocateDailyFifaCardSetMock).not.toHaveBeenCalled();
+    if (session.challengeType !== 'fifaCards') throw new Error('unreachable');
+    expect(session.cards).toHaveLength(1);
+  });
+
+  it('refuses to serve a stored set with dangling or duplicate ids', async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A, CARD_C] });
+    listFifaCardsByIdsMock.mockResolvedValue([fifaCardRow(CARD_A, 'Erling Haaland', 91)]);
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await expect(dailyChallengesService.getChallengeSession('user-1', 'fifaCards', 'en')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('fails clearly when the pool is empty', async () => {
+    getDailyFifaCardSetMock.mockResolvedValue(null);
+    allocateDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [] });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await expect(dailyChallengesService.getChallengeSession('user-1', 'fifaCards', 'en')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("records validated outcomes and caps the score at the solves' worth", async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A, CARD_B] });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'fifaCards', 20, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 1 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 3 },
+    ]);
+
+    // claimed 20 (2 solves) but only 1 solved → 10 points → 10 coins
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 10, coinsAwarded: 10 }));
+    expect(createCardOutcomesMock).toHaveBeenCalledWith('completion-1', [
+      { cardId: CARD_A, solved: true, cluesRevealed: 1 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 3 },
+    ]);
+    expect(result.coinsAwarded).toBe(10);
+  });
+
+  it("rejects outcomes for cards outside today's set, duplicates, and partial coverage", async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 10, [
+      { cardId: CARD_C, solved: true, cluesRevealed: 0 },
+      { cardId: CARD_A, solved: true, cluesRevealed: 0 },
+    ])).rejects.toThrow(/not in today's set/);
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 10, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 0 },
+      { cardId: CARD_A, solved: true, cluesRevealed: 0 },
+    ])).rejects.toThrow(/Duplicate card outcome/);
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 10, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 0 },
+    ])).rejects.toThrow(/one outcome per card/);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bare score with no outcomes, and completion before any set was served', async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 9999)).rejects.toThrow(/one outcome per card/);
+
+    getDailyFifaCardSetMock.mockResolvedValue(null);
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 0, [])).rejects.toThrow(/No FIFA Cards set/);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(addCoinsMock).not.toHaveBeenCalled();
+  });
+
+  it('derives the score from reported solves, ignoring the client score', async () => {
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-02', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'fifaCards', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 1 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 1 },
+    ]);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 20, coinsAwarded: 20 }));
+    expect(result.coinsAwarded).toBe(20);
   });
 });

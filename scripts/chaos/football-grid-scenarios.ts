@@ -797,18 +797,23 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-/** Best-effort removal of this run's Supabase Auth identities (the DB rows stay, like every other harness). */
-async function deleteAuthUsers(target: TargetConfig, users: ChaosUser[]): Promise<void> {
+/**
+ * Best-effort removal of this run's Supabase Auth identities (the DB rows
+ * stay, like every other harness). Keyed by email so it also covers users
+ * created by a provisioning run that failed before login, and runs at most
+ * once even when both the normal exit path and a signal handler reach it.
+ */
+let authCleanupDone = false;
+async function deleteAuthUsersByEmail(target: TargetConfig, emails: string[]): Promise<void> {
+  if (authCleanupDone) return;
+  authCleanupDone = true;
   let deleted = 0;
-  // ChaosUser.userId is the backend row id, not the Auth uid; resolve by email.
-  const authIds = await listAdminUserIdsByEmail(target, new Set(users.map((user) => user.email.toLowerCase())))
+  // The backend row id is not the Auth uid; resolve by email.
+  const authIds = await listAdminUserIdsByEmail(target, new Set(emails.map((email) => email.toLowerCase())))
     .catch(() => new Map<string, string>());
-  for (const user of users) {
-    const authId = authIds.get(user.email.toLowerCase());
-    if (!authId) {
-      console.warn(`auth cleanup: ${user.email} → not found in Auth`);
-      continue;
-    }
+  for (const email of emails) {
+    const authId = authIds.get(email.toLowerCase());
+    if (!authId) continue; // never created, or already removed
     try {
       const res = await fetch(`${target.supabaseUrl}/auth/v1/admin/users/${authId}`, {
         method: 'DELETE',
@@ -816,12 +821,12 @@ async function deleteAuthUsers(target: TargetConfig, users: ChaosUser[]): Promis
         signal: AbortSignal.timeout(15_000),
       });
       if (res.ok) deleted += 1;
-      else console.warn(`auth cleanup: ${user.email} → ${res.status}`);
+      else console.warn(`auth cleanup: ${email} → ${res.status}`);
     } catch (error) {
-      console.warn(`auth cleanup: ${user.email} → ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`auth cleanup: ${email} → ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  console.log(`auth cleanup: deleted ${deleted}/${users.length} run users (pass --keep-users to skip)`);
+  console.log(`auth cleanup: deleted ${deleted}/${authIds.size} run users (pass --keep-users to skip)`);
 }
 
 async function runScenario(scenario: Scenario, users: ChaosUser[], target: TargetConfig, content: Content, campaign: string): Promise<ScenarioResult> {
@@ -886,19 +891,38 @@ async function main(): Promise<void> {
   // opponent-diversity scorer would otherwise keep re-pairing the same two.
   // Per-run throwaway credentials: the users only live for this campaign and
   // are deleted from Supabase Auth at the end unless --keep-users is passed.
+  // Emails are derived up front (same scheme as provisionUsers) so cleanup can
+  // run even if provisioning fails half-way or the process is interrupted.
   const password = process.env.CHAOS_USER_PASSWORD ?? `Scn-${randomUUID()}`;
-  const users = await provisionUsers({
-    apiBase: target.apiBase,
-    supabaseUrl: target.supabaseUrl,
-    serviceRoleKey: target.serviceRoleKey,
-    count: totalUsers,
-    password,
-    emailPrefix: `gridscn-${args.campaign}`,
-    emailDomain: target.emailDomain,
-    concurrency: 4,
-    loginIntervalMs: args.target === 'staging' ? 250 : 0,
-    bypassToken: target.bypassToken,
-  });
+  const emailPrefix = `gridscn-${args.campaign}`;
+  const runEmails = Array.from({ length: totalUsers }, (_, index) => `${emailPrefix}+u${index}@${target.emailDomain}`);
+  const cleanup = async () => {
+    if (!args.keepUsers) await deleteAuthUsersByEmail(target, runEmails);
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      console.log(`\n${signal}: cleaning up run users before exit`);
+      void cleanup().finally(() => process.exit(130));
+    });
+  }
+  let users: ChaosUser[];
+  try {
+    users = await provisionUsers({
+      apiBase: target.apiBase,
+      supabaseUrl: target.supabaseUrl,
+      serviceRoleKey: target.serviceRoleKey,
+      count: totalUsers,
+      password,
+      emailPrefix,
+      emailDomain: target.emailDomain,
+      concurrency: 4,
+      loginIntervalMs: args.target === 'staging' ? 250 : 0,
+      bypassToken: target.bypassToken,
+    });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
   const content = new Content(target.databaseUrl);
   const results: ScenarioResult[] = [];
   let cursor = 0;
@@ -910,7 +934,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await content.close();
-    if (!args.keepUsers) await deleteAuthUsers(target, users);
+    await cleanup();
   }
 
   const passed = results.filter((result) => result.status === 'pass').length;

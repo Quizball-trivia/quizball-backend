@@ -350,7 +350,9 @@ async function runPostConnectHydration(
   // Flag-gated so mature modes pay nothing for it: with Grid off this costs
   // ranked/auction connects zero queries, and every connect is on the hot path
   // that reconnect storms hammer.
-  if (config.FOOTBALL_GRID_QUEUE_ENABLED) {
+  // Skipped when hydration already bound this socket to a live match of any
+  // mode: an old grid result must not land on top of a ranked/auction rejoin.
+  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
     } catch (error) {

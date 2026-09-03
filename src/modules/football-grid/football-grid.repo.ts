@@ -742,7 +742,7 @@ export const footballGridRepo = {
        WHERE user_id = ${userId} AND status <> 'delivered'
          AND created_at > now() - interval '3 days'
        ORDER BY created_at DESC
-       LIMIT 3
+       LIMIT 1
     `;
     return rows.map((row) => row.match_id);
   },
@@ -1510,12 +1510,14 @@ export const footballGridRepo = {
         throw new Error('GRID_ACTIVE_SESSION_CONFLICT');
       }
       const humanUserIds = input.players.filter((player) => !player.isBot).map((player) => player.userId);
-      const theme = input.theme ?? 'european';
+      let theme = input.theme ?? 'european';
       let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme);
       if (!boardId && theme !== 'european') {
         // A pack whose boards are not yet published (or got quarantined) must
         // not strand two matched players: serve the European mix instead.
         boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european');
+        // Persist the pack the match actually plays, not the one requested.
+        theme = 'european';
       }
       if (!boardId) throw new Error('No published Football Grid board is available');
       const boards = await tx.unsafe<GridBoardRow[]>(

@@ -18,23 +18,29 @@ interface TypeaheadPayload {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 let cached: { payload: TypeaheadPayload; expiresAt: number } | null = null;
 
+// Board selection draws from EVERY published release (activation does not
+// retire the previous one), so the roster must too — otherwise a match on an
+// older board has valid answers the suggestions never show. The newest
+// published release still identifies the payload for caching.
 async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
   const rows = await sql<Array<{ release_id: string; id: string; name_en: string; name_ka: string | null }>>`
-    WITH release AS (
+    WITH newest AS (
       SELECT id FROM football_grid_content_releases
       WHERE status = 'published'
       ORDER BY version DESC
       LIMIT 1
     )
     SELECT DISTINCT ON (ba.football_player_id)
-      (SELECT id FROM release) AS release_id,
+      (SELECT id FROM newest) AS release_id,
       ba.football_player_id AS id,
       ba.player_name_en AS name_en,
       ba.player_name_ka AS name_ka
     FROM football_grid_board_answers ba
     JOIN football_grid_boards b ON b.id = ba.board_id
-    WHERE b.release_id = (SELECT id FROM release)
-    ORDER BY ba.football_player_id, ba.recognizable_rank ASC NULLS LAST
+    JOIN football_grid_content_releases r ON r.id = b.release_id
+    WHERE r.status = 'published'
+      AND ba.player_name_en IS NOT NULL
+    ORDER BY ba.football_player_id, (b.release_id = (SELECT id FROM newest)) DESC, ba.recognizable_rank ASC NULLS LAST
   `;
   if (rows.length === 0) return null;
   return {

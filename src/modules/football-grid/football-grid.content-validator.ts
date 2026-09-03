@@ -57,7 +57,7 @@ export function validateFootballGridBoard(
   if (board.columns.filter((criterion) => criterion.difficulty === 'hard').length > 1) {
     errors.push('Column axis contains more than one hard criterion');
   }
-  // League packs (non-european themes) draw from far smaller pools; four
+  // League packs (non-european themes) draw from far smaller pools; three
   // distinct answers per cell keeps cells honest without strangling small
   // leagues. The European mix keeps the original nine-answer bar.
   const minAnswers = board.theme && board.theme !== 'european' ? 3 : 9;

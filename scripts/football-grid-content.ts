@@ -83,7 +83,7 @@ const boardSchema = z.object({
   approvedBy: z.string().min(1),
   cells: z.array(z.object({
     // European-mix generation still targets ≥9 answers per cell; themed league
-    // packs run with a ≥4 floor (small pools), so the schema floor is 4.
+    // packs run with a ≥3 floor (small pools), so the schema floor is 3.
     playerIds: z.array(z.string().uuid()).min(3),
     recognizablePlayerIds: z.array(z.string().uuid()).min(2),
   })).length(9),

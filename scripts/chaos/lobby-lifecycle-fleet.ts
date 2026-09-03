@@ -310,6 +310,7 @@ async function runScenario(
 ): Promise<ScenarioResult> {
   const startedAt = Date.now();
   const clients = new Map<string, StagingClient>();
+  const extraClients: StagingClient[] = [];
   const errors: ScenarioResult['socketErrors'] = [];
   const ctx: ScenarioContext = {
     cfg,
@@ -326,6 +327,10 @@ async function runScenario(
       trackPresence(client, user.userId);
       await sleep(HYDRATION_SETTLE_MS);
       return client;
+    },
+    track: (user, client) => {
+      extraClients.push(client);
+      trackPresence(client, user.userId);
     },
     dropSocket: (user) => {
       const client = clients.get(user.userId);
@@ -357,7 +362,7 @@ async function runScenario(
     }
   }
 
-  for (const client of clients.values()) {
+  for (const client of [...clients.values(), ...extraClients]) {
     for (const event of client.trace.byEvent('error')) {
       const payload = event.payload as { code?: string; message?: string };
       if (payload?.code === 'CONNECT_ERROR') continue;
@@ -368,22 +373,31 @@ async function runScenario(
   // Every socket is gone before the probe so the server's disconnect grace is
   // the only thing keeping a membership alive. Waiting past it is the point.
   for (const user of users) ctx.dropSocket(user);
+  for (const client of extraClients) client.socket.disconnect();
   const rankedProbes: RankedProbeResult[] = [];
   if (spec.rankedProbe) {
-    await sleep(cfg.graceWaitMs);
-    // Whatever the storyline left behind is, by now, an abandoned lobby (every
-    // socket is gone) — age it so the probe judges the heal, not the 30-min wait.
-    if (ctx.lobbyId && cfg.ageLobby && cfg.ageStrandedMinutes) {
-      await cfg.ageLobby(ctx.lobbyId, cfg.ageStrandedMinutes);
-    }
-    for (const user of users) {
-      const probe = await rankedProbe(cfg.apiBase, user, spec);
-      rankedProbes.push(probe);
-      if (!probe.ok && ok) {
-        ok = false;
-        stage = 'ranked_probe';
-        detail = `${probe.outcome}: ${probe.detail}`;
+    // Contained like the storyline: one rejected DB call or probe must not
+    // take the whole fleet (and its report) down with it.
+    try {
+      await sleep(cfg.graceWaitMs);
+      // Whatever the storyline left behind is, by now, an abandoned lobby (every
+      // socket is gone) — age it so the probe judges the heal, not the 30-min wait.
+      if (ctx.lobbyId && cfg.ageLobby && cfg.ageStrandedMinutes) {
+        await cfg.ageLobby(ctx.lobbyId, cfg.ageStrandedMinutes);
       }
+      for (const user of users) {
+        const probe = await rankedProbe(cfg.apiBase, user, spec);
+        rankedProbes.push(probe);
+        if (!probe.ok && ok) {
+          ok = false;
+          stage = 'ranked_probe';
+          detail = `${probe.outcome}: ${probe.detail}`;
+        }
+      }
+    } catch (error) {
+      ok = false;
+      stage = 'probe_phase';
+      detail = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -412,6 +426,8 @@ interface ScenarioContext {
   lobbyId: string | null;
   matchIds: string[];
   connect: (user: ChaosUser) => Promise<StagingClient>;
+  /** Register an extra socket (second tab) so end-of-storyline cleanup reaches it. */
+  track: (user: ChaosUser, client: StagingClient) => void;
   dropSocket: (user: ChaosUser) => void;
 }
 
@@ -552,18 +568,16 @@ const STORYLINES: Record<ScenarioKind, Storyline> = {
     await createLobby(ctx, tabA);
     // Second tab: connect hydration attaches every socket of the user.
     const tabB = connectStaging(ctx.cfg.apiBase, user.token, user.userId);
+    ctx.track(user, tabB);
     if (!(await waitConnected(tabB, CONNECT_TIMEOUT_MS))) throw new ScenarioFailure('connect', 'second tab failed to connect');
-    trackPresence(tabB, user.userId);
     await waitLobbyState(tabB, (s) => s.lobbyId === ctx.lobbyId, 'second_tab_attach');
     tabA.socket.disconnect();
     await sleep(ctx.cfg.graceWaitMs);
     const still = await freshLobbyState(tabB, 'one_tab_left');
     if (!(still.members ?? []).some((m) => m.userId === user.userId) || still.status !== 'waiting') {
-      tabB.disconnect();
       throw new ScenarioFailure('one_tab_left', `closing one tab removed the player (status=${still.status})`);
     }
     const result = await leaveLobby(tabB);
-    tabB.disconnect();
     if (!result?.ok) throw new ScenarioFailure('leave', `leave ack ${JSON.stringify(result)}`);
   },
 

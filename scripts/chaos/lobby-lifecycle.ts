@@ -313,7 +313,11 @@ async function provisionWithTokenCache(args: Args, target: TargetConfig): Promis
 interface ManagedBackend {
   restarts: Array<{ atSec: number; signal: string; downMs: number; reason: string }>;
   failures: Array<{ atSec: number; error: string }>;
+  /** every restart that was actually started (succeeded or failed) */
+  attempts: number;
   restart: (atSec: number, reason: string) => Promise<void>;
+  /** resolves once every in-flight restart has settled */
+  settle: () => Promise<void>;
   stop: () => Promise<void>;
 }
 
@@ -386,13 +390,16 @@ async function startManagedBackend(args: Args, target: TargetConfig): Promise<Ma
   await launch();
   const restarts: ManagedBackend['restarts'] = [];
   const failures: ManagedBackend['failures'] = [];
+  let attempts = 0;
   let restartChain: Promise<void> = Promise.resolve();
   return {
     restarts,
     failures,
+    get attempts() { return attempts; },
     // Serialized: two overlapping restarts would race each other for the port.
     restart: (atSec, reason) => {
       const run = restartChain.then(async () => {
+        attempts++;
         const downAt = Date.now();
         console.log(`[chaos] ${args.restartSignal} backend at t+${atSec}s (${reason})`);
         try {
@@ -409,7 +416,14 @@ async function startManagedBackend(args: Args, target: TargetConfig): Promise<Ma
       restartChain = run.catch(() => undefined);
       return run;
     },
-    stop: () => killCurrent('SIGTERM'),
+    settle: () => restartChain,
+    // Also chained: stopping in the middle of a relaunch would leave the new
+    // detached child running on the port after the harness exits.
+    stop: () => {
+      const run = restartChain.then(() => killCurrent('SIGTERM'));
+      restartChain = run.catch(() => undefined);
+      return run;
+    },
   };
 }
 
@@ -546,6 +560,9 @@ async function main(): Promise<void> {
       },
     });
     for (const timer of restartTimers) clearTimeout(timer);
+    // A scheduled restart may still be mid-relaunch; the audit must see a
+    // server that has been up for a full grace, not one that is booting.
+    await backend?.settle();
     clearInterval(auditTimer);
     while (auditInFlight) await sleep(100);
     const app = await appCollector.stop().catch(() => null);
@@ -556,9 +573,8 @@ async function main(): Promise<void> {
     const strandedObserved = [...strandedSeen.values()];
     const violations = evaluate(fleet, invariants, app);
     if (backend) {
-      const requested = args.restartAtSec.length + Math.min(args.scenarioRestarts, fleet.byKind.abandon_then_restart?.planned ?? 0);
       if (backend.failures.length > 0) violations.push(`${backend.failures.length} backend restarts failed: ${backend.failures.map((f) => f.error).join('; ')}`);
-      if (backend.restarts.length < requested) violations.push(`backend restarts completed ${backend.restarts.length}/${requested} requested`);
+      if (backend.restarts.length < backend.attempts) violations.push(`backend restarts completed ${backend.restarts.length}/${backend.attempts} attempted`);
     }
     // A stranded row that the player's next explicit ranked click heals is the
     // designed outcome; only rows still there at the end (or a blocked probe)
@@ -576,6 +592,7 @@ async function main(): Promise<void> {
       config: { ...args, envFile: args.envFile ?? null },
       backendRestarts: backend?.restarts ?? [],
       backendRestartFailures: backend?.failures ?? [],
+      backendRestartAttempts: backend?.attempts ?? 0,
       fleet,
       invariants,
       strandedObserved,

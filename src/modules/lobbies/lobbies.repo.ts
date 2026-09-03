@@ -167,6 +167,19 @@ export const lobbiesRepo = {
     `;
   },
 
+  /**
+   * Undo the updated_at stamp a heal-triggered host transfer leaves on a
+   * lobby that is still waiting: the remaining members abandoned it just the
+   * same, and their own heal keys off this idle time.
+   */
+  async restoreWaitingIdleSince(lobbyId: string, updatedAt: string): Promise<void> {
+    await sql`
+      UPDATE lobbies
+      SET updated_at = ${updatedAt}
+      WHERE id = ${lobbyId} AND status = 'waiting'
+    `;
+  },
+
   async setHostUser(lobbyId: string, userId: string): Promise<void> {
     await sql`
       UPDATE lobbies
@@ -221,12 +234,19 @@ export const lobbiesRepo = {
   },
 
   async addMember(lobbyId: string, userId: string, isReady: boolean): Promise<LobbyMemberRow> {
+    // `updated_at` is the idle signal the stranded-lobby heal relies on, so a
+    // member joining is lobby activity too — folded into one statement.
     const [row] = await sql<LobbyMemberRow[]>`
-      INSERT INTO lobby_members (lobby_id, user_id, is_ready)
-      VALUES (${lobbyId}, ${userId}, ${isReady})
-      ON CONFLICT (lobby_id, user_id)
-      DO UPDATE SET is_ready = ${isReady}
-      RETURNING *
+      WITH member AS (
+        INSERT INTO lobby_members (lobby_id, user_id, is_ready)
+        VALUES (${lobbyId}, ${userId}, ${isReady})
+        ON CONFLICT (lobby_id, user_id)
+        DO UPDATE SET is_ready = ${isReady}
+        RETURNING *
+      ), touched AS (
+        UPDATE lobbies SET updated_at = NOW() WHERE id = ${lobbyId}
+      )
+      SELECT * FROM member
     `;
     return row;
   },
@@ -247,11 +267,23 @@ export const lobbiesRepo = {
   },
 
   async updateMemberReady(lobbyId: string, userId: string, isReady: boolean): Promise<boolean> {
+    // A real readiness change in a waiting lobby is activity; replayed or
+    // same-value ready events must not keep a stale lobby alive.
     const [row] = await sql<LobbyMemberRow[]>`
-      UPDATE lobby_members
-      SET is_ready = ${isReady}
-      WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
-      RETURNING *
+      WITH before AS (
+        SELECT is_ready FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+      ), member AS (
+        UPDATE lobby_members
+        SET is_ready = ${isReady}
+        WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+        RETURNING *
+      ), touched AS (
+        UPDATE lobbies SET updated_at = NOW()
+        WHERE id = ${lobbyId}
+          AND status = 'waiting'
+          AND EXISTS (SELECT 1 FROM before WHERE before.is_ready IS DISTINCT FROM ${isReady})
+      )
+      SELECT * FROM member
     `;
     return row !== undefined;
   },

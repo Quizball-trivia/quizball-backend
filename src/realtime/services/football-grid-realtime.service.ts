@@ -270,10 +270,11 @@ async function processTerminalDeliveries(
 async function recoverTerminalResultDeliveries(
   io: QuizballServer,
   matchId: string | null = null,
+  userId: string | null = null,
 ): Promise<number> {
   let processed = 0;
   while (true) {
-    const deliveries = await footballGridRepo.claimPendingResultDeliveries({ matchId, limit: 100 });
+    const deliveries = await footballGridRepo.claimPendingResultDeliveries({ matchId, userId, limit: 100 });
     if (deliveries.length === 0) break;
     const byMatch = new Map<string, FootballGridResultDeliveryRow[]>();
     for (const delivery of deliveries) {
@@ -363,9 +364,11 @@ export const footballGridRealtimeService = {
     if (await footballGridRepo.getActiveMatchIdForUser(userId)) return;
     const pending = await footballGridRepo.listUndeliveredResultMatchIds(userId);
     if (pending.length === 0) return;
+    // Scoped to this user: a match-wide claim would rotate the opponent's
+    // in-flight ack token and turn their pending ACK into COMPLETION_ACK_INVALID.
     await Promise.all(pending.map(async (pendingMatchId) => {
-      await footballGridRepo.makeResultDeliveryDue(pendingMatchId, userId);
-      await recoverTerminalResultDeliveries(io, pendingMatchId);
+      await footballGridRepo.makeResultDeliveryDue(pendingMatchId, userId, { preserveUnexpiredAck: true });
+      await recoverTerminalResultDeliveries(io, pendingMatchId, userId);
     }));
   },
 

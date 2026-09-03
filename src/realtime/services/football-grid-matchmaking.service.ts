@@ -128,7 +128,11 @@ async function readSearch(searchId: string): Promise<QueuedGridSearch | null> {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as QueuedGridSearch;
-    return parsed.searchId === searchId && typeof parsed.userId === 'string' ? parsed : null;
+    if (parsed.searchId !== searchId || typeof parsed.userId !== 'string') return null;
+    // Searches queued by a pre-themes replica during a rolling deploy carry no
+    // theme; without a default they can never pair with a themed search and
+    // keep deferring each other's bot fallback until the queue TTL.
+    return { ...parsed, theme: normalizeTheme(parsed.theme) };
   } catch {
     return null;
   }
@@ -195,10 +199,11 @@ function parseSearchSnapshot(value: Record<string, unknown> | null): QueuedGridS
   ) return null;
   // Pre-themes snapshots (and any unknown theme) fall back to the default
   // pack rather than being dropped from recovery.
-  const theme = FOOTBALL_GRID_THEMES.includes(value.theme as FootballGridTheme)
-    ? value.theme as FootballGridTheme
-    : 'european';
-  return { ...(value as unknown as QueuedGridSearch), theme };
+  return { ...(value as unknown as QueuedGridSearch), theme: normalizeTheme(value.theme) };
+}
+
+function normalizeTheme(value: unknown): FootballGridTheme {
+  return FOOTBALL_GRID_THEMES.includes(value as FootballGridTheme) ? value as FootballGridTheme : 'european';
 }
 
 async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {

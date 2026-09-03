@@ -22,7 +22,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import postgres from 'postgres';
 import { io, type Socket } from 'socket.io-client';
-import { provisionUsers, type ChaosUser } from './auth.js';
+import { listAdminUserIdsByEmail, provisionUsers, type ChaosUser } from './auth.js';
 
 const STAGING_SUPABASE_PROJECT = 'nsdfiprfmhdqhbfxfwpv';
 const PRODUCTION_SUPABASE_PROJECT = 'lfbwhxvwubzeqkztghok';
@@ -36,6 +36,8 @@ interface Args {
   only: Set<string> | null;
   campaign: string;
   report?: string;
+  /** Keep the provisioned Supabase Auth users instead of deleting them at the end. */
+  keepUsers: boolean;
 }
 
 interface TargetConfig {
@@ -109,6 +111,7 @@ function parseArgs(argv: string[]): Args {
     only: only ? new Set(only.split(',').map((item) => item.trim().toUpperCase())) : null,
     campaign: value(argv, 'campaign') ?? `scn${Date.now().toString(36)}`,
     report: value(argv, 'report'),
+    keepUsers: argv.includes('--keep-users'),
   };
 }
 
@@ -794,6 +797,33 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
+/** Best-effort removal of this run's Supabase Auth identities (the DB rows stay, like every other harness). */
+async function deleteAuthUsers(target: TargetConfig, users: ChaosUser[]): Promise<void> {
+  let deleted = 0;
+  // ChaosUser.userId is the backend row id, not the Auth uid; resolve by email.
+  const authIds = await listAdminUserIdsByEmail(target, new Set(users.map((user) => user.email.toLowerCase())))
+    .catch(() => new Map<string, string>());
+  for (const user of users) {
+    const authId = authIds.get(user.email.toLowerCase());
+    if (!authId) {
+      console.warn(`auth cleanup: ${user.email} → not found in Auth`);
+      continue;
+    }
+    try {
+      const res = await fetch(`${target.supabaseUrl}/auth/v1/admin/users/${authId}`, {
+        method: 'DELETE',
+        headers: { apikey: target.serviceRoleKey, Authorization: `Bearer ${target.serviceRoleKey}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) deleted += 1;
+      else console.warn(`auth cleanup: ${user.email} → ${res.status}`);
+    } catch (error) {
+      console.warn(`auth cleanup: ${user.email} → ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  console.log(`auth cleanup: deleted ${deleted}/${users.length} run users (pass --keep-users to skip)`);
+}
+
 async function runScenario(scenario: Scenario, users: ChaosUser[], target: TargetConfig, content: Content, campaign: string): Promise<ScenarioResult> {
   const notes: string[] = [];
   const note = (message: string) => {
@@ -840,7 +870,7 @@ async function runScenario(scenario: Scenario, users: ChaosUser[], target: Targe
 
 async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
-    console.log('Usage: npm run chaos:grid:scenarios -- --target=local|staging [--only=S1,S5] [--campaign=name] [--report=path]');
+    console.log('Usage: npm run chaos:grid:scenarios -- --target=local|staging [--only=S1,S5] [--campaign=name] [--report=path] [--keep-users]');
     console.log(SCENARIOS.map((scenario) => `  ${scenario.id}  ${scenario.title}`).join('\n'));
     return;
   }
@@ -854,12 +884,15 @@ async function main(): Promise<void> {
   // Fresh users per campaign: the session guard blocks a search while an
   // earlier (possibly failed) scenario's match is still active, and the
   // opponent-diversity scorer would otherwise keep re-pairing the same two.
+  // Per-run throwaway credentials: the users only live for this campaign and
+  // are deleted from Supabase Auth at the end unless --keep-users is passed.
+  const password = process.env.CHAOS_USER_PASSWORD ?? `Scn-${randomUUID()}`;
   const users = await provisionUsers({
     apiBase: target.apiBase,
     supabaseUrl: target.supabaseUrl,
     serviceRoleKey: target.serviceRoleKey,
     count: totalUsers,
-    password: 'GridScenario!2026',
+    password,
     emailPrefix: `gridscn-${args.campaign}`,
     emailDomain: target.emailDomain,
     concurrency: 4,
@@ -877,6 +910,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await content.close();
+    if (!args.keepUsers) await deleteAuthUsers(target, users);
   }
 
   const passed = results.filter((result) => result.status === 'pass').length;

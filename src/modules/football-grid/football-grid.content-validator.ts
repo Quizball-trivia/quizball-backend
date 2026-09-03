@@ -98,10 +98,9 @@ export function validateFootballGridRelease(input: {
   // packs are small, deliberately themed sets whose difficulty skews with
   // their club lists, so they are exempt from the mix requirement.
   const distributionBoards = input.boards.filter((board) => !board.theme || board.theme === 'european');
-  for (const difficulty of Object.keys(targets) as FootballGridDifficulty[]) {
-    const actual = distributionBoards.length === 0
-      ? 0
-      : distributionBoards.filter((board) => board.difficulty === difficulty).length / distributionBoards.length * 100;
+  // A themed-only release has nothing to measure the mix against.
+  for (const difficulty of distributionBoards.length === 0 ? [] : Object.keys(targets) as FootballGridDifficulty[]) {
+    const actual = distributionBoards.filter((board) => board.difficulty === difficulty).length / distributionBoards.length * 100;
     if (Math.abs(actual - targets[difficulty]) > tolerance) {
       errors.push(`${difficulty} board distribution is ${actual.toFixed(2)}%, expected ${targets[difficulty]}% +/- ${tolerance}%`);
     }

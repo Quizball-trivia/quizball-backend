@@ -18,7 +18,8 @@ const querySchema = z.object({
  */
 export const footballGridPackPreviewController = {
   async getPreview(req: Request, res: Response): Promise<void> {
-    if (!config.FOOTBALL_GRID_PACK_PREVIEW_ENABLED) {
+    // Review tooling only: it exposes board criteria and answer samples.
+    if (!config.FOOTBALL_GRID_PACK_PREVIEW_ENABLED || config.NODE_ENV === 'prod') {
       res.status(404).json({ error: 'Not found' });
       return;
     }

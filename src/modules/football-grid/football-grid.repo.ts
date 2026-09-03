@@ -629,6 +629,7 @@ export const footballGridRepo = {
 
   async claimPendingResultDeliveries(input: {
     matchId?: string | null;
+    userId?: string | null;
     limit?: number;
   } = {}): Promise<FootballGridResultDeliveryRow[]> {
     const limit = input.limit ?? 100;
@@ -637,6 +638,7 @@ export const footballGridRepo = {
          SELECT d.match_id, d.user_id
            FROM football_grid_result_deliveries d
           WHERE ($1::uuid IS NULL OR d.match_id = $1::uuid)
+            AND ($3::uuid IS NULL OR d.user_id = $3::uuid)
             AND (
               (d.status = 'pending' AND d.next_attempt_at <= clock_timestamp())
               OR (d.status = 'awaiting_ack' AND d.next_attempt_at <= clock_timestamp())
@@ -654,7 +656,7 @@ export const footballGridRepo = {
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
        RETURNING d.match_id, d.user_id, d.terminal_state_version, d.attempt_count, d.ack_token`,
-      [input.matchId ?? null, limit],
+      [input.matchId ?? null, limit, input.userId ?? null],
     ));
   },
 
@@ -706,7 +708,17 @@ export const footballGridRepo = {
     return existing[0]?.found === true;
   },
 
-  async makeResultDeliveryDue(matchId: string, userId: string): Promise<void> {
+  /**
+   * With `preserveUnexpiredAck`, a delivery this user's other tab already
+   * rendered (awaiting_ack, retry not yet due) keeps its token instead of being
+   * re-issued — rotating it would turn that tab's ACK into COMPLETION_ACK_INVALID.
+   */
+  async makeResultDeliveryDue(
+    matchId: string,
+    userId: string,
+    options: { preserveUnexpiredAck?: boolean } = {},
+  ): Promise<void> {
+    const preserveUnexpiredAck = options.preserveUnexpiredAck ?? false;
     await sql`
       UPDATE football_grid_result_deliveries
          SET status = CASE WHEN status = 'processing' AND processing_lease_until >= now()
@@ -720,6 +732,7 @@ export const footballGridRepo = {
                THEN ack_token ELSE null END,
              updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId} AND status <> 'delivered'
+         AND NOT (${preserveUnexpiredAck} AND status = 'awaiting_ack' AND next_attempt_at > now())
     `;
   },
 
@@ -727,6 +740,7 @@ export const footballGridRepo = {
     const rows = await sql<Array<{ match_id: string }>>`
       SELECT match_id FROM football_grid_result_deliveries
        WHERE user_id = ${userId} AND status <> 'delivered'
+         AND created_at > now() - interval '3 days'
        ORDER BY created_at DESC
        LIMIT 3
     `;
@@ -2492,17 +2506,19 @@ export const footballGridRepo = {
 
   async getCuratedResultSamples(matchId: string): Promise<Array<{
     cellIndex: number;
-    players: Array<{ playerId: string; name: string; imageUrl: null; imageAssetKey: string | null }>;
+    players: Array<{ playerId: string; name: string; imageUrl: string | null; imageAssetKey: string | null }>;
   }>> {
     const rows = await sql<Array<{
       cell_index: number;
       football_player_id: string;
       name: string;
       image_asset_key: string | null;
+      image_url: string | null;
     }>>`
       SELECT a.cell_index, a.football_player_id,
              COALESCE(a.player_name_en, fp.name) AS name,
-             COALESCE(NULLIF(a.image_asset_key, 'players/unknown.webp'), fp.image_url) AS image_asset_key
+             NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
+             fp.image_url
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
@@ -2518,6 +2534,9 @@ export const footballGridRepo = {
       playerId: row.football_player_id,
       name: row.name,
       imageAssetKey: row.image_asset_key,
+      // Answer rows are append-only once published, so a photo sourced later
+      // lives only on football_players; it travels as a full URL, not a key.
+      imageUrl: row.image_asset_key ? null : row.image_url,
     })));
   },
 };

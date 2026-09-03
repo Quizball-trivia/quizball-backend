@@ -24,7 +24,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { fetchUserRoomSockets } from './match-presence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
-import { userSessionGuardService } from './user-session-guard.service.js';
+import { SESSION_LOCK_WAIT_MS, userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
 import {
@@ -1429,7 +1429,7 @@ export const rankedMatchmakingService = {
           }),
           // A deliberate click deserves the normal bounded wait for the user
           // lock; the client does not retry an ignored explicit join on its own.
-          { waitMs: explicitJoin ? undefined : 0 },
+          { waitMs: explicitJoin ? SESSION_LOCK_WAIT_MS : 0 },
         );
         if (prepared) {
           earlySessionBlock = prepared.ok ? null : {

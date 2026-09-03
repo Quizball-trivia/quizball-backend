@@ -804,28 +804,33 @@ const SCENARIOS: Scenario[] = [
  * once even when both the normal exit path and a signal handler reach it.
  */
 let authCleanupDone = false;
-async function deleteAuthUsersByEmail(target: TargetConfig, emails: string[]): Promise<void> {
+async function deleteAuthUsersByEmail(target: TargetConfig, emails: string[], deadlineMs = 60_000): Promise<void> {
   if (authCleanupDone) return;
   authCleanupDone = true;
+  // One deadline for the whole cleanup (lookup + deletes, which run in
+  // parallel) so a signal-path exit is bounded regardless of user count.
+  const deadline = AbortSignal.timeout(deadlineMs);
   let deleted = 0;
   // The backend row id is not the Auth uid; resolve by email.
-  const authIds = await listAdminUserIdsByEmail(target, new Set(emails.map((email) => email.toLowerCase())))
-    .catch(() => new Map<string, string>());
-  for (const email of emails) {
+  const authIds = await Promise.race([
+    listAdminUserIdsByEmail(target, new Set(emails.map((email) => email.toLowerCase()))),
+    new Promise<Map<string, string>>((_, reject) => deadline.addEventListener('abort', () => reject(new Error('cleanup deadline')), { once: true })),
+  ]).catch(() => new Map<string, string>());
+  await Promise.all(emails.map(async (email) => {
     const authId = authIds.get(email.toLowerCase());
-    if (!authId) continue; // never created, or already removed
+    if (!authId) return; // never created, or already removed
     try {
       const res = await fetch(`${target.supabaseUrl}/auth/v1/admin/users/${authId}`, {
         method: 'DELETE',
         headers: { apikey: target.serviceRoleKey, Authorization: `Bearer ${target.serviceRoleKey}` },
-        signal: AbortSignal.timeout(15_000),
+        signal: deadline,
       });
       if (res.ok) deleted += 1;
       else console.warn(`auth cleanup: ${email} → ${res.status}`);
     } catch (error) {
       console.warn(`auth cleanup: ${email} → ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
+  }));
   console.log(`auth cleanup: deleted ${deleted}/${authIds.size} run users (pass --keep-users to skip)`);
 }
 
@@ -896,13 +901,13 @@ async function main(): Promise<void> {
   const password = process.env.CHAOS_USER_PASSWORD ?? `Scn-${randomUUID()}`;
   const emailPrefix = `gridscn-${args.campaign}`;
   const runEmails = Array.from({ length: totalUsers }, (_, index) => `${emailPrefix}+u${index}@${target.emailDomain}`);
-  const cleanup = async () => {
-    if (!args.keepUsers) await deleteAuthUsersByEmail(target, runEmails);
+  const cleanup = async (deadlineMs?: number) => {
+    if (!args.keepUsers) await deleteAuthUsersByEmail(target, runEmails, deadlineMs);
   };
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
-      console.log(`\n${signal}: cleaning up run users before exit`);
-      void cleanup().finally(() => process.exit(130));
+      console.log(`\n${signal}: cleaning up run users before exit (20s budget)`);
+      void cleanup(20_000).finally(() => process.exit(130));
     });
   }
   let users: ChaosUser[];

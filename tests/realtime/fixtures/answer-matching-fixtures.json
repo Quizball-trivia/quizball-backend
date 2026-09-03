@@ -173,6 +173,104 @@
       ],
       "legacy": true,
       "v2": true
+    },
+    {
+      "note": "prod 2026-09-03 tokaghv: Georgian Eto'o without apostrophe (eval #26419, ranked clues q)",
+      "guess": "ეტოო",
+      "accepted": [
+        "Samuel Eto'o",
+        "Eto'o",
+        "სამუელ ეტო’ო",
+        "სამუელი ეტუ"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "prod: Latin Eto'o without apostrophe (8 rejections Aug 2026)",
+      "guess": "etoo",
+      "accepted": [
+        "Samuel Eto'o",
+        "Eto'o"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "prod: O'Shea without apostrophe, Georgian (11 rejections Aug 2026)",
+      "guess": "ოში",
+      "accepted": [
+        "John O'Shea",
+        "ჯონ ო’ში"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe-stripped full name still matches",
+      "guess": "samuel etoo",
+      "accepted": [
+        "Samuel Eto'o"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "guard: spaced O'Neill variant keeps matching via typo budget",
+      "guess": "o neill",
+      "accepted": [
+        "Martin O'Neill",
+        "O'Neill"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "guard: unrelated short Georgian guess still rejected",
+      "guess": "ეტა",
+      "accepted": [
+        "Samuel Eto'o",
+        "Eto'o",
+        "სამუელ ეტო’ო"
+      ],
+      "legacy": false,
+      "v2": false
+    },
+    {
+      "note": "apostrophe variant U+2019 right single quote joins",
+      "guess": "ngolo kante",
+      "accepted": [
+        "N’Golo Kanté"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant U+2018 left single quote joins",
+      "guess": "oshea",
+      "accepted": [
+        "John O‘Shea"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant U+02BC modifier letter joins",
+      "guess": "etoo",
+      "accepted": [
+        "Etoʼo"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant backtick joins",
+      "guess": "oneill",
+      "accepted": [
+        "O`Neill"
+      ],
+      "legacy": true,
+      "v2": true
     }
   ],
   "countdownCases": [

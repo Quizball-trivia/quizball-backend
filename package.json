@@ -33,6 +33,7 @@
     "chaos:party": "tsx scripts/chaos/friendly.ts",
     "chaos:lobby": "tsx scripts/chaos/lobby-lifecycle.ts",
     "chaos:grid": "tsx scripts/chaos/football-grid.ts",
+    "chaos:grid:scenarios": "tsx scripts/chaos/football-grid-scenarios.ts",
     "load:k6:inspect": "k6 inspect scripts/load/k6/auth-api.k6.js",
     "load:k6:smoke": "TARGET=staging MODE=smoke USERS=2 VUS=2 k6 run scripts/load/k6/auth-api.k6.js",
     "load:k6": "k6 run scripts/load/k6/auth-api.k6.js",

@@ -57,8 +57,12 @@ export function validateFootballGridBoard(
   if (board.columns.filter((criterion) => criterion.difficulty === 'hard').length > 1) {
     errors.push('Column axis contains more than one hard criterion');
   }
+  // League packs (non-european themes) draw from far smaller pools; three
+  // distinct answers per cell keeps cells honest without strangling small
+  // leagues. The European mix keeps the original nine-answer bar.
+  const minAnswers = board.theme && board.theme !== 'european' ? 3 : 9;
   board.cells.forEach((cell, index) => {
-    if (new Set(cell.playerIds).size < 9) errors.push(`Cell ${index} has fewer than nine distinct answers`);
+    if (new Set(cell.playerIds).size < minAnswers) errors.push(`Cell ${index} has fewer than ${minAnswers} distinct answers`);
     const recognizable = new Set(cell.recognizablePlayerIds.filter((playerId) => cell.playerIds.includes(playerId)));
     if (recognizable.size < 2) errors.push(`Cell ${index} has fewer than two recognizable answers`);
   });
@@ -90,10 +94,13 @@ export function validateFootballGridRelease(input: {
   if (input.boards.length < 1) errors.push('Release contains no boards');
   const targets: Record<FootballGridDifficulty, number> = { easy: 25, normal: 60, hard: 15 };
   const tolerance = input.tolerancePercentagePoints ?? 2;
-  for (const difficulty of Object.keys(targets) as FootballGridDifficulty[]) {
-    const actual = input.boards.length === 0
-      ? 0
-      : input.boards.filter((board) => board.difficulty === difficulty).length / input.boards.length * 100;
+  // The distribution target governs the default European rotation; league
+  // packs are small, deliberately themed sets whose difficulty skews with
+  // their club lists, so they are exempt from the mix requirement.
+  const distributionBoards = input.boards.filter((board) => !board.theme || board.theme === 'european');
+  // A themed-only release has nothing to measure the mix against.
+  for (const difficulty of distributionBoards.length === 0 ? [] : Object.keys(targets) as FootballGridDifficulty[]) {
+    const actual = distributionBoards.filter((board) => board.difficulty === difficulty).length / distributionBoards.length * 100;
     if (Math.abs(actual - targets[difficulty]) > tolerance) {
       errors.push(`${difficulty} board distribution is ${actual.toFixed(2)}%, expected ${targets[difficulty]}% +/- ${tolerance}%`);
     }

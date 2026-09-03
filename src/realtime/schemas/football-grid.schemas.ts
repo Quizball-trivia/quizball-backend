@@ -4,10 +4,22 @@ const matchId = z.string().uuid();
 const commandId = z.string().uuid();
 const expectedStateVersion = z.number().int().nonnegative();
 
+export const FOOTBALL_GRID_THEMES = [
+  'european', 'england', 'italy', 'spain', 'france', 'germany', 'georgia',
+  'netherlands', 'brazil', 'turkey', 'argentina',
+] as const;
+export type FootballGridTheme = (typeof FOOTBALL_GRID_THEMES)[number];
+
 export const footballGridSearchStartSchema = z
-  .object({ locale: z.enum(['en', 'ka']).optional() })
+  .object({
+    locale: z.enum(['en', 'ka']).optional(),
+    theme: z.enum(FOOTBALL_GRID_THEMES).optional(),
+  })
   .optional()
-  .transform((input) => ({ locale: input?.locale ?? 'en' as const }));
+  .transform((input) => ({
+    locale: input?.locale ?? 'en' as const,
+    theme: input?.theme ?? 'european' as const,
+  }));
 
 export const footballGridSearchCancelSchema = z.object({
   searchId: z.string().uuid(),

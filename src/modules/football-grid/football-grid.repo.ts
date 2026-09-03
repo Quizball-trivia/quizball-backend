@@ -153,6 +153,8 @@ export interface FootballGridCuratedSampleCandidate {
   playerId: string;
   name: string;
   imageAssetKey: string | null;
+  /** Photo sourced after publication (answer rows are append-only); a full URL. */
+  imageUrl?: string | null;
 }
 
 export interface FootballGridCuratedCellSamples {
@@ -160,7 +162,7 @@ export interface FootballGridCuratedCellSamples {
   players: Array<{
     playerId: string;
     name: string;
-    imageUrl: null;
+    imageUrl: string | null;
     imageAssetKey: string | null;
   }>;
 }
@@ -204,7 +206,7 @@ export function selectDiverseFootballGridSamples(
     players: (selectedByCell.get(cellIndex) ?? []).map((candidate) => ({
       playerId: candidate.playerId,
       name: candidate.name,
-      imageUrl: null,
+      imageUrl: candidate.imageUrl ?? null,
       imageAssetKey: candidate.imageAssetKey,
     })),
   }));
@@ -629,6 +631,7 @@ export const footballGridRepo = {
 
   async claimPendingResultDeliveries(input: {
     matchId?: string | null;
+    userId?: string | null;
     limit?: number;
   } = {}): Promise<FootballGridResultDeliveryRow[]> {
     const limit = input.limit ?? 100;
@@ -637,6 +640,7 @@ export const footballGridRepo = {
          SELECT d.match_id, d.user_id
            FROM football_grid_result_deliveries d
           WHERE ($1::uuid IS NULL OR d.match_id = $1::uuid)
+            AND ($3::uuid IS NULL OR d.user_id = $3::uuid)
             AND (
               (d.status = 'pending' AND d.next_attempt_at <= clock_timestamp())
               OR (d.status = 'awaiting_ack' AND d.next_attempt_at <= clock_timestamp())
@@ -654,7 +658,7 @@ export const footballGridRepo = {
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
        RETURNING d.match_id, d.user_id, d.terminal_state_version, d.attempt_count, d.ack_token`,
-      [input.matchId ?? null, limit],
+      [input.matchId ?? null, limit, input.userId ?? null],
     ));
   },
 
@@ -706,7 +710,17 @@ export const footballGridRepo = {
     return existing[0]?.found === true;
   },
 
-  async makeResultDeliveryDue(matchId: string, userId: string): Promise<void> {
+  /**
+   * With `preserveUnexpiredAck`, a delivery this user's other tab already
+   * rendered (awaiting_ack, retry not yet due) keeps its token instead of being
+   * re-issued — rotating it would turn that tab's ACK into COMPLETION_ACK_INVALID.
+   */
+  async makeResultDeliveryDue(
+    matchId: string,
+    userId: string,
+    options: { preserveUnexpiredAck?: boolean } = {},
+  ): Promise<void> {
+    const preserveUnexpiredAck = options.preserveUnexpiredAck ?? false;
     await sql`
       UPDATE football_grid_result_deliveries
          SET status = CASE WHEN status = 'processing' AND processing_lease_until >= now()
@@ -720,7 +734,19 @@ export const footballGridRepo = {
                THEN ack_token ELSE null END,
              updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId} AND status <> 'delivered'
+         AND NOT (${preserveUnexpiredAck} AND status = 'awaiting_ack' AND next_attempt_at > now())
     `;
+  },
+
+  async listUndeliveredResultMatchIds(userId: string): Promise<string[]> {
+    const rows = await sql<Array<{ match_id: string }>>`
+      SELECT match_id FROM football_grid_result_deliveries
+       WHERE user_id = ${userId} AND status <> 'delivered'
+         AND created_at > now() - interval '3 days'
+       ORDER BY created_at DESC
+       LIMIT 1
+    `;
+    return rows.map((row) => row.match_id);
   },
 
   async deferResultDelivery(input: {
@@ -1375,15 +1401,24 @@ export const footballGridRepo = {
     }));
   },
 
+  async getMatchTheme(matchId: string): Promise<string> {
+    const rows = await sql<Array<{ theme: string }>>`
+      SELECT theme FROM football_grid_matches WHERE match_id = ${matchId}
+    `;
+    return rows[0]?.theme ?? 'european';
+  },
+
   async selectBoardIdForUsers(
     tx: TransactionSql,
     humanUserIds: string[],
+    theme = 'european',
   ): Promise<string | null> {
     const rows = await tx.unsafe<{ id: string }[]>(
       `SELECT b.id
          FROM football_grid_boards b
          JOIN football_grid_content_releases r ON r.id = b.release_id
         WHERE r.status = 'published'
+          AND b.theme = $2
           AND NOT EXISTS (
             SELECT 1
               FROM football_grid_content_quarantines q
@@ -1411,7 +1446,7 @@ export const footballGridRepo = {
           ) ASC NULLS FIRST,
           random()
         LIMIT 1`,
-      [humanUserIds],
+      [humanUserIds, theme],
     );
     return rows[0]?.id ?? null;
   },
@@ -1420,6 +1455,7 @@ export const footballGridRepo = {
     pairingToken: string;
     lobbyId: string | null;
     origin: FootballGridOrigin;
+    theme?: string;
     players: Array<{ userId: string; seat: 1 | 2; isBot?: boolean }>;
     openerUserId: string;
     seriesId?: string | null;
@@ -1476,7 +1512,15 @@ export const footballGridRepo = {
         throw new Error('GRID_ACTIVE_SESSION_CONFLICT');
       }
       const humanUserIds = input.players.filter((player) => !player.isBot).map((player) => player.userId);
-      const boardId = await this.selectBoardIdForUsers(tx, humanUserIds);
+      let theme = input.theme ?? 'european';
+      let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme);
+      if (!boardId && theme !== 'european') {
+        // A pack whose boards are not yet published (or got quarantined) must
+        // not strand two matched players: serve the European mix instead.
+        boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european');
+        // Persist the pack the match actually plays, not the one requested.
+        theme = 'european';
+      }
       if (!boardId) throw new Error('No published Football Grid board is available');
       const boards = await tx.unsafe<GridBoardRow[]>(
         `SELECT id, version, release_id, row_criteria, column_criteria, canonical_checksum
@@ -1526,10 +1570,10 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment
+           bot_strength_adjustment, theme
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
          )`,
         [
           matchId,
@@ -1553,6 +1597,7 @@ export const footballGridRepo = {
           botConfigVersion,
           input.botRngSeed ?? null,
           botStrengthAdjustment,
+          theme,
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -2465,17 +2510,19 @@ export const footballGridRepo = {
 
   async getCuratedResultSamples(matchId: string): Promise<Array<{
     cellIndex: number;
-    players: Array<{ playerId: string; name: string; imageUrl: null; imageAssetKey: string | null }>;
+    players: Array<{ playerId: string; name: string; imageUrl: string | null; imageAssetKey: string | null }>;
   }>> {
     const rows = await sql<Array<{
       cell_index: number;
       football_player_id: string;
       name: string;
       image_asset_key: string | null;
+      image_url: string | null;
     }>>`
       SELECT a.cell_index, a.football_player_id,
              COALESCE(a.player_name_en, fp.name) AS name,
-             a.image_asset_key
+             NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
+             fp.image_url
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
@@ -2491,6 +2538,9 @@ export const footballGridRepo = {
       playerId: row.football_player_id,
       name: row.name,
       imageAssetKey: row.image_asset_key,
+      // Answer rows are append-only once published, so a photo sourced later
+      // lives only on football_players; it travels as a full URL, not a key.
+      imageUrl: row.image_asset_key ? null : row.image_url,
     })));
   },
 };

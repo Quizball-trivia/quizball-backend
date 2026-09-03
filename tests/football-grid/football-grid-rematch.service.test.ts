@@ -24,6 +24,7 @@ vi.mock('../../src/modules/football-grid/index.js', () => ({
   FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     offerRematch: (...args: unknown[]) => offerRematchMock(...args),
+    getMatchTheme: async () => 'european',
     createPairing: (...args: unknown[]) => createPairingMock(...args),
     markPairingFailed: (...args: unknown[]) => markPairingFailedMock(...args),
     closeRematchAfterFailure: (...args: unknown[]) => closeRematchAfterFailureMock(...args),

@@ -134,8 +134,8 @@ async function adminCreateConfirmedUser(
   throw new Error(`admin create user ${email} failed: ${res.status} ${text.slice(0, 200)}`);
 }
 
-async function listAdminUserIdsByEmail(
-  cfg: ProvisionConfig,
+export async function listAdminUserIdsByEmail(
+  cfg: Pick<ProvisionConfig, 'supabaseUrl' | 'serviceRoleKey'>,
   wantedEmails: Set<string>
 ): Promise<Map<string, string>> {
   const found = new Map<string, string>();

@@ -343,6 +343,23 @@ async function runPostConnectHydration(
     }
   }
 
+  // Results only — live-match rejoin already happened above via
+  // rejoinActiveMatchOnConnect. This no-ops unless the user has a terminalized
+  // grid match whose result never reached them.
+  //
+  // Flag-gated so mature modes pay nothing for it: with Grid off this costs
+  // ranked/auction connects zero queries, and every connect is on the hot path
+  // that reconnect storms hammer.
+  // Skipped when hydration already bound this socket to a live match of any
+  // mode: an old grid result must not land on top of a ranked/auction rejoin.
+  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId) {
+    try {
+      await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to flush pending grid results on connect');
+    }
+  }
+
   if (!socket.data.matchId) {
     try {
       await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(socket);

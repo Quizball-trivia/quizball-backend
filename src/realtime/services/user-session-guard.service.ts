@@ -34,7 +34,7 @@ import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
-const SESSION_LOCK_WAIT_MS = 1200;
+export const SESSION_LOCK_WAIT_MS = 1200;
 const SESSION_LOCK_RETRY_INTERVAL_MS = 75;
 const RANKED_QUEUE_KEY = 'ranked:mm:queue';
 const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';

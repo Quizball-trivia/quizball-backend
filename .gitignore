@@ -83,3 +83,5 @@ scripts/bot-burnin/*.receipt.json
 
 # Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
 node_modules
+.env.harness
+.env.harness.debug

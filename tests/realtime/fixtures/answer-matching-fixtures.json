@@ -235,6 +235,42 @@
       ],
       "legacy": false,
       "v2": false
+    },
+    {
+      "note": "apostrophe variant U+2019 right single quote joins",
+      "guess": "ngolo kante",
+      "accepted": [
+        "N’Golo Kanté"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant U+2018 left single quote joins",
+      "guess": "oshea",
+      "accepted": [
+        "John O‘Shea"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant U+02BC modifier letter joins",
+      "guess": "etoo",
+      "accepted": [
+        "Etoʼo"
+      ],
+      "legacy": true,
+      "v2": true
+    },
+    {
+      "note": "apostrophe variant backtick joins",
+      "guess": "oneill",
+      "accepted": [
+        "O`Neill"
+      ],
+      "legacy": true,
+      "v2": true
     }
   ],
   "countdownCases": [

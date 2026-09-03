@@ -20,6 +20,11 @@ export function normalizeAnswer(value: string): string {
   return value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Apostrophes join, they don't separate: "Eto'o" must normalize to "etoo",
+    // not "eto o" \u2014 the space split leaves fragments too short for any typo
+    // budget, making apostrophe-less spellings unmatchable (29 players hit
+    // this on Eto'o/O'Shea clues questions, Aug 2026).
+    .replace(/['\u2018\u2019\u02bc`]/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()

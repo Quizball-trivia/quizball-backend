@@ -425,14 +425,6 @@ async function isWaitingLobbyAbandonedBy(
     logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect waiting lobby socket presence');
     return false;
   }
-  if (lobby.game_mode === 'football_grid') {
-    try {
-      if (await footballGridRepo.hasOpenSeriesForLobby(lobby.id)) return false;
-    } catch (error) {
-      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect Football Grid series state');
-      return false;
-    }
-  }
   return true;
 }
 

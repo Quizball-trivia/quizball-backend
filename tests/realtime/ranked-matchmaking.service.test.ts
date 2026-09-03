@@ -32,6 +32,7 @@ const listOpenLobbiesForUserMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
 const getActiveMatchForLobbyMock = vi.fn();
 const removeLobbyMemberMock = vi.fn();
+const restoreWaitingIdleSinceMock = vi.fn();
 const deleteLobbyMock = vi.fn();
 const countLobbyMembersMock = vi.fn();
 const listLobbyMembersMock = vi.fn();
@@ -83,6 +84,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
       ] as const))
     ),
     removeMember: (...args: unknown[]) => removeLobbyMemberMock(...args),
+    restoreWaitingIdleSince: (...args: unknown[]) => restoreWaitingIdleSinceMock(...args),
     deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
     countMembers: (...args: unknown[]) => countLobbyMembersMock(...args),
     listMembersWithUser: (...args: unknown[]) => listLobbyMembersMock(...args),
@@ -150,6 +152,8 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 // Users treated as having NO live socket (ghost searches). Anyone not listed is
 // present by default — queued users normally have an authenticated socket.
 const absentUserIds = new Set<string>();
+/** lobbyId → sockets the io mock reports inside `lobby:<id>` (default: none). */
+const lobbyRoomSockets = new Map<string, Array<{ id: string; leave: () => void; data: { user: { id: string }; lobbyId?: string; connectedAt?: number } }>>();
 
 function createIoMock(): QuizballServer {
   const emit = vi.fn();
@@ -158,10 +162,13 @@ function createIoMock(): QuizballServer {
   const inFn = vi.fn((room: string) => {
     const userMatch = /^user:(.+)$/.exec(room);
     const userId = userMatch?.[1] ?? null;
+    const lobbyMatch = /^lobby:(.+)$/.exec(room);
     const fetchSockets = vi.fn().mockResolvedValue(
-      userId && !absentUserIds.has(userId)
-        ? [{ id: `sock-${userId}`, data: { user: { id: userId } } }]
-        : []
+      lobbyMatch
+        ? (lobbyRoomSockets.get(lobbyMatch[1]!) ?? [])
+        : userId && !absentUserIds.has(userId)
+          ? [{ id: `sock-${userId}`, data: { user: { id: userId } } }]
+          : []
     );
     return { socketsJoin, fetchSockets };
   });
@@ -201,6 +208,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     absentUserIds.clear();
+    lobbyRoomSockets.clear();
 
     redisMock = {
       isOpen: true,
@@ -247,6 +255,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     getActiveMatchForLobbyMock.mockResolvedValue(null);
     removeLobbyMemberMock.mockResolvedValue(undefined);
+    restoreWaitingIdleSinceMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
     countLobbyMembersMock.mockResolvedValue(0);
     listLobbyMembersMock.mockResolvedValue([{ user_id: 'u1', is_ai: false }]);
@@ -397,6 +406,218 @@ describe('ranked-matchmaking.service queue behavior', () => {
       expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'lobby-live-wait' })
     );
     prepareSpy.mockRestore();
+  });
+
+  describe('abandoned waiting lobby heal on an explicit ranked join', () => {
+    const STALE_MS = 31 * 60_000;
+    function staleFriendlyLobby(id: string, ageMs = STALE_MS) {
+      const at = new Date(Date.now() - ageMs).toISOString();
+      return {
+        ...makeOpenLobby(id, 'waiting'),
+        mode: 'friendly' as const,
+        game_mode: 'friendly_possession' as const,
+        created_at: at,
+        updated_at: at,
+        joined_at: at,
+      };
+    }
+    function installLobby(lobby: ReturnType<typeof staleFriendlyLobby>) {
+      const open = [lobby];
+      listOpenLobbiesForUserMock.mockImplementation(async () => [...open]);
+      getLobbyByIdMock.mockImplementation(async (lobbyId: string) => (lobbyId === lobby.id ? lobby : null));
+      removeLobbyMemberMock.mockImplementation(async () => { open.splice(0, open.length); });
+    }
+    const explicit = { source: 'mode_select', reason: 'initial' } as const;
+
+    it('heals a stranded lobby even though connect hydration re-attached the player\'s own socket', async () => {
+      // The real prod path: the returning player's socket is back in the dead
+      // lobby's room before they press Play Ranked. Their own socket must not
+      // count as life, or the heal is unreachable.
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('stranded-hydrated'));
+      lobbyRoomSockets.set('stranded-hydrated', [{ id: 'own', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'stranded-hydrated', connectedAt: Date.now() - 1_500 } }]);
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(acquireLockMock).toHaveBeenCalledWith('lock:lobby:stranded-hydrated', expect.any(Number));
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-hydrated', 'u1');
+      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+    });
+
+    it('preserves the same stranded lobby on a reload re-emit (recovery source)', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('stranded-recovery'));
+      lobbyRoomSockets.set('stranded-recovery', [{ id: 'own', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'stranded-recovery', connectedAt: Date.now() - 1_500 } }]);
+
+      await service.handleQueueJoin(io, socket as never, { source: 'recovery', reason: 'recovery_retry' });
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+      expect(userEmit).toHaveBeenCalledWith(
+        'session:state',
+        expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'stranded-recovery' })
+      );
+    });
+
+    it('preserves an idle lobby the player has kept open in a long-lived tab', async () => {
+      // Solo host waiting 35 min for a friend, then Play Ranked from another
+      // tab (or a reload re-emitting a stale mode_select intent): the tab that
+      // has been in the lobby since before it went quiet is real life.
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('kept-open'));
+      lobbyRoomSockets.set('kept-open', [
+        { id: 'old-tab', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'kept-open', connectedAt: Date.now() - STALE_MS - 60_000 } },
+        { id: 'new-tab', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'kept-open', connectedAt: Date.now() - 1_000 } },
+      ]);
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('heals a stranded auction lobby with a second member who is also gone (the Aug-28 prod shape)', async () => {
+      // Only the requester leaves; the lobby's idle time is put back so the
+      // other stranded member's own explicit click heals just the same.
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      const lobby = { ...staleFriendlyLobby('stranded-auction'), game_mode: 'auction' as never };
+      installLobby(lobby);
+      listLobbyMembersMock.mockResolvedValue([{ user_id: 'u1' }, { user_id: 'u2' }]);
+      countLobbyMembersMock.mockResolvedValue(1);
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
+      expect(removeLobbyMemberMock).not.toHaveBeenCalledWith('stranded-auction', 'u2');
+      expect(restoreWaitingIdleSinceMock).toHaveBeenCalledWith('stranded-auction', lobby.updated_at);
+      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+    });
+
+    it('preserves the lobby on an automatic retry that still carries the original mode_select source', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('stranded-retry'));
+
+      await service.handleQueueJoin(io, socket as never, { source: 'mode_select', reason: 'recovery_retry' });
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('treats a lobby deleted between the context read and the lock as healed', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      const lobby = staleFriendlyLobby('vanished');
+      const open = [lobby];
+      listOpenLobbiesForUserMock.mockImplementation(async () => [...open]);
+      getLobbyByIdMock.mockImplementation(async () => { open.splice(0, open.length); return null; });
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+    });
+
+    it('preserves everything when one of two waiting lobbies is still live', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      const dead = staleFriendlyLobby('dead-one');
+      const live = staleFriendlyLobby('live-one');
+      const open = [dead, live];
+      listOpenLobbiesForUserMock.mockImplementation(async () => [...open]);
+      getLobbyByIdMock.mockImplementation(async (lobbyId: string) => open.find((l) => l.id === lobbyId) ?? null);
+      removeLobbyMemberMock.mockImplementation(async (lobbyId: string) => {
+        const index = open.findIndex((l) => l.id === lobbyId);
+        if (index >= 0) open.splice(index, 1);
+      });
+      lobbyRoomSockets.set('live-one', [{ id: 'friend', leave: vi.fn(), data: { user: { id: 'u2' }, lobbyId: 'live-one' } }]);
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('preserves an old lobby another member is still connected to', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('old-but-shared'));
+      lobbyRoomSockets.set('old-but-shared', [{ id: 'friend', leave: vi.fn(), data: { user: { id: 'u2' }, lobbyId: 'old-but-shared' } }]);
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('preserves a fresh socketless lobby (reload window) on an explicit join', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('fresh-wait', 0));
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('preserves a ranked pairing lobby regardless of age', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby({ ...staleFriendlyLobby('pairing-lobby'), mode: 'ranked' as never, game_mode: 'ranked_sim' as never });
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves the lobby when the lobby lock is busy (a join or start is racing)', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('locked-lobby'));
+      acquireLockMock.mockImplementation(async (key: string) =>
+        key.startsWith('lock:lobby:') ? { acquired: false } : { acquired: true, token: 't1' });
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('preserves the lobby when the locked re-read shows it moved on (status no longer waiting)', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      const lobby = staleFriendlyLobby('advanced-lobby');
+      installLobby(lobby);
+      getLobbyByIdMock.mockImplementation(async () => ({ ...lobby, status: 'active' }));
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
   });
 
   it('skips the active-lobby heal when the user session lock is held', async () => {

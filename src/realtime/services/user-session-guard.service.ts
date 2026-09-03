@@ -392,6 +392,102 @@ async function isActiveLobbyLive(
   return !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS;
 }
 
+/**
+ * A waiting lobby is abandoned FROM THE REQUESTER'S POINT OF VIEW when nobody
+ * else has a socket in it and nothing has touched it for the stale window.
+ * The requester's own sockets only count as life when they connected BEFORE
+ * the lobby went quiet (a tab that has been sitting in the lobby all along).
+ * A socket that connected after the last activity was put into the room by
+ * connect hydration, which re-attaches a returning player to whatever lobby
+ * row they left behind — that is exactly how stranded lobbies blocked ranked
+ * for days, and it also covers a client re-emitting a stale "explicit"
+ * intent after a reload. Anything uncertain (ranked pairing lobbies, grid
+ * series, inspection errors) counts as live.
+ */
+async function isWaitingLobbyAbandonedBy(
+  io: QuizballServer,
+  userId: string,
+  lobby: Pick<LobbyWithJoinedAt, 'id' | 'mode' | 'game_mode' | 'updated_at'>,
+): Promise<boolean> {
+  if (lobby.mode === 'ranked') return false;
+  const updatedAtMs = Date.parse(lobby.updated_at);
+  if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS) return false;
+  try {
+    const sockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
+    const live = sockets.some((socket) => {
+      if (socket.data.lobbyId !== lobby.id) return false;
+      if (socket.data.user.id !== userId) return true;
+      const connectedAt = socket.data.connectedAt;
+      return typeof connectedAt === 'number' && connectedAt <= updatedAtMs;
+    });
+    if (live) return false;
+  } catch (error) {
+    logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect waiting lobby socket presence');
+    return false;
+  }
+  if (lobby.game_mode === 'football_grid') {
+    try {
+      if (await footballGridRepo.hasOpenSeriesForLobby(lobby.id)) return false;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect Football Grid series state');
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Remove the requester from waiting lobbies they abandoned, checking each one
+ * under its lobby lock so a join or start racing this heal wins. Returns true
+ * only when every lobby is gone afterwards; on any doubt the caller preserves.
+ */
+async function healAbandonedWaitingLobbies(
+  io: QuizballServer,
+  userId: string,
+  lobbies: LobbyWithJoinedAt[],
+): Promise<boolean> {
+  let healedAll = true;
+  for (const lobby of lobbies) {
+    const lockKey = `lock:lobby:${lobby.id}`;
+    const lock = await acquireLock(lockKey, LOBBY_LOCK_TTL_MS);
+    if (!lock.acquired || !lock.token) {
+      logger.info({ userId, lobbyId: lobby.id }, 'Abandoned waiting lobby heal skipped: lobby lock busy');
+      healedAll = false;
+      continue;
+    }
+    // The critical section fans out to socket inspection and several writes;
+    // keep the lock alive so a join/start cannot slip in halfway through.
+    const heartbeat = startLockHeartbeat(lockKey, lock.token, LOBBY_LOCK_TTL_MS);
+    try {
+      const fresh = await lobbiesRepo.getById(lobby.id);
+      // Deleted between the context read and the lock: nothing left to block on.
+      if (!fresh) continue;
+      if (fresh.status !== 'waiting' || !(await isWaitingLobbyAbandonedBy(io, userId, fresh))) {
+        healedAll = false;
+        continue;
+      }
+      // Only the requester leaves: another member with no socket right now may
+      // be inside their own 15s reconnect grace, and only their own explicit
+      // click carries the intent to give the lobby up. Removing the host
+      // transfers hosting and stamps updated_at, which would make the dead
+      // lobby look fresh to that member's later heal — put the idle time back.
+      await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby');
+      await lobbiesRepo.restoreWaitingIdleSince(fresh.id, fresh.updated_at);
+      trackStaleLobbyHealed({
+        userId,
+        lobbyId: fresh.id,
+        mode: fresh.mode,
+        gameMode: fresh.game_mode,
+        idleMs: Date.now() - Date.parse(fresh.updated_at),
+      });
+    } finally {
+      heartbeat.stop();
+      await releaseLock(lockKey, lock.token).catch(() => undefined);
+    }
+  }
+  return healedAll;
+}
+
 async function everyActiveLobbyIsDead(
   io: QuizballServer,
   lobbies: LobbyWithJoinedAt[],
@@ -1252,7 +1348,14 @@ export const userSessionGuardService = {
     io: QuizballServer,
     userId: string,
     requestedQueue: 'ranked' | 'auction' | 'grid' = 'ranked',
-    options?: { preserveWaitingLobbies?: boolean },
+    options?: {
+      preserveWaitingLobbies?: boolean;
+      /**
+       * The player pressed Play Ranked themselves (not a reload re-emit):
+       * a waiting lobby they abandoned may be healed instead of blocking.
+       */
+      explicitJoin?: boolean;
+    },
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
     // Queue join is a flash-traffic path. A clean user only needs one context
     // read; the generic connect preparation used to resolve the same match and
@@ -1299,14 +1402,23 @@ export const userSessionGuardService = {
     // A reload while sitting in a live lobby can make the client re-emit a
     // stale queue_join; ranked opts in to preserving the lobby membership so
     // that automatic re-emit never dissolves a real lobby (auction/grid keep
-    // the leave-lobby-and-queue semantics).
+    // the leave-lobby-and-queue semantics). An EXPLICIT join is different:
+    // a lobby nobody else is in that has been idle past the stale window is
+    // abandoned, and preserving it blocked players from ranked for days.
     if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
-      return {
-        ok: false,
-        snapshot,
-        reason: 'ACTIVE_MATCH',
-        message: 'You are already in a lobby',
-      };
+      const healed = options.explicitJoin
+        ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies)
+        : false;
+      if (!healed) {
+        return {
+          ok: false,
+          snapshot,
+          reason: 'ACTIVE_MATCH',
+          message: 'You are already in a lobby',
+        };
+      }
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
     }
 
     if (context.activeLobbies.length > 0) {

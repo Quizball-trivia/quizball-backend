@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { sql } from '../../db/index.js';
 
@@ -9,6 +10,8 @@ export interface FootballGridTypeaheadPlayer {
 
 interface TypeaheadPayload {
   releaseId: string;
+  /** Every published release that contributed players; the cache key, since any of them can change the roster. */
+  releaseKey: string;
   players: FootballGridTypeaheadPlayer[];
 }
 
@@ -23,7 +26,7 @@ let cached: { payload: TypeaheadPayload; expiresAt: number } | null = null;
 // older board has valid answers the suggestions never show. The newest
 // published release still identifies the payload for caching.
 async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
-  const rows = await sql<Array<{ release_id: string; id: string; name_en: string; name_ka: string | null }>>`
+  const rows = await sql<Array<{ release_id: string; release_key: string; id: string; name_en: string; name_ka: string | null }>>`
     WITH newest AS (
       SELECT id FROM football_grid_content_releases
       WHERE status = 'published'
@@ -32,6 +35,7 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
     )
     SELECT DISTINCT ON (ba.football_player_id)
       (SELECT id FROM newest) AS release_id,
+      (SELECT string_agg(id::text, ',' ORDER BY id) FROM football_grid_content_releases WHERE status = 'published') AS release_key,
       ba.football_player_id AS id,
       ba.player_name_en AS name_en,
       ba.player_name_ka AS name_ka
@@ -45,6 +49,7 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
   if (rows.length === 0) return null;
   return {
     releaseId: rows[0].release_id,
+    releaseKey: rows[0].release_key,
     players: rows
       .map((row) => ({ id: row.id, nameEn: row.name_en, nameKa: row.name_ka }))
       .sort((a, b) => a.nameEn.localeCompare(b.nameEn)),
@@ -69,7 +74,7 @@ export const footballGridTypeaheadController = {
       }
       cached = { payload, expiresAt: now + CACHE_TTL_MS };
     }
-    const etag = `"grid-typeahead-${cached.payload.releaseId}"`;
+    const etag = `"grid-typeahead-${createHash('sha1').update(cached.payload.releaseKey).digest('hex').slice(0, 16)}"`;
     if (req.headers['if-none-match'] === etag) {
       res.status(304).end();
       return;

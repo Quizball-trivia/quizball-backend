@@ -153,6 +153,8 @@ export interface FootballGridCuratedSampleCandidate {
   playerId: string;
   name: string;
   imageAssetKey: string | null;
+  /** Photo sourced after publication (answer rows are append-only); a full URL. */
+  imageUrl?: string | null;
 }
 
 export interface FootballGridCuratedCellSamples {
@@ -160,7 +162,7 @@ export interface FootballGridCuratedCellSamples {
   players: Array<{
     playerId: string;
     name: string;
-    imageUrl: null;
+    imageUrl: string | null;
     imageAssetKey: string | null;
   }>;
 }
@@ -204,7 +206,7 @@ export function selectDiverseFootballGridSamples(
     players: (selectedByCell.get(cellIndex) ?? []).map((candidate) => ({
       playerId: candidate.playerId,
       name: candidate.name,
-      imageUrl: null,
+      imageUrl: candidate.imageUrl ?? null,
       imageAssetKey: candidate.imageAssetKey,
     })),
   }));

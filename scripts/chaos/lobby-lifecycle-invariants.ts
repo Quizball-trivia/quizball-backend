@@ -42,6 +42,26 @@ export interface LobbyInvariantReport {
 
 const PROD_PROJECT = 'lfbwhxvwubzeqkztghok';
 
+/**
+ * One small pool per database for the run. A client per call looked cheap
+ * but 25 concurrent ageing writes plus the audit blew through the staging
+ * session pooler's 15-client cap (EMAXCONNSESSION) mid-run.
+ */
+const clients = new Map<string, ReturnType<typeof postgres>>();
+function sharedSql(databaseUrl: string): ReturnType<typeof postgres> {
+  let sql = clients.get(databaseUrl);
+  if (!sql) {
+    sql = postgres(databaseUrl, { max: 3, connect_timeout: 15, idle_timeout: 30 });
+    clients.set(databaseUrl, sql);
+  }
+  return sql;
+}
+
+export async function closeSharedClients(): Promise<void> {
+  await Promise.all([...clients.values()].map((sql) => sql.end({ timeout: 5 }).catch(() => undefined)));
+  clients.clear();
+}
+
 function assertNonProdDatabase(databaseUrl: string): void {
   if (databaseUrl.includes(PROD_PROJECT)) {
     throw new Error('PROD GUARD: lobby-lifecycle harness refuses to touch production.');
@@ -126,14 +146,14 @@ export async function checkLobbyInvariants(
 ): Promise<LobbyInvariantReport> {
   assertNonProdDatabase(databaseUrl);
   const ids = [...new Set(userIds)];
+  const sql = sharedSql(databaseUrl);
   // A draft or auction legitimately runs as an active lobby with no matches
   // row; only prolonged silence makes it stale (the server's own heal uses
   // 30 min, the harness wants to know sooner).
   const staleActiveIdleSec = options.staleActiveIdleSec ?? 180;
   // The stale-match sweeper fires at 15 min; anything older is hung for real.
   const hungMatchIdleSec = options.hungMatchIdleSec ?? 16 * 60;
-  const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10, idle_timeout: 5 });
-  try {
+  {
     const rows = await sql<Array<{
       lobby_id: string;
       mode: string;
@@ -243,28 +263,33 @@ export async function checkLobbyInvariants(
       usersInActiveMatches: inMatches?.n ?? 0,
       violations,
     };
-  } finally {
-    await sql.end({ timeout: 5 });
   }
 }
 
-/** Backdate one harness lobby so it looks idle for `minutes` (heal-threshold testing). */
-export async function ageLobby(databaseUrl: string, lobbyId: string, minutes: number): Promise<void> {
+/**
+ * Backdate every open lobby the given harness users are members of so it looks
+ * idle for `minutes` (heal-threshold testing). Keyed by users, not by a lobby
+ * id the storyline may never have learned (a create ack lost in a restart).
+ */
+export async function ageLobbiesForUsers(databaseUrl: string, userIds: string[], minutes: number): Promise<number> {
   assertNonProdDatabase(databaseUrl);
-  const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10, idle_timeout: 5 });
-  try {
-    await sql`
-      UPDATE lobbies
-      SET updated_at = NOW() - make_interval(mins => ${minutes}),
-          created_at = LEAST(created_at, NOW() - make_interval(mins => ${minutes}))
-      WHERE id = ${lobbyId} AND status IN ('waiting', 'active')
-    `;
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return 0;
+  const sql = sharedSql(databaseUrl);
+  const aged = await sql<{ id: string }[]>`
+    UPDATE lobbies
+    SET updated_at = NOW() - make_interval(mins => ${minutes}),
+        created_at = LEAST(created_at, NOW() - make_interval(mins => ${minutes}))
+    WHERE status IN ('waiting', 'active')
+      AND EXISTS (SELECT 1 FROM lobby_members m WHERE m.lobby_id = lobbies.id AND m.user_id IN ${sql(ids)})
+    RETURNING id
+  `;
+  if (aged.length > 0) {
     await sql`
       UPDATE lobby_members
       SET joined_at = NOW() - make_interval(mins => ${minutes})
-      WHERE lobby_id = ${lobbyId}
+      WHERE lobby_id IN ${sql(aged.map((row) => row.id))}
     `;
-  } finally {
-    await sql.end({ timeout: 5 });
   }
+  return aged.length;
 }

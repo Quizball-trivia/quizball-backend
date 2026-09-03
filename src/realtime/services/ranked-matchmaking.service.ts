@@ -24,7 +24,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { fetchUserRoomSockets } from './match-presence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
-import { userSessionGuardService } from './user-session-guard.service.js';
+import { SESSION_LOCK_WAIT_MS, userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
 import {
@@ -281,6 +281,13 @@ async function getRankedMatchmakingSessionBlocks(
       state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
     }];
   }));
+}
+
+/** Sources the client sends for a deliberate user action, never for a reload re-emit. */
+const EXPLICIT_QUEUE_JOIN_SOURCES = new Set(['mode_select', 'play_again', 'retry']);
+
+function isExplicitRankedQueueJoin(payload?: { source?: string; reason?: string }): boolean {
+  return EXPLICIT_QUEUE_JOIN_SOURCES.has(payload?.source ?? '') && payload?.reason !== 'recovery_retry';
 }
 
 async function getRankedMatchmakingSessionBlock(
@@ -1401,9 +1408,13 @@ export const rankedMatchmakingService = {
       // (A bare queueSearchId is NOT handled here: the debounce/resume logic
       // below re-emits the search with the correct REMAINING duration.)
       let earlySessionBlock = await getRankedMatchmakingSessionBlock(userId);
+      // A waiting lobby only gets the heal attempt on an explicit click: a
+      // reload re-emit must keep the old "ignore, re-emit state" behaviour.
+      const explicitJoin = isExplicitRankedQueueJoin(payload);
       const lobbyOnlySessionBlock = Boolean(
         earlySessionBlock?.waitingLobbyId
-        && earlySessionBlock.primaryLobbyStatus === 'active'
+        && (earlySessionBlock.primaryLobbyStatus === 'active'
+          || (earlySessionBlock.primaryLobbyStatus === 'waiting' && explicitJoin))
         && !earlySessionBlock.activeMatchId
         && !earlySessionBlock.queueSearchId
         && earlySessionBlock.state !== 'PAIRING_IN_FLIGHT'
@@ -1414,8 +1425,11 @@ export const rankedMatchmakingService = {
           userId,
           () => userSessionGuardService.prepareForQueueJoin(io, userId, 'ranked', {
             preserveWaitingLobbies: true,
+            explicitJoin,
           }),
-          { waitMs: 0 },
+          // A deliberate click deserves the normal bounded wait for the user
+          // lock; the client does not retry an ignored explicit join on its own.
+          { waitMs: explicitJoin ? SESSION_LOCK_WAIT_MS : 0 },
         );
         if (prepared) {
           earlySessionBlock = prepared.ok ? null : {

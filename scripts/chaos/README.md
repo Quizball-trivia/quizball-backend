@@ -61,6 +61,21 @@ npm run chaos:grid -- --target=staging --clients=500 --ramp-s=120 \
 # worker 1: --clients=1000 --offset=0; worker 2: --clients=1000 --offset=1000; etc.
 # Only one distributed worker should collect direct DB stats; pass
 # `--no-db-stats` to the others so monitoring does not become test traffic.
+# Lobby lifecycle (the ugly middle: abandon / disconnect / reload / restart).
+# Every bot runs one storyline, then reconnects and presses Play Ranked. The
+# database is audited for memberships nobody is connected to, both mid-run
+# (a reconnect self-heals a stranded row, so the end audit alone under-counts)
+# and after a final grace. --manage-backend lets the harness kill and restart
+# the local server mid-run (SIGKILL = crash, SIGTERM = deploy) — that is how
+# the 15s disconnect-grace timers get lost for real.
+# Local target needs an env file whose DATABASE_URL is a localhost Postgres
+# (see game-regression/setup-native-db.sh with HARNESS_DB_NAME) and Supabase
+# auth vars for user provisioning; logins are paced ~27/min and tokens cached.
+npm run chaos:lobby -- --target=local --clients=20 --env-file=.env.harness --manage-backend
+npm run chaos:lobby -- --target=local --clients=500 --env-file=.env.harness --manage-backend \
+  --restart-at-s=120,300 --restart-signal=SIGKILL
+npm run chaos:lobby -- --target=staging --clients=100 --scenarios=create_abandon,auction_abandon
+
 # Queue-storm cleanup sends one cancellation per matched lobby, ramps those
 # cancellations within the match-found modal, and ramps ordinary disconnects.
 # A simultaneous disconnect storm is measured as a separate chaos scenario.

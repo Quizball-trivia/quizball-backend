@@ -9,7 +9,8 @@ export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
 export PGPASSWORD=postgres
 
 ADMIN="postgresql://postgres:postgres@127.0.0.1:5432/postgres"
-DB="quizball_regression"
+DB="${HARNESS_DB_NAME:-quizball_regression}"
+case "$DB" in quizball_[a-z0-9_]*) ;; *) echo "HARNESS_DB_NAME must match quizball_<name> (got: $DB)"; exit 1;; esac
 DBCONN="postgresql://postgres:postgres@127.0.0.1:5432/${DB}"
 MIGRATIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/supabase/migrations"
 

@@ -35,3 +35,12 @@ export const footballGridAdminQuarantinesQuerySchema = z.object({
   boardId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
+
+export const footballGridAdminPlayerParamsSchema = z.object({ playerId: z.string().uuid() });
+export const footballGridAdminRenamePlayerSchema = z.object({
+  nameEn: z.string().trim().min(1).max(120).optional(),
+  nameKa: z.string().trim().min(1).max(120).optional(),
+  reason: z.string().trim().min(3).max(500),
+}).refine((body) => body.nameEn !== undefined || body.nameKa !== undefined, {
+  message: 'Provide nameEn and/or nameKa',
+});

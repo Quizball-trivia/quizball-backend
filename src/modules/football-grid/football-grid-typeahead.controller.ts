@@ -21,6 +21,11 @@ interface TypeaheadPayload {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 let cached: { payload: TypeaheadPayload; expiresAt: number } | null = null;
 
+/** Admin renames drop this replica's roster at once; others refresh within the TTL. */
+export function resetFootballGridTypeaheadCache(): void {
+  cached = null;
+}
+
 // Board selection draws from EVERY published release (activation does not
 // retire the previous one), so the roster must too — otherwise a match on an
 // older board has valid answers the suggestions never show. The newest
@@ -35,7 +40,9 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
     )
     SELECT DISTINCT ON (ba.football_player_id)
       (SELECT id FROM newest) AS release_id,
-      (SELECT string_agg(id::text, ',' ORDER BY id) FROM football_grid_content_releases WHERE status = 'published') AS release_key,
+      (SELECT string_agg(id::text, ',' ORDER BY id) FROM football_grid_content_releases WHERE status = 'published')
+        || ':' || (SELECT md5(string_agg(coalesce(player_name_en, '') || '|' || coalesce(player_name_ka, ''), ',' ORDER BY board_id, cell_index, football_player_id))
+                     FROM football_grid_board_answers) AS release_key,
       ba.football_player_id AS id,
       ba.player_name_en AS name_en,
       ba.player_name_ka AS name_ka

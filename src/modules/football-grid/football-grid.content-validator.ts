@@ -92,7 +92,9 @@ export function validateFootballGridRelease(input: {
     if (!input.exactGeorgianPlayerIds.has(playerId)) errors.push(`Player ${playerId} lacks an exact Georgian alias`);
   }
   if (input.boards.length < 1) errors.push('Release contains no boards');
-  const targets: Record<FootballGridDifficulty, number> = { easy: 25, normal: 60, hard: 15 };
+  // Owner decision 2026-09-04: new players should mostly meet easy boards.
+  // Mirrors BOARD_DISTRIBUTION in scripts/football-grid-content-generator.
+  const targets: Record<FootballGridDifficulty, number> = { easy: 40, normal: 45, hard: 15 };
   const tolerance = input.tolerancePercentagePoints ?? 2;
   // The distribution target governs the default European rotation; league
   // packs are small, deliberately themed sets whose difficulty skews with

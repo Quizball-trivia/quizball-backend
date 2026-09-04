@@ -37,6 +37,9 @@ export const footballGridSubmitAnswerSchema = footballGridVersionedCommandSchema
   locale: z.enum(['en', 'ka']),
 });
 
+export const footballGridDrawRespondSchema = footballGridVersionedCommandSchema.extend({
+  accept: z.boolean(),
+});
 export const footballGridResyncSchema = z.object({ matchId });
 
 export const footballGridCompletedAckSchema = z.object({

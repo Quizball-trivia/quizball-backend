@@ -259,6 +259,42 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
   const participants = await readParticipants(tx, matchId);
   const humans = participants.filter((participant) => !participant.is_bot);
   const results = new Map<string, FootballGridRewardResult>();
+  // Best-of-N: rewards are paid once, on the game that decides the series,
+  // for the series result. Earlier games settle as 'series_in_progress'.
+  const series = await readSeriesOutcome(tx, matchId);
+  if (series?.pending) {
+    for (const human of humans) {
+      const opponent = participants.find((candidate) => candidate.user_id !== human.user_id);
+      await tx.unsafe(
+        `INSERT INTO football_grid_reward_eligibility (
+           match_id, user_id, evaluator_version, opponent_type, origin,
+           participation, decision, reason, points_decision, points_reason
+         ) VALUES (
+           $1,$2,1,$3,$4,'{}'::jsonb,
+           'ineligible','series_in_progress','ineligible','series_in_progress'
+         )
+         ON CONFLICT (match_id, user_id, evaluator_version) DO NOTHING`,
+        [matchId, human.user_id, opponent?.is_bot ? 'bot' : 'human', row.origin],
+      );
+      results.set(human.user_id, {
+        xp: 0,
+        coins: 0,
+        tp: 0,
+        eligibilityReason: 'series_in_progress',
+        coinEligibilityReason: 'series_in_progress',
+        tpEligibilityReason: 'series_in_progress',
+      });
+    }
+    await markSettledInTx(tx, row.outbox_id, matchId);
+    return results;
+  }
+  if (series && !series.pending) {
+    // The deciding game pays for the whole series.
+    row.winner_user_id = series.winnerUserId;
+    if (series.closedReason && series.closedReason !== 'decided' && series.closedReason !== 'series_draw') {
+      row.completion_reason = series.closedReason;
+    }
+  }
   if (row.base_status !== 'completed' || row.completion_reason === 'loading_no_show' || row.completion_reason === 'simultaneous_disconnect') {
     for (const human of humans) {
       const opponent = participants.find((candidate) => candidate.user_id !== human.user_id);
@@ -432,11 +468,16 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       });
     }
   }
+  await markSettledInTx(tx, row.outbox_id, matchId);
+  return results;
+}
+
+async function markSettledInTx(tx: TransactionSql, outboxId: string, matchId: string): Promise<void> {
   await tx.unsafe(
     `UPDATE football_grid_settlement_outbox
         SET status = 'completed', completed_at = now(), next_retry_at = null
       WHERE id = $1`,
-    [row.outbox_id],
+    [outboxId],
   );
   await tx.unsafe(
     `UPDATE matches
@@ -446,7 +487,41 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
       WHERE id = $1`,
     [matchId],
   );
-  return results;
+}
+
+/**
+ * For a match inside a best-of-N series: whether the series is still running
+ * (nothing to pay yet) or, on the deciding game, the series result to pay for.
+ * Single-game series and legacy matches without a series settle as before.
+ */
+async function readSeriesOutcome(
+  tx: TransactionSql,
+  matchId: string,
+): Promise<{ pending: boolean; winnerUserId: string | null; closedReason: string | null } | null> {
+  const rows = await tx.unsafe<Array<{
+    format: string;
+    status: string;
+    current_match_id: string | null;
+    winner_user_id: string | null;
+    closed_reason: string | null;
+    closed_at: string | null;
+  }>>(
+    `SELECT s.format, s.status, s.current_match_id, s.winner_user_id, s.closed_reason, s.closed_at
+       FROM football_grid_matches gm
+       JOIN football_grid_series s ON s.id = gm.series_id
+      WHERE gm.match_id = $1`,
+    [matchId],
+  );
+  const series = rows[0];
+  if (!series || series.format !== 'bo3') return null;
+  // closed_at marks a finished series even while a rematch window keeps the
+  // row in 'rematch_pending'.
+  if (!series.closed_at) return { pending: true, winnerUserId: null, closedReason: null };
+  // Closed on a later game: this earlier game was already settled as in-progress.
+  if (series.current_match_id && series.current_match_id !== matchId) {
+    return { pending: true, winnerUserId: null, closedReason: null };
+  }
+  return { pending: false, winnerUserId: series.winner_user_id, closedReason: series.closed_reason };
 }
 
 async function readSettledRewardsInTx(

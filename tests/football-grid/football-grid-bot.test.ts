@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyFootballGridBotDifficulty,
+  FOOTBALL_GRID_EASY_BOT_CAPS,
+  footballGridBotShouldAcceptDraw,
   chooseFootballGridBotCell,
   footballGridBotActionIsOnTime,
   footballGridBotAccuracy,
@@ -208,5 +211,78 @@ describe('Football Grid bot tier model', () => {
       ],
     } as FootballGridState;
     expect(chooseFootballGridBotCell(state, 'bot', 1, 'GOAT')).toBe(5);
+  });
+});
+
+describe('Football Grid easy bot difficulty', () => {
+  it('caps knowledge and tactics for every tier while adaptive keeps the tier model', () => {
+    const goat = footballGridBotTierPolicyV2('GOAT');
+    const easy = applyFootballGridBotDifficulty(goat, 'easy');
+    expect(easy.accuracy).toBe(FOOTBALL_GRID_EASY_BOT_CAPS.accuracy);
+    expect(easy.tacticalOptimality).toBe(FOOTBALL_GRID_EASY_BOT_CAPS.tacticalOptimality);
+    expect(easy.passOnMiss).toBe(FOOTBALL_GRID_EASY_BOT_CAPS.passOnMiss);
+    expect(easy.minDelayMs).toBe(goat.minDelayMs);
+    expect(applyFootballGridBotDifficulty(goat, 'adaptive')).toEqual(goat);
+  });
+
+  it('never lets governor or scarcity lift an easy bot above the cap', () => {
+    for (const modelVersion of [1, 2]) {
+      const result = footballGridBotEffectiveAccuracy({
+        modelVersion,
+        configVersion: 1,
+        tier: 'GOAT',
+        strengthAdjustment: 0,
+        chosenCellUnusedAnswerCount: 40,
+        difficulty: 'easy',
+      });
+      expect(result.effectiveAccuracy).toBeLessThanOrEqual(FOOTBALL_GRID_EASY_BOT_CAPS.accuracy);
+    }
+    const weak = footballGridBotEffectiveAccuracy({
+      modelVersion: 2,
+      configVersion: 1,
+      tier: 'Academy',
+      strengthAdjustment: -0.2,
+      chosenCellUnusedAnswerCount: 2,
+      difficulty: 'easy',
+    });
+    expect(weak.effectiveAccuracy).toBeLessThan(FOOTBALL_GRID_EASY_BOT_CAPS.accuracy);
+  });
+});
+
+describe('Football Grid bot draw policy', () => {
+  const bot = 'bot';
+  const human = 'human';
+  const stateWith = (claims: Array<[number, string]>): FootballGridState => ({
+    players: [{ userId: bot, isBot: true }, { userId: human, isBot: false }],
+    claims: claims.map(([cellIndex, claimantUserId]) => ({ cellIndex, claimantUserId })),
+  } as unknown as FootballGridState);
+
+  it('accepts when the bot can no longer complete a line', () => {
+    // Human holds the whole middle row and column: every line the bot could use is cut.
+    const state = stateWith([[3, human], [4, human], [5, human], [1, human], [7, human], [0, bot], [8, bot]]);
+    expect(footballGridBotShouldAcceptDraw(state, bot, 'adaptive')).toBe(true);
+  });
+
+  it('declines while only the bot can still win', () => {
+    const state = stateWith([[3, bot], [4, bot], [5, bot], [1, bot], [7, bot], [0, human], [8, human]]);
+    expect(footballGridBotShouldAcceptDraw(state, bot, 'adaptive')).toBe(false);
+    expect(footballGridBotShouldAcceptDraw(state, bot, 'easy')).toBe(false);
+  });
+
+  it('accepts when the human has more open lines', () => {
+    // Human owns the centre (4 lines), bot owns one edge (2 lines minus the cut ones).
+    const state = stateWith([[4, human], [1, bot]]);
+    expect(footballGridBotShouldAcceptDraw(state, bot, 'adaptive')).toBe(true);
+  });
+
+  it('declines an early balanced offer but settles a late one, earlier on easy', () => {
+    const early = stateWith([[0, bot], [8, human]]);
+    expect(footballGridBotShouldAcceptDraw(early, bot, 'adaptive')).toBe(false);
+    expect(footballGridBotShouldAcceptDraw(early, bot, 'easy')).toBe(false);
+    const mid = stateWith([[0, bot], [8, human], [2, human], [6, bot]]);
+    expect(footballGridBotShouldAcceptDraw(mid, bot, 'adaptive')).toBe(false);
+    expect(footballGridBotShouldAcceptDraw(mid, bot, 'easy')).toBe(true);
+    const late = stateWith([[0, bot], [8, human], [2, human], [6, bot], [1, bot], [7, human]]);
+    expect(footballGridBotShouldAcceptDraw(late, bot, 'adaptive')).toBe(true);
   });
 });

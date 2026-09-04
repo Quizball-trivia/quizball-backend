@@ -216,6 +216,9 @@ const configSchema = z.object({
   // Rolling-deploy gate: ship code/migration with v1, then flip to 2 only once
   // every replica understands the immutable v2 policy and private audit schema.
   FOOTBALL_GRID_BOT_MODEL_VERSION: z.coerce.number().int().min(1).max(2).default(1),
+  // 'easy' caps every grid bot (any tier, any governor adjustment) at the easy
+  // ceilings so new players can beat them; 'adaptive' restores the tier model.
+  FOOTBALL_GRID_BOT_DIFFICULTY: z.enum(["easy", "adaptive"]).default("easy"),
   // Grid-only bot safety loop. New matches pin the current adjustment; turning
   // this off pins zero while completed matches continue warming the EMA and
   // reset any stored nerf toward the safe v2 baseline.

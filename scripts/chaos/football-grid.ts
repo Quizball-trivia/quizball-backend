@@ -709,7 +709,9 @@ async function main(): Promise<void> {
     emailPrefix: args.campaign,
     emailDomain: target.emailDomain,
     concurrency: 10,
-    loginIntervalMs: args.target === 'staging' ? 2_200 : 0,
+    // Supabase Auth rate-limits token requests per IP; local runs still hit the
+    // shared staging Auth, so allow the same pacing there via env.
+    loginIntervalMs: args.target === 'staging' ? 2_200 : Number(process.env.LOAD_LOGIN_INTERVAL_MS ?? 0),
     bypassToken: target.bypassToken,
   });
   if (users.length !== args.clients) throw new Error(`Provisioned ${users.length}/${args.clients} users.`);

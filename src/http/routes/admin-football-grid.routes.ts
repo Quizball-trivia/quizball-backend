@@ -6,6 +6,8 @@ import {
   footballGridAdminCoinParamsSchema,
   footballGridAdminController,
   footballGridAdminMatchParamsSchema,
+  footballGridAdminPlayerParamsSchema,
+  footballGridAdminRenamePlayerSchema,
   footballGridAdminReasonSchema,
   footballGridAdminQuarantineSchema,
   footballGridAdminQuarantinesQuerySchema,
@@ -25,5 +27,6 @@ router.get('/missing-answer-reports', validate({ query: footballGridAdminReports
 router.patch('/missing-answer-reports/:reportId', validate({ params: footballGridAdminReportParamsSchema, body: footballGridAdminReportDecisionSchema }), footballGridAdminController.decideReport);
 router.get('/content/quarantines', validate({ query: footballGridAdminQuarantinesQuerySchema }), footballGridAdminController.listQuarantines);
 router.post('/content/quarantines', validate({ body: footballGridAdminQuarantineSchema }), footballGridAdminController.quarantineContent);
+router.post('/players/:playerId/names', validate({ params: footballGridAdminPlayerParamsSchema, body: footballGridAdminRenamePlayerSchema }), footballGridAdminController.renamePlayer);
 
 export const adminFootballGridRoutes = router;

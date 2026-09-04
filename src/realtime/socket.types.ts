@@ -682,6 +682,7 @@ export interface FootballGridSearchStatePayload {
 export interface FootballGridMatchFoundPayload {
   matchId: string;
   state: FootballGridState;
+  series?: FootballGridSeriesInfo | null;
   opponent: OpponentInfo;
   capabilities: {
     canAddFriend: boolean;
@@ -690,16 +691,24 @@ export interface FootballGridMatchFoundPayload {
   serverNow: string;
 }
 
+export interface FootballGridDrawRespondPayload extends FootballGridVersionedCommandPayload {
+  accept: boolean;
+}
+
+import type { FootballGridSeriesInfo } from '../modules/football-grid/football-grid.types.js';
+export type { FootballGridSeriesInfo };
+
 export interface FootballGridStatePayload {
   matchId: string;
   state: FootballGridState;
   serverNow: string;
+  series?: FootballGridSeriesInfo | null;
 }
 
 export interface FootballGridCommandResultPayload {
   matchId: string;
   commandId: string;
-  outcome: 'correct' | 'wrong' | 'ambiguous' | 'already_used' | 'pass';
+  outcome: 'correct' | 'wrong' | 'ambiguous' | 'already_used' | 'pass' | 'draw_offered' | 'draw_accepted' | 'draw_declined';
   stateVersion: number;
   resolvedPlayerId: string | null;
   attemptId: string | null;
@@ -1262,6 +1271,8 @@ export interface ClientToServerEvents {
   'grid:client_ready': (data: FootballGridVersionedCommandPayload) => void;
   'grid:submit_answer': (data: FootballGridSubmitAnswerPayload) => void;
   'grid:pass': (data: FootballGridVersionedCommandPayload) => void;
+  'grid:draw_offer': (data: FootballGridVersionedCommandPayload) => void;
+  'grid:draw_respond': (data: FootballGridDrawRespondPayload) => void;
   'grid:resync': (data: { matchId: string }) => void;
   'grid:completed_ack': (data: { matchId: string; terminalStateVersion: number; ackToken: string }) => void;
   'grid:forfeit': (data: FootballGridVersionedCommandPayload) => void;

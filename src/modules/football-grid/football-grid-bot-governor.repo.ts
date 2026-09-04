@@ -15,7 +15,7 @@ interface GovernorStateRow {
 export interface FootballGridCompletedBotMatch {
   matchId: string;
   winnerUserId: string | null;
-  completionReason: 'line' | 'board_full' | 'turn_limit';
+  completionReason: 'line' | 'board_full' | 'board_dead' | 'draw_agreed' | 'turn_limit';
   botUserId: string;
   humanUserId: string;
   modelVersion: number;
@@ -27,7 +27,7 @@ export interface FootballGridCompletedBotMatch {
 interface CompletedBotMatchRow {
   match_id: string;
   winner_user_id: string | null;
-  completion_reason: 'line' | 'board_full' | 'turn_limit';
+  completion_reason: 'line' | 'board_full' | 'board_dead' | 'draw_agreed' | 'turn_limit';
   bot_user_id: string;
   human_user_id: string;
   bot_model_version: number;
@@ -86,7 +86,7 @@ export const footballGridBotGovernorRepo = {
           AND m.status = 'completed'
           AND gm.bot_model_version = 2
           AND gm.bot_config_version = 1
-          AND gm.completion_reason IN ('line', 'board_full', 'turn_limit')
+          AND gm.completion_reason IN ('line', 'board_full', 'board_dead', 'draw_agreed', 'turn_limit')
           AND (SELECT count(*) FROM football_grid_participants participants
                 WHERE participants.match_id = gm.match_id) = 2
         LIMIT 1`,
@@ -118,7 +118,7 @@ export const footballGridBotGovernorRepo = {
          AND gm.bot_model_version = 2
          AND gm.bot_config_version = 1
          AND gm.bot_strength_adjustment IS NOT NULL
-         AND gm.completion_reason IN ('line', 'board_full', 'turn_limit')
+         AND gm.completion_reason IN ('line', 'board_full', 'board_dead', 'draw_agreed', 'turn_limit')
          AND EXISTS (
            SELECT 1 FROM football_grid_participants bot
             WHERE bot.match_id = gm.match_id
@@ -173,7 +173,7 @@ export const footballGridBotGovernorRepo = {
       botTier: string;
       pinnedStrengthAdjustment: number;
       outcomeScore: 0 | 0.5 | 1;
-      completionReason: 'line' | 'board_full' | 'turn_limit';
+      completionReason: 'line' | 'board_full' | 'board_dead' | 'draw_agreed' | 'turn_limit';
     },
   ): Promise<boolean> {
     const inserted = await tx.unsafe<Array<{ match_id: string }>>(

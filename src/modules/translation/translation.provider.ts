@@ -2,7 +2,7 @@ import { config } from '../../core/config.js';
 import { ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 
-export type TranslationDomain = 'general' | 'legal' | 'marketing' | 'ui';
+export type TranslationDomain = 'general' | 'legal' | 'marketing' | 'ui' | 'football-name';
 
 export interface TranslationItem {
   id: string;
@@ -45,6 +45,10 @@ This is legal text (terms of service, privacy policy, etc.). Translate establish
     case 'marketing':
       return `${base}
 This is marketing copy. Prioritize natural, engaging ${labelFor(target)} that reads like it was written natively. Brand names (e.g. "QuizBall") must remain unchanged in Latin script.`;
+    case 'football-name':
+      return `${base}
+Each item is a FOOTBALL PLAYER'S NAME. Transliterate it into ${labelFor(target)} script exactly as Georgian football media writes that player — nothing more.
+Rules: keep the SAME number of words as the input; never expand a short name into a fuller or more famous name (input "Vinicius" → "ვინისიუს", NOT "ვინისიუს ჟუნიორი"; "Fernando" → "ფერნანდო"); never add a surname, nickname or club; keep hyphens and apostrophes; no Latin letters in the output.`;
     case 'ui':
       return `${base}
 This is short UI microcopy (button labels, menu items, error messages). Keep translations concise and idiomatic. Match the brevity of the source.`;

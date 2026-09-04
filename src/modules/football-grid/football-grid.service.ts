@@ -16,6 +16,8 @@ import {
   cancelNoContest,
   expireTurn,
   forfeitMatch,
+  offerDraw,
+  respondToDrawOffer,
   markReady,
   passTurn,
   pauseForDisconnect,
@@ -32,6 +34,7 @@ import type {
   FootballGridOrigin,
   FootballGridResolvedAnswer,
   FootballGridState,
+  FootballGridSeriesFormat,
 } from './football-grid.types.js';
 
 export interface FootballGridCommandResult {
@@ -88,6 +91,13 @@ function trimAliasReleaseCache(): void {
     if (!oldestKey) break;
     aliasReleaseCache.delete(oldestKey);
   }
+}
+
+
+/** Admin renames add aliases in place; drop the cached release so they match immediately. */
+export function resetFootballGridAliasCache(releaseId?: string): void {
+  if (releaseId) aliasReleaseCache.delete(releaseId);
+  else aliasReleaseCache.clear();
 }
 
 async function getAliasesByPlayerForRelease(
@@ -322,6 +332,11 @@ async function processInbox(
         aliasId: resolution?.aliasId ?? null,
         eventType: outcome === 'correct' ? 'cell_claimed' : `turn_${outcome}`,
       });
+      // The engine only knows the footballer id; the broadcast must carry the
+      // name and photo the board renders, so re-read the persisted claims.
+      if (outcome === 'correct') {
+        next = (await footballGridRepo.loadStateForUpdate(tx, leased.match_id)) ?? next;
+      }
       return { outcome, state: next, resolvedPlayerId: resolution?.playerId ?? null, attemptId, duplicate: false };
     });
     if (result.state.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
@@ -367,6 +382,8 @@ export const footballGridService = {
     rematchOfMatchId?: string | null;
     rematchIndex?: number;
     botReservationFence?: number | null;
+    /** Series format when this match starts a new series (default best-of-3). */
+    seriesFormat?: FootballGridSeriesFormat;
     botRp?: number | null;
     botTier?: string | null;
     botModelVersion?: number | null;
@@ -532,6 +549,52 @@ export const footballGridService = {
         processingFence,
       });
       return await processInbox(inbox, processingFence);
+    } catch (error) {
+      throw toDomainError(error);
+    }
+  },
+
+  /** Proposes a draw; the offer lapses at the end of the current turn. */
+  async offerDraw(input: {
+    matchId: string;
+    userId: string;
+    expectedStateVersion: number;
+  }): Promise<FootballGridState> {
+    try {
+      return await footballGridRepo.runInTransaction(async (tx) => {
+        const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
+        if (!previous) throw new NotFoundError('Football Grid match not found');
+        const next = offerDraw(previous, input.userId, input.expectedStateVersion, await footballGridRepo.databaseNowMs(tx));
+        await footballGridRepo.persistStateInTx(tx, previous, next, {
+          eventType: 'draw_offered', eventPayload: { userId: input.userId },
+        });
+        return next;
+      });
+    } catch (error) {
+      throw toDomainError(error);
+    }
+  },
+
+  async respondToDraw(input: {
+    matchId: string;
+    userId: string;
+    accept: boolean;
+    expectedStateVersion: number;
+  }): Promise<FootballGridState> {
+    try {
+      const state = await footballGridRepo.runInTransaction(async (tx) => {
+        const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
+        if (!previous) throw new NotFoundError('Football Grid match not found');
+        const next = respondToDrawOffer(
+          previous, input.userId, input.accept, input.expectedStateVersion, await footballGridRepo.databaseNowMs(tx),
+        );
+        await footballGridRepo.persistStateInTx(tx, previous, next, {
+          eventType: input.accept ? 'draw_agreed' : 'draw_declined', eventPayload: { userId: input.userId },
+        });
+        return next;
+      });
+      if (state.phase === 'terminal') invalidateBoardAnswerContent(input.matchId);
+      return state;
     } catch (error) {
       throw toDomainError(error);
     }

@@ -5,6 +5,7 @@ export interface AuthRequestContext {
   clientIp?: string;
   /** First-touch campaign tags from the client, for signup attribution only. */
   utm?: import('../../core/utm-attribution.js').UtmAttribution | null;
+  campaign?: import('../../core/campaign-attribution.js').CampaignAttribution | null;
 }
 
 /**

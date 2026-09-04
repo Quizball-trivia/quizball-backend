@@ -308,6 +308,12 @@ export async function assignRetentionEmailCandidates(): Promise<number> {
     || !emailUnsubEnabled()
     || config.RETENTION_EMAIL_ASSIGNMENT_CAP <= 0
   ) return 0;
+  // Skip the candidate scan once the campaign cap is spent — it is the second
+  // most expensive statement on prod (318.3 ms mean) and the cap is reached.
+  if (!(await retentionEmailRepo.hasCampaignCapacity(
+    RETENTION_EMAIL_CAMPAIGN_KEY,
+    config.RETENTION_EMAIL_ASSIGNMENT_CAP,
+  ))) return 0;
   const candidates = await retentionEmailRepo.listEligibleCandidates({
     campaignKey: RETENTION_EMAIL_CAMPAIGN_KEY,
     minInactiveDays: config.RETENTION_EMAIL_MIN_INACTIVE_DAYS,
@@ -359,6 +365,12 @@ export async function assignDormantComebackEmailCandidates(): Promise<number> {
     || !emailUnsubEnabled()
     || config.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP <= 0
   ) return 0;
+  // Same reasoning as the weekend-league campaign above: the cap is spent, so
+  // the scan cannot produce an assignment.
+  if (!(await retentionEmailRepo.hasCampaignCapacity(
+    DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,
+    config.DORMANT_COMEBACK_EMAIL_ASSIGNMENT_CAP,
+  ))) return 0;
   const candidates = await retentionEmailRepo.listDormantCandidates({
     campaignKey: DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,
     minInactiveDays: config.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS,

@@ -24,9 +24,31 @@ async function tick(): Promise<void> {
     || !emailEnabled()
     || !emailUnsubEnabled()
   ) return;
-  const weekendLeagueAssigned = await assignRetentionEmailCandidates();
-  const dormantAssigned = await assignDormantComebackEmailCandidates();
-  const journeyAssigned = await assignReactivationJourneyCandidates();
+  // These three assignment passes are independent — different campaigns,
+  // different tables, each gated by its own cap — so they were paying three
+  // sequential round trips for no ordering guarantee. Delivery still runs after
+  // them, since it sends what they just assigned.
+  // allSettled, not all: `all` rejects on the first failure while the other two
+  // passes are still in flight, so `inFlight` would clear and the next tick
+  // could start them again concurrently — something the old sequential version
+  // could not do. Each pass reports its own outcome instead.
+  const [weekendLeague, dormant, journeyAssignment] = await Promise.allSettled([
+    assignRetentionEmailCandidates(),
+    assignDormantComebackEmailCandidates(),
+    assignReactivationJourneyCandidates(),
+  ]);
+  for (const [name, outcome] of [
+    ['weekendLeague', weekendLeague],
+    ['dormant', dormant],
+    ['journey', journeyAssignment],
+  ] as const) {
+    if (outcome.status === 'rejected') {
+      logger.error({ error: outcome.reason, pass: name }, 'Retention assignment pass failed');
+    }
+  }
+  const weekendLeagueAssigned = weekendLeague.status === 'fulfilled' ? weekendLeague.value : 0;
+  const dormantAssigned = dormant.status === 'fulfilled' ? dormant.value : 0;
+  const journeyAssigned = journeyAssignment.status === 'fulfilled' ? journeyAssignment.value : 0;
   const journey = await scheduleReactivationJourneySteps();
   const sent = await deliverRetentionEmails();
   if (

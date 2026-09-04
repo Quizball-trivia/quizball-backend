@@ -50,6 +50,10 @@ function journeyEnabled(journeyConfig: JourneyConfig | null): journeyConfig is J
 export async function assignReactivationJourneyCandidates(): Promise<number> {
   const journeyConfig = await retentionJourneyRepo.getConfig();
   if (!journeyEnabled(journeyConfig)) return 0;
+  // The candidate scan is the single most expensive statement in the system
+  // (827.9 ms mean on prod). Skip it outright once the caps are spent — which
+  // they are for most of the day, since the daily cap is reached every day.
+  if (!(await retentionJourneyRepo.hasJourneyCapacityToday(journeyConfig))) return 0;
   const candidates = await retentionJourneyRepo.listEnrollmentCandidates({
     config: journeyConfig,
     userIdAllowlist: config.REACTIVATION_JOURNEY_USER_ID_ALLOWLIST,

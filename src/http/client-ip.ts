@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import type { Request } from 'express';
 import { config } from '../core/config.js';
 import { UTM_ATTRIBUTION_HEADER, parseUtmAttribution } from '../core/utm-attribution.js';
+import { CAMPAIGN_ATTRIBUTION_HEADER, parseCampaignAttribution } from '../core/campaign-attribution.js';
 import type { AuthRequestContext } from '../modules/auth/auth.client.js';
 
 type HeaderValue = string | string[] | undefined;
@@ -47,6 +48,11 @@ export function authRequestContext(req: Pick<Request, 'headers' | 'socket'>): Au
   // have to ride along here — the /users/me middleware only sees an account
   // that already exists.
   const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
-  if (!clientIp && !utm) return undefined;
-  return { ...(clientIp ? { clientIp } : {}), ...(utm ? { utm } : {}) };
+  const campaign = parseCampaignAttribution(req.headers[CAMPAIGN_ATTRIBUTION_HEADER]);
+  if (!clientIp && !utm && !campaign) return undefined;
+  return {
+    ...(clientIp ? { clientIp } : {}),
+    ...(utm ? { utm } : {}),
+    ...(campaign ? { campaign } : {}),
+  };
 }

@@ -28,6 +28,7 @@ scripts/*
 !scripts/generate-image-question-preview.ts
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
+!scripts/fix-storage-cache-control.ts
 !scripts/export-openapi.ts
 !scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/

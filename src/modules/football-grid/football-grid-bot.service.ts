@@ -1,5 +1,8 @@
+import { config } from '../../core/config.js';
 import { appMetrics } from '../../core/metrics.js';
-import { applyResolvedAnswer, FOOTBALL_GRID_WIN_LINES, passTurn } from './football-grid.engine.js';
+import { applyResolvedAnswer, FOOTBALL_GRID_WIN_LINES, passTurn,
+  countWinnableLines,
+} from './football-grid.engine.js';
 import { parseFootballGridBotStrengthAdjustment } from './football-grid-bot-governor.js';
 import { footballGridBotGovernorService } from './football-grid-bot-governor.service.js';
 import { footballGridRepo } from './football-grid.repo.js';
@@ -81,20 +84,51 @@ export function footballGridBotScarcityMultiplier(
   return 1;
 }
 
+export type FootballGridBotDifficulty = 'easy' | 'adaptive';
+
+// Ceilings for FOOTBALL_GRID_BOT_DIFFICULTY=easy. The tier model still picks
+// the bot and its delays; only knowledge and tactics are capped so a casual
+// player wins more often than not.
+export const FOOTBALL_GRID_EASY_BOT_CAPS = Object.freeze({
+  accuracy: 0.38,
+  tacticalOptimality: 0.45,
+  passOnMiss: 0.5,
+});
+
+export function footballGridBotDifficulty(): FootballGridBotDifficulty {
+  return config.FOOTBALL_GRID_BOT_DIFFICULTY;
+}
+
+export function applyFootballGridBotDifficulty(
+  policy: FootballGridBotTierPolicy,
+  difficulty: FootballGridBotDifficulty,
+): FootballGridBotTierPolicy {
+  if (difficulty !== 'easy') return policy;
+  return {
+    ...policy,
+    accuracy: Math.min(policy.accuracy, FOOTBALL_GRID_EASY_BOT_CAPS.accuracy),
+    tacticalOptimality: Math.min(policy.tacticalOptimality, FOOTBALL_GRID_EASY_BOT_CAPS.tacticalOptimality),
+    passOnMiss: Math.max(policy.passOnMiss, FOOTBALL_GRID_EASY_BOT_CAPS.passOnMiss),
+  };
+}
+
 export function footballGridBotEffectiveAccuracy(input: {
   modelVersion: number;
   configVersion: number;
   tier: string;
   strengthAdjustment: number;
   chosenCellUnusedAnswerCount: number;
+  difficulty?: FootballGridBotDifficulty;
 }): { baseAccuracy: number; scarcityMultiplier: number; effectiveAccuracy: number } {
   const policy = footballGridBotTierPolicyForVersion(
     input.modelVersion,
     input.configVersion,
     input.tier,
   );
+  const cap = input.difficulty === 'easy' ? FOOTBALL_GRID_EASY_BOT_CAPS.accuracy : 1;
   if (input.modelVersion === 1 && input.configVersion === 1) {
-    return { baseAccuracy: policy.accuracy, scarcityMultiplier: 1, effectiveAccuracy: policy.accuracy };
+    const effectiveAccuracy = Math.min(cap, policy.accuracy);
+    return { baseAccuracy: policy.accuracy, scarcityMultiplier: 1, effectiveAccuracy };
   }
   const strengthAdjustment = parseFootballGridBotStrengthAdjustment(
     input.strengthAdjustment,
@@ -112,6 +146,7 @@ export function footballGridBotEffectiveAccuracy(input: {
   // selected intersection no easier. Final clamp is the invariant that no
   // modifier may ever strengthen a bot above its tier's safe v2 baseline.
   const effectiveAccuracy = Math.min(
+    cap,
     policy.accuracy,
     Math.max(0, policy.accuracy + strengthAdjustment) * scarcityMultiplier,
   );
@@ -182,7 +217,38 @@ export function chooseFootballGridBotCell(
   return open[Math.floor(seededUnit(seed, state.turnNumber, 0x72d5c3) * open.length)] ?? 0;
 }
 
+/**
+ * Draw policy: a bot takes a draw when it cannot win, or when the human is
+ * ahead on open lines; with equal chances it settles once the board is late
+ * (easy bots settle earlier). It never accepts while it is the only side that
+ * can still win.
+ */
+export function footballGridBotShouldAcceptDraw(
+  state: FootballGridState,
+  botUserId: string,
+  difficulty: FootballGridBotDifficulty,
+): boolean {
+  const opponent = state.players.find((player) => player.userId !== botUserId);
+  const botLines = countWinnableLines(state.claims, botUserId);
+  if (botLines === 0) return true;
+  const opponentLines = opponent ? countWinnableLines(state.claims, opponent.userId) : 0;
+  if (opponentLines === 0) return false;
+  if (opponentLines > botLines) return true;
+  if (opponentLines < botLines) return false;
+  const lateBoardClaims = difficulty === 'easy' ? 4 : 6;
+  return state.claims.length >= lateBoardClaims;
+}
+
 export const footballGridBotService = {
+  /** A bot takes a draw only once it has no winnable line left; otherwise it plays on. */
+  shouldAcceptDraw(
+    state: FootballGridState,
+    botUserId: string,
+    difficulty: FootballGridBotDifficulty = footballGridBotDifficulty(),
+  ): boolean {
+    return footballGridBotShouldAcceptDraw(state, botUserId, difficulty);
+  },
+
   async getSchedule(matchId: string, state: FootballGridState): Promise<{
     delayMs: number;
     expectedStateVersion: number;
@@ -260,7 +326,11 @@ export const footballGridBotService = {
           telemetry: null,
         };
       }
-      const policy = footballGridBotTierPolicyForVersion(runtime.modelVersion, runtime.configVersion, runtime.botTier);
+      const difficulty = footballGridBotDifficulty();
+      const policy = applyFootballGridBotDifficulty(
+        footballGridBotTierPolicyForVersion(runtime.modelVersion, runtime.configVersion, runtime.botTier),
+        difficulty,
+      );
       const cellIndex = chooseFootballGridBotCell(
         previous,
         runtime.botUserId,
@@ -281,6 +351,7 @@ export const footballGridBotService = {
         tier: runtime.botTier,
         strengthAdjustment: runtime.strengthAdjustment,
         chosenCellUnusedAnswerCount: candidates.length,
+        difficulty,
       });
       const accurate = recognizableCandidates.length > 0
         && seededUnit(runtime.rngSeed, previous.turnNumber, 0x19660d) <= accuracy.effectiveAccuracy;
@@ -291,7 +362,7 @@ export const footballGridBotService = {
         : null;
       const passes = !accurate
         && seededUnit(runtime.rngSeed, previous.turnNumber, 0xa53c9e) <= policy.passOnMiss;
-      const next = passes
+      let next = passes
         ? passTurn(previous, runtime.botUserId, previous.stateVersion, nowMs)
         : applyResolvedAnswer(previous, {
             userId: runtime.botUserId,
@@ -321,6 +392,9 @@ export const footballGridBotService = {
         } : {}),
       });
       const outcome: 'correct' | 'wrong' | 'pass' = accurate ? 'correct' : passes ? 'pass' : 'wrong';
+      // Same as the human path: a claim broadcast must include the player's
+      // name and photo, which only the persisted rows carry.
+      if (accurate) next = (await footballGridRepo.loadStateForUpdate(tx, input.matchId)) ?? next;
       if (runtime.modelVersion === 2 && runtime.configVersion === 1) {
         await footballGridBotGovernorService.recordActionInTx(tx, {
           matchId: input.matchId,

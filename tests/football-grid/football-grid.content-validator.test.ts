@@ -72,8 +72,8 @@ describe('football grid content validation', () => {
 
   it('validates release difficulty distribution and exact EN/KA coverage', () => {
     const boards = [
-      ...Array.from({ length: 25 }, (_, index) => candidate(`easy-${index}`, 'easy')),
-      ...Array.from({ length: 60 }, (_, index) => candidate(`normal-${index}`, 'normal')),
+      ...Array.from({ length: 40 }, (_, index) => candidate(`easy-${index}`, 'easy')),
+      ...Array.from({ length: 45 }, (_, index) => candidate(`normal-${index}`, 'normal')),
       ...Array.from({ length: 15 }, (_, index) => candidate(`hard-${index}`, 'hard')),
     ];
     const players = new Set(boards.flatMap((board) => board.cells.flatMap((cell) => cell.playerIds)));

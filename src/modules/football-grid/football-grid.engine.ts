@@ -6,10 +6,11 @@ import type {
   FootballGridState,
 } from './football-grid.types.js';
 
-export const FOOTBALL_GRID_TURN_MS = 20_000;
+export const FOOTBALL_GRID_TURN_MS = 40_000;
 // 5s: long enough for the pre-match showdown + board build-in animation the
 // web client plays during this phase (owner request 2026-08-27).
-export const FOOTBALL_GRID_COUNTDOWN_MS = 5_000;
+// 5 s kickoff gate + 3 s board reveal on the client before the first turn.
+export const FOOTBALL_GRID_COUNTDOWN_MS = 8_000;
 export const FOOTBALL_GRID_HANDOFF_MS = 30_000;
 export const FOOTBALL_GRID_READY_MS = 20_000;
 export const FOOTBALL_GRID_RECONNECT_MS = 30_000;
@@ -24,6 +25,8 @@ export const FOOTBALL_GRID_SERVICE_INTERRUPTION_MS = 120_000;
 // keep a match (and its timers/rows) alive indefinitely. Generous enough that
 // legitimate play almost always ends by line or board_full first.
 export const FOOTBALL_GRID_MAX_TURNS = 40;
+/** Turns an offerer sits out after a declined draw offer (their own next two turns). */
+export const FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS = 4;
 
 export const FOOTBALL_GRID_WIN_LINES: ReadonlyArray<readonly [number, number, number]> = [
   [0, 1, 2],
@@ -43,7 +46,11 @@ export type FootballGridRuleErrorCode =
   | 'NOT_YOUR_TURN'
   | 'CELL_OCCUPIED'
   | 'PLAYER_ALREADY_USED'
-  | 'INVALID_CELL';
+  | 'INVALID_CELL'
+  | 'DRAW_OFFER_PENDING'
+  | 'DRAW_OFFER_LOCKED'
+  | 'NO_DRAW_OFFER'
+  | 'OWN_DRAW_OFFER';
 
 export class FootballGridRuleError extends Error {
   constructor(public readonly code: FootballGridRuleErrorCode, message: string) {
@@ -61,6 +68,7 @@ function cloneState(state: FootballGridState): FootballGridState {
     ...state,
     players: state.players.map((player) => ({ ...player })) as FootballGridState['players'],
     claims: state.claims.map((claim) => ({ ...claim })),
+    drawOffer: state.drawOffer ? { ...state.drawOffer } : null,
   };
 }
 
@@ -112,6 +120,14 @@ function advanceTurn(state: FootballGridState, actorUserId: string, nowMs: numbe
   state.turnDeadlineAt = iso(nowMs + FOOTBALL_GRID_TURN_MS);
   state.phaseDeadlineAt = state.turnDeadlineAt;
   state.turnRemainingMs = FOOTBALL_GRID_TURN_MS;
+  // An unanswered draw offer lapses with the turn it was made on.
+  // An ignored offer lapses with the same lock as a declined one, so the
+  // off-turn player cannot re-offer every turn.
+  if (state.drawOffer) {
+    const offerer = state.players.find((player) => player.userId === state.drawOffer!.byUserId);
+    if (offerer) offerer.drawOfferLockedUntilTurn = Math.max(offerer.drawOfferLockedUntilTurn ?? 0, state.drawOffer.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
+  }
+  state.drawOffer = null;
   state.stateVersion += 1;
 }
 
@@ -128,6 +144,7 @@ function complete(
       : 'completed';
   state.phase = 'terminal';
   state.winnerUserId = winnerUserId;
+  state.drawOffer = null;
   state.currentPlayerUserId = null;
   state.phaseDeadlineAt = null;
   state.turnDeadlineAt = null;
@@ -170,6 +187,7 @@ export function createFootballGridState(input: {
         ready: player.isBot ?? false,
         noActionTimeouts: 0,
         pauseBudgetRemainingMs: FOOTBALL_GRID_INITIAL_PAUSE_BUDGET_MS,
+        drawOfferLockedUntilTurn: 0,
       })) as FootballGridState['players'],
     openerUserId: input.openerUserId,
     currentPlayerUserId: null,
@@ -185,6 +203,7 @@ export function createFootballGridState(input: {
     pausedFromPhase: null,
     reconnectDeadlineAt: null,
     completionReason: null,
+    drawOffer: null,
   };
 }
 
@@ -269,6 +288,29 @@ export function detectWinningUser(claims: FootballGridClaimState[]): string | nu
   return null;
 }
 
+/** A line is still winnable for a player while none of its cells belongs to the opponent. */
+export function countWinnableLines(claims: FootballGridClaimState[], userId: string): number {
+  const byCell = new Map(claims.map((claim) => [claim.cellIndex, claim.claimantUserId]));
+  return FOOTBALL_GRID_WIN_LINES.filter((line) =>
+    line.every((cell) => {
+      const owner = byCell.get(cell);
+      return owner === undefined || owner === userId;
+    })).length;
+}
+
+export function hasWinnableLine(claims: FootballGridClaimState[], userId: string): boolean {
+  return countWinnableLines(claims, userId) > 0;
+}
+
+/**
+ * Nobody can complete a line any more. Cells are locked once claimed, so a
+ * board can go dead well before it is full — without this the players would
+ * only be passing at each other until the turn cap.
+ */
+export function isBoardDead(state: Pick<FootballGridState, 'claims' | 'players'>): boolean {
+  return state.players.every((player) => !hasWinnableLine(state.claims, player.userId));
+}
+
 export function applyResolvedAnswer(
   inputState: FootballGridState,
   input: {
@@ -317,8 +359,63 @@ export function applyResolvedAnswer(
       complete(state, null, 'board_full', input.nowMs);
       return state;
     }
+    if (isBoardDead(state)) {
+      complete(state, null, 'board_dead', input.nowMs);
+      return state;
+    }
   }
   advanceTurn(state, input.userId, input.nowMs);
+  return state;
+}
+
+export function offerDraw(
+  inputState: FootballGridState,
+  userId: string,
+  expectedStateVersion: number,
+  nowMs: number,
+): FootballGridState {
+  assertParticipant(inputState, userId);
+  assertExpectedVersion(inputState, expectedStateVersion);
+  if (inputState.status !== 'active' || inputState.phase !== 'turn') {
+    throw new FootballGridRuleError('INVALID_STATE', 'Draw offers are only possible during a live turn');
+  }
+  if (inputState.drawOffer) {
+    throw new FootballGridRuleError('DRAW_OFFER_PENDING', 'A draw offer is already waiting for an answer');
+  }
+  const offerer = inputState.players.find((player) => player.userId === userId)!;
+  if (offerer.drawOfferLockedUntilTurn > inputState.turnNumber) {
+    throw new FootballGridRuleError('DRAW_OFFER_LOCKED', 'Draw offer declined recently; try again in a few turns');
+  }
+  const state = cloneState(inputState);
+  state.drawOffer = { byUserId: userId, turnNumber: state.turnNumber, offeredAt: iso(nowMs) };
+  state.stateVersion += 1;
+  return state;
+}
+
+export function respondToDrawOffer(
+  inputState: FootballGridState,
+  userId: string,
+  accept: boolean,
+  expectedStateVersion: number,
+  nowMs: number,
+): FootballGridState {
+  assertParticipant(inputState, userId);
+  assertExpectedVersion(inputState, expectedStateVersion);
+  if (!inputState.drawOffer || inputState.phase !== 'turn') {
+    throw new FootballGridRuleError('NO_DRAW_OFFER', 'There is no draw offer to answer');
+  }
+  if (inputState.drawOffer.byUserId === userId) {
+    throw new FootballGridRuleError('OWN_DRAW_OFFER', 'You cannot answer your own draw offer');
+  }
+  const state = cloneState(inputState);
+  if (accept) {
+    complete(state, null, 'draw_agreed', nowMs);
+    return state;
+  }
+  const offerer = state.players.find((player) => player.userId === state.drawOffer!.byUserId)!;
+  offerer.drawOfferLockedUntilTurn = state.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS;
+  state.drawOffer = null;
+  state.stateVersion += 1;
   return state;
 }
 
@@ -371,6 +468,9 @@ export function pauseForDisconnect(
     : state.turnRemainingMs;
   state.status = 'paused';
   state.phase = 'paused';
+  // An offer made before the interruption should not silently resolve a turn
+  // the reconnecting player sees as fresh.
+  state.drawOffer = null;
   state.pausedFromPhase = inputState.phase === 'countdown' ? 'countdown' : 'turn';
   state.pausedAt = iso(nowMs);
   state.reconnectDeadlineAt = iso(reconnectDeadlineAtMs);

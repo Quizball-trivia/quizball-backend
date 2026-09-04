@@ -13,6 +13,8 @@ const objectPrefix = `football-grid/${release}/players`;
 const dryRun = process.argv.includes('--dry-run');
 const verifyOnly = process.argv.includes('--verify-only');
 const retryFallbacks = process.argv.includes('--retry-fallbacks');
+// --pool: only players that can enter the grid (Georgian name known) and still hotlink a third-party face.
+const poolOnly = process.argv.includes('--pool');
 const limitArgument = process.argv.find((argument) => argument.startsWith('--limit='));
 const concurrencyArgument = process.argv.find((argument) => argument.startsWith('--concurrency='));
 const limit = limitArgument ? Number(limitArgument.split('=')[1]) : Number.POSITIVE_INFINITY;
@@ -350,7 +352,26 @@ try {
              ORDER BY id
              LIMIT ${PAGE_SIZE}
           `
-        : await sql<PlayerRow[]>`
+        : poolOnly
+          ? await sql<PlayerRow[]>`
+            WITH ka AS (
+              SELECT DISTINCT lower(qp.payload->'display_answer'->>'en') AS en
+                FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+               WHERE q.status = 'published'
+                 AND q.type IN ('career_path', 'clue_chain', 'football_logic')
+                 AND nullif(qp.payload->'display_answer'->>'ka', '') IS NOT NULL
+            )
+            SELECT p.id::text, p.name, p.image_url, p.image_url AS source_image_url, p.updated_at
+              FROM football_players p
+             WHERE p.data_quality_status = 'usable'
+               AND p.transfermarkt_id ~ '^[0-9]+$'
+               AND (${afterId}::uuid IS NULL OR p.id > ${afterId}::uuid)
+               AND (EXISTS (SELECT 1 FROM ka WHERE ka.en = lower(p.name))
+                    OR EXISTS (SELECT 1 FROM football_player_name_translations t WHERE t.football_player_id = p.id AND t.locale = 'ka'))
+             ORDER BY p.id
+             LIMIT ${PAGE_SIZE}
+          `
+          : await sql<PlayerRow[]>`
             SELECT id::text, name, image_url, image_url AS source_image_url, updated_at
               FROM football_players
              WHERE data_quality_status = 'usable'

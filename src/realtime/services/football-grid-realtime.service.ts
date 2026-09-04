@@ -8,6 +8,8 @@ import {
   trackFootballGridMissingAnswerReported,
 } from '../../core/analytics/game-events.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
+
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
 import {
@@ -27,7 +29,10 @@ import {
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   FootballGridSubmitAnswerPayload,
+  FootballGridDrawRespondPayload,
+  FootballGridSeriesInfo,
   FootballGridVersionedCommandPayload,
+  OpponentInfo,
 } from '../socket.types.js';
 import { footballGridPresenceService } from './football-grid-presence.service.js';
 import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
@@ -114,7 +119,8 @@ async function scheduleStateDeadline(state: FootballGridState): Promise<void> {
 }
 
 async function emitState(io: QuizballServer, state: FootballGridState): Promise<void> {
-  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString() };
+  const series = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series };
   io.to(gridRoom(state.matchId)).emit('grid:state', payload);
   if (state.phase === 'loading' || state.phase === 'handoff') {
     io.to(gridRoom(state.matchId)).emit('grid:loading_state', payload);
@@ -145,6 +151,7 @@ async function processTerminalDeliveries(
   // before any participant delivery can be acknowledged. A process crash can
   // therefore only leave retryable delivery rows, never a client-visible
   // completion without its corresponding durable result/rematch state.
+  const series = await advanceSeries(state);
   const rematchWindow = await footballGridRepo.openRematchWindow(state.matchId);
   if (rematchWindow) {
     await scheduleRealtimeTimer(
@@ -222,7 +229,7 @@ async function processTerminalDeliveries(
       });
     }
   }
-  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString() };
+  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series: series.info };
   for (const delivery of humanDeliveries) {
     try {
       const sockets = await io.in(`user:${delivery.user_id}`).fetchSockets();
@@ -265,6 +272,7 @@ async function processTerminalDeliveries(
       logger.warn({ error, matchId: state.matchId, userId: delivery.user_id }, 'Football Grid result delivery failed');
     }
   }
+  if (series.nextState) announceNextSeriesGame(io, series.nextState);
 }
 
 async function recoverTerminalResultDeliveries(
@@ -318,6 +326,98 @@ function emitTurnResolved(io: QuizballServer, input: {
     cellIndex: input.cellIndex,
     resolvedPlayerId: input.outcome === 'correct' ? input.resolvedPlayerId : null,
   });
+}
+
+/**
+ * Records the finished game on its series and, when the series continues,
+ * deals the next game: same players and seats, opener alternates, a board the
+ * series has not used, and a bot opponent's reservation moved across so the
+ * finished game's settlement cannot free it. Runs before settlement for that
+ * reason. Idempotent per finished game.
+ */
+async function advanceSeries(
+  state: FootballGridState,
+): Promise<{ info: FootballGridSeriesInfo | null; nextState: FootballGridState | null }> {
+  let advance: Awaited<ReturnType<typeof footballGridRepo.advanceSeriesAfterGame>>;
+  try {
+    advance = await footballGridRepo.advanceSeriesAfterGame(state.matchId);
+  } catch (error) {
+    logger.error({ error, matchId: state.matchId }, 'Football Grid series advance failed');
+    return { info: await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null), nextState: null };
+  }
+  let nextState: FootballGridState | null = null;
+  if (advance.kind === 'continued') {
+    if (advance.nextMatchId) {
+      nextState = await footballGridRepo.loadState(advance.nextMatchId);
+    } else if (advance.pairingToken) {
+      try {
+        await footballGridRepo.createPairing({
+          pairingToken: advance.pairingToken,
+          searchAId: advance.seriesId,
+          searchBId: advance.seriesId,
+          userAId: advance.players[0].userId,
+          userBId: advance.players[1].userId,
+          opponentType: advance.players.some((player) => player.isBot) ? 'bot' : 'human',
+        });
+        const opener = advance.players.find((player) => player.seat === advance.openerSeat) ?? advance.players[0];
+        const bot = advance.players.find((player) => player.isBot);
+        const botRuntime = bot ? await footballGridRepo.getBotRuntime(state.matchId) : null;
+        nextState = (await footballGridService.createMatch({
+          pairingToken: advance.pairingToken,
+          lobbyId: advance.lobbyId,
+          origin: advance.origin,
+          theme: advance.theme,
+          players: advance.players.map((player) => ({ userId: player.userId, seat: player.seat, isBot: player.isBot })),
+          openerUserId: opener.userId,
+          seriesId: advance.seriesId,
+          rematchOfMatchId: state.matchId,
+          rematchIndex: advance.rematchIndex,
+          ...(bot && botRuntime ? {
+            botReservationFence: botRuntime.reservationFence,
+            botRp: botRuntime.botRp,
+            botTier: botRuntime.botTier,
+            botModelVersion: botRuntime.modelVersion,
+            botConfigVersion: botRuntime.configVersion,
+            botRngSeed: botRuntime.rngSeed + advance.rematchIndex,
+            afterCreateInTx: async (tx, matchId) => {
+              const moved = await syntheticBotsRepo.transferReservationBetweenMatches(tx, {
+                botUserId: bot.userId, fromMatchId: state.matchId, toMatchId: matchId,
+              });
+              if (!moved) throw new Error('GRID_BOT_RESERVATION_LOST');
+            },
+          } : {}),
+        })).state;
+      } catch (error) {
+        // Two workers can race on the same durable pairing token (the match
+        // row's pairing_token is UNIQUE): the loser adopts the winner's game.
+        const raced = await footballGridRepo.getMatchIdByPairingToken(advance.pairingToken).catch(() => null);
+        if (raced) {
+          nextState = await footballGridRepo.loadState(raced);
+        } else {
+          logger.error({ error, matchId: state.matchId, seriesId: advance.seriesId }, 'Football Grid next series game failed; closing series');
+          await footballGridRepo.markPairingFailed(advance.pairingToken, error instanceof Error ? error.message : 'series_next_game_failed').catch(() => {});
+          await footballGridRepo.closeSeriesAfterFailure(advance.seriesId, state.matchId).catch(() => {});
+        }
+      }
+    }
+  }
+  const info = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+  return { info, nextState };
+}
+
+const SERIES_NEXT_GAME_ANNOUNCE_DELAY_MS = 3_000;
+
+/**
+ * Announces the next game of a series once the finished game's result has
+ * been emitted, so every client sees the score before the new handoff. The
+ * handoff outbox redelivers the match if this best-effort emit is lost.
+ */
+function announceNextSeriesGame(io: QuizballServer, nextState: FootballGridState): void {
+  setTimeout(() => {
+    void footballGridRealtimeService.emitMatchFound(io, nextState).catch((error) => {
+      logger.warn({ error, matchId: nextState.matchId }, 'Football Grid next game handoff deferred to recovery');
+    });
+  }, SERIES_NEXT_GAME_ANNOUNCE_DELAY_MS);
 }
 
 async function applyAndBroadcast(
@@ -488,6 +588,18 @@ export const footballGridRealtimeService = {
     if (!current || current.phase === 'terminal') return false;
     state = current;
     const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
+    const series = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+    // Ranked points feed the tier frames on the HUD and kickoff gate, same as
+    // ranked/auction; a profile miss must never block the match handoff.
+    const rpByUserId = new Map<string, number>();
+    await Promise.all(state.players.map(async (player) => {
+      try {
+        const profile = await rankedService.ensureProfile(player.userId);
+        rpByUserId.set(player.userId, profile.rp);
+      } catch (error) {
+        logger.warn({ error, userId: player.userId }, 'Football Grid opponent RP lookup failed');
+      }
+    }));
     for (const player of state.players) {
       const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;
       const opponentUser = users.get(opponent.userId);
@@ -520,10 +632,13 @@ export const footballGridRealtimeService = {
       io.to(`user:${player.userId}`).emit('grid:match_found', {
         matchId: state.matchId,
         state,
+        series,
         opponent: {
           id: opponent.userId,
           username: opponentUser?.nickname ?? 'Player',
           avatarUrl: opponentUser?.avatar_url ?? null,
+          avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
+          ...(rpByUserId.has(opponent.userId) ? { rp: rpByUserId.get(opponent.userId) } : {}),
         },
         capabilities: {
           canAddFriend: !opponent.isBot,
@@ -636,6 +751,63 @@ export const footballGridRealtimeService = {
       });
     }
     await emitState(io, result.state);
+  },
+
+  async handleDrawOffer(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    const userId = socket.data.user.id;
+    const state = await applyAndBroadcast(io, () => footballGridService.offerDraw({
+      matchId: input.matchId, userId, expectedStateVersion: input.expectedStateVersion,
+    }));
+    socket.emit('grid:command_result', {
+      matchId: input.matchId, commandId: input.commandId, outcome: 'draw_offered', stateVersion: state.stateVersion,
+      resolvedPlayerId: null, attemptId: null, duplicate: false,
+    });
+    const opponent = state.players.find((player) => player.userId !== userId);
+    if (opponent?.isBot && state.drawOffer) {
+      // Bots answer after a short think. Not durable on purpose: an unanswered
+      // offer lapses with the turn, so a lost timer costs nothing.
+      const offerVersion = state.stateVersion;
+      setTimeout(() => {
+        void (async () => {
+          const latest = await footballGridRepo.loadState(state.matchId);
+          if (!latest?.drawOffer || latest.stateVersion !== offerVersion) return;
+          const accept = footballGridBotService.shouldAcceptDraw(latest, opponent.userId);
+          await applyAndBroadcast(io, () => footballGridService.respondToDraw({
+            matchId: state.matchId, userId: opponent.userId, accept, expectedStateVersion: offerVersion,
+          }));
+        })().catch((error) => {
+          logger.warn({ error, matchId: state.matchId }, 'Football Grid bot draw response failed');
+        });
+      }, 1_500 + Math.floor(Math.random() * 1_500));
+    }
+  },
+
+  async handleDrawRespond(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridDrawRespondPayload,
+  ): Promise<void> {
+    const state = await applyAndBroadcast(io, () => footballGridService.respondToDraw({
+      matchId: input.matchId,
+      userId: socket.data.user.id,
+      accept: input.accept,
+      expectedStateVersion: input.expectedStateVersion,
+    }));
+    socket.emit('grid:command_result', {
+      matchId: input.matchId,
+      commandId: input.commandId,
+      outcome: input.accept ? 'draw_accepted' : 'draw_declined',
+      stateVersion: state.stateVersion,
+      resolvedPlayerId: null, attemptId: null, duplicate: false,
+    });
+    if (state.phase === 'terminal') {
+      socket.data.gridMatchId = undefined;
+      socket.data.matchId = undefined;
+    }
   },
 
   async handlePass(

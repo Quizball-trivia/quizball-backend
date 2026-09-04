@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import postgres from 'postgres';
+import { FOOTBALL_GRID_EASY_BOT_CAPS } from '../../src/modules/football-grid/football-grid-bot.service.js';
 import '../setup.js';
 
 process.env.FOOTBALL_GRID_COINS_ENABLED = 'true';
@@ -202,6 +203,7 @@ async function createReadyTurn(
   seriesId?: string,
   existingPlayers?: [string, string],
   lobbyId?: string,
+  seriesFormat: 'single' | 'bo3' = 'single',
 ): Promise<{
   matchId: string;
   playerA: string;
@@ -219,6 +221,7 @@ async function createReadyTurn(
     opponentType: 'human',
   });
   let state = (await footballGridService.createMatch({
+    seriesFormat,
     pairingToken,
     lobbyId,
     origin,
@@ -325,6 +328,7 @@ async function createV2BotMatch(tier: string, opener: 'human' | 'bot' = 'bot'): 
     opponentType: 'bot',
   });
   const state = (await footballGridService.createMatch({
+      seriesFormat: 'single',
     pairingToken,
     origin: 'random',
     players: [
@@ -379,8 +383,9 @@ async function playWinningLine(
   seriesId?: string,
   existingPlayers?: [string, string],
   lobbyId?: string,
+  seriesFormat: 'single' | 'bo3' = 'single',
 ) {
-  const runtime = await createReadyTurn(origin, seriesId, existingPlayers, lobbyId);
+  const runtime = await createReadyTurn(origin, seriesId, existingPlayers, lobbyId, seriesFormat);
   let version = runtime.stateVersion;
   let firstCommandId = '';
   for (let index = 0; index < 3; index += 1) {
@@ -486,6 +491,13 @@ afterEach(async () => {
        USING football_grid_point_events e
        WHERE a.point_event_id = e.id AND e.match_id = ANY(${runtimeMatchIds}::uuid[])
     `;
+    // Series rows are created by createMatch itself now; collect them so the
+    // winner FK does not block the user cleanup below.
+    const linkedSeries = await db<Array<{ series_id: string }>>`
+      SELECT DISTINCT series_id FROM football_grid_matches
+       WHERE match_id = ANY(${runtimeMatchIds}::uuid[]) AND series_id IS NOT NULL
+    `;
+    for (const row of linkedSeries) if (!runtimeSeriesIds.includes(row.series_id)) runtimeSeriesIds.push(row.series_id);
     await db`DELETE FROM matches WHERE id = ANY(${runtimeMatchIds}::uuid[])`;
   }
   if (runtimeSeriesIds.length > 0) {
@@ -572,7 +584,13 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(audits[0].candidate_count).toBe(9);
     expect(audits[0].recognizable_pool_size).toBe(5);
     expect(Number(audits[0].base_accuracy)).toBe(0.74);
-    expect(Number(audits[0].effective_accuracy)).toBeCloseTo((0.74 - 0.075) * 0.85, 6);
+    // Governor + scarcity give 0.56525; the easy difficulty cap (default) then
+    // clamps what the bot actually rolled against, and the audit records that.
+    const uncapped = (0.74 - 0.075) * 0.85;
+    const expectedEffective = runtimeConfig.FOOTBALL_GRID_BOT_DIFFICULTY === 'easy'
+      ? Math.min(uncapped, FOOTBALL_GRID_EASY_BOT_CAPS.accuracy)
+      : uncapped;
+    expect(Number(audits[0].effective_accuracy)).toBeCloseTo(expectedEffective, 6);
     expect(Number(audits[0].pinned_strength_adjustment)).toBe(-0.075);
   });
 
@@ -770,6 +788,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const state = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: playerA, seat: 1 }, { userId: playerB, seat: 2 }],
@@ -814,7 +833,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
 
   it('replays terminal delivery after transport loss until each client explicitly acknowledges it', async (context) => {
     if (!hasRuntimeDb(context)) return;
-    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null });
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
     runtimeSeriesIds.push(seriesId);
     const match = await playWinningLine('private', seriesId);
     const pending = await db<Array<{ user_id: string; status: string }>>`
@@ -922,6 +941,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const created = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: playerA, seat: 1 }, { userId: playerB, seat: 2 }],
@@ -962,6 +982,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const created = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: playerA, seat: 1 }, { userId: playerB, seat: 2 }],
@@ -1019,6 +1040,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'bot',
     });
     const created = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: humanId, seat: 1 }, { userId: botId, seat: 2, isBot: true }],
@@ -1475,6 +1497,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const state = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: playerA, seat: 1 }, { userId: playerB, seat: 2 }],
@@ -1603,7 +1626,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
 
   it('deduplicates friend rematch accepts and creates exactly one alternating-opener match', async (context) => {
     if (!hasRuntimeDb(context)) return;
-    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null });
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
     runtimeSeriesIds.push(seriesId);
     const firstMatch = await playWinningLine('private', seriesId);
     const info = await footballGridRepo.getRematchInfo(firstMatch.matchId);
@@ -1647,6 +1670,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     });
     const opener = secondAccept.players.find((player) => player.seat === secondAccept.openerSeat)!;
     const nextMatch = await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: secondAccept.pairingToken,
       origin: secondAccept.origin,
       players: secondAccept.players,
@@ -1657,6 +1681,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     });
     runtimeMatchIds.push(nextMatch.state.matchId);
     const replayedCreate = await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: secondAccept.pairingToken,
       origin: secondAccept.origin,
       players: secondAccept.players,
@@ -1754,6 +1779,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const handoff = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: handoffPairing,
       origin: 'random',
       players: [{ userId: handoffA, seat: 1 }, { userId: handoffB, seat: 2 }],
@@ -1784,6 +1810,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     let loading = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: readyPairing,
       origin: 'random',
       players: [{ userId: readyA, seat: 1 }, { userId: readyB, seat: 2 }],
@@ -1837,6 +1864,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'bot',
     });
     let botState = (await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: botPairing,
       origin: 'random',
       players: [{ userId: human, seat: 1 }, { userId: bot, seat: 2, isBot: true }],
@@ -2014,6 +2042,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     const created = await footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: firstPairing,
       lobbyId: lobby.id,
       origin: 'private',
@@ -2041,6 +2070,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       opponentType: 'human',
     });
     await expect(footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken: stalePairing,
       lobbyId: lobby.id,
       origin: 'private',
@@ -2080,6 +2110,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(await footballGridRepo.heartbeatPairing(pairingToken)).toBe(false);
 
     await expect(footballGridService.createMatch({
+      seriesFormat: 'single',
       pairingToken,
       origin: 'random',
       players: [{ userId: players[0], seat: 1 }, { userId: players[1], seat: 2 }],
@@ -2097,4 +2128,106 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     `;
     expect(result).toEqual({ grid_matches: 0, base_matches: 0 });
   });
+
+  it('best of 3: game 1 settles as in progress, game 2 is dealt with the other opener, a forfeit decides and pays once', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game1 = await playWinningLine('random', undefined, undefined, undefined, 'bo3');
+    const info1 = await footballGridRepo.getSeriesInfoForMatch(game1.matchId);
+    expect(info1).toMatchObject({ format: 'bo3', gameIndex: 1, targetWins: 2, finished: false });
+
+    const advance = await footballGridRepo.advanceSeriesAfterGame(game1.matchId);
+    expect(advance.kind).toBe('continued');
+    if (advance.kind !== 'continued') return;
+    expect(advance.pairingToken).toBeTruthy();
+    expect(advance.openerSeat).toBe(2);
+    expect(advance.rematchIndex).toBe(1);
+
+    const rewards1 = await footballGridSettlementService.settleMatch(game1.matchId);
+    expect(rewards1.get(game1.playerA)).toMatchObject({ xp: 0, coins: 0, tp: 0, coinEligibilityReason: 'series_in_progress' });
+    expect(rewards1.get(game1.playerB)).toMatchObject({ xp: 0, coins: 0, tp: 0, tpEligibilityReason: 'series_in_progress' });
+
+    await footballGridRepo.createPairing({
+      pairingToken: advance.pairingToken!,
+      searchAId: advance.seriesId,
+      searchBId: advance.seriesId,
+      userAId: game1.playerA,
+      userBId: game1.playerB,
+      opponentType: 'human',
+    });
+    const game2 = (await footballGridService.createMatch({
+      pairingToken: advance.pairingToken!,
+      lobbyId: null,
+      origin: 'random',
+      theme: advance.theme,
+      players: advance.players.map((player) => ({ userId: player.userId, seat: player.seat })),
+      openerUserId: advance.players.find((player) => player.seat === advance.openerSeat)!.userId,
+      seriesId: advance.seriesId,
+      rematchOfMatchId: game1.matchId,
+      rematchIndex: advance.rematchIndex,
+    })).state;
+    runtimeMatchIds.push(game2.matchId);
+    expect(game2.openerUserId).toBe(game1.playerB);
+    // The fixture release holds a single board, so the pack-exhausted fallback deals it again.
+    const info2 = await footballGridRepo.getSeriesInfoForMatch(game2.matchId);
+    expect(info2).toMatchObject({ gameIndex: 2, finished: false, draws: 0 });
+    expect(info2?.wins[game1.playerA]).toBe(1);
+    expect(info2?.wins[game1.playerB]).toBe(0);
+
+    // A replay of the advance for game 1 reports the already-dealt game 2.
+    const replay = await footballGridRepo.advanceSeriesAfterGame(game1.matchId);
+    expect(replay).toMatchObject({ kind: 'continued', nextMatchId: game2.matchId });
+
+    const forfeited = await footballGridService.forfeit({
+      matchId: game2.matchId, userId: game1.playerB, expectedStateVersion: game2.stateVersion,
+    });
+    expect(forfeited.phase).toBe('terminal');
+    const closed = await footballGridRepo.advanceSeriesAfterGame(game2.matchId);
+    expect(closed).toMatchObject({ kind: 'closed', winnerUserId: game1.playerA, alreadyRecorded: false });
+    const info3 = await footballGridRepo.getSeriesInfoForMatch(game2.matchId);
+    expect(info3).toMatchObject({ finished: true, winnerUserId: game1.playerA });
+
+    // The deciding game settles for the series; a forfeit pays no coins, like a single match.
+    const rewards2 = await footballGridSettlementService.settleMatch(game2.matchId);
+    expect(rewards2.get(game1.playerA)).toMatchObject({ coins: 0, coinEligibilityReason: 'forfeit_no_coins' });
+    expect(rewards2.get(game1.playerA)?.xp).toBeGreaterThan(0);
+    expect(rewards2.get(game1.playerB)).toMatchObject({ coins: 0, tp: 0 });
+    expect(await footballGridRepo.advanceSeriesAfterGame(game2.matchId)).toMatchObject({ kind: 'closed', alreadyRecorded: true });
+  });
+
+  it('lets an admin correct a published player name in place, and nothing else', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { footballGridAdminService } = await import('../../src/modules/football-grid/football-grid-admin.service.js');
+    const playerId = PLAYER_IDS[8];
+    // Unique per run: the seeded content survives between runs, so a fixed
+    // name would already be in place (and its alias already inserted).
+    const renamed = `გრიდ მოთამაშე ${Date.now()}`;
+    const edit = await footballGridAdminService.renamePlayer({
+      playerId,
+      nameKa: renamed,
+      reason: 'integration test rename',
+      actor: 'integration-test',
+    });
+    expect(edit.rowsUpdated).toBe(9);
+    expect(edit.aliasesAdded).toBe(1);
+    const names = await db<Array<{ player_name_ka: string | null }>>`
+      SELECT DISTINCT player_name_ka FROM football_grid_board_answers WHERE football_player_id = ${playerId}
+    `;
+    expect(names.map((row) => row.player_name_ka)).toEqual([renamed]);
+    const alias = await db<Array<{ acceptance_policy: string }>>`
+      SELECT acceptance_policy FROM football_grid_player_aliases
+       WHERE football_player_id = ${playerId} AND normalized_alias = ${renamed} AND locale = 'ka'
+    `;
+    expect(alias).toHaveLength(1);
+    const audit = await db<Array<{ rows_updated: number }>>`
+      SELECT rows_updated FROM football_grid_player_name_edits WHERE football_player_id = ${playerId} AND name_ka = ${renamed}
+    `;
+    expect(audit[0]?.rows_updated).toBe(9);
+    await expect(db`
+      UPDATE football_grid_board_answers SET recognizable_rank = 99 WHERE football_player_id = ${playerId}
+    `).rejects.toThrow(/append-only/);
+    await expect(db`
+      DELETE FROM football_grid_board_answers WHERE football_player_id = ${playerId}
+    `).rejects.toThrow(/append-only/);
+  });
+
 });

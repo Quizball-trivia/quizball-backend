@@ -1,6 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import type {
+  FootballGridDifficultyProfile,
+  FootballGridSeriesAdvance,
+  FootballGridSeriesFormat,
+  FootballGridSeriesInfo,
   FootballGridAliasRecord,
   FootballGridBoardView,
   FootballGridCriterionView,
@@ -41,6 +46,7 @@ interface GridMatchRow {
   paused_from_phase: 'countdown' | 'turn' | null;
   reconnect_deadline_at: string | null;
   completion_reason: FootballGridState['completionReason'];
+  draw_offer: FootballGridState['drawOffer'];
   database_now?: string;
 }
 
@@ -52,6 +58,7 @@ interface GridParticipantRow {
   ready_at: string | null;
   no_action_timeout_count: number;
   pause_budget_remaining_ms: number;
+  draw_offer_locked_until_turn: number;
 }
 
 interface GridClaimRow {
@@ -324,7 +331,8 @@ async function loadStateRecordWithExecutor(
              'handoff_ack_at', p.handoff_ack_at,
              'ready_at', p.ready_at,
              'no_action_timeout_count', p.no_action_timeout_count,
-             'pause_budget_remaining_ms', p.pause_budget_remaining_ms
+             'pause_budget_remaining_ms', p.pause_budget_remaining_ms,
+             'draw_offer_locked_until_turn', p.draw_offer_locked_until_turn
            ) ORDER BY p.seat)
              FROM football_grid_participants p
             WHERE p.match_id = $1
@@ -362,6 +370,7 @@ async function loadStateRecordWithExecutor(
       ready: participant.ready_at !== null,
       noActionTimeouts: participant.no_action_timeout_count,
       pauseBudgetRemainingMs: participant.pause_budget_remaining_ms,
+      drawOfferLockedUntilTurn: participant.draw_offer_locked_until_turn ?? 0,
     })) as FootballGridState['players'],
     openerUserId: match.opener_user_id,
     currentPlayerUserId: match.current_player_user_id,
@@ -384,6 +393,7 @@ async function loadStateRecordWithExecutor(
     pausedFromPhase: match.paused_from_phase,
     reconnectDeadlineAt: match.reconnect_deadline_at,
     completionReason: match.completion_reason,
+    drawOffer: match.draw_offer ?? null,
   };
   return { state, databaseNowMs };
 }
@@ -815,15 +825,234 @@ export const footballGridRepo = {
   },
 
   async createSeries(input: {
-    origin: Exclude<FootballGridOrigin, 'random'>;
+    origin: FootballGridOrigin;
     lobbyId: string | null;
+    format?: FootballGridSeriesFormat;
+    theme?: string | null;
   }): Promise<string> {
     const rows = await sql<Array<{ id: string }>>`
-      INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat)
-      VALUES (${input.origin}, ${input.lobbyId}, 1)
+      INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
+      VALUES (${input.origin}, ${input.lobbyId}, 1, ${input.format ?? 'bo3'}, ${input.theme ?? null})
       RETURNING id
     `;
     return rows[0].id;
+  },
+
+  /** Series progress as the clients see it, keyed by the given match. */
+  async getSeriesInfoForMatch(matchId: string): Promise<FootballGridSeriesInfo | null> {
+    const rows = await sql<Array<{
+      id: string;
+      format: FootballGridSeriesFormat;
+      status: 'active' | 'rematch_pending' | 'closed';
+      seat1_wins: number;
+      seat2_wins: number;
+      draws: number;
+      winner_user_id: string | null;
+      closed_at: string | null;
+      rematch_index: number;
+      seat1_user_id: string | null;
+      seat2_user_id: string | null;
+    }>>`
+      SELECT s.id, s.format, s.status, s.seat1_wins, s.seat2_wins, s.draws, s.winner_user_id, s.closed_at,
+             gm.rematch_index,
+             (SELECT user_id FROM football_grid_participants p WHERE p.match_id = gm.match_id AND p.seat = 1) AS seat1_user_id,
+             (SELECT user_id FROM football_grid_participants p WHERE p.match_id = gm.match_id AND p.seat = 2) AS seat2_user_id
+        FROM football_grid_matches gm
+        JOIN football_grid_series s ON s.id = gm.series_id
+       WHERE gm.match_id = ${matchId}
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    const wins: Record<string, number> = {};
+    if (row.seat1_user_id) wins[row.seat1_user_id] = row.seat1_wins;
+    if (row.seat2_user_id) wins[row.seat2_user_id] = row.seat2_wins;
+    return {
+      seriesId: row.id,
+      format: row.format,
+      gameIndex: row.rematch_index + 1,
+      targetWins: row.format === 'bo3' ? 2 : 1,
+      wins,
+      draws: row.draws,
+      winnerUserId: row.winner_user_id,
+      finished: row.closed_at !== null,
+    };
+  },
+
+  /**
+   * Records a finished game on its series and decides what happens next.
+   * Idempotent per game: a retry after the next game was already dealt
+   * returns that game so delivery can be repeated without a second board.
+   */
+  async advanceSeriesAfterGame(matchId: string): Promise<FootballGridSeriesAdvance> {
+    return this.runInTransaction(async (tx) => {
+      const matches = await tx.unsafe<Array<{
+        series_id: string | null;
+        phase: string;
+        status: string;
+        winner_user_id: string | null;
+        completion_reason: string | null;
+        rematch_index: number;
+        theme: string;
+        origin: FootballGridOrigin;
+      }>>(
+        `SELECT series_id, phase, status, winner_user_id, completion_reason, rematch_index, theme, origin
+           FROM football_grid_matches WHERE match_id = $1`,
+        [matchId],
+      );
+      const match = matches[0];
+      if (!match?.series_id || match.phase !== 'terminal') return { kind: 'none' };
+      const seriesRows = await tx.unsafe<Array<{
+        id: string;
+        format: FootballGridSeriesFormat;
+        status: 'active' | 'rematch_pending' | 'closed';
+        lobby_id: string | null;
+        origin: FootballGridOrigin;
+        current_match_id: string | null;
+        next_opener_seat: 1 | 2;
+        seat1_wins: number;
+        seat2_wins: number;
+        draws: number;
+        game_index: number;
+        next_pairing_token: string | null;
+        closed_at: string | null;
+        last_advanced_match_id: string | null;
+      }>>(
+        `SELECT id, format, status, lobby_id, origin, current_match_id, next_opener_seat,
+                seat1_wins, seat2_wins, draws, game_index, next_pairing_token, closed_at, last_advanced_match_id
+           FROM football_grid_series WHERE id = $1 FOR UPDATE`,
+        [match.series_id],
+      );
+      const series = seriesRows[0];
+      if (!series) return { kind: 'none' };
+      const participants = await tx.unsafe<Array<{ user_id: string; seat: 1 | 2; is_bot: boolean }>>(
+        `SELECT user_id, seat, is_bot FROM football_grid_participants WHERE match_id = $1 ORDER BY seat`,
+        [matchId],
+      );
+      if (participants.length !== 2) return { kind: 'none' };
+      const players = participants.map((p) => ({ userId: p.user_id, seat: p.seat, isBot: p.is_bot }));
+      const nextGameFor = async (): Promise<string | null> => {
+        const next = await tx.unsafe<Array<{ match_id: string }>>(
+          `SELECT match_id FROM football_grid_matches WHERE rematch_of_match_id = $1 AND series_id = $2`,
+          [matchId, series.id],
+        );
+        return next[0]?.match_id ?? null;
+      };
+      // This game was already folded into the score (a retry while the next
+      // game is being created, or after it exists): never recompute, just
+      // report the token or the game that came out of it.
+      if (series.last_advanced_match_id === matchId) {
+        if (series.closed_at) return { kind: 'closed', seriesId: series.id, winnerUserId: null, alreadyRecorded: true };
+        return {
+          kind: 'continued',
+          seriesId: series.id,
+          nextMatchId: await nextGameFor(),
+          pairingToken: series.next_pairing_token,
+          players,
+          openerSeat: series.next_opener_seat,
+          theme: match.theme,
+          origin: series.origin,
+          lobbyId: series.lobby_id,
+          rematchIndex: series.game_index - 1,
+        };
+      }
+      // Already advanced past this game: report the game that was dealt.
+      if (series.current_match_id !== matchId) {
+        if (series.status === 'closed') return { kind: 'closed', seriesId: series.id, winnerUserId: null, alreadyRecorded: true };
+        const nextMatchId = await nextGameFor();
+        if (nextMatchId) return { kind: 'continued', seriesId: series.id, nextMatchId, players, pairingToken: null, openerSeat: series.next_opener_seat, theme: match.theme, origin: series.origin, lobbyId: series.lobby_id, rematchIndex: series.game_index - 1 };
+        return { kind: 'none' };
+      }
+      if (series.status === 'closed' || series.closed_at) return { kind: 'closed', seriesId: series.id, winnerUserId: null, alreadyRecorded: true };
+      const reason = match.completion_reason ?? 'administrative_cancel';
+      const forfeitLike = reason === 'forfeit' || reason === 'no_action_timeouts' || reason === 'disconnect_timeout';
+      const noContest = match.status === 'cancelled' || reason === 'loading_no_show'
+        || reason === 'simultaneous_disconnect' || reason === 'administrative_cancel';
+      const close = async (winnerUserId: string | null, closedReason: string) => {
+        await tx.unsafe(
+          `UPDATE football_grid_series
+              SET status = 'closed', winner_user_id = $2, closed_reason = $3, closed_at = now(),
+                  next_pairing_token = null, rematch_expires_at = null, last_advanced_match_id = $4,
+                  state_version = state_version + 1, updated_at = now()
+            WHERE id = $1`,
+          [series.id, winnerUserId, closedReason, matchId],
+        );
+        return { kind: 'closed' as const, seriesId: series.id, winnerUserId, alreadyRecorded: false };
+      };
+      if (noContest) return close(null, reason);
+      if (forfeitLike) return close(match.winner_user_id, reason);
+      let seat1Wins = series.seat1_wins;
+      let seat2Wins = series.seat2_wins;
+      let draws = series.draws;
+      const winnerSeat = participants.find((p) => p.user_id === match.winner_user_id)?.seat ?? null;
+      if (winnerSeat === 1) seat1Wins += 1;
+      else if (winnerSeat === 2) seat2Wins += 1;
+      else draws += 1;
+      const target = series.format === 'bo3' ? 2 : 1;
+      const maxGames = series.format === 'bo3' ? 3 : 1;
+      const decided = seat1Wins >= target || seat2Wins >= target || series.game_index >= maxGames;
+      if (decided) {
+        await tx.unsafe(
+          `UPDATE football_grid_series SET seat1_wins = $2, seat2_wins = $3, draws = $4, last_advanced_match_id = $5 WHERE id = $1`,
+          [series.id, seat1Wins, seat2Wins, draws, matchId],
+        );
+        const winnerUserId = seat1Wins === seat2Wins
+          ? null
+          : participants.find((p) => p.seat === (seat1Wins > seat2Wins ? 1 : 2))!.user_id;
+        return close(winnerUserId, winnerUserId ? 'decided' : 'series_draw');
+      }
+      const pairingToken = randomUUID();
+      await tx.unsafe(
+        `UPDATE football_grid_series
+            SET seat1_wins = $2, seat2_wins = $3, draws = $4, game_index = game_index + 1,
+                next_pairing_token = $5, last_advanced_match_id = $6,
+                status = 'active', state_version = state_version + 1, updated_at = now()
+          WHERE id = $1`,
+        [series.id, seat1Wins, seat2Wins, draws, pairingToken, matchId],
+      );
+      return {
+        kind: 'continued',
+        seriesId: series.id,
+        nextMatchId: null,
+        players,
+        pairingToken,
+        openerSeat: series.next_opener_seat,
+        theme: match.theme,
+        origin: series.origin,
+        lobbyId: series.lobby_id,
+        rematchIndex: series.game_index,
+      };
+    });
+  },
+
+  async getMatchIdByPairingToken(pairingToken: string): Promise<string | null> {
+    const rows = await sql<Array<{ match_id: string }>>`
+      SELECT match_id FROM football_grid_matches WHERE pairing_token = ${pairingToken}
+    `;
+    return rows[0]?.match_id ?? null;
+  },
+
+  /** The next game could not be dealt: end the series on the finished game's score. */
+  async closeSeriesAfterFailure(seriesId: string, lastMatchId: string): Promise<void> {
+    await sql`
+      UPDATE football_grid_series
+         SET status = 'closed', closed_reason = 'next_game_failed', closed_at = now(),
+             next_pairing_token = null, current_match_id = ${lastMatchId},
+             winner_user_id = CASE WHEN seat1_wins > seat2_wins THEN (
+                 SELECT user_id FROM football_grid_participants p WHERE p.match_id = ${lastMatchId} AND p.seat = 1)
+               WHEN seat2_wins > seat1_wins THEN (
+                 SELECT user_id FROM football_grid_participants p WHERE p.match_id = ${lastMatchId} AND p.seat = 2)
+               ELSE NULL END,
+             state_version = state_version + 1, updated_at = now()
+       WHERE id = ${seriesId} AND status <> 'closed'
+    `;
+  },
+
+  /** Boards already dealt in a series, so the next game never repeats one. */
+  async listSeriesBoardIds(seriesId: string): Promise<string[]> {
+    const rows = await sql<Array<{ board_id: string }>>`
+      SELECT board_id FROM football_grid_matches WHERE series_id = ${seriesId}
+    `;
+    return rows.map((row) => row.board_id);
   },
 
   async closeSeries(seriesId: string): Promise<void> {
@@ -1205,8 +1434,9 @@ export const footballGridRepo = {
         state_version: number;
         status: 'active' | 'rematch_pending' | 'closed';
         rematch_expires_at: string | null;
+        closed_reason: string | null;
       }>>(
-        `SELECT s.id, s.state_version, s.status, s.rematch_expires_at
+        `SELECT s.id, s.state_version, s.status, s.rematch_expires_at, s.closed_reason
            FROM football_grid_series s
            JOIN football_grid_matches gm ON gm.series_id = s.id
           WHERE gm.match_id = $1 AND s.current_match_id = $1
@@ -1215,7 +1445,12 @@ export const footballGridRepo = {
         [matchId],
       );
       const series = rows[0];
-      if (!series || series.status === 'closed') return null;
+      if (!series) return null;
+      // A best-of-N series only offers a rematch once it is decided; a game
+      // that merely continues the series has already moved current_match_id on.
+      // Any finished series can be replayed except one the server failed to
+      // continue; the replay starts a fresh score on the same series row.
+      if (series.status === 'closed' && (!series.closed_reason || series.closed_reason === 'next_game_failed')) return null;
       if (series.status === 'rematch_pending' && series.rematch_expires_at) {
         return {
           seriesId: series.id,
@@ -1408,17 +1643,52 @@ export const footballGridRepo = {
     return rows[0]?.theme ?? 'european';
   },
 
+  /**
+   * Which difficulty mix a pair of players should get. Everyone starts on
+   * mostly easy boards; a player who has won at least three of their last
+   * five finished games moves to a balanced mix.
+   */
+  async difficultyProfileForUsers(tx: TransactionSql, humanUserIds: string[]): Promise<FootballGridDifficultyProfile> {
+    if (humanUserIds.length === 0) return 'gentle';
+    const rows = await tx.unsafe<Array<{ user_id: string; recent_wins: number }>>(
+      `SELECT p.user_id,
+              count(*) FILTER (WHERE m.winner_user_id = p.user_id) AS recent_wins
+         FROM (
+           SELECT gm.match_id, gm.ended_at, mp.user_id,
+                  row_number() OVER (PARTITION BY mp.user_id ORDER BY gm.ended_at DESC) AS rn
+             FROM football_grid_matches gm
+             JOIN football_grid_participants mp ON mp.match_id = gm.match_id
+            WHERE mp.user_id = ANY($1::uuid[]) AND gm.phase = 'terminal'
+              AND gm.completion_reason IN ('line', 'board_full', 'board_dead', 'draw_agreed', 'turn_limit')
+         ) p
+         JOIN matches m ON m.id = p.match_id
+        WHERE p.rn <= 5
+        GROUP BY p.user_id`,
+      [humanUserIds],
+    );
+    return rows.some((row) => Number(row.recent_wins) >= 3) ? 'balanced' : 'gentle';
+  },
+
   async selectBoardIdForUsers(
     tx: TransactionSql,
     humanUserIds: string[],
     theme = 'european',
+    excludeBoardIds: string[] = [],
+    profile: FootballGridDifficultyProfile = 'gentle',
   ): Promise<string | null> {
+    // Weighted random by difficulty (Efraimidis–Spirakis keys): a 'gentle'
+    // profile makes easy boards the usual draw, hard ones rare; 'balanced'
+    // leans normal. Recently exposed boards still sort last.
+    const weights = profile === 'balanced'
+      ? { easy: 2, normal: 6, hard: 2 }
+      : { easy: 10, normal: 3, hard: 0.5 };
     const rows = await tx.unsafe<{ id: string }[]>(
       `SELECT b.id
          FROM football_grid_boards b
          JOIN football_grid_content_releases r ON r.id = b.release_id
         WHERE r.status = 'published'
           AND b.theme = $2
+          AND NOT (b.id = ANY($3::uuid[]))
           AND NOT EXISTS (
             SELECT 1
               FROM football_grid_content_quarantines q
@@ -1444,14 +1714,15 @@ export const footballGridRepo = {
             SELECT max(e.played_at) FROM football_grid_board_exposures e
              WHERE e.board_id = b.id AND e.user_id = ANY($1::uuid[])
           ) ASC NULLS FIRST,
-          random()
+          -ln(random()) / CASE b.difficulty WHEN 'easy' THEN $4::float8 WHEN 'hard' THEN $6::float8 ELSE $5::float8 END
         LIMIT 1`,
-      [humanUserIds, theme],
+      [humanUserIds, theme, excludeBoardIds, weights.easy, weights.normal, weights.hard],
     );
     return rows[0]?.id ?? null;
   },
 
   async createMatch(input: {
+    seriesFormat?: FootballGridSeriesFormat;
     pairingToken: string;
     lobbyId: string | null;
     origin: FootballGridOrigin;
@@ -1513,14 +1784,34 @@ export const footballGridRepo = {
       }
       const humanUserIds = input.players.filter((player) => !player.isBot).map((player) => player.userId);
       let theme = input.theme ?? 'european';
-      let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme);
+      // Every match belongs to a series. A random-opponent match creates its
+      // own best-of-3 here; lobby starts and series continuations pass one in.
+      let seriesId = input.seriesId ?? null;
+      if (!seriesId) {
+        const created = await tx.unsafe<Array<{ id: string }>>(
+          `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
+           VALUES ($1, $2, 1, $4, $3) RETURNING id`,
+          [input.origin, input.lobbyId, theme, input.seriesFormat ?? 'bo3'],
+        );
+        seriesId = created[0].id;
+      }
+      const usedBoardIds = (await tx.unsafe<Array<{ board_id: string }>>(
+        `SELECT board_id FROM football_grid_matches WHERE series_id = $1`,
+        [seriesId],
+      )).map((row) => row.board_id);
+      const profile = await this.difficultyProfileForUsers(tx, humanUserIds);
+      let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme, usedBoardIds, profile);
       if (!boardId && theme !== 'european') {
         // A pack whose boards are not yet published (or got quarantined) must
         // not strand two matched players: serve the European mix instead.
-        boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european');
+        boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european', usedBoardIds, profile);
         // Persist the pack the match actually plays, not the one requested.
         theme = 'european';
       }
+      // A series that exhausted its pack falls back to any board rather than
+      // failing — which can repeat a board already played in this series.
+      // Only reachable for tiny packs (a bo3 needs three boards).
+      if (!boardId && usedBoardIds.length > 0) boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme, [], profile);
       if (!boardId) throw new Error('No published Football Grid board is available');
       const boards = await tx.unsafe<GridBoardRow[]>(
         `SELECT id, version, release_id, row_criteria, column_criteria, canonical_checksum
@@ -1583,7 +1874,7 @@ export const footballGridRepo = {
           release.resolver_policy_version,
           board.canonical_checksum,
           input.origin,
-          input.seriesId ?? null,
+          seriesId,
           input.rematchOfMatchId ?? null,
           input.rematchIndex ?? 0,
           input.openerUserId,
@@ -1649,16 +1940,23 @@ export const footballGridRepo = {
           board.id,
         ],
       );
-      if (input.seriesId) {
+      {
         const openerSeat = input.players.find((player) => player.userId === input.openerUserId)?.seat ?? 1;
         const seriesUpdate = await tx.unsafe<Array<{ id: string }>>(
           `UPDATE football_grid_series
               SET current_match_id = $2, rematch_index = $3, status = 'active',
                   next_opener_seat = $4, next_pairing_token = null,
-                  rematch_expires_at = null, updated_at = now(), state_version = state_version + 1
-            WHERE id = $1 AND status <> 'closed'
+                  rematch_expires_at = null, theme = COALESCE(theme, $5),
+                  -- A rematch after a finished series starts the score over.
+                  seat1_wins = CASE WHEN closed_at IS NOT NULL THEN 0 ELSE seat1_wins END,
+                  seat2_wins = CASE WHEN closed_at IS NOT NULL THEN 0 ELSE seat2_wins END,
+                  draws = CASE WHEN closed_at IS NOT NULL THEN 0 ELSE draws END,
+                  game_index = CASE WHEN closed_at IS NOT NULL THEN 1 ELSE game_index END,
+                  winner_user_id = NULL, closed_reason = NULL, closed_at = NULL,
+                  updated_at = now(), state_version = state_version + 1
+            WHERE id = $1 AND (status <> 'closed' OR (closed_reason IS NOT NULL AND closed_reason <> 'next_game_failed'))
             RETURNING id`,
-          [input.seriesId, matchId, input.rematchIndex ?? 0, openerSeat === 1 ? 2 : 1],
+          [seriesId, matchId, input.rematchIndex ?? 0, openerSeat === 1 ? 2 : 1, theme],
         );
         // A concurrent decline or expiry closed the series between the second
         // acceptance and this creation. Abort instead of resurrecting it.
@@ -1808,6 +2106,7 @@ export const footballGridRepo = {
               reconnect_deadline_at = $14, completion_reason = $15,
               paused_from_phase = $17,
               pending_command_id = CASE WHEN $18::uuid IS NULL THEN pending_command_id ELSE NULL END,
+              draw_offer = $19::jsonb,
               bot_action_deadline_at = null,
               updated_at = now(), ended_at = CASE WHEN $3 = 'terminal' THEN now() ELSE ended_at END
         WHERE match_id = $1 AND state_version = $16
@@ -1832,6 +2131,7 @@ export const footballGridRepo = {
         previous.stateVersion,
         next.pausedFromPhase ?? null,
         input.pendingCommandId ?? null,
+        next.drawOffer ? sql.json({ ...next.drawOffer }) : null,
       ],
     );
     if (updated.length !== 1) {
@@ -1846,6 +2146,7 @@ export const footballGridRepo = {
         && prior.ready === player.ready
         && prior.noActionTimeouts === player.noActionTimeouts
         && prior.pauseBudgetRemainingMs === player.pauseBudgetRemainingMs
+        && prior.drawOfferLockedUntilTurn === player.drawOfferLockedUntilTurn
       ) {
         continue;
       }
@@ -1859,6 +2160,7 @@ export const footballGridRepo = {
                   WHEN $4 THEN COALESCE(ready_command_id, $7::uuid)
                   ELSE null
                 END,
+                draw_offer_locked_until_turn = $8,
                 updated_at = now()
           WHERE match_id = $1 AND user_id = $2`,
         [
@@ -1869,6 +2171,7 @@ export const footballGridRepo = {
           player.noActionTimeouts,
           player.pauseBudgetRemainingMs,
           input.readyCommand?.userId === player.userId ? input.readyCommand.commandId : null,
+          player.drawOfferLockedUntilTurn,
         ],
       );
     }

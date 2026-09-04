@@ -1,5 +1,8 @@
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { sql } from '../../db/index.js';
+import { normalizeFootballGridAnswer } from './football-grid.answer-resolver.js';
+import { resetFootballGridAliasCache } from './football-grid.service.js';
+import { resetFootballGridTypeaheadCache } from './football-grid-typeahead.controller.js';
 import type { Json } from '../../db/types.js';
 
 // Must match COIN_DAILY_CAP in football-grid-settlement.service.ts.
@@ -437,6 +440,92 @@ export const footballGridAdminService = {
         ],
       );
       if (!rows[0]) throw new NotFoundError('Open Football Grid report not found');
+    });
+  },
+
+  /**
+   * Corrects a player's display names across every published board answer and
+   * adds the corrected spellings as exact aliases, so the fix is both visible
+   * and accepted without a republish. Everything else stays append-only.
+   */
+  async renamePlayer(input: {
+    playerId: string;
+    nameEn?: string;
+    nameKa?: string;
+    reason: string;
+    actor: string;
+  }): Promise<{
+    playerId: string;
+    previousNameEn: string | null;
+    previousNameKa: string | null;
+    nameEn: string | null;
+    nameKa: string | null;
+    rowsUpdated: number;
+    aliasesAdded: number;
+    releaseIds: string[];
+  }> {
+    const nameEn = input.nameEn?.trim() || null;
+    const nameKa = input.nameKa?.trim() || null;
+    if (!nameEn && !nameKa) throw new BadRequestError('Provide nameEn and/or nameKa');
+    return sql.begin(async (tx) => {
+      const current = await tx.unsafe<Array<{ name_en: string | null; name_ka: string | null; release_ids: string[] }>>(
+        `SELECT (array_agg(player_name_en ORDER BY created_at DESC))[1] AS name_en,
+                (array_agg(player_name_ka ORDER BY created_at DESC))[1] AS name_ka,
+                array_agg(DISTINCT release_id) AS release_ids
+           FROM football_grid_board_answers
+          WHERE football_player_id = $1`,
+        [input.playerId],
+      );
+      if (!current[0] || !current[0].release_ids) {
+        throw new NotFoundError('Football Grid player has no published board answers');
+      }
+      const updated = await tx.unsafe<Array<{ n: number }>>(
+        `WITH upd AS (
+           UPDATE football_grid_board_answers
+              SET player_name_en = COALESCE($2, player_name_en),
+                  player_name_ka = COALESCE($3, player_name_ka)
+            WHERE football_player_id = $1
+              AND (player_name_en IS DISTINCT FROM COALESCE($2, player_name_en)
+                   OR player_name_ka IS DISTINCT FROM COALESCE($3, player_name_ka))
+            RETURNING 1
+         ) SELECT count(*)::int AS n FROM upd`,
+        [input.playerId, nameEn, nameKa],
+      );
+      let aliasesAdded = 0;
+      for (const releaseId of current[0].release_ids) {
+        for (const [locale, alias, aliasType] of [['en', nameEn, 'full_name'], ['ka', nameKa, 'georgian']] as const) {
+          if (!alias) continue;
+          const inserted = await tx.unsafe<Array<{ id: string }>>(
+            `INSERT INTO football_grid_player_aliases (
+               release_id, football_player_id, alias, normalized_alias, locale,
+               alias_type, acceptance_policy, reviewed_by, reviewed_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'exact', $7, now())
+             ON CONFLICT (release_id, football_player_id, normalized_alias, locale, alias_type) DO NOTHING
+             RETURNING id`,
+            [releaseId, input.playerId, alias, normalizeFootballGridAnswer(alias), locale, aliasType, input.actor],
+          );
+          aliasesAdded += inserted.length;
+        }
+      }
+      await tx.unsafe(
+        `INSERT INTO football_grid_player_name_edits (
+           football_player_id, previous_name_en, previous_name_ka, name_en, name_ka,
+           rows_updated, aliases_added, reason, actor
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [input.playerId, current[0].name_en, current[0].name_ka, nameEn, nameKa, updated[0].n, aliasesAdded, input.reason, input.actor],
+      );
+      for (const releaseId of current[0].release_ids) resetFootballGridAliasCache(releaseId);
+      resetFootballGridTypeaheadCache();
+      return {
+        playerId: input.playerId,
+        previousNameEn: current[0].name_en,
+        previousNameKa: current[0].name_ka,
+        nameEn,
+        nameKa,
+        rowsUpdated: updated[0].n,
+        aliasesAdded,
+        releaseIds: current[0].release_ids,
+      };
     });
   },
 };

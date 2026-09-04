@@ -8,9 +8,13 @@ import {
   applyResolvedAnswer,
   createFootballGridState,
   expireTurn,
+  isBoardDead,
+  offerDraw,
+  respondToDrawOffer,
   markReady,
   passTurn,
   pauseForDisconnect,
+  FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS,
   resumeAfterReconnect,
   startTurnAfterCountdown,
   type FootballGridBoardView,
@@ -218,5 +222,90 @@ describe('football grid engine', () => {
     expect(resumed.phase).toBe('countdown');
     expect(resumed.currentPlayerUserId).toBeNull();
     expect(Date.parse(resumed.phaseDeadlineAt!)).toBe(resumedAt + 1_500);
+  });
+});
+
+describe('football grid draws', () => {
+  const claim = (state: FootballGridState, userId: string, cellIndex: number) => applyResolvedAnswer(state, {
+    userId,
+    expectedStateVersion: state.stateVersion,
+    cellIndex,
+    outcome: 'correct',
+    footballPlayerId: `p-${userId}-${cellIndex}`,
+    nowMs: 50_000 + cellIndex,
+  });
+
+  it('runs 40-second turns', () => {
+    expect(FOOTBALL_GRID_TURN_MS).toBe(40_000);
+  });
+
+  it('ends a game as board_dead once no line is winnable for either player', () => {
+    // u1: 0, 4 ; u2: 8, 2 ; u1: 6 ; u2: 3 ; u1: 5 ; u2: 1 → every line is mixed.
+    let state = activeState();
+    for (const [userId, cell] of [['u1', 0], ['u2', 8], ['u1', 4], ['u2', 2], ['u1', 6], ['u2', 3], ['u1', 5]] as const) {
+      state = claim(state, userId, cell);
+      expect(state.phase).toBe('turn');
+    }
+    expect(isBoardDead(state)).toBe(false);
+    state = claim(state, 'u2', 1);
+    expect(state.phase).toBe('terminal');
+    expect(state.completionReason).toBe('board_dead');
+    expect(state.winnerUserId).toBeNull();
+    expect(state.status).toBe('completed');
+  });
+
+  it('accepts a draw offer into a draw_agreed completion', () => {
+    const state = activeState();
+    const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
+    expect(offered.drawOffer).toEqual({ byUserId: 'u1', turnNumber: state.turnNumber, offeredAt: new Date(60_000).toISOString() });
+    expect(offered.stateVersion).toBe(state.stateVersion + 1);
+    expect(() => offerDraw(offered, 'u2', offered.stateVersion, 60_001)).toThrow('already waiting');
+    expect(() => respondToDrawOffer(offered, 'u1', true, offered.stateVersion, 60_002)).toThrow('own draw offer');
+    const done = respondToDrawOffer(offered, 'u2', true, offered.stateVersion, 60_003);
+    expect(done.phase).toBe('terminal');
+    expect(done.completionReason).toBe('draw_agreed');
+    expect(done.winnerUserId).toBeNull();
+    expect(done.drawOffer).toBeNull();
+  });
+
+  it('locks a declined offerer out for a few turns and lapses an offer at turn end', () => {
+    const state = activeState();
+    const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
+    const declined = respondToDrawOffer(offered, 'u2', false, offered.stateVersion, 60_001);
+    expect(declined.phase).toBe('turn');
+    expect(declined.drawOffer).toBeNull();
+    expect(declined.players.find((p) => p.userId === 'u1')?.drawOfferLockedUntilTurn)
+      .toBe(state.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
+    expect(() => offerDraw(declined, 'u1', declined.stateVersion, 60_002)).toThrow('declined recently');
+    // The opponent is not locked and may offer.
+    const counter = offerDraw(declined, 'u2', declined.stateVersion, 60_003);
+    expect(counter.drawOffer?.byUserId).toBe('u2');
+    // An unanswered offer lapses when the turn changes.
+    const passed = passTurn(counter, counter.currentPlayerUserId!, counter.stateVersion, 60_004);
+    expect(passed.drawOffer).toBeNull();
+    expect(() => respondToDrawOffer(passed, 'u1', true, passed.stateVersion, 60_005)).toThrow('no draw offer');
+  });
+
+  it('lapses a pending draw offer when the match pauses for a disconnect', () => {
+    const state = activeState();
+    const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
+    const paused = pauseForDisconnect(offered, 60_500, 90_500);
+    expect(paused.drawOffer).toBeNull();
+    const resumed = resumeAfterReconnect(paused, 61_000);
+    expect(resumed.drawOffer).toBeNull();
+    expect(() => respondToDrawOffer(resumed, 'u2', true, resumed.stateVersion, 61_001)).toThrow('no draw offer');
+  });
+});
+
+describe('Football Grid draw offer lapse', () => {
+  it('locks the offerer when the offer lapses unanswered, like a decline', () => {
+    const state = activeState();
+    const offerer = state.players.find((p) => p.userId !== state.currentPlayerUserId)!.userId;
+    const offered = offerDraw(state, offerer, state.stateVersion, 60_000);
+    const lapsed = passTurn(offered, offered.currentPlayerUserId!, offered.stateVersion, 60_001);
+    expect(lapsed.drawOffer).toBeNull();
+    expect(lapsed.players.find((p) => p.userId === offerer)?.drawOfferLockedUntilTurn)
+      .toBe(state.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
+    expect(() => offerDraw(lapsed, offerer, lapsed.stateVersion, 60_002)).toThrow('declined recently');
   });
 });

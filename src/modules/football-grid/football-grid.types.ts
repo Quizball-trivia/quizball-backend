@@ -1,6 +1,43 @@
 export type FootballGridLocale = 'en' | 'ka';
 export type FootballGridDifficulty = 'easy' | 'normal' | 'hard';
 export type FootballGridOrigin = 'random' | 'challenge' | 'private' | 'public' | 'code';
+
+export type FootballGridSeriesFormat = 'single' | 'bo3';
+
+/** Board difficulty mix for a pairing: 'gentle' = mostly easy (default), 'balanced' = leans normal. */
+export type FootballGridDifficultyProfile = 'gentle' | 'balanced';
+
+/** Best-of-N progress, attached to state and completion payloads. */
+export interface FootballGridSeriesInfo {
+  seriesId: string;
+  format: FootballGridSeriesFormat;
+  /** 1-based index of the game this state belongs to. */
+  gameIndex: number;
+  /** Games needed to take the series (2 for bo3). */
+  targetWins: number;
+  wins: Record<string, number>;
+  draws: number;
+  /** Set once the series is decided; null while games remain. */
+  winnerUserId: string | null;
+  finished: boolean;
+}
+
+export type FootballGridSeriesAdvance =
+  | { kind: 'none' }
+  | { kind: 'closed'; seriesId: string; winnerUserId: string | null; alreadyRecorded: boolean }
+  | {
+      kind: 'continued';
+      seriesId: string;
+      /** Set when the next game already exists (retry path); otherwise it must be created with pairingToken. */
+      nextMatchId: string | null;
+      pairingToken: string | null;
+      players: Array<{ userId: string; seat: 1 | 2; isBot: boolean }>;
+      openerSeat: 1 | 2;
+      theme: string;
+      origin: FootballGridOrigin;
+      lobbyId: string | null;
+      rematchIndex: number;
+    };
 export type FootballGridStatus =
   | 'handoff'
   | 'loading'
@@ -29,6 +66,10 @@ export type FootballGridResolutionOutcome =
 export type FootballGridCompletionReason =
   | 'line'
   | 'board_full'
+  /** No line is still possible for either player: an automatic draw. */
+  | 'board_dead'
+  /** One player offered a draw and the other accepted. */
+  | 'draw_agreed'
   | 'turn_limit'
   | 'forfeit'
   | 'no_action_timeouts'
@@ -63,6 +104,15 @@ export interface FootballGridPlayerState {
   ready: boolean;
   noActionTimeouts: number;
   pauseBudgetRemainingMs: number;
+  /** A declined draw offer locks the offerer out until this turn number. */
+  drawOfferLockedUntilTurn: number;
+}
+
+export interface FootballGridDrawOffer {
+  byUserId: string;
+  /** The turn the offer was made on; it lapses when that turn ends. */
+  turnNumber: number;
+  offeredAt: string;
 }
 
 export interface FootballGridClaimState {
@@ -94,6 +144,7 @@ export interface FootballGridState {
   pausedFromPhase?: 'countdown' | 'turn' | null;
   reconnectDeadlineAt: string | null;
   completionReason: FootballGridCompletionReason | null;
+  drawOffer: FootballGridDrawOffer | null;
 }
 
 export interface FootballGridAliasRecord {

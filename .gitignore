@@ -86,3 +86,7 @@ scripts/bot-burnin/*.receipt.json
 node_modules
 .env.harness
 .env.harness.debug
+
+# Grid content generator is source, not a build artefact
+!scripts/football-grid-content-generator/
+!scripts/football-grid-content-generator/**

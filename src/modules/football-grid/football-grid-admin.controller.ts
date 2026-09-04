@@ -58,4 +58,14 @@ export const footballGridAdminController = {
     const query = req.validated.query as { releaseId?: string; boardId?: string; limit: number };
     res.json({ quarantines: await footballGridAdminService.listQuarantines(query) });
   },
+  async renamePlayer(req: Request, res: Response): Promise<void> {
+    const { playerId } = req.validated.params as { playerId: string };
+    const body = req.validated.body as { nameEn?: string; nameKa?: string; reason: string };
+    const edit = await footballGridAdminService.renamePlayer({
+      playerId,
+      ...body,
+      actor: `user:${req.user!.id}`,
+    });
+    res.status(200).json({ edit });
+  },
 };

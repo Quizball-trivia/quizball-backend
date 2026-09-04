@@ -64,11 +64,24 @@ interface GridState {
   turnNumber: number;
   board: { boardId: string };
   players: [PlayerState, PlayerState];
+  openerUserId: string;
   currentPlayerUserId: string | null;
   winnerUserId: string | null;
   completionReason: string | null;
   reconnectDeadlineAt: string | null;
   claims: Array<{ cellIndex: number; footballPlayerId: string; claimantUserId: string }>;
+  drawOffer: { byUserId: string; turnNumber: number } | null;
+}
+
+interface SeriesInfo {
+  seriesId: string;
+  format: 'single' | 'bo3';
+  gameIndex: number;
+  targetWins: number;
+  wins: Record<string, number>;
+  draws: number;
+  winnerUserId: string | null;
+  finished: boolean;
 }
 
 interface CompletedPayload {
@@ -76,7 +89,9 @@ interface CompletedPayload {
   state: GridState;
   terminalStateVersion: number;
   ackToken: string;
-  rewards?: Record<string, unknown>;
+  rewards?: { coins: number; tp: number; xp: number; coinEligibilityReason?: string };
+  series?: SeriesInfo | null;
+  rematch?: { eligible: boolean; seriesId: string } | null;
 }
 
 interface RecordedEvent {
@@ -180,6 +195,7 @@ const STATE_EVENTS = new Set([
 const RECORDED_EVENTS = [
   ...STATE_EVENTS, 'grid:search_state', 'grid:command_result', 'grid:error',
   'grid:rematch_state', 'session:blocked', 'connect', 'disconnect',
+  'lobby:state', 'lobby:error', 'error',
 ];
 
 interface Waiter {
@@ -204,6 +220,8 @@ class GridClient {
   state: GridState | null = null;
   matchId: string | null = null;
   completed: CompletedPayload | null = null;
+  /** Results of earlier games in the current series. */
+  completedGames: CompletedPayload[] = [];
   auto = { handoff: true, ready: true, heartbeat: true, resync: true };
   private waiters: Waiter[] = [];
   private stateWaiters: StateWaiter[] = [];
@@ -250,6 +268,15 @@ class GridClient {
     }
     if (name === 'grid:match_found') {
       const found = payload as { matchId: string; state: GridState };
+      if (this.matchId && found.matchId !== this.matchId) {
+        // Next game of a series: the finished game's result is kept in
+        // `completedGames`, per-match tracking starts over.
+        if (this.completed) this.completedGames.push(this.completed);
+        this.completed = null;
+        this.state = null;
+        this.handoffAcked.clear();
+        this.readyAcked.clear();
+      }
       this.matchId = found.matchId;
       this.startHeartbeat();
     }
@@ -258,8 +285,12 @@ class GridClient {
       if (!this.matchId || done.matchId === this.matchId) {
         this.completed = done;
         this.stopHeartbeat();
+      } else {
+        // Result of an earlier series game arriving after the next handoff.
+        this.completedGames.push(done);
       }
     }
+
     if (STATE_EVENTS.has(name)) {
       const state = (payload as { state?: GridState }).state;
       if (state) this.applyState(state);
@@ -406,7 +437,7 @@ class GridClient {
     return found;
   }
 
-  private async command(event: 'grid:submit_answer' | 'grid:pass' | 'grid:forfeit', extra: Record<string, unknown> = {}) {
+  private async command(event: 'grid:submit_answer' | 'grid:pass' | 'grid:forfeit' | 'grid:draw_offer' | 'grid:draw_respond', extra: Record<string, unknown> = {}) {
     assert(this.state, `${this.label}: no state to command from`);
     const commandId = randomUUID();
     const result = this.waitFor<{ commandId: string; outcome: string }>(
@@ -440,6 +471,14 @@ class GridClient {
   }
 
   /** Forfeit emits no command_result; the terminal broadcast is the acknowledgement. */
+  offerDraw() {
+    return this.command('grid:draw_offer');
+  }
+
+  respondDraw(accept: boolean) {
+    return this.command('grid:draw_respond', { accept });
+  }
+
   forfeit(): Promise<CompletedPayload> {
     assert(this.state, `${this.label}: no state to forfeit from`);
     const done = this.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === this.state?.matchId, 15_000, 'grid:completed after forfeit');
@@ -449,12 +488,19 @@ class GridClient {
     return done;
   }
 
-  ackCompleted(): void {
-    assert(this.completed, `${this.label}: nothing to ack`);
+  /** The completion payload for a match, whether it is the current one or an earlier series game. */
+  completionFor(matchId: string): CompletedPayload | null {
+    if (this.completed?.matchId === matchId) return this.completed;
+    return this.completedGames.find((game) => game.matchId === matchId) ?? null;
+  }
+
+  ackCompleted(matchId?: string): void {
+    const done = matchId ? this.completionFor(matchId) : this.completed;
+    assert(done, `${this.label}: nothing to ack${matchId ? ` for ${matchId}` : ''}`);
     this.socket.emit('grid:completed_ack', {
-      matchId: this.completed.matchId,
-      terminalStateVersion: this.completed.terminalStateVersion,
-      ackToken: this.completed.ackToken,
+      matchId: done.matchId,
+      terminalStateVersion: done.terminalStateVersion,
+      ackToken: done.ackToken,
     });
   }
 
@@ -532,7 +578,7 @@ class Content {
 async function ackAndProve(client: GridClient, content: Content, matchId: string): Promise<void> {
   const before = await content.deliveryStatus(client.userId, matchId);
   assert(before === 'awaiting_ack', `${client.label}: delivery row before ACK is ${before ?? 'missing'}, expected awaiting_ack`);
-  client.ackCompleted();
+  client.ackCompleted(matchId);
   let after: string | null = before;
   for (let i = 0; i < 20 && after !== 'delivered'; i += 1) {
     await wait(250);
@@ -795,6 +841,198 @@ const SCENARIOS: Scenario[] = [
       assert(a.gridErrors().length === 0, `grid:error seen: ${a.gridErrors().join(',')}`);
     },
   },
+  {
+    id: 'S14',
+    title: 'Friend lobby: create, join by code, pick Tic Tac Toe, start → same best-of-3 for both; rematch offered after the series',
+    users: 2,
+    run: async ({ clients: [host, guest], content, note }) => {
+      interface LobbyState { inviteCode?: string | null; members?: Array<{ isReady?: boolean }>; settings?: { gameMode?: string } }
+      const created = host.waitFor<LobbyState>('lobby:state', (p) => Boolean(p.inviteCode), 15_000, 'lobby created');
+      host.socket.emit('lobby:create', { mode: 'friendly' });
+      const lobby = await created;
+      note(`lobby ${lobby.inviteCode}`);
+      const joined = host.waitFor<LobbyState>('lobby:state', (p) => (p.members?.length ?? 0) === 2, 15_000, 'guest joined');
+      guest.socket.emit('lobby:join_by_code', { inviteCode: lobby.inviteCode });
+      await joined;
+      const modeSet = host.waitFor<LobbyState>('lobby:state', (p) => p.settings?.gameMode === 'football_grid', 15_000, 'mode selected');
+      host.socket.emit('lobby:update_settings', { gameMode: 'football_grid' });
+      await modeSet;
+      const allReady = host.waitFor<LobbyState>('lobby:state', (p) => (p.members?.length ?? 0) === 2 && Boolean(p.members?.every((m) => m.isReady)), 15_000, 'both ready');
+      host.socket.emit('lobby:ready', { ready: true });
+      guest.socket.emit('lobby:ready', { ready: true });
+      await allReady;
+      const foundHost = host.waitFor<{ matchId: string; series?: SeriesInfo | null }>('grid:match_found', () => true, 30_000, 'match (host)');
+      const foundGuest = guest.waitFor<{ matchId: string }>('grid:match_found', () => true, 30_000, 'match (guest)');
+      host.socket.emit('lobby:start', {});
+      const [fh, fg] = await Promise.all([foundHost, foundGuest]);
+      assert(fh.matchId === fg.matchId, 'lobby members received different matches');
+      assert(fh.series?.format === 'bo3' && fh.series.gameIndex === 1, `friend series info: ${JSON.stringify(fh.series)}`);
+      note(`friend match ${fh.matchId} (bo3 game 1)`);
+      const [th] = await Promise.all([
+        host.waitForState((s) => s.phase === 'turn', 40_000, 'first turn (host)'),
+        guest.waitForState((s) => s.phase === 'turn', 40_000, 'first turn (guest)'),
+      ]);
+      // Game 1: the mover claims a line with three correct answers while the other passes.
+      const [mover, passer] = th.currentPlayerUserId === host.userId ? [host, guest] : [guest, host];
+      const doneMover = mover.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === fh.matchId, 120_000, 'game 1 result');
+      for (const cell of [0, 1, 2]) {
+        const state = await mover.waitMyTurn(60_000);
+        const answer = await content.correctAnswer(state.matchId, cell);
+        const result = await mover.submit(cell, answer);
+        assert(result.outcome === 'correct', `cell ${cell} → ${result.outcome}`);
+        if (cell < 2) {
+          await passer.waitMyTurn(60_000);
+          await passer.pass();
+        }
+      }
+      const game1 = await doneMover;
+      assert(game1.state.completionReason === 'line' && game1.state.winnerUserId === mover.userId, `game 1 ended ${game1.state.completionReason}`);
+      assert(game1.rewards?.coinEligibilityReason === 'series_in_progress', `game 1 reason ${game1.rewards?.coinEligibilityReason}`);
+      await ackAndProve(mover, content, fh.matchId);
+      // The passer's copy usually lands while the mover is acknowledging.
+      if (!passer.completionFor(fh.matchId)) {
+        await passer.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === fh.matchId, 15_000, 'game 1 result (passer)');
+      }
+      await ackAndProve(passer, content, fh.matchId);
+      const [g2h, g2g] = await Promise.all([
+        host.waitFor<{ matchId: string; state: GridState }>('grid:match_found', (p) => p.matchId !== fh.matchId, 20_000, 'game 2 (host)'),
+        guest.waitFor<{ matchId: string; state: GridState }>('grid:match_found', (p) => p.matchId !== fh.matchId, 20_000, 'game 2 (guest)'),
+      ]);
+      assert(g2h.matchId === g2g.matchId, 'game 2 differs between friends');
+      assert(g2h.state.openerUserId !== th.openerUserId, 'game 2 opener must alternate');
+      note(`game 2 ${g2h.matchId} dealt`);
+      await Promise.all([
+        host.waitForState((s) => s.matchId === g2h.matchId && s.phase === 'turn', 40_000, 'game 2 turn (host)'),
+        guest.waitForState((s) => s.matchId === g2h.matchId && s.phase === 'turn', 40_000, 'game 2 turn (guest)'),
+      ]);
+      // The loser of game 1 forfeits game 2: series decided 2-0, rematch offered to friends.
+      const doneWinner = mover.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === g2h.matchId, 15_000, 'series result');
+      const done = await passer.forfeit();
+      const winnerView = mover.completionFor(g2h.matchId) ?? await doneWinner;
+      doneWinner.cancel();
+      assert(done.series?.finished && done.series.winnerUserId === mover.userId, `series not decided: ${JSON.stringify(done.series)}`);
+      assert(winnerView.rewards?.coinEligibilityReason === 'friend_match_no_coins' || winnerView.rewards?.coinEligibilityReason === 'forfeit_no_coins', `deciding game reason ${winnerView.rewards?.coinEligibilityReason}`);
+      note(`series over: ${JSON.stringify(done.series?.wins)}; rematch eligible=${winnerView.rematch?.eligible}`);
+      assert(winnerView.rematch?.eligible === true, 'friends should be offered a rematch after the series');
+      await ackAndProve(mover, content, g2h.matchId);
+      await ackAndProve(passer, content, g2h.matchId);
+    },
+  },
+  {
+    id: 'S11',
+    title: 'Best of 3 vs bot: game 1 pays nothing, game 2 is dealt automatically with the other opener',
+    users: 1,
+    run: async ({ clients: [a], content, note }) => {
+      const first = await startBotMatch(a, 'european', note);
+      const bot = opponentOf(first, a.userId);
+      const game1 = first.matchId;
+      const opener1 = first.currentPlayerUserId;
+      // Lose game 1 fast: pass every turn until the bot completes a line.
+      const done1 = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === game1, 240_000, 'game 1 result');
+      const passLoop = (async () => {
+        while (!a.completed) {
+          const turn = a.waitMyTurn(60_000);
+          const end = a.waitFor<CompletedPayload>('grid:completed', () => true, 60_000, 'completed');
+          const state = await Promise.race([turn, end.then(() => null)]).catch(() => null);
+          turn.cancel(); end.cancel();
+          if (!state || a.completed) break;
+          await a.pass();
+          await wait(150);
+        }
+      })();
+      const result1 = await done1;
+      await passLoop;
+      assert(result1.series && result1.series.format === 'bo3', 'game 1 result carries no bo3 series info');
+      assert(result1.series.gameIndex === 1 && !result1.series.finished, `series after game 1: ${JSON.stringify(result1.series)}`);
+      assert(result1.rewards && result1.rewards.coins === 0 && result1.rewards.tp === 0, `game 1 must not pay: ${JSON.stringify(result1.rewards)}`);
+      assert(result1.rewards.coinEligibilityReason === 'series_in_progress', `reason ${result1.rewards.coinEligibilityReason}`);
+      await ackAndProve(a, content, game1);
+      const second = await a.waitFor<{ matchId: string; state: GridState; series?: SeriesInfo | null }>(
+        'grid:match_found', (p) => p.matchId !== game1, 20_000, 'game 2 handoff');
+      note(`game 2 ${second.matchId} dealt ${JSON.stringify(second.series?.wins)}`);
+      assert(second.series?.gameIndex === 2, `game 2 series info: ${JSON.stringify(second.series)}`);
+      assert(opponentOf(second.state, a.userId).userId === bot.userId, 'game 2 must keep the same bot');
+      assert(second.state.openerUserId !== opener1, 'the opener must alternate between games');
+      assert(second.state.board.boardId !== first.board.boardId, 'game 2 must use a different board');
+      const turn2 = await a.waitForState((s) => s.matchId === second.matchId && s.phase === 'turn', 40_000, 'game 2 first turn');
+      note(`game 2 live at v${turn2.stateVersion}`);
+      // Forfeit game 2: the series ends 0-2 and this deciding game pays the series loss.
+      const done2 = await a.forfeit();
+      assert(done2.series?.finished && done2.series.winnerUserId === bot.userId, `series not decided for bot: ${JSON.stringify(done2.series)}`);
+      assert(done2.rewards, 'deciding game carries no rewards');
+      await ackAndProve(a, content, second.matchId);
+    },
+  },
+  {
+    id: 'S12',
+    title: 'Draw offer: decline locks the offerer, accept ends the game as draw_agreed and deals game 2',
+    users: 2,
+    run: async ({ clients: [a, b], content, note }) => {
+      const [fa, fb] = await Promise.all([a.search('italy'), b.search('italy')]);
+      assert(fa.matchId === fb.matchId, 'humans were not paired');
+      await Promise.all([
+        a.waitForState((s) => s.phase === 'turn', 40_000, 'first turn'),
+        b.waitForState((s) => s.phase === 'turn', 40_000, 'first turn'),
+      ]);
+      const offered = await a.offerDraw();
+      assert(offered.outcome === 'draw_offered', `offer → ${offered.outcome}`);
+      const seen = await b.waitForState((s) => s.drawOffer?.byUserId === a.userId, 10_000, 'offer visible to opponent');
+      note(`offer visible at v${seen.stateVersion}`);
+      const declined = await b.respondDraw(false);
+      assert(declined.outcome === 'draw_declined', `decline → ${declined.outcome}`);
+      await a.waitForState((s) => s.drawOffer === null && s.stateVersion > seen.stateVersion, 10_000, 'offer cleared');
+      const again = await a.offerDraw();
+      assert(again.outcome === 'error:DRAW_OFFER_LOCKED', `locked offerer should be rejected, got ${again.outcome}`);
+      const counter = await b.offerDraw();
+      assert(counter.outcome === 'draw_offered', `counter offer → ${counter.outcome}`);
+      await a.waitForState((s) => s.drawOffer?.byUserId === b.userId, 10_000, 'counter offer visible');
+      const doneA = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === fa.matchId, 15_000, 'completed (a)');
+      const doneB = b.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === fa.matchId, 15_000, 'completed (b)');
+      const accepted = await a.respondDraw(true);
+      assert(accepted.outcome === 'draw_accepted', `accept → ${accepted.outcome}`);
+      const [ca, cb] = await Promise.all([doneA, doneB]);
+      assert(ca.state.completionReason === 'draw_agreed' && cb.state.completionReason === 'draw_agreed', `reason ${ca.state.completionReason}`);
+      assert(ca.series?.draws === 1 && !ca.series.finished, `series after draw: ${JSON.stringify(ca.series)}`);
+      await ackAndProve(a, content, fa.matchId);
+      await ackAndProve(b, content, fa.matchId);
+      const [na, nb] = await Promise.all([
+        a.waitFor<{ matchId: string }>('grid:match_found', (p) => p.matchId !== fa.matchId, 20_000, 'game 2 (a)'),
+        b.waitFor<{ matchId: string }>('grid:match_found', (p) => p.matchId !== fa.matchId, 20_000, 'game 2 (b)'),
+      ]);
+      assert(na.matchId === nb.matchId, 'both players must be dealt the same game 2');
+      note(`game 2 ${na.matchId} dealt after the agreed draw`);
+    },
+  },
+  {
+    id: 'S13',
+    title: 'Dead board ends the game as an automatic draw',
+    users: 2,
+    run: async ({ clients: [a, b], content, note }) => {
+      const [fa, fb] = await Promise.all([a.search('spain'), b.search('spain')]);
+      assert(fa.matchId === fb.matchId, 'humans were not paired');
+      const start = await a.waitForState((s) => s.phase === 'turn', 40_000, 'first turn');
+      await b.waitForState((s) => s.phase === 'turn', 40_000, 'first turn');
+      // Mover-1 takes 0,4,6,5 and mover-2 takes 8,2,3,1: after the 8th claim
+      // every line holds both colours, so no line is winnable for anyone.
+      const order: Array<[GridClient, number]> = [];
+      const [m1, m2] = start.currentPlayerUserId === a.userId ? [a, b] : [b, a];
+      for (const [who, cell] of [[m1, 0], [m2, 8], [m1, 4], [m2, 2], [m1, 6], [m2, 3], [m1, 5], [m2, 1]] as Array<[GridClient, number]>) order.push([who, cell]);
+      const doneA = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === fa.matchId, 300_000, 'completed (a)');
+      for (const [who, cell] of order) {
+        const state = await who.waitMyTurn(60_000);
+        const answer = await content.correctAnswer(state.matchId, cell);
+        const result = await who.submit(cell, answer);
+        assert(result.outcome === 'correct', `claim of cell ${cell} → ${result.outcome} ("${answer}")`);
+        if (who.completed) break;
+      }
+      const done = await doneA;
+      note(`ended: ${done.state.completionReason} after ${done.state.claims.length} claims`);
+      assert(done.state.completionReason === 'board_dead', `expected board_dead, got ${done.state.completionReason}`);
+      assert(done.state.winnerUserId === null, 'a dead board has no winner');
+      await ackAndProve(a, content, fa.matchId);
+      await ackAndProve(b, content, fa.matchId);
+    },
+  },
 ];
 
 /**
@@ -857,7 +1095,7 @@ async function runScenario(scenario: Scenario, users: ChaosUser[], target: Targe
         return typeof state === 'object' && state ? `${event.name}(${state.phase} v${state.stateVersion})` : event.name;
       });
       console.log(`    ${client.label} last events: ${tail.join(' → ')}`);
-      for (const event of client.events.filter((e) => e.name === 'grid:error' || e.name === 'session:blocked')) {
+      for (const event of client.events.filter((e) => ['grid:error', 'session:blocked', 'error', 'lobby:error'].includes(e.name))) {
         console.log(`    ${client.label} ${event.name}: ${JSON.stringify(event.payload).slice(0, 300)}`);
       }
     }
@@ -869,8 +1107,10 @@ async function runScenario(scenario: Scenario, users: ChaosUser[], target: Targe
       if (client.isInActiveMatch()) {
         await client.forfeit().then((done) => { client.completed = done; }).catch(() => undefined);
       }
-      if (client.completed && client.socket.connected) {
-        try { client.ackCompleted(); } catch { /* already acknowledged or no token */ }
+      if (client.socket.connected) {
+        for (const done of [client.completed, ...client.completedGames]) {
+          if (done) { try { client.ackCompleted(done.matchId); } catch { /* already acknowledged */ } }
+        }
       }
     }
     await wait(300);

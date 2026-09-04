@@ -27,7 +27,7 @@ export const footballGridBotGovernorService = {
       botTier: string;
       pinnedStrengthAdjustment: number;
       outcomeScore: 0 | 0.5 | 1;
-      completionReason: 'line' | 'board_full' | 'turn_limit';
+      completionReason: 'line' | 'board_full' | 'board_dead' | 'draw_agreed' | 'turn_limit';
       now: Date;
     },
   ): Promise<FootballGridBotGovernorDecision | null> {

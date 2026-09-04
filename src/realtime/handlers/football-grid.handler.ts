@@ -5,6 +5,7 @@ import {
   footballGridSearchCancelSchema,
   footballGridRematchAcceptSchema,
   footballGridRematchDeclineSchema,
+  footballGridDrawRespondSchema,
   footballGridResyncSchema,
   footballGridSearchStartSchema,
   footballGridSubmitAnswerSchema,
@@ -79,6 +80,16 @@ export function registerFootballGridHandlers(io: QuizballServer, socket: Quizbal
     const parsed = footballGridVersionedCommandSchema.safeParse(payload);
     if (!parsed.success) return invalid(socket, 'grid:pass', parsed.error.flatten());
     runLimited(socket, 'grid:pass', 'command', () => footballGridRealtimeService.handlePass(io, socket, parsed.data));
+  });
+  socket.on('grid:draw_offer', (payload) => {
+    const parsed = footballGridVersionedCommandSchema.safeParse(payload);
+    if (!parsed.success) return invalid(socket, 'grid:draw_offer', parsed.error.flatten());
+    runLimited(socket, 'grid:draw_offer', 'command', () => footballGridRealtimeService.handleDrawOffer(io, socket, parsed.data));
+  });
+  socket.on('grid:draw_respond', (payload) => {
+    const parsed = footballGridDrawRespondSchema.safeParse(payload);
+    if (!parsed.success) return invalid(socket, 'grid:draw_respond', parsed.error.flatten());
+    runLimited(socket, 'grid:draw_respond', 'command', () => footballGridRealtimeService.handleDrawRespond(io, socket, parsed.data));
   });
   socket.on('grid:resync', (payload) => {
     const parsed = footballGridResyncSchema.safeParse(payload);

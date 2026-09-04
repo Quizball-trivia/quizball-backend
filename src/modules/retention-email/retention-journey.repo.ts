@@ -103,6 +103,40 @@ export const retentionJourneyRepo = {
     return row ?? null;
   },
 
+  /**
+   * Cheap pre-check for `listEnrollmentCandidates`.
+   *
+   * The candidate scan aggregates users x match_players x matches and cost
+   * 827.9 ms mean on prod (594,521 shared buffers — it visits the 408 MB
+   * `matches` heap 148,629 times). The worker ticks every 60s, but the daily
+   * assignment cap is reached every day, so most of those 1,440 daily scans
+   * produced a result that the capped INSERT then discarded: measured
+   * 2026-09-04, this statement family was 61% of ALL prod database time while
+   * sending ~100 emails/day.
+   *
+   * Counting today's enrollments touches a small, indexed table instead
+   * (0.55 ms local vs 64 ms for the scan on the same box). The capped INSERT in
+   * `insertEnrollment` remains the authority — this only avoids the scan when
+   * we already know it cannot produce an enrollment.
+   */
+  async hasJourneyCapacityToday(config: JourneyConfig): Promise<boolean> {
+    const [row] = await sql<{ within_caps: boolean }[]>`
+      SELECT (
+        (
+          SELECT COUNT(*) FROM retention_journey_enrollments e
+          WHERE e.journey_key = ${config.journey_key}
+            AND e.journey_version = ${config.version}
+        ) < ${config.assignment_cap}
+        AND (
+          SELECT COUNT(*) FROM retention_journey_enrollments e
+          WHERE e.journey_key = ${config.journey_key}
+            AND e.entered_at >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'
+        ) < ${config.daily_assignment_cap}
+      ) AS within_caps
+    `;
+    return row?.within_caps ?? false;
+  },
+
   async listEnrollmentCandidates(input: {
     config: JourneyConfig;
     userIdAllowlist: string[];

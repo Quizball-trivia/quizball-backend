@@ -621,7 +621,14 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     // network hiccups — see SOCKET_HEARTBEAT_CONFIG for the sizing rationale.
     pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
     pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
-    perMessageDeflate: SOCKET_COMPRESSION_CONFIG,
+    // INCIDENT 2026-09-04/05: compression negotiation with fixed 13-bit
+    // windows breaks WebKit — Safari/iOS does not offer client_max_window_bits,
+    // and RFC 7692 obliges a client to FAIL the connection when the server
+    // responds with a parameter it never offered. Result: every iOS player
+    // (~124 users, ~9K failures in 12h) got "websocket error" on connect while
+    // Chrome-engine clients negotiated fine. Compression stays OFF until a
+    // WebKit-safe config is proven on staging against a real iOS client.
+    perMessageDeflate: false,
   });
 
   const { pubClient, subClient } = await initRedisClients();

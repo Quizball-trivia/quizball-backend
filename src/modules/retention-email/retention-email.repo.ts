@@ -72,6 +72,30 @@ export type RetentionEmailProviderAttribution = {
 };
 
 export const retentionEmailRepo = {
+  /**
+   * Cheap pre-check for the campaign candidate scans.
+   *
+   * `listEligibleCandidates` / `listDormantCandidates` aggregate users against
+   * match history and cost 318.3 ms and 88.3 ms mean on prod. The worker ticks
+   * every 60s, but both campaigns sit at their assignment cap (200/200 as of
+   * 2026-09-04), so those scans ran 1,440x/day and the capped INSERT discarded
+   * every row. Counting existing assignments hits a 798-row indexed table
+   * instead.
+   *
+   * The capped INSERT in `insertAssignment` remains the authority; this only
+   * avoids a scan that provably cannot lead to an assignment.
+   */
+  async hasCampaignCapacity(campaignKey: string, assignmentCap: number): Promise<boolean> {
+    if (assignmentCap <= 0) return false;
+    const [row] = await sql<{ within_cap: boolean }[]>`
+      SELECT (
+        SELECT COUNT(*) FROM retention_email_assignments existing
+        WHERE existing.campaign_key = ${campaignKey}
+      ) < ${assignmentCap} AS within_cap
+    `;
+    return row?.within_cap ?? false;
+  },
+
   async listEligibleCandidates(input: {
     campaignKey: string;
     minInactiveDays: number;

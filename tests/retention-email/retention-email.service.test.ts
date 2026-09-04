@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listEligibleCandidatesMock = vi.fn();
+const hasCampaignCapacityMock = vi.fn();
 const listDormantCandidatesMock = vi.fn();
 const insertAssignmentMock = vi.fn();
 const recoverStaleClaimsMock = vi.fn();
@@ -19,6 +20,7 @@ const verifyEmailLinkTokenMock = vi.fn();
 vi.mock('../../src/modules/retention-email/retention-email.repo.js', () => ({
   retentionEmailRepo: {
     listEligibleCandidates: (...args: unknown[]) => listEligibleCandidatesMock(...args),
+    hasCampaignCapacity: (...args: unknown[]) => hasCampaignCapacityMock(...args),
     listDormantCandidates: (...args: unknown[]) => listDormantCandidatesMock(...args),
     insertAssignment: (...args: unknown[]) => insertAssignmentMock(...args),
     recoverStaleClaims: (...args: unknown[]) => recoverStaleClaimsMock(...args),
@@ -116,6 +118,8 @@ const assignment = (userId = '22222222-2222-4222-8222-222222222222') => ({
 describe('retention email experiment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Capacity gate open by default; the capped INSERT remains the authority.
+    hasCampaignCapacityMock.mockResolvedValue(true);
     listDormantCandidatesMock.mockResolvedValue([]);
     recoverStaleClaimsMock.mockResolvedValue(undefined);
     cancelInvalidPendingMock.mockResolvedValue(undefined);

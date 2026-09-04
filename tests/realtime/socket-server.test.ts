@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
@@ -59,6 +61,20 @@ describe('socket compression config', () => {
     // the bound above silently does not apply (793 KB/socket vs 254 KB).
     expect(SOCKET_COMPRESSION_CONFIG.serverMaxWindowBits).toBeLessThanOrEqual(13);
     expect(SOCKET_COMPRESSION_CONFIG.clientMaxWindowBits).toBeLessThanOrEqual(13);
+  });
+
+  it('keeps permessage-deflate DISABLED on the live server (iOS incident 2026-09-04)', () => {
+    // Fixed 13-bit window negotiation broke every WebKit client: Safari/iOS
+    // does not offer client_max_window_bits, and RFC 7692 obliges a client to
+    // fail the connection when the server responds with a parameter it never
+    // offered (~124 iOS users, ~9K "websocket error" failures in 12h).
+    // SOCKET_COMPRESSION_CONFIG stays exported for a future WebKit-safe
+    // re-attempt, but it must NOT be wired to the server until proven on
+    // staging against a real iOS client.
+    const src = readFileSync(
+      resolve(__dirname, '../../src/realtime/socket-server.ts'), 'utf8');
+    expect(src).toContain('perMessageDeflate: false');
+    expect(src).not.toContain('perMessageDeflate: SOCKET_COMPRESSION_CONFIG');
   });
 });
 

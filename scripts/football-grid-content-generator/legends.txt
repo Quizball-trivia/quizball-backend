@@ -1,0 +1,155 @@
+# Football legends 1990–2012 whose careers predate the Transfermarkt appearance data (starts 2012).
+# One name per line; optional "|QID" to pin the Wikidata item. Lines starting with # are ignored.
+Zinedine Zidane|Q1835
+Ronaldo Nazario|Q529207
+Ronaldinho|Q39444
+Thierry Henry
+Paolo Maldini
+Luís Figo
+Raúl|Q11576
+Oliver Kahn
+Michael Ballack
+Dennis Bergkamp
+Roberto Carlos
+Cafu
+Pavel Nedvěd
+Gabriel Batistuta
+Roberto Baggio
+Marco van Basten
+Ruud Gullit
+Frank Rijkaard
+Hristo Stoichkov
+Gheorghe Hagi
+George Weah
+Jay-Jay Okocha
+Nwankwo Kanu
+Davor Šuker
+Zvonimir Boban
+Jürgen Klinsmann
+Lothar Matthäus
+Rudi Völler
+Jari Litmanen
+Hidetoshi Nakata
+David Beckham
+Patrick Vieira
+Fabio Cannavaro
+Clarence Seedorf
+Edgar Davids
+Claude Makélélé
+Lilian Thuram
+Marcel Desailly
+Fabien Barthez
+David Trezeguet
+Nicolas Anelka
+Robert Pirès
+Michael Owen
+Alan Shearer
+Hernán Crespo
+Christian Vieri
+Filippo Inzaghi
+Gennaro Gattuso
+Alessandro Nesta
+Alessandro Del Piero
+Andriy Shevchenko
+Deco
+Ricardo Carvalho
+Nuno Gomes
+Rui Costa
+Henrik Larsson
+Fernando Hierro
+Pep Guardiola
+Michael Laudrup
+Brian Laudrup
+Peter Schmeichel
+Roy Keane
+Eric Cantona
+Ryan Giggs
+Paul Scholes
+Gary Neville
+Rivaldo
+Romário
+Bebeto
+Dunga
+Cláudio Taffarel
+Dida
+Emerson Ferreira
+Juninho Pernambucano
+Adriano
+Diego Forlán
+Juan Román Riquelme
+Juan Sebastián Verón
+Diego Simeone
+Javier Zanetti
+Ariel Ortega
+Carlos Valderrama
+René Higuita
+Faustino Asprilla
+Iván Zamorano
+Marcelo Salas
+José Luis Chilavert
+Hakan Şükür
+Rüştü Reçber
+Patrick Kluivert
+Marc Overmars
+Edwin van der Sar
+Jaap Stam
+Ronald Koeman
+Ruud van Nistelrooy
+Phillip Cocu
+Francesco Toldo
+Gianluca Zambrotta
+Christian Panucci
+Roberto Ayala
+Laurent Blanc
+Didier Deschamps
+Youri Djorkaeff
+Bixente Lizarazu
+Emmanuel Petit
+Sylvain Wiltord
+Fernando Morientes
+Míchel Salgado
+Gaizka Mendieta
+Juan Carlos Valerón
+Iker Casillas
+Carles Puyol
+Xavi
+Andrés Iniesta
+Steven Gerrard
+Frank Lampard
+Wayne Rooney
+Rio Ferdinand
+John Terry
+Sol Campbell
+Ashley Cole
+Paul Gascoigne
+Alan Hansen
+Ian Wright
+Robbie Fowler
+Teddy Sheringham
+Les Ferdinand
+Matt Le Tissier
+Lúcio
+Zé Roberto
+Giovane Élber
+Stefan Effenberg
+Mehmet Scholl
+Jens Lehmann
+Oliver Bierhoff
+Torsten Frings
+Bernd Schneider
+Christian Ziege
+Miroslav Klose
+Philipp Lahm
+Bastian Schweinsteiger
+Samuel Eto'o
+Didier Drogba
+Kaká
+Robinho
+Fernando Torres
+Xabi Alonso
+David Villa
+Andrea Pirlo
+Gianluigi Buffon
+Francesco Totti
+Alberto Gilardino
+Luca Toni

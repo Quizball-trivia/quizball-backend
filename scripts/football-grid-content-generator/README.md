@@ -20,3 +20,10 @@ python football-grid-build-launch-manifest.py \
   --boards 500 --release-version <int> --seed 20260826
 ```
 Then `npm run grid:content -- validate|review|publish|activate|retire`.
+
+## Legends (careers before the 2012 appearance data)
+1. Curate `legends.txt` (one name per line, optional `|QID`).
+2. `python football-grid-fetch-legends.py legends.txt legends.json` — Wikidata careers (P54 with years), nationality, birth date, position, awards, Transfermarkt id, portrait.
+3. `DATABASE_URL=<staging> python football-grid-upsert-legends.py legends.json [--apply]` — upgrades `legend:*` player rows / inserts new ones (portrait via Commons Special:FilePath, mirrored by `football-grid-player-cdn.ts --pool`).
+4. Georgian names: `football-grid-translate-player-names.ts --tm-ids=<ids file>`.
+5. Build with `--legends legends.json`: club/country/teammate/wildcard memberships get `wikidata:` evidence locators under source `wikidata-legends`.

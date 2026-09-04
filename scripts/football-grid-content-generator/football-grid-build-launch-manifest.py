@@ -357,6 +357,59 @@ def prepare_duckdb(dataset_dir: Path, players: dict[int, Player]) -> duckdb.Duck
     return connection
 
 
+CLUB_NOISE = re.compile(
+    r"\b(f\.?c\.?|c\.?f\.?|a\.?f\.?c\.?|a\.?c\.?|s\.?c\.?|u\.?c\.?|s\.?l\.?|s\.?k\.?|s\.?s\.?|e\.?c\.?|f\.?k\.?|c\.?r\.?|r\.?c\.?|club de futbol|club de f[uú]tbol|football club|"
+    r"futebol clube|calcio|istanbul|club atletico|clube de regatas do|sociedade esportiva|esporte clube|sport club|sporting clube de|"
+    r"associazione sportiva|unione calcio|societa sportiva|fbpa|paulista|deportivo|de a coruna|men's|association football team|sv|rotterdam|bk|if)\b",
+    re.I,
+)
+WIKIDATA_CLUB_ALIASES = {
+    "real madrid": "real-madrid-cf", "atletico madrid": "atletico-de-madrid", "atletico de madrid": "atletico-de-madrid",
+    "fenerbahce": "wl-fenerbahce", "galatasaray": "wl-galatasaray", "besiktas": "wl-besiktas",
+    "benfica": "sl-benfica", "sporting cp": "sporting-cp", "sporting": "sporting-cp", "porto": "fc-porto",
+    "inter milan": "inter-milan", "internazionale": "inter-milan", "internazionale milano": "inter-milan",
+    "milan": "ac-milan", "roma": "as-roma", "lazio": "ss-lazio", "juventus": "juventus",
+    "bayern munich": "fc-bayern-munich", "bayern munchen": "fc-bayern-munich", "borussia dortmund": "borussia-dortmund",
+    "schalke 04": "fc-schalke-04", "ajax": "afc-ajax", "psv eindhoven": "psv-eindhoven", "psv": "psv-eindhoven",
+    "paris saint germain": "paris-saint-germain", "olympique de marseille": "olympique-de-marseille", "marseille": "olympique-de-marseille",
+    "olympique lyonnais": "olympique-lyonnais", "lyon": "olympique-lyonnais", "monaco": "as-monaco",
+    "manchester united": "manchester-united", "manchester city": "manchester-city", "tottenham hotspur": "tottenham-hotspur",
+    "newcastle united": "newcastle-united", "west ham united": "west-ham-united", "aston villa": "aston-villa",
+    "celtic": "celtic", "rangers": "rangers", "river plate": "river-plate", "boca juniors": "boca-juniors",
+}
+
+
+def wikidata_club_key(label: str) -> str:
+    cleaned = CLUB_NOISE.sub(" ", ascii_key(label))
+    # ascii_key turns "F.C." into "f c": drop leftover single-letter tokens.
+    cleaned = re.sub(r"\b[a-z]\b", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+_registry_by_clean_key: dict[int, dict[str, list[dict[str, Any]]]] = {}
+
+
+def map_wikidata_club(label: str, registry: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Wikidata spells clubs formally ("Real Madrid Club de Fútbol", "Chelsea
+    F.C."); strip the corporate noise on both sides before matching."""
+    direct = map_club_item(label, registry)
+    if direct:
+        return direct
+    key = wikidata_club_key(label)
+    by_id = {item["id"]: item for item in registry}
+    if key in WIKIDATA_CLUB_ALIASES:
+        return by_id.get(WIKIDATA_CLUB_ALIASES[key])
+    cache = _registry_by_clean_key.setdefault(id(registry), defaultdict(list))
+    if not cache:
+        for item in registry:
+            cache[wikidata_club_key(item.get("labelEn") or "")].append(item)
+    candidates = cache.get(key, [])
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item["id"].startswith("wl-"), len(item["id"]), item["id"]))
+    return candidates[0]
+
+
 def map_club_item(name: str, registry: list[dict[str, Any]]) -> dict[str, Any] | None:
     by_id = {item["id"]: item for item in registry}
     if ascii_key(name) in CLUB_ALIASES:
@@ -382,11 +435,68 @@ def map_club_item(name: str, registry: list[dict[str, Any]]) -> dict[str, Any] |
     return candidates[0]
 
 
+WIKIDATA_SOURCE_KEY = "wikidata-legends"
+SENIOR_NATIONAL = re.compile(r"national", re.I)
+NOT_SENIOR = re.compile(r"under-|u-?\d\d|\bB\b|women|olympic|amateur|youth|junior", re.I)
+COUNTRY_TO_LEAGUE = {"England": "GB1", "Spain": "ES1", "Italy": "IT1", "Germany": "L1", "France": "FR1"}
+
+
+@dataclass
+class Legend:
+    player: Player
+    qid: str
+    clubs: list[tuple[str, str, int | None, int | None]]  # (team qid, label, start, end)
+    national_teams: list[str]  # senior national team labels
+    citizenship: list[str]
+    awards: list[str]
+    born: str | None
+    position_group: str | None
+
+
+def load_legends(path: Path, players: dict[int, Player]) -> list[Legend]:
+    """Wikidata careers for players whose playing days predate the appearance
+    dataset. Only legends that resolved to an eligible player (Georgian name +
+    first-party portrait) are used; the rest are reported."""
+    data = json.loads(path.read_text())
+    by_tm = {player.dataset_id: player for player in players.values()}
+    legends: list[Legend] = []
+    skipped: list[str] = []
+    for row in data["legends"]:
+        tm = row.get("transfermarktId")
+        player = by_tm.get(int(tm)) if tm and str(tm).isdigit() else None
+        if not player:
+            skipped.append(row["name"])
+            continue
+        clubs, nationals = [], []
+        for team in row["teams"]:
+            label = team.get("label") or team["qid"]
+            if SENIOR_NATIONAL.search(label):
+                if not NOT_SENIOR.search(label):
+                    nationals.append(label)
+                continue
+            clubs.append((team["qid"], label, team.get("start"), team.get("end")))
+        legends.append(Legend(
+            player=player, qid=row["qid"], clubs=clubs, national_teams=nationals,
+            citizenship=row.get("citizenship", []), awards=row.get("awards", []),
+            born=row.get("dateOfBirth"), position_group=row.get("positionGroup"),
+        ))
+    if skipped:
+        print(json.dumps({"legendsSkippedNotEligible": skipped}, ensure_ascii=False), file=sys.stderr)
+    return legends
+
+
+def national_team_country(label: str) -> str:
+    # "France men's national association football team" → "France"
+    return re.split(r"\s+(men's|national|association)\b", label, maxsplit=1)[0].strip()
+
+
 def build_criteria(
     connection: duckdb.DuckDBPyConnection,
     players: dict[int, Player],
     frontend_root: Path,
+    legends: list[Legend] | None = None,
 ) -> list[Criterion]:
+    legends = legends or []
     pack = frontend_root / "src/data/football-grid/launch-assets"
     registries = {
         name: load_registry(pack / f"{name}.json")
@@ -409,13 +519,43 @@ def build_criteria(
             captured_fact=f"{player_by_uuid[player_uuid].name_en} made {games} recorded senior appearances for {club_name}.",
             effective_from=iso_date(first_date), effective_to=iso_date(last_date),
         )
+    # Legends: Wikidata club spells keyed by registry club id, merged into the
+    # dataset club that maps to the same registry item.
+    legend_clubs_by_registry: dict[str, dict[str, RelationshipEvidence]] = defaultdict(dict)
+    legend_club_spans: dict[str, list[tuple[str, int, int]]] = defaultdict(list)  # uuid -> (registry id, start, end)
+    for legend in legends:
+        for team_qid, label, start, end in legend.clubs:
+            item = map_wikidata_club(label, registries["clubs"])
+            if not item:
+                continue
+            legend_clubs_by_registry[item["id"]][legend.player.uuid] = RelationshipEvidence(
+                locator=f"wikidata:{legend.qid}#P54={team_qid}",
+                captured_fact=f"{legend.player.name_en} is recorded as a {label} player{f' ({start}–{end})' if start and end else ''} on Wikidata.",
+                effective_from=f"{start}-01-01" if start else None, effective_to=f"{end}-12-31" if end else None,
+            )
+            if start and end:
+                legend_club_spans[legend.player.uuid].append((item["id"], start, end))
     used_club_assets: set[str] = set()
     club_members_by_registry_id: dict[str, dict[str, RelationshipEvidence]] = {}
-    for (_club_id, club_name), members in sorted(clubs.items(), key=lambda item: (-len(item[1]), item[0][1])):
-        item = map_club_item(club_name, registries["clubs"])
+    club_keys = sorted(clubs.items(), key=lambda item: (-len(item[1]), item[0][1]))
+    mapped_registry_ids = {map_club_item(name, registries["clubs"])["id"] for (_id, name), _m in club_keys if map_club_item(name, registries["clubs"])}
+    for registry_id, extra in legend_clubs_by_registry.items():
+        if registry_id not in mapped_registry_ids:
+            # Club only known from legends (e.g. a club the dataset never saw).
+            club_keys.append(((-1, f"__legend__:{registry_id}"), {}))
+    for (_club_id, club_name), members in club_keys:
+        item = registries_item = None
+        if club_name.startswith("__legend__:"):
+            registry_id = club_name.split(":", 1)[1]
+            item = next((entry for entry in registries["clubs"] if entry["id"] == registry_id), None)
+        else:
+            item = map_club_item(club_name, registries["clubs"])
         if not item or item["id"] in used_club_assets:
             continue
         used_club_assets.add(item["id"])
+        members = dict(members)
+        for uuid, evidence in legend_clubs_by_registry.get(item["id"], {}).items():
+            members.setdefault(uuid, evidence)
         club_members_by_registry_id[item["id"]] = members
         familiarity = min(98.0, 42.0 + len(members) * 0.85)
         add_criterion(
@@ -481,6 +621,16 @@ def build_criteria(
             effective_from=None,
             effective_to=None,
         )
+    for legend in legends:
+        names = [national_team_country(label) for label in legend.national_teams] or legend.citizenship
+        for country_name in names:
+            item = country_by_name.get(ascii_key(country_name))
+            if not item or legend.player.uuid in country_members[item["id"]]:
+                continue
+            country_members[item["id"]][legend.player.uuid] = RelationshipEvidence(
+                locator=f"wikidata:{legend.qid}#P54/P27={country_name}",
+                captured_fact=f"{legend.player.name_en} represented {country_name} (Wikidata).",
+            )
     for item in registries["countries"]:
         members = country_members.get(item["id"], {})
         add_criterion(
@@ -565,7 +715,29 @@ def build_criteria(
     for player_uuid, club_id, season, first_date, last_date in club_seasons:
         slots[(club_id, season)].add(player_uuid)
         player_slots[player_uuid].append((club_id, season, first_date, last_date))
+    # Legends' seasons: registry club id + year. Dataset slots use TM club ids,
+    # so map registry id → dataset club ids through the club names seen above.
+    registry_to_dataset_clubs: dict[str, set[int]] = defaultdict(set)
+    for (club_id, club_name) in clubs:
+        item = map_club_item(club_name, registries["clubs"])
+        if item:
+            registry_to_dataset_clubs[item["id"]].add(club_id)
+    legend_slot_key = 10_000_000  # synthetic club ids for registry clubs with no dataset id
+    registry_slot_id: dict[str, int] = {}
+    for uuid, spans in legend_club_spans.items():
+        for registry_id, start, end in spans:
+            dataset_ids = registry_to_dataset_clubs.get(registry_id)
+            if not dataset_ids:
+                registry_slot_id.setdefault(registry_id, legend_slot_key + len(registry_slot_id))
+                dataset_ids = {registry_slot_id[registry_id]}
+            for club_id in dataset_ids:
+                for season in range(start, end + 1):
+                    slots[(club_id, season)].add(uuid)
+                    player_slots[uuid].append((club_id, season, f"{season}-07-01", f"{season + 1}-06-30"))
+    legend_uuids = {legend.player.uuid for legend in legends}
     teammate_targets = sorted(players.values(), key=lambda player: player.recognizable_score, reverse=True)[:120]
+    # Every legend is a teammate target too ("Played with Zidane").
+    teammate_targets += [legend.player for legend in legends if legend.player.uuid not in {t.uuid for t in teammate_targets}]
     for target in teammate_targets:
         teammates: dict[str, list[tuple[int, int, Any, Any]]] = defaultdict(list)
         for club_id, season, first_date, last_date in player_slots.get(target.uuid, []):
@@ -704,6 +876,24 @@ def build_criteria(
                 locator=f"players.csv:player_id={player_by_uuid[player_uuid].dataset_id};field=international_caps",
                 captured_fact=f"{player_by_uuid[player_uuid].name_en} has {int(caps)} recorded senior international caps.",
             )
+    for legend in legends:
+        uuid = legend.player.uuid
+        locator = f"wikidata:{legend.qid}"
+        position_id = {"GK": "position-gk", "DEF": "position-def", "MID": "position-mid", "FWD": "position-fwd"}.get(legend.position_group or "")
+        if position_id and uuid not in wildcard_members[position_id]:
+            wildcard_members[position_id][uuid] = RelationshipEvidence(locator=f"{locator}#P413", captured_fact=f"{legend.player.name_en} is recorded as a {legend.position_group} (Wikidata).")
+        if legend.born:
+            decade = int(legend.born[:4]) // 10 * 10
+            decade_id = f"born-{decade}s"
+            if decade_id in wildcard_items and uuid not in wildcard_members[decade_id]:
+                wildcard_members[decade_id][uuid] = RelationshipEvidence(locator=f"{locator}#P569", captured_fact=f"{legend.player.name_en} was born in {decade}–{decade + 9}.", effective_from=legend.born, effective_to=legend.born)
+        if any(award == "Ballon d'Or" for award in legend.awards) and "ballon-dor-winner" in wildcard_items:
+            wildcard_members["ballon-dor-winner"][uuid] = RelationshipEvidence(locator=f"{locator}#P166", captured_fact=f"{legend.player.name_en} won the Ballon d'Or (Wikidata).")
+        club_countries = {next((entry.get("countryEn") for entry in registries["clubs"] if entry["id"] == registry_id), None) for registry_id, _s, _e in legend_club_spans.get(uuid, [])}
+        for registry_id, _s, _e in legend_club_spans.get(uuid, []):
+            entry = next((e for e in registries["clubs"] if e["id"] == registry_id), None)
+            if entry and entry.get("countryEn") in COUNTRY_TO_LEAGUE:
+                player_leagues[uuid].add(COUNTRY_TO_LEAGUE[entry["countryEn"]])
     for player_uuid, leagues in player_leagues.items():
         major = sorted(leagues & TOP_FIVE_LEAGUES)
         if len(major) >= 3:
@@ -1053,6 +1243,7 @@ def main() -> None:
     parser.add_argument("--boards", type=int, default=500)
     parser.add_argument("--release-version", type=int, required=True)
     parser.add_argument("--seed", type=int, default=20260826)
+    parser.add_argument("--legends", type=Path, default=None, help="legends.json from football-grid-fetch-legends.py (Wikidata careers)")
     args = parser.parse_args()
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("STAGING_DATABASE_URL")
     if not db_url:
@@ -1063,7 +1254,9 @@ def main() -> None:
     reviewed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     players, question_provenance = load_players(db_url)
     connection = prepare_duckdb(args.dataset_dir, players)
-    criteria = build_criteria(connection, players, args.frontend_root)
+    legends = load_legends(args.legends, players) if args.legends else []
+    print(json.dumps({"legendsMatched": len(legends)}), file=sys.stderr)
+    criteria = build_criteria(connection, players, args.frontend_root, legends)
     print(json.dumps({
         "eligiblePlayers": len(players),
         "criteriaBuilt": Counter(criterion.family for criterion in criteria),
@@ -1116,7 +1309,7 @@ def main() -> None:
                 "verifiedBy": "football-grid-source-consistency-audit-v1",
                 "reviewedAt": reviewed_at,
                 "evidence": [{
-                    "sourceKey": "dcaribou-transfermarkt-datasets",
+                    "sourceKey": WIKIDATA_SOURCE_KEY if evidence.locator.startswith("wikidata:") else "dcaribou-transfermarkt-datasets",
                     "sourceLocator": evidence.locator,
                     "capturedFact": evidence.captured_fact,
                     "effectiveFrom": evidence.effective_from,
@@ -1160,6 +1353,16 @@ def main() -> None:
             # later publish must byte-match the stored approval — reuse the
             # original approval timestamp instead of the build time.
             "approvedAt": "2026-08-26T08:21:51Z",
+        }, {
+            "key": WIKIDATA_SOURCE_KEY,
+            "providerName": "Wikidata",
+            "datasetVersion": "2026-09-04-legends-v1",
+            "permittedUse": "Career, nationality, birth and award facts for football legends (CC0 1.0).",
+            "databaseRightsStatus": "approved",
+            "attributionRequirements": "None required by CC0; keep item/property locators for audit.",
+            "retentionRequirements": "Retain release evidence locators and checksums for the lifetime of pinned matches.",
+            "approvalOwner": "Quizball content operations",
+            "approvedAt": "2026-09-04T09:00:00Z",
         }],
         "assetCatalog": sorted(asset_registry),
         "players": [{

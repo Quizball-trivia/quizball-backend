@@ -237,6 +237,10 @@ async function main(): Promise<void> {
     FROM storage.objects
     WHERE bucket_id = ${bucket}
       AND coalesce(metadata->>'cacheControl', 'no-cache') NOT LIKE '%max-age=31536000%'
+      -- Bucket-placeholder files are not images and the bucket rejects their
+      -- mime type on re-upload (415 invalid_mime_type). They are never served,
+      -- so skip them rather than fail every run on the same object.
+      AND coalesce(metadata->>'mimetype', '') LIKE 'image/%'
     ORDER BY (metadata->>'size')::bigint DESC NULLS LAST
     ${limit > 0 ? sql`LIMIT ${limit}` : sql``}
   `) as unknown as StaleObject[];

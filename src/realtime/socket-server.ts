@@ -133,9 +133,19 @@ export const SOCKET_HEARTBEAT_CONFIG = {
 // set serverNoContextTakeover — it throws away most of the win.
 //
 // windowBits/memLevel are the memory guard, and they are required: ws holds a
-// zlib context per connection, and at the default 15-bit window that is ~318 KB
-// per socket (~1.5 GB at 5k sockets) against a container that peaks at 1.25 GB.
-// windowBits 13 + memLevel 6 costs ~0.5pt of ratio for ~45% of the memory.
+// zlib context per connection, and at the default 15-bit window that is
+// hundreds of KB per socket against a container that peaks at 1.25 GB.
+//
+// serverMaxWindowBits/clientMaxWindowBits are NOT redundant with
+// zlibDeflateOptions.windowBits. ws builds the context as
+// `createDeflateRaw({ ...zlibDeflateOptions, windowBits })` where windowBits
+// comes from the NEGOTIATED `<endpoint>_max_window_bits` and falls back to
+// zlib's 15-bit default (ws 8.18.3, permessage-deflate.js `_compress`) — so it
+// overrides the option and the bound silently does not apply. Measured
+// 2026-09-04 at 300 sockets: 793 KB/socket without the negotiated limits vs
+// 254 KB/socket with them, at the same 96% compression. A client that cannot
+// negotiate the window simply declines the extension (RFC 7692) and falls back
+// to uncompressed frames, which is safe.
 //
 // `threshold` is intentionally NOT relied on: ws only honours it when
 // no_context_takeover was negotiated (see ws/lib/sender.js `_firstFragment`
@@ -149,6 +159,8 @@ export const SOCKET_COMPRESSION_CONFIG = {
   concurrencyLimit: 10,
   zlibDeflateOptions: { level: 6, memLevel: 6, windowBits: 13 },
   zlibInflateOptions: { windowBits: 13 },
+  serverMaxWindowBits: 13,
+  clientMaxWindowBits: 13,
 } as const;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;

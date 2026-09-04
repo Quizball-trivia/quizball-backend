@@ -54,6 +54,11 @@ describe('socket compression config', () => {
     // sockets on this container (peak RSS 1.25 GB).
     expect(SOCKET_COMPRESSION_CONFIG.zlibDeflateOptions.windowBits).toBeLessThanOrEqual(13);
     expect(SOCKET_COMPRESSION_CONFIG.zlibDeflateOptions.memLevel).toBeLessThanOrEqual(6);
+    // ws overrides zlibDeflateOptions.windowBits with the NEGOTIATED
+    // <endpoint>_max_window_bits, defaulting to 15 when unset — without these
+    // the bound above silently does not apply (793 KB/socket vs 254 KB).
+    expect(SOCKET_COMPRESSION_CONFIG.serverMaxWindowBits).toBeLessThanOrEqual(13);
+    expect(SOCKET_COMPRESSION_CONFIG.clientMaxWindowBits).toBeLessThanOrEqual(13);
   });
 });
 

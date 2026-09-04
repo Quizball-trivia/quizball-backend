@@ -107,6 +107,12 @@ async function repairObject(
   const backupPath = join(backupDir, bucket, object.name);
   await mkdir(dirname(backupPath), { recursive: true });
   await writeFile(backupPath, bytes);
+  // Bytes alone are not an undo: restoring must put back the ORIGINAL
+  // cache-control and mimetype, not the value this run is applying.
+  await writeFile(
+    `${backupPath}.meta.json`,
+    JSON.stringify({ cacheControl: object.cache_control, mimetype: object.mimetype }),
+  );
   const verified = new Uint8Array(await readFile(backupPath));
   if (md5(verified) !== md5(bytes)) throw new Error('backup verification failed');
 
@@ -148,7 +154,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
 /** Puts a backup directory back, byte for byte. */
 async function restore(baseUrl: string, serviceKey: string, dir: string, apply: boolean): Promise<void> {
   const files: string[] = [];
-  for await (const f of walk(dir)) files.push(f);
+  for await (const f of walk(dir)) if (!f.endsWith('.meta.json')) files.push(f);
   console.log(`restore source : ${dir}`);
   console.log(`files          : ${files.length}`);
   console.log(`mode           : ${apply ? 'APPLY' : 'DRY RUN (pass --yes to write)'}\n`);
@@ -166,13 +172,22 @@ async function restore(baseUrl: string, serviceKey: string, dir: string, apply: 
     const encoded = name.split('/').map(encodeURIComponent).join('/');
     try {
       const bytes = new Uint8Array(await readFile(file));
+      // Put back what was there before the repair, not what the repair applied.
+      let meta: { cacheControl?: string | null; mimetype?: string | null } = {};
+      try {
+        meta = JSON.parse(await readFile(`${file}.meta.json`, 'utf8'));
+      } catch {
+        // Pre-manifest backup: fall back to letting Storage infer defaults.
+      }
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${serviceKey}`,
+        'x-upsert': 'true',
+      };
+      if (meta.cacheControl) headers['cache-control'] = meta.cacheControl;
+      if (meta.mimetype) headers['Content-Type'] = meta.mimetype;
       const res = await fetch(`${baseUrl}/storage/v1/object/${bucket}/${encoded}`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${serviceKey}`,
-          'cache-control': CACHE_CONTROL,
-          'x-upsert': 'true',
-        },
+        headers,
         body: bytes,
       });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -183,11 +198,18 @@ async function restore(baseUrl: string, serviceKey: string, dir: string, apply: 
     }
   }
   console.log(`\nrestored ${done}, failed ${failed}`);
+  if (failed > 0) process.exitCode = 1;
 }
 
 async function main(): Promise<void> {
   const bucket = arg('bucket') ?? DEFAULT_BUCKET;
-  const limit = Number(arg('limit') ?? '0');
+  const limitRaw = arg('limit');
+  const limit = limitRaw === undefined ? 0 : Number(limitRaw);
+  if (!Number.isInteger(limit) || limit < 0) {
+    // Number('twenty') is NaN, and NaN > 0 is false — an unvalidated typo would
+    // silently drop the LIMIT and repair the whole bucket.
+    throw new Error(`--limit must be a non-negative integer (got "${limitRaw}")`);
+  }
   const apply = process.argv.includes('--yes');
   const restoreDir = arg('restore');
 
@@ -263,6 +285,7 @@ async function main(): Promise<void> {
   console.log(`\nrepaired ${done}, failed ${failed}`);
   console.log(`originals saved to ${backupDir}`);
   console.log(`to undo: npx tsx scripts/fix-storage-cache-control.ts --restore=${backupDir} --yes`);
+  if (failed > 0) process.exitCode = 1;
   await sql.end();
 }
 

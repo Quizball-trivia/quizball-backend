@@ -237,10 +237,22 @@ async function main(): Promise<void> {
     FROM storage.objects
     WHERE bucket_id = ${bucket}
       AND coalesce(metadata->>'cacheControl', 'no-cache') NOT LIKE '%max-age=31536000%'
-      -- Bucket-placeholder files are not images and the bucket rejects their
-      -- mime type on re-upload (415 invalid_mime_type). They are never served,
-      -- so skip them rather than fail every run on the same object.
-      AND coalesce(metadata->>'mimetype', '') LIKE 'image/%'
+      -- Re-upload sends the object's own mimetype back as Content-Type, so a
+      -- type the bucket does not accept fails with 415 invalid_mime_type and
+      -- leaves the run incomplete. Bucket placeholders (feedback/.keep,
+      -- text/plain) are the case that actually occurs; filtering against the
+      -- bucket's own allowlist rather than a hardcoded image/% also covers any
+      -- future type the bucket stops accepting. Verified 2026-09-04: the imgs
+      -- allowlist is {png,jpeg,webp,svg+xml} and zero prod objects fall outside
+      -- it, so this changes no current behaviour.
+      AND EXISTS (
+        SELECT 1 FROM storage.buckets b
+        WHERE b.id = ${bucket}
+          AND (
+            b.allowed_mime_types IS NULL
+            OR metadata->>'mimetype' = ANY (b.allowed_mime_types)
+          )
+      )
     ORDER BY (metadata->>'size')::bigint DESC NULLS LAST
     ${limit > 0 ? sql`LIMIT ${limit}` : sql``}
   `) as unknown as StaleObject[];

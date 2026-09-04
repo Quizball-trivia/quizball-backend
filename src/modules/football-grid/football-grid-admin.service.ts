@@ -485,6 +485,8 @@ export const footballGridAdminService = {
               SET player_name_en = COALESCE($2, player_name_en),
                   player_name_ka = COALESCE($3, player_name_ka)
             WHERE football_player_id = $1
+              AND (player_name_en IS DISTINCT FROM COALESCE($2, player_name_en)
+                   OR player_name_ka IS DISTINCT FROM COALESCE($3, player_name_ka))
             RETURNING 1
          ) SELECT count(*)::int AS n FROM upd`,
         [input.playerId, nameEn, nameKa],

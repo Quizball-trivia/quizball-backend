@@ -121,6 +121,12 @@ function advanceTurn(state: FootballGridState, actorUserId: string, nowMs: numbe
   state.phaseDeadlineAt = state.turnDeadlineAt;
   state.turnRemainingMs = FOOTBALL_GRID_TURN_MS;
   // An unanswered draw offer lapses with the turn it was made on.
+  // An ignored offer lapses with the same lock as a declined one, so the
+  // off-turn player cannot re-offer every turn.
+  if (state.drawOffer) {
+    const offerer = state.players.find((player) => player.userId === state.drawOffer!.byUserId);
+    if (offerer) offerer.drawOfferLockedUntilTurn = Math.max(offerer.drawOfferLockedUntilTurn ?? 0, state.drawOffer.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
+  }
   state.drawOffer = null;
   state.stateVersion += 1;
 }

@@ -296,3 +296,16 @@ describe('football grid draws', () => {
     expect(() => respondToDrawOffer(resumed, 'u2', true, resumed.stateVersion, 61_001)).toThrow('no draw offer');
   });
 });
+
+describe('Football Grid draw offer lapse', () => {
+  it('locks the offerer when the offer lapses unanswered, like a decline', () => {
+    const state = activeState();
+    const offerer = state.players.find((p) => p.userId !== state.currentPlayerUserId)!.userId;
+    const offered = offerDraw(state, offerer, state.stateVersion, 60_000);
+    const lapsed = passTurn(offered, offered.currentPlayerUserId!, offered.stateVersion, 60_001);
+    expect(lapsed.drawOffer).toBeNull();
+    expect(lapsed.players.find((p) => p.userId === offerer)?.drawOfferLockedUntilTurn)
+      .toBe(state.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
+    expect(() => offerDraw(lapsed, offerer, lapsed.stateVersion, 60_002)).toThrow('declined recently');
+  });
+});

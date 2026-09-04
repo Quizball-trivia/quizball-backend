@@ -104,12 +104,52 @@ const POST_CONNECT_MAX_ATTEMPTS = 10;
 // ~5s network hiccup — mobile radio wake-ups, wifi roaming and GC pauses
 // routinely take 3-8s, so production saw constant false disconnects (mass
 // socket-drop bursts pausing 7+ matches at once, diagnosed 2026-06-10).
-// 10s absorbs those; worst-case disconnect detection becomes
-// pingInterval + pingTimeout = 12.5s, which the 30s grace flow comfortably
-// covers. Intentional exits stay instant (the client emits match:leave).
+// 10s absorbs those; worst-case disconnect detection is
+// pingInterval + pingTimeout, which the 30s grace flow comfortably covers.
+// Intentional exits stay instant (the client emits match:leave).
+// pingInterval sizing: every connected socket exchanges a ping/pong pair on
+// this cadence for its whole lifetime, whether or not it is in a match, so the
+// interval sets a per-socket traffic floor that scales with concurrency, not
+// with play. At 2500ms that floor is ~34.6k round-trips per socket per day.
+// Each engine.io
+// ping is only ~5 payload bytes (~57B on the wire with TCP/IP headers), so at
+// today's few-hundred concurrent sockets this is worth ~1-2% of Railway TX, not
+// the bulk of it — the compression below is what moves the number. 4000ms keeps
+// most of the heartbeat saving while leaving 1s of margin under the 15s ceiling:
+// engine.io clears pingTimeoutTimer only on a real pong (ordinary data traffic
+// does NOT reset it), so pingInterval + pingTimeout is a hard disconnect budget.
 export const SOCKET_HEARTBEAT_CONFIG = {
-  pingInterval: 2500,
+  pingInterval: 4000,
   pingTimeout: 10000,
+} as const;
+
+// Socket.IO v4 leaves permessage-deflate OFF by default, so every frame went
+// out as raw JSON. Match/lobby state payloads are repetitive JSON objects that
+// compress well.
+//
+// Context takeover (the default) is what makes this worth doing: the per-socket
+// LZ77 window carries across frames, so repeated JSON keys cost almost nothing.
+// Measured 2026-09-04 (20 clients, 300 varied broadcasts, real wire bytes):
+// 95-96% smaller with takeover vs 34-44% with serverNoContextTakeover. Do NOT
+// set serverNoContextTakeover — it throws away most of the win.
+//
+// windowBits/memLevel are the memory guard, and they are required: ws holds a
+// zlib context per connection, and at the default 15-bit window that is ~318 KB
+// per socket (~1.5 GB at 5k sockets) against a container that peaks at 1.25 GB.
+// windowBits 13 + memLevel 6 costs ~0.5pt of ratio for ~45% of the memory.
+//
+// `threshold` is intentionally NOT relied on: ws only honours it when
+// no_context_takeover was negotiated (see ws/lib/sender.js `_firstFragment`
+// branch), so with takeover on EVERY frame is deflated regardless. It is kept
+// for documentation and forward-compat only.
+//
+// concurrencyLimit is a process-global cap on simultaneous zlib jobs; it keeps
+// a broadcast storm from starving the libuv threadpool. Leave it at 10.
+export const SOCKET_COMPRESSION_CONFIG = {
+  threshold: 1024,
+  concurrencyLimit: 10,
+  zlibDeflateOptions: { level: 6, memLevel: 6, windowBits: 13 },
+  zlibInflateOptions: { windowBits: 13 },
 } as const;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
@@ -567,11 +607,12 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       // today): cache preflight verdicts instead of the 5s browser default.
       maxAge: 7200,
     },
-    // Balance: disconnect feedback within ~12.5s worst case (opponent then
+    // Balance: disconnect feedback within ~14s worst case (opponent then
     // sees the grace overlay) vs. NOT killing sockets on routine mobile
     // network hiccups — see SOCKET_HEARTBEAT_CONFIG for the sizing rationale.
     pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
     pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
+    perMessageDeflate: SOCKET_COMPRESSION_CONFIG,
   });
 
   const { pubClient, subClient } = await initRedisClients();

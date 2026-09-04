@@ -24,9 +24,15 @@ async function tick(): Promise<void> {
     || !emailEnabled()
     || !emailUnsubEnabled()
   ) return;
-  const weekendLeagueAssigned = await assignRetentionEmailCandidates();
-  const dormantAssigned = await assignDormantComebackEmailCandidates();
-  const journeyAssigned = await assignReactivationJourneyCandidates();
+  // These three assignment passes are independent — different campaigns,
+  // different tables, each gated by its own cap — so they were paying three
+  // sequential round trips for no ordering guarantee. Delivery still runs after
+  // them, since it sends what they just assigned.
+  const [weekendLeagueAssigned, dormantAssigned, journeyAssigned] = await Promise.all([
+    assignRetentionEmailCandidates(),
+    assignDormantComebackEmailCandidates(),
+    assignReactivationJourneyCandidates(),
+  ]);
   const journey = await scheduleReactivationJourneySteps();
   const sent = await deliverRetentionEmails();
   if (

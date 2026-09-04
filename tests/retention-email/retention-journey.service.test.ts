@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getConfigMock = vi.fn();
 const listEnrollmentCandidatesMock = vi.fn();
+const hasJourneyCapacityTodayMock = vi.fn();
 const insertEnrollmentMock = vi.fn();
 const exitIneligibleEnrollmentsMock = vi.fn();
 const listDueStepsMock = vi.fn();
@@ -18,6 +19,7 @@ vi.mock('../../src/modules/retention-email/retention-journey.repo.js', () => ({
   retentionJourneyRepo: {
     getConfig: (...args: unknown[]) => getConfigMock(...args),
     listEnrollmentCandidates: (...args: unknown[]) => listEnrollmentCandidatesMock(...args),
+    hasJourneyCapacityToday: (...args: unknown[]) => hasJourneyCapacityTodayMock(...args),
     insertEnrollment: (...args: unknown[]) => insertEnrollmentMock(...args),
     exitIneligibleEnrollments: (...args: unknown[]) => exitIneligibleEnrollmentsMock(...args),
     listDueSteps: (...args: unknown[]) => listDueStepsMock(...args),
@@ -85,12 +87,48 @@ describe('durable reactivation journey', () => {
     vi.clearAllMocks();
     getConfigMock.mockResolvedValue(journeyConfig);
     listEnrollmentCandidatesMock.mockResolvedValue([]);
+    // Capacity gate open by default; the capped INSERT is still the authority.
+    hasJourneyCapacityTodayMock.mockResolvedValue(true);
     exitIneligibleEnrollmentsMock.mockResolvedValue(0);
     listDueStepsMock.mockResolvedValue([]);
     getSegmentsMock.mockResolvedValue([]);
     getFunnelMock.mockResolvedValue([]);
     getStepSummaryMock.mockResolvedValue([]);
   });
+
+  it('skips the candidate scan once the daily cap is spent', async () => {
+
+    // The scan aggregates users x match_players x matches and cost 827.9 ms
+
+    // mean on prod — 61% of all database time — while the daily cap was
+
+    // reached every day, so most ticks scanned and threw the result away.
+
+    hasJourneyCapacityTodayMock.mockResolvedValue(false);
+
+
+    const assigned = await assignReactivationJourneyCandidates();
+
+
+    expect(assigned).toBe(0);
+
+    expect(listEnrollmentCandidatesMock).not.toHaveBeenCalled();
+
+  });
+
+
+  it('still scans while capacity remains', async () => {
+
+    hasJourneyCapacityTodayMock.mockResolvedValue(true);
+
+
+    await assignReactivationJourneyCandidates();
+
+
+    expect(listEnrollmentCandidatesMock).toHaveBeenCalled();
+
+  });
+
 
   it('persists a stable control enrollment and emits one exposure', async () => {
     listEnrollmentCandidatesMock.mockResolvedValue([candidate]);

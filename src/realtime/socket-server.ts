@@ -155,6 +155,7 @@ export const SOCKET_COMPRESSION_CONFIG = {
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
+let lastBroadcastOnlineCount: number | null = null;
 const detachedSocketFailureCounts = new Map<string, number>();
 const connectStateBatcher = new ConnectStateBatcher(
   (userIds) => userSessionGuardService.resolveStates(userIds),
@@ -267,9 +268,17 @@ async function emitOnlineCount(io: QuizballServer, socket?: QuizballSocket): Pro
   try {
     const onlineUsers = await getOnlineUserCount();
     if (socket) {
+      // A single socket that just connected always needs the current value,
+      // even if it matches what everyone else was last told.
       socket.emit('presence:online_count', { onlineUsers });
       return;
     }
+    // The refresh timer fires every 10s regardless of whether the count moved,
+    // and this is a global fan-out to every connected socket. Re-broadcasting
+    // an unchanged number cost 185 MB/day at 200 sockets and would be 4.6 GB/day
+    // at 5,000 (measured 2026-09-04), for zero client-visible change.
+    if (onlineUsers === lastBroadcastOnlineCount) return;
+    lastBroadcastOnlineCount = onlineUsers;
     io.emit('presence:online_count', { onlineUsers });
   } catch (error) {
     logger.warn({ error }, 'Failed to emit online user count');

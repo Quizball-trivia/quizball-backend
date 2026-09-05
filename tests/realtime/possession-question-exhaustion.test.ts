@@ -5,7 +5,6 @@ import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
 const getMatchCacheOrRebuildMock = vi.fn();
 const getMatchMock = vi.fn();
-const getRecentlySeenQuestionIdsMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
 const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
@@ -25,7 +24,6 @@ vi.mock('../../src/core/tracing.js', () => ({
 
 vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
-    getRecentlySeenQuestionIds: (...args: unknown[]) => getRecentlySeenQuestionIdsMock(...args),
     getRandomQuestionCandidatesForMatch: (...args: unknown[]) => getRandomQuestionCandidatesForMatchMock(...args),
     getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
     getImageMcqCandidateForMatchById: vi.fn(async () => []),
@@ -121,7 +119,6 @@ describe('possession question exhaustion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getMatchMock.mockResolvedValue({ status: 'active' });
-    getRecentlySeenQuestionIdsMock.mockResolvedValue([]);
     getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
     completePossessionMatchMock.mockResolvedValue({
       matchId: 'match-exhausted',

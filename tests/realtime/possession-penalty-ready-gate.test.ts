@@ -28,7 +28,6 @@ vi.mock('../../src/core/tracing.js', () => ({
 }));
 vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
-    getRecentlySeenQuestionIds: vi.fn(async () => []),
     getRandomQuestionCandidatesForMatch: vi.fn(async () => []),
     getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
     getImageMcqCandidateForMatchById: vi.fn(async () => []),

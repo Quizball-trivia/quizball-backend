@@ -208,8 +208,7 @@ describeLocal('regression: fair repeat ordering on category exhaustion (real DB)
       matchId: liveMatchId,
       categoryIds: [catId],
       questionTypes: ['mcq_single'],
-      excludeSeenForUserIds: [p1, p2],
-      excludeSeenWithinDays: 14,
+      excludeSeen: { userIds: [p1, p2], withinDays: 14 },
       limit: 3,
     });
     expect(seen, 'every question was shown to these players recently').toHaveLength(0);
@@ -219,8 +218,7 @@ describeLocal('regression: fair repeat ordering on category exhaustion (real DB)
       matchId: liveMatchId,
       categoryIds: [catId],
       questionTypes: ['mcq_single'],
-      excludeSeenForUserIds: ['00000000-0000-4000-8000-000000000000'],
-      excludeSeenWithinDays: 14,
+      excludeSeen: { userIds: ['00000000-0000-4000-8000-000000000000'], withinDays: 14 },
       limit: 3,
     });
     expect(fresh.map((r) => r.id).sort()).toEqual([qFewest, qMid, qMost].sort());

@@ -139,18 +139,10 @@ export const matchQuestionsRepo = {
   },
 
   /**
-   * Question ids the given users have ALREADY SEEN in matches within the recent
-   * window — used to bias the random picker AWAY from recently-served questions
-   * (history-aware selection), so heavy players stop re-seeing the same question
-   * while unseen ones sit in the pool.
-   *
-   * Performance: indexed path only (match_players(user_id) → matches(pkey) →
-   * match_questions(match_id)). Measured ~1-5ms even for the heaviest player;
-   * runs ONCE per pick, not per candidate. The result feeds the existing
-   * `excludeQuestionIds` array filter — no new joins on the hot pick query.
-   *
-   * Best-effort by contract: callers must treat this as a soft exclusion and
-   * fall back to picking WITHOUT it if a (thin) category would otherwise run dry.
+   * Question ids these users saw within the window. The hot pick path no
+   * longer calls this: getRandomQuestionCandidatesForMatch applies the same
+   * rule inside its query (excludeSeen). Kept as the reference definition of
+   * "seen" and as the oracle for tests/regression/question-history.
    */
   async getRecentlySeenQuestionIds(
     userIds: string[],
@@ -286,12 +278,11 @@ export const matchQuestionsRepo = {
      */
     leastRecentForUserIds?: string[];
     /**
-     * History-aware pick: skip questions any of these users saw within
-     * `excludeSeenWithinDays`. Evaluated inside the query so the seen set
-     * (thousands of ids for heavy players) never round-trips to the app.
+     * History-aware pick: skip questions any of these users saw within the
+     * window. Evaluated inside the query so the seen set (thousands of ids
+     * for heavy players) never round-trips to the app.
      */
-    excludeSeenForUserIds?: string[];
-    excludeSeenWithinDays?: number;
+    excludeSeen?: { userIds: string[]; withinDays: number };
   }): Promise<RandomQuestionCandidate[]> {
     return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
       'db.operation.name': 'select',
@@ -330,10 +321,10 @@ export const matchQuestionsRepo = {
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
       }
       let excludeSeenClause = '';
-      if (params.excludeSeenForUserIds?.length) {
-        values.push(params.excludeSeenForUserIds);
+      if (params.excludeSeen?.userIds.length) {
+        values.push(params.excludeSeen.userIds);
         const seenUsersParam = `$${values.length}`;
-        values.push(params.excludeSeenWithinDays ?? 14);
+        values.push(params.excludeSeen.withinDays);
         const seenDaysParam = `$${values.length}`;
         // shown_at, not row existence: a question dispatched but never shown
         // must not count as seen (see getRecentlySeenQuestionIds).

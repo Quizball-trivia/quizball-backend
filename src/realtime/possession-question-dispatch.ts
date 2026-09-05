@@ -538,8 +538,9 @@ async function maybePickQuestionForState(
       difficulties,
       questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
-      excludeSeenForUserIds: opts?.excludeSeen && humanUserIds.length > 0 ? humanUserIds : undefined,
-      excludeSeenWithinDays: QUESTION_HISTORY_WINDOW_DAYS,
+      excludeSeen: opts?.excludeSeen && humanUserIds.length > 0
+        ? { userIds: humanUserIds, withinDays: QUESTION_HISTORY_WINDOW_DAYS }
+        : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
       leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
       limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
@@ -560,6 +561,10 @@ async function maybePickQuestionForState(
   //   3. only once NO unseen question exists in the category: a repeat ordered
   //      by LEAST-recently-seen (the question they saw longest ago), never a
   //      random recent repeat, and never a stall.
+  // Whether an exclusion was applied at all is no longer known here (the seen
+  // set stays in the database), so the repeat rung also runs for a player with
+  // no history whose category is empty — one extra query on an already-empty
+  // pool, same outcome as before.
   const excludeSeen = humanUserIds.length > 0;
   let picked = await pickValidCandidate(questionType, preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {

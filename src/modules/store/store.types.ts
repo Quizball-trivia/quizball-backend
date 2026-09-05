@@ -124,7 +124,7 @@ export interface TicketPackMetadata {
 export interface AvatarMetadata {
   avatarKey: string;
   avatarPartId?: string;
-  slot?: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair';
+  slot?: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair' | 'headwear' | 'earwear';
   assetUrl: string;
 }
 

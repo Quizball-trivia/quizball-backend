@@ -12,7 +12,7 @@ const getClickAssignmentMock = vi.fn();
 const markClickedMock = vi.fn();
 const markUnsubscribedMock = vi.fn();
 const applyProviderEventMock = vi.fn();
-const getFeatureFlagMock = vi.fn();
+const resolveVariantMock = vi.fn();
 const trackEventMock = vi.fn();
 const sendEmailDetailedMock = vi.fn();
 const verifyEmailLinkTokenMock = vi.fn();
@@ -60,8 +60,14 @@ vi.mock('../../src/core/config.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/retention-email/retention-flag.js', () => ({
+  resolveRetentionVariant: (...args: unknown[]) => resolveVariantMock(...args),
+}));
+vi.mock('../../src/modules/retention-email/retention-flag-exclusions.repo.js', () => ({
+  RETENTION_FLAG_EXCLUSION_TTL_DAYS: 3,
+}));
+
 vi.mock('../../src/core/analytics.js', () => ({
-  getPostHogClient: () => ({ getFeatureFlag: getFeatureFlagMock }),
   stableAnalyticsEventUuid: (key: string) => `uuid:${key}`,
   trackEvent: (...args: unknown[]) => trackEventMock(...args),
 }));
@@ -131,7 +137,7 @@ describe('retention email experiment', () => {
     const controlCandidate = candidate('44444444-4444-4444-8444-444444444444');
     const testCandidate = candidate('55555555-5555-4555-8555-555555555555');
     listEligibleCandidatesMock.mockResolvedValue([controlCandidate, testCandidate]);
-    getFeatureFlagMock
+    resolveVariantMock
       .mockResolvedValueOnce('control')
       .mockResolvedValueOnce('test');
     insertAssignmentMock.mockImplementation(async ({ candidate: value, variant }) => ({
@@ -167,13 +173,38 @@ describe('retention email experiment', () => {
     );
   });
 
-  it('skips candidates when the production feature flag is inactive or unavailable', async () => {
+  it('skips candidates the flag resolver does not place in a variant', async () => {
     listEligibleCandidatesMock.mockResolvedValue([candidate('66666666-6666-4666-8666-666666666666')]);
-    getFeatureFlagMock.mockResolvedValue(false);
+    resolveVariantMock.mockResolvedValue(null);
 
     await expect(assignRetentionEmailCandidates()).resolves.toBe(0);
+    expect(resolveVariantMock).toHaveBeenCalledWith({
+      featureFlagKey: 'email-comeback-weekend-league',
+      userId: '66666666-6666-4666-8666-666666666666',
+      country: 'GE',
+      logContext: 'Retention email',
+    });
     expect(insertAssignmentMock).not.toHaveBeenCalled();
     expect(trackEventMock).not.toHaveBeenCalled();
+  });
+
+  it('scopes the candidate scans to the campaign flag so exclusions apply', async () => {
+    listEligibleCandidatesMock.mockResolvedValue([]);
+
+    await assignRetentionEmailCandidates();
+    await assignDormantComebackEmailCandidates();
+
+    // TTL clamps to the campaign's own inactivity floor (3 and 14 days in this config).
+    expect(listEligibleCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({
+      campaignKey: 'weekend_league_comeback_v1',
+      featureFlagKey: 'email-comeback-weekend-league',
+      exclusionTtlDays: 3,
+    }));
+    expect(listDormantCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({
+      campaignKey: 'dormant_player_comeback_v1',
+      featureFlagKey: 'email-comeback-dormant-players',
+      exclusionTtlDays: 3,
+    }));
   });
 
   it('assigns established dormant players through a separate feature flag and cap', async () => {
@@ -189,7 +220,7 @@ describe('retention email experiment', () => {
       last_match_started_at: '2026-07-10T12:00:00.000Z',
     };
     listDormantCandidatesMock.mockResolvedValue([dormantCandidate]);
-    getFeatureFlagMock.mockResolvedValue('test');
+    resolveVariantMock.mockResolvedValue('test');
     insertAssignmentMock.mockImplementation(async ({ candidate: value, variant }) => ({
       ...assignment(value.user_id),
       ...value,
@@ -201,11 +232,10 @@ describe('retention email experiment', () => {
 
     await expect(assignDormantComebackEmailCandidates()).resolves.toBe(1);
 
-    expect(getFeatureFlagMock).toHaveBeenCalledWith(
-      'email-comeback-dormant-players',
-      dormantCandidate.user_id,
-      expect.any(Object),
-    );
+    expect(resolveVariantMock).toHaveBeenCalledWith(expect.objectContaining({
+      featureFlagKey: 'email-comeback-dormant-players',
+      userId: dormantCandidate.user_id,
+    }));
     expect(insertAssignmentMock).toHaveBeenCalledWith(expect.objectContaining({
       campaignKey: 'dormant_player_comeback_v1',
       assignmentCap: 200,

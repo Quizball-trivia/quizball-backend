@@ -91,6 +91,14 @@ export function registerAiUserId(userId: string): void {
   aiCache.set(userId, { isAi: true, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
 }
 
+export function getPostHogFlagsConfig(): { apiKey: string; host: string } | null {
+  if (!process.env.POSTHOG_API_KEY) return null;
+  return {
+    apiKey: process.env.POSTHOG_API_KEY,
+    host: (process.env.POSTHOG_HOST || 'https://us.i.posthog.com').replace(/\/+$/, ''),
+  };
+}
+
 export function getPostHogClient(): PostHog | null {
   if (!process.env.POSTHOG_API_KEY) {
     return null;

@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { RETENTION_FLAG_EXCLUSION_TTL_DAYS } from './retention-flag-exclusions.repo.js';
 import type {
   RetentionEmailAssignment,
   RetentionEmailDestination,
@@ -8,6 +9,13 @@ import type {
 export const REACTIVATION_JOURNEY_KEY = 'dormant_reactivation';
 export const REACTIVATION_JOURNEY_VERSION = 1;
 export const REACTIVATION_JOURNEY_FEATURE_FLAG_KEY = 'dormant-reactivation-journey-v1';
+// Entry requires this much inactivity; the exclusion TTL is clamped to it so an
+// exclusion recorded in one dormancy episode cannot reach the next one.
+export const REACTIVATION_JOURNEY_MIN_INACTIVE_DAYS = 3;
+const JOURNEY_EXCLUSION_TTL_DAYS = Math.min(
+  RETENTION_FLAG_EXCLUSION_TTL_DAYS,
+  REACTIVATION_JOURNEY_MIN_INACTIVE_DAYS,
+);
 
 export type JourneyMilestone = 3 | 7 | 14 | 30 | 60;
 export type JourneyStatus = 'draft' | 'canary' | 'live' | 'paused' | 'completed';
@@ -167,6 +175,12 @@ export const retentionJourneyRepo = {
             ${input.userIdAllowlist.length === 0}
             OR u.id = ANY(${sql.array(input.userIdAllowlist)}::uuid[])
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM retention_flag_exclusions fx
+            WHERE fx.feature_flag_key = ${input.config.feature_flag_key}
+              AND fx.user_id = u.id
+              AND fx.excluded_at >= NOW() - make_interval(days => ${JOURNEY_EXCLUSION_TTL_DAYS})
+          )
         GROUP BY u.id, u.email, u.nickname, u.preferred_language, u.country
       )
       SELECT
@@ -186,7 +200,7 @@ export const retentionJourneyRepo = {
         END::int AS entry_milestone_days
       FROM activity a
       WHERE a.lifetime_matches >= ${input.config.min_lifetime_matches}
-        AND a.last_match_started_at <= NOW() - INTERVAL '3 days'
+        AND a.last_match_started_at <= NOW() - make_interval(days => ${REACTIVATION_JOURNEY_MIN_INACTIVE_DAYS})
         AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = a.user_id)
         AND NOT EXISTS (
           SELECT 1 FROM retention_email_assignments recent

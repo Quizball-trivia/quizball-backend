@@ -98,6 +98,8 @@ export const retentionEmailRepo = {
 
   async listEligibleCandidates(input: {
     campaignKey: string;
+    featureFlagKey: string;
+    exclusionTtlDays: number;
     minInactiveDays: number;
     maxInactiveDays: number;
     frequencyDays: number;
@@ -175,6 +177,12 @@ export const retentionEmailRepo = {
           OR u.id = ANY(${sql.array(input.userIdAllowlist)}::uuid[])
         )
         AND NOT EXISTS (
+          SELECT 1 FROM retention_flag_exclusions fx
+          WHERE fx.feature_flag_key = ${input.featureFlagKey}
+            AND fx.user_id = u.id
+            AND fx.excluded_at >= NOW() - make_interval(days => ${input.exclusionTtlDays})
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM email_unsubscribes x WHERE x.user_id = u.id
         )
         AND NOT EXISTS (
@@ -203,6 +211,8 @@ export const retentionEmailRepo = {
 
   async listDormantCandidates(input: {
     campaignKey: string;
+    featureFlagKey: string;
+    exclusionTtlDays: number;
     minInactiveDays: number;
     maxInactiveDays: number;
     minLifetimeMatches: number;
@@ -250,6 +260,12 @@ export const retentionEmailRepo = {
         AND (
           ${input.userIdAllowlist.length === 0}
           OR u.id = ANY(${sql.array(input.userIdAllowlist)}::uuid[])
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM retention_flag_exclusions fx
+          WHERE fx.feature_flag_key = ${input.featureFlagKey}
+            AND fx.user_id = u.id
+            AND fx.excluded_at >= NOW() - make_interval(days => ${input.exclusionTtlDays})
         )
         AND NOT EXISTS (
           SELECT 1 FROM email_unsubscribes x WHERE x.user_id = u.id

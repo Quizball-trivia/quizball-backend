@@ -126,7 +126,10 @@ export async function resolveRetentionVariant(input: {
       userId: input.userId,
     });
   } catch (error) {
-    logger.warn({ error }, `${input.logContext} feature flag exclusion was not recorded`);
+    // Without the row the scans would hand this player back next tick and
+    // bill another request for as long as the write keeps failing.
+    remoteUnavailableUntil.set(input.featureFlagKey, Date.now() + REMOTE_BACKOFF_MS);
+    logger.warn({ error }, `${input.logContext} feature flag exclusion was not recorded; pausing this flag`);
   }
   return null;
 }

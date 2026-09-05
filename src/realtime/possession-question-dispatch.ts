@@ -520,6 +520,11 @@ async function maybePickQuestionForState(
   // the same question while unseen ones sit in the pool. Applied INSIDE the
   // candidate query as a SOFT exclusion: if it would empty a (thin) category
   // the ladder below drops it and picks normally rather than stall.
+  // Once a history-aware query fails, the rest of this pick runs without
+  // history — including the repeat rung, which has no plain fallback of its
+  // own — exactly as a failed history fetch used to disable it.
+  let historyAvailable = humanUserIds.length > 0;
+
   const pickValidCandidate = async (
     candidateQuestionType: QuestionType,
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
@@ -532,26 +537,28 @@ async function maybePickQuestionForState(
     }
   ): Promise<PickedQuestion | null> => {
     const exclude = opts?.dropReservedExclusion ? [] : reservedExclusion;
-    const query = (withHistory: boolean) => matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+    const withHistory = Boolean(opts?.excludeSeen) && historyAvailable;
+    const query = (useHistory: boolean) => matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
-      excludeSeen: withHistory && opts?.excludeSeen && humanUserIds.length > 0
+      excludeSeen: useHistory
         ? { userIds: humanUserIds, withinDays: QUESTION_HISTORY_WINDOW_DAYS }
         : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
-      leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
+      leastRecentForUserIds: opts?.leastRecent && historyAvailable ? humanUserIds : undefined,
       limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
     let rows: Awaited<ReturnType<typeof query>>;
     try {
-      rows = await query(true);
+      rows = await query(withHistory);
     } catch (error) {
       // Never let the freshness optimization break question dispatch: on a
       // history-query failure fall back to a pick without the exclusion.
-      if (!(opts?.excludeSeen && humanUserIds.length > 0)) throw error;
+      if (!withHistory) throw error;
+      historyAvailable = false;
       logger.warn({ error, matchId }, 'history-aware pick failed; picking without history exclusion');
       rows = await query(false);
     }
@@ -580,7 +587,7 @@ async function maybePickQuestionForState(
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(questionType, ['easy', 'medium', 'hard'], { excludeSeen });
   }
-  if (!picked && excludeSeen) {
+  if (!picked && excludeSeen && historyAvailable) {
     picked = await pickValidCandidate(
       questionType,
       useDifficulty ? ['easy', 'medium', 'hard'] : preferredDifficulties,

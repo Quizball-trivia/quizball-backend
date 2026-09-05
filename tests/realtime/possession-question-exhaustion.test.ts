@@ -199,6 +199,40 @@ describe('possession question exhaustion', () => {
     );
   });
 
+  it('keeps history disabled for the rest of the pick after a failure, so the repeat rung cannot throw', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { excludeSeen?: unknown; leastRecentForUserIds?: string[] }) => {
+      if (params.excludeSeen) throw new Error('statement timeout');
+      if (params.leastRecentForUserIds) throw new Error('repeat ordering must not run once history failed');
+      return [];
+    });
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 0)).resolves.toBeNull();
+
+    const calls = getRandomQuestionCandidatesForMatchMock.mock.calls.map(([params]) => params as {
+      excludeSeen?: unknown; leastRecentForUserIds?: string[]; allowImageMcqs?: boolean;
+    });
+    expect(calls.filter((c) => c.excludeSeen)).toHaveLength(1);
+    expect(calls.some((c) => c.leastRecentForUserIds)).toBe(false);
+    expect(calls.some((c) => c.allowImageMcqs)).toBe(true);
+  });
+
+  it('propagates a failure of the plain retry instead of looping', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockRejectedValue(new Error('database down'));
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 0)).rejects.toThrow('database down');
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('falls back to a pick without history when the history-aware query fails', async () => {
     const cache = createCache('NORMAL_PLAY');
     cache.currentQIndex = 0;

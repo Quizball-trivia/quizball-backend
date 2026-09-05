@@ -90,10 +90,26 @@ export async function assignReactivationJourneyCandidates(): Promise<number> {
 // enrollment is marked exited — minutes, against milestones measured in days.
 const EXIT_SWEEP_INTERVAL_MS = 10 * 60_000;
 let lastExitSweepAt = 0;
+let exitSweepInFlight: Promise<number> | null = null;
 
 /** @internal test seam. */
 export function resetReactivationJourneySweepForTests(): void {
   lastExitSweepAt = 0;
+  exitSweepInFlight = null;
+}
+
+// One sweep at a time per process; the timestamp only advances after a
+// successful sweep so a failed one is retried on the next tick.
+async function runExitSweepIfDue(): Promise<number> {
+  if (exitSweepInFlight) return exitSweepInFlight;
+  if (Date.now() - lastExitSweepAt < EXIT_SWEEP_INTERVAL_MS) return 0;
+  exitSweepInFlight = retentionJourneyRepo.exitIneligibleEnrollments()
+    .then((exited) => {
+      lastExitSweepAt = Date.now();
+      return exited;
+    })
+    .finally(() => { exitSweepInFlight = null; });
+  return exitSweepInFlight;
 }
 
 export async function scheduleReactivationJourneySteps(): Promise<{
@@ -102,11 +118,7 @@ export async function scheduleReactivationJourneySteps(): Promise<{
 }> {
   const journeyConfig = await retentionJourneyRepo.getConfig();
   if (!journeyEnabled(journeyConfig)) return { exited: 0, scheduled: 0 };
-  let exited = 0;
-  if (Date.now() - lastExitSweepAt >= EXIT_SWEEP_INTERVAL_MS) {
-    exited = await retentionJourneyRepo.exitIneligibleEnrollments();
-    lastExitSweepAt = Date.now();
-  }
+  const exited = await runExitSweepIfDue();
   const due = await retentionJourneyRepo.listDueSteps({
     config: journeyConfig,
     limit: Math.min(config.REACTIVATION_JOURNEY_BATCH_SIZE, journeyConfig.daily_send_cap),

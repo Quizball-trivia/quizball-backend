@@ -454,8 +454,14 @@ export const retentionJourneyRepo = {
         -- activity against assigned_at, which would miss that return.
         AND EXISTS (
           SELECT 1 FROM retention_journey_enrollments e
+          JOIN users u ON u.id = e.user_id
           WHERE e.id = ${input.step.id}
             AND e.status = 'active'
+            AND u.email IS NOT NULL AND BTRIM(u.email) <> ''
+            AND u.is_ai = false AND u.is_seed = false
+            AND u.is_deleted = false AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL AND u.is_banned = false
+            AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
             AND NOT EXISTS (
               SELECT 1 FROM match_players mp
               JOIN matches m ON m.id = mp.match_id AND m.is_dev = false

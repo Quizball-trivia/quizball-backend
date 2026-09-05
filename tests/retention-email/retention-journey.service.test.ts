@@ -214,6 +214,27 @@ describe('durable reactivation journey', () => {
     expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(2);
   });
 
+  it('runs one sweep for concurrent callers and retries after a failed sweep', async () => {
+    let release: (n: number) => void = () => {};
+    exitIneligibleEnrollmentsMock.mockImplementationOnce(() => new Promise<number>((resolve) => { release = resolve; }));
+
+    const first = scheduleReactivationJourneySteps();
+    const second = scheduleReactivationJourneySteps();
+    await Promise.resolve();
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(1);
+    release(4);
+    await expect(first).resolves.toEqual({ exited: 4, scheduled: 0 });
+    await expect(second).resolves.toEqual({ exited: 4, scheduled: 0 });
+
+    // A failed sweep must not advance the ten-minute clock.
+    resetReactivationJourneySweepForTests();
+    exitIneligibleEnrollmentsMock.mockRejectedValueOnce(new Error('db down'));
+    await expect(scheduleReactivationJourneySteps()).rejects.toThrow('db down');
+    exitIneligibleEnrollmentsMock.mockResolvedValueOnce(1);
+    await expect(scheduleReactivationJourneySteps()).resolves.toEqual({ exited: 1, scheduled: 0 });
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(3);
+  });
+
   it('schedules only the due test step returned by the guarded repository', async () => {
     const step = {
       ...candidate,

@@ -318,7 +318,7 @@ export const retentionJourneyRepo = {
       SET status = 'exited',
           exited_at = NOW(),
           exit_reason = CASE
-            WHEN latest_activity.latest_match > e.baseline_last_match_started_at THEN 'returned'
+            WHEN latest_activity.latest_match > e.entered_at THEN 'returned'
             WHEN EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
               THEN 'unsubscribed'
             ELSE 'user_ineligible'
@@ -326,7 +326,7 @@ export const retentionJourneyRepo = {
       FROM latest_activity
       WHERE e.id = latest_activity.id
         AND (
-          latest_activity.latest_match > e.baseline_last_match_started_at
+          latest_activity.latest_match > e.entered_at
           OR EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
           OR NOT EXISTS (
             SELECT 1 FROM users u
@@ -390,6 +390,10 @@ export const retentionJourneyRepo = {
         -- The exit sweep runs every few minutes, not every tick; apply its
         -- eligibility rules here too so an ineligible or returned player never
         -- consumes a daily send slot or a milestone in between sweeps.
+        -- "Returned" means a match since enrolment (entered_at, set by the
+        -- database). baseline_last_match_started_at round-trips through JS and
+        -- is stored truncated to milliseconds, so the originating match itself
+        -- compares greater than it — never compare activity against it.
         AND u.is_ai = false AND u.is_seed = false
         AND u.is_deleted = false AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL AND u.is_banned = false
@@ -397,7 +401,7 @@ export const retentionJourneyRepo = {
           SELECT 1 FROM match_players mp
           JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
           WHERE mp.user_id = e.user_id
-            AND m.started_at > e.baseline_last_match_started_at
+            AND m.started_at > e.entered_at
         )
         AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
         AND NOT EXISTS (
@@ -456,7 +460,7 @@ export const retentionJourneyRepo = {
               SELECT 1 FROM match_players mp
               JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
               WHERE mp.user_id = e.user_id
-                AND m.started_at > e.baseline_last_match_started_at
+                AND m.started_at > e.entered_at
             )
         )
       )

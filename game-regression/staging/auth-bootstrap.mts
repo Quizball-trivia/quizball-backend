@@ -28,6 +28,7 @@ const EMAIL_B = process.env.STAGING_TEST_EMAIL_B ?? `quizball-harness-${RUN_TAG}
 export interface TestUser {
   email: string;
   userId: string;
+  authUserId: string;
   accessToken: string;
 }
 
@@ -92,7 +93,14 @@ async function login(email: string): Promise<TestUser> {
   if (!data.access_token || !data.user?.id) {
     throw new Error(`login for ${email} returned no access_token/user id`);
   }
-  return { email, userId: data.user.id, accessToken: data.access_token };
+  const apiUrl = (process.env.STAGING_URL ?? 'https://api-staging.quizball.io').replace(/\/$/, '');
+  const profileResponse = await fetch(`${apiUrl}/api/v1/users/me`, {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+  });
+  if (!profileResponse.ok) throw new Error(`profile lookup failed for ${email}: ${profileResponse.status}`);
+  const profile = await profileResponse.json() as { id?: string };
+  if (!profile.id) throw new Error(`profile lookup for ${email} returned no application user id`);
+  return { email, userId: profile.id, authUserId: data.user.id, accessToken: data.access_token };
 }
 
 /** Ensure both test users exist (confirmed) and return their tokens. */
@@ -108,7 +116,7 @@ export async function deleteTestUsers(users: { a: TestUser; b: TestUser }): Prom
   const { url, key } = requireEnv();
   for (const u of [users.a, users.b]) {
     try {
-      await fetch(`${url}/auth/v1/admin/users/${u.userId}`, {
+      await fetch(`${url}/auth/v1/admin/users/${u.authUserId}`, {
         method: 'DELETE',
         headers: { apikey: key, Authorization: `Bearer ${key}` },
       });

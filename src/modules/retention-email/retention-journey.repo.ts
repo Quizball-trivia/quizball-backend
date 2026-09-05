@@ -387,6 +387,14 @@ export const retentionJourneyRepo = {
         AND e.status = 'active'
         AND e.variant = 'test'
         AND u.email IS NOT NULL AND BTRIM(u.email) <> ''
+        -- A player who came back is exited by the periodic sweep; until it runs,
+        -- never schedule a comeback email for someone who already played.
+        AND NOT EXISTS (
+          SELECT 1 FROM match_players mp
+          JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
+          WHERE mp.user_id = e.user_id
+            AND m.started_at > e.baseline_last_match_started_at
+        )
         AND NOT EXISTS (SELECT 1 FROM email_unsubscribes x WHERE x.user_id = e.user_id)
         AND NOT EXISTS (
           SELECT 1 FROM retention_email_assignments recent

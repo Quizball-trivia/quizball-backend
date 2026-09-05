@@ -84,13 +84,29 @@ export async function assignReactivationJourneyCandidates(): Promise<number> {
   return assigned;
 }
 
+// The exit sweep aggregates every enrolled player's match history (82 ms mean,
+// the single heaviest statement on prod when it ran every 60s tick). Due steps
+// carry their own returned-player guard, so the sweep only decides how soon an
+// enrollment is marked exited — minutes, against milestones measured in days.
+const EXIT_SWEEP_INTERVAL_MS = 10 * 60_000;
+let lastExitSweepAt = 0;
+
+/** @internal test seam. */
+export function resetReactivationJourneySweepForTests(): void {
+  lastExitSweepAt = 0;
+}
+
 export async function scheduleReactivationJourneySteps(): Promise<{
   exited: number;
   scheduled: number;
 }> {
   const journeyConfig = await retentionJourneyRepo.getConfig();
   if (!journeyEnabled(journeyConfig)) return { exited: 0, scheduled: 0 };
-  const exited = await retentionJourneyRepo.exitIneligibleEnrollments();
+  let exited = 0;
+  if (Date.now() - lastExitSweepAt >= EXIT_SWEEP_INTERVAL_MS) {
+    exited = await retentionJourneyRepo.exitIneligibleEnrollments();
+    lastExitSweepAt = Date.now();
+  }
   const due = await retentionJourneyRepo.listDueSteps({
     config: journeyConfig,
     limit: Math.min(config.REACTIVATION_JOURNEY_BATCH_SIZE, journeyConfig.daily_send_cap),

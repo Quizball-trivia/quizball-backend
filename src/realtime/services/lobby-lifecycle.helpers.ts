@@ -1,3 +1,4 @@
+import { removeUserFromLobbySockets, transferHostIfNeeded } from './lobby-membership.helpers.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -127,24 +128,6 @@ export function getNextDraftActorId(
   return members.find((member) => member.user_id !== lastActor)?.user_id ?? firstActorUserId;
 }
 
-export async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length === 0) return;
-  const nextHostId = members[0]?.user_id;
-  if (nextHostId && nextHostId !== previousHostId) {
-    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
-  }
-}
-
-export async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    if (socket.data.user.id !== userId) return;
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-  });
-}
-
 export async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
 
@@ -244,28 +227,5 @@ export async function detachAllSocketsFromLobby(io: QuizballServer, lobbyId: str
   sockets.forEach((socket) => {
     socket.leave(`lobby:${lobbyId}`);
     socket.data.lobbyId = undefined;
-  });
-}
-
-export async function emitClosedLobbyStateForMode(
-  io: QuizballServer,
-  lobbyId: string,
-  mode: 'friendly' | 'ranked'
-): Promise<void> {
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
-    lobbyId,
-    mode,
-    status: 'closed',
-    inviteCode: null,
-    displayName: 'Lobby closed',
-    isPublic: false,
-    hostUserId: '',
-    settings: {
-      gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
-      friendlyRandom: true,
-      friendlyCategoryAId: null,
-      friendlyCategoryBId: null,
-    },
-    members: [],
   });
 }

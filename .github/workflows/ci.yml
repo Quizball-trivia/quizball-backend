@@ -18,6 +18,20 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    services:
+      migration-db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55439:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIGRATION_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55439/postgres
     steps:
       - uses: actions/checkout@v4
         with:

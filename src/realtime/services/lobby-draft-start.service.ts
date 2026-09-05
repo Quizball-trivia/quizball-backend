@@ -15,9 +15,9 @@ import { withSpan } from '../../core/tracing.js';
 import { trackDraftStarted } from '../../core/analytics/game-events.js';
 import {
   detachAllSocketsFromLobby,
-  emitClosedLobbyStateForMode,
   resolveRankedAiUserIdForDraft,
 } from './lobby-lifecycle.helpers.js';
+import { emitClosedLobbyStateForMode } from './lobby-membership.helpers.js';
 
 const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
 const DRAFT_START_GUARD_TTL_SEC = 15;

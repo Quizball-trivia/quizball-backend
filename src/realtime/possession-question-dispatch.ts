@@ -77,7 +77,7 @@ const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
 
 // History-aware selection window: don't re-serve a question a player saw within
 // this many days (best-effort; falls back to a repeat if a thin category would
-// otherwise run dry). See getRecentlySeenQuestionIds.
+// otherwise run dry). Applied by getRandomQuestionCandidatesForMatch.
 const QUESTION_HISTORY_WINDOW_DAYS = 14;
 
 // The 0-based slot within a half whose question is forced to be an image MCQ
@@ -517,23 +517,9 @@ async function maybePickQuestionForState(
 
   // History-aware selection: bias the random pick AWAY from questions these
   // players already saw in the recency window, so heavy players stop re-seeing
-  // the same question while unseen ones sit in the pool. Best-effort — fetched
-  // once per pick (~1-5ms, indexed) and applied as a SOFT exclusion: if it would
-  // empty a (thin) category we drop it and pick normally rather than stall.
-  let recentlySeenIds: string[] = [];
-  if (humanUserIds.length > 0) {
-    try {
-      recentlySeenIds = await matchQuestionsRepo.getRecentlySeenQuestionIds(
-        humanUserIds,
-        QUESTION_HISTORY_WINDOW_DAYS,
-      );
-    } catch (error) {
-      // Never let the freshness optimization break question dispatch.
-      logger.warn({ error, matchId }, 'getRecentlySeenQuestionIds failed; picking without history exclusion');
-      recentlySeenIds = [];
-    }
-  }
-
+  // the same question while unseen ones sit in the pool. Applied INSIDE the
+  // candidate query as a SOFT exclusion: if it would empty a (thin) category
+  // the ladder below drops it and picks normally rather than stall.
   const pickValidCandidate = async (
     candidateQuestionType: QuestionType,
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
@@ -545,16 +531,15 @@ async function maybePickQuestionForState(
       leastRecent?: boolean;
     }
   ): Promise<PickedQuestion | null> => {
-    const exclude = [
-      ...(opts?.dropReservedExclusion ? [] : reservedExclusion),
-      ...(opts?.excludeSeen ? recentlySeenIds : []),
-    ];
+    const exclude = opts?.dropReservedExclusion ? [] : reservedExclusion;
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
+      excludeSeenForUserIds: opts?.excludeSeen && humanUserIds.length > 0 ? humanUserIds : undefined,
+      excludeSeenWithinDays: QUESTION_HISTORY_WINDOW_DAYS,
       allowImageMcqs: opts?.allowImageMcqs,
       leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
       limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
@@ -575,7 +560,7 @@ async function maybePickQuestionForState(
   //   3. only once NO unseen question exists in the category: a repeat ordered
   //      by LEAST-recently-seen (the question they saw longest ago), never a
   //      random recent repeat, and never a stall.
-  const excludeSeen = recentlySeenIds.length > 0;
+  const excludeSeen = humanUserIds.length > 0;
   let picked = await pickValidCandidate(questionType, preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(questionType, ['easy', 'medium', 'hard'], { excludeSeen });

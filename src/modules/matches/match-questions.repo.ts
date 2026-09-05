@@ -285,6 +285,13 @@ export const matchQuestionsRepo = {
      * path; the normal pick leaves this undefined and stays a plain RANDOM().
      */
     leastRecentForUserIds?: string[];
+    /**
+     * History-aware pick: skip questions any of these users saw within
+     * `excludeSeenWithinDays`. Evaluated inside the query so the seen set
+     * (thousands of ids for heavy players) never round-trips to the app.
+     */
+    excludeSeenForUserIds?: string[];
+    excludeSeenWithinDays?: number;
   }): Promise<RandomQuestionCandidate[]> {
     return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
       'db.operation.name': 'select',
@@ -321,6 +328,24 @@ export const matchQuestionsRepo = {
       if (params.excludeQuestionIds?.length) {
         values.push(params.excludeQuestionIds);
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
+      }
+      let excludeSeenClause = '';
+      if (params.excludeSeenForUserIds?.length) {
+        values.push(params.excludeSeenForUserIds);
+        const seenUsersParam = `$${values.length}`;
+        values.push(params.excludeSeenWithinDays ?? 14);
+        const seenDaysParam = `$${values.length}`;
+        // shown_at, not row existence: a question dispatched but never shown
+        // must not count as seen (see getRecentlySeenQuestionIds).
+        excludeSeenClause = `AND NOT EXISTS (
+          SELECT 1
+          FROM match_players mps
+          JOIN match_questions mqs ON mqs.match_id = mps.match_id
+          WHERE mps.user_id = ANY(${seenUsersParam}::uuid[])
+            AND mqs.question_id = q.id
+            AND mqs.shown_at IS NOT NULL
+            AND mqs.shown_at > now() - make_interval(days => ${seenDaysParam}::int)
+        )`;
       }
 
       // Exhaustion fallback: when a category is fully seen, the repeat is
@@ -391,6 +416,7 @@ export const matchQuestionsRepo = {
           ${excludeImageMcqClause}
           ${difficultyClause}
           ${excludeClause}
+          ${excludeSeenClause}
           AND NOT EXISTS (
             SELECT 1
             FROM match_questions mq

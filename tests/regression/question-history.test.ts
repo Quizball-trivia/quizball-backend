@@ -201,6 +201,31 @@ describeLocal('regression: fair repeat ordering on category exhaustion (real DB)
     await sql`DELETE FROM users WHERE nickname LIKE ${NS2 + '%'}`;
   });
 
+  it('excludes recently-seen questions inside the candidate query itself (no id round trip)', async () => {
+    // All three questions were shown to p1/p2 in the seeding above, so the
+    // history exclusion must empty the pool for them…
+    const seen = await repo.getRandomQuestionCandidatesForMatch({
+      matchId: liveMatchId,
+      categoryIds: [catId],
+      questionTypes: ['mcq_single'],
+      excludeSeenForUserIds: [p1, p2],
+      excludeSeenWithinDays: 14,
+      limit: 3,
+    });
+    expect(seen, 'every question was shown to these players recently').toHaveLength(0);
+
+    // …while a player with no history still gets the whole pool.
+    const fresh = await repo.getRandomQuestionCandidatesForMatch({
+      matchId: liveMatchId,
+      categoryIds: [catId],
+      questionTypes: ['mcq_single'],
+      excludeSeenForUserIds: ['00000000-0000-4000-8000-000000000000'],
+      excludeSeenWithinDays: 14,
+      limit: 3,
+    });
+    expect(fresh.map((r) => r.id).sort()).toEqual([qFewest, qMid, qMost].sort());
+  });
+
   it('on exhaustion, repeats the LEAST-played question first (GREATEST per-player count), both histories considered', async () => {
     // Ask for all 3 as a repeat batch (leastRecentForUserIds set = fallback path).
     const rows = await repo.getRandomQuestionCandidatesForMatch({

@@ -189,11 +189,13 @@ describe('resolveRetentionVariant', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('still returns null for the excluded player when the exclusion write fails', async () => {
+  it('pauses the flag when the exclusion write fails, so the player is not re-billed next tick', async () => {
     respond({ [input.featureFlagKey]: { enabled: false, reason: { code: 'no_condition_match' } } });
     recordExclusionMock.mockRejectedValue(new Error('db down'));
 
     await expect(resolveRetentionVariant(input)).resolves.toBeNull();
+    await expect(resolveRetentionVariant(input)).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('returns null without a request when PostHog is not configured', async () => {

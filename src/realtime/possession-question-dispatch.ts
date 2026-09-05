@@ -76,7 +76,7 @@ const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
 
 // History-aware selection window: don't re-serve a question a player saw within
 // this many days (best-effort; falls back to a repeat if a thin category would
-// otherwise run dry). See getRecentlySeenQuestionIds.
+// otherwise run dry). Applied by getRandomQuestionCandidatesForMatch.
 const QUESTION_HISTORY_WINDOW_DAYS = 14;
 
 // The 0-based slot within a half whose question is forced to be an image MCQ
@@ -545,22 +545,13 @@ async function maybePickQuestionForState(
 
   // History-aware selection: bias the random pick AWAY from questions these
   // players already saw in the recency window, so heavy players stop re-seeing
-  // the same question while unseen ones sit in the pool. Best-effort — fetched
-  // once per pick (~1-5ms, indexed) and applied as a SOFT exclusion: if it would
-  // empty a (thin) category we drop it and pick normally rather than stall.
-  let recentlySeenIds: string[] = [];
-  if (humanUserIds.length > 0) {
-    try {
-      recentlySeenIds = await matchQuestionsRepo.getRecentlySeenQuestionIds(
-        humanUserIds,
-        QUESTION_HISTORY_WINDOW_DAYS,
-      );
-    } catch (error) {
-      // Never let the freshness optimization break question dispatch.
-      logger.warn({ error, matchId }, 'getRecentlySeenQuestionIds failed; picking without history exclusion');
-      recentlySeenIds = [];
-    }
-  }
+  // the same question while unseen ones sit in the pool. Applied INSIDE the
+  // candidate query as a SOFT exclusion: if it would empty a (thin) category
+  // the ladder below drops it and picks normally rather than stall.
+  // Once a history-aware query fails, the rest of this pick runs without
+  // history — including the repeat rung, which has no plain fallback of its
+  // own — exactly as a failed history fetch used to disable it.
+  let historyAvailable = humanUserIds.length > 0;
 
   const pickValidCandidate = async (
     candidateQuestionType: QuestionType,
@@ -573,20 +564,32 @@ async function maybePickQuestionForState(
       leastRecent?: boolean;
     }
   ): Promise<PickedQuestion | null> => {
-    const exclude = [
-      ...(opts?.dropReservedExclusion ? [] : reservedExclusion),
-      ...(opts?.excludeSeen ? recentlySeenIds : []),
-    ];
-    const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+    const exclude = opts?.dropReservedExclusion ? [] : reservedExclusion;
+    const withHistory = Boolean(opts?.excludeSeen) && historyAvailable;
+    const query = (useHistory: boolean) => matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
+      excludeSeen: useHistory
+        ? { userIds: humanUserIds, withinDays: QUESTION_HISTORY_WINDOW_DAYS }
+        : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
-      leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
+      leastRecentForUserIds: opts?.leastRecent && historyAvailable ? humanUserIds : undefined,
       limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
+    let rows: Awaited<ReturnType<typeof query>>;
+    try {
+      rows = await query(withHistory);
+    } catch (error) {
+      // Never let the freshness optimization break question dispatch: on a
+      // history-query failure fall back to a pick without the exclusion.
+      if (!withHistory) throw error;
+      historyAvailable = false;
+      logger.warn({ error, matchId }, 'history-aware pick failed; picking without history exclusion');
+      rows = await query(false);
+    }
     return pickFirstValidCandidate(rows, candidateQuestionType, {
       matchId,
       categoryIds,
@@ -603,12 +606,16 @@ async function maybePickQuestionForState(
   //   3. only once NO unseen question exists in the category: a repeat ordered
   //      by LEAST-recently-seen (the question they saw longest ago), never a
   //      random recent repeat, and never a stall.
-  const excludeSeen = recentlySeenIds.length > 0;
+  // Whether an exclusion was applied at all is no longer known here (the seen
+  // set stays in the database), so the repeat rung also runs for a player with
+  // no history whose category is empty — one extra query on an already-empty
+  // pool, same outcome as before.
+  const excludeSeen = humanUserIds.length > 0;
   let picked = await pickValidCandidate(questionType, preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(questionType, ['easy', 'medium', 'hard'], { excludeSeen });
   }
-  if (!picked && excludeSeen) {
+  if (!picked && excludeSeen && historyAvailable) {
     picked = await pickValidCandidate(
       questionType,
       useDifficulty ? ['easy', 'medium', 'hard'] : preferredDifficulties,

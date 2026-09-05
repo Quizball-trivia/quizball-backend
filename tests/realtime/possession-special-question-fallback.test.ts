@@ -156,7 +156,6 @@ describe('possession special-question exhaustion', () => {
   it('tries unseen image MCQs before repeating when plain MCQs are exhausted', async () => {
     const cache = createCache();
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
-    getRecentlySeenQuestionIdsMock.mockResolvedValue(['seen-mcq']);
     getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: {
       questionTypes: string[];
       allowImageMcqs?: boolean;
@@ -186,11 +185,15 @@ describe('possession special-question exhaustion', () => {
 
     await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 4)).resolves.toBeNull();
 
+    // History is applied inside the pick query now; the seen set never
+    // round-trips through the app.
+    expect(getRecentlySeenQuestionIdsMock).not.toHaveBeenCalled();
     expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         questionTypes: ['mcq_single'],
         allowImageMcqs: true,
-        excludeQuestionIds: ['seen-mcq'],
+        excludeSeen: { userIds: ['user-1', 'user-2'], withinDays: 14 },
+        excludeQuestionIds: undefined,
         leastRecentForUserIds: undefined,
       })
     );

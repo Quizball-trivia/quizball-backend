@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getConfigMock = vi.fn();
 const listEnrollmentCandidatesMock = vi.fn();
@@ -54,6 +54,7 @@ vi.mock('../../src/core/analytics.js', () => ({
 
 import {
   assignReactivationJourneyCandidates,
+  resetReactivationJourneySweepForTests,
   scheduleReactivationJourneySteps,
 } from '../../src/modules/retention-email/retention-journey.service.js';
 
@@ -87,6 +88,9 @@ const candidate = {
 describe('durable reactivation journey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T08:00:00.000Z'));
+    resetReactivationJourneySweepForTests();
     getConfigMock.mockResolvedValue(journeyConfig);
     listEnrollmentCandidatesMock.mockResolvedValue([]);
     // Capacity gate open by default; the capped INSERT is still the authority.
@@ -96,6 +100,10 @@ describe('durable reactivation journey', () => {
     getSegmentsMock.mockResolvedValue([]);
     getFunnelMock.mockResolvedValue([]);
     getStepSummaryMock.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('skips the candidate scan once the daily cap is spent', async () => {
@@ -187,6 +195,44 @@ describe('durable reactivation journey', () => {
     });
     expect(insertEnrollmentMock).not.toHaveBeenCalled();
     expect(trackEventMock).not.toHaveBeenCalled();
+  });
+
+  it('runs the exit sweep at most once per ten minutes while due steps keep flowing', async () => {
+    exitIneligibleEnrollmentsMock.mockResolvedValue(2);
+
+    await expect(scheduleReactivationJourneySteps()).resolves.toEqual({ exited: 2, scheduled: 0 });
+    await expect(scheduleReactivationJourneySteps()).resolves.toEqual({ exited: 0, scheduled: 0 });
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(1);
+    expect(listDueStepsMock).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(new Date('2026-09-05T08:09:59.000Z'));
+    await scheduleReactivationJourneySteps();
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-09-05T08:10:00.000Z'));
+    await expect(scheduleReactivationJourneySteps()).resolves.toEqual({ exited: 2, scheduled: 0 });
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs one sweep for concurrent callers and retries after a failed sweep', async () => {
+    let release: (n: number) => void = () => {};
+    exitIneligibleEnrollmentsMock.mockImplementationOnce(() => new Promise<number>((resolve) => { release = resolve; }));
+
+    const first = scheduleReactivationJourneySteps();
+    const second = scheduleReactivationJourneySteps();
+    await Promise.resolve();
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(1);
+    release(4);
+    await expect(first).resolves.toEqual({ exited: 4, scheduled: 0 });
+    await expect(second).resolves.toEqual({ exited: 4, scheduled: 0 });
+
+    // A failed sweep must not advance the ten-minute clock.
+    resetReactivationJourneySweepForTests();
+    exitIneligibleEnrollmentsMock.mockRejectedValueOnce(new Error('db down'));
+    await expect(scheduleReactivationJourneySteps()).rejects.toThrow('db down');
+    exitIneligibleEnrollmentsMock.mockResolvedValueOnce(1);
+    await expect(scheduleReactivationJourneySteps()).resolves.toEqual({ exited: 1, scheduled: 0 });
+    expect(exitIneligibleEnrollmentsMock).toHaveBeenCalledTimes(3);
   });
 
   it('schedules only the due test step returned by the guarded repository', async () => {

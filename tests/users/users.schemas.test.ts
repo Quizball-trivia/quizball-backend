@@ -9,6 +9,10 @@ import {
 import { avatarCustomizationSchema } from '../../src/modules/users/avatar-customization.js';
 
 describe('avatarCustomizationSchema', () => {
+  it('accepts headgear, earrings and bounded hair colours', () => {
+    expect(avatarCustomizationSchema.parse({ headwear: 'headwear_cech', earwear: 'earwear_hoop', hairColor: 'pink_streaks' })).toEqual({ headwear: 'headwear_cech', earwear: 'earwear_hoop', hairColor: 'pink_streaks' });
+    expect(avatarCustomizationSchema.safeParse({ hairColor: 'unknown' }).success).toBe(false);
+  });
   it('accepts bounded catalog identifiers added after backend deployment', () => {
     expect(avatarCustomizationSchema.safeParse({ hair: 'hair_leopard' }).success).toBe(true);
   });

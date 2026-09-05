@@ -1,3 +1,4 @@
+import { transferHostIfNeeded, removeUserFromLobbySockets, emitClosedLobbyStateForMode } from './lobby-membership.helpers.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -684,51 +685,6 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
   io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
 }
 
-async function removeUserFromLobbySockets(
-  io: QuizballServer,
-  lobbyId: string,
-  userId: string
-): Promise<void> {
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    if (socket.data.user.id !== userId) return;
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-  });
-}
-
-async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length === 0) return;
-  const nextHostId = members[0]?.user_id;
-  if (nextHostId && nextHostId !== previousHostId) {
-    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
-  }
-}
-
-async function emitClosedLobbyState(
-  io: QuizballServer,
-  lobbyId: string,
-  mode: 'friendly' | 'ranked' = 'friendly'
-): Promise<void> {
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
-    lobbyId,
-    mode,
-    status: 'closed',
-    inviteCode: null,
-    displayName: 'Lobby closed',
-    isPublic: false,
-    hostUserId: '',
-    settings: {
-      gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
-      friendlyRandom: true,
-      friendlyCategoryAId: null,
-      friendlyCategoryBId: null,
-    },
-    members: [],
-  });
-}
-
 async function removeUserFromLobby(
   io: QuizballServer,
   lobby: LobbyWithJoinedAt,
@@ -750,7 +706,7 @@ async function removeUserFromLobby(
       for (const removedId of result.removedMemberIds) {
         await removeUserFromLobbySockets(io, lobby.id, removedId);
       }
-      await emitClosedLobbyState(io, lobby.id, lobby.mode);
+      await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
       logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard aborted ranked pre-match lobby');
       return;
     }
@@ -768,7 +724,7 @@ async function removeUserFromLobby(
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
   if (memberCount === 0) {
     await lobbiesRepo.deleteLobby(lobby.id);
-    await emitClosedLobbyState(io, lobby.id, lobby.mode);
+    await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
     logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed and deleted empty lobby');
     return;
   }
@@ -798,7 +754,7 @@ async function closeRankedPreMatchLobby(
     await redis.del(rankedAiLobbyKey(lobby.id));
   }
 
-  await emitClosedLobbyState(io, lobby.id, lobby.mode);
+  await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
 
   const lobbySockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
   lobbySockets.forEach((socket) => {

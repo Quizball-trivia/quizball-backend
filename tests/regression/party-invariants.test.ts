@@ -96,3 +96,21 @@ describe('party-quiz invariants', () => {
     expect(violationsFor(t, 'oneQuestionPerQIndexParty').length).toBeGreaterThan(0);
   });
 });
+
+it('accepts a points tie settled by the ranked standings', () => {
+  const t = build([], { winnerId: 'u2', winnerDecisionMethod: 'total_points', standings: [
+    { userId: 'u2', rank: 1, totalPoints: 1000, correctAnswers: 10, avgTimeMs: 100 },
+    { userId: 'u1', rank: 2, totalPoints: 1000, correctAnswers: 10, avgTimeMs: 200 },
+  ] });
+  expect(checkPartyInvariants(t).ok).toBe(true);
+});
+
+it('rejects a normal winner that disagrees with rank one', () => {
+  const t = build([], { ...GOOD_FINAL, winnerId: 'u2', winnerDecisionMethod: 'total_points' });
+  expect(violationsFor(t, 'winnerMatchesStandings')).toHaveLength(1);
+});
+
+it('allows a forfeit winner below rank one', () => {
+  const t = build([], { ...GOOD_FINAL, winnerId: 'u2', winnerDecisionMethod: 'forfeit' });
+  expect(checkPartyInvariants(t).ok).toBe(true);
+});

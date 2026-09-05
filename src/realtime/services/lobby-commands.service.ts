@@ -41,10 +41,9 @@ import {
   closeLobbyIfEmpty,
   isRankedAiLobby,
   releaseRankedAiLobbyMemberSafely,
-  removeUserFromLobbySockets,
   resolveLobbyId,
-  transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
+import { removeUserFromLobbySockets, transferHostIfNeeded } from './lobby-membership.helpers.js';
 
 /**
  * Whether a friendly lobby's member count is a legal host-start shape for the

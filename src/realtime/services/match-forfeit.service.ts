@@ -386,6 +386,7 @@ export async function finalizeMatchAsForfeit(
 
     await matchesRepo.setMatchStatePayload(params.matchId, {
       ...currentPayload,
+      ...(variant === 'friendly_party_quiz' ? {} : { phase: 'COMPLETED', currentQuestion: null }),
       winnerDecisionMethod: 'forfeit',
     });
 

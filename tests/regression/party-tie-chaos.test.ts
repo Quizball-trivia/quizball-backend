@@ -21,7 +21,7 @@ describeLocal('regression: party quiz tie invariant', () => {
     await teardownRun();
   });
 
-  it('forces an exact party-quiz tie and surfaces partyTieIsDraw when the engine picks a winner', async () => {
+  it('completes a tied-score party quiz with a winner matching the standings', async () => {
     const { bootFriendlyLobbyMatch, playLobbyMatch } = await import('../../game-regression/src/runner.mjs');
     const { checkPartyInvariants } = await import('../../game-regression/src/party-invariants.mjs');
 
@@ -32,6 +32,6 @@ describeLocal('regression: party quiz tie invariant', () => {
 
     const inv = checkPartyInvariants(run.trace);
     expect(run.trace.byEvent('match:final_results').length).toBeGreaterThan(0);
-    expect(Array.isArray(inv.violations)).toBe(true);
+    expect(inv.violations).toEqual([]);
   }, 180_000);
 });

@@ -617,21 +617,34 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
     await Promise.all([clearActiveMatch(host), clearActiveMatch(guest)]);
     autoAnswer(host); autoAnswer(guest); autoHalftime(host); autoHalftime(guest);
 
-    // Collision driver: when the draft opens, BOTH seats try to ban the SAME
-    // (first) category on their own turn. One wins; the loser gets BAN_FAILED and
-    // must retry a DISTINCT category — the existing autoDraft fallback handles the
-    // retry so the draft still completes.
-    const banSame = (c: StagingClient) => {
-      c.socket.on('draft:start', (state: { categories: Array<{ id: string }>; turnUserId: string }) => {
-        if (state.turnUserId === c.userId && state.categories[0]) {
-          c.socket.emit('draft:ban', { categoryId: state.categories[0].id });
+    autoRecover(host); autoRecover(guest);
+    // On the second turn, retry the opponent's category, then recover from BAN_FAILED.
+    for (const client of [host, guest]) {
+      let state: { lobbyId: string; categories: Array<{ id: string }>; turnUserId: string };
+      let firstBan: string | undefined;
+      client.socket.on('draft:start', (draft: typeof state) => {
+        state = draft;
+        client.socket.emit('draft:ui_ready', { lobbyId: state.lobbyId, banCount: 0 });
+        if (state.turnUserId === client.userId && state.categories[0]) {
+          client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: state.categories[0].id });
         }
       });
-    };
-    banSame(host); banSame(guest);
-    autoDraft(host); autoDraft(guest); // fallback: retry a distinct category on BAN_FAILED / next turn
+      client.socket.on('draft:banned', (ban: { actorId: string; categoryId: string }) => {
+        if (firstBan) return;
+        firstBan = ban.categoryId;
+        client.socket.emit('draft:ui_ready', { lobbyId: state.lobbyId, banCount: 1 });
+        if (ban.actorId !== client.userId) {
+          client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: ban.categoryId });
+        }
+      });
+      client.socket.on('error', (error: { code?: string }) => {
+        if (error.code !== 'BAN_FAILED' || !state) return;
+        const next = state.categories.find((category) => category.id !== firstBan);
+        if (next) client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: next.id });
+      });
+    }
 
-    // Set up a friendly possession lobby (the path with a 2-human draft).
+    // Ranked simulation in a private friendly lobby runs the two-human draft.
     let inviteCode: string | null = null;
     let memberCount = 0; let settingsSent = false; let settingsApplied = false;
     host.socket.on('lobby:state', (state: { inviteCode?: string | null; members?: unknown[]; settings?: { gameMode?: string } }) => {
@@ -642,9 +655,9 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
       }
       if (!settingsSent && memberCount >= 2) {
         settingsSent = true;
-        host.socket.emit('lobby:update_settings', { gameMode: 'friendly_possession', friendlyRandom: true });
+        host.socket.emit('lobby:update_settings', { gameMode: 'ranked_sim', friendlyRandom: true });
       }
-      if (state.settings?.gameMode === 'friendly_possession') settingsApplied = true;
+      if (state.settings?.gameMode === 'ranked_sim') settingsApplied = true;
     });
     host.socket.emit('lobby:create', { mode: 'friendly' });
 
@@ -653,8 +666,7 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
       await new Promise((r) => setTimeout(r, 500));
       host.socket.emit('lobby:ready', { ready: true });
       guest.socket.emit('lobby:ready', { ready: true });
-      await new Promise((r) => setTimeout(r, 1_500));
-      host.socket.emit('lobby:start', {});
+
     }
 
     // The collision is proven if the draft does NOT wedge: a match:start fires.
@@ -662,19 +674,23 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
     const sawBanFailed =
       host.trace.byEvent('error').some((e) => (e.payload as { code?: string })?.code === 'BAN_FAILED')
       || guest.trace.byEvent('error').some((e) => (e.payload as { code?: string })?.code === 'BAN_FAILED');
-    const ok = started; // not wedging is the contract; BAN_FAILED is the expected (informational) signal
+    const ok = started && host.count('draft:start') > 0 && sawBanFailed;
     return {
       name, ok,
       detail: ok
         ? `draft survived the collision -> match started${sawBanFailed ? ' (BAN_FAILED observed)' : ''}`
-        : 'draft WEDGED after a same-category collision (no match:start)',
-      violations: ok ? [] : ['same-category ban collision wedged the draft'],
+        : 'expected a real draft, BAN_FAILED collision, and subsequent match:start',
+      violations: ok ? [] : ['draft collision was not exercised or did not recover'],
       events: tracedEvents(host),
       startedAt: host.trace.events[0]?.t,
       endedAt: host.trace.events[host.trace.events.length - 1]?.t,
     };
   } finally {
-    host.disconnect(); guest.disconnect();
+    try {
+      if (host.socket.connected) await clearActiveMatch(host);
+    } finally {
+      host.disconnect(); guest.disconnect();
+    }
   }
 }
 

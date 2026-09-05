@@ -1,5 +1,8 @@
 -- Database hygiene from the 2026-09-05 Supabase advisor pass. No behaviour change.
 --
+-- Runs inside the runner's single transaction. The lock timeout below makes a
+-- busy embeddings table fail the deploy fast instead of queueing behind it.
+--
 -- 1. Pin search_path on the functions the security advisor flags as mutable.
 --    Pinned to the schemas each body actually resolves against (several use
 --    unqualified public tables, the agents ones cast to extensions.vector), so
@@ -11,6 +14,8 @@
 -- 3. Drop three ad-hoc backup tables from August (no primary key, unused since
 --    their repairs landed). Exported to backend-node/backups/prod-backup-tables-20260905/
 --    as CSV + column lists before this migration was written.
+
+SET LOCAL lock_timeout = '5s';
 
 DO $$
 DECLARE
@@ -27,7 +32,7 @@ BEGIN
     'public.wl_mark_question_seen()'
   ] LOOP
     IF to_regprocedure(fn) IS NOT NULL THEN
-      EXECUTE format('ALTER FUNCTION %s SET search_path = public', fn);
+      EXECUTE format('ALTER FUNCTION %s SET search_path = public, pg_temp', fn);
     END IF;
   END LOOP;
 
@@ -41,14 +46,16 @@ BEGIN
     'agents.upsert_question_embedding(uuid, uuid, text, text)'
   ] LOOP
     IF to_regprocedure(fn) IS NOT NULL THEN
-      EXECUTE format('ALTER FUNCTION %s SET search_path = agents, public, extensions', fn);
+      EXECUTE format('ALTER FUNCTION %s SET search_path = agents, public, extensions, pg_temp', fn);
     END IF;
   END LOOP;
 END $$;
-
-DROP INDEX IF EXISTS agents.question_embeddings_cosine_idx;
 
 DROP TABLE IF EXISTS
   public.question_payload_backup_aug30,
   public.clue_sync_backup_20260826,
   public.wl_questions_backup_aug22;
+
+-- Last, so the ACCESS EXCLUSIVE lock it takes on agents.question_embeddings is
+-- held only for the final moments of the transaction.
+DROP INDEX IF EXISTS agents.question_embeddings_cosine_idx;

@@ -387,8 +387,12 @@ export const retentionJourneyRepo = {
         AND e.status = 'active'
         AND e.variant = 'test'
         AND u.email IS NOT NULL AND BTRIM(u.email) <> ''
-        -- A player who came back is exited by the periodic sweep; until it runs,
-        -- never schedule a comeback email for someone who already played.
+        -- The exit sweep runs every few minutes, not every tick; apply its
+        -- eligibility rules here too so an ineligible or returned player never
+        -- consumes a daily send slot or a milestone in between sweeps.
+        AND u.is_ai = false AND u.is_seed = false
+        AND u.is_deleted = false AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL AND u.is_banned = false
         AND NOT EXISTS (
           SELECT 1 FROM match_players mp
           JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
@@ -440,6 +444,20 @@ export const retentionJourneyRepo = {
           WHERE current_config.journey_key = ${input.config.journey_key}
             AND current_config.version = ${input.config.version}
             AND current_config.status IN ('canary', 'live')
+        )
+        -- Re-check under the send lock: the player may have started a match
+        -- between selection and this insert, and delivery only compares
+        -- activity against assigned_at, which would miss that return.
+        AND EXISTS (
+          SELECT 1 FROM retention_journey_enrollments e
+          WHERE e.id = ${input.step.id}
+            AND e.status = 'active'
+            AND NOT EXISTS (
+              SELECT 1 FROM match_players mp
+              JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
+              WHERE mp.user_id = e.user_id
+                AND m.started_at > e.baseline_last_match_started_at
+            )
         )
       )
       INSERT INTO retention_email_assignments (

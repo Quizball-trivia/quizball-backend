@@ -129,6 +129,7 @@ const terminalReachedParty: PartyInvariant = (trace) => {
  */
 interface FinalPartyPayload {
   winnerId?: string | null;
+  winnerDecisionMethod?: string | null;
   standings?: Array<{ userId: string; rank: number; totalPoints?: number }>;
   players?: Record<string, { totalPoints?: number }>;
 }
@@ -164,24 +165,20 @@ const finalStandingsWellFormed: PartyInvariant = (trace) => {
   return out;
 };
 
-const partyTieIsDraw: PartyInvariant = (trace) => {
+// Party standings already apply correctness, answer-time, and seat tie-breaks.
+// A forfeit may award the win to someone other than the highest-ranked scorer.
+const winnerMatchesStandings: PartyInvariant = (trace) => {
   const finals = trace.byEvent('match:final_results');
   if (finals.length === 0) return [];
   const payload = finals[0].payload as FinalPartyPayload;
-  const standings = payload.standings ?? [];
-  if (standings.length < 2) return [];
-  const maxPoints = Math.max(...standings.map((standing) => standing.totalPoints ?? 0));
-  const tiedAtTop = standings.filter((standing) => (standing.totalPoints ?? 0) === maxPoints);
-  if (tiedAtTop.length < 2 || payload.winnerId == null) return [];
+  if (payload.winnerDecisionMethod === 'forfeit') return [];
+  const first = payload.standings?.find((standing) => standing.rank === 1);
+  if (!first || payload.winnerId === first.userId) return [];
   return [{
-    invariant: 'partyTieIsDraw',
-    message: 'Party-quiz match ended with equal top scores but produced a winner instead of a draw.',
+    invariant: 'winnerMatchesStandings',
+    message: 'Party-quiz winner disagrees with the final standings.',
     seq: finals[0].seq,
-    detail: {
-      winnerId: payload.winnerId,
-      maxPoints,
-      tiedUserIds: tiedAtTop.map((standing) => standing.userId),
-    },
+    detail: { winnerId: payload.winnerId, expectedWinnerId: first.userId },
   }];
 };
 
@@ -191,7 +188,7 @@ const ALL_PARTY_INVARIANTS: Array<{ name: string; check: PartyInvariant }> = [
   { name: 'oneQuestionPerQIndexParty', check: oneQuestionPerQIndexParty },
   { name: 'terminalReachedParty', check: terminalReachedParty },
   { name: 'finalStandingsWellFormed', check: finalStandingsWellFormed },
-  { name: 'partyTieIsDraw', check: partyTieIsDraw },
+  { name: 'winnerMatchesStandings', check: winnerMatchesStandings },
 ];
 
 /** Run all party-quiz invariants against a trace. */

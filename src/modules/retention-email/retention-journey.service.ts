@@ -1,40 +1,12 @@
-import {
-  getPostHogClient,
-  stableAnalyticsEventUuid,
-  trackEvent,
-} from '../../core/analytics.js';
+import { stableAnalyticsEventUuid, trackEvent } from '../../core/analytics.js';
 import { config } from '../../core/config.js';
 import { emailUnsubEnabled } from '../../core/email.js';
-import { logger } from '../../core/logger.js';
-import type { RetentionEmailVariant } from './retention-email.repo.js';
+import { resolveRetentionVariant } from './retention-flag.js';
 import {
   REACTIVATION_JOURNEY_KEY,
   retentionJourneyRepo,
-  type JourneyCandidate,
   type JourneyConfig,
 } from './retention-journey.repo.js';
-
-async function evaluateVariant(
-  candidate: JourneyCandidate,
-  journeyConfig: JourneyConfig,
-): Promise<RetentionEmailVariant | null> {
-  const client = getPostHogClient();
-  if (!client) return null;
-  try {
-    const value = await client.getFeatureFlag(
-      journeyConfig.feature_flag_key,
-      candidate.user_id,
-      {
-        personProperties: { country: candidate.country ?? '' },
-        sendFeatureFlagEvents: false,
-      },
-    );
-    return value === 'control' || value === 'test' ? value : null;
-  } catch (error) {
-    logger.warn({ error }, 'Reactivation journey feature flag evaluation failed');
-    return null;
-  }
-}
 
 function journeyEnabled(journeyConfig: JourneyConfig | null): journeyConfig is JourneyConfig {
   return Boolean(
@@ -66,7 +38,12 @@ export async function assignReactivationJourneyCandidates(): Promise<number> {
 
   let assigned = 0;
   for (const candidate of candidates) {
-    const variant = await evaluateVariant(candidate, journeyConfig);
+    const variant = await resolveRetentionVariant({
+      featureFlagKey: journeyConfig.feature_flag_key,
+      userId: candidate.user_id,
+      country: candidate.country,
+      logContext: 'Reactivation journey',
+    });
     if (!variant) continue;
     const enrollment = await retentionJourneyRepo.insertEnrollment({
       config: journeyConfig,

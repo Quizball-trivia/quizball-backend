@@ -497,7 +497,8 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
     const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
 
     // Play past the early-forfeit grace, THEN forfeit.
-    await client.waitFor(() => client.count('match:round_result') >= 2, 90_000);
+    const progressed = await client.waitFor(() => client.count('match:round_result') >= 2, 90_000);
+    if (!progressed) return { name, ok: false, detail: 'match did not advance past early-forfeit grace', violations: [], events: tracedEvents(client) };
     client.socket.emit('match:forfeit', { matchId });
     const finished = await client.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 60_000);
     if (!finished) return { name, ok: false, detail: 'late forfeit produced no final_results', violations: [] };
@@ -508,7 +509,8 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
     // Primary contract: the match settles as a FORFEIT (not a no-contest). If the
     // leaver's own RP delta is echoed it must be negative; but the forfeiter has
     // left the room, so an absent delta is acceptable — `method` is the signal.
-    const ok = method === 'forfeit' && (delta == null || delta < 0);
+    const cancelled = (final as { cancelledNoContest?: boolean } | undefined)?.cancelledNoContest;
+    const ok = method === 'forfeit' && cancelled !== true && (delta == null || delta < 0);
     return {
       name, ok,
       detail: ok
@@ -543,8 +545,10 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
       return { name, ok: false, detail: 'sockets never connected', violations: [] };
     }
     await Promise.all([clearActiveMatch(winner), clearActiveMatch(loser)]);
-    // Only the WINNER answers (builds a lead); the loser sits, then forfeits.
-    autoAnswer(winner); autoDraft(winner); autoDraft(loser); autoHalftime(winner); autoHalftime(loser);
+    // Both clients acknowledge round transitions; wrong answers let the survivor build a lead.
+    autoAnswer(winner); autoAnswer(loser, { answerPlan: () => 'wrong' });
+    autoDraft(winner); autoDraft(loser); autoHalftime(winner); autoHalftime(loser);
+    autoRecover(winner); autoRecover(loser);
 
     winner.socket.emit('ranked:queue_join', {});
     loser.socket.emit('ranked:queue_join', {});
@@ -559,7 +563,8 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
     const matchId = winner.latest<{ matchId?: string }>('match:start')?.matchId;
 
     // Let the winner build a lead, then the loser forfeits.
-    await winner.waitFor(() => winner.count('match:round_result') >= 3, 90_000);
+    const progressed = await winner.waitFor(() => winner.count('match:round_result') >= 3, 90_000);
+    if (!progressed) return { name, ok: false, detail: 'match did not advance past early-forfeit grace', violations: [], events: tracedEvents(winner) };
     loser.socket.emit('match:forfeit', { matchId });
 
     const finished = await winner.waitFor(() => hasFinalResultsForMatch(winner.trace, matchId), 60_000);

@@ -174,7 +174,7 @@ const MOCK_H2H = {
 };
 
 function ownedAvatarPart(
-  slot: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair',
+  slot: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair' | 'headwear' | 'earwear',
   partId: string,
 ) {
   return {
@@ -324,6 +324,12 @@ describe('usersService.getPublicProfile', () => {
 
     expect(getHeadToHeadMock).not.toHaveBeenCalled();
     expect(result.headToHead).toBeNull();
+  });
+
+  it.each(['headwear', 'earwear'] as const)('rejects an unowned %s item', async (slot) => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await expect(usersService.updateProfile('user-target-id', { avatarCustomization: { [slot]: slot === 'headwear' ? 'headwear_cech' : 'earwear_hoop' } })).rejects.toMatchObject({ statusCode: 400 });
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
   it('rejects avatar customization with unowned paid items', async () => {

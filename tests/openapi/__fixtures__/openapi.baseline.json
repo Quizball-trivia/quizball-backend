@@ -407,6 +407,29 @@
                             "minLength": 1,
                             "maxLength": 64,
                             "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "headwear": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "earwear": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "hairColor": {
+                            "type": "string",
+                            "enum": [
+                              "natural",
+                              "platinum",
+                              "ginger",
+                              "silver",
+                              "blue_tips",
+                              "pink_streaks"
+                            ]
                           }
                         },
                         "additionalProperties": false
@@ -479,6 +502,29 @@
                           "minLength": 1,
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "headwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "hairColor": {
+                          "type": "string",
+                          "enum": [
+                            "natural",
+                            "platinum",
+                            "ginger",
+                            "silver",
+                            "blue_tips",
+                            "pink_streaks"
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -2928,6 +2974,29 @@
                 "minLength": 1,
                 "maxLength": 64,
                 "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "headwear": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "earwear": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "hairColor": {
+                "type": "string",
+                "enum": [
+                  "natural",
+                  "platinum",
+                  "ginger",
+                  "silver",
+                  "blue_tips",
+                  "pink_streaks"
+                ]
               }
             },
             "additionalProperties": false
@@ -3030,6 +3099,29 @@
                 "minLength": 1,
                 "maxLength": 64,
                 "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "headwear": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "earwear": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "hairColor": {
+                "type": "string",
+                "enum": [
+                  "natural",
+                  "platinum",
+                  "ginger",
+                  "silver",
+                  "blue_tips",
+                  "pink_streaks"
+                ]
               }
             },
             "additionalProperties": false
@@ -3415,6 +3507,29 @@
                       "minLength": 1,
                       "maxLength": 64,
                       "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "headwear": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "earwear": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "hairColor": {
+                      "type": "string",
+                      "enum": [
+                        "natural",
+                        "platinum",
+                        "ginger",
+                        "silver",
+                        "blue_tips",
+                        "pink_streaks"
+                      ]
                     }
                   },
                   "additionalProperties": false
@@ -3581,6 +3696,29 @@
                           "minLength": 1,
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "headwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "hairColor": {
+                          "type": "string",
+                          "enum": [
+                            "natural",
+                            "platinum",
+                            "ginger",
+                            "silver",
+                            "blue_tips",
+                            "pink_streaks"
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -3747,6 +3885,29 @@
                           "minLength": 1,
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "headwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "hairColor": {
+                          "type": "string",
+                          "enum": [
+                            "natural",
+                            "platinum",
+                            "ginger",
+                            "silver",
+                            "blue_tips",
+                            "pink_streaks"
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -10797,6 +10958,29 @@
                           "minLength": 1,
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "headwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "hairColor": {
+                          "type": "string",
+                          "enum": [
+                            "natural",
+                            "platinum",
+                            "ginger",
+                            "silver",
+                            "blue_tips",
+                            "pink_streaks"
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -11464,6 +11648,29 @@
                                       "minLength": 1,
                                       "maxLength": 64,
                                       "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "headwear": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "earwear": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "hairColor": {
+                                      "type": "string",
+                                      "enum": [
+                                        "natural",
+                                        "platinum",
+                                        "ginger",
+                                        "silver",
+                                        "blue_tips",
+                                        "pink_streaks"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -11536,6 +11743,29 @@
                                     "minLength": 1,
                                     "maxLength": 64,
                                     "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "headwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "hairColor": {
+                                    "type": "string",
+                                    "enum": [
+                                      "natural",
+                                      "platinum",
+                                      "ginger",
+                                      "silver",
+                                      "blue_tips",
+                                      "pink_streaks"
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -11969,6 +12199,29 @@
                                     "minLength": 1,
                                     "maxLength": 64,
                                     "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "headwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "hairColor": {
+                                    "type": "string",
+                                    "enum": [
+                                      "natural",
+                                      "platinum",
+                                      "ginger",
+                                      "silver",
+                                      "blue_tips",
+                                      "pink_streaks"
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -14883,6 +15136,29 @@
                         "minLength": 1,
                         "maxLength": 64,
                         "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "headwear": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "earwear": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "hairColor": {
+                        "type": "string",
+                        "enum": [
+                          "natural",
+                          "platinum",
+                          "ginger",
+                          "silver",
+                          "blue_tips",
+                          "pink_streaks"
+                        ]
                       }
                     },
                     "additionalProperties": false
@@ -15664,6 +15940,29 @@
                                 "minLength": 1,
                                 "maxLength": 64,
                                 "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "headwear": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "earwear": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "hairColor": {
+                                "type": "string",
+                                "enum": [
+                                  "natural",
+                                  "platinum",
+                                  "ginger",
+                                  "silver",
+                                  "blue_tips",
+                                  "pink_streaks"
+                                ]
                               }
                             },
                             "additionalProperties": false
@@ -15854,6 +16153,29 @@
                                 "minLength": 1,
                                 "maxLength": 64,
                                 "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "headwear": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "earwear": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "hairColor": {
+                                "type": "string",
+                                "enum": [
+                                  "natural",
+                                  "platinum",
+                                  "ginger",
+                                  "silver",
+                                  "blue_tips",
+                                  "pink_streaks"
+                                ]
                               }
                             },
                             "additionalProperties": false
@@ -16052,6 +16374,29 @@
                                     "minLength": 1,
                                     "maxLength": 64,
                                     "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "headwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "hairColor": {
+                                    "type": "string",
+                                    "enum": [
+                                      "natural",
+                                      "platinum",
+                                      "ginger",
+                                      "silver",
+                                      "blue_tips",
+                                      "pink_streaks"
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -16218,6 +16563,29 @@
                                     "minLength": 1,
                                     "maxLength": 64,
                                     "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "headwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "hairColor": {
+                                    "type": "string",
+                                    "enum": [
+                                      "natural",
+                                      "platinum",
+                                      "ginger",
+                                      "silver",
+                                      "blue_tips",
+                                      "pink_streaks"
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false

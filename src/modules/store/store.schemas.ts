@@ -22,7 +22,7 @@ export const avatarMetadataSchema = z
   .object({
     avatarKey: z.string().min(1).optional(),
     avatarPartId: z.string().min(1).optional(),
-    slot: z.enum(['skin', 'jersey', 'hair', 'glasses', 'facialHair']).optional(),
+    slot: z.enum(['skin', 'jersey', 'hair', 'glasses', 'facialHair', 'headwear', 'earwear']).optional(),
     assetUrl: z.string().min(1),
   })
   .refine((metadata) => metadata.avatarKey || metadata.avatarPartId, {

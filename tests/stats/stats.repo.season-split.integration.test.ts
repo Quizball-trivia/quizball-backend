@@ -36,7 +36,13 @@ const fixtures = `
   )
 `;
 
-const connection = postgres('postgresql://test:test@127.0.0.1:5432/test', {
+// Override the port to exercise the unavailable-database path without stopping
+// a shared local database. Keep all fixture connections on loopback hosts.
+const databaseUrl = new URL(process.env.STATS_TEST_DATABASE_URL ?? 'postgresql://test:test@127.0.0.1:5432/test');
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(databaseUrl.hostname)) {
+  throw new Error('Season-split fixtures require a local PostgreSQL database');
+}
+const connection = postgres(databaseUrl.toString(), {
   max: 1,
   prepare: false,
   connect_timeout: 1,
@@ -66,19 +72,21 @@ afterAll(async () => {
 });
 
 describe('ranked season split SQL', () => {
-  it.each([
+  for (const { name, user, start, boundary, previous, current } of [
     { name: 'season boundaries, one-player losses, and excluded matches', user: 'self', start: '2026-07-01', boundary: '2026-08-01', previous: [1, 2, 1], current: [1, 2, 1] },
     { name: 'a player without matches', user: 'absent', start: '2026-07-01', boundary: '2026-08-01', previous: [0, 0, 0], current: [0, 0, 0] },
     { name: 'epoch fallback without a completed reset', user: 'self', start: '1970-01-01', boundary: '1970-01-01', previous: [0, 0, 0], current: [3, 4, 2] },
     { name: 'no matches inside either requested season', user: 'self', start: '2026-09-01', boundary: '2026-10-01', previous: [0, 0, 0], current: [0, 0, 0] },
     { name: 'equal season boundaries', user: 'self', start: '2026-08-01', boundary: '2026-08-01', previous: [0, 0, 0], current: [1, 2, 1] },
     { name: 'reversed bounds preserve the current-season predicate', user: 'self', start: '2026-08-01', boundary: '2026-07-01', previous: [0, 0, 0], current: [2, 4, 2] },
-  ])('$name', async ({ user, start, boundary, previous, current }, context) => {
-    if (!available) context.skip();
-    const result = await statsRepo.getRankedStatsSplitAtBoundary(user, boundary, start);
-    expect(result).toEqual({
-      previous_wins: previous[0], previous_losses: previous[1], previous_draws: previous[2],
-      current_wins: current[0], current_losses: current[1], current_draws: current[2],
+  ]) {
+    it(name, async (context) => {
+      if (!available) context.skip();
+      const result = await statsRepo.getRankedStatsSplitAtBoundary(user, boundary, start);
+      expect(result).toEqual({
+        previous_wins: previous[0], previous_losses: previous[1], previous_draws: previous[2],
+        current_wins: current[0], current_losses: current[1], current_draws: current[2],
+      });
     });
-  });
+  }
 });

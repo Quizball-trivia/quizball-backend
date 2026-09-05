@@ -46,6 +46,7 @@ describeLocal('regression: history-aware question selection (real DB)', () => {
     await sql`DELETE FROM match_questions WHERE match_id IN (SELECT m.id FROM matches m JOIN categories c ON c.id = m.category_a_id WHERE c.slug LIKE ${NS + '%'})`;
     await sql`DELETE FROM match_players WHERE match_id IN (SELECT m.id FROM matches m JOIN categories c ON c.id = m.category_a_id WHERE c.slug LIKE ${NS + '%'})`;
     await sql`DELETE FROM matches WHERE category_a_id IN (SELECT id FROM categories WHERE slug LIKE ${NS + '%'})`;
+    await sql`DELETE FROM question_payloads WHERE question_id IN (SELECT id FROM questions WHERE category_id IN (SELECT id FROM categories WHERE slug LIKE ${NS + '%'}))`;
     await sql`DELETE FROM questions WHERE category_id IN (SELECT id FROM categories WHERE slug LIKE ${NS + '%'})`;
     await sql`DELETE FROM categories WHERE slug LIKE ${NS + '%'}`;
     await sql`DELETE FROM users WHERE nickname LIKE ${NS + '%'}`;
@@ -66,6 +67,17 @@ describeLocal('regression: history-aware question selection (real DB)', () => {
              jsonb_build_object('en', ${NS} || '-q' || i)
       FROM generate_series(1, 3) i RETURNING id`;
     [qShownRecent, qShownOld, qNeverShown] = qs.map((r) => r.id);
+
+    // The pick query inner-joins question_payloads and validates the MCQ payload.
+    const [tpl] = await sql<{ payload: unknown }[]>`
+      SELECT qp.payload FROM question_payloads qp
+      JOIN questions q ON q.id = qp.question_id
+      WHERE q.type = 'mcq_single' AND q.status = 'published' AND q.category_id <> ${catId}
+      LIMIT 1`;
+    if (!tpl) throw new Error('regression DB has no published mcq_single payload to clone');
+    for (const qid of [qShownRecent, qShownOld, qNeverShown]) {
+      await sql`INSERT INTO question_payloads (question_id, payload) VALUES (${qid}, ${sql.json(tpl.payload as object)})`;
+    }
 
     const [m] = await sql<{ id: string }[]>`
       INSERT INTO matches (mode, status, category_a_id, category_b_id, current_q_index, total_questions)
@@ -89,6 +101,7 @@ describeLocal('regression: history-aware question selection (real DB)', () => {
     await sql`DELETE FROM match_questions WHERE match_id = ${matchId}`;
     await sql`DELETE FROM match_players WHERE match_id = ${matchId}`;
     await sql`DELETE FROM matches WHERE id = ${matchId}`;
+    await sql`DELETE FROM question_payloads WHERE question_id IN (SELECT id FROM questions WHERE category_id = ${catId})`;
     await sql`DELETE FROM questions WHERE category_id = ${catId}`;
     await sql`DELETE FROM categories WHERE id = ${catId}`;
     await sql`DELETE FROM users WHERE nickname = ${NS + '-u'}`;
@@ -99,6 +112,28 @@ describeLocal('regression: history-aware question selection (real DB)', () => {
     expect(seen, 'shown-recently must be flagged').toContain(qShownRecent);
     expect(seen, 'shown 30d ago is outside the 14d window').not.toContain(qShownOld);
     expect(seen, 'never-shown (shown_at NULL) must not pollute history').not.toContain(qNeverShown);
+  });
+
+  it('the in-query exclusion agrees with getRecentlySeenQuestionIds on a mixed history', async () => {
+    const pick = (userIds: string[], withinDays: number) => repo.getRandomQuestionCandidatesForMatch({
+      matchId: '00000000-0000-4000-8000-00000000c0de',
+      categoryIds: [catId],
+      questionTypes: ['mcq_single'],
+      excludeSeen: { userIds, withinDays },
+      limit: 3,
+    });
+    const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id).sort();
+
+    // 14 days: only the recently-shown one is out; never-shown and 30d-old stay.
+    expect(ids(await pick([userId], 14))).toEqual([qShownOld, qNeverShown].sort());
+    // 60 days: the 30-day-old one is out as well; never-shown still stays.
+    expect(ids(await pick([userId], 60))).toEqual([qNeverShown]);
+    // Another player with no history sees the whole pool.
+    expect(ids(await pick(['00000000-0000-4000-8000-000000000000'], 14))).toEqual([qShownRecent, qShownOld, qNeverShown].sort());
+    // Oracle agreement: whatever the helper reports as seen is exactly what the query dropped.
+    const seen = await repo.getRecentlySeenQuestionIds([userId], 14);
+    const kept = ids(await pick([userId], 14));
+    expect(kept.some((id) => seen.includes(id))).toBe(false);
   });
 
   it('widening the window picks up the older question too', async () => {
@@ -199,6 +234,29 @@ describeLocal('regression: fair repeat ordering on category exhaustion (real DB)
     await sql`DELETE FROM questions WHERE category_id=${catId}`;
     await sql`DELETE FROM categories WHERE id=${catId}`;
     await sql`DELETE FROM users WHERE nickname LIKE ${NS2 + '%'}`;
+  });
+
+  it('excludes recently-seen questions inside the candidate query itself (no id round trip)', async () => {
+    // All three questions were shown to p1/p2 in the seeding above, so the
+    // history exclusion must empty the pool for them…
+    const seen = await repo.getRandomQuestionCandidatesForMatch({
+      matchId: liveMatchId,
+      categoryIds: [catId],
+      questionTypes: ['mcq_single'],
+      excludeSeen: { userIds: [p1, p2], withinDays: 14 },
+      limit: 3,
+    });
+    expect(seen, 'every question was shown to these players recently').toHaveLength(0);
+
+    // …while a player with no history still gets the whole pool.
+    const fresh = await repo.getRandomQuestionCandidatesForMatch({
+      matchId: liveMatchId,
+      categoryIds: [catId],
+      questionTypes: ['mcq_single'],
+      excludeSeen: { userIds: ['00000000-0000-4000-8000-000000000000'], withinDays: 14 },
+      limit: 3,
+    });
+    expect(fresh.map((r) => r.id).sort()).toEqual([qFewest, qMid, qMost].sort());
   });
 
   it('on exhaustion, repeats the LEAST-played question first (GREATEST per-player count), both histories considered', async () => {

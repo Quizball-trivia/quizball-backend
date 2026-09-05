@@ -5,8 +5,8 @@ import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
 const getMatchCacheOrRebuildMock = vi.fn();
 const getMatchMock = vi.fn();
-const getRecentlySeenQuestionIdsMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const getRecentlySeenQuestionIdsMock = vi.fn();
 const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
 
@@ -25,8 +25,8 @@ vi.mock('../../src/core/tracing.js', () => ({
 
 vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
-    getRecentlySeenQuestionIds: (...args: unknown[]) => getRecentlySeenQuestionIdsMock(...args),
     getRandomQuestionCandidatesForMatch: (...args: unknown[]) => getRandomQuestionCandidatesForMatchMock(...args),
+    getRecentlySeenQuestionIds: (...args: unknown[]) => getRecentlySeenQuestionIdsMock(...args),
     getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
     getImageMcqCandidateForMatchById: vi.fn(async () => []),
     insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
@@ -121,7 +121,6 @@ describe('possession question exhaustion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getMatchMock.mockResolvedValue({ status: 'active' });
-    getRecentlySeenQuestionIdsMock.mockResolvedValue([]);
     getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
     completePossessionMatchMock.mockResolvedValue({
       matchId: 'match-exhausted',
@@ -154,6 +153,114 @@ describe('possession question exhaustion', () => {
 
     await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 6)).resolves.toBeNull();
 
+    expect(completePossessionMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the history exclusion inside the pick query and only drops it for the repeat rung', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { leastRecentForUserIds?: string[] }) => (
+      params.leastRecentForUserIds ? [{
+          id: 'repeat-mcq',
+          category_id: 'category-a',
+          payload: {
+            type: 'mcq_single',
+            options: [
+              { id: 'a', text: { en: 'Correct' }, is_correct: true },
+              { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+              { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+              { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+            ],
+          },
+        }] : []
+    ));
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await sendPossessionMatchQuestion(createIo(), cache.matchId, 0);
+
+    // The seen set never round-trips through the app any more.
+    expect(getRecentlySeenQuestionIdsMock).not.toHaveBeenCalled();
+    const calls = getRandomQuestionCandidatesForMatchMock.mock.calls.map(([params]) => params as {
+      excludeSeen?: { userIds: string[]; withinDays: number };
+      leastRecentForUserIds?: string[];
+      difficulties?: string[];
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls[0].excludeSeen).toEqual({ userIds: ['user-1', 'user-2'], withinDays: 14 });
+    expect(calls[0].leastRecentForUserIds).toBeUndefined();
+    expect(calls[1].excludeSeen).toEqual({ userIds: ['user-1', 'user-2'], withinDays: 14 });
+    expect(calls[1].difficulties).toEqual(['easy', 'medium', 'hard']);
+    expect(calls[2].excludeSeen).toBeUndefined();
+    expect(calls[2].leastRecentForUserIds).toEqual(['user-1', 'user-2']);
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(
+      expect.objectContaining({ questionId: 'repeat-mcq' })
+    );
+  });
+
+  it('keeps history disabled for the rest of the pick after a failure, so the repeat rung cannot throw', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { excludeSeen?: unknown; leastRecentForUserIds?: string[] }) => {
+      if (params.excludeSeen) throw new Error('statement timeout');
+      if (params.leastRecentForUserIds) throw new Error('repeat ordering must not run once history failed');
+      return [];
+    });
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 0)).resolves.toBeNull();
+
+    const calls = getRandomQuestionCandidatesForMatchMock.mock.calls.map(([params]) => params as {
+      excludeSeen?: unknown; leastRecentForUserIds?: string[]; allowImageMcqs?: boolean;
+    });
+    expect(calls.filter((c) => c.excludeSeen)).toHaveLength(1);
+    expect(calls.some((c) => c.leastRecentForUserIds)).toBe(false);
+    expect(calls.some((c) => c.allowImageMcqs)).toBe(true);
+  });
+
+  it('propagates a failure of the plain retry instead of looping', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockRejectedValue(new Error('database down'));
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 0)).rejects.toThrow('database down');
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to a pick without history when the history-aware query fails', async () => {
+    const cache = createCache('NORMAL_PLAY');
+    cache.currentQIndex = 0;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 0;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { excludeSeen?: unknown }) => {
+      if (params.excludeSeen) throw new Error('statement timeout');
+      return [{
+          id: 'repeat-mcq',
+          category_id: 'category-a',
+          payload: {
+            type: 'mcq_single',
+            options: [
+              { id: 'a', text: { en: 'Correct' }, is_correct: true },
+              { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+              { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+              { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+            ],
+          },
+        }];
+    });
+
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await sendPossessionMatchQuestion(createIo(), cache.matchId, 0);
+
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(
+      expect.objectContaining({ questionId: 'repeat-mcq' })
+    );
     expect(completePossessionMatchMock).not.toHaveBeenCalled();
   });
 

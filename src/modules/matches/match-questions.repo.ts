@@ -139,18 +139,10 @@ export const matchQuestionsRepo = {
   },
 
   /**
-   * Question ids the given users have ALREADY SEEN in matches within the recent
-   * window — used to bias the random picker AWAY from recently-served questions
-   * (history-aware selection), so heavy players stop re-seeing the same question
-   * while unseen ones sit in the pool.
-   *
-   * Performance: indexed path only (match_players(user_id) → matches(pkey) →
-   * match_questions(match_id)). Measured ~1-5ms even for the heaviest player;
-   * runs ONCE per pick, not per candidate. The result feeds the existing
-   * `excludeQuestionIds` array filter — no new joins on the hot pick query.
-   *
-   * Best-effort by contract: callers must treat this as a soft exclusion and
-   * fall back to picking WITHOUT it if a (thin) category would otherwise run dry.
+   * Question ids these users saw within the window. The hot pick path no
+   * longer calls this: getRandomQuestionCandidatesForMatch applies the same
+   * rule inside its query (excludeSeen). Kept as the reference definition of
+   * "seen" and as the oracle for tests/regression/question-history.
    */
   async getRecentlySeenQuestionIds(
     userIds: string[],
@@ -285,6 +277,12 @@ export const matchQuestionsRepo = {
      * path; the normal pick leaves this undefined and stays a plain RANDOM().
      */
     leastRecentForUserIds?: string[];
+    /**
+     * History-aware pick: skip questions any of these users saw within the
+     * window. Evaluated inside the query so the seen set (thousands of ids
+     * for heavy players) never round-trips to the app.
+     */
+    excludeSeen?: { userIds: string[]; withinDays: number };
   }): Promise<RandomQuestionCandidate[]> {
     return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
       'db.operation.name': 'select',
@@ -322,6 +320,28 @@ export const matchQuestionsRepo = {
         values.push(params.excludeQuestionIds);
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
       }
+      // The players' recent question set is built ONCE (MATERIALIZED, so the
+      // planner cannot re-probe match history per candidate) and anti-joined —
+      // the same rows getRecentlySeenQuestionIds used to ship to the app.
+      // shown_at, not row existence: a question dispatched but never shown must
+      // not count as seen.
+      let recentlySeenCte = '';
+      let excludeSeenClause = '';
+      if (params.excludeSeen?.userIds.length) {
+        values.push(params.excludeSeen.userIds);
+        const seenUsersParam = `$${values.length}`;
+        values.push(params.excludeSeen.withinDays);
+        const seenDaysParam = `$${values.length}`;
+        recentlySeenCte = `recently_seen AS MATERIALIZED (
+          SELECT DISTINCT mqs.question_id
+          FROM match_players mps
+          JOIN match_questions mqs ON mqs.match_id = mps.match_id
+          WHERE mps.user_id = ANY(${seenUsersParam}::uuid[])
+            AND mqs.shown_at IS NOT NULL
+            AND mqs.shown_at > now() - make_interval(days => ${seenDaysParam}::int)
+        )`;
+        excludeSeenClause = `AND NOT EXISTS (SELECT 1 FROM recently_seen rs WHERE rs.question_id = q.id)`;
+      }
 
       // Exhaustion fallback: when a category is fully seen, the repeat is
       // unavoidable — pick the FAIREST one to repeat for BOTH players, in this
@@ -348,7 +368,7 @@ export const matchQuestionsRepo = {
       if (params.leastRecentForUserIds?.length) {
         values.push(params.leastRecentForUserIds);
         const uidParam = `$${values.length}`;
-        userSeenCte = `WITH user_seen AS (
+        userSeenCte = `user_seen AS (
           SELECT pu.question_id,
                  max(pu.cnt)        AS max_seen_count,
                  max(pu.last_seen)  AS last_seen_at
@@ -372,9 +392,11 @@ export const matchQuestionsRepo = {
       values.push(params.limit ?? 1);
       const limitPlaceholder = `$${values.length}`;
 
+      const ctes = [recentlySeenCte, userSeenCte].filter(Boolean);
+      const withClause = ctes.length ? `WITH ${ctes.join(', ')}` : '';
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
-        ${userSeenCte}
+        ${withClause}
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload${userSeenSelect}
         FROM questions q
         JOIN categories c ON c.id = q.category_id
@@ -391,6 +413,7 @@ export const matchQuestionsRepo = {
           ${excludeImageMcqClause}
           ${difficultyClause}
           ${excludeClause}
+          ${excludeSeenClause}
           AND NOT EXISTS (
             SELECT 1
             FROM match_questions mq

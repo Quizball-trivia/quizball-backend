@@ -320,23 +320,27 @@ export const matchQuestionsRepo = {
         values.push(params.excludeQuestionIds);
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
       }
+      // The players' recent question set is built ONCE (MATERIALIZED, so the
+      // planner cannot re-probe match history per candidate) and anti-joined —
+      // the same rows getRecentlySeenQuestionIds used to ship to the app.
+      // shown_at, not row existence: a question dispatched but never shown must
+      // not count as seen.
+      let recentlySeenCte = '';
       let excludeSeenClause = '';
       if (params.excludeSeen?.userIds.length) {
         values.push(params.excludeSeen.userIds);
         const seenUsersParam = `$${values.length}`;
         values.push(params.excludeSeen.withinDays);
         const seenDaysParam = `$${values.length}`;
-        // shown_at, not row existence: a question dispatched but never shown
-        // must not count as seen (see getRecentlySeenQuestionIds).
-        excludeSeenClause = `AND NOT EXISTS (
-          SELECT 1
+        recentlySeenCte = `recently_seen AS MATERIALIZED (
+          SELECT DISTINCT mqs.question_id
           FROM match_players mps
           JOIN match_questions mqs ON mqs.match_id = mps.match_id
           WHERE mps.user_id = ANY(${seenUsersParam}::uuid[])
-            AND mqs.question_id = q.id
             AND mqs.shown_at IS NOT NULL
             AND mqs.shown_at > now() - make_interval(days => ${seenDaysParam}::int)
         )`;
+        excludeSeenClause = `AND NOT EXISTS (SELECT 1 FROM recently_seen rs WHERE rs.question_id = q.id)`;
       }
 
       // Exhaustion fallback: when a category is fully seen, the repeat is
@@ -364,7 +368,7 @@ export const matchQuestionsRepo = {
       if (params.leastRecentForUserIds?.length) {
         values.push(params.leastRecentForUserIds);
         const uidParam = `$${values.length}`;
-        userSeenCte = `WITH user_seen AS (
+        userSeenCte = `user_seen AS (
           SELECT pu.question_id,
                  max(pu.cnt)        AS max_seen_count,
                  max(pu.last_seen)  AS last_seen_at
@@ -388,9 +392,11 @@ export const matchQuestionsRepo = {
       values.push(params.limit ?? 1);
       const limitPlaceholder = `$${values.length}`;
 
+      const ctes = [recentlySeenCte, userSeenCte].filter(Boolean);
+      const withClause = ctes.length ? `WITH ${ctes.join(', ')}` : '';
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
-        ${userSeenCte}
+        ${withClause}
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload${userSeenSelect}
         FROM questions q
         JOIN categories c ON c.id = q.category_id

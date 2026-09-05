@@ -532,19 +532,29 @@ async function maybePickQuestionForState(
     }
   ): Promise<PickedQuestion | null> => {
     const exclude = opts?.dropReservedExclusion ? [] : reservedExclusion;
-    const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+    const query = (withHistory: boolean) => matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [candidateQuestionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
-      excludeSeen: opts?.excludeSeen && humanUserIds.length > 0
+      excludeSeen: withHistory && opts?.excludeSeen && humanUserIds.length > 0
         ? { userIds: humanUserIds, withinDays: QUESTION_HISTORY_WINDOW_DAYS }
         : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
       leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
       limit: candidateQuestionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
+    let rows: Awaited<ReturnType<typeof query>>;
+    try {
+      rows = await query(true);
+    } catch (error) {
+      // Never let the freshness optimization break question dispatch: on a
+      // history-query failure fall back to a pick without the exclusion.
+      if (!(opts?.excludeSeen && humanUserIds.length > 0)) throw error;
+      logger.warn({ error, matchId }, 'history-aware pick failed; picking without history exclusion');
+      rows = await query(false);
+    }
     return pickFirstValidCandidate(rows, candidateQuestionType, {
       matchId,
       categoryIds,

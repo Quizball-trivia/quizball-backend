@@ -21,6 +21,7 @@
  * Exit 0 = all selected scenarios clean; 1 = any hard failure.
  */
 import type { Socket } from 'socket.io-client';
+import { computeSeasonRpDelta } from '../../src/modules/ranked/season-rp-formula.js';
 import { bootstrapTestUsers, deleteTestUsers, type TestUser } from './auth-bootstrap.mjs';
 import { connectStaging, clearActiveMatch, type StagingClient } from './staging-client.mjs';
 import { autoAnswer, autoDraft, autoHalftime, autoRecover } from './bot-behaviors.mjs';
@@ -497,7 +498,8 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
     const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
 
     // Play past the early-forfeit grace, THEN forfeit.
-    await client.waitFor(() => client.count('match:round_result') >= 2, 90_000);
+    const progressed = await client.waitFor(() => client.count('match:round_result') >= 2, 90_000);
+    if (!progressed) return { name, ok: false, detail: 'match did not advance past early-forfeit grace', violations: [], events: tracedEvents(client) };
     client.socket.emit('match:forfeit', { matchId });
     const finished = await client.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 60_000);
     if (!finished) return { name, ok: false, detail: 'late forfeit produced no final_results', violations: [] };
@@ -508,7 +510,8 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
     // Primary contract: the match settles as a FORFEIT (not a no-contest). If the
     // leaver's own RP delta is echoed it must be negative; but the forfeiter has
     // left the room, so an absent delta is acceptable — `method` is the signal.
-    const ok = method === 'forfeit' && (delta == null || delta < 0);
+    const cancelled = (final as { cancelledNoContest?: boolean } | undefined)?.cancelledNoContest;
+    const ok = method === 'forfeit' && cancelled !== true && (delta == null || delta < 0);
     return {
       name, ok,
       detail: ok
@@ -534,8 +537,6 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
  */
 async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): Promise<ScenarioResult> {
   const name = 'opponent_forfeit_winner_live';
-  const FORFEIT_WIN_BASE = 50;
-  const marginBonus = (m: number) => (m >= 4 ? 40 : m === 3 ? 30 : m === 2 ? 15 : 0);
   const winner = connectStaging(URL, users.a.accessToken, users.a.userId);
   const loser = connectStaging(URL, users.b.accessToken, users.b.userId);
   try {
@@ -543,8 +544,10 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
       return { name, ok: false, detail: 'sockets never connected', violations: [] };
     }
     await Promise.all([clearActiveMatch(winner), clearActiveMatch(loser)]);
-    // Only the WINNER answers (builds a lead); the loser sits, then forfeits.
-    autoAnswer(winner); autoDraft(winner); autoDraft(loser); autoHalftime(winner); autoHalftime(loser);
+    // Both clients acknowledge round transitions; wrong answers let the survivor build a lead.
+    autoAnswer(winner); autoAnswer(loser, { answerPlan: () => 'wrong' });
+    autoDraft(winner); autoDraft(loser); autoHalftime(winner); autoHalftime(loser);
+    autoRecover(winner); autoRecover(loser);
 
     winner.socket.emit('ranked:queue_join', {});
     loser.socket.emit('ranked:queue_join', {});
@@ -559,7 +562,8 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
     const matchId = winner.latest<{ matchId?: string }>('match:start')?.matchId;
 
     // Let the winner build a lead, then the loser forfeits.
-    await winner.waitFor(() => winner.count('match:round_result') >= 3, 90_000);
+    const progressed = await winner.waitFor(() => winner.count('match:round_result') >= 3, 90_000);
+    if (!progressed) return { name, ok: false, detail: 'match did not advance past early-forfeit grace', violations: [], events: tracedEvents(winner) };
     loser.socket.emit('match:forfeit', { matchId });
 
     const finished = await winner.waitFor(() => hasFinalResultsForMatch(winner.trace, matchId), 60_000);
@@ -567,6 +571,8 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
 
     const final = finalForMatch(winner, matchId) as {
       winnerDecisionMethod?: string;
+      winnerId?: string | null;
+      rankedOutcome?: { byUserId?: Record<string, { oldRp: number }> };
       players?: Record<string, { goals?: number }>;
     } | undefined;
     const delta = myDeltaRp(final, users.a.userId);
@@ -574,13 +580,14 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
     const oppGoals = final?.players?.[users.b.userId]?.goals ?? 0;
     const margin = myGoals - oppGoals;
 
-    let ok = delta != null && delta >= FORFEIT_WIN_BASE;
-    let detail = `winner delta=${delta} (margin ${margin})`;
-    if (ok && margin > 0) {
-      const expected = FORFEIT_WIN_BASE + marginBonus(margin);
-      ok = delta === expected;
-      detail = ok ? `winner +${delta} = base+margin (${expected})` : `winner delta=${delta}, expected ${expected} for margin ${margin}`;
-    }
+    const mine = final?.rankedOutcome?.byUserId?.[users.a.userId];
+    const opponent = final?.rankedOutcome?.byUserId?.[users.b.userId];
+    const expected = mine && opponent
+      ? computeSeasonRpDelta(true, 'forfeit', margin, opponent.oldRp > mine.oldRp)
+      : null;
+    const ok = final?.winnerId === users.a.userId && final.winnerDecisionMethod === 'forfeit'
+      && expected != null && delta === expected;
+    const detail = `winner delta=${delta}, expected=${expected} (margin ${margin})`;
     return {
       name, ok,
       detail: ok ? detail : `winner-side bonus wrong: ${detail}`,
@@ -610,21 +617,34 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
     await Promise.all([clearActiveMatch(host), clearActiveMatch(guest)]);
     autoAnswer(host); autoAnswer(guest); autoHalftime(host); autoHalftime(guest);
 
-    // Collision driver: when the draft opens, BOTH seats try to ban the SAME
-    // (first) category on their own turn. One wins; the loser gets BAN_FAILED and
-    // must retry a DISTINCT category — the existing autoDraft fallback handles the
-    // retry so the draft still completes.
-    const banSame = (c: StagingClient) => {
-      c.socket.on('draft:start', (state: { categories: Array<{ id: string }>; turnUserId: string }) => {
-        if (state.turnUserId === c.userId && state.categories[0]) {
-          c.socket.emit('draft:ban', { categoryId: state.categories[0].id });
+    autoRecover(host); autoRecover(guest);
+    // On the second turn, retry the opponent's category, then recover from BAN_FAILED.
+    for (const client of [host, guest]) {
+      let state: { lobbyId: string; categories: Array<{ id: string }>; turnUserId: string };
+      let firstBan: string | undefined;
+      client.socket.on('draft:start', (draft: typeof state) => {
+        state = draft;
+        client.socket.emit('draft:ui_ready', { lobbyId: state.lobbyId, banCount: 0 });
+        if (state.turnUserId === client.userId && state.categories[0]) {
+          client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: state.categories[0].id });
         }
       });
-    };
-    banSame(host); banSame(guest);
-    autoDraft(host); autoDraft(guest); // fallback: retry a distinct category on BAN_FAILED / next turn
+      client.socket.on('draft:banned', (ban: { actorId: string; categoryId: string }) => {
+        if (firstBan) return;
+        firstBan = ban.categoryId;
+        client.socket.emit('draft:ui_ready', { lobbyId: state.lobbyId, banCount: 1 });
+        if (ban.actorId !== client.userId) {
+          client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: ban.categoryId });
+        }
+      });
+      client.socket.on('error', (error: { code?: string }) => {
+        if (error.code !== 'BAN_FAILED' || !state) return;
+        const next = state.categories.find((category) => category.id !== firstBan);
+        if (next) client.socket.emit('draft:ban', { lobbyId: state.lobbyId, categoryId: next.id });
+      });
+    }
 
-    // Set up a friendly possession lobby (the path with a 2-human draft).
+    // Ranked simulation in a private friendly lobby runs the two-human draft.
     let inviteCode: string | null = null;
     let memberCount = 0; let settingsSent = false; let settingsApplied = false;
     host.socket.on('lobby:state', (state: { inviteCode?: string | null; members?: unknown[]; settings?: { gameMode?: string } }) => {
@@ -635,9 +655,9 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
       }
       if (!settingsSent && memberCount >= 2) {
         settingsSent = true;
-        host.socket.emit('lobby:update_settings', { gameMode: 'friendly_possession', friendlyRandom: true });
+        host.socket.emit('lobby:update_settings', { gameMode: 'ranked_sim', friendlyRandom: true });
       }
-      if (state.settings?.gameMode === 'friendly_possession') settingsApplied = true;
+      if (state.settings?.gameMode === 'ranked_sim') settingsApplied = true;
     });
     host.socket.emit('lobby:create', { mode: 'friendly' });
 
@@ -646,8 +666,7 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
       await new Promise((r) => setTimeout(r, 500));
       host.socket.emit('lobby:ready', { ready: true });
       guest.socket.emit('lobby:ready', { ready: true });
-      await new Promise((r) => setTimeout(r, 1_500));
-      host.socket.emit('lobby:start', {});
+
     }
 
     // The collision is proven if the draft does NOT wedge: a match:start fires.
@@ -655,19 +674,23 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
     const sawBanFailed =
       host.trace.byEvent('error').some((e) => (e.payload as { code?: string })?.code === 'BAN_FAILED')
       || guest.trace.byEvent('error').some((e) => (e.payload as { code?: string })?.code === 'BAN_FAILED');
-    const ok = started; // not wedging is the contract; BAN_FAILED is the expected (informational) signal
+    const ok = started && host.count('draft:start') > 0 && sawBanFailed;
     return {
       name, ok,
       detail: ok
         ? `draft survived the collision -> match started${sawBanFailed ? ' (BAN_FAILED observed)' : ''}`
-        : 'draft WEDGED after a same-category collision (no match:start)',
-      violations: ok ? [] : ['same-category ban collision wedged the draft'],
+        : 'expected a real draft, BAN_FAILED collision, and subsequent match:start',
+      violations: ok ? [] : ['draft collision was not exercised or did not recover'],
       events: tracedEvents(host),
       startedAt: host.trace.events[0]?.t,
       endedAt: host.trace.events[host.trace.events.length - 1]?.t,
     };
   } finally {
-    host.disconnect(); guest.disconnect();
+    try {
+      if (host.socket.connected) await clearActiveMatch(host);
+    } finally {
+      host.disconnect(); guest.disconnect();
+    }
   }
 }
 

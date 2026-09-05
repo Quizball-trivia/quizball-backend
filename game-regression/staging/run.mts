@@ -21,6 +21,7 @@
  * Exit 0 = all selected scenarios clean; 1 = any hard failure.
  */
 import type { Socket } from 'socket.io-client';
+import { computeSeasonRpDelta } from '../../src/modules/ranked/season-rp-formula.js';
 import { bootstrapTestUsers, deleteTestUsers, type TestUser } from './auth-bootstrap.mjs';
 import { connectStaging, clearActiveMatch, type StagingClient } from './staging-client.mjs';
 import { autoAnswer, autoDraft, autoHalftime, autoRecover } from './bot-behaviors.mjs';
@@ -536,8 +537,6 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
  */
 async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): Promise<ScenarioResult> {
   const name = 'opponent_forfeit_winner_live';
-  const FORFEIT_WIN_BASE = 50;
-  const marginBonus = (m: number) => (m >= 4 ? 40 : m === 3 ? 30 : m === 2 ? 15 : 0);
   const winner = connectStaging(URL, users.a.accessToken, users.a.userId);
   const loser = connectStaging(URL, users.b.accessToken, users.b.userId);
   try {
@@ -572,6 +571,8 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
 
     const final = finalForMatch(winner, matchId) as {
       winnerDecisionMethod?: string;
+      winnerId?: string | null;
+      rankedOutcome?: { byUserId?: Record<string, { oldRp: number }> };
       players?: Record<string, { goals?: number }>;
     } | undefined;
     const delta = myDeltaRp(final, users.a.userId);
@@ -579,13 +580,14 @@ async function opponentForfeitWinnerLive(users: { a: TestUser; b: TestUser }): P
     const oppGoals = final?.players?.[users.b.userId]?.goals ?? 0;
     const margin = myGoals - oppGoals;
 
-    let ok = delta != null && delta >= FORFEIT_WIN_BASE;
-    let detail = `winner delta=${delta} (margin ${margin})`;
-    if (ok && margin > 0) {
-      const expected = FORFEIT_WIN_BASE + marginBonus(margin);
-      ok = delta === expected;
-      detail = ok ? `winner +${delta} = base+margin (${expected})` : `winner delta=${delta}, expected ${expected} for margin ${margin}`;
-    }
+    const mine = final?.rankedOutcome?.byUserId?.[users.a.userId];
+    const opponent = final?.rankedOutcome?.byUserId?.[users.b.userId];
+    const expected = mine && opponent
+      ? computeSeasonRpDelta(true, 'forfeit', margin, opponent.oldRp > mine.oldRp)
+      : null;
+    const ok = final?.winnerId === users.a.userId && final.winnerDecisionMethod === 'forfeit'
+      && expected != null && delta === expected;
+    const detail = `winner delta=${delta}, expected=${expected} (margin ${margin})`;
     return {
       name, ok,
       detail: ok ? detail : `winner-side bonus wrong: ${detail}`,

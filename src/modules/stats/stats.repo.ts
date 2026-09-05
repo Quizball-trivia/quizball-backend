@@ -251,6 +251,8 @@ export const statsRepo = {
         AND m.mode = 'ranked'
         AND m.status = 'completed'
         AND m.is_dev = false
+        -- Older and undated matches contribute to neither displayed season.
+        AND m.ended_at >= LEAST(${previousStartIso}::timestamptz, ${boundaryIso}::timestamptz)
     `;
     return (
       row ?? {

@@ -1,8 +1,4 @@
-import {
-  getPostHogClient,
-  stableAnalyticsEventUuid,
-  trackEvent,
-} from '../../core/analytics.js';
+import { stableAnalyticsEventUuid, trackEvent } from '../../core/analytics.js';
 import { config } from '../../core/config.js';
 import {
   emailLinkToken,
@@ -11,13 +7,12 @@ import {
   sendEmailDetailed,
   verifyEmailLinkToken,
 } from '../../core/email.js';
-import { logger } from '../../core/logger.js';
 import {
   retentionEmailRepo,
   type RetentionEmailAssignment,
-  type RetentionEmailCandidate,
-  type RetentionEmailVariant,
 } from './retention-email.repo.js';
+import { RETENTION_FLAG_EXCLUSION_TTL_DAYS } from './retention-flag-exclusions.repo.js';
+import { resolveRetentionVariant } from './retention-flag.js';
 
 export const RETENTION_EMAIL_CAMPAIGN_KEY = 'weekend_league_comeback_v1';
 export const RETENTION_EMAIL_FEATURE_FLAG_KEY = 'email-comeback-weekend-league';
@@ -279,28 +274,6 @@ function assignmentAnalyticsProperties(assignment: RetentionEmailAssignment) {
   };
 }
 
-async function evaluateVariant(
-  candidate: RetentionEmailCandidate,
-  featureFlagKey: string,
-): Promise<RetentionEmailVariant | null> {
-  const client = getPostHogClient();
-  if (!client) return null;
-  try {
-    const value = await client.getFeatureFlag(
-      featureFlagKey,
-      candidate.user_id,
-      {
-        personProperties: { country: candidate.country ?? '' },
-        sendFeatureFlagEvents: false,
-      },
-    );
-    return value === 'control' || value === 'test' ? value : null;
-  } catch (error) {
-    logger.warn({ error }, 'Retention email feature flag evaluation failed');
-    return null;
-  }
-}
-
 export async function assignRetentionEmailCandidates(): Promise<number> {
   if (
     !config.RETENTION_EMAIL_EXPERIMENT_ENABLED
@@ -316,6 +289,10 @@ export async function assignRetentionEmailCandidates(): Promise<number> {
   ))) return 0;
   const candidates = await retentionEmailRepo.listEligibleCandidates({
     campaignKey: RETENTION_EMAIL_CAMPAIGN_KEY,
+    featureFlagKey: RETENTION_EMAIL_FEATURE_FLAG_KEY,
+    // Never longer than the inactivity this campaign requires, so an exclusion
+    // cannot outlive the dormancy episode it was recorded in.
+    exclusionTtlDays: Math.min(RETENTION_FLAG_EXCLUSION_TTL_DAYS, config.RETENTION_EMAIL_MIN_INACTIVE_DAYS),
     minInactiveDays: config.RETENTION_EMAIL_MIN_INACTIVE_DAYS,
     maxInactiveDays: config.RETENTION_EMAIL_MAX_INACTIVE_DAYS,
     frequencyDays: config.RETENTION_EMAIL_FREQUENCY_DAYS,
@@ -330,7 +307,12 @@ export async function assignRetentionEmailCandidates(): Promise<number> {
 
   let assigned = 0;
   for (const candidate of candidates) {
-    const variant = await evaluateVariant(candidate, RETENTION_EMAIL_FEATURE_FLAG_KEY);
+    const variant = await resolveRetentionVariant({
+      featureFlagKey: RETENTION_EMAIL_FEATURE_FLAG_KEY,
+      userId: candidate.user_id,
+      country: candidate.country,
+      logContext: 'Retention email',
+    });
     if (!variant) continue;
     const assignment = await retentionEmailRepo.insertAssignment({
       campaignKey: RETENTION_EMAIL_CAMPAIGN_KEY,
@@ -373,6 +355,8 @@ export async function assignDormantComebackEmailCandidates(): Promise<number> {
   ))) return 0;
   const candidates = await retentionEmailRepo.listDormantCandidates({
     campaignKey: DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,
+    featureFlagKey: DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY,
+    exclusionTtlDays: Math.min(RETENTION_FLAG_EXCLUSION_TTL_DAYS, config.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS),
     minInactiveDays: config.DORMANT_COMEBACK_EMAIL_MIN_INACTIVE_DAYS,
     maxInactiveDays: config.DORMANT_COMEBACK_EMAIL_MAX_INACTIVE_DAYS,
     minLifetimeMatches: config.DORMANT_COMEBACK_EMAIL_MIN_LIFETIME_MATCHES,
@@ -386,7 +370,12 @@ export async function assignDormantComebackEmailCandidates(): Promise<number> {
 
   let assigned = 0;
   for (const candidate of candidates) {
-    const variant = await evaluateVariant(candidate, DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY);
+    const variant = await resolveRetentionVariant({
+      featureFlagKey: DORMANT_COMEBACK_EMAIL_FEATURE_FLAG_KEY,
+      userId: candidate.user_id,
+      country: candidate.country,
+      logContext: 'Retention email',
+    });
     if (!variant) continue;
     const assignment = await retentionEmailRepo.insertAssignment({
       campaignKey: DORMANT_COMEBACK_EMAIL_CAMPAIGN_KEY,

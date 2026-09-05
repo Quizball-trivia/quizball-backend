@@ -11,7 +11,7 @@ const getSegmentsMock = vi.fn();
 const getFunnelMock = vi.fn();
 const getStepSummaryMock = vi.fn();
 const pauseMock = vi.fn();
-const getFeatureFlagMock = vi.fn();
+const resolveVariantMock = vi.fn();
 const trackEventMock = vi.fn();
 
 vi.mock('../../src/modules/retention-email/retention-journey.repo.js', () => ({
@@ -40,12 +40,14 @@ vi.mock('../../src/core/config.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/retention-email/retention-flag.js', () => ({
+  resolveRetentionVariant: (...args: unknown[]) => resolveVariantMock(...args),
+}));
 vi.mock('../../src/core/email.js', () => ({ emailUnsubEnabled: () => true }));
 vi.mock('../../src/core/logger.js', () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 vi.mock('../../src/core/analytics.js', () => ({
-  getPostHogClient: () => ({ getFeatureFlag: getFeatureFlagMock }),
   stableAnalyticsEventUuid: (key: string) => `uuid:${key}`,
   trackEvent: (...args: unknown[]) => trackEventMock(...args),
 }));
@@ -132,7 +134,7 @@ describe('durable reactivation journey', () => {
 
   it('persists a stable control enrollment and emits one exposure', async () => {
     listEnrollmentCandidatesMock.mockResolvedValue([candidate]);
-    getFeatureFlagMock.mockResolvedValue('control');
+    resolveVariantMock.mockResolvedValue('control');
     insertEnrollmentMock.mockResolvedValue({
       ...candidate,
       id: '22222222-2222-4222-8222-222222222222',
@@ -161,6 +163,30 @@ describe('durable reactivation journey', () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it('emits no exposure for a player PostHog assigns but the cap rejects', async () => {
+    listEnrollmentCandidatesMock.mockResolvedValue([candidate]);
+    resolveVariantMock.mockResolvedValue('control');
+    insertEnrollmentMock.mockResolvedValue(null);
+
+    await expect(assignReactivationJourneyCandidates()).resolves.toBe(0);
+    expect(trackEventMock).not.toHaveBeenCalled();
+  });
+
+  it('skips a candidate the flag resolver does not place in a variant', async () => {
+    listEnrollmentCandidatesMock.mockResolvedValue([candidate]);
+    resolveVariantMock.mockResolvedValue(null);
+
+    await expect(assignReactivationJourneyCandidates()).resolves.toBe(0);
+    expect(resolveVariantMock).toHaveBeenCalledWith({
+      featureFlagKey: journeyConfig.feature_flag_key,
+      userId: candidate.user_id,
+      country: 'GE',
+      logContext: 'Reactivation journey',
+    });
+    expect(insertEnrollmentMock).not.toHaveBeenCalled();
+    expect(trackEventMock).not.toHaveBeenCalled();
   });
 
   it('schedules only the due test step returned by the guarded repository', async () => {

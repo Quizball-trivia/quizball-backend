@@ -193,7 +193,7 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     setupActiveRankedMatch(0);
   });
 
-  it('persists the frozen score before ranked settlement on late forfeits', async () => {
+  it('persists terminal state and frozen score before ranked settlement on late forfeits', async () => {
     setupActiveRankedMatch(3);
     listMatchPlayersMock.mockResolvedValue([
       { match_id: MATCH_ID, user_id: FORFEITER_ID, seat: 1, total_points: 100, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
@@ -274,6 +274,11 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       FORFEITER_ID,
       expect.objectContaining({ goals: 0, penaltyGoals: 0 })
     );
+    expect(setMatchStatePayloadMock).toHaveBeenLastCalledWith(MATCH_ID, expect.objectContaining({
+      phase: 'COMPLETED',
+      currentQuestion: null,
+      winnerDecisionMethod: 'forfeit',
+    }));
     const lastTotalsWriteOrder = Math.max(...setPlayerFinalTotalsMock.mock.invocationCallOrder);
     expect(lastTotalsWriteOrder).toBeLessThan(settleCompletedRankedMatchMock.mock.invocationCallOrder[0]!);
     expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith(MATCH_ID);

@@ -16,8 +16,8 @@ import {
   isRankedAiLobby,
   releaseRankedAiLobbyMemberSafely,
   resolveRankedAiUserIdForDraft,
-  transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
+import { transferHostIfNeeded } from './lobby-membership.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
 import { socketDbTaskLimiter } from '../socket-db-task-limiter.js';
 

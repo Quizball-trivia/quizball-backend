@@ -43,7 +43,6 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
 }));
 vi.mock('../../src/realtime/services/lobby-lifecycle.helpers.js', () => ({
   detachAllSocketsFromLobby: vi.fn().mockResolvedValue(undefined),
-  emitClosedLobbyStateForMode: vi.fn().mockResolvedValue(undefined),
   resolveRankedAiUserIdForDraft: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../../src/db/readonly-breaker.js', () => ({

@@ -32,6 +32,7 @@ import {
 } from './possession-state.js';
 import { getRedisClient } from './redis.js';
 import {
+  buildFinalQuestionResults,
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
 } from './services/match-final-results.service.js';
@@ -40,7 +41,6 @@ import { hasNoHumanInteraction, isNoContestHuman } from './services/match-intera
 import type { QuizballServer } from './socket-server.js';
 import type { MatchFinalResultsPayload } from './socket.types.js';
 
-type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
 export type ProgressDecisionBasis = 'goals' | 'penalty_goals' | 'total_points' | 'correct_answers';
 export type ProgressResolutionDecision = ResolutionDecision & { basis: ProgressDecisionBasis };
 
@@ -167,33 +167,6 @@ async function flushCacheToDB(cache: MatchCache): Promise<void> {
       })
     )
   );
-}
-
-async function buildFinalQuestionResults(
-  matchId: string,
-  userIds: string[],
-  totalQuestions: number
-): Promise<NonNullable<MatchFinalResultsPayload['questionResults']>> {
-  const safeTotal = Math.max(0, totalQuestions);
-  const results = Object.fromEntries(
-    userIds.map((userId) => [
-      userId,
-      Array.from({ length: safeTotal }, () => null as QuestionResult),
-    ])
-  ) as NonNullable<MatchFinalResultsPayload['questionResults']>;
-
-  if (safeTotal === 0) return results;
-
-  const answers = await matchAnswersRepo.listAnswersForMatch(matchId);
-  for (const answer of answers) {
-    const playerResults = results[answer.user_id];
-    if (!playerResults) continue;
-    const answerQIndex = answer.q_index;
-    if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
-    playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
-  }
-
-  return results;
 }
 
 export async function completePossessionMatch(

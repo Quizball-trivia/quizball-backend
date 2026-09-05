@@ -40,10 +40,8 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import {
-  detachAllSocketsFromLobby,
-  emitClosedLobbyStateForMode,
-} from './lobby-lifecycle.helpers.js';
+import { detachAllSocketsFromLobby } from './lobby-lifecycle.helpers.js';
+import { emitClosedLobbyStateForMode } from './lobby-membership.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;

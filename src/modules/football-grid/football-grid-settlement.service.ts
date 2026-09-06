@@ -250,6 +250,19 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
   if (row.status === 'completed') {
     return readSettledRewardsInTx(tx, matchId);
   }
+  const series = await readSeriesOutcome(tx, matchId);
+  if (series?.deferred) {
+    // The realtime worker may still be recording the result or transferring
+    // the bot into the next game. Neither zero rewards nor reservation release
+    // is final until the series closes or current_match_id moves atomically.
+    await tx.unsafe(
+      `UPDATE football_grid_settlement_outbox
+          SET status = 'pending', next_retry_at = now() + interval '1 second'
+        WHERE id = $1`,
+      [row.outbox_id],
+    );
+    return new Map();
+  }
   await tx.unsafe(
     `UPDATE football_grid_settlement_outbox
         SET status = 'processing', attempt_count = attempt_count + 1, last_error = null
@@ -261,7 +274,6 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
   const results = new Map<string, FootballGridRewardResult>();
   // Best-of-N: rewards are paid once, on the game that decides the series,
   // for the series result. Earlier games settle as 'series_in_progress'.
-  const series = await readSeriesOutcome(tx, matchId);
   if (series?.pending) {
     for (const human of humans) {
       const opponent = participants.find((candidate) => candidate.user_id !== human.user_id);
@@ -497,7 +509,7 @@ async function markSettledInTx(tx: TransactionSql, outboxId: string, matchId: st
 async function readSeriesOutcome(
   tx: TransactionSql,
   matchId: string,
-): Promise<{ pending: boolean; winnerUserId: string | null; closedReason: string | null } | null> {
+): Promise<{ deferred: boolean; pending: boolean; winnerUserId: string | null; closedReason: string | null } | null> {
   const rows = await tx.unsafe<Array<{
     format: string;
     status: string;
@@ -516,12 +528,15 @@ async function readSeriesOutcome(
   if (!series || series.format !== 'bo3') return null;
   // closed_at marks a finished series even while a rematch window keeps the
   // row in 'rematch_pending'.
-  if (!series.closed_at) return { pending: true, winnerUserId: null, closedReason: null };
+  if (!series.closed_at && series.current_match_id === matchId) {
+    return { deferred: true, pending: true, winnerUserId: null, closedReason: null };
+  }
+  if (!series.closed_at) return { deferred: false, pending: true, winnerUserId: null, closedReason: null };
   // Closed on a later game: this earlier game was already settled as in-progress.
   if (series.current_match_id && series.current_match_id !== matchId) {
-    return { pending: true, winnerUserId: null, closedReason: null };
+    return { deferred: false, pending: true, winnerUserId: null, closedReason: null };
   }
-  return { pending: false, winnerUserId: series.winner_user_id, closedReason: series.closed_reason };
+  return { deferred: false, pending: false, winnerUserId: series.winner_user_id, closedReason: series.closed_reason };
 }
 
 async function readSettledRewardsInTx(
@@ -627,6 +642,7 @@ export const footballGridSettlementService = {
   async settleMatch(matchId: string): Promise<Map<string, FootballGridRewardResult>> {
     try {
       const rewards = await sql.begin((tx) => settleInTx(tx, matchId)) as Map<string, FootballGridRewardResult>;
+      if (rewards.size === 0) return rewards;
       await reservationService.releaseIfSettled(matchId, 'completion');
       appMetrics.footballGridSettlements.add(1, { outcome: 'completed' });
       return rewards;

@@ -50,7 +50,8 @@ export type FootballGridRuleErrorCode =
   | 'DRAW_OFFER_PENDING'
   | 'DRAW_OFFER_LOCKED'
   | 'NO_DRAW_OFFER'
-  | 'OWN_DRAW_OFFER';
+  | 'OWN_DRAW_OFFER'
+  | 'LATE_COMMAND';
 
 export class FootballGridRuleError extends Error {
   constructor(public readonly code: FootballGridRuleErrorCode, message: string) {
@@ -368,6 +369,13 @@ export function applyResolvedAnswer(
   return state;
 }
 
+function assertDrawDeadline(state: FootballGridState, nowMs: number): void {
+  const deadlineMs = Date.parse(state.turnDeadlineAt ?? '');
+  if (!Number.isFinite(deadlineMs) || nowMs > deadlineMs) {
+    throw new FootballGridRuleError('LATE_COMMAND', 'Turn deadline has passed');
+  }
+}
+
 export function offerDraw(
   inputState: FootballGridState,
   userId: string,
@@ -379,6 +387,7 @@ export function offerDraw(
   if (inputState.status !== 'active' || inputState.phase !== 'turn') {
     throw new FootballGridRuleError('INVALID_STATE', 'Draw offers are only possible during a live turn');
   }
+  assertDrawDeadline(inputState, nowMs);
   if (inputState.drawOffer) {
     throw new FootballGridRuleError('DRAW_OFFER_PENDING', 'A draw offer is already waiting for an answer');
   }
@@ -407,6 +416,7 @@ export function respondToDrawOffer(
   if (inputState.drawOffer.byUserId === userId) {
     throw new FootballGridRuleError('OWN_DRAW_OFFER', 'You cannot answer your own draw offer');
   }
+  assertDrawDeadline(inputState, nowMs);
   const state = cloneState(inputState);
   if (accept) {
     complete(state, null, 'draw_agreed', nowMs);

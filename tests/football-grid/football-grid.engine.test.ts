@@ -255,7 +255,7 @@ describe('football grid draws', () => {
   });
 
   it('accepts a draw offer into a draw_agreed completion', () => {
-    const state = activeState();
+    const state = activeState(50_000);
     const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
     expect(offered.drawOffer).toEqual({ byUserId: 'u1', turnNumber: state.turnNumber, offeredAt: new Date(60_000).toISOString() });
     expect(offered.stateVersion).toBe(state.stateVersion + 1);
@@ -269,7 +269,7 @@ describe('football grid draws', () => {
   });
 
   it('locks a declined offerer out for a few turns and lapses an offer at turn end', () => {
-    const state = activeState();
+    const state = activeState(50_000);
     const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
     const declined = respondToDrawOffer(offered, 'u2', false, offered.stateVersion, 60_001);
     expect(declined.phase).toBe('turn');
@@ -287,7 +287,7 @@ describe('football grid draws', () => {
   });
 
   it('lapses a pending draw offer when the match pauses for a disconnect', () => {
-    const state = activeState();
+    const state = activeState(50_000);
     const offered = offerDraw(state, 'u1', state.stateVersion, 60_000);
     const paused = pauseForDisconnect(offered, 60_500, 90_500);
     expect(paused.drawOffer).toBeNull();
@@ -299,7 +299,7 @@ describe('football grid draws', () => {
 
 describe('Football Grid draw offer lapse', () => {
   it('locks the offerer when the offer lapses unanswered, like a decline', () => {
-    const state = activeState();
+    const state = activeState(50_000);
     const offerer = state.players.find((p) => p.userId !== state.currentPlayerUserId)!.userId;
     const offered = offerDraw(state, offerer, state.stateVersion, 60_000);
     const lapsed = passTurn(offered, offered.currentPlayerUserId!, offered.stateVersion, 60_001);
@@ -307,5 +307,30 @@ describe('Football Grid draw offer lapse', () => {
     expect(lapsed.players.find((p) => p.userId === offerer)?.drawOfferLockedUntilTurn)
       .toBe(state.turnNumber + FOOTBALL_GRID_DRAW_OFFER_LOCK_TURNS);
     expect(() => offerDraw(lapsed, offerer, lapsed.stateVersion, 60_002)).toThrow('declined recently');
+  });
+});
+
+
+describe('Football Grid draw deadline boundary', () => {
+  it('allows an offer and response exactly at the turn cutoff', () => {
+    const state = activeState();
+    const cutoff = Date.parse(state.turnDeadlineAt!);
+    const offered = offerDraw(state, 'u1', state.stateVersion, cutoff);
+    expect(respondToDrawOffer(offered, 'u2', true, offered.stateVersion, cutoff).completionReason).toBe('draw_agreed');
+  });
+
+  it('rejects offers, accepts, and declines one millisecond after the cutoff', () => {
+    const state = activeState();
+    const cutoff = Date.parse(state.turnDeadlineAt!);
+    const offered = offerDraw(state, 'u1', state.stateVersion, cutoff - 1);
+    expect(() => offerDraw(state, 'u1', state.stateVersion, cutoff + 1)).toThrow('Turn deadline has passed');
+    for (const accept of [true, false]) {
+      expect(() => respondToDrawOffer(offered, 'u2', accept, offered.stateVersion, cutoff + 1)).toThrow('Turn deadline has passed');
+    }
+  });
+
+  it('fails closed when a live turn has no valid deadline', () => {
+    const state = { ...activeState(), turnDeadlineAt: null };
+    expect(() => offerDraw(state, 'u1', state.stateVersion, 10_000)).toThrow('Turn deadline has passed');
   });
 });

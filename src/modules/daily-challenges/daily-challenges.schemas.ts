@@ -12,6 +12,9 @@ export const dailyChallengeTypeEnum = z.enum([
   'footballLogic',
   'fifaCards',
   'cardDetective',
+  'missingXi',
+  'passChain',
+  'statSniper',
 ]);
 
 export const dailyChallengeMetadataSchema = z.object({
@@ -102,6 +105,24 @@ const footballLogicSettingsBaseSchema = z.object({
   secondsPerQuestion: z.number().int().min(5).max(120),
 });
 
+const missingXiSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  squadCount: z.number().int().min(1).max(5),
+  secondsPerSquad: z.number().int().min(30).max(300),
+});
+
+const passChainSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  puzzleCount: z.number().int().min(1).max(5),
+  secondsPerPuzzle: z.number().int().min(30).max(300),
+});
+
+const statSniperSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  questionCount: z.number().int().min(1).max(20),
+  secondsPerQuestion: z.number().int().min(10).max(120),
+});
+
 // FIFA Cards draws from the fifa_cards pool, not from questions; categoryIds is
 // kept (always empty) so the settings union stays shape-compatible.
 const fifaCardsSettingsBaseSchema = z.object({
@@ -125,6 +146,9 @@ const cardDetectiveSettingsBaseSchema = z.object({
   cardCount: z.number().int().min(1).max(10),
 });
 export const cardDetectiveSettingsSchema = cardDetectiveSettingsBaseSchema;
+export const missingXiSettingsSchema = missingXiSettingsBaseSchema;
+export const passChainSettingsSchema = passChainSettingsBaseSchema;
+export const statSniperSettingsSchema = statSniperSettingsBaseSchema;
 
 const moneyDropSettingsOpenApiSchema = moneyDropSettingsBaseSchema.extend({
   challengeType: z.literal('moneyDrop'),
@@ -158,6 +182,14 @@ const fifaCardsSettingsOpenApiSchema = fifaCardsSettingsBaseSchema.extend({
 });
 const cardDetectiveSettingsOpenApiSchema = cardDetectiveSettingsBaseSchema.extend({
   challengeType: z.literal('cardDetective'),
+const missingXiSettingsOpenApiSchema = missingXiSettingsBaseSchema.extend({
+  challengeType: z.literal('missingXi'),
+});
+const passChainSettingsOpenApiSchema = passChainSettingsBaseSchema.extend({
+  challengeType: z.literal('passChain'),
+});
+const statSniperSettingsOpenApiSchema = statSniperSettingsBaseSchema.extend({
+  challengeType: z.literal('statSniper'),
 });
 
 export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType', [
@@ -172,6 +204,9 @@ export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType'
   footballLogicSettingsOpenApiSchema,
   fifaCardsSettingsOpenApiSchema,
   cardDetectiveSettingsOpenApiSchema,
+  missingXiSettingsOpenApiSchema,
+  passChainSettingsOpenApiSchema,
+  statSniperSettingsOpenApiSchema,
 ]);
 
 export const dailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema.extend({
@@ -272,6 +307,8 @@ const careerPathQuestionSchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard']),
   prompt: z.string().min(1),
   clubs: z.array(z.string().min(1)).min(2),
+  // English club names, index-aligned with `clubs`, for crest lookup on the client.
+  clubMatchNames: z.array(z.string().min(1)).min(2),
   displayAnswer: z.string().min(1),
   acceptedAnswers: z.array(z.string().min(1)).min(1),
 });
@@ -303,6 +340,100 @@ const footballLogicQuestionSchema = z.object({
   displayAnswer: z.string().min(1),
   acceptedAnswers: z.array(z.string().min(1)).min(1),
   explanation: z.string().nullable(),
+});
+
+const missingXiSlotSchema = z.object({
+  id: z.string().min(1),
+  position: z.string().min(1),
+  number: z.number().int().nullable(),
+  x: z.number(),
+  y: z.number(),
+  name: z.string().min(1),
+  acceptedAnswers: z.array(z.string().min(1)).min(1),
+  /** First-party face image (Grid bucket) shown once the shirt is named or revealed; null when none. */
+  imageUrl: z.string().nullable(),
+});
+
+const missingXiSquadSchema = z.object({
+  id: z.string().uuid(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  team: z.string().min(1),
+  opponent: z.string().min(1),
+  matchLabel: z.string().min(1),
+  score: z.string().nullable(),
+  formation: z.string().min(1),
+  slots: z.array(missingXiSlotSchema).length(11),
+});
+
+/** How two consecutive chain players are connected: same club, or the same coach (≥5 games under them). */
+const passChainLinkKindSchema = z.enum(['club', 'manager']);
+
+const passChainPlayerSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  /** Club names in the session locale — shown under the node so the player can reason about links. */
+  clubs: z.array(z.string()),
+  imageUrl: z.string().nullable(),
+});
+
+const passChainPuzzleSchema = z.object({
+  id: z.string().uuid(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  /** Shortest chain in links; the score compares the player's chain against it. */
+  par: z.number().int().positive(),
+  start: passChainPlayerSchema,
+  target: passChainPlayerSchema,
+  /** One optimal path (intermediates + the club that links each step), for the skip/timeout reveal. */
+  solution: z.array(z.object({ player: passChainPlayerSchema, via: z.string(), kind: passChainLinkKindSchema })).min(1),
+});
+
+export const passChainLinkBodySchema = z.object({
+  puzzleId: z.string().uuid(),
+  /** The player at the end of the chain so far (start or the last accepted link). */
+  fromPlayerId: z.string().uuid(),
+  text: z.string().trim().min(1).max(80),
+  locale: z.string().max(10).optional(),
+});
+
+export const passChainLinkResponseSchema = z.object({
+  /** unknown: no such player; noLink: known player who never shared a club with `from`; linked: accepted. */
+  status: z.enum(['linked', 'unknown', 'noLink']),
+  player: passChainPlayerSchema.nullable(),
+  viaClub: z.string().nullable(),
+  viaKind: passChainLinkKindSchema.nullable(),
+  /** True when the accepted player shares a club or coach with the target (chain complete). */
+  reachesTarget: z.boolean(),
+  targetClub: z.string().nullable(),
+  targetKind: passChainLinkKindSchema.nullable(),
+});
+
+const statSniperQuestionSchema = z.object({
+  id: z.string().uuid(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  kind: z.string().min(1),
+  prompt: z.string().min(1),
+  unit: z.string().min(1),
+  /** The true value; scoring is proximity within the slider span (client-side, like the other dailies). */
+  value: z.number(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number().positive(),
+});
+
+export const statSniperLeaderboardEntrySchema = z.object({
+  userId: z.string().uuid(),
+  rank: z.number().int().positive(),
+  username: z.string(),
+  avatarCustomization: z.unknown().nullable(),
+  country: z.string().nullable(),
+  /** Accuracy 0–100: average proximity points over the day's questions. */
+  score: z.number().int(),
+});
+
+export const statSniperLeaderboardResponseSchema = z.object({
+  challengeDay: z.string(),
+  entries: z.array(statSniperLeaderboardEntrySchema),
+  me: z.object({ rank: z.number().int().positive(), score: z.number().int(), total: z.number().int() }).nullable(),
 });
 
 const fifaCardSessionCardSchema = z.object({
@@ -417,6 +548,30 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     questions: z.array(footballLogicQuestionSchema).min(1),
   }),
   z.object({
+    challengeType: z.literal('missingXi'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    squadCount: z.number().int().positive(),
+    secondsPerSquad: z.number().int().positive(),
+    squads: z.array(missingXiSquadSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('passChain'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    puzzleCount: z.number().int().positive(),
+    secondsPerPuzzle: z.number().int().positive(),
+    puzzles: z.array(passChainPuzzleSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('statSniper'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    questionCount: z.number().int().positive(),
+    secondsPerQuestion: z.number().int().positive(),
+    questions: z.array(statSniperQuestionSchema).min(1),
+  }),
+  z.object({
     challengeType: z.literal('fifaCards'),
     title: z.string().min(1),
     description: z.string().min(1),
@@ -506,6 +661,13 @@ export const dailyChallengeLocaleQuerySchema = z.object({
   locale: z.string().min(2).max(16).optional(),
 });
 
+export const dailyChallengeRecommendationsQuerySchema = z.object({
+  locale: z.string().min(2).max(16).optional(),
+  /** The challenge just finished — excluded from the row and used for tag similarity. */
+  justPlayed: dailyChallengeTypeEnum.optional(),
+  limit: z.coerce.number().int().min(1).max(6).optional(),
+});
+
 export type DailyChallengeType = z.infer<typeof dailyChallengeTypeEnum>;
 export type MoneyDropSettings = z.infer<typeof moneyDropSettingsSchema>;
 export type TrueFalseSettings = z.infer<typeof trueFalseSettingsSchema>;
@@ -517,6 +679,12 @@ export type CareerPathSettings = z.infer<typeof careerPathSettingsSchema>;
 export type HighLowSettings = z.infer<typeof highLowSettingsSchema>;
 export type FootballLogicSettings = z.infer<typeof footballLogicSettingsSchema>;
 export type FifaCardsSettings = z.infer<typeof fifaCardsSettingsSchema>;
+export type MissingXiSettings = z.infer<typeof missingXiSettingsSchema>;
+export type PassChainSettings = z.infer<typeof passChainSettingsSchema>;
+export type StatSniperSettings = z.infer<typeof statSniperSettingsSchema>;
+export type StatSniperLeaderboardResponse = z.infer<typeof statSniperLeaderboardResponseSchema>;
+export type PassChainLinkBody = z.infer<typeof passChainLinkBodySchema>;
+export type PassChainLinkResponse = z.infer<typeof passChainLinkResponseSchema>;
 export type DailyChallengeCardOutcome = z.infer<typeof dailyChallengeCardOutcomeSchema>;
 export type DailyChallengeSettings = z.infer<typeof dailyChallengeSettingsSchema>;
 export type AdminDailyChallengeCategoryOption = z.infer<typeof adminDailyChallengeCategoryOptionSchema>;

@@ -30,14 +30,17 @@ export function fairStepBp(unknownTiles: number, hiddenDefenders: number): numbe
   return Math.round((10_000 * unknownTiles) / safe);
 }
 
-/** Fair pot after one more safe pick from the given state, floored, capped. */
-export function fairPotAfterPick(fairPot: number, unknownTiles: number, hiddenDefenders: number): number {
-  return Math.min(TRIVIA_MINES_POT_CAP, Math.floor((fairPot * fairStepBp(unknownTiles, hiddenDefenders)) / 10_000));
+/** Pots are tracked in milli-coins so a 5-coin stake does not lose a fifth of every step to flooring. */
+export const MILLI = 1_000;
+
+/** Fair pot (milli-coins) after one more safe pick from the given state, capped. */
+export function fairPotAfterPick(fairPotMilli: number, unknownTiles: number, hiddenDefenders: number): number {
+  return Math.min(TRIVIA_MINES_POT_CAP * MILLI, Math.floor((fairPotMilli * fairStepBp(unknownTiles, hiddenDefenders)) / 10_000));
 }
 
-/** What the player receives on cash-out: fair pot minus the house margin. */
-export function cashoutValue(fairPot: number): number {
-  return Math.floor((fairPot * MARGIN_BP) / 10_000);
+/** What the player receives on cash-out, in whole coins: fair pot minus the house margin, rounded once. */
+export function cashoutValue(fairPotMilli: number): number {
+  return Math.floor((fairPotMilli * MARGIN_BP) / 10_000 / MILLI);
 }
 
 /** 10s visible timer + 2s network grace, enforced server-side. */

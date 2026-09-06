@@ -1,6 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import { pickIdleRosterBots, topUpRosterBotWallet } from '../synthetic-bots/roster.js';
-import { CALIBRATION_MAX_ANSWERS_PER_USER, CALIBRATION_WINDOW_DAYS, PLAYING_NOW_WINDOW_S, SEEN_COMBO_WINDOW_DAYS, type SquadSpinTier } from './squad-spin.constants.js';
+import { CALIBRATION_MAX_ANSWERS_PER_USER, CALIBRATION_WINDOW_DAYS, MILLI, PLAYING_NOW_WINDOW_S, SEEN_COMBO_WINDOW_DAYS, type SquadSpinTier } from './squad-spin.constants.js';
 import type { TierObservation } from './squad-spin.calibration.js';
 import type {
   SquadSpinAliasRow,
@@ -27,10 +27,10 @@ export const squadSpinRepo = {
   ): Promise<SquadSpinRoundRow> {
     const [row] = await exec(tx)<SquadSpinRoundRow[]>`
       INSERT INTO squad_spin_rounds (
-        id, user_id, stake_coins, reels, pot_coins, combo_id, combo_ids, question_dealt_at, question_deadline_at,
+        id, user_id, stake_coins, reels, pot_milli, combo_id, combo_ids, question_dealt_at, question_deadline_at,
         steps_bp, calibration_day, server_seed, commit_hash, client_nonce
       ) VALUES (
-        ${data.roundId}, ${data.userId}, ${data.stakeCoins}, ${data.reels}, ${data.stakeCoins}, ${data.comboId}, ${sql.array([data.comboId])}::uuid[],
+        ${data.roundId}, ${data.userId}, ${data.stakeCoins}, ${data.reels}, ${data.stakeCoins * MILLI}, ${data.comboId}, ${sql.array([data.comboId])}::uuid[],
         ${data.questionDealtAt}, ${data.questionDeadlineAt}, ${exec(tx).json(data.stepsBp as never)}, ${data.calibrationDay}, ${data.serverSeed}, ${data.commitHash}, ${data.clientNonce}
       )
       RETURNING *
@@ -92,7 +92,7 @@ export const squadSpinRepo = {
     await exec(tx)`
       INSERT INTO squad_spin_events (
         round_id, user_id, state_version, event_type, spin_index, combo_id, tier, submitted_text, resolved_player_id,
-        answer_correct, answer_late, answer_ms, commit_hash, server_seed, client_nonce, hmac_input, pot_before, pot_after
+        answer_correct, answer_late, answer_ms, commit_hash, server_seed, client_nonce, hmac_input, pot_before_milli, pot_after_milli
       ) VALUES (
         ${event.roundId}, ${event.userId}, ${event.stateVersion}, ${event.eventType}, ${event.spinIndex ?? null}, ${event.comboId ?? null},
         ${event.tier ?? null}, ${event.submittedText ?? null}, ${event.resolvedPlayerId ?? null}, ${event.answerCorrect ?? null},

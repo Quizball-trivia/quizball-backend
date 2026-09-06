@@ -16,6 +16,7 @@ import {
   SQUAD_SPIN_POT_CAP,
   SQUAD_SPIN_TIERS,
   TIER_PRIOR_ACCURACY_BP,
+  MILLI,
   cashoutValue,
   fairPotAfterSpin,
   fairStepBp,
@@ -37,17 +38,17 @@ describe('squad-spin economics', () => {
     for (const tier of SQUAD_SPIN_TIERS) {
       const p = calibration.accuracy[tier] / 10_000;
       for (let pot = SQUAD_SPIN_MIN_STAKE; pot <= SQUAD_SPIN_MAX_STAKE * 20; pot += 7) {
-        const next = fairPotAfterSpin(pot, calibration.steps[tier], SQUAD_SPIN_MAX_STAKE);
+        const next = fairPotAfterSpin(pot * MILLI, calibration.steps[tier], SQUAD_SPIN_MAX_STAKE);
         // Continuing from a cash-out-able pot: EV of the next spin's cash-out value < current cash-out value.
-        expect(p * cashoutValue(next, calibration.steps.margin)).toBeLessThan(Math.max(cashoutValue(pot, calibration.steps.margin), pot * 0.999));
+        expect(p * cashoutValue(next, calibration.steps.margin)).toBeLessThan(Math.max(cashoutValue(pot * MILLI, calibration.steps.margin), pot * 0.999));
       }
     }
   });
 
   it('pot never exceeds the global cap nor the per-run multiple of the stake', () => {
-    expect(fairPotAfterSpin(SQUAD_SPIN_POT_CAP, 40_000, SQUAD_SPIN_MAX_STAKE)).toBe(runPotCap(SQUAD_SPIN_MAX_STAKE));
-    expect(fairPotAfterSpin(SQUAD_SPIN_POT_CAP - 1, 10_001, SQUAD_SPIN_MAX_STAKE)).toBeLessThanOrEqual(SQUAD_SPIN_POT_CAP);
-    expect(fairPotAfterSpin(10_000, 40_000, 10)).toBe(runPotCap(10));
+    expect(fairPotAfterSpin(SQUAD_SPIN_POT_CAP * MILLI, 40_000, SQUAD_SPIN_MAX_STAKE)).toBe(runPotCap(SQUAD_SPIN_MAX_STAKE) * MILLI);
+    expect(fairPotAfterSpin((SQUAD_SPIN_POT_CAP - 1) * MILLI, 10_001, SQUAD_SPIN_MAX_STAKE)).toBeLessThanOrEqual(SQUAD_SPIN_POT_CAP * MILLI);
+    expect(fairPotAfterSpin(10_000 * MILLI, 40_000, 10)).toBe(runPotCap(10) * MILLI);
     expect(runPotCap(10)).toBe(Math.floor((10 * RUN_MULT_CAP_BP) / 10_000));
   });
 
@@ -64,8 +65,15 @@ describe('squad-spin economics', () => {
     const c = computeCalibration(seasoned, null);
     for (const tier of SQUAD_SPIN_TIERS) {
       const stake = SQUAD_SPIN_MAX_STAKE;
-      expect(cashoutValue(fairPotAfterSpin(stake, c.steps[tier], stake), c.steps.margin)).toBeLessThan(stake);
+      expect(cashoutValue(fairPotAfterSpin(stake * MILLI, c.steps[tier], stake), c.steps.margin)).toBeLessThan(stake);
     }
+  });
+
+  it('milli-coin pots keep small stakes close to the fair value', () => {
+    // A 5-coin stake at ×1.25: whole-coin flooring would pay 6 → 5 after margin; milli keeps 6.25 → 5 coins but no compounding loss.
+    let pot = 5 * MILLI;
+    for (let i = 0; i < 3; i += 1) pot = fairPotAfterSpin(pot, 12_500, 5);
+    expect(pot).toBe(Math.floor(5 * MILLI * 1.25 * 1.25 * 1.25));
   });
 
   it('tiers follow reel count and answer count', () => {

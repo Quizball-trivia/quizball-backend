@@ -1,7 +1,7 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import { pickIdleRosterBots, topUpRosterBotWallet } from '../synthetic-bots/roster.js';
 import type { QuestionWithPayload } from '../../db/types.js';
-import { QUESTION_CANDIDATES, RECENT_QUESTION_WINDOW, STALE_AFTER_MS } from './trivia-mines.constants.js';
+import { MILLI, QUESTION_CANDIDATES, RECENT_QUESTION_WINDOW, STALE_AFTER_MS } from './trivia-mines.constants.js';
 import type { TriviaMinesEventInput, TriviaMinesRoundRow } from './trivia-mines.types.js';
 
 const exec = (tx: TransactionSql): typeof sql => tx as unknown as typeof sql;
@@ -12,11 +12,25 @@ export const triviaMinesRepo = {
     data: { userId: string; stakeCoins: number; serverSeed: string; commitHash: string; clientNonce: string | null }
   ): Promise<TriviaMinesRoundRow> {
     const [row] = await exec(tx)<TriviaMinesRoundRow[]>`
-      INSERT INTO trivia_mines_rounds (user_id, stake_coins, pot_coins, server_seed, commit_hash, client_nonce)
-      VALUES (${data.userId}, ${data.stakeCoins}, ${data.stakeCoins}, ${data.serverSeed}, ${data.commitHash}, ${data.clientNonce})
+      INSERT INTO trivia_mines_rounds (user_id, stake_coins, pot_milli, server_seed, commit_hash, client_nonce)
+      VALUES (${data.userId}, ${data.stakeCoins}, ${data.stakeCoins * MILLI}, ${data.serverSeed}, ${data.commitHash}, ${data.clientNonce})
       RETURNING *
     `;
     return row;
+  },
+
+  async getRoundByNonceForUpdate(tx: TransactionSql, userId: string, clientNonce: string): Promise<TriviaMinesRoundRow | null> {
+    const [row] = await exec(tx)<TriviaMinesRoundRow[]>`
+      SELECT * FROM trivia_mines_rounds WHERE user_id = ${userId} AND client_nonce = ${clientNonce} FOR UPDATE
+    `;
+    return row ?? null;
+  },
+
+  async getLatestRound(userId: string): Promise<TriviaMinesRoundRow | null> {
+    const [row] = await sql<TriviaMinesRoundRow[]>`
+      SELECT * FROM trivia_mines_rounds WHERE user_id = ${userId} ORDER BY created_at DESC LIMIT 1
+    `;
+    return row ?? null;
   },
 
   async getActiveRound(userId: string): Promise<TriviaMinesRoundRow | null> {
@@ -85,7 +99,7 @@ export const triviaMinesRepo = {
     await exec(tx)`
       INSERT INTO trivia_mines_events (
         round_id, user_id, state_version, event_type, tile, question_id, answer_option, answer_correct, answer_ms,
-        flagged_tile, commit_hash, server_seed, client_nonce, hmac_input, pot_before, pot_after
+        flagged_tile, commit_hash, server_seed, client_nonce, hmac_input, pot_before_milli, pot_after_milli
       ) VALUES (
         ${event.roundId}, ${event.userId}, ${event.stateVersion}, ${event.eventType}, ${event.tile ?? null},
         ${event.questionId ?? null}, ${event.answerOption ?? null}, ${event.answerCorrect ?? null}, ${event.answerMs ?? null},

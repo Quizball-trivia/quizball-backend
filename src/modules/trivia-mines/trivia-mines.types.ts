@@ -10,7 +10,8 @@ export interface TriviaMinesRoundRow {
   phase: TriviaMinesPhase;
   state_version: number;
   stake_coins: number;
-  pot_coins: number;
+  /** FAIR pot in milli-coins (×1000); the margin and the coin rounding apply once at cash-out. */
+  pot_milli: number;
   opened: number[];
   flagged: number[];
   bust_tile: number | null;

@@ -47,17 +47,17 @@ export async function runBotSession(bot: BotProfile): Promise<void> {
     if (state.phase === 'picking') {
       const picks = state.opened.length;
       if (picks >= targetPicks || (picks > 0 && state.pot_coins >= TRIVIA_MINES_POT_CAP / 4)) {
-        state = await triviaMinesService.cashout(bot.user_id, state.state_version);
+        state = await triviaMinesService.cashout(bot.user_id, { roundId: state.round_id, expectedVersion: state.state_version });
         continue;
       }
       // Scout early in the run when the profile likes it; never when everything is flagged.
       if (state.scouts_left > 0 && state.flagged.length < state.defender_count && rng() < scoutAppetite * 0.6) {
-        state = await triviaMinesService.dealQuestion(bot.user_id, state.state_version);
+        state = await triviaMinesService.dealQuestion(bot.user_id, { roundId: state.round_id, expectedVersion: state.state_version });
         continue;
       }
       const candidates = Array.from({ length: BOARD_SIZE }, (_, i) => i).filter((t) => !state.opened.includes(t) && !state.flagged.includes(t));
       const tile = candidates[Math.floor(rng() * candidates.length)];
-      const result = await triviaMinesService.pick(bot.user_id, { tile, expectedVersion: state.state_version });
+      const result = await triviaMinesService.pick(bot.user_id, { roundId: state.round_id, tile, expectedVersion: state.state_version });
       state = result.state;
       continue;
     }
@@ -75,7 +75,7 @@ export async function runBotSession(bot: BotProfile): Promise<void> {
       const wrong = options.filter((id) => id !== correctId);
       const optionId = rng() < accuracy ? correctId! : wrong[Math.floor(rng() * wrong.length)];
       try {
-        const result = await triviaMinesService.answerQuestion(bot.user_id, { questionId: state.question.question_id, optionId, expectedVersion: row.state_version });
+        const result = await triviaMinesService.answerQuestion(bot.user_id, { roundId: state.round_id, questionId: state.question.question_id, optionId, expectedVersion: row.state_version });
         state = result.state;
       } catch {
         state = await triviaMinesService.getCurrentState(bot.user_id);

@@ -9,6 +9,7 @@ router.use(authMiddleware);
 
 router.post('/rounds', validate({ body: startRoundSchema }), triviaMinesController.startRound);
 router.get('/rounds/current', triviaMinesController.getCurrent);
+router.get('/rounds/latest', triviaMinesController.getLatest);
 router.post('/rounds/pick', validate({ body: pickSchema }), triviaMinesController.pick);
 router.post('/rounds/question', validate({ body: dealQuestionSchema }), triviaMinesController.dealQuestion);
 router.post('/rounds/answer', validate({ body: answerQuestionSchema }), triviaMinesController.answerQuestion);

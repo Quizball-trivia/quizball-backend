@@ -88,12 +88,15 @@ export function runPotCap(stakeCoins: number): number {
   return Math.min(SQUAD_SPIN_POT_CAP, Math.floor((stakeCoins * RUN_MULT_CAP_BP) / 10_000));
 }
 
-/** Fair pot after one more correct answer, floored, capped for the run. */
-export function fairPotAfterSpin(fairPot: number, stepBp: number, stakeCoins: number): number {
-  return Math.min(runPotCap(stakeCoins), Math.floor((fairPot * stepBp) / 10_000));
+/** Pots are tracked in milli-coins so small stakes do not lose part of every step to flooring. */
+export const MILLI = 1_000;
+
+/** Fair pot (milli-coins) after one more correct answer, capped for the run. */
+export function fairPotAfterSpin(fairPotMilli: number, stepBp: number, stakeCoins: number): number {
+  return Math.min(runPotCap(stakeCoins) * MILLI, Math.floor((fairPotMilli * stepBp) / 10_000));
 }
 
-/** What the player receives on cash-out: fair pot minus the (frozen) margin. */
-export function cashoutValue(fairPot: number, marginBp: number): number {
-  return Math.floor((fairPot * marginBp) / 10_000);
+/** What the player receives on cash-out, in whole coins: fair pot minus the (frozen) margin, rounded once. */
+export function cashoutValue(fairPotMilli: number, marginBp: number): number {
+  return Math.floor((fairPotMilli * marginBp) / 10_000 / MILLI);
 }

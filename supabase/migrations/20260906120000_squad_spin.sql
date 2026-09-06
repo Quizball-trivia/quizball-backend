@@ -120,8 +120,8 @@ CREATE TABLE IF NOT EXISTS public.squad_spin_rounds (
   state_version integer NOT NULL DEFAULT 0 CHECK (state_version >= 0),
   stake_coins integer NOT NULL CHECK (stake_coins BETWEEN 1 AND 100000),
   reels smallint NOT NULL CHECK (reels BETWEEN 3 AND 5),
-  -- FAIR pot (margin is applied at cash-out).
-  pot_coins integer NOT NULL CHECK (pot_coins BETWEEN 0 AND 1000000),
+  -- FAIR pot in milli-coins (×1000); the margin and the coin rounding apply once at cash-out.
+  pot_milli bigint NOT NULL CHECK (pot_milli BETWEEN 0 AND 1000000000),
   spins_cleared integer NOT NULL DEFAULT 0 CHECK (spins_cleared >= 0),
   combo_id uuid REFERENCES public.squad_spin_combos(id) ON DELETE RESTRICT,
   combo_ids uuid[] NOT NULL DEFAULT '{}',
@@ -191,8 +191,8 @@ CREATE TABLE IF NOT EXISTS public.squad_spin_events (
   server_seed text,
   client_nonce text,
   hmac_input text,
-  pot_before integer,
-  pot_after integer,
+  pot_before_milli bigint,
+  pot_after_milli bigint,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_squad_spin_events_round ON public.squad_spin_events (round_id, id);

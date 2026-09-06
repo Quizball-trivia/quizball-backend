@@ -23,7 +23,8 @@ export interface SquadSpinRoundRow {
   state_version: number;
   stake_coins: number;
   reels: number;
-  pot_coins: number;
+  /** FAIR pot in milli-coins (×1000). */
+  pot_milli: number;
   spins_cleared: number;
   combo_id: string | null;
   combo_ids: string[];

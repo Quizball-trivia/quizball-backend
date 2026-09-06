@@ -6,6 +6,7 @@ import {
   DEFENDERS,
   FAIRNESS_VERSION,
   MAX_SAFE_PICKS,
+  MILLI,
   QUESTION_WINDOW_MS,
   SCOUTS_PER_ROUND,
   STALE_AFTER_MS,
@@ -29,7 +30,7 @@ import type { I18nField } from '../../db/types.js';
 
 interface McqOptionShape { id: string; text: I18nField; is_correct: boolean }
 
-/** Public round state — never contains the seed, the defenders or the correct option while active. */
+/** Public round state — never contains the seed, the defenders or the correct option while active. Pots are whole coins. */
 export interface TriviaMinesPublicState {
   round_id: string;
   status: string;
@@ -64,9 +65,9 @@ function toPublicState(row: TriviaMinesRoundRow): TriviaMinesPublicState {
   const safePicks = row.opened.length;
   const unknown = BOARD_SIZE - row.opened.length - row.flagged.length;
   const hidden = DEFENDERS - row.flagged.length;
-  // pot_coins in the row is the FAIR pot; players see the cash-out value (margin applied).
-  const potNow = row.status === 'active' ? (safePicks > 0 ? cashoutValue(row.pot_coins) : row.stake_coins) : row.pot_coins;
-  const potNext = row.status === 'active' && safePicks < MAX_SAFE_PICKS ? cashoutValue(fairPotAfterPick(row.pot_coins, unknown, hidden)) : potNow;
+  // pot_milli in the row is the FAIR pot; players see the cash-out value (margin applied, whole coins).
+  const potNow = row.status === 'active' ? (safePicks > 0 ? cashoutValue(row.pot_milli) : row.stake_coins) : row.status === 'cashed' ? row.payout_coins ?? 0 : row.status === 'expired' ? row.stake_coins : 0;
+  const potNext = row.status === 'active' && safePicks < MAX_SAFE_PICKS ? cashoutValue(fairPotAfterPick(row.pot_milli, unknown, hidden)) : potNow;
   return {
     round_id: row.id,
     status: row.status,
@@ -124,20 +125,35 @@ function parseMcqOptions(payload: unknown): McqOptionShape[] | null {
   return shaped.filter((o) => o.is_correct).length === 1 ? shaped : null;
 }
 
-/** An expired scout question simply burns the scout; the board is untouched. */
+/** An expired scout question burns the scout; the board is untouched. */
 async function resolveExpiredQuestion(tx: TransactionSql, row: TriviaMinesRoundRow): Promise<TriviaMinesRoundRow> {
   if (!questionExpired(row)) return row;
-  const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, { phase: 'picking', ...clearQuestion });
+  const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, { phase: 'picking', scouts_left: Math.max(0, row.scouts_left - 1), ...clearQuestion });
   if (!updated) throw new ConflictError('Round state changed');
   await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType: 'question_expired', questionId: row.question_id });
   return updated;
 }
 
+/**
+ * Expiry is committed on its own so a later "stale question" rejection cannot roll it back;
+ * every read and mutation calls this first.
+ */
+async function resolveExpiredQuestionForUser(userId: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    const row = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
+    if (row && questionExpired(row)) await resolveExpiredQuestion(tx, row);
+  });
+}
+
+function assertRound(row: TriviaMinesRoundRow, roundId: string): void {
+  if (row.id !== roundId) throw new ConflictError('Request targets a different round');
+}
+
 /** The single payout primitive; the ledger unique index makes it once-only even if two paths race. */
 async function settleCashout(tx: TransactionSql, row: TriviaMinesRoundRow, eventType: 'cashout' | 'auto_cashout'): Promise<TriviaMinesRoundRow> {
-  const payout = cashoutValue(row.pot_coins);
+  const payout = cashoutValue(row.pot_milli);
   const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, {
-    status: 'cashed', phase: 'settled', pot_coins: payout, payout_coins: payout, settled_at: new Date().toISOString(), ...clearQuestion,
+    status: 'cashed', phase: 'settled', pot_milli: payout * MILLI, payout_coins: payout, settled_at: new Date().toISOString(), ...clearQuestion,
   });
   if (!updated) throw new ConflictError('Round already settled');
   try {
@@ -154,14 +170,14 @@ async function settleCashout(tx: TransactionSql, row: TriviaMinesRoundRow, event
   }
   const wallet = await storeRepo.adjustWalletInTx(tx, row.user_id, payout, 0);
   if (!wallet) throw new AppError('Wallet credit failed', 500);
-  await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType, potBefore: payout, potAfter: payout, serverSeed: row.server_seed, hmacInput: boardHmacInput(row.id, row.client_nonce) });
+  await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType, potBefore: row.pot_milli, potAfter: payout * MILLI, serverSeed: row.server_seed, hmacInput: boardHmacInput(row.id, row.client_nonce) });
   return updated;
 }
 
 /** Abandoned before any pick: the stake goes back (nothing was risked yet). */
 async function expireWithRefund(tx: TransactionSql, row: TriviaMinesRoundRow): Promise<void> {
   const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, {
-    status: 'expired', phase: 'settled', pot_coins: 0, settled_at: new Date().toISOString(), ...clearQuestion,
+    status: 'expired', phase: 'settled', pot_milli: 0, settled_at: new Date().toISOString(), ...clearQuestion,
   });
   if (!updated) throw new ConflictError('Round state changed');
   try {
@@ -175,7 +191,7 @@ async function expireWithRefund(tx: TransactionSql, row: TriviaMinesRoundRow): P
   }
   const wallet = await storeRepo.adjustWalletInTx(tx, row.user_id, row.stake_coins, 0);
   if (!wallet) throw new AppError('Wallet refund failed', 500);
-  await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType: 'refunded', potBefore: row.pot_coins, potAfter: 0 });
+  await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType: 'refunded', potBefore: row.pot_milli, potAfter: 0 });
 }
 
 /** Stale policy: a pot with at least one safe pick is banked; an untouched board refunds the stake. */
@@ -201,7 +217,12 @@ export const triviaMinesService = {
     if (!Number.isInteger(stakeCoins) || stakeCoins < TRIVIA_MINES_MIN_STAKE || stakeCoins > TRIVIA_MINES_MAX_STAKE) {
       throw new BadRequestError(`Stake must be an integer between ${TRIVIA_MINES_MIN_STAKE} and ${TRIVIA_MINES_MAX_STAKE}`);
     }
-    return sql.begin(async (tx) => {
+    const run = () => sql.begin(async (tx) => {
+      // A retried start (lost response) replays its round instead of debiting a second stake.
+      if (clientNonce) {
+        const replay = await triviaMinesRepo.getRoundByNonceForUpdate(tx, userId, clientNonce);
+        if (replay) return toPublicState(replay.status === 'active' ? await resolveExpiredQuestion(tx, replay) : replay);
+      }
       const existing = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
       if (existing) {
         if (isStale(existing)) await settleStale(tx, existing);
@@ -214,21 +235,40 @@ export const triviaMinesService = {
       await storeRepo.insertTransactionLogInTx(tx, {
         eventType: TRIVIA_MINES_STAKE_EVENT, outcome: 'success', userId, coinsDelta: -stakeCoins, reason: 'trivia_mines_stake', idempotencyKey: stakeIdempotencyKey(round.id),
       });
-      await triviaMinesRepo.insertEvent(tx, { roundId: round.id, userId, stateVersion: round.state_version, eventType: 'start', commitHash: round.commit_hash, clientNonce, potBefore: stakeCoins, potAfter: stakeCoins });
+      await triviaMinesRepo.insertEvent(tx, { roundId: round.id, userId, stateVersion: round.state_version, eventType: 'start', commitHash: round.commit_hash, clientNonce, potBefore: round.pot_milli, potAfter: round.pot_milli });
       return toPublicState(round);
     });
+    try {
+      return await run();
+    } catch (error) {
+      // Two starts raced on the same nonce or the active-round index: the second one replays.
+      if ((error as { code?: string }).code === '23505' && clientNonce) return run();
+      throw error;
+    }
   },
 
+  /** Expiry is resolved here too, so a client that only polls never sees a dead scout question. */
   async getCurrentState(userId: string): Promise<TriviaMinesPublicState> {
+    await resolveExpiredQuestionForUser(userId);
     const row = await triviaMinesRepo.getActiveRound(userId);
     if (!row) throw new NotFoundError('No active round');
     return toPublicState(row);
   },
 
-  async pick(userId: string, input: { tile: number; expectedVersion: number }): Promise<{ safe: boolean; state: TriviaMinesPublicState }> {
+  /** Most recent round in any state; lets a client recover a round the sweeper settled while it was away. */
+  async getLatestState(userId: string): Promise<TriviaMinesPublicState> {
+    await resolveExpiredQuestionForUser(userId);
+    const row = await triviaMinesRepo.getLatestRound(userId);
+    if (!row) throw new NotFoundError('No rounds yet');
+    return toPublicState(row);
+  },
+
+  async pick(userId: string, input: { roundId: string; tile: number; expectedVersion: number }): Promise<{ safe: boolean; state: TriviaMinesPublicState }> {
+    await resolveExpiredQuestionForUser(userId);
     return sql.begin(async (tx) => {
       let row = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
+      assertRound(row, input.roundId);
       if (row.phase === 'question') {
         if (questionExpired(row)) { row = await resolveExpiredQuestion(tx, row); throw new ConflictError('Question expired — refresh the round'); }
         throw new ConflictError('Answer the pending question first');
@@ -238,10 +278,10 @@ export const triviaMinesService = {
       if (row.opened.includes(input.tile) || row.flagged.includes(input.tile)) throw new BadRequestError('Tile already resolved');
 
       const defenders = defendersOf(row);
-      const potBefore = row.pot_coins;
+      const potBefore = row.pot_milli;
       if (defenders.includes(input.tile)) {
         const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, {
-          status: 'lost', phase: 'settled', pot_coins: 0, bust_tile: input.tile, settled_at: new Date().toISOString(),
+          status: 'lost', phase: 'settled', pot_milli: 0, bust_tile: input.tile, settled_at: new Date().toISOString(),
         });
         if (!updated) throw new ConflictError('Round state changed');
         await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId, stateVersion: updated.state_version, eventType: 'bust', tile: input.tile, commitHash: row.commit_hash, serverSeed: row.server_seed, clientNonce: row.client_nonce, hmacInput: boardHmacInput(row.id, row.client_nonce), potBefore, potAfter: 0 });
@@ -250,9 +290,9 @@ export const triviaMinesService = {
       const opened = [...row.opened, input.tile];
       const unknown = BOARD_SIZE - row.opened.length - row.flagged.length;
       const hidden = DEFENDERS - row.flagged.length;
-      const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, { opened, pot_coins: fairPotAfterPick(row.pot_coins, unknown, hidden) });
+      const updated = await triviaMinesRepo.updateRoundState(tx, row.id, row.state_version, { opened, pot_milli: fairPotAfterPick(row.pot_milli, unknown, hidden) });
       if (!updated) throw new ConflictError('Round state changed');
-      await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId, stateVersion: updated.state_version, eventType: 'pick', tile: input.tile, potBefore, potAfter: updated.pot_coins });
+      await triviaMinesRepo.insertEvent(tx, { roundId: updated.id, userId, stateVersion: updated.state_version, eventType: 'pick', tile: input.tile, potBefore, potAfter: updated.pot_milli });
       // Every safe tile opened: nothing left to risk, bank it automatically.
       if (opened.length >= MAX_SAFE_PICKS) {
         const banked = await settleCashout(tx, updated, 'auto_cashout');
@@ -262,10 +302,13 @@ export const triviaMinesService = {
     });
   },
 
-  async dealQuestion(userId: string, expectedVersion: number): Promise<TriviaMinesPublicState> {
+  async dealQuestion(userId: string, input: { roundId: string; expectedVersion: number }): Promise<TriviaMinesPublicState> {
+    await resolveExpiredQuestionForUser(userId);
+    const expectedVersion = input.expectedVersion;
     return sql.begin(async (tx) => {
       let row = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
+      assertRound(row, input.roundId);
       const before = row.state_version;
       row = await resolveExpiredQuestion(tx, row);
       if (row.state_version !== before) throw new ConflictError('Question expired — refresh the round');
@@ -299,10 +342,11 @@ export const triviaMinesService = {
     });
   },
 
-  async answerQuestion(userId: string, input: { questionId: string; optionId: string; expectedVersion: number }): Promise<{ outcome: 'correct' | 'wrong' | 'late'; correct_option_id: string; flagged_tile: number | null; state: TriviaMinesPublicState }> {
+  async answerQuestion(userId: string, input: { roundId: string; questionId: string; optionId: string; expectedVersion: number }): Promise<{ outcome: 'correct' | 'wrong' | 'late'; correct_option_id: string; flagged_tile: number | null; state: TriviaMinesPublicState }> {
     return sql.begin(async (tx) => {
       const row = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
+      assertRound(row, input.roundId);
       if (row.phase !== 'question' || row.question_id == null) throw new ConflictError('No question pending');
       if (row.question_id !== input.questionId) throw new ConflictError('Answer targets a stale question');
       assertVersion(row, input.expectedVersion);
@@ -327,11 +371,13 @@ export const triviaMinesService = {
     });
   },
 
-  async cashout(userId: string, expectedVersion: number): Promise<TriviaMinesPublicState> {
+  async cashout(userId: string, input: { roundId: string; expectedVersion: number }): Promise<TriviaMinesPublicState> {
+    await resolveExpiredQuestionForUser(userId);
     return sql.begin(async (tx) => {
       const row = await triviaMinesRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
-      assertVersion(row, expectedVersion);
+      assertRound(row, input.roundId);
+      assertVersion(row, input.expectedVersion);
       if (row.phase !== 'picking') throw new ConflictError('Answer the pending question first');
       if (row.opened.length === 0) throw new ConflictError('Open at least one tile before cashing out');
       return toPublicState(await settleCashout(tx, row, 'cashout'));

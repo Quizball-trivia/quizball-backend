@@ -330,7 +330,17 @@ async function dealQuestionIntoRound(tx: TransactionSql, row: FreeKicksRoundRow)
 /** A deciding round that may still open zones gets its next question at once. */
 async function autoDeal(tx: TransactionSql, row: FreeKicksRoundRow): Promise<FreeKicksRoundRow> {
   if (row.phase !== 'deciding' || row.answer_locked || row.open_count >= MAX_OPEN) return row;
-  return dealQuestionIntoRound(tx, row);
+  try {
+    return await dealQuestionIntoRound(tx, row);
+  } catch (error) {
+    // No eligible question is a content problem, not the player's: keep the earned
+    // state (deciding, zones open) so they can shoot instead of losing the answer.
+    if (error instanceof AppError && error.statusCode === 503) {
+      logger.warn({ roundId: row.id }, 'free-kicks: no question to deal, leaving the round in deciding');
+      return row;
+    }
+    throw error;
+  }
 }
 
 function assertVersion(row: FreeKicksRoundRow, expectedVersion: number): void {

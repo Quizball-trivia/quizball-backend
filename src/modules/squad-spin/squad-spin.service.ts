@@ -13,6 +13,7 @@ import {
   DECISION_MS,
   FAIRNESS_VERSION,
   MAX_SPINS_PER_RUN,
+  MILLI,
   QUESTION_WINDOW_MS,
   SQUAD_SPIN_MAX_STAKE,
   SQUAD_SPIN_MIN_STAKE,
@@ -97,7 +98,7 @@ async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<
 
 async function toPublicState(row: SquadSpinRoundRow, opts: { combo?: SquadSpinComboRow | null; answers?: PlayerView[]; tx?: TransactionSql } = {}): Promise<SquadSpinPublicState> {
   const steps = stepsOf(row);
-  const potNow = row.status === 'active' ? (row.spins_cleared > 0 ? cashoutValue(row.pot_coins, steps.margin) : row.stake_coins) : row.pot_coins;
+  const potNow = row.status === 'active' ? (row.spins_cleared > 0 ? cashoutValue(row.pot_milli, steps.margin) : row.stake_coins) : row.status === 'cashed' ? row.payout_coins ?? 0 : 0;
   let spin: SquadSpinPublicState['spin'] = null;
   if (row.status === 'active' && row.phase === 'question' && row.combo_id && row.question_deadline_at && row.question_dealt_at) {
     const combo = opts.combo ?? (await squadSpinRepo.getComboById(row.combo_id, opts.tx));
@@ -107,7 +108,7 @@ async function toPublicState(row: SquadSpinRoundRow, opts: { combo?: SquadSpinCo
       index: row.spins_cleared + 1,
       tier: combo.tier,
       step_bp: stepBp,
-      next_pot_coins: cashoutValue(fairPotAfterSpin(row.pot_coins, stepBp, row.stake_coins), steps.margin),
+      next_pot_coins: cashoutValue(fairPotAfterSpin(row.pot_milli, stepBp, row.stake_coins), steps.margin),
       reels: await reelsFor(combo, opts.tx),
       dealt_at: row.question_dealt_at,
       deadline_at: row.question_deadline_at,
@@ -173,9 +174,9 @@ async function oneAnswerOf(combo: SquadSpinComboRow, tx?: TransactionSql): Promi
 
 /** The single payout primitive; the ledger unique index makes it once-only even if two paths race. */
 async function settleCashout(tx: TransactionSql, row: SquadSpinRoundRow, eventType: 'cashout' | 'auto_cashout'): Promise<SquadSpinRoundRow> {
-  const payout = cashoutValue(row.pot_coins, stepsOf(row).margin);
+  const payout = cashoutValue(row.pot_milli, stepsOf(row).margin);
   const updated = await squadSpinRepo.updateRoundState(tx, row.id, row.state_version, {
-    status: 'cashed', phase: 'settled', pot_coins: payout, payout_coins: payout, settled_at: new Date().toISOString(), decision_deadline_at: null, question_deadline_at: null,
+    status: 'cashed', phase: 'settled', pot_milli: payout * MILLI, payout_coins: payout, settled_at: new Date().toISOString(), decision_deadline_at: null, question_deadline_at: null,
   });
   if (!updated) throw new ConflictError('Round already settled');
   try {
@@ -192,13 +193,13 @@ async function settleCashout(tx: TransactionSql, row: SquadSpinRoundRow, eventTy
   }
   const wallet = await storeRepo.adjustWalletInTx(tx, row.user_id, payout, 0);
   if (!wallet) throw new AppError('Wallet credit failed', 500);
-  await squadSpinRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType, potBefore: payout, potAfter: payout, serverSeed: row.server_seed, hmacInput: roundHmacInput(row.id, row.client_nonce) });
+  await squadSpinRepo.insertEvent(tx, { roundId: updated.id, userId: updated.user_id, stateVersion: updated.state_version, eventType, potBefore: row.pot_milli, potAfter: payout * MILLI, serverSeed: row.server_seed, hmacInput: roundHmacInput(row.id, row.client_nonce) });
   return updated;
 }
 
 async function settleLost(tx: TransactionSql, row: SquadSpinRoundRow): Promise<SquadSpinRoundRow> {
   const updated = await squadSpinRepo.updateRoundState(tx, row.id, row.state_version, {
-    status: 'lost', phase: 'settled', pot_coins: 0, settled_at: new Date().toISOString(), question_deadline_at: null, decision_deadline_at: null,
+    status: 'lost', phase: 'settled', pot_milli: 0, settled_at: new Date().toISOString(), question_deadline_at: null, decision_deadline_at: null,
   });
   if (!updated) throw new ConflictError('Round state changed');
   return updated;
@@ -211,7 +212,7 @@ async function resolveExpired(tx: TransactionSql, row: SquadSpinRoundRow): Promi
     const lost = await settleLost(tx, row);
     await squadSpinRepo.insertEvent(tx, {
       roundId: lost.id, userId: lost.user_id, stateVersion: lost.state_version, eventType: 'answer', spinIndex: row.spins_cleared + 1, comboId: row.combo_id,
-      tier: combo?.tier ?? null, answerCorrect: false, answerLate: true, potBefore: row.pot_coins, potAfter: 0, serverSeed: row.server_seed, hmacInput: roundHmacInput(row.id, row.client_nonce),
+      tier: combo?.tier ?? null, answerCorrect: false, answerLate: true, potBefore: row.pot_milli, potAfter: 0, serverSeed: row.server_seed, hmacInput: roundHmacInput(row.id, row.client_nonce),
     });
     return lost;
   }
@@ -288,7 +289,7 @@ export const squadSpinService = {
       await storeRepo.insertTransactionLogInTx(tx, {
         eventType: SQUAD_SPIN_STAKE_EVENT, outcome: 'success', userId, coinsDelta: -input.stakeCoins, reason: 'squad_spin_stake', idempotencyKey: stakeIdempotencyKey(round.id),
       });
-      await squadSpinRepo.insertEvent(tx, { roundId: round.id, userId, stateVersion: round.state_version, eventType: 'start', commitHash: round.commit_hash, clientNonce: input.clientNonce, potBefore: input.stakeCoins, potAfter: input.stakeCoins });
+      await squadSpinRepo.insertEvent(tx, { roundId: round.id, userId, stateVersion: round.state_version, eventType: 'start', commitHash: round.commit_hash, clientNonce: input.clientNonce, potBefore: round.pot_milli, potAfter: round.pot_milli });
       await squadSpinRepo.insertEvent(tx, { roundId: round.id, userId, stateVersion: round.state_version, eventType: 'spin_dealt', spinIndex: 1, comboId: combo.id, tier: combo.tier });
       return toPublicState(round, { combo, tx });
     });
@@ -332,7 +333,7 @@ export const squadSpinService = {
       const late = questionExpired(row);
       const resolved = late ? { playerId: null, normalizedInput: '' } : resolveSquadSpinAnswer(input.text, await squadSpinRepo.getAliasesForPlayers(combo.answer_ids, tx));
       const correct = resolved.playerId != null;
-      const potBefore = row.pot_coins;
+      const potBefore = row.pot_milli;
       const hmacInput = roundHmacInput(row.id, row.client_nonce);
 
       if (!correct) {
@@ -346,9 +347,9 @@ export const squadSpinService = {
       }
 
       const player = (await answersOf(combo, tx)).find((a) => a.id === resolved.playerId) ?? null;
-      const potAfter = fairPotAfterSpin(row.pot_coins, stepsOf(row)[combo.tier], row.stake_coins);
+      const potAfter = fairPotAfterSpin(row.pot_milli, stepsOf(row)[combo.tier], row.stake_coins);
       const updated = await squadSpinRepo.updateRoundState(tx, row.id, row.state_version, {
-        phase: 'decision', pot_coins: potAfter, spins_cleared: row.spins_cleared + 1, question_deadline_at: null,
+        phase: 'decision', pot_milli: potAfter, spins_cleared: row.spins_cleared + 1, question_deadline_at: null,
         decision_deadline_at: new Date(Date.now() + DECISION_MS).toISOString(),
       });
       if (!updated) throw new ConflictError('Round state changed');
@@ -357,7 +358,7 @@ export const squadSpinService = {
         submittedText: input.text.slice(0, 160), resolvedPlayerId: resolved.playerId, answerCorrect: true, answerLate: false, answerMs, potBefore, potAfter,
       });
       // Nothing left to win past the run cap or the spin limit: bank it automatically.
-      if (potAfter >= runPotCap(row.stake_coins) || updated.spins_cleared >= MAX_SPINS_PER_RUN) {
+      if (potAfter >= runPotCap(row.stake_coins) * MILLI || updated.spins_cleared >= MAX_SPINS_PER_RUN) {
         const banked = await settleCashout(tx, updated, 'auto_cashout');
         return { outcome: 'correct', player, answers: [], state: await toPublicState(banked, { tx }) };
       }
@@ -375,7 +376,7 @@ export const squadSpinService = {
       assertVersion(row, input.expectedVersion);
       if (decisionExpired(row)) return toPublicState(await settleCashout(tx, row, 'auto_cashout'), { tx });
       const dealt = await dealNextSpin(tx, row);
-      await squadSpinRepo.insertEvent(tx, { roundId: dealt.row.id, userId, stateVersion: dealt.row.state_version, eventType: 'continue', spinIndex: dealt.row.spins_cleared + 1, potBefore: row.pot_coins, potAfter: row.pot_coins });
+      await squadSpinRepo.insertEvent(tx, { roundId: dealt.row.id, userId, stateVersion: dealt.row.state_version, eventType: 'continue', spinIndex: dealt.row.spins_cleared + 1, potBefore: row.pot_milli, potAfter: row.pot_milli });
       return toPublicState(dealt.row, { combo: dealt.combo, tx });
     });
   },

@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS public.trivia_mines_rounds (
     CHECK (phase IN ('picking', 'question', 'settled')),
   state_version integer NOT NULL DEFAULT 0 CHECK (state_version >= 0),
   stake_coins integer NOT NULL CHECK (stake_coins BETWEEN 1 AND 100000),
-  pot_coins integer NOT NULL CHECK (pot_coins BETWEEN 0 AND 1000000),
+  -- FAIR pot in milli-coins (×1000): per-pick flooring in whole coins distorted the RTP at small stakes.
+  pot_milli bigint NOT NULL CHECK (pot_milli BETWEEN 0 AND 1000000000),
   opened integer[] NOT NULL DEFAULT '{}',
   flagged integer[] NOT NULL DEFAULT '{}',
   bust_tile integer,
@@ -73,6 +74,9 @@ CREATE TABLE IF NOT EXISTS public.trivia_mines_rounds (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_trivia_mines_active_round
   ON public.trivia_mines_rounds (user_id) WHERE status = 'active';
+-- A start retried with the same client nonce replays the round instead of debiting a second stake.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_trivia_mines_user_nonce
+  ON public.trivia_mines_rounds (user_id, client_nonce) WHERE client_nonce IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trivia_mines_rounds_user
   ON public.trivia_mines_rounds (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trivia_mines_rounds_stale
@@ -110,8 +114,8 @@ CREATE TABLE IF NOT EXISTS public.trivia_mines_events (
   server_seed text,
   client_nonce text,
   hmac_input text,
-  pot_before integer,
-  pot_after integer,
+  pot_before_milli bigint,
+  pot_after_milli bigint,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_trivia_mines_events_round ON public.trivia_mines_events (round_id, id);

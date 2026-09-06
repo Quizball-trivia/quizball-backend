@@ -284,13 +284,33 @@ async function loadRecentlyServed(userId: string): Promise<RecentlyServed> {
   }
 }
 
-function servedEntriesOf(
-  selected: Array<{ row: { id: string }; payload: unknown }>
+function servedEntriesOf<T extends { row: { id: string }; payload: unknown }>(
+  selected: T[],
+  // Types without a display_answer record the same keys their selection dedupes on.
+  keysOf: (entry: T) => string[] = ({ payload }) => answerKeysOf(((payload as { display_answer?: Json }).display_answer) ?? null),
 ): Array<{ id: string; answerKeys: string[] }> {
-  return selected.map(({ row, payload }) => ({
-    id: row.id,
-    answerKeys: answerKeysOf(((payload as { display_answer?: Json }).display_answer) ?? null),
-  }));
+  return selected.map((entry) => ({ id: entry.row.id, answerKeys: keysOf(entry) }));
+}
+
+/**
+ * Deterministic daily pick: every player gets the same questions on the same day
+ * (a leaderboard needs identical papers) and restarting cannot reroll them.
+ */
+function pickDaySeeded<T>(rows: T[], count: number, day: string, idOf: (row: T) => string, difficultyOf: (row: T) => string, quota: Record<string, number>): T[] {
+  const ordered = rows
+    .map((row) => ({ row, key: createHash('sha1').update(`${day}:${idOf(row)}`).digest('hex') }))
+    .sort((a, b) => (a.key < b.key ? -1 : 1))
+    .map((x) => x.row);
+  const picked: T[] = [];
+  for (const [difficulty, wanted] of Object.entries(quota)) {
+    for (const row of ordered) {
+      if (picked.length >= count) break;
+      if (picked.filter((p) => difficultyOf(p) === difficulty).length >= wanted) break;
+      if (difficultyOf(row) === difficulty && !picked.includes(row)) picked.push(row);
+    }
+  }
+  for (const row of ordered) { if (picked.length >= count) break; if (!picked.includes(row)) picked.push(row); }
+  return picked.slice(0, count);
 }
 
 async function markQuestionsServed(
@@ -821,22 +841,26 @@ function levenshtein(a: string, b: string): number {
 function resolvePassChainPlayer(players: PassChainPlayerRow[], text: string): PassChainPlayerRow | null {
   const input = normalizeAnswerString(text);
   if (!input || input.length < 3) return null;
-  const exact = players.find((p) => p.normalized_aliases.includes(input));
-  if (exact) return exact;
+  // Ambiguity at any tier (two players share the alias or tie on distance) is "unknown": never guess a name.
+  const exact = players.filter((p) => p.normalized_aliases.includes(input));
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return null;
   const wholeWord = players.filter((p) => p.normalized_aliases.some((alias) => alias === input || alias.startsWith(`${input} `) || alias.endsWith(` ${input}`) || alias.includes(` ${input} `)));
   if (wholeWord.length === 1) return wholeWord[0];
   if (wholeWord.length > 1 || input.length < 4) return null;
   const allowed = (target: string) => (target.length < 5 ? 0 : target.length > 6 ? 2 : 1);
-  let best: { row: PassChainPlayerRow; distance: number } | null = null;
+  let best: { row: PassChainPlayerRow; distance: number; tied: boolean } | null = null;
   for (const p of players) {
     for (const alias of p.normalized_aliases) {
       const max = allowed(alias);
       if (max === 0 || Math.abs(alias.length - input.length) > max) continue;
       const distance = levenshtein(input, alias);
-      if (distance <= max && (!best || distance < best.distance)) best = { row: p, distance };
+      if (distance > max) continue;
+      if (!best || distance < best.distance) best = { row: p, distance, tied: false };
+      else if (distance === best.distance && best.row.id !== p.id) best.tied = true;
     }
   }
-  return best?.row ?? null;
+  return best && !best.tied ? best.row : null;
 }
 
 function getLocalizedText(value: Json, fallback: string, locale?: string): string {
@@ -1164,7 +1188,8 @@ export const dailyChallengesService = {
     const none = { player: null, viaClub: null, viaKind: null, reachesTarget: false, targetClub: null, targetKind: null };
     if (!candidate) return { status: 'unknown' as const, ...none };
     const via = sharedClub(from, candidate);
-    if (!via || candidate.id === from.id) return { status: 'noLink' as const, ...none };
+    // The name resolved but shares nothing with the chain's end: say so with the player, not "unknown".
+    if (!via || candidate.id === from.id) return { status: 'noLink' as const, ...none, player: toPassChainSessionPlayer(candidate, locale) };
     const toTarget = candidate.id === target.id ? via : sharedClub(candidate, target);
     return {
       status: 'linked' as const,
@@ -1591,7 +1616,7 @@ export const dailyChallengesService = {
           difficultyOf: ({ row }) => row.difficulty,
         }
       );
-      await markQuestionsServed(userId, servedEntriesOf(selected));
+      await markQuestionsServed(userId, servedEntriesOf(selected, ({ payload }) => answerKeysOf(payload.team as Json)));
       const faceUrls = await dailyChallengesRepo.listPlayerImagesByTransfermarktIds(
         Array.from(new Set(
           selected.flatMap(({ payload }) => payload.slots.map((slot) => slot.tm_id))
@@ -1645,7 +1670,7 @@ export const dailyChallengesService = {
           difficultyOf: ({ row }) => row.difficulty,
         }
       );
-      await markQuestionsServed(userId, servedEntriesOf(selected));
+      await markQuestionsServed(userId, servedEntriesOf(selected, ({ payload }) => [String(payload.start_tm_id), String(payload.target_tm_id)]));
       const tmIds = Array.from(new Set(selected.flatMap(({ payload }) => [payload.start_tm_id, payload.target_tm_id, ...payload.solution.map((step) => step.tm_id)])));
       const players = new Map((await dailyChallengesRepo.listPassChainPlayersByTmIds(tmIds)).map((row) => [row.tm_id, row]));
       const playerOf = (tmId: number) => {
@@ -1674,20 +1699,16 @@ export const dailyChallengesService = {
     if (challengeType === 'statSniper') {
       const settings = statSniperSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const validRows = await listTypedQuestionRows(settings.categoryIds, 'stat_sniper', { limit: settings.questionCount * 20 });
-      const selected = pickChallengeQuestions(
+      // The whole pool, day-seeded: the leaderboard compares identical papers and a restart cannot reroll.
+      const validRows = await listTypedQuestionRows(settings.categoryIds, 'stat_sniper', { limit: 5000 });
+      const selected = pickDaySeeded(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,
-        {
-          idOf: ({ row }) => row.id,
-          recentlyServedIds: recentlyServed.ids,
-          recentlyServedAnswerKeys: recentlyServed.answerKeys,
-          answerKeysOf: ({ payload }) => answerKeysOf(payload.prompt as Json),
-          difficultyQuota: footballLogicDifficultyQuota(settings.questionCount),
-          difficultyOf: ({ row }) => row.difficulty,
-        }
+        getDailyChallengeDay(),
+        ({ row }) => row.id,
+        ({ row }) => row.difficulty,
+        footballLogicDifficultyQuota(settings.questionCount),
       );
-      await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
         challengeType,

@@ -285,7 +285,6 @@ const FIFA_CARDS_MAX_CLUES = 3;
 export const CARD_DETECTIVE_START_COINS = 100;
 export const CARD_DETECTIVE_WRONG_GUESS_COST = 15;
 export const CARD_DETECTIVE_CLUE_COSTS = {
-  photo: 90,
   rating: 25,
   club: 20,
   league: 15,

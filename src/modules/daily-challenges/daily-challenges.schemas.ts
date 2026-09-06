@@ -329,7 +329,6 @@ const fifaCardSessionCardSchema = z.object({
 });
 
 export const cardDetectiveClueCostsSchema = z.object({
-  photo: z.number().int().nonnegative(),
   rating: z.number().int().nonnegative(),
   position: z.number().int().nonnegative(),
   nation: z.number().int().nonnegative(),
@@ -441,7 +440,7 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
 export const dailyChallengeCardOutcomeSchema = z.object({
   cardId: z.string().uuid(),
   solved: z.boolean(),
-  /** FIFA Cards: 0..3 identity clues; Card Detective: 0..12 purchased slots. */
+  /** FIFA Cards: 0..3 identity clues; Card Detective: 0..11 purchased slots (no photo clue). */
   cluesRevealed: z.number().int().min(0).max(12).default(0),
   /** Card Detective only: clue coins left when the card was resolved. */
   coinsLeft: z.number().int().min(0).max(100).optional(),

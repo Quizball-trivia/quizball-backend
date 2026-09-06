@@ -1799,7 +1799,8 @@ describe('dailyChallengesService cardDetective', () => {
     expect(allocateDailyFifaCardSetMock).not.toHaveBeenCalled();
     if (session.challengeType !== 'cardDetective') throw new Error('unreachable');
     expect(session.startCoins).toBe(100);
-    expect(session.clueCosts.photo).toBe(90);
+    expect(session.clueCosts).not.toHaveProperty('photo');
+    expect(session.clueCosts.rating).toBe(25);
     expect(session.wrongGuessCost).toBe(15);
     expect(session.cards.map((card) => card.id)).toEqual([CARD_A, CARD_B]);
     expect(session.cards[0].faceUrl).toMatch(/\/imgs\/fifa-faces\/239085_24\.webp$/);
@@ -1811,14 +1812,14 @@ describe('dailyChallengesService cardDetective', () => {
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
     const result = await dailyChallengesService.completeChallenge('user-1', 'cardDetective', 999, [
       { cardId: CARD_A, solved: true, cluesRevealed: 3, coinsLeft: 65 },
-      { cardId: CARD_B, solved: false, cluesRevealed: 12, coinsLeft: 100 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 11, coinsLeft: 100 },
     ]);
 
     // claimed 999, derived 65 (unsolved card scores nothing) → 6 coins
     expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 65, coinsAwarded: 6 }));
     expect(createCardOutcomesMock).toHaveBeenCalledWith('completion-1', [
       { cardId: CARD_A, solved: true, cluesRevealed: 3, coinsLeft: 65 },
-      { cardId: CARD_B, solved: false, cluesRevealed: 12, coinsLeft: 100 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 11, coinsLeft: 100 },
     ]);
     expect(result.coinsAwarded).toBe(6);
   });
@@ -1856,7 +1857,7 @@ describe('dailyChallengesService cardDetective', () => {
       { cardId: CARD_A, solved: true, cluesRevealed: 1, coinsLeft: 101 },
     ])).rejects.toThrow(/coins left/);
     await expect(dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
-      { cardId: CARD_A, solved: true, cluesRevealed: 13, coinsLeft: 10 },
+      { cardId: CARD_A, solved: true, cluesRevealed: 12, coinsLeft: 10 },
     ])).rejects.toThrow(/Too many clues/);
     expect(createCompletionMock).not.toHaveBeenCalled();
   });

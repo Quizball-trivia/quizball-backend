@@ -6939,10 +6939,6 @@
               "clueCosts": {
                 "type": "object",
                 "properties": {
-                  "photo": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
                   "rating": {
                     "type": "integer",
                     "minimum": 0
@@ -6989,7 +6985,6 @@
                   }
                 },
                 "required": [
-                  "photo",
                   "rating",
                   "position",
                   "nation",
@@ -20859,10 +20854,6 @@
                         "clueCosts": {
                           "type": "object",
                           "properties": {
-                            "photo": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
                             "rating": {
                               "type": "integer",
                               "minimum": 0
@@ -20909,7 +20900,6 @@
                             }
                           },
                           "required": [
-                            "photo",
                             "rating",
                             "position",
                             "nation",

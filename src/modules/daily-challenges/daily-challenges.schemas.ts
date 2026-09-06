@@ -11,6 +11,7 @@ export const dailyChallengeTypeEnum = z.enum([
   'highLow',
   'footballLogic',
   'fifaCards',
+  'cardDetective',
 ]);
 
 export const dailyChallengeMetadataSchema = z.object({
@@ -118,6 +119,12 @@ export const careerPathSettingsSchema = careerPathSettingsBaseSchema;
 export const highLowSettingsSchema = highLowSettingsBaseSchema;
 export const footballLogicSettingsSchema = footballLogicSettingsBaseSchema;
 export const fifaCardsSettingsSchema = fifaCardsSettingsBaseSchema;
+// Card Detective plays the same pool; start coins and clue prices are server constants.
+const cardDetectiveSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  cardCount: z.number().int().min(1).max(10),
+});
+export const cardDetectiveSettingsSchema = cardDetectiveSettingsBaseSchema;
 
 const moneyDropSettingsOpenApiSchema = moneyDropSettingsBaseSchema.extend({
   challengeType: z.literal('moneyDrop'),
@@ -149,6 +156,9 @@ const footballLogicSettingsOpenApiSchema = footballLogicSettingsBaseSchema.exten
 const fifaCardsSettingsOpenApiSchema = fifaCardsSettingsBaseSchema.extend({
   challengeType: z.literal('fifaCards'),
 });
+const cardDetectiveSettingsOpenApiSchema = cardDetectiveSettingsBaseSchema.extend({
+  challengeType: z.literal('cardDetective'),
+});
 
 export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType', [
   moneyDropSettingsOpenApiSchema,
@@ -161,6 +171,7 @@ export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType'
   highLowSettingsOpenApiSchema,
   footballLogicSettingsOpenApiSchema,
   fifaCardsSettingsOpenApiSchema,
+  cardDetectiveSettingsOpenApiSchema,
 ]);
 
 export const dailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema.extend({
@@ -317,6 +328,20 @@ const fifaCardSessionCardSchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard', 'veryHard']),
 });
 
+export const cardDetectiveClueCostsSchema = z.object({
+  rating: z.number().int().nonnegative(),
+  position: z.number().int().nonnegative(),
+  nation: z.number().int().nonnegative(),
+  league: z.number().int().nonnegative(),
+  club: z.number().int().nonnegative(),
+  pac: z.number().int().nonnegative(),
+  sho: z.number().int().nonnegative(),
+  pas: z.number().int().nonnegative(),
+  dri: z.number().int().nonnegative(),
+  def: z.number().int().nonnegative(),
+  phy: z.number().int().nonnegative(),
+});
+
 export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challengeType', [
   z.object({
     challengeType: z.literal('moneyDrop'),
@@ -399,17 +424,31 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     pointsPerSolve: z.number().int().positive(),
     cards: z.array(fifaCardSessionCardSchema).min(1),
   }),
+  z.object({
+    challengeType: z.literal('cardDetective'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    cardCount: z.number().int().positive(),
+    /** Clue coins each card starts with; a solve scores the coins left. */
+    startCoins: z.number().int().positive(),
+    clueCosts: cardDetectiveClueCostsSchema,
+    wrongGuessCost: z.number().int().nonnegative(),
+    cards: z.array(fifaCardSessionCardSchema).min(1),
+  }),
 ]);
 
 export const dailyChallengeCardOutcomeSchema = z.object({
   cardId: z.string().uuid(),
   solved: z.boolean(),
-  cluesRevealed: z.number().int().min(0).max(3).default(0),
+  /** FIFA Cards: 0..3 identity clues; Card Detective: 0..11 purchased slots (no photo clue). */
+  cluesRevealed: z.number().int().min(0).max(12).default(0),
+  /** Card Detective only: clue coins left when the card was resolved. */
+  coinsLeft: z.number().int().min(0).max(100).optional(),
 });
 
 export const completeDailyChallengeBodySchema = z.object({
   score: z.number().int().nonnegative().default(0),
-  /** Per-card results (FIFA Cards only); validated against the day's set server-side. */
+  /** Per-card results (FIFA Cards / Card Detective); validated against the day's set server-side. */
   outcomes: z.array(dailyChallengeCardOutcomeSchema).max(10).optional(),
 });
 

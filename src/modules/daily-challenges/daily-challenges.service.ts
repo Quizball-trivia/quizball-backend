@@ -25,6 +25,7 @@ import {
   cluesSettingsSchema,
   countdownSettingsSchema,
   fifaCardsSettingsSchema,
+  cardDetectiveSettingsSchema,
   footballLogicSettingsSchema,
   highLowSettingsSchema,
   imposterSettingsSchema,
@@ -42,6 +43,7 @@ import type {
   DailyChallengeLocalizedText,
   DailyChallengeType,
   FifaCardRow,
+  DailyFifaCardSetRow,
   QuestionContentRow,
 } from './daily-challenges.types.js';
 import { buildFifaFaceUrl } from './fifa-face-url.js';
@@ -93,6 +95,7 @@ const dailyChallengeSettingsSchemas = {
   highLow: highLowSettingsSchema,
   footballLogic: footballLogicSettingsSchema,
   fifaCards: fifaCardsSettingsSchema,
+  cardDetective: cardDetectiveSettingsSchema,
 } as const;
 
 const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es'] as const;
@@ -275,6 +278,40 @@ async function markQuestionsServed(
 
 const FIFA_CARDS_POINTS_PER_SOLVE = 10;
 const FIFA_CARDS_ROTATION_SALT = 'fifa-cards-rotation-v1';
+const FIFA_CARDS_MAX_CLUES = 3;
+
+/** Card Detective: every card starts with 100 clue coins; a solve scores what is left. */
+export const CARD_DETECTIVE_START_COINS = 100;
+export const CARD_DETECTIVE_WRONG_GUESS_COST = 15;
+export const CARD_DETECTIVE_CLUE_COSTS = {
+  rating: 25,
+  club: 20,
+  league: 15,
+  nation: 10,
+  position: 10,
+  pac: 5, sho: 5, pas: 5, dri: 5, def: 5, phy: 5,
+} as const;
+const CARD_DETECTIVE_MAX_CLUES = Object.keys(CARD_DETECTIVE_CLUE_COSTS).length;
+const CARD_DETECTIVE_ROTATION_SALT = 'card-detective-rotation-v1';
+
+type CardSetType = 'fifaCards' | 'cardDetective';
+const isCardSetType = (type: DailyChallengeType): type is CardSetType => type === 'fifaCards' || type === 'cardDetective';
+const CARD_SET_REPO: Record<CardSetType, {
+  get: (day: string) => Promise<DailyFifaCardSetRow | null>;
+  allocate: (day: string, count: number, salt: string) => Promise<DailyFifaCardSetRow>;
+  salt: string;
+}> = {
+  fifaCards: {
+    get: (day) => dailyChallengesRepo.getDailyFifaCardSet(day),
+    allocate: (day, count, salt) => dailyChallengesRepo.allocateDailyFifaCardSet(day, count, salt),
+    salt: FIFA_CARDS_ROTATION_SALT,
+  },
+  cardDetective: {
+    get: (day) => dailyChallengesRepo.getDailyCardDetectiveSet(day),
+    allocate: (day, count, salt) => dailyChallengesRepo.allocateDailyCardDetectiveSet(day, count, salt),
+    salt: CARD_DETECTIVE_ROTATION_SALT,
+  },
+};
 
 /**
  * Everyone plays the same cards on a given (UTC) day. The set is materialised on
@@ -282,14 +319,13 @@ const FIFA_CARDS_ROTATION_SALT = 'fifa-cards-rotation-v1';
  * recycling least-recently-served cards only once the pool is exhausted; a
  * concurrent first request loses the insert race harmlessly and re-reads.
  */
-async function getOrCreateDailyFifaCardSet(
+async function getOrCreateDailyCardSet(
   day: string,
   count: number,
-  challengeType: DailyChallengeType
+  challengeType: CardSetType
 ): Promise<FifaCardRow[]> {
-  const set =
-    (await dailyChallengesRepo.getDailyFifaCardSet(day))
-    ?? (await dailyChallengesRepo.allocateDailyFifaCardSet(day, count, FIFA_CARDS_ROTATION_SALT));
+  const repo = CARD_SET_REPO[challengeType];
+  const set = (await repo.get(day)) ?? (await repo.allocate(day, count, repo.salt));
   // A short pool still yields a playable (smaller) round; an empty one is a
   // content outage, reported like any other type's missing content.
   ensureEnough(set.card_ids, 1, challengeType, { needed: count, challengeDay: day });
@@ -329,34 +365,38 @@ function toFifaSessionCard(card: FifaCardRow, locale?: string) {
 }
 
 /**
- * FIFA Cards completion is only accepted with one outcome per card of today's
- * served set — no missing, unknown or duplicate cards — and the score is
- * derived from the reported solves rather than taken from the client. Without
- * a served set there is nothing to complete. (The individual `solved` flags
- * are still client-reported; server-side guess validation is a platform-wide
- * follow-up shared with every other daily type.)
+ * Card-based completions (FIFA Cards, Card Detective) are only accepted with one
+ * outcome per card of today's served set — no missing, unknown or duplicate
+ * cards — and the score is derived from the reported outcomes rather than
+ * taken from the client: solves × 10 for FIFA Cards, clue coins left on solved
+ * cards for Card Detective. Without a served set there is nothing to complete.
+ * (The individual `solved` / `coinsLeft` values are still client-reported and
+ * bounded by the type's ceiling; server-side guess validation is a
+ * platform-wide follow-up shared with every other daily type.)
  */
-async function reconcileFifaCardsOutcomes(
+async function reconcileCardOutcomes(
   challengeType: DailyChallengeType,
   day: string,
   score: number,
   outcomes: DailyChallengeCardOutcomeInput[] | undefined
 ): Promise<{ score: number; outcomes: DailyChallengeCardOutcomeInput[] }> {
-  if (challengeType !== 'fifaCards') {
+  if (challengeType !== 'fifaCards' && challengeType !== 'cardDetective') {
     return { score, outcomes: [] };
   }
-  const set = await dailyChallengesRepo.getDailyFifaCardSet(day);
+  const label = challengeType === 'fifaCards' ? 'FIFA Cards' : 'Card Detective';
+  const set = await CARD_SET_REPO[challengeType].get(day);
   if (!set || set.card_ids.length === 0) {
-    throw new ValidationError('No FIFA Cards set has been served today', { challengeDay: day });
+    throw new ValidationError(`No ${label} set has been served today`, { challengeDay: day });
   }
   if (!outcomes || outcomes.length !== set.card_ids.length) {
-    throw new ValidationError("FIFA Cards completion must report one outcome per card in today's set", {
+    throw new ValidationError(`${label} completion must report one outcome per card in today's set`, {
       expected: set.card_ids.length,
       received: outcomes?.length ?? 0,
     });
   }
   const allowed = new Set(set.card_ids);
   const seen = new Set<string>();
+  const maxClues = challengeType === 'fifaCards' ? FIFA_CARDS_MAX_CLUES : CARD_DETECTIVE_MAX_CLUES;
   for (const outcome of outcomes) {
     if (!allowed.has(outcome.cardId)) {
       throw new ValidationError("Outcome references a card that is not in today's set", { cardId: outcome.cardId });
@@ -364,10 +404,32 @@ async function reconcileFifaCardsOutcomes(
     if (seen.has(outcome.cardId)) {
       throw new ValidationError('Duplicate card outcome', { cardId: outcome.cardId });
     }
+    if (outcome.cluesRevealed > maxClues) {
+      throw new ValidationError('Too many clues revealed for this challenge', { cardId: outcome.cardId, max: maxClues });
+    }
     seen.add(outcome.cardId);
   }
-  const solved = outcomes.filter((outcome) => outcome.solved).length;
-  return { score: solved * FIFA_CARDS_POINTS_PER_SOLVE, outcomes };
+
+  if (challengeType === 'fifaCards') {
+    const solved = outcomes.filter((outcome) => outcome.solved).length;
+    return {
+      score: solved * FIFA_CARDS_POINTS_PER_SOLVE,
+      outcomes: outcomes.map((outcome) => ({ cardId: outcome.cardId, solved: outcome.solved, cluesRevealed: outcome.cluesRevealed })),
+    };
+  }
+
+  // Card Detective: each outcome must say how many clue coins were left; an
+  // unsolved card scores nothing regardless.
+  let total = 0;
+  const normalized = outcomes.map((outcome) => {
+    const coinsLeft = outcome.coinsLeft;
+    if (coinsLeft == null || !Number.isInteger(coinsLeft) || coinsLeft < 0 || coinsLeft > CARD_DETECTIVE_START_COINS) {
+      throw new ValidationError('Card Detective outcomes must report coins left (0..100)', { cardId: outcome.cardId });
+    }
+    if (outcome.solved) total += coinsLeft;
+    return { cardId: outcome.cardId, solved: outcome.solved, cluesRevealed: outcome.cluesRevealed, coinsLeft };
+  });
+  return { score: total, outcomes: normalized };
 }
 
 function ensureEnough<T>(
@@ -444,6 +506,7 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
     case 'footballLogic':
       return 'football_logic';
     case 'fifaCards':
+    case 'cardDetective':
       // Cards live in fifa_cards, not in the questions pool.
       return null;
   }
@@ -466,6 +529,7 @@ const COINS_PER_SCORE_POINT: Record<DailyChallengeType, number> = {
   putInOrder: 20,
   footballLogic: 20,
   fifaCards: 1, // 10 points per solved card → at most 100 coins/day
+  cardDetective: 0.1, // coins left per solved card (≤1,000/day) → at most 100 coins/day
 };
 
 const MONEY_DROP_COIN_CAP = 1500;
@@ -519,6 +583,8 @@ export function getMaxScoreForCompletion(challengeType: DailyChallengeType, sett
       return roundCount;
     case 'fifaCards':
       return (s.cardCount ?? 10) * FIFA_CARDS_POINTS_PER_SOLVE;
+    case 'cardDetective':
+      return (s.cardCount ?? 10) * CARD_DETECTIVE_START_COINS;
   }
 }
 
@@ -534,7 +600,8 @@ function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: 
     return Math.min(normalizedScore, MONEY_DROP_COIN_CAP);
   }
 
-  return normalizedScore * COINS_PER_SCORE_POINT[challengeType];
+  // Fractional rates (Card Detective) must never mint fractional coins.
+  return Math.floor(normalizedScore * COINS_PER_SCORE_POINT[challengeType]);
 }
 
 function toAvailableCategoryOption(row: DailyChallengeAvailableCategoryRow) {
@@ -1260,9 +1327,25 @@ export const dailyChallengesService = {
       };
     }
 
+    if (challengeType === 'cardDetective') {
+      const settings = cardDetectiveSettingsSchema.parse(config.settings);
+      const cards = await getOrCreateDailyCardSet(day, settings.cardCount, challengeType);
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        cardCount: cards.length,
+        startCoins: CARD_DETECTIVE_START_COINS,
+        clueCosts: { ...CARD_DETECTIVE_CLUE_COSTS },
+        wrongGuessCost: CARD_DETECTIVE_WRONG_GUESS_COST,
+        cards: cards.map((card) => toFifaSessionCard(card, locale)),
+      };
+    }
+
     if (challengeType === 'fifaCards') {
       const settings = fifaCardsSettingsSchema.parse(config.settings);
-      const cards = await getOrCreateDailyFifaCardSet(day, settings.cardCount, challengeType);
+      const cards = await getOrCreateDailyCardSet(day, settings.cardCount, challengeType);
 
       return {
         challengeType,
@@ -1332,15 +1415,22 @@ export const dailyChallengesService = {
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
     }
-    // The client reports its own score; clamp it to what this challenge can
-    // legitimately produce before it turns into coins or gets recorded.
-    const clampedScore = clampScoreForCompletion(challengeType, score, config.settings);
-    const { score: cappedScore, outcomes: validatedOutcomes } = await reconcileFifaCardsOutcomes(
+    // The client reports its own score; card types replace it with a score
+    // derived from validated outcomes. Either way the result is clamped to what
+    // this challenge can legitimately produce before it turns into coins or
+    // gets recorded.
+    const { score: reconciledScore, outcomes: validatedOutcomes } = await reconcileCardOutcomes(
       challengeType,
       day,
-      clampedScore,
+      score,
       outcomes
     );
+    // Card types are already bounded by the served set (one outcome per served
+    // card, each worth at most its per-card maximum); clamping them against the
+    // current settings would shrink a legitimate round after a config edit.
+    const cappedScore = isCardSetType(challengeType)
+      ? reconciledScore
+      : clampScoreForCompletion(challengeType, reconciledScore, config.settings);
     const coinsAwarded = getCoinsAwardedForCompletion(challengeType, cappedScore);
     const configuredStreakBonus = comebackBonusCoins();
 

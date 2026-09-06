@@ -10,7 +10,8 @@ export type DailyChallengeType =
   | 'careerPath'
   | 'highLow'
   | 'footballLogic'
-  | 'fifaCards';
+  | 'fifaCards'
+  | 'cardDetective';
 
 export type DailyChallengeIconToken =
   | 'dollarSign'
@@ -95,6 +96,8 @@ export interface DailyChallengeCardOutcomeInput {
   cardId: string;
   solved: boolean;
   cluesRevealed: number;
+  /** Card Detective only: clue coins left when the card was resolved (0..100). */
+  coinsLeft?: number | null;
 }
 
 export interface QuestionContentRow {

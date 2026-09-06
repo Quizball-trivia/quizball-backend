@@ -123,4 +123,16 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     },
     iconToken: 'cards',
   },
+  cardDetective: {
+    challengeType: 'cardDetective',
+    title: {
+      en: 'Card Detective',
+      ka: 'ბარათის დეტექტივი',
+    },
+    description: {
+      en: 'Everything hidden, 100 clue coins — name the player using the least information.',
+      ka: 'ყველაფერი დამალულია, 100 მინიშნების ქოინი — გამოიცანი მოთამაშე მინიმალური ინფორმაციით.',
+    },
+    iconToken: 'cards',
+  },
 };

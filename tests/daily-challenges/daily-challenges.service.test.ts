@@ -26,6 +26,8 @@ const upsertReminderMock = vi.fn();
 const cancelReminderMock = vi.fn();
 const getDailyFifaCardSetMock = vi.fn();
 const allocateDailyFifaCardSetMock = vi.fn();
+const getDailyCardDetectiveSetMock = vi.fn();
+const allocateDailyCardDetectiveSetMock = vi.fn();
 const listFifaCardsByIdsMock = vi.fn();
 const createCardOutcomesMock = vi.fn();
 
@@ -50,6 +52,8 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     cancelReminder: (...args: unknown[]) => cancelReminderMock(...args),
     getDailyFifaCardSet: (...args: unknown[]) => getDailyFifaCardSetMock(...args),
     allocateDailyFifaCardSet: (...args: unknown[]) => allocateDailyFifaCardSetMock(...args),
+    getDailyCardDetectiveSet: (...args: unknown[]) => getDailyCardDetectiveSetMock(...args),
+    allocateDailyCardDetectiveSet: (...args: unknown[]) => allocateDailyCardDetectiveSetMock(...args),
     listFifaCardsByIds: (...args: unknown[]) => listFifaCardsByIdsMock(...args),
   },
 }));
@@ -72,6 +76,7 @@ function defaultSettingsFor(challengeType: string) {
     case 'highLow': return { ...base, roundCount: 10, secondsPerRound: 60 };
     case 'clues': return { ...base, questionCount: 20, secondsPerClueStep: 10 };
     case 'fifaCards': return { ...base, cardCount: 10 };
+    case 'cardDetective': return { ...base, cardCount: 10 };
     default: return { ...base, questionCount: 20, secondsPerQuestion: 30 };
   }
 }
@@ -1749,5 +1754,132 @@ describe('dailyChallengesService fifaCards', () => {
     ]);
     expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 20, coinsAwarded: 20 }));
     expect(result.coinsAwarded).toBe(20);
+  });
+});
+
+const DETECTIVE_CONFIG = {
+  challenge_type: 'cardDetective', is_active: true, coin_reward: 100, xp_reward: 40,
+  settings: { challengeType: 'cardDetective', categoryIds: [], cardCount: 2 },
+};
+
+describe('dailyChallengesService cardDetective', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listRecentlyServedQuestionsMock.mockResolvedValue([]);
+    getConfigMock.mockResolvedValue(DETECTIVE_CONFIG);
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listDistinctCompletionDaysMock.mockResolvedValue([]);
+    createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+    addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+    grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+    createCardOutcomesMock.mockResolvedValue(undefined);
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: unknown) => Promise<unknown>) =>
+      callback({
+        getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
+        createCompletion: (...args: unknown[]) => createCompletionMock(...args),
+        addCoins: (...args: unknown[]) => addCoinsMock(...args),
+        grantXp: (...args: unknown[]) => grantXpMock(...args),
+        listDistinctCompletionDays: (...args: unknown[]) => listDistinctCompletionDaysMock(...args),
+        createStreakBonusAward: (...args: unknown[]) => createStreakBonusAwardMock(...args),
+        createCardOutcomes: (...args: unknown[]) => createCardOutcomesMock(...args),
+      })
+    );
+  });
+
+  it('allocates its own day set (not the FIFA Cards one) and serves clue prices', async () => {
+    getDailyCardDetectiveSetMock.mockResolvedValue(null);
+    allocateDailyCardDetectiveSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A, CARD_B] });
+    listFifaCardsByIdsMock.mockResolvedValue([fifaCardRow(CARD_A, 'Erling Haaland', 91), fifaCardRow(CARD_B, 'Kevin De Bruyne', 91)]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'cardDetective', 'en');
+
+    expect(allocateDailyCardDetectiveSetMock).toHaveBeenCalledWith(expect.any(String), 2, 'card-detective-rotation-v1');
+    expect(getDailyFifaCardSetMock).not.toHaveBeenCalled();
+    expect(allocateDailyFifaCardSetMock).not.toHaveBeenCalled();
+    if (session.challengeType !== 'cardDetective') throw new Error('unreachable');
+    expect(session.startCoins).toBe(100);
+    expect(session.clueCosts.photo).toBe(90);
+    expect(session.wrongGuessCost).toBe(15);
+    expect(session.cards.map((card) => card.id)).toEqual([CARD_A, CARD_B]);
+    expect(session.cards[0].faceUrl).toMatch(/\/imgs\/fifa-faces\/239085_24\.webp$/);
+  });
+
+  it('scores the coins left on solved cards only, pays floor(score / 10) coins, and stores coins_left', async () => {
+    getDailyCardDetectiveSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A, CARD_B] });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'cardDetective', 999, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 3, coinsLeft: 65 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 12, coinsLeft: 100 },
+    ]);
+
+    // claimed 999, derived 65 (unsolved card scores nothing) → 6 coins
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 65, coinsAwarded: 6 }));
+    expect(createCardOutcomesMock).toHaveBeenCalledWith('completion-1', [
+      { cardId: CARD_A, solved: true, cluesRevealed: 3, coinsLeft: 65 },
+      { cardId: CARD_B, solved: false, cluesRevealed: 12, coinsLeft: 100 },
+    ]);
+    expect(result.coinsAwarded).toBe(6);
+  });
+
+  it('caps a perfect day at 100 coins and never exceeds the settings ceiling', async () => {
+    getDailyCardDetectiveSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 0, coinsLeft: 100 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 0, coinsLeft: 100 },
+    ]);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 200, coinsAwarded: 20 }));
+    expect(result.coinsAwarded).toBe(20);
+  });
+
+  it('scores against the served set, not the current settings (a config edit never shrinks a legit round)', async () => {
+    getConfigMock.mockResolvedValue({ ...DETECTIVE_CONFIG, settings: { ...DETECTIVE_CONFIG.settings, cardCount: 1 } });
+    getDailyCardDetectiveSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 0, coinsLeft: 100 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 0, coinsLeft: 100 },
+    ]);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 200, coinsAwarded: 20 }));
+  });
+
+  it('rejects outcomes without coins left, over the start balance, or with too many clues', async () => {
+    getDailyCardDetectiveSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+
+    await expect(dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 1 },
+    ])).rejects.toThrow(/coins left/);
+    await expect(dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 1, coinsLeft: 101 },
+    ])).rejects.toThrow(/coins left/);
+    await expect(dailyChallengesService.completeChallenge('user-1', 'cardDetective', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 13, coinsLeft: 10 },
+    ])).rejects.toThrow(/Too many clues/);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps FIFA Cards on its own formula and clue limit (legacy request shape unchanged)', async () => {
+    getConfigMock.mockResolvedValue(FIFA_CONFIG);
+    getDailyFifaCardSetMock.mockResolvedValue({ challenge_day: '2026-09-06', card_ids: [CARD_A, CARD_B] });
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+
+    const result = await dailyChallengesService.completeChallenge('user-1', 'fifaCards', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 2 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 3 },
+    ]);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ score: 20, coinsAwarded: 20 }));
+    expect(createCardOutcomesMock).toHaveBeenCalledWith('completion-1', [
+      { cardId: CARD_A, solved: true, cluesRevealed: 2 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 3 },
+    ]);
+    expect(result.coinsAwarded).toBe(20);
+
+    await expect(dailyChallengesService.completeChallenge('user-1', 'fifaCards', 0, [
+      { cardId: CARD_A, solved: true, cluesRevealed: 4 },
+      { cardId: CARD_B, solved: true, cluesRevealed: 0 },
+    ])).rejects.toThrow(/Too many clues/);
   });
 });

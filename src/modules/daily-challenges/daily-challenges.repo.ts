@@ -545,8 +545,10 @@ async function getDailyCardSet(table: DailyCardSetTable, challengeDay: string): 
  * in THIS game's schedule; see selectDailyFifaCardIds. Players already picked
  * by the sibling game for the same day are left out so the two dailies never
  * share an answer on one day, whichever allocates first. "Same player" is
- * matched by SoFIFA id (source_key sofifa:<edition>:<id>, or the face id) as
- * well as by name, since aliases like "Neymar" / "Neymar Jr" are separate rows.
+ * matched by SoFIFA id (source_key sofifa:<edition>:<id>, or the face id),
+ * by name with case/punctuation folded ("Heung-min Son" = "Heung Min Son"),
+ * and by any shared accepted answer, since aliases like "Neymar" / "Neymar Jr"
+ * are separate rows. Over-excluding a namesake for one day is harmless.
  */
 async function allocateDailyCardSet(
   table: DailyCardSetTable,
@@ -581,6 +583,8 @@ async function allocateDailyCardSet(
           WHERE o.challenge_day = $1::date
             AND (
               oc.name = c.name
+              OR regexp_replace(lower(oc.name), '[^a-z0-9]', '', 'g') = regexp_replace(lower(c.name), '[^a-z0-9]', '', 'g')
+              OR oc.accepted && c.accepted
               OR (oc.photo_id IS NOT NULL AND oc.photo_id = c.photo_id)
               OR (
                 split_part(oc.source_key, ':', 3) <> ''

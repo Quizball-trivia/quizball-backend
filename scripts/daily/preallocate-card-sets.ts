@@ -7,7 +7,7 @@
  * materialised before any future one — and walks forward; existing days are
  * returned as-is. Because each game's `last_served_day` counts future rows
  * too, filling days out of order would skew rotation; the script therefore
- * always continues from the latest scheduled day and warns about gaps.
+ * always continues from the latest scheduled day and refuses to run over gaps.
  *
  *   npx tsx scripts/daily/preallocate-card-sets.ts --type cardDetective --days 60
  *   npx tsx scripts/daily/preallocate-card-sets.ts --type fifaCards --days 60 --dry-run
@@ -60,7 +60,11 @@ async function main() {
      WHERE NOT EXISTS (SELECT 1 FROM ${TABLE[type]} s WHERE s.challenge_day = d)`,
     [today]
   );
-  if (gaps > 0) console.warn(`WARNING: ${gaps} unscheduled day(s) between today and the latest row — those would be allocated out of order on first play`);
+  if (gaps > 0) {
+    console.error(`ABORT: ${gaps} unscheduled day(s) between today and the latest row — fill them chronologically first (or delete the future rows) so rotation history stays in order`);
+    process.exitCode = 2;
+    return;
+  }
   console.log(`${type}: ${cardCount} cards/day · latest scheduled ${latest ?? 'none'} · allocating ${start} → ${addDays(start, days - 1)}${dryRun ? ' (dry run)' : ''}`);
   if (dryRun) return;
 

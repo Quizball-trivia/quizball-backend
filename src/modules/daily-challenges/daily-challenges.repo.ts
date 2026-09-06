@@ -483,60 +483,27 @@ export const dailyChallengesRepo = {
   },
 
   async getDailyFifaCardSet(challengeDay: string): Promise<DailyFifaCardSetRow | null> {
-    const [row] = await sql<DailyFifaCardSetRow[]>`
-      SELECT challenge_day::text AS challenge_day, card_ids
-      FROM daily_fifa_card_sets
-      WHERE challenge_day = ${challengeDay}::date
-    `;
-    return row ?? null;
+    return getDailyCardSet('daily_fifa_card_sets', challengeDay);
+  },
+
+  async getDailyCardDetectiveSet(challengeDay: string): Promise<DailyFifaCardSetRow | null> {
+    return getDailyCardSet('daily_card_detective_sets', challengeDay);
   },
 
   /**
-   * Materialise the day's set if it doesn't exist yet and return it. Runs under
-   * a transaction-level advisory lock so two allocations (same day racing, or
-   * adjacent days around the UTC rollover) can never both pick the same
-   * never-served cards: history is read and the row inserted atomically.
-   *
-   * Never-served active cards come first in a stable salted-hash order (a
-   * deterministic rotation that isn't alphabetical); only when the pool is
-   * exhausted are the least recently served recycled.
+   * Materialise the day's FIFA Cards set if it doesn't exist yet and return it.
+   * Runs under a transaction-level advisory lock shared with Card Detective so
+   * two allocations (same day racing, adjacent days around the UTC rollover, or
+   * the two games on one day) can never both pick the same never-served cards:
+   * history is read and the row inserted atomically.
    */
   async allocateDailyFifaCardSet(challengeDay: string, count: number, salt: string): Promise<DailyFifaCardSetRow> {
-    return sql.begin(async (tx) => {
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('daily_fifa_card_sets:allocate'))`);
+    return allocateDailyCardSet('daily_fifa_card_sets', 'daily_card_detective_sets', challengeDay, count, salt);
+  },
 
-      const [existing] = await tx.unsafe<DailyFifaCardSetRow[]>(
-        `SELECT challenge_day::text AS challenge_day, card_ids FROM daily_fifa_card_sets WHERE challenge_day = $1::date`,
-        [challengeDay]
-      );
-      if (existing) return existing;
-
-      // Difficulty-balanced pick (3 veryHard / 3 hard / 4 medium-easy + >=5 old
-      // for a 10-card round) done in TS over the active pool + each card's last
-      // served day; see selectDailyFifaCardIds.
-      const candidates = await tx.unsafe<FifaCardCandidate[]>(
-        `
-        SELECT c.id::text AS id, c.difficulty, c.edition, c.name,
-               (
-                 SELECT max(s.challenge_day)::text
-                 FROM daily_fifa_card_sets s
-                 WHERE c.id = ANY(s.card_ids)
-               ) AS last_served_day
-        FROM fifa_cards c
-        WHERE c.is_active
-        `
-      );
-      const picked = selectDailyFifaCardIds(candidates, count, salt, challengeDay);
-      if (picked.length === 0) {
-        return { challenge_day: challengeDay, card_ids: [] };
-      }
-
-      await tx.unsafe(
-        `INSERT INTO daily_fifa_card_sets (challenge_day, card_ids) VALUES ($1::date, $2::uuid[])`,
-        [challengeDay, picked]
-      );
-      return { challenge_day: challengeDay, card_ids: picked };
-    }) as Promise<DailyFifaCardSetRow>;
+  /** Same allocator for Card Detective: its own rotation history, players in today's FIFA Cards set excluded. */
+  async allocateDailyCardDetectiveSet(challengeDay: string, count: number, salt: string): Promise<DailyFifaCardSetRow> {
+    return allocateDailyCardSet('daily_card_detective_sets', 'daily_fifa_card_sets', challengeDay, count, salt);
   },
 
   async createCardOutcomesInTx(
@@ -547,17 +514,92 @@ export const dailyChallengesRepo = {
     if (outcomes.length === 0) return;
     await tx.unsafe(
       `
-      INSERT INTO daily_challenge_card_outcomes (completion_id, card_id, solved, clues_revealed)
-      SELECT $1::uuid, v.card_id::uuid, v.solved, v.clues_revealed
-      FROM jsonb_to_recordset($2::jsonb) AS v(card_id text, solved boolean, clues_revealed int)
+      INSERT INTO daily_challenge_card_outcomes (completion_id, card_id, solved, clues_revealed, coins_left)
+      SELECT $1::uuid, v.card_id::uuid, v.solved, v.clues_revealed, v.coins_left
+      FROM jsonb_to_recordset($2::jsonb) AS v(card_id text, solved boolean, clues_revealed int, coins_left int)
       ON CONFLICT (completion_id, card_id) DO NOTHING
       `,
       // postgres.js serialises a jsonb parameter itself; pre-stringifying would
       // hand Postgres a JSON *string* ("cannot call jsonb_to_recordset on a non-array").
       [
         completionId,
-        outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed })),
+        outcomes.map((o) => ({ card_id: o.cardId, solved: o.solved, clues_revealed: o.cluesRevealed, coins_left: o.coinsLeft ?? null })),
       ]
     );
   },
 };
+
+type DailyCardSetTable = 'daily_fifa_card_sets' | 'daily_card_detective_sets';
+
+async function getDailyCardSet(table: DailyCardSetTable, challengeDay: string): Promise<DailyFifaCardSetRow | null> {
+  const [row] = await sql.unsafe<DailyFifaCardSetRow[]>(
+    `SELECT challenge_day::text AS challenge_day, card_ids FROM ${table} WHERE challenge_day = $1::date`,
+    [challengeDay]
+  );
+  return row ?? null;
+}
+
+/**
+ * Difficulty-balanced pick (3 veryHard / 3 hard / 4 medium-easy + >=5 old for a
+ * 10-card round) done in TS over the active pool + each card's last served day
+ * in THIS game's schedule; see selectDailyFifaCardIds. Players already picked
+ * by the sibling game for the same day are left out so the two dailies never
+ * share an answer on one day, whichever allocates first. "Same player" is
+ * matched by SoFIFA id (source_key sofifa:<edition>:<id>, or the face id) as
+ * well as by name, since aliases like "Neymar" / "Neymar Jr" are separate rows.
+ */
+async function allocateDailyCardSet(
+  table: DailyCardSetTable,
+  siblingTable: DailyCardSetTable,
+  challengeDay: string,
+  count: number,
+  salt: string
+): Promise<DailyFifaCardSetRow> {
+  return sql.begin(async (tx) => {
+    await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('daily_fifa_card_sets:allocate'))`);
+
+    const [existing] = await tx.unsafe<DailyFifaCardSetRow[]>(
+      `SELECT challenge_day::text AS challenge_day, card_ids FROM ${table} WHERE challenge_day = $1::date`,
+      [challengeDay]
+    );
+    if (existing) return existing;
+
+    const candidates = await tx.unsafe<FifaCardCandidate[]>(
+      `
+      SELECT c.id::text AS id, c.difficulty, c.edition, c.name,
+             (
+               SELECT max(s.challenge_day)::text
+               FROM ${table} s
+               WHERE c.id = ANY(s.card_ids)
+             ) AS last_served_day
+      FROM fifa_cards c
+      WHERE c.is_active
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ${siblingTable} o
+          JOIN fifa_cards oc ON oc.id = ANY(o.card_ids)
+          WHERE o.challenge_day = $1::date
+            AND (
+              oc.name = c.name
+              OR (oc.photo_id IS NOT NULL AND oc.photo_id = c.photo_id)
+              OR (
+                split_part(oc.source_key, ':', 3) <> ''
+                AND split_part(oc.source_key, ':', 3) = split_part(c.source_key, ':', 3)
+              )
+            )
+        )
+      `,
+      [challengeDay]
+    );
+    const picked = selectDailyFifaCardIds(candidates, count, salt, challengeDay);
+    if (picked.length === 0) {
+      return { challenge_day: challengeDay, card_ids: [] };
+    }
+
+    await tx.unsafe(
+      `INSERT INTO ${table} (challenge_day, card_ids) VALUES ($1::date, $2::uuid[])`,
+      [challengeDay, picked]
+    );
+    return { challenge_day: challengeDay, card_ids: picked };
+  }) as Promise<DailyFifaCardSetRow>;
+}

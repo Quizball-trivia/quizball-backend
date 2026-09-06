@@ -22,6 +22,7 @@ export const DAILY_CHALLENGE_TAGS: Record<DailyChallengeType, readonly string[]>
   passChain: ['guessing', 'timed'],
   statSniper: ['guessing', 'timed'],
   fifaCards: ['guessing'],
+  cardDetective: ['guessing'],
 };
 
 export interface DailyChallengeRankingInput {

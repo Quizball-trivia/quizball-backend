@@ -182,6 +182,7 @@ const fifaCardsSettingsOpenApiSchema = fifaCardsSettingsBaseSchema.extend({
 });
 const cardDetectiveSettingsOpenApiSchema = cardDetectiveSettingsBaseSchema.extend({
   challengeType: z.literal('cardDetective'),
+});
 const missingXiSettingsOpenApiSchema = missingXiSettingsBaseSchema.extend({
   challengeType: z.literal('missingXi'),
 });

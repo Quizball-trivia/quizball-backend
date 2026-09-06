@@ -12,6 +12,9 @@ import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
 import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
 import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
+import { startTriviaMinesSweeper, startTriviaMinesBots } from './modules/trivia-mines/index.js';
+import { startSquadSpinSweeper, startSquadSpinBots } from './modules/squad-spin/index.js';
+import { startRoadToGoalBots } from './modules/road-to-goal/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper } from './modules/road-to-goal/index.js';
 import {
   startBotChallengeResponder,
@@ -49,6 +52,11 @@ const server = httpServer.listen(config.PORT, () => {
 });
 startAiFriendResponder();
 startFreeKicksSweeper();
+startTriviaMinesSweeper();
+startTriviaMinesBots();
+startSquadSpinSweeper();
+startSquadSpinBots();
+startRoadToGoalBots();
 startFreeKicksBots();
 startRoadToGoalSweeper();
 // Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).

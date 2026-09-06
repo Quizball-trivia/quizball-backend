@@ -52,5 +52,6 @@ router.post(
   roadToGoalController.cashout
 );
 router.post('/rounds/heartbeat', roadToGoalController.heartbeat);
+router.get('/stats', roadToGoalController.stats);
 
 export { router as roadToGoalRoutes };

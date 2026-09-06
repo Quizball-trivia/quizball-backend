@@ -117,6 +117,11 @@ const configSchema = z.object({
   // Free Kicks (real-coins solo mode). Ships DISABLED; the kill switch blocks
   // only NEW rounds — resume/cashout/sweeper keep running while liabilities
   // exist so no player pot is ever stranded.
+  // Trivia Mines (house-banked solo mini game). Flag blocks only NEW rounds.
+  TRIVIA_MINES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   FREE_KICKS_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -133,7 +138,33 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /** Deprecated 2026-09-06: bots now follow the shared activity model; kept so existing envs still parse. */
   FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
+  FREE_KICKS_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Shared audience size for the mini-game bot activity model (measured prod
+  // average of daily active humans, 2026-09-06). Raise to make modes look busier.
+  SYNTHETIC_ACTIVITY_DAU: z.coerce.number().int().min(0).max(100000).default(195),
+  TRIVIA_MINES_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** 0 = derive from SYNTHETIC_ACTIVITY_DAU × mode share. */
+  TRIVIA_MINES_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Squad Spin (house-banked solo mini game). Flag blocks only NEW rounds.
+  SQUAD_SPIN_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  ROAD_TO_GOAL_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  ROAD_TO_GOAL_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
   // Road to Goal (real-coins solo mode). New rounds ship disabled; resume,
   // settlement, and stale-round cleanup remain available regardless.
   ROAD_TO_GOAL_ENABLED: z

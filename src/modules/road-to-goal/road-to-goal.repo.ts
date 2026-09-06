@@ -1,4 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { pickIdleRosterBots, topUpRosterBotWallet } from '../synthetic-bots/roster.js';
 import {
   ROAD_TO_GOAL_CANDIDATES_PER_DIFFICULTY,
   ROAD_TO_GOAL_DIFFICULTIES,
@@ -781,5 +782,30 @@ export const roadToGoalRepo = {
        AND requested.zone = calibration.zone
       WHERE calibration.version_id = ${versionId}
     `;
+  },
+
+  async countPlayingNow(): Promise<number> {
+    const [row] = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count FROM road_to_goal_rounds
+      WHERE status = 'active' AND last_seen_at > now() - interval '90 seconds'
+    `;
+    return Number(row?.count ?? 0);
+  },
+
+  async getRecentWins(limit: number): Promise<Array<{ nickname: string; payout_coins: number; stake_coins: number; settled_at: string }>> {
+    return sql<Array<{ nickname: string; payout_coins: number; stake_coins: number; settled_at: string }>>`
+      SELECT u.nickname, r.payout_coins::int AS payout_coins, r.stake_coins, r.settled_at
+      FROM road_to_goal_rounds r JOIN users u ON u.id = r.user_id
+      WHERE r.status IN ('cashed', 'completed') AND r.payout_coins > r.stake_coins
+      ORDER BY r.settled_at DESC LIMIT ${limit}
+    `;
+  },
+
+  pickIdleBots(limit: number) {
+    return pickIdleRosterBots('road_to_goal_rounds', limit, 'road-to-goal');
+  },
+
+  topUpBotWallet(userId: string, amount: number) {
+    return topUpRosterBotWallet(userId, amount, 'road_to_goal_bot_topup');
   },
 };

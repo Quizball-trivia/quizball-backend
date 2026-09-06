@@ -55,11 +55,16 @@ async function main() {
   const [{ latest }] = await sql.unsafe<{ latest: string | null }[]>(`SELECT max(challenge_day)::text AS latest FROM ${TABLE[type]}`);
   const today = isoDay(new Date());
   const start = latest && latest >= today ? addDays(latest, 1) : today;
-  const [{ gaps }] = await sql.unsafe<{ gaps: number }[]>(
-    `SELECT count(*)::int AS gaps FROM generate_series($1::date, COALESCE((SELECT max(challenge_day) FROM ${TABLE[type]}), $1::date), '1 day') d
-     WHERE NOT EXISTS (SELECT 1 FROM ${TABLE[type]} s WHERE s.challenge_day = d)`,
-    [today]
-  );
+  // Gaps only matter when future rows already exist: every day from today up
+  // to the latest scheduled one must be present, or first play would allocate
+  // an earlier day against future history.
+  const [{ gaps }] = latest && latest >= today
+    ? await sql.unsafe<{ gaps: number }[]>(
+        `SELECT count(*)::int AS gaps FROM generate_series($1::date, $2::date, '1 day') d
+         WHERE NOT EXISTS (SELECT 1 FROM ${TABLE[type]} s WHERE s.challenge_day = d)`,
+        [today, latest]
+      )
+    : [{ gaps: 0 }];
   if (gaps > 0) {
     console.error(`ABORT: ${gaps} unscheduled day(s) between today and the latest row — fill them chronologically first (or delete the future rows) so rotation history stays in order`);
     process.exitCode = 2;

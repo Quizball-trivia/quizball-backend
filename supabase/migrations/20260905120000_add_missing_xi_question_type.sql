@@ -31,7 +31,7 @@ ALTER TABLE daily_challenge_configs
   ADD CONSTRAINT chk_daily_challenge_type
   CHECK (challenge_type IN (
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
-    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'missingXi'
+    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'cardDetective', 'missingXi'
   )) NOT VALID;
 
 ALTER TABLE daily_challenge_completions
@@ -40,5 +40,5 @@ ALTER TABLE daily_challenge_completions
   ADD CONSTRAINT chk_daily_completion_type
   CHECK (challenge_type IN (
     'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
-    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'missingXi'
+    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'cardDetective', 'missingXi'
   )) NOT VALID;

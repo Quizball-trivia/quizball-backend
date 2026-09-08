@@ -54,6 +54,16 @@ import type {
 import { buildFifaFaceUrl } from './fifa-face-url.js';
 import { guestRepo } from '../guest/guest.repo.js';
 
+/** Placeholder actor for guest set building: never written anywhere (no served-history, no completion). */
+const GUEST_ACTOR = '00000000-0000-4000-8000-000000000000';
+const guestSetKey = (day: string, type: string, locale?: string) => `guest:daily:v1:${day}:${type}:${locale ?? 'en'}`;
+const guestSetMemo = new Map<string, { value: unknown; expiresAt: number }>();
+function secondsUntilNextUtcDay(): number {
+  const now = new Date();
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(60, Math.floor((next - now.getTime()) / 1000));
+}
+
 function getDailyChallengeDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
@@ -1715,7 +1725,8 @@ export const dailyChallengesService = {
       const selected = pickDaySeeded(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,
-        getDailyChallengeDay(),
+        // Guests get their own paper: the members' day-seeded set must not be readable without an account.
+        options.guest ? `${getDailyChallengeDay()}:guest` : getDailyChallengeDay(),
         ({ row }) => row.id,
         ({ row }) => row.difficulty,
         footballLogicDifficultyQuota(settings.questionCount),
@@ -1788,6 +1799,34 @@ export const dailyChallengesService = {
             : getQuestionClue(row.explanation, locale),
       })),
     };
+  },
+
+  /**
+   * The guest set for a day/type/locale is frozen on first use and served to every
+   * guest, so freely minted guest identities can only ever read one bounded set per
+   * day instead of walking the question bank. Redis holds it across replicas; an
+   * in-process copy covers a Redis outage.
+   */
+  async getGuestChallengeSession(challengeType: DailyChallengeType, locale?: string) {
+    const day = getDailyChallengeDay();
+    const key = guestSetKey(day, challengeType, locale);
+    const local = guestSetMemo.get(key);
+    if (local && local.expiresAt > Date.now()) return local.value;
+    const value = await getOrLoadJson(key, secondsUntilNextUtcDay(), () => this.getChallengeSession(GUEST_ACTOR, challengeType, locale, { guest: true }));
+    guestSetMemo.set(key, { value, expiresAt: Date.now() + secondsUntilNextUtcDay() * 1000 });
+    return value;
+  },
+
+  /** True when the puzzle belongs to one of today's frozen guest sets (any locale); guests may only link inside those. */
+  async isGuestPuzzleToday(puzzleId: string): Promise<boolean> {
+    const day = getDailyChallengeDay();
+    for (const locale of ['en', 'ka', 'es']) {
+      const key = guestSetKey(day, 'passChain', locale);
+      const cached = guestSetMemo.get(key)?.value ?? (await getOrLoadJson(key, secondsUntilNextUtcDay(), async () => null).catch(() => null));
+      const puzzles = (cached as { puzzles?: Array<{ id: string }> } | null)?.puzzles ?? [];
+      if (puzzles.some((p) => p.id === puzzleId)) return true;
+    }
+    return false;
   },
 
   /** A guest's result: best score of the day is kept for the results screen; nothing is awarded. */

@@ -32,6 +32,11 @@ export const guestRepo = {
     await sql`UPDATE guest_sessions SET last_seen_at = now() WHERE id = ${id} AND last_seen_at < now() - interval '1 minute'`;
   },
 
+  async purgeIdle(days: number): Promise<number> {
+    const rows = await sql`DELETE FROM guest_sessions WHERE last_seen_at < now() - make_interval(days => ${days}) RETURNING id`;
+    return rows.length;
+  },
+
   async upsertDailyCompletion(data: { guestId: string; challengeType: string; challengeDay: string; score: number }): Promise<{ best_score: number; attempts: number }> {
     const [row] = await sql<Array<{ best_score: number; attempts: number }>>`
       INSERT INTO guest_daily_completions (guest_id, challenge_type, challenge_day, best_score)

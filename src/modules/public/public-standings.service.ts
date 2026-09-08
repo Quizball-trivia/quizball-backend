@@ -12,7 +12,7 @@ export interface PublicStandingEntry { alias: string; rank: number; score: numbe
 export interface PublicStandingsBlock {
   competition: 'ranked' | 'weekend_league';
   scoring_label: string;
-  status: 'live' | 'not_started' | 'unavailable';
+  status: 'live' | 'pending_results' | 'not_started' | 'unavailable';
   entries: PublicStandingEntry[];
   updated_at: string;
 }
@@ -35,9 +35,9 @@ async function weekendLeague(): Promise<PublicStandingsBlock> {
   const updated_at = new Date().toISOString();
   try {
     const standings = await weekendLeagueService.standings();
-    if (!standings.tournament_id || standings.game_index == null) {
-      return { competition: 'weekend_league', scoring_label: 'points', status: 'not_started', entries: [], updated_at };
-    }
+    // No current tournament = not started; a tournament with no results yet is live but has nothing to rank.
+    if (!standings.tournament_id) return { competition: 'weekend_league', scoring_label: 'points', status: 'not_started', entries: [], updated_at };
+    if (standings.game_index == null) return { competition: 'weekend_league', scoring_label: 'points', status: 'pending_results', entries: [], updated_at };
     return {
       competition: 'weekend_league', scoring_label: 'points', status: 'live', updated_at,
       entries: standings.entries.slice(0, TOP).map((e) => ({ alias: e.nickname ?? 'Player', rank: e.rank, score: e.points })),
@@ -48,11 +48,25 @@ async function weekendLeague(): Promise<PublicStandingsBlock> {
   }
 }
 
+type Standings = { ranked: PublicStandingsBlock; weekend_league: PublicStandingsBlock };
+/** In-process copy: served while fresh, and as a stale fallback (own timestamps) when Redis or the loaders fail. */
+let local: { value: Standings; at: number } | null = null;
+
 export const publicStandingsService = {
-  async get(): Promise<{ ranked: PublicStandingsBlock; weekend_league: PublicStandingsBlock }> {
-    return getOrLoadJson('public:standings:v1', CACHE_SECONDS, async () => {
-      const [r, w] = await Promise.all([ranked(), weekendLeague()]);
-      return { ranked: r, weekend_league: w };
-    });
+  async get(): Promise<Standings> {
+    if (local && Date.now() - local.at < CACHE_SECONDS * 1000) return local.value;
+    try {
+      const value = await getOrLoadJson('public:standings:v1', CACHE_SECONDS, async () => {
+        const [r, w] = await Promise.all([ranked(), weekendLeague()]);
+        return { ranked: r, weekend_league: w };
+      });
+      local = { value, at: Date.now() };
+      return value;
+    } catch (error) {
+      logger.warn({ error }, 'public standings: cache/load failed, serving stale copy if any');
+      if (local) return local.value;
+      const updated_at = new Date().toISOString();
+      return { ranked: { competition: 'ranked', scoring_label: 'RP', status: 'unavailable', entries: [], updated_at }, weekend_league: { competition: 'weekend_league', scoring_label: 'points', status: 'unavailable', entries: [], updated_at } };
+    }
   },
 };

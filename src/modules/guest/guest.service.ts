@@ -9,6 +9,10 @@ import { guestRepo, type GuestSessionRow } from './guest.repo.js';
  * streak, leaderboard row or competitive entry is ever created for it.
  */
 export const GUEST_TOKEN_HEADER = 'x-guest-token';
+/** A token unused for this long stops working; the sweeper deletes it (and its completions) after GUEST_PURGE_DAYS. */
+export const GUEST_IDLE_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+export const GUEST_PURGE_DAYS = 45;
+export const GUEST_TOKEN_SHAPE = /^[a-f0-9]{64}$/;
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 const hashSignal = (value: string | null | undefined) => (value ? createHash('sha256').update(value).digest('hex').slice(0, 32) : null);
@@ -21,9 +25,10 @@ export const guestService = {
   },
 
   async resolve(token: string | null | undefined): Promise<GuestSessionRow> {
-    if (!token || !/^[a-f0-9]{64}$/.test(token)) throw new AuthenticationError('Missing guest token');
+    if (!token || !GUEST_TOKEN_SHAPE.test(token)) throw new AuthenticationError('Missing guest token');
     const row = await guestRepo.findByTokenHash(hashToken(token));
     if (!row) throw new AuthenticationError('Unknown guest token');
+    if (Date.now() - new Date(row.last_seen_at).getTime() > GUEST_IDLE_EXPIRY_MS) throw new AuthenticationError('Guest session expired');
     void guestRepo.touch(row.id).catch(() => undefined);
     return row;
   },

@@ -14,6 +14,7 @@ import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends
 import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
 import { startTriviaMinesSweeper, startTriviaMinesBots } from './modules/trivia-mines/index.js';
 import { startSquadSpinSweeper, startSquadSpinBots } from './modules/squad-spin/index.js';
+import { startGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalBots } from './modules/road-to-goal/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper } from './modules/road-to-goal/index.js';
 import {
@@ -56,6 +57,7 @@ startTriviaMinesSweeper();
 startTriviaMinesBots();
 startSquadSpinSweeper();
 startSquadSpinBots();
+startGuestSweeper();
 startRoadToGoalBots();
 startFreeKicksBots();
 startRoadToGoalSweeper();

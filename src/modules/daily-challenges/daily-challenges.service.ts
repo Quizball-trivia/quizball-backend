@@ -52,6 +52,7 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 import { buildFifaFaceUrl } from './fifa-face-url.js';
+import { guestRepo } from '../guest/guest.repo.js';
 
 function getDailyChallengeDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -313,7 +314,7 @@ function pickDaySeeded<T>(rows: T[], count: number, day: string, idOf: (row: T) 
   return picked.slice(0, count);
 }
 
-async function markQuestionsServed(
+async function markQuestionsServedForUser(
   userId: string,
   served: Array<{ id: string; answerKeys: string[] }>
 ): Promise<void> {
@@ -1203,11 +1204,11 @@ export const dailyChallengesService = {
   },
 
   /** Today's most accurate Stat Sniper players (top N) plus the caller's own rank. */
-  async getStatSniperLeaderboard(userId: string, limit = 10) {
+  async getStatSniperLeaderboard(userId: string | null, limit = 10) {
     const day = getDailyChallengeDay();
     const [rows, me] = await Promise.all([
       dailyChallengesRepo.listTopCompletionsForDay('statSniper', day, limit),
-      dailyChallengesRepo.getCompletionRankForDay(userId, 'statSniper', day),
+      userId ? dailyChallengesRepo.getCompletionRankForDay(userId, 'statSniper', day) : Promise.resolve(null),
     ]);
     return {
       challengeDay: day,
@@ -1223,19 +1224,29 @@ export const dailyChallengesService = {
     };
   },
 
-  async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string) {
+  /**
+   * Today's set for a player. Guests (public game pages) get the same selection
+   * rules and real content but no completion gate and no served-history: they
+   * have no users row, and their play must not consume a member's history.
+   */
+  async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string, options: { guest?: boolean } = {}) {
     const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
     }
 
-    const completion = await dailyChallengesRepo.getCompletionForUserOnDay(userId, challengeType, day);
-    if (completion) {
-      throwAlreadyCompleted(challengeType);
+    if (!options.guest) {
+      const completion = await dailyChallengesRepo.getCompletionForUserOnDay(userId, challengeType, day);
+      if (completion) {
+        throwAlreadyCompleted(challengeType);
+      }
     }
 
-    const recentlyServed = await loadRecentlyServed(userId);
+    const recentlyServed = options.guest ? { ids: new Set<string>(), answerKeys: new Set<string>() } : await loadRecentlyServed(userId);
+    const markQuestionsServed = options.guest
+      ? async () => undefined
+      : (id: string, served: Array<{ id: string; answerKeys: string[] }>) => markQuestionsServedForUser(id, served);
 
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
@@ -1777,6 +1788,18 @@ export const dailyChallengesService = {
             : getQuestionClue(row.explanation, locale),
       })),
     };
+  },
+
+  /** A guest's result: best score of the day is kept for the results screen; nothing is awarded. */
+  async completeChallengeForGuest(guestId: string, challengeType: DailyChallengeType, score: number) {
+    const day = getDailyChallengeDay();
+    const config = await dailyChallengesRepo.getConfig(challengeType);
+    if (!config || !config.is_active) {
+      throw new NotFoundError('Daily challenge not available');
+    }
+    const cappedScore = clampScoreForCompletion(challengeType, score, config.settings);
+    const saved = await guestRepo.upsertDailyCompletion({ guestId, challengeType, challengeDay: day, score: cappedScore });
+    return { status: 'completed' as const, guest: true as const, score: cappedScore, bestScore: saved.best_score, attempts: saved.attempts, coinsAwarded: 0, xpAwarded: 0 };
   },
 
   async completeChallenge(

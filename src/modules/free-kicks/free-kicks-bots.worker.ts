@@ -1,8 +1,8 @@
 import { config } from '../../core/config.js';
-import { logger } from '../../core/logger.js';
 import { freeKicksRepo } from './free-kicks.repo.js';
 import { freeKicksService } from './free-kicks.service.js';
-import { isWithinScheduleWindow } from '../synthetic-bots/activity-window.js';
+import { deriveDailySessions, mulberry32 } from '../synthetic-bots/activity-model.js';
+import { createMiniGameBotWorker, type MiniGameBotProfile } from '../synthetic-bots/mini-game-bots.js';
 import { FREE_KICKS_POT_CAP, MAX_OPEN, openZones } from './free-kicks.constants.js';
 
 /**
@@ -16,57 +16,23 @@ import { FREE_KICKS_POT_CAP, MAX_OPEN, openZones } from './free-kicks.constants.
  *   - stake size, target open-zones, and ride-vs-cash greed from the
  *     personality seed, so a given bot plays a recognizable style
  *   - human pacing: 1–5s thinking pauses, occasional question timeouts
- *   - activity schedules respected (fewer bots at 4am Tbilisi), plus an
- *     hour-of-day concurrency curve on top
+ *   - arrivals follow the shared activity model (measured hour curve, daily
+ *     jitter, Poisson), see synthetic-bots/activity-model.ts
  *
  * The worker peeks the round row for the correct option (server-side code may;
  * clients cannot) purely to IMPLEMENT the skill roll — the outcome still flows
  * through the normal answer endpoint logic, deadlines included.
  */
 
-const TICK_MS = 20_000;
 const SESSION_HARD_CAP_MS = 4 * 60_000;
 const TOPUP_THRESHOLD = 200;
 const TOPUP_AMOUNT = 2_000;
 
-/** Concurrency multiplier per Tbilisi hour (0-23) — quiet nights, busy evenings. */
-const HOUR_CURVE = [
-  0.25, 0.15, 0.1, 0.1, 0.1, 0.15, 0.25, 0.4, 0.55, 0.65, 0.7, 0.75,
-  0.8, 0.8, 0.85, 0.9, 0.95, 1, 1, 1, 0.95, 0.85, 0.65, 0.4,
-];
-
-function tbilisiHour(): number {
-  return Number(
-    new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'Asia/Tbilisi' })
-      .format(new Date())
-  ) % 24;
-}
-
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-interface BotProfile {
-  user_id: string;
-  base_skill: number;
-  consistency: number;
-  personality_seed: number;
-  schedule: unknown;
-  coins: number;
-}
+type BotProfile = MiniGameBotProfile;
 
-const activeSessions = new Set<string>();
-let timer: NodeJS.Timeout | null = null;
-let stopping = false;
 
 async function runBotSession(bot: BotProfile): Promise<void> {
   const rng = mulberry32((Number(bot.personality_seed) % 0xffffffff) ^ Date.now());
@@ -85,7 +51,7 @@ async function runBotSession(bot: BotProfile): Promise<void> {
 
   let state = await freeKicksService.startRound(bot.user_id, stake, `bot-${Math.floor(rng() * 1e9)}`);
 
-  while (!stopping && Date.now() < deadline && state.status === 'active') {
+  while (!worker.stopping && Date.now() < deadline && state.status === 'active') {
     await sleep(800 + rng() * 2500);
 
     if (state.phase === 'deciding') {
@@ -147,57 +113,21 @@ async function runBotSession(bot: BotProfile): Promise<void> {
   }
 }
 
-async function tick(): Promise<void> {
-  const target = Math.round(config.FREE_KICKS_BOTS_TARGET * HOUR_CURVE[tbilisiHour()]);
-  const deficit = target - activeSessions.size;
-  if (deficit <= 0) return;
-
-  const candidates = await freeKicksRepo.pickIdleBots(deficit * 2);
-  const eligible = candidates
-    .filter((bot) => isWithinScheduleWindow(bot.schedule))
-    .slice(0, deficit);
-
-  // NOTE: activeSessions is per-process. With multiple replicas two workers
-  // can pick the same bot; the unique active-round index makes the second
-  // startRound fail (409) and that session aborts — the only waste is a
-  // possible duplicate house-side top-up, which is bounded and audited.
-  for (const bot of eligible) {
-    if (activeSessions.has(bot.user_id)) continue;
-    activeSessions.add(bot.user_id);
-    // Stagger session starts so arrivals look organic, not batchy.
-    const startDelay = Math.random() * TICK_MS;
-    void sleep(startDelay)
-      .then(() => runBotSession(bot))
-      .catch((error) => {
-        logger.debug({ botId: bot.user_id, error }, 'free-kicks bot session ended with error');
-      })
-      .finally(() => {
-        activeSessions.delete(bot.user_id);
-      });
-  }
+/** FREE_KICKS_BOTS_DAILY_SESSIONS wins when set; otherwise derive from the audience size. */
+function dailySessions(): number {
+  return config.FREE_KICKS_BOTS_DAILY_SESSIONS > 0
+    ? config.FREE_KICKS_BOTS_DAILY_SESSIONS
+    : deriveDailySessions(config.SYNTHETIC_ACTIVITY_DAU, 0.15, 3);
 }
 
-export function startFreeKicksBots(): void {
-  // Bots are an amplifier for the mode, never a bypass of its kill switch:
-  // both flags must be on, so FREE_KICKS_ENABLED=false always means "no new
-  // rounds from anyone", bots included.
-  if (timer || !config.FREE_KICKS_BOTS_ENABLED) return;
-  if (!config.FREE_KICKS_ENABLED) {
-    logger.warn('FREE_KICKS_BOTS_ENABLED is set without FREE_KICKS_ENABLED — bots stay off');
-    return;
-  }
-  stopping = false;
-  timer = setInterval(() => {
-    void tick().catch((error) => logger.error({ error }, 'free-kicks bots tick failed'));
-  }, TICK_MS);
-  timer.unref?.();
-  logger.info({ target: config.FREE_KICKS_BOTS_TARGET }, 'free-kicks bot worker started');
-}
+const worker = createMiniGameBotWorker<BotProfile>({
+  name: 'free-kicks',
+  botsEnabled: () => config.FREE_KICKS_BOTS_ENABLED,
+  modeEnabled: () => config.FREE_KICKS_ENABLED,
+  dailySessions,
+  pickIdleBots: (limit) => freeKicksRepo.pickIdleBots(limit),
+  runSession: runBotSession,
+});
 
-export function stopFreeKicksBots(): void {
-  stopping = true;
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}
+export const startFreeKicksBots = (): void => worker.start();
+export const stopFreeKicksBots = (): void => worker.stop();

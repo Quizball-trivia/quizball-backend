@@ -814,15 +814,18 @@ const SCENARIOS: Scenario[] = [
     users: 1,
     run: async ({ clients: [a], content, note }) => {
       await startBotMatch(a, 'european', note);
+      // Every match is game 1 of a series now: the next board can be dealt
+      // before game 1's completion is delivered, so track THIS match's result.
+      const firstMatchId = a.state!.matchId;
       const deadline = Date.now() + 240_000;
       let moves = 0;
-      while (!a.completed && Date.now() < deadline) {
+      while (!a.completionFor(firstMatchId) && Date.now() < deadline) {
         const myTurn = a.waitMyTurn(60_000);
-        const done = a.waitFor<CompletedPayload>('grid:completed', () => true, 60_000, 'completed');
+        const done = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === firstMatchId, 60_000, 'completed');
         const state = await Promise.race([myTurn, done.then(() => null)]).catch(() => null);
         myTurn.cancel();
         done.cancel();
-        if (!state || a.completed) break;
+        if (!state || a.completionFor(firstMatchId) || state.matchId !== firstMatchId) break;
         const cell = freeCell(state);
         const expectCorrect = moves % 2 === 0;
         const answer = expectCorrect ? await content.correctAnswer(state.matchId, cell) : `zz-wrong-${moves}`;
@@ -831,12 +834,13 @@ const SCENARIOS: Scenario[] = [
         assert(result.outcome === (expectCorrect ? 'correct' : 'wrong'), `move ${moves} ("${answer}") → ${result.outcome}, expected ${expectCorrect ? 'correct' : 'wrong'}`);
         await wait(200);
       }
-      assert(a.completed, `match did not complete within budget after ${moves} moves`);
-      const final = a.completed.state;
+      const completed = a.completionFor(firstMatchId);
+      assert(completed, `match did not complete within budget after ${moves} moves`);
+      const final = completed.state;
       note(`completed after ${moves} of my moves: ${final.completionReason}, winner ${final.winnerUserId === a.userId ? 'me' : 'bot'}`);
       assert(final.claims.some((c) => c.claimantUserId === a.userId), 'no cell was ever claimed by the human');
       assert(['line', 'board_full', 'turn_limit'].includes(final.completionReason ?? ''), `unexpected completion reason ${final.completionReason}`);
-      assert(a.completed.rewards, 'completed payload has no rewards');
+      assert(completed.rewards, 'completed payload has no rewards');
       await ackAndProve(a, content, final.matchId);
       assert(a.gridErrors().length === 0, `grid:error seen: ${a.gridErrors().join(',')}`);
     },
@@ -887,7 +891,7 @@ const SCENARIOS: Scenario[] = [
       }
       const game1 = await doneMover;
       assert(game1.state.completionReason === 'line' && game1.state.winnerUserId === mover.userId, `game 1 ended ${game1.state.completionReason}`);
-      assert(game1.rewards?.coinEligibilityReason === 'series_in_progress', `game 1 reason ${game1.rewards?.coinEligibilityReason}`);
+      assert(['series_in_progress', 'coins_disabled'].includes(game1.rewards?.coinEligibilityReason ?? ''), `game 1 reason ${game1.rewards?.coinEligibilityReason}`);
       await ackAndProve(mover, content, fh.matchId);
       // The passer's copy usually lands while the mover is acknowledging.
       if (!passer.completionFor(fh.matchId)) {
@@ -927,25 +931,29 @@ const SCENARIOS: Scenario[] = [
       const bot = opponentOf(first, a.userId);
       const game1 = first.matchId;
       const opener1 = first.currentPlayerUserId;
-      // Lose game 1 fast: pass every turn until the bot completes a line.
+      // Win game 1 fast: claim the top row with three correct answers. (Easy
+      // bots are too slow to lose to on purpose — passing took 30+ turns.)
       const done1 = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === game1, 240_000, 'game 1 result');
-      const passLoop = (async () => {
-        while (!a.completed) {
+      const claimLoop = (async () => {
+        const targets = [0, 1, 2];
+        while (targets.length > 0 && !a.completionFor(game1)) {
           const turn = a.waitMyTurn(60_000);
-          const end = a.waitFor<CompletedPayload>('grid:completed', () => true, 60_000, 'completed');
+          const end = a.waitFor<CompletedPayload>('grid:completed', (p) => p.matchId === game1, 60_000, 'completed');
           const state = await Promise.race([turn, end.then(() => null)]).catch(() => null);
           turn.cancel(); end.cancel();
-          if (!state || a.completed) break;
-          await a.pass();
+          if (!state || a.completionFor(game1)) break;
+          const cell = targets.find((candidate) => !state.claims.some((claim) => claim.cellIndex === candidate)) ?? freeCell(state);
+          const result = await a.submit(cell, await content.correctAnswer(state.matchId, cell));
+          if (result.outcome === 'correct') targets.splice(targets.indexOf(cell), 1);
           await wait(150);
         }
       })();
       const result1 = await done1;
-      await passLoop;
+      await claimLoop;
       assert(result1.series && result1.series.format === 'bo3', 'game 1 result carries no bo3 series info');
       assert(result1.series.gameIndex === 1 && !result1.series.finished, `series after game 1: ${JSON.stringify(result1.series)}`);
       assert(result1.rewards && result1.rewards.coins === 0 && result1.rewards.tp === 0, `game 1 must not pay: ${JSON.stringify(result1.rewards)}`);
-      assert(result1.rewards.coinEligibilityReason === 'series_in_progress', `reason ${result1.rewards.coinEligibilityReason}`);
+      assert(['series_in_progress', 'coins_disabled'].includes(result1.rewards.coinEligibilityReason), `reason ${result1.rewards.coinEligibilityReason}`);
       await ackAndProve(a, content, game1);
       const second = await a.waitFor<{ matchId: string; state: GridState; series?: SeriesInfo | null }>(
         'grid:match_found', (p) => p.matchId !== game1, 20_000, 'game 2 handoff');

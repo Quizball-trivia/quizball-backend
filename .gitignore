@@ -90,3 +90,9 @@ node_modules
 # Grid content generator is source, not a build artefact
 !scripts/football-grid-content-generator/
 !scripts/football-grid-content-generator/**
+!scripts/football-logic-content/
+!scripts/daily-content-audit/
+!scripts/missing-xi-content/
+!scripts/pass-chain-content/
+!scripts/stat-sniper-content/
+!scripts/squad-spin-content/

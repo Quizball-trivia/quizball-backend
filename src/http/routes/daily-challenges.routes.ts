@@ -4,8 +4,10 @@ import { requireRole } from '../middleware/require-role.js';
 import { validate } from '../middleware/validate.js';
 import {
   completeDailyChallengeBodySchema,
+  passChainLinkBodySchema,
   dailyChallengeLocaleQuerySchema,
   dailyChallengeParamSchema,
+  dailyChallengeRecommendationsQuerySchema,
   dailyChallengesController,
   setDailyComebackReminderBodySchema,
 } from '../../modules/daily-challenges/index.js';
@@ -20,12 +22,26 @@ router.get(
   dailyChallengesController.list
 );
 
+router.get(
+  '/recommendations',
+  validate({ query: dailyChallengeRecommendationsQuerySchema }),
+  dailyChallengesController.recommendations
+);
+
 router.get('/comeback', dailyChallengesController.comebackState);
 
 router.put(
   '/comeback/reminder',
   validate({ body: setDailyComebackReminderBodySchema }),
   dailyChallengesController.setComebackReminder
+);
+
+router.get('/stat-sniper/leaderboard', dailyChallengesController.statSniperLeaderboard);
+
+router.post(
+  '/pass-chain/link',
+  validate({ body: passChainLinkBodySchema }),
+  dailyChallengesController.passChainLink
 );
 
 router.post(

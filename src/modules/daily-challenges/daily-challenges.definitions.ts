@@ -28,8 +28,8 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
   clues: {
     challengeType: 'clues',
     title: {
-      en: 'Clues Challenge',
-      ka: 'მინიშნებების გამოწვევა',
+      en: 'Who Am I?',
+      ka: 'ვინ ვარ მე?',
     },
     description: {
       en: 'Solve each football clue chain before the later hints give it away.',
@@ -110,6 +110,42 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       ka: 'გამოიყენე ვიზუალური მინიშნებები ფეხბურთელის, მატჩის ან მომენტის გამოსაცნობად.',
     },
     iconToken: 'image',
+  },
+  missingXi: {
+    challengeType: 'missingXi',
+    title: {
+      en: 'Missing XI',
+      ka: 'დაკარგული XI',
+    },
+    description: {
+      en: 'Three famous line-ups a day. Tap a shirt and name the player who started there.',
+      ka: 'დღეში სამი ცნობილი შემადგენლობა. დააჭირე მაისურს და დაასახელე, ვინ დაიწყო იქ.',
+    },
+    iconToken: 'users',
+  },
+  passChain: {
+    challengeType: 'passChain',
+    title: {
+      en: 'Pass Chain',
+      ka: 'პასების ჯაჭვი',
+    },
+    description: {
+      en: 'Link two players through team-mates who shared a club. Fewer links score higher.',
+      ka: 'დააკავშირე ორი ფეხბურთელი საერთო კლუბის თანაგუნდელებით. ნაკლები რგოლი — მეტი ქულა.',
+    },
+    iconToken: 'route',
+  },
+  statSniper: {
+    challengeType: 'statSniper',
+    title: {
+      en: 'Stat Sniper',
+      ka: 'სტატ-სნაიპერი',
+    },
+    description: {
+      en: 'Ten football numbers a day. Slide to your best guess — the closer you land, the higher you score.',
+      ka: 'დღეში ათი ფეხბურთის რიცხვი. მიიტანე სლაიდერი შენს ვარაუდამდე — რაც უფრო ახლოს, მით მეტი ქულა.',
+    },
+    iconToken: 'trendingUp',
   },
   fifaCards: {
     challengeType: 'fifaCards',

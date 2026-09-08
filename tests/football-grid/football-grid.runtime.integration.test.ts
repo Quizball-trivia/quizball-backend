@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import postgres from 'postgres';
 import { FOOTBALL_GRID_EASY_BOT_CAPS } from '../../src/modules/football-grid/football-grid-bot.service.js';
 import '../setup.js';
@@ -2142,9 +2142,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(advance.openerSeat).toBe(2);
     expect(advance.rematchIndex).toBe(1);
 
-    const rewards1 = await footballGridSettlementService.settleMatch(game1.matchId);
-    expect(rewards1.get(game1.playerA)).toMatchObject({ xp: 0, coins: 0, tp: 0, coinEligibilityReason: 'series_in_progress' });
-    expect(rewards1.get(game1.playerB)).toMatchObject({ xp: 0, coins: 0, tp: 0, tpEligibilityReason: 'series_in_progress' });
+    // Until the next game commits, a failure can still close on this game.
+    expect((await footballGridSettlementService.settleMatch(game1.matchId)).size).toBe(0);
 
     await footballGridRepo.createPairing({
       pairingToken: advance.pairingToken!,
@@ -2167,6 +2166,10 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     })).state;
     runtimeMatchIds.push(game2.matchId);
     expect(game2.openerUserId).toBe(game1.playerB);
+    const rewards1 = await footballGridSettlementService.settleMatch(game1.matchId);
+    expect(rewards1.get(game1.playerA)).toMatchObject({ xp: 0, coins: 0, tp: 0, coinEligibilityReason: 'series_in_progress' });
+    expect(rewards1.get(game1.playerB)).toMatchObject({ xp: 0, coins: 0, tp: 0, tpEligibilityReason: 'series_in_progress' });
+
     // The fixture release holds a single board, so the pack-exhausted fallback deals it again.
     const info2 = await footballGridRepo.getSeriesInfoForMatch(game2.matchId);
     expect(info2).toMatchObject({ gameIndex: 2, finished: false, draws: 0 });
@@ -2192,6 +2195,145 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(rewards2.get(game1.playerA)?.xp).toBeGreaterThan(0);
     expect(rewards2.get(game1.playerB)).toMatchObject({ coins: 0, tp: 0 });
     expect(await footballGridRepo.advanceSeriesAfterGame(game2.matchId)).toMatchObject({ kind: 'closed', alreadyRecorded: true });
+  });
+
+
+
+  it('rejoins a fresh socket with an explicit handoff and series metadata', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await createReadyTurn('random');
+    const emitted: Array<{ event: string; payload: any }> = [];
+    const joined: string[] = [];
+    const socket = {
+      id: `rejoin-${game.playerA}`, data: { user: { id: game.playerA } },
+      join: async (room: string) => { joined.push(room); },
+      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+    } as unknown as Parameters<typeof footballGridRealtimeService.handleResync>[1];
+    const io = { to: () => ({ emit: () => undefined }) } as unknown as Parameters<typeof footballGridRealtimeService.handleResync>[0];
+    const { usersRepo } = await import('../../src/modules/users/users.repo.js');
+    const lookup = vi.spyOn(usersRepo, 'getByIds').mockRejectedValueOnce(new Error('temporary user lookup failure'));
+    try {
+      await expect(footballGridRealtimeService.handleResync(io, socket, game.matchId)).rejects.toThrow('temporary user lookup failure');
+      expect(socket.data.gridMatchId).toBeUndefined();
+      joined.length = 0;
+      await footballGridRealtimeService.handleResync(io, socket, game.matchId);
+      expect(joined).toEqual([`grid:${game.matchId}`]);
+      expect(emitted.map((entry) => entry.event)).toEqual(['grid:match_found', 'grid:state']);
+      expect(emitted[0].payload).toMatchObject({ matchId: game.matchId, opponent: { id: game.playerB }, series: { gameIndex: 1 } });
+      expect(emitted[1].payload.series).toEqual(emitted[0].payload.series);
+      emitted.length = 0;
+      await footballGridRealtimeService.handleResync(io, socket, game.matchId);
+      expect(emitted.map((entry) => entry.event)).toEqual(['grid:state']);
+    } finally {
+      lookup.mockRestore();
+      const { cancelRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      await cancelRealtimeTimer('football_grid_phase', game.matchId);
+    }
+  });
+
+  it('does not move a newer socket binding back to a terminal game on resync', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await playWinningLine('random');
+    const newerMatchId = randomUUID();
+    const socket = {
+      id: `terminal-rejoin-${game.playerA}`,
+      data: { user: { id: game.playerA }, gridMatchId: newerMatchId, matchId: newerMatchId },
+      join: async () => { throw new Error('Terminal resync must not join the old room'); },
+      emit: () => undefined,
+    } as unknown as Parameters<typeof footballGridRealtimeService.handleResync>[1];
+    const io = {
+      to: () => ({ emit: () => undefined }), in: () => ({ fetchSockets: async () => [] }),
+    } as unknown as Parameters<typeof footballGridRealtimeService.handleResync>[0];
+    await footballGridRealtimeService.handleResync(io, socket, game.matchId);
+    expect(socket.data.gridMatchId).toBe(newerMatchId);
+    expect(socket.data.matchId).toBe(newerMatchId);
+  });
+
+  it('defers settlement before BO3 closure and pays the winner exactly once on retry', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await createReadyTurn('random', undefined, undefined, undefined, 'bo3');
+    const state = await footballGridService.getState(game.matchId, game.playerA);
+    await footballGridService.forfeit({ matchId: game.matchId, userId: game.playerB, expectedStateVersion: state.stateVersion });
+    // Both independent workers can discover the same terminal game.
+    const beforeAdvance = await Promise.all([
+      footballGridSettlementService.settleMatch(game.matchId),
+      footballGridSettlementService.settleMatch(game.matchId),
+    ]);
+    expect(beforeAdvance.every((result) => result.size === 0)).toBe(true);
+    const rows = await db<Array<{ status: string; completed_at: string | null; settled: boolean | null; eligibility_count: number }>>`
+      SELECT o.status, o.completed_at, (m.state_payload->>'footballGridRewardsSettled')::boolean AS settled,
+             (SELECT count(*)::int FROM football_grid_reward_eligibility e WHERE e.match_id = m.id) AS eligibility_count
+        FROM football_grid_settlement_outbox o JOIN matches m ON m.id = o.match_id
+       WHERE o.match_id = ${game.matchId}
+    `;
+    expect(rows[0]).toMatchObject({ status: 'pending', completed_at: null, eligibility_count: 0 });
+    expect(rows[0].settled).not.toBe(true);
+    await footballGridRepo.advanceSeriesAfterGame(game.matchId);
+    const [first, replay] = await Promise.all([
+      footballGridSettlementService.settleMatch(game.matchId),
+      footballGridSettlementService.settleMatch(game.matchId),
+    ]);
+    expect(first.get(game.playerA)?.xp).toBeGreaterThan(0);
+    expect(replay.get(game.playerA)).toEqual(first.get(game.playerA));
+    const xpRows = await db<Array<{ count: number }>>`
+      SELECT count(*)::int AS count FROM user_xp_events
+       WHERE user_id = ${game.playerA} AND source_type = 'match_result' AND source_key = ${game.matchId}
+    `;
+    expect(xpRows[0].count).toBe(1);
+  });
+
+  it('keeps settlement retryable while next-game creation can still fail', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await playWinningLine('random', undefined, undefined, undefined, 'bo3');
+    const advance = await footballGridRepo.advanceSeriesAfterGame(game.matchId);
+    expect(advance.kind).toBe('continued');
+    if (advance.kind !== 'continued') throw new Error('Expected continuing series');
+    expect((await footballGridSettlementService.settleMatch(game.matchId)).size).toBe(0);
+    await footballGridRepo.closeSeriesAfterFailure(advance.seriesId, game.matchId);
+    const result = await footballGridSettlementService.settleMatch(game.matchId);
+    expect(result.get(game.playerA)?.xp).toBeGreaterThan(0);
+    expect(result.get(game.playerA)?.coinEligibilityReason).not.toBe('series_in_progress');
+  });
+
+  it('rejects draw mutations after the database cutoff even before timer recovery', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await createReadyTurn('random');
+    const state = await footballGridService.getState(game.matchId, game.playerA);
+    const offered = await footballGridService.offerDraw({ matchId: game.matchId, userId: game.playerA, expectedStateVersion: state.stateVersion });
+    await db`UPDATE football_grid_matches SET turn_deadline_at = now() - interval '1 second', phase_deadline_at = now() - interval '1 second' WHERE match_id = ${game.matchId}`;
+    for (const accept of [true, false]) {
+      await expect(footballGridService.respondToDraw({ matchId: game.matchId, userId: game.playerB, accept, expectedStateVersion: offered.stateVersion }))
+        .rejects.toMatchObject({ details: { gridCode: 'LATE_COMMAND' } });
+    }
+    const expired = await footballGridService.handlePhaseDeadline(game.matchId, offered.stateVersion, true);
+    expect(expired.state).toMatchObject({ phase: 'turn', drawOffer: null, turnNumber: offered.turnNumber + 1 });
+    await db`UPDATE football_grid_matches SET turn_deadline_at = now() - interval '1 second', phase_deadline_at = now() - interval '1 second' WHERE match_id = ${game.matchId}`;
+    await expect(footballGridService.offerDraw({ matchId: game.matchId, userId: game.playerA, expectedStateVersion: expired.state.stateVersion }))
+      .rejects.toMatchObject({ details: { gridCode: 'LATE_COMMAND' } });
+  });
+
+  // Plain `it` per case: vitest's it.each does not pass the TestContext needed for the DB-unavailable skip.
+  for (const action of ['offer', 'accept', 'decline'] as const) it(`keeps an admitted answer ahead of a draw ${action}`, async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const game = await createReadyTurn('random');
+    let state = await footballGridService.getState(game.matchId, game.playerA);
+    if (action !== 'offer') {
+      state = await footballGridService.offerDraw({ matchId: game.matchId, userId: game.playerA, expectedStateVersion: state.stateVersion });
+    }
+    const inbox = await footballGridRepo.admitCommand({
+      matchId: game.matchId, actorUserId: game.playerA, commandId: randomUUID(),
+      expectedStateVersion: state.stateVersion, commandType: 'answer', cellIndex: 0,
+      locale: 'en', submittedText: 'Grid Player 1', payloadHash: `draw-${action}-after-answer`,
+    });
+    const command = { matchId: game.matchId, userId: game.playerB, expectedStateVersion: state.stateVersion };
+    await expect(action === 'offer'
+      ? footballGridService.offerDraw(command)
+      : footballGridService.respondToDraw({ ...command, accept: action === 'accept' }))
+      .rejects.toMatchObject({ details: { gridCode: 'COMMAND_IN_PROGRESS' } });
+    const committed = await footballGridService.recoverPendingCommand(inbox);
+    expect(committed.outcome).toBe('correct');
+    expect(committed.state.claims).toHaveLength(1);
+    expect(committed.state.drawOffer).toBeNull();
   });
 
   it('lets an admin correct a published player name in place, and nothing else', async (context) => {

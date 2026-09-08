@@ -2,6 +2,7 @@ export { roadToGoalController } from './road-to-goal.controller.js';
 export { roadToGoalRepo } from './road-to-goal.repo.js';
 export { roadToGoalService } from './road-to-goal.service.js';
 export { startRoadToGoalSweeper, stopRoadToGoalSweeper } from './road-to-goal.sweeper.js';
+export { startRoadToGoalBots, stopRoadToGoalBots } from './road-to-goal-bots.worker.js';
 export {
   answerRoadToGoalQuestionSchema,
   answerRoadToGoalResponseSchema,

@@ -26,6 +26,7 @@ import {
 import type { DealtQuestionSnapshot, FreeKicksRoundRow } from './free-kicks.types.js';
 import { AppError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { createLiveStats, type LiveStats } from '../synthetic-bots/live-stats.js';
 import type { I18nField } from '../../db/types.js';
 
 interface McqOptionShape {
@@ -262,6 +263,86 @@ async function settleStale(tx: TransactionSql, row: FreeKicksRoundRow): Promise<
   }
 }
 
+/**
+ * Persist the expiry of a pending question in its own transaction. Doing it
+ * inside a mutation that then throws would roll the resolution back, and a
+ * plain GET never resolved it at all — the client kept re-fetching the same
+ * expired question and looped (owner report 2026-09-06).
+ */
+async function resolveExpiredQuestionForUser(userId: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    const row = await freeKicksRepo.getActiveRoundForUpdate(tx, userId);
+    if (row && questionExpired(row)) await resolveExpiredQuestion(tx, row);
+  });
+}
+
+/**
+ * Deal a question into a deciding round (row already locked by the caller).
+ * Used by the deal endpoint and, since 2026-09-06, inside start / next-attack /
+ * correct-answer so the client never has to chain a second request: the
+ * question arrives in the same response as the transition that earned it.
+ */
+async function dealQuestionIntoRound(tx: TransactionSql, row: FreeKicksRoundRow): Promise<FreeKicksRoundRow> {
+  const recent = await freeKicksRepo.getRecentQuestionIds(row.user_id);
+  const candidates = await freeKicksRepo.pickQuestionCandidates(recent);
+  let picked: { id: string; prompt: I18nField; options: McqOptionShape[] } | null = null;
+  for (const candidate of candidates) {
+    const options = parseMcqOptions(candidate.payload);
+    if (!options) continue;
+    const prompt =
+      typeof candidate.prompt === 'string'
+        ? (safeJson(candidate.prompt) as I18nField | null)
+        : (candidate.prompt as unknown as I18nField);
+    if (!prompt) continue;
+    picked = { id: candidate.id, prompt, options };
+    break;
+  }
+  if (!picked) throw new AppError('No eligible questions available', 503);
+
+  const shuffled = shuffleOptions(picked.options);
+  const correct = shuffled.find((option) => option.is_correct);
+  if (!correct) throw new AppError('Question integrity error', 500);
+  const snapshot: DealtQuestionSnapshot = {
+    question_id: picked.id,
+    prompt: picked.prompt,
+    options: shuffled.map((option) => ({ id: option.id, text: option.text })),
+    dealt_at: new Date().toISOString(),
+  };
+  const updated = await freeKicksRepo.setQuestionSnapshot(tx, row.id, row.state_version, {
+    questionId: picked.id,
+    snapshot,
+    correctOption: correct.id,
+    deadlineAt: new Date(Date.now() + QUESTION_WINDOW_MS).toISOString(),
+  });
+  if (!updated) throw new ConflictError('Round state changed');
+  await freeKicksRepo.insertEvent(tx, {
+    roundId: updated.id,
+    userId: row.user_id,
+    attack: updated.attack,
+    stateVersion: updated.state_version,
+    eventType: 'question_dealt',
+    questionId: picked.id,
+    openCount: updated.open_count,
+  });
+  return updated;
+}
+
+/** A deciding round that may still open zones gets its next question at once. */
+async function autoDeal(tx: TransactionSql, row: FreeKicksRoundRow): Promise<FreeKicksRoundRow> {
+  if (row.phase !== 'deciding' || row.answer_locked || row.open_count >= MAX_OPEN) return row;
+  try {
+    return await dealQuestionIntoRound(tx, row);
+  } catch (error) {
+    // No eligible question is a content problem, not the player's: keep the earned
+    // state (deciding, zones open) so they can shoot instead of losing the answer.
+    if (error instanceof AppError && error.statusCode === 503) {
+      logger.warn({ roundId: row.id }, 'free-kicks: no question to deal, leaving the round in deciding');
+      return row;
+    }
+    throw error;
+  }
+}
+
 function assertVersion(row: FreeKicksRoundRow, expectedVersion: number): void {
   if (row.state_version !== expectedVersion) {
     throw new ConflictError('Stale state — refresh the round');
@@ -269,14 +350,12 @@ function assertVersion(row: FreeKicksRoundRow, expectedVersion: number): void {
 }
 
 
-let statsCache: { at: number; value: FreeKicksStats } | null = null;
-const STATS_CACHE_MS = 10_000;
-
-export interface FreeKicksStats {
-  playing_now: number;
-  recent_wins: Array<{ nickname: string; amount: number; run_mult: number; settled_at: string }>;
-  top_runs: Array<{ nickname: string; run_mult: number }>;
-}
+export type FreeKicksStats = LiveStats & { top_runs: Array<{ nickname: string; run_mult: number }> };
+const loadLiveStats = createLiveStats({
+  countPlayingNow: () => freeKicksRepo.countPlayingNow(),
+  getRecentWins: (n) => freeKicksRepo.getRecentWins(n),
+  extras: async () => ({ top_runs: (await freeKicksRepo.getTopRuns(5)).map((run) => ({ nickname: run.nickname, run_mult: Math.round(run.run_mult * 100) / 100 })) }),
+});
 
 export const freeKicksService = {
   async startRound(
@@ -338,76 +417,27 @@ export const freeKicksService = {
         potAfter: stakeCoins,
       });
 
-      return toPublicState(round);
+      return toPublicState(await autoDeal(tx, round));
     });
   },
 
   async getCurrentState(userId: string): Promise<FreeKicksPublicState> {
+    await resolveExpiredQuestionForUser(userId);
     const row = await freeKicksRepo.getActiveRound(userId);
     if (!row) throw new NotFoundError('No active round');
     return toPublicState(row);
   },
 
   async dealQuestion(userId: string, expectedVersion: number): Promise<FreeKicksPublicState> {
+    await resolveExpiredQuestionForUser(userId);
     return sql.begin(async (tx) => {
-      let row = await freeKicksRepo.getActiveRoundForUpdate(tx, userId);
+      const row = await freeKicksRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
-      const beforeResolve = row.state_version;
-      row = await resolveExpiredQuestion(tx, row);
-      if (row.state_version !== beforeResolve) {
-        // The pending question just expired — surface the reset state first.
-        throw new ConflictError('Question expired — refresh the round');
-      }
       assertVersion(row, expectedVersion);
       if (row.phase !== 'deciding') throw new ConflictError('Cannot deal a question now');
       if (row.answer_locked) throw new ConflictError('Answering is locked this attack');
       if (row.open_count >= MAX_OPEN) throw new ConflictError('All zones already open');
-
-      const recent = await freeKicksRepo.getRecentQuestionIds(userId);
-      const candidates = await freeKicksRepo.pickQuestionCandidates(recent);
-      let picked: { id: string; prompt: I18nField; options: McqOptionShape[] } | null = null;
-      for (const candidate of candidates) {
-        const options = parseMcqOptions(candidate.payload);
-        if (!options) continue;
-        const prompt =
-          typeof candidate.prompt === 'string'
-            ? (safeJson(candidate.prompt) as I18nField | null)
-            : (candidate.prompt as unknown as I18nField);
-        if (!prompt) continue;
-        picked = { id: candidate.id, prompt, options };
-        break;
-      }
-      if (!picked) throw new AppError('No eligible questions available', 503);
-
-      const shuffled = shuffleOptions(picked.options);
-      const correct = shuffled.find((option) => option.is_correct);
-      if (!correct) throw new AppError('Question integrity error', 500);
-      const snapshot: DealtQuestionSnapshot = {
-        question_id: picked.id,
-        prompt: picked.prompt,
-        options: shuffled.map((option) => ({ id: option.id, text: option.text })),
-        dealt_at: new Date().toISOString(),
-      };
-
-      const updated = await freeKicksRepo.setQuestionSnapshot(tx, row.id, row.state_version, {
-        questionId: picked.id,
-        snapshot,
-        correctOption: correct.id,
-        deadlineAt: new Date(Date.now() + QUESTION_WINDOW_MS).toISOString(),
-      });
-      if (!updated) throw new ConflictError('Round state changed');
-
-      await freeKicksRepo.insertEvent(tx, {
-        roundId: updated.id,
-        userId,
-        attack: updated.attack,
-        stateVersion: updated.state_version,
-        eventType: 'question_dealt',
-        questionId: picked.id,
-        openCount: updated.open_count,
-      });
-
-      return toPublicState(updated);
+      return toPublicState(await dealQuestionIntoRound(tx, row));
     });
   },
 
@@ -464,7 +494,7 @@ export const freeKicksService = {
       return {
         outcome: late ? 'late' : correct ? 'correct' : 'wrong',
         correct_option_id: correctOption,
-        state: toPublicState(updated),
+        state: toPublicState(await autoDeal(tx, updated)),
       };
     });
   },
@@ -484,6 +514,7 @@ export const freeKicksService = {
     };
     state: FreeKicksPublicState;
   }> {
+    await resolveExpiredQuestionForUser(userId);
     return sql.begin(async (tx) => {
       let row = await freeKicksRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
@@ -592,7 +623,7 @@ export const freeKicksService = {
         potAfter: row.pot_coins,
       });
 
-      return toPublicState(updated);
+      return toPublicState(await autoDeal(tx, updated));
     });
   },
 
@@ -608,29 +639,7 @@ export const freeKicksService = {
   },
 
   /** Real social-layer numbers (10s cache): live players, recent wins, top runs. */
-  async getStats(): Promise<FreeKicksStats> {
-    if (statsCache && Date.now() - statsCache.at < STATS_CACHE_MS) return statsCache.value;
-    const [playingNow, recentWins, topRuns] = await Promise.all([
-      freeKicksRepo.countPlayingNow(),
-      freeKicksRepo.getRecentWins(6),
-      freeKicksRepo.getTopRuns(5),
-    ]);
-    const value: FreeKicksStats = {
-      playing_now: playingNow,
-      recent_wins: recentWins.map((win) => ({
-        nickname: win.nickname,
-        amount: win.payout_coins,
-        run_mult: Math.round((win.payout_coins / win.stake_coins) * 100) / 100,
-        settled_at: win.settled_at,
-      })),
-      top_runs: topRuns.map((run) => ({
-        nickname: run.nickname,
-        run_mult: Math.round(run.run_mult * 100) / 100,
-      })),
-    };
-    statsCache = { at: Date.now(), value };
-    return value;
-  },
+  getStats: (): Promise<FreeKicksStats> => loadLiveStats(),
 
   async heartbeat(userId: string): Promise<void> {
     await freeKicksRepo.touchLastSeen(userId);

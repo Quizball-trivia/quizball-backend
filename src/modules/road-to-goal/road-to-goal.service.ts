@@ -45,6 +45,7 @@ import {
 } from './road-to-goal.fairness.js';
 import { buildRoadToGoalQuestionSet } from './road-to-goal.questions.js';
 import { roadToGoalRepo } from './road-to-goal.repo.js';
+import { createLiveStats, type LiveStats } from '../synthetic-bots/live-stats.js';
 import {
   trackRoadToGoalQuestionResolved,
   trackRoadToGoalRunSettled,
@@ -889,6 +890,8 @@ function replayAnswerResult(
   };
 }
 
+const loadLiveStats = createLiveStats({ countPlayingNow: () => roadToGoalRepo.countPlayingNow(), getRecentWins: (n) => roadToGoalRepo.getRecentWins(n) });
+
 export const roadToGoalService = {
   async prepareCommitment(
     userId: string,
@@ -1382,6 +1385,9 @@ export const roadToGoalService = {
       };
     });
   },
+
+  /** Live social numbers (10s cache): active rounds with a recent heartbeat, latest profitable runs. */
+  getStats: (): Promise<LiveStats> => loadLiveStats(),
 
   async heartbeat(userId: string): Promise<void> {
     await roadToGoalRepo.touchLastSeen(userId);

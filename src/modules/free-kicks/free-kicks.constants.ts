@@ -44,8 +44,9 @@ export function openZones(openCount: number): readonly FreeKicksZone[] {
   return OPEN_ORDER.slice(0, openCount);
 }
 
-/** 5s visible timer + 2s network grace, enforced server-side. */
-export const QUESTION_WINDOW_MS = 7_000;
+/** The next question is dealt inside the answer response, so its window also covers the
+ *  2s answer reveal: 2s reveal + 3s reading + 10s visible timer (ranked MCQ timing) + 2.5s network grace. */
+export const QUESTION_WINDOW_MS = 17_500;
 
 /** Client heartbeat cadence is ~10s; a round with no heartbeat for this long
  *  is auto-settled (post-goal pots are cashed out; anything else expires). */

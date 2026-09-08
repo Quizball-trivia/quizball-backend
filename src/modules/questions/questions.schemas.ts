@@ -23,6 +23,9 @@ export const questionTypeEnum = z.enum([
   'career_path',
   'high_low',
   'football_logic',
+  'missing_xi',
+  'pass_chain',
+  'stat_sniper',
 ]);
 export type QuestionType = z.infer<typeof questionTypeEnum>;
 
@@ -180,6 +183,58 @@ const footballLogicPayloadBaseSchema = z.object({
   explanation: i18nFieldSchema.nullish(),
 });
 
+const missingXiSlotPayloadSchema = z.object({
+  id: z.string().min(1),
+  position: z.string().min(1),
+  number: z.number().int().nullable(),
+  x: z.number(),
+  y: z.number(),
+  name: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+  // Transfermarkt id — resolves to the Grid face image at serve time.
+  tm_id: z.number().int().nullish(),
+});
+
+const missingXiPayloadBaseSchema = z.object({
+  type: z.literal('missing_xi'),
+  team: i18nFieldSchema,
+  opponent: i18nFieldSchema,
+  match_label: i18nFieldSchema,
+  formation: z.string().min(1),
+  score: z.string().nullish(),
+  season: z.number().int().nullish(),
+  slots: z.array(missingXiSlotPayloadSchema).length(11),
+  /** Formation as the content source listed it; `formation` is the verified/drawn one. */
+  tm_formation: z.string().nullish(),
+  /** Second-source confirmation of the XI + layout; the daily picker only serves verified squads. */
+  verified: z.object({ source: z.string().min(1), matchId: z.string().nullish(), checkedAt: z.string().min(1) }).nullish(),
+});
+
+const passChainPayloadBaseSchema = z.object({
+  type: z.literal('pass_chain'),
+  start_tm_id: z.number().int(),
+  target_tm_id: z.number().int(),
+  /** Shortest chain length in links (BFS over the pass_chain_players graph). */
+  par: z.number().int().min(2),
+  bridges: z.number().int().nullish(),
+  /** One shortest path, revealed when the player skips or runs out of time. */
+  solution: z.array(z.object({ tm_id: z.number().int(), kind: z.enum(['club', 'manager']).default('club'), via: i18nFieldSchema })).min(1),
+});
+
+const statSniperPayloadBaseSchema = z.object({
+  type: z.literal('stat_sniper'),
+  /** fee | goals | attendance | peak | height — which dataset field the number comes from. */
+  kind: z.string().min(1),
+  prompt: i18nFieldSchema,
+  unit: i18nFieldSchema,
+  value: z.number(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number().positive(),
+  /** Dataset row the value traces back to (fact-check trail). */
+  source: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).nullish(),
+});
+
 function parseNestedJsonString(value: unknown): unknown {
   let current = value;
   for (let i = 0; i < 2; i += 1) {
@@ -293,6 +348,9 @@ export const questionPayloadSchema = z
       careerPathPayloadBaseSchema,
       highLowPayloadBaseSchema,
       footballLogicPayloadBaseSchema,
+      missingXiPayloadBaseSchema,
+      passChainPayloadBaseSchema,
+      statSniperPayloadBaseSchema,
     ])
   )
   .superRefine((data, ctx) => {
@@ -394,6 +452,9 @@ export type PutInOrderPayload = z.infer<typeof putInOrderPayloadBaseSchema>;
 export type CareerPathPayload = z.infer<typeof careerPathPayloadBaseSchema>;
 export type HighLowPayload = z.infer<typeof highLowPayloadBaseSchema>;
 export type FootballLogicPayload = z.infer<typeof footballLogicPayloadBaseSchema>;
+export type MissingXiPayload = z.infer<typeof missingXiPayloadBaseSchema>;
+export type PassChainPayload = z.infer<typeof passChainPayloadBaseSchema>;
+export type StatSniperPayload = z.infer<typeof statSniperPayloadBaseSchema>;
 export type QuestionPayload = z.infer<typeof questionPayloadSchema>;
 
 /**

@@ -29,6 +29,12 @@ export const STORE_TX_EVENT_TYPES = [
   'road_to_goal_stake',
   'road_to_goal_payout',
   'guess_the_goal_reward',
+  'trivia_mines_stake',
+  'trivia_mines_payout',
+  'trivia_mines_refund',
+  'squad_spin_stake',
+  'squad_spin_payout',
+  'squad_spin_refund',
 ] as const;
 
 export type StoreTxEventType = typeof STORE_TX_EVENT_TYPES[number];

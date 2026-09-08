@@ -846,10 +846,13 @@ export const footballGridRealtimeService = {
 
   async handleResync(io: QuizballServer, socket: QuizballSocket, matchId: string): Promise<void> {
     const previous = await footballGridService.getState(matchId, socket.data.user.id);
-    await socket.join(gridRoom(matchId));
-    socket.data.matchId = matchId;
-    socket.data.gridMatchId = matchId;
-    await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
+    const needsHandoff = socket.data.gridMatchId !== matchId;
+    // Replayed terminal resyncs are result delivery, not a match transition.
+    // In particular, they must not rebind a socket already playing game N+1.
+    if (previous.phase !== 'terminal') {
+      await socket.join(gridRoom(matchId));
+      await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
+    }
     const state = previous.phase === 'terminal'
       ? await footballGridService.markReconnected(matchId, socket.data.user.id)
       : await applyAndBroadcast(
@@ -867,7 +870,32 @@ export const footballGridRealtimeService = {
         serverNow: new Date().toISOString(),
       });
     }
-    socket.emit('grid:state', { matchId, state, serverNow: new Date().toISOString() });
+    const series = await footballGridRepo.getSeriesInfoForMatch(matchId);
+    if (needsHandoff && state.phase !== 'terminal') {
+      // A fresh socket may still have another match in its client store (for
+      // example, the next BO3 game started while it was offline). Rejoin must
+      // explicitly establish this match before ordinary snapshots are applied.
+      const opponent = state.players.find((player) => player.userId !== socket.data.user.id)!;
+      const users = await usersRepo.getByIds([opponent.userId]);
+      const opponentUser = users.get(opponent.userId);
+      const profile = await rankedService.ensureProfile(opponent.userId).catch(() => null);
+      // Commit the binding only after bootstrap data is available, so a
+      // temporary lookup failure still retries this handoff on the next resync.
+      socket.data.matchId = matchId;
+      socket.data.gridMatchId = matchId;
+      socket.emit('grid:match_found', {
+        matchId, state, series, serverNow: new Date().toISOString(),
+        opponent: {
+          id: opponent.userId,
+          username: opponentUser?.nickname ?? 'Player',
+          avatarUrl: opponentUser?.avatar_url ?? null,
+          avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
+          ...(profile ? { rp: profile.rp } : {}),
+        },
+        capabilities: { canAddFriend: !opponent.isBot, canChallenge: !opponent.isBot },
+      });
+    }
+    socket.emit('grid:state', { matchId, state, series, serverNow: new Date().toISOString() });
     if (state.phase === 'terminal') {
       // A reconnect must rebuild the complete result payload even if a prior
       // server emit happened just before the transport disconnected. Receipt

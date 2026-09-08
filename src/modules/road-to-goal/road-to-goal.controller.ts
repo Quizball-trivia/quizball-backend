@@ -87,6 +87,10 @@ export const roadToGoalController = {
     res.json(await roadToGoalService.getProof(req.user!.id, params.roundId));
   },
 
+  async stats(_req: Request, res: Response): Promise<void> {
+    res.json(await roadToGoalService.getStats());
+  },
+
   async heartbeat(req: Request, res: Response): Promise<void> {
     await roadToGoalService.heartbeat(req.user!.id);
     res.status(204).end();

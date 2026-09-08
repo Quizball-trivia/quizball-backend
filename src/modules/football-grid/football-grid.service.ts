@@ -565,6 +565,11 @@ export const footballGridService = {
         const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
         if (!previous) throw new NotFoundError('Football Grid match not found');
         const next = offerDraw(previous, input.userId, input.expectedStateVersion, await footballGridRepo.databaseNowMs(tx));
+        // A durable answer/pass owns the next state transition once admitted.
+        // Draw mutations must not clear that fence or invalidate its version.
+        if (await footballGridRepo.getPendingCommandIdInTx(tx, input.matchId)) {
+          throw new ConflictError('Football Grid command in progress', { gridCode: 'COMMAND_IN_PROGRESS' });
+        }
         await footballGridRepo.persistStateInTx(tx, previous, next, {
           eventType: 'draw_offered', eventPayload: { userId: input.userId },
         });
@@ -588,6 +593,11 @@ export const footballGridService = {
         const next = respondToDrawOffer(
           previous, input.userId, input.accept, input.expectedStateVersion, await footballGridRepo.databaseNowMs(tx),
         );
+        // A durable answer/pass owns the next state transition once admitted.
+        // Draw mutations must not clear that fence or invalidate its version.
+        if (await footballGridRepo.getPendingCommandIdInTx(tx, input.matchId)) {
+          throw new ConflictError('Football Grid command in progress', { gridCode: 'COMMAND_IN_PROGRESS' });
+        }
         await footballGridRepo.persistStateInTx(tx, previous, next, {
           eventType: input.accept ? 'draw_agreed' : 'draw_declined', eventPayload: { userId: input.userId },
         });

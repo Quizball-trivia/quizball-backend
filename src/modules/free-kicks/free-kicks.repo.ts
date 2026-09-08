@@ -1,5 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
-import { storeRepo } from '../store/store.repo.js';
+import { pickIdleRosterBots, topUpRosterBotWallet } from '../synthetic-bots/roster.js';
 import type { QuestionWithPayload } from '../../db/types.js';
 import { QUESTION_CANDIDATES, RECENT_QUESTION_WINDOW, STALE_AFTER_MS } from './free-kicks.constants.js';
 import type { FreeKicksEventInput, FreeKicksRoundRow } from './free-kicks.types.js';
@@ -196,60 +196,12 @@ export const freeKicksRepo = {
     `;
   },
 
-  /**
-   * Idle roster bots eligible to start a Free Kicks session: active profile,
-   * not frozen, not reserved for a match, no active round. Schedule filtering
-   * happens in JS (isWithinScheduleWindow).
-   */
-  async pickIdleBots(limit: number): Promise<
-    Array<{
-      user_id: string;
-      base_skill: number;
-      consistency: number;
-      personality_seed: number;
-      schedule: unknown;
-      coins: number;
-    }>
-  > {
-    return sql<
-      Array<{
-        user_id: string;
-        base_skill: number;
-        consistency: number;
-        personality_seed: number;
-        schedule: unknown;
-        coins: number;
-      }>
-    >`
-      SELECT p.user_id, p.base_skill, p.consistency, p.personality_seed, p.schedule, u.coins
-      FROM synthetic_player_profiles p
-      JOIN users u ON u.id = p.user_id
-      LEFT JOIN synthetic_bot_reservations res ON res.bot_user_id = p.user_id
-      LEFT JOIN free_kicks_rounds fr ON fr.user_id = p.user_id AND fr.status = 'active'
-      WHERE p.status = 'active'
-        AND NOT p.selection_frozen
-        AND res.bot_user_id IS NULL
-        AND fr.id IS NULL
-      ORDER BY random()
-      LIMIT ${limit}
-    `;
+  pickIdleBots(limit: number) {
+    return pickIdleRosterBots('free_kicks_rounds', limit, 'free-kicks');
   },
 
-  /** House-side top-up so roster bots always have coins to stake — goes
-   *  through the wallet primitive AND writes an audited ledger row, so bot
-   *  coin creation is visible in reconciliation like any other adjustment. */
-  async topUpBotWallet(userId: string, amount: number): Promise<void> {
-    await sql.begin(async (tx) => {
-      const wallet = await storeRepo.adjustWalletInTx(tx, userId, amount, 0);
-      if (!wallet) throw new Error('Bot wallet top-up failed');
-      await storeRepo.insertTransactionLogInTx(tx, {
-        eventType: 'manual_adjustment_succeeded',
-        outcome: 'success',
-        userId,
-        coinsDelta: amount,
-        reason: 'free_kicks_bot_topup',
-      });
-    });
+  topUpBotWallet(userId: string, amount: number) {
+    return topUpRosterBotWallet(userId, amount, 'free_kicks_bot_topup');
   },
 
   /**

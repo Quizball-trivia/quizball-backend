@@ -1,0 +1,216 @@
+{
+ "moneyDrop": {
+  "question_type": "mcq_single",
+  "active": true,
+  "per_day": 5,
+  "category_scoped": false,
+  "pool": 4855,
+  "days_no_repeat": 971.0,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "hard": 848,
+   "easy": 1989,
+   "medium": 2018
+  },
+  "text_fields": 24298,
+  "missing_by_locale": {},
+  "images": {
+   "distinct": 166,
+   "hotlinked_external": 80,
+   "checked": 166,
+   "broken": 0,
+   "rate_limited_hotlinks": 66,
+   "broken_examples": [],
+   "avg_kb": 155.2,
+   "over_500kb": 2
+  },
+  "newest_question": "2026-09-04T09:03:10.014107+00:00"
+ },
+ "trueFalse": {
+  "question_type": "true_false",
+  "active": true,
+  "per_day": 4,
+  "category_scoped": true,
+  "pool": 615,
+  "days_no_repeat": 153.8,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "medium": 240,
+   "easy": 200,
+   "hard": 175
+  },
+  "text_fields": 1849,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-05T01:02:44.357016+00:00"
+ },
+ "countdown": {
+  "question_type": "countdown_list",
+  "active": true,
+  "per_day": 2,
+  "category_scoped": false,
+  "pool": 751,
+  "days_no_repeat": 375.5,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "easy": 96,
+   "hard": 261,
+   "medium": 394
+  },
+  "text_fields": 12329,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-03T01:03:30.933167+00:00"
+ },
+ "clues": {
+  "question_type": "clue_chain",
+  "active": false,
+  "per_day": 5,
+  "category_scoped": false,
+  "pool": 1990,
+  "days_no_repeat": 398.0,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "hard": 176,
+   "medium": 802,
+   "easy": 1012
+  },
+  "text_fields": 13930,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-03T01:12:02.467146+00:00"
+ },
+ "putInOrder": {
+  "question_type": "put_in_order",
+  "active": false,
+  "per_day": 3,
+  "category_scoped": false,
+  "pool": 1335,
+  "days_no_repeat": 445.0,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "easy": 342,
+   "medium": 592,
+   "hard": 401
+  },
+  "text_fields": 8010,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-03T01:13:36.583216+00:00"
+ },
+ "imposter": {
+  "question_type": "imposter_multi_select",
+  "active": true,
+  "per_day": 2,
+  "category_scoped": true,
+  "pool": 319,
+  "days_no_repeat": 159.5,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "hard": 75,
+   "medium": 118,
+   "easy": 126
+  },
+  "text_fields": 3291,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-05T01:05:08.930402+00:00"
+ },
+ "careerPath": {
+  "question_type": "career_path",
+  "active": true,
+  "per_day": 3,
+  "category_scoped": true,
+  "pool": 266,
+  "days_no_repeat": 88.7,
+  "months_target": 4.0,
+  "enough": false,
+  "difficulty": {
+   "easy": 74,
+   "medium": 118,
+   "hard": 74
+  },
+  "text_fields": 2112,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-08-31T01:10:39.510431+00:00"
+ },
+ "highLow": {
+  "question_type": "high_low",
+  "active": true,
+  "per_day": 2,
+  "category_scoped": true,
+  "pool": 264,
+  "days_no_repeat": 132.0,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "easy": 113,
+   "medium": 95,
+   "hard": 56
+  },
+  "text_fields": 2754,
+  "missing_by_locale": {},
+  "images": null,
+  "newest_question": "2026-09-04T01:12:38.587672+00:00"
+ },
+ "footballLogic": {
+  "question_type": "football_logic",
+  "active": false,
+  "per_day": 3,
+  "category_scoped": true,
+  "pool": 3,
+  "days_no_repeat": 1.0,
+  "months_target": 4.0,
+  "enough": false,
+  "difficulty": {
+   "medium": 2,
+   "easy": 1
+  },
+  "text_fields": 15,
+  "missing_by_locale": {},
+  "images": {
+   "distinct": 6,
+   "hotlinked_external": 6,
+   "checked": 6,
+   "broken": 0,
+   "rate_limited_hotlinks": 0,
+   "broken_examples": [],
+   "avg_kb": 6.8,
+   "over_500kb": 0
+  },
+  "newest_question": "2026-04-28T15:02:34.285353+00:00"
+ },
+ "fifaCards": {
+  "question_type": "fifa_cards",
+  "active": true,
+  "per_day": 10,
+  "pool": 1200,
+  "days_no_repeat": 120.0,
+  "months_target": 4.0,
+  "enough": true,
+  "difficulty": {
+   "hard": 453,
+   "medium": 389,
+   "veryHard": 109,
+   "easy": 249
+  },
+  "missing_by_locale": {
+   "ka_name": 1200
+  },
+  "no_face_photo": 24,
+  "few_accepted": 11,
+  "images": {
+   "checked": 60,
+   "broken": 0,
+   "broken_examples": [],
+   "face_url_template": "${base}/storage/v1/object/public/${FIFA_FACES_BUCKET_PATH}/${photoId}_${encodeURIComponent(photoVer)}.webp"
+  }
+ }
+}

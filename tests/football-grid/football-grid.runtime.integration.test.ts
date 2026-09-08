@@ -2312,7 +2312,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       .rejects.toMatchObject({ details: { gridCode: 'LATE_COMMAND' } });
   });
 
-  it.each(['offer', 'accept', 'decline'] as const)('keeps an admitted answer ahead of a draw %s', async (action, context) => {
+  // Plain `it` per case: vitest's it.each does not pass the TestContext needed for the DB-unavailable skip.
+  for (const action of ['offer', 'accept', 'decline'] as const) it(`keeps an admitted answer ahead of a draw ${action}`, async (context) => {
     if (!hasRuntimeDb(context)) return;
     const game = await createReadyTurn('random');
     let state = await footballGridService.getState(game.matchId, game.playerA);

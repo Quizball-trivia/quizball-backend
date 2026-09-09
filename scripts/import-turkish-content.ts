@@ -556,6 +556,15 @@ async function main() {
       console.log(JSON.stringify(report, null, 2));
       return;
     }
+    // A conflict means the English source drifted since extraction; the plan
+    // skips it rather than attaching a translation to changed text. A few are
+    // expected on a live catalog, thousands mean a stale plan — stop.
+    const conflicts = jsonb.stats.conflicts + scalar.stats.conflicts + localeRows.stats.conflicts;
+    const maxConflicts = Number(argValue('max-conflicts') ?? '50');
+    if (conflicts > maxConflicts) {
+      console.log(JSON.stringify(report, null, 2));
+      throw new Error(`${conflicts} conflicts exceed --max-conflicts=${maxConflicts}; nothing applied`);
+    }
 
     const backupPath = path.resolve(
       argValue('backup') ?? `tmp/turkish-import-backups/${target}-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`,

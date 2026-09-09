@@ -183,7 +183,7 @@ async function fetchRows(
   const output = new Map<string, Record<string, unknown>>();
   const selected = columns.length === 1 && columns[0] === '*'
     ? '*'
-    : columns.map(quoteIdentifier).join(', ');
+    : columns.map((column) => (column.includes('::') ? column : quoteIdentifier(column))).join(', ');
   for (const batch of chunks([...new Set(rowKeys)])) {
     const rows = await sql.unsafe<Record<string, unknown>[]>(
       `SELECT ${quoteIdentifier(keyColumn)}::text AS row_key, ${selected}
@@ -204,7 +204,7 @@ async function planJsonbChanges(
 ) {
   const stats = { changedRows: 0, changedValues: 0, existing: 0, conflicts: 0, missingRows: 0 };
   const groups = groupBy(items, (item) => `${item.table}\0${item.column}`);
-  const changes: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown }> = [];
+  const changes: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown; originalText: string | null }> = [];
 
   for (const values of groups.values()) {
     const first = values[0];
@@ -213,7 +213,9 @@ async function planJsonbChanges(
     const target = JSONB_TARGETS[table];
     if (!target || !target.columns.has(column)) throw new Error(`Blocked JSONB target ${table}.${column}`);
     const rowGroups = groupBy(values, (item) => item.rowKey ?? '');
-    const rows = await fetchRows(sql, table, target.key, [column], [...rowGroups.keys()]);
+    // The optimistic UPDATE compares against the database's own JSON text so a
+    // JavaScript number round-trip (integers above 2^53) cannot cause a false mismatch.
+    const rows = await fetchRows(sql, table, target.key, [column, `${quoteIdentifier(column)}::text AS original_text`], [...rowGroups.keys()]);
 
     for (const [rowKey, operations] of rowGroups) {
       const row = rows.get(rowKey);
@@ -222,6 +224,7 @@ async function planJsonbChanges(
         continue;
       }
       const original = row[column];
+      const originalText = row.original_text as string | null;
       const next = clone(original);
       let rowChanged = false;
       const unique = new Map(operations.map((item) => [JSON.stringify(item.jsonPath ?? []), item]));
@@ -234,7 +237,7 @@ async function planJsonbChanges(
       if (rowChanged) {
         stats.changedRows += 1;
         backup.jsonb.push({ table, keyColumn: target.key, rowKey, column, value: original });
-        changes.push({ table, keyColumn: target.key, rowKey, column, value: next, original });
+        changes.push({ table, keyColumn: target.key, rowKey, column, value: next, originalText });
       }
     }
   }
@@ -380,7 +383,7 @@ async function planLocaleRows(
 async function applyChanges(
   sql: postgres.Sql,
   backup: Backup,
-  jsonb: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown; original: unknown }>,
+  jsonb: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown; originalText: string | null }>,
   scalar: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown }>,
   localeRows: Array<Record<string, unknown>>,
   backupPath: string,
@@ -410,7 +413,7 @@ async function applyChanges(
           [
             batch.map((change) => change.rowKey),
             batch.map((change) => JSON.stringify(change.value)),
-            batch.map((change) => JSON.stringify(change.original)),
+            batch.map((change) => change.originalText),
           ],
         );
         if (updated.length !== batch.length) {

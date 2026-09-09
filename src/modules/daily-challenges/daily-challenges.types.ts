@@ -28,6 +28,7 @@ export type DailyChallengeIconToken =
 export interface DailyChallengeLocalizedText {
   en: string;
   ka: string;
+  tr?: string;
 }
 
 export interface DailyChallengeDefinition {

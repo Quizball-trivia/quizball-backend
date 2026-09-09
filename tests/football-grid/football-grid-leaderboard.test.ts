@@ -51,6 +51,10 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
     req.user = { id: USER_ID, role: 'user' };
     next();
   }),
+  optionalAuthMiddleware: vi.fn((req, _res, next) => {
+    req.user = { id: USER_ID, role: 'user' };
+    next();
+  }),
 }));
 
 const { footballGridRoutes } = await import('../../src/http/routes/football-grid.routes.js');

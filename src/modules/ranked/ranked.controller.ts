@@ -9,6 +9,7 @@ import type {
 } from './ranked.schemas.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
+import { AuthenticationError } from '../../core/errors.js';
 
 function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
   if (total === 0) return { trend: 'same', trendValue: 0 };
@@ -39,7 +40,8 @@ export const rankedController = {
 
     let country: string | undefined;
     if (scope === 'country') {
-      const user = await usersRepo.getById(req.user!.id);
+      if (!req.user) throw new AuthenticationError('Sign in to see your country board');
+      const user = await usersRepo.getById(req.user.id);
       country = normalizeSupportedCountryCode(user?.country) ?? undefined;
       if (!country) {
         res.json({ entries: [] });

@@ -35,7 +35,7 @@ export const registerSchema = z.object({
   // Drives the language of the Supabase confirmation email. Stored as
   // user metadata (raw_user_meta_data) so the email template can branch on
   // {{ .Data.locale }}. Unsupported locales fall back to English.
-  locale: z.enum(['en', 'ka', 'es']).optional(),
+  locale: z.enum(['en', 'ka', 'es', 'tr']).optional(),
 });
 export type RegisterRequest = z.infer<typeof registerSchema>;
 

@@ -32,6 +32,8 @@ scripts/*
 # OpenAPI baseline regeneration — referenced by tests/openapi/spec-snapshot.test.ts
 # and the api:export npm script; must ship or the baseline rots unregenerable.
 !scripts/export-openapi.ts
+!scripts/import-spanish-content.ts
+!scripts/import-turkish-content.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts

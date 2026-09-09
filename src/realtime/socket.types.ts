@@ -647,12 +647,12 @@ export interface WarmupScoresPayload {
 
 export interface AuctionStartAiMatchPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es';
+  locale?: 'en' | 'ka' | 'es' | 'tr';
 }
 
 export interface AuctionSearchStartPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es';
+  locale?: 'en' | 'ka' | 'es' | 'tr';
 }
 
 export interface AuctionBidPayload {
@@ -680,7 +680,7 @@ export interface AuctionUiReadyPayload {
 
 export interface AuctionSearchStartedPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -690,7 +690,7 @@ export interface AuctionSearchStartedPayload {
 
 export interface AuctionSearchStatusPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -727,7 +727,7 @@ export interface AuctionMatchFoundPayload {
    * count while it is filling; identities become authoritative at match
    * creation time. */
   botPlayers: AuctionMatchBotSummary[];
-  locale: 'en' | 'ka' | 'es';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   formation: FormationName;
   /** Server clock used by clients to compensate for local clock skew. */
   serverNow: string;
@@ -742,7 +742,7 @@ export interface AuctionMatchFoundPayload {
 
 export interface AuctionMatchStartedPayload {
   matchId: string;
-  locale: 'en' | 'ka' | 'es';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   state: PublicAuctionMatchState;
   serverNow?: string;
 }

@@ -29,6 +29,8 @@ export const sessionIdParamsSchema = z.object({
 const i18nTextSchema = z.object({
   en: z.string().min(1).max(300),
   ka: z.string().min(1).max(300).nullable().optional(),
+  es: z.string().min(1).max(300).nullable().optional(),
+  tr: z.string().min(1).max(300).nullable().optional(),
 });
 
 // x may run slightly beyond the touchlines (the board draws a 3-unit green

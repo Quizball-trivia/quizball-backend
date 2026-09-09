@@ -24408,7 +24408,8 @@
                     "enum": [
                       "en",
                       "ka",
-                      "es"
+                      "es",
+                      "tr"
                     ]
                   },
                   "promptVersion": {
@@ -24506,7 +24507,8 @@
                     "enum": [
                       "en",
                       "ka",
-                      "es"
+                      "es",
+                      "tr"
                     ]
                   },
                   "promptVersion": {

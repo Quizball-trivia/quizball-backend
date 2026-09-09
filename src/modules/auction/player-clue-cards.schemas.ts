@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const clueCardLocaleEnum = z.enum(['en', 'ka', 'es']);
+export const clueCardLocaleEnum = z.enum(['en', 'ka', 'es', 'tr']);
 export type ClueCardLocale = z.infer<typeof clueCardLocaleEnum>;
 
 export const clueCardDifficultyEnum = z.enum(['easy', 'medium', 'hard']);

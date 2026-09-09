@@ -123,10 +123,15 @@ function fisherYates<T>(arr: T[]): T[] {
  * first as 'a') must never be observable — a stable authored id would let a
  * client answer without ever watching the replay.
  */
+// Explicit per-locale copy (never a spread) so only known text keys survive.
+function snapshotText(text: I18nText): I18nText {
+  return { en: text.en, ka: text.ka ?? null, es: text.es ?? null, tr: text.tr ?? null };
+}
+
 function anonymizeOptions(options: ChoreographyOption[], prefix: string): ChoreographyOption[] {
   return fisherYates(options).map((o, i) => ({
     id: `${prefix}${i + 1}`,
-    text: { en: o.text.en, ka: o.text.ka ?? null },
+    text: snapshotText(o.text),
     is_correct: o.is_correct,
   }));
 }
@@ -162,8 +167,8 @@ function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
   });
   return {
     difficulty: goal.difficulty,
-    title: { en: goal.title.en, ka: goal.title.ka ?? null },
-    fun_fact: goal.fun_fact ? { en: goal.fun_fact.en, ka: goal.fun_fact.ka ?? null } : null,
+    title: snapshotText(goal.title),
+    fun_fact: goal.fun_fact ? snapshotText(goal.fun_fact) : null,
     video_url: goal.video_url ?? null,
     mirrored_url: goal.mirrored_url ?? null,
     clip_start_s: goal.clip_start_s ?? null,
@@ -173,7 +178,7 @@ function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
     options: anonymizeOptions(goal.options, 'o'),
     bonus: goal.bonus
       ? {
-          question: { en: goal.bonus.question.en, ka: goal.bonus.question.ka ?? null },
+          question: snapshotText(goal.bonus.question),
           options: anonymizeOptions(goal.bonus.options, 'b'),
         }
       : null,

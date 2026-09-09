@@ -66,6 +66,12 @@ const SCALAR_TARGETS: Record<string, { key: string; columns: ReadonlySet<string>
   goal_choreographies: { key: 'id', columns: new Set(['match_label_tr']) },
 };
 
+// campaign_quizzes tr_* columns are created by the SEO branch; every other
+// scalar target must already exist (turkish_catalog_support migration).
+const DEFERRABLE_COLUMNS: Record<string, ReadonlySet<string>> = {
+  campaign_quizzes: SCALAR_TARGETS.campaign_quizzes.columns,
+};
+
 function argValue(name: string): string | undefined {
   const prefix = `--${name}=`;
   return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
@@ -228,7 +234,7 @@ async function planJsonbChanges(
       if (rowChanged) {
         stats.changedRows += 1;
         backup.jsonb.push({ table, keyColumn: target.key, rowKey, column, value: original });
-        changes.push({ table, keyColumn: target.key, rowKey, column, value: next });
+        changes.push({ table, keyColumn: target.key, rowKey, column, value: next, original });
       }
     }
   }
@@ -252,6 +258,9 @@ async function planScalarChanges(
     const target = SCALAR_TARGETS[table];
     if (!target || !target.columns.has(targetColumn)) throw new Error(`Blocked scalar target ${table}.${targetColumn}`);
     if (!(await columnExists(sql, table, targetColumn))) {
+      if (!DEFERRABLE_COLUMNS[table]?.has(targetColumn)) {
+        throw new Error(`Required column ${table}.${targetColumn} is missing — run the Turkish catalog migration first`);
+      }
       stats.missingColumns += values.length;
       continue;
     }
@@ -371,7 +380,7 @@ async function planLocaleRows(
 async function applyChanges(
   sql: postgres.Sql,
   backup: Backup,
-  jsonb: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown }>,
+  jsonb: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown; original: unknown }>,
   scalar: Array<{ table: string; keyColumn: string; rowKey: string; column: string; value: unknown }>,
   localeRows: Array<Record<string, unknown>>,
   backupPath: string,
@@ -388,13 +397,27 @@ async function applyChanges(
     for (const changes of jsonbGroups.values()) {
       const first = changes[0];
       for (const batch of chunks(changes, 200)) {
-        await tx.unsafe(
+        // Planning read the rows outside this transaction; only overwrite a
+        // column that still holds the value we planned against, and abort the
+        // whole import (rolling back) if a CMS edit landed in between.
+        const updated = await tx.unsafe<{ row_key: string }[]>(
           `UPDATE public.${quoteIdentifier(first.table)} AS target
            SET ${quoteIdentifier(first.column)} = batch.value::jsonb
-           FROM UNNEST($1::text[], $2::text[]) AS batch(row_key, value)
-           WHERE target.${quoteIdentifier(first.keyColumn)}::text = batch.row_key`,
-          [batch.map((change) => change.rowKey), batch.map((change) => JSON.stringify(change.value))],
+           FROM UNNEST($1::text[], $2::text[], $3::text[]) AS batch(row_key, value, original)
+           WHERE target.${quoteIdentifier(first.keyColumn)}::text = batch.row_key
+             AND target.${quoteIdentifier(first.column)} IS NOT DISTINCT FROM batch.original::jsonb
+           RETURNING batch.row_key`,
+          [
+            batch.map((change) => change.rowKey),
+            batch.map((change) => JSON.stringify(change.value)),
+            batch.map((change) => JSON.stringify(change.original)),
+          ],
         );
+        if (updated.length !== batch.length) {
+          const applied = new Set(updated.map((row) => row.row_key));
+          const stale = batch.filter((change) => !applied.has(change.rowKey)).map((change) => change.rowKey);
+          throw new Error(`${first.table}.${first.column} changed since planning for ${stale.length} row(s) (${stale.slice(0, 5).join(', ')}); import rolled back`);
+        }
       }
     }
     const scalarGroups = groupBy(scalar, (change) => `${change.table}\0${change.keyColumn}\0${change.column}`);
@@ -431,7 +454,8 @@ async function applyChanges(
     }
   });
   backup.applied = true;
-  await fs.writeFile(backupPath, `${JSON.stringify(backup)}\n`);
+  await fs.writeFile(`${backupPath}.tmp`, `${JSON.stringify(backup)}\n`);
+  await fs.rename(`${backupPath}.tmp`, backupPath);
 }
 
 async function rollback(sql: postgres.Sql, backupPath: string, target: Target, projectRef: string) {

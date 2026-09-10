@@ -1107,6 +1107,11 @@ export const footballGridRepo = {
            JOIN football_grid_matches gm ON gm.series_id = s.id
           WHERE gm.match_id = $1 AND s.current_match_id = $1
             AND gm.phase = 'terminal' AND s.origin <> 'random'
+            AND NOT EXISTS (
+              SELECT 1 FROM football_grid_matches next_game
+               WHERE next_game.rematch_of_match_id = gm.match_id
+                 AND next_game.series_id <> s.id
+            )
           FOR UPDATE OF s`,
         [input.matchId],
       );
@@ -1445,6 +1450,11 @@ export const footballGridRepo = {
            JOIN football_grid_matches gm ON gm.series_id = s.id
           WHERE gm.match_id = $1 AND s.current_match_id = $1
             AND gm.phase = 'terminal' AND s.origin <> 'random'
+            AND NOT EXISTS (
+              SELECT 1 FROM football_grid_matches next_game
+               WHERE next_game.rematch_of_match_id = gm.match_id
+                 AND next_game.series_id <> s.id
+            )
           FOR UPDATE OF s`,
         [matchId],
       );
@@ -1453,7 +1463,7 @@ export const footballGridRepo = {
       // A best-of-N series only offers a rematch once it is decided; a game
       // that merely continues the series has already moved current_match_id on.
       // Any finished series can be replayed except one the server failed to
-      // continue; the replay starts a fresh score on the same series row.
+      // continue; the replay creates a fresh series with its own score.
       if (series.status === 'closed' && (!series.closed_reason || series.closed_reason === 'next_game_failed')) return null;
       if (series.status === 'rematch_pending' && series.rematch_expires_at) {
         return {
@@ -1791,11 +1801,44 @@ export const footballGridRepo = {
       // Every match belongs to a series. A random-opponent match creates its
       // own best-of-3 here; lobby starts and series continuations pass one in.
       let seriesId = input.seriesId ?? null;
+      let seriesFormat = input.seriesFormat ?? 'bo3';
+      let rematchIndex = input.rematchIndex ?? 0;
+      if (seriesId) {
+        const [previous] = await tx.unsafe<Array<{
+          closed_at: string | null; status: string; current_match_id: string | null;
+          next_pairing_token: string | null; format: FootballGridSeriesFormat; theme: string | null;
+        }>>(
+          `SELECT closed_at, status, current_match_id, next_pairing_token, format, theme
+             FROM football_grid_series WHERE id = $1 FOR UPDATE`,
+          [seriesId],
+        );
+        if (!previous) throw new Error('SERIES_CLOSED');
+        theme = input.theme ?? previous.theme ?? 'european';
+        if (previous.closed_at) {
+          // A rematch is a NEW series, not another board in the finished one.
+          // Reusing the old ID reset game_index but not rematch_index, making
+          // the following board look stale to both clients. It also rewrote
+          // the historical series score. Consume the accepted offer atomically
+          // with creation, so expiry/decline cannot resurrect a closed offer.
+          if (previous.status !== 'rematch_pending'
+            || previous.current_match_id !== input.rematchOfMatchId
+            || previous.next_pairing_token !== input.pairingToken) throw new Error('SERIES_CLOSED');
+          await tx.unsafe(
+            `UPDATE football_grid_series SET status = 'closed', next_pairing_token = null,
+                    rematch_expires_at = null, state_version = state_version + 1, updated_at = now()
+              WHERE id = $1`,
+            [seriesId],
+          );
+          seriesFormat = previous.format;
+          seriesId = null;
+          rematchIndex = 0;
+        }
+      }
       if (!seriesId) {
         const created = await tx.unsafe<Array<{ id: string }>>(
           `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
            VALUES ($1, $2, 1, $4, $3) RETURNING id`,
-          [input.origin, input.lobbyId, theme, input.seriesFormat ?? 'bo3'],
+          [input.origin, input.lobbyId, theme, seriesFormat],
         );
         seriesId = created[0].id;
       }
@@ -1880,7 +1923,7 @@ export const footballGridRepo = {
           input.origin,
           seriesId,
           input.rematchOfMatchId ?? null,
-          input.rematchIndex ?? 0,
+          rematchIndex,
           input.openerUserId,
           phaseDeadlineAt,
           input.wrongAnswerVisibility ?? false,
@@ -1960,7 +2003,7 @@ export const footballGridRepo = {
                   updated_at = now(), state_version = state_version + 1
             WHERE id = $1 AND (status <> 'closed' OR (closed_reason IS NOT NULL AND closed_reason <> 'next_game_failed'))
             RETURNING id`,
-          [seriesId, matchId, input.rematchIndex ?? 0, openerSeat === 1 ? 2 : 1, theme],
+          [seriesId, matchId, rematchIndex, openerSeat === 1 ? 2 : 1, theme],
         );
         // A concurrent decline or expiry closed the series between the second
         // acceptance and this creation. Abort instead of resurrecting it.

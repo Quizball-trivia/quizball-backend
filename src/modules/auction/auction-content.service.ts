@@ -283,6 +283,7 @@ export function displayLeagueName(slug: string): string {
 // on any client that falls back to plain clue text.
 const SNAPSHOT_FACETS = ['Goals', 'Assists', 'Market value', 'Age', 'League'] as const;
 const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'Age', 'League'] as const;
+const FACET_LABELS: ReadonlySet<string> = new Set([...SNAPSHOT_FACETS, ...SNAPSHOT_FACETS_GK]);
 
 /** Authored text hints revealed after the stat facets (clue_1 and clue_2). */
 export const AUCTION_TEXT_HINTS_PER_LOT = 2;
@@ -444,13 +445,15 @@ async function localizedClueSteps(
   }
   const byLocale: NonNullable<AuctionFootballer['cluesByLocale']> = {};
   for (const sibling of siblings) {
-    if (!isAuctionContentLocale(sibling.locale)) continue;
+    if (!isAuctionContentLocale(sibling.locale) || byLocale[sibling.locale]) continue;
     const texts = [sibling.clue_1, sibling.clue_2, sibling.clue_3];
     byLocale[sibling.locale] = [
       ...facets,
       ...authoredHints.map((hint) => {
+        // The slot is known to be an authored hint; a short translation is
+        // still a translation. Only empty or facet-label placeholders fall back.
         const text = texts[hint.index];
-        return typeof text === 'string' && text.trim().length >= 25 ? text : hint.text;
+        return typeof text === 'string' && text.trim().length > 0 && !FACET_LABELS.has(text.trim()) ? text : hint.text;
       }),
     ];
   }

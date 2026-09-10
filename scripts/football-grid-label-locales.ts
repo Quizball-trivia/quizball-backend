@@ -17,7 +17,7 @@ import postgres from 'postgres';
 
 type Locale = 'es' | 'tr';
 type Family = 'club' | 'country' | 'league' | 'manager' | 'teammate' | 'trophy_award' | 'wildcard';
-type Row = { criterion_key: string; family: Family; label_en: string };
+type Row = { id: string; criterion_key: string; family: Family; label_en: string };
 type Fixture = { version: 1; model: string; labels: Record<string, { en: string; es: string; tr: string }> };
 
 const FIXTURE_PATH = path.resolve('scripts/football-grid-label-locales.json');
@@ -111,7 +111,7 @@ async function build(sql: postgres.Sql) {
   } catch {
     // first run
   }
-  const rows = await sql<Row[]>`SELECT criterion_key, family, label_en FROM football_grid_criteria ORDER BY family, label_en`;
+  const rows = await sql<Row[]>`SELECT id, criterion_key, family, label_en FROM football_grid_criteria ORDER BY family, label_en`;
   const pending: Array<{ key: string; family: Family; en: string }> = [];
   for (const row of rows) {
     const existing = fixture.labels[row.criterion_key];
@@ -155,15 +155,15 @@ async function build(sql: postgres.Sql) {
 
 async function apply(sql: postgres.Sql, dryRun: boolean) {
   const fixture = JSON.parse(await fs.readFile(FIXTURE_PATH, 'utf8')) as Fixture;
-  const rows = await sql<Row[]>`SELECT criterion_key, family, label_en FROM football_grid_criteria`;
-  const updates: Array<{ key: string; es: string; tr: string }> = [];
+  const rows = await sql<Row[]>`SELECT id, criterion_key, family, label_en FROM football_grid_criteria`;
+  const updates: Array<{ id: string; es: string; tr: string }> = [];
   let stale = 0;
   let missing = 0;
   for (const row of rows) {
     const entry = fixture.labels[row.criterion_key];
     if (!entry) { missing += 1; continue; }
     if (entry.en !== row.label_en) { stale += 1; continue; }
-    updates.push({ key: row.criterion_key, es: entry.es, tr: entry.tr });
+    updates.push({ id: row.id, es: entry.es, tr: entry.tr });
   }
   console.log(JSON.stringify({ mode: dryRun ? 'dry-run' : 'apply', criteria: rows.length, updates: updates.length, missingFromFixture: missing, englishChangedSinceFixture: stale }));
   if (dryRun) return;
@@ -173,9 +173,9 @@ async function apply(sql: postgres.Sql, dryRun: boolean) {
       await tx.unsafe(
         `UPDATE football_grid_criteria AS c
            SET label_es = u.es, label_tr = u.tr
-          FROM UNNEST($1::text[], $2::text[], $3::text[]) AS u(key, es, tr)
-         WHERE c.criterion_key = u.key`,
-        [batch.map((u) => u.key), batch.map((u) => u.es), batch.map((u) => u.tr)],
+          FROM UNNEST($1::uuid[], $2::text[], $3::text[]) AS u(id, es, tr)
+         WHERE c.id = u.id`,
+        [batch.map((u) => u.id), batch.map((u) => u.es), batch.map((u) => u.tr)],
       );
     }
   });

@@ -382,21 +382,58 @@ export const auctionContentRepo = {
   },
 
   /**
-   * Published rows for the same player + card variant in every locale. The
-   * Spanish/Turkish imports copy football_player_id and variant_key from the
-   * source card, so this is the reliable cross-locale link.
+   * Published rows of the same card in every locale. Pipeline-v2 cards share a
+   * card_family_id + variant_key; the imported Spanish/Turkish copies keep both.
+   * Legacy cards (no family) are linked through the translation note the
+   * importers write ("<Language> translation of <en id>") and, for Georgian,
+   * through the single legacy row of the same player.
    */
   async getPublishedClueSiblings(
     clueCardId: string
   ): Promise<Array<{ locale: string; clue_1: string; clue_2: string; clue_3: string }>> {
     return await sql<Array<{ locale: string; clue_1: string; clue_2: string; clue_3: string }>>`
-      SELECT sibling.locale, sibling.clue_1, sibling.clue_2, sibling.clue_3
-      FROM player_clue_cards source
-      JOIN player_clue_cards sibling
-        ON sibling.football_player_id = source.football_player_id
-       AND sibling.variant_key IS NOT DISTINCT FROM source.variant_key
-       AND sibling.status = 'published'
-      WHERE source.id = ${clueCardId}
+      WITH source AS (
+        SELECT * FROM player_clue_cards WHERE id = ${clueCardId}
+      ),
+      root AS (
+        SELECT
+          source.football_player_id,
+          source.card_family_id,
+          source.variant_key,
+          COALESCE(
+            (regexp_match(source.review_notes, 'translation of ([0-9a-f-]{36})'))[1]::uuid,
+            CASE
+              WHEN source.locale = 'en' OR source.card_family_id IS NOT NULL THEN source.id
+              ELSE (
+                SELECT min(en.id::text)::uuid FROM player_clue_cards en
+                WHERE en.locale = 'en' AND en.status = 'published' AND en.card_family_id IS NULL
+                  AND en.football_player_id = source.football_player_id
+                HAVING count(*) = 1
+              )
+            END,
+            source.id
+          ) AS root_id
+        FROM source
+      )
+      SELECT s.locale, s.clue_1, s.clue_2, s.clue_3
+      FROM player_clue_cards s, root
+      WHERE s.status = 'published'
+        AND s.football_player_id = root.football_player_id
+        AND (
+          (root.card_family_id IS NOT NULL
+             AND s.card_family_id = root.card_family_id
+             AND s.variant_key IS NOT DISTINCT FROM root.variant_key)
+          OR (root.card_family_id IS NULL AND (
+                s.id = root.root_id
+             OR s.review_notes ~ ('translation of ' || root.root_id::text)
+             OR (s.locale = 'ka' AND s.card_family_id IS NULL AND (
+                  SELECT count(*) FROM player_clue_cards k
+                  WHERE k.locale = 'ka' AND k.status = 'published' AND k.card_family_id IS NULL
+                    AND k.football_player_id = root.football_player_id
+                ) = 1)
+          ))
+        )
+      ORDER BY s.created_at, s.id
     `;
   },
 

@@ -255,7 +255,9 @@ export function toHiddenFootballer(
     positionGroup: footballer.positionGroup,
     startingPrice: footballer.startingPrice,
     clues: [...revealedClues],
-    ...(footballer.cluesByLocale
+    // The map travels only once a clue is out: its mere presence would tell a
+    // devtools reader that the card carries authored hints before any reveal.
+    ...(footballer.cluesByLocale && revealedClues.length > 0
       ? { cluesByLocale: sliceCluesByLocale(footballer.cluesByLocale, revealedClues.length) }
       : {}),
     // Only what the pre-reveal UI actually renders travels: the SCOUT season

@@ -116,6 +116,10 @@ describe('localized clues over the wire', () => {
     expect('cluesByLocale' in toHiddenFootballer(footballer, ['Goals'])).toBe(false);
   });
 
+  it('hidden lots omit the map before the first reveal so a mystery card stays blind', () => {
+    expect('cluesByLocale' in toHiddenFootballer(localized)).toBe(false);
+  });
+
   it('revealed lots carry the full map', () => {
     expect(toRevealedFootballer(localized).cluesByLocale?.tr).toHaveLength(7);
   });

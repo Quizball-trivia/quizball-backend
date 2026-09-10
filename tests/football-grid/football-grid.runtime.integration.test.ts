@@ -1629,6 +1629,8 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
     runtimeSeriesIds.push(seriesId);
     const firstMatch = await playWinningLine('private', seriesId);
+    await footballGridRepo.advanceSeriesAfterGame(firstMatch.matchId);
+    await footballGridRepo.openRematchWindow(firstMatch.matchId);
     const info = await footballGridRepo.getRematchInfo(firstMatch.matchId);
     expect(info?.eligible).toBe(true);
     const firstCommandId = randomUUID();
@@ -1694,6 +1696,51 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(replayedCreate.created).toBe(false);
     expect(replayedCreate.state.matchId).toBe(nextMatch.state.matchId);
     expect(nextMatch.state.openerUserId).not.toBe(firstMatch.state.openerUserId);
+    const fresh = await footballGridRepo.getSeriesInfoForMatch(nextMatch.state.matchId);
+    expect(fresh).toMatchObject({ format: 'single', gameIndex: 1, finished: false, draws: 0 });
+    expect(fresh!.seriesId).not.toBe(seriesId);
+    runtimeSeriesIds.push(fresh!.seriesId);
+    expect(await footballGridRepo.getSeriesInfoForMatch(firstMatch.matchId)).toMatchObject({ finished: true, winnerUserId: firstMatch.playerA });
+    expect(await footballGridRepo.openRematchWindow(firstMatch.matchId)).toBeNull();
+  });
+
+  it('a BO3 rematch starts at board 1 and an accepted draw advances to playable board 2', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const first = await createReadyTurn('private', undefined, undefined, undefined, 'bo3');
+    await footballGridService.forfeit({ matchId: first.matchId, userId: first.playerB, expectedStateVersion: first.stateVersion });
+    await footballGridRepo.advanceSeriesAfterGame(first.matchId);
+    const window = await footballGridRepo.openRematchWindow(first.matchId);
+    const a = await footballGridRepo.offerRematch({ matchId: first.matchId, userId: first.playerA, commandId: randomUUID(), expectedSeriesVersion: window!.seriesVersion, proposedPairingToken: randomUUID() });
+    const b = await footballGridRepo.offerRematch({ matchId: first.matchId, userId: first.playerB, commandId: randomUUID(), expectedSeriesVersion: a.seriesVersion, proposedPairingToken: randomUUID() });
+    await footballGridRepo.createPairing({ pairingToken: b.pairingToken, searchAId: b.seriesId, searchBId: b.seriesId, userAId: first.playerA, userBId: first.playerB, opponentType: 'human' });
+    let state = (await footballGridService.createMatch({ pairingToken: b.pairingToken, origin: 'private', players: b.players, openerUserId: b.players.find(p => p.seat === b.openerSeat)!.userId, seriesId: b.seriesId, rematchOfMatchId: first.matchId, rematchIndex: b.rematchIndex })).state;
+    runtimeMatchIds.push(state.matchId);
+    const fresh = await footballGridRepo.getSeriesInfoForMatch(state.matchId);
+    runtimeSeriesIds.push(fresh!.seriesId);
+    expect(fresh).toMatchObject({ gameIndex: 1, finished: false, draws: 0, wins: { [first.playerA]: 0, [first.playerB]: 0 } });
+    expect(fresh!.seriesId).not.toBe(b.seriesId);
+    for (const userId of [first.playerA, first.playerB]) state = await footballGridService.acknowledgeHandoff({ matchId: state.matchId, userId, expectedStateVersion: state.stateVersion });
+    for (const userId of [first.playerA, first.playerB]) state = await footballGridService.markReady({ matchId: state.matchId, userId, commandId: randomUUID(), expectedStateVersion: state.stateVersion });
+    await db`UPDATE football_grid_matches SET phase_deadline_at = now() - interval '1 second' WHERE match_id = ${state.matchId}`;
+    state = (await footballGridService.handlePhaseDeadline(state.matchId, state.stateVersion, true)).state;
+    state = await footballGridService.offerDraw({ matchId: state.matchId, userId: first.playerA, expectedStateVersion: state.stateVersion });
+    state = await footballGridService.respondToDraw({ matchId: state.matchId, userId: first.playerB, accept: true, expectedStateVersion: state.stateVersion });
+    const advance = await footballGridRepo.advanceSeriesAfterGame(state.matchId);
+    expect(advance.kind).toBe('continued');
+    if (advance.kind !== 'continued') throw new Error('Expected second board');
+    expect(advance.rematchIndex).toBe(1);
+    await footballGridRepo.createPairing({ pairingToken: advance.pairingToken!, searchAId: advance.seriesId, searchBId: advance.seriesId, userAId: first.playerA, userBId: first.playerB, opponentType: 'human' });
+    let next = (await footballGridService.createMatch({ pairingToken: advance.pairingToken!, origin: 'private', players: advance.players, openerUserId: advance.players.find(p => p.seat === advance.openerSeat)!.userId, seriesId: advance.seriesId, rematchOfMatchId: state.matchId, rematchIndex: advance.rematchIndex })).state;
+    runtimeMatchIds.push(next.matchId);
+    expect(await footballGridRepo.getSeriesInfoForMatch(next.matchId)).toMatchObject({ seriesId: fresh!.seriesId, gameIndex: 2, draws: 1, finished: false });
+    for (const userId of [first.playerA, first.playerB]) next = await footballGridService.acknowledgeHandoff({ matchId: next.matchId, userId, expectedStateVersion: next.stateVersion });
+    for (const userId of [first.playerA, first.playerB]) next = await footballGridService.markReady({ matchId: next.matchId, userId, commandId: randomUUID(), expectedStateVersion: next.stateVersion });
+    await db`UPDATE football_grid_matches SET phase_deadline_at = now() - interval '1 second' WHERE match_id = ${next.matchId}`;
+    next = (await footballGridService.handlePhaseDeadline(next.matchId, next.stateVersion, true)).state;
+    expect(next.phase).toBe('turn');
+    const answer = await footballGridService.submitAnswer({ matchId: next.matchId, userId: next.currentPlayerUserId!, commandId: randomUUID(), expectedStateVersion: next.stateVersion, cellIndex: 0, text: 'Grid Player 1', locale: 'en' });
+    expect(answer.outcome).toBe('correct');
+    expect(await footballGridRepo.advanceSeriesAfterGame(state.matchId)).toMatchObject({ kind: 'continued', nextMatchId: next.matchId });
   });
 
   it('pauses safely after the durable command retry budget is exhausted', async (context) => {

@@ -283,7 +283,18 @@ export function displayLeagueName(slug: string): string {
 // on any client that falls back to plain clue text.
 const SNAPSHOT_FACETS = ['Goals', 'Assists', 'Market value', 'Age', 'League'] as const;
 const SNAPSHOT_FACETS_GK = ['Clean sheets', 'Goals conceded', 'Market value', 'Age', 'League'] as const;
-const FACET_LABELS: ReadonlySet<string> = new Set([...SNAPSHOT_FACETS, ...SNAPSHOT_FACETS_GK]);
+// Stat-pivot placeholder rows carry facet LABELS in their clue columns, in the
+// row's own language; a sibling slot holding one is not a translated hint.
+const FACET_LABELS: ReadonlySet<string> = new Set([
+  ...SNAPSHOT_FACETS, ...SNAPSHOT_FACETS_GK,
+  'გოლები', 'ასისტები', 'საბაზრო ღირებულება', 'ასაკი', 'ლიგა', 'მშრალი მატჩები', 'გაშვებული გოლები',
+  'Goles', 'Asistencias', 'Valor de mercado', 'Edad', 'Liga', 'Porterías a cero', 'Goles encajados',
+  'Goller', 'Asistler', 'Piyasa değeri', 'Yaş', 'Lig', 'Gol yemeden bitirilen maçlar', 'Yenilen goller',
+].map((label) => label.toLowerCase()));
+
+function isFacetPlaceholder(text: string): boolean {
+  return FACET_LABELS.has(text.trim().toLowerCase());
+}
 
 /** Authored text hints revealed after the stat facets (clue_1 and clue_2). */
 export const AUCTION_TEXT_HINTS_PER_LOT = 2;
@@ -453,7 +464,7 @@ async function localizedClueSteps(
         // The slot is known to be an authored hint; a short translation is
         // still a translation. Only empty or facet-label placeholders fall back.
         const text = texts[hint.index];
-        return typeof text === 'string' && text.trim().length > 0 && !FACET_LABELS.has(text.trim()) ? text : hint.text;
+        return typeof text === 'string' && text.trim().length > 0 && !isFacetPlaceholder(text) ? text : hint.text;
       }),
     ];
   }

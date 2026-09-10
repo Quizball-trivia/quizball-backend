@@ -34,6 +34,7 @@ scripts/*
 !scripts/import-turkish-content.ts
 !scripts/football-grid-label-locales.ts
 !scripts/football-grid-label-locales.json
+!scripts/sync-content-from-prod.ts
 !scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts

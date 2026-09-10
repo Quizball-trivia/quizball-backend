@@ -116,6 +116,8 @@ async function build(sql: postgres.Sql) {
   for (const row of rows) {
     const existing = fixture.labels[row.criterion_key];
     if (existing && existing.en === row.label_en && existing.es && existing.tr) continue;
+    // An English label that changed invalidates both cached translations.
+    if (existing && existing.en !== row.label_en) delete fixture.labels[row.criterion_key];
     const rule = ruleBased(row);
     if (rule) {
       fixture.labels[row.criterion_key] = { en: row.label_en, ...rule };
@@ -167,6 +169,7 @@ async function apply(sql: postgres.Sql, dryRun: boolean) {
   }
   console.log(JSON.stringify({ mode: dryRun ? 'dry-run' : 'apply', criteria: rows.length, updates: updates.length, missingFromFixture: missing, englishChangedSinceFixture: stale }));
   if (dryRun) return;
+  if (missing > 0 || stale > 0) throw new Error(`Fixture incomplete: ${missing} rows missing, ${stale} rows with a changed English label — rebuild with --build first`);
   await sql.begin(async (tx) => {
     for (let offset = 0; offset < updates.length; offset += 500) {
       const batch = updates.slice(offset, offset + 500);

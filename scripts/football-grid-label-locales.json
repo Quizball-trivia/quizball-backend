@@ -1,0 +1,3146 @@
+{
+  "version": 1,
+  "model": "google/gemini-2.5-flash-lite",
+  "labels": {
+    "club-1-fc-heidenheim": {
+      "en": "1. FC Heidenheim",
+      "es": "1. FC Heidenheim",
+      "tr": "1. FC Heidenheim"
+    },
+    "club-1-fc-koln": {
+      "en": "1. FC Köln",
+      "es": "1. FC Köln",
+      "tr": "1. FC Köln"
+    },
+    "club:1-fc-koln": {
+      "en": "1. FC Köln",
+      "es": "1. FC Köln",
+      "tr": "1. FC Köln"
+    },
+    "club-1899-hoffenheim": {
+      "en": "1899 Hoffenheim",
+      "es": "1899 Hoffenheim",
+      "tr": "1899 Hoffenheim"
+    },
+    "club:ac-milan": {
+      "en": "AC Milan",
+      "es": "AC Milan",
+      "tr": "AC Milan"
+    },
+    "club:acf-fiorentina": {
+      "en": "ACF Fiorentina",
+      "es": "ACF Fiorentina",
+      "tr": "ACF Fiorentina"
+    },
+    "club:wl-adana-demirspor": {
+      "en": "Adana Demirspor",
+      "es": "Adana Demirspor",
+      "tr": "Adana Demirspor"
+    },
+    "club-aek-athens": {
+      "en": "AEK Athens",
+      "es": "AEK Athens",
+      "tr": "AEK Athens"
+    },
+    "club-afc-ajax": {
+      "en": "AFC Ajax",
+      "es": "AFC Ajax",
+      "tr": "AFC Ajax"
+    },
+    "club:afc-ajax": {
+      "en": "AFC Ajax",
+      "es": "AFC Ajax",
+      "tr": "AFC Ajax"
+    },
+    "club-afc-bournemouth": {
+      "en": "AFC Bournemouth",
+      "es": "AFC Bournemouth",
+      "tr": "AFC Bournemouth"
+    },
+    "club-agf-aarhus": {
+      "en": "AGF Aarhus",
+      "es": "AGF Aarhus",
+      "tr": "AGF Aarhus"
+    },
+    "club-al-jazira": {
+      "en": "Al-Jazira",
+      "es": "Al-Jazira",
+      "tr": "Al-Jazira"
+    },
+    "club-al-nassr": {
+      "en": "Al-Nassr",
+      "es": "Al-Nassr",
+      "tr": "Al-Nassr"
+    },
+    "club-al-qadsiah": {
+      "en": "Al-Qadsiah",
+      "es": "Al-Qadsiah",
+      "tr": "Al-Qadsiah"
+    },
+    "club-alania-vladikavkaz": {
+      "en": "Alania Vladikavkaz",
+      "es": "Alania Vladikavkaz",
+      "tr": "Alania Vladikavkaz"
+    },
+    "club-america-de-cali": {
+      "en": "América de Cali",
+      "es": "América de Cali",
+      "tr": "América de Cali"
+    },
+    "club-anorthosis-famagusta": {
+      "en": "Anorthosis Famagusta",
+      "es": "Anorthosis Famagusta",
+      "tr": "Anorthosis Famagusta"
+    },
+    "club-anzhi-makhachkala": {
+      "en": "Anzhi Makhachkala",
+      "es": "Anzhi Makhachkala",
+      "tr": "Anzhi Makhachkala"
+    },
+    "club-apoel": {
+      "en": "APOEL",
+      "es": "APOEL",
+      "tr": "APOEL"
+    },
+    "club-argentinos-juniors": {
+      "en": "Argentinos Juniors",
+      "es": "Argentinos Juniors",
+      "tr": "Argentinos Juniors"
+    },
+    "club:arsenal": {
+      "en": "Arsenal",
+      "es": "Arsenal",
+      "tr": "Arsenal"
+    },
+    "arsenal": {
+      "en": "Arsenal",
+      "es": "Arsenal",
+      "tr": "Arsenal"
+    },
+    "club:as-monaco": {
+      "en": "AS Monaco",
+      "es": "AS Monaco",
+      "tr": "AS Monaco"
+    },
+    "club:as-roma": {
+      "en": "AS Roma",
+      "es": "AS Roma",
+      "tr": "AS Roma"
+    },
+    "club-as-saint-etienne": {
+      "en": "AS Saint-Étienne",
+      "es": "AS Saint-Étienne",
+      "tr": "AS Saint-Étienne"
+    },
+    "club:as-saint-etienne": {
+      "en": "AS Saint-Étienne",
+      "es": "AS Saint-Étienne",
+      "tr": "AS Saint-Étienne"
+    },
+    "club:aston-villa": {
+      "en": "Aston Villa",
+      "es": "Aston Villa",
+      "tr": "Aston Villa"
+    },
+    "club-atalanta": {
+      "en": "Atalanta",
+      "es": "Atalanta",
+      "tr": "Atalanta"
+    },
+    "club:atalanta-bc": {
+      "en": "Atalanta BC",
+      "es": "Atalanta BC",
+      "tr": "Atalanta BC"
+    },
+    "club-atlanta-united": {
+      "en": "Atlanta United",
+      "es": "Atlanta United",
+      "tr": "Atlanta United"
+    },
+    "club:atletico-de-madrid": {
+      "en": "Atlético de Madrid",
+      "es": "Atlético de Madrid",
+      "tr": "Atlético de Madrid"
+    },
+    "club-atletico-mineiro": {
+      "en": "Atlético Mineiro",
+      "es": "Atlético Mineiro",
+      "tr": "Atlético Mineiro"
+    },
+    "club-atletico-nacional": {
+      "en": "Atlético Nacional",
+      "es": "Atlético Nacional",
+      "tr": "Atlético Nacional"
+    },
+    "club-atletico-paranaense": {
+      "en": "Atlético Paranaense",
+      "es": "Atlético Paranaense",
+      "tr": "Atlético Paranaense"
+    },
+    "club-az": {
+      "en": "AZ",
+      "es": "AZ",
+      "tr": "AZ"
+    },
+    "club-az-alkmaar": {
+      "en": "AZ Alkmaar",
+      "es": "AZ Alkmaar",
+      "tr": "AZ Alkmaar"
+    },
+    "club-banfield": {
+      "en": "Banfield",
+      "es": "Banfield",
+      "tr": "Banfield"
+    },
+    "club:wl-basaksehir": {
+      "en": "Başakşehir",
+      "es": "Başakşehir",
+      "tr": "Başakşehir"
+    },
+    "club-basel": {
+      "en": "Basel",
+      "es": "Basel",
+      "tr": "Basel"
+    },
+    "club:bayer-04-leverkusen": {
+      "en": "Bayer 04 Leverkusen",
+      "es": "Bayer 04 Leverkusen",
+      "tr": "Bayer 04 Leverkusen"
+    },
+    "club-benfica": {
+      "en": "Benfica",
+      "es": "Benfica",
+      "tr": "Benfica"
+    },
+    "club:wl-besiktas": {
+      "en": "Beşiktaş",
+      "es": "Beşiktaş",
+      "tr": "Beşiktaş"
+    },
+    "club-besiktas": {
+      "en": "Beşiktaş",
+      "es": "Beşiktaş",
+      "tr": "Beşiktaş"
+    },
+    "club-blackburn-rovers": {
+      "en": "Blackburn Rovers",
+      "es": "Blackburn Rovers",
+      "tr": "Blackburn Rovers"
+    },
+    "club-boca-juniors": {
+      "en": "Boca Juniors",
+      "es": "Boca Juniors",
+      "tr": "Boca Juniors"
+    },
+    "club-bologna": {
+      "en": "Bologna",
+      "es": "Bologna",
+      "tr": "Bologna"
+    },
+    "club-bolton-wanderers": {
+      "en": "Bolton Wanderers",
+      "es": "Bolton Wanderers",
+      "tr": "Bolton Wanderers"
+    },
+    "club-bordeaux": {
+      "en": "Bordeaux",
+      "es": "Bordeaux",
+      "tr": "Bordeaux"
+    },
+    "club:borussia-dortmund": {
+      "en": "Borussia Dortmund",
+      "es": "Borussia Dortmund",
+      "tr": "Borussia Dortmund"
+    },
+    "club-borussia-monchengladbach": {
+      "en": "Borussia Mönchengladbach",
+      "es": "Borussia Mönchengladbach",
+      "tr": "Borussia Mönchengladbach"
+    },
+    "club:borussia-monchengladbach": {
+      "en": "Borussia Mönchengladbach",
+      "es": "Borussia Mönchengladbach",
+      "tr": "Borussia Mönchengladbach"
+    },
+    "club-botafogo": {
+      "en": "Botafogo",
+      "es": "Botafogo",
+      "tr": "Botafogo"
+    },
+    "club:wl-bournemouth": {
+      "en": "Bournemouth",
+      "es": "Bournemouth",
+      "tr": "Bournemouth"
+    },
+    "club-braga": {
+      "en": "Braga",
+      "es": "Braga",
+      "tr": "Braga"
+    },
+    "club:wl-brentford": {
+      "en": "Brentford",
+      "es": "Brentford",
+      "tr": "Brentford"
+    },
+    "club-brighton-hove-albion": {
+      "en": "Brighton & Hove Albion",
+      "es": "Brighton & Hove Albion",
+      "tr": "Brighton & Hove Albion"
+    },
+    "club-bursaspor": {
+      "en": "Bursaspor",
+      "es": "Bursaspor",
+      "tr": "Bursaspor"
+    },
+    "club:ca-osasuna": {
+      "en": "CA Osasuna",
+      "es": "CA Osasuna",
+      "tr": "CA Osasuna"
+    },
+    "club-cagliari": {
+      "en": "Cagliari",
+      "es": "Cagliari",
+      "tr": "Cagliari"
+    },
+    "club:celta-de-vigo": {
+      "en": "Celta de Vigo",
+      "es": "Celta de Vigo",
+      "tr": "Celta de Vigo"
+    },
+    "club-celtic": {
+      "en": "Celtic",
+      "es": "Celtic",
+      "tr": "Celtic"
+    },
+    "club:celtic": {
+      "en": "Celtic",
+      "es": "Celtic",
+      "tr": "Celtic"
+    },
+    "club:chelsea": {
+      "en": "Chelsea",
+      "es": "Chelsea",
+      "tr": "Chelsea"
+    },
+    "club-chornomorets-odesa": {
+      "en": "Chornomorets Odesa",
+      "es": "Chornomorets Odesa",
+      "tr": "Chornomorets Odesa"
+    },
+    "club-club-america": {
+      "en": "Club América",
+      "es": "Club América",
+      "tr": "Club América"
+    },
+    "club-club-brugge": {
+      "en": "Club Brugge",
+      "es": "Club Brugge",
+      "tr": "Club Brugge"
+    },
+    "club-colo-colo": {
+      "en": "Colo-Colo",
+      "es": "Colo-Colo",
+      "tr": "Colo-Colo"
+    },
+    "club-columbus-crew": {
+      "en": "Columbus Crew",
+      "es": "Columbus Crew",
+      "tr": "Columbus Crew"
+    },
+    "club-copenhagen": {
+      "en": "Copenhagen",
+      "es": "Copenhagen",
+      "tr": "Copenhagen"
+    },
+    "club-corinthians": {
+      "en": "Corinthians",
+      "es": "Corinthians",
+      "tr": "Corinthians"
+    },
+    "club-coritiba": {
+      "en": "Coritiba",
+      "es": "Coritiba",
+      "tr": "Coritiba"
+    },
+    "club-cracovia": {
+      "en": "Cracovia",
+      "es": "Cracovia",
+      "tr": "Cracovia"
+    },
+    "club-cremonese": {
+      "en": "Cremonese",
+      "es": "Cremonese",
+      "tr": "Cremonese"
+    },
+    "club-cruz-azul": {
+      "en": "Cruz Azul",
+      "es": "Cruz Azul",
+      "tr": "Cruz Azul"
+    },
+    "club-cruzeiro": {
+      "en": "Cruzeiro",
+      "es": "Cruzeiro",
+      "tr": "Cruzeiro"
+    },
+    "club-crystal-palace": {
+      "en": "Crystal Palace",
+      "es": "Crystal Palace",
+      "tr": "Crystal Palace"
+    },
+    "club:wl-crystal-palace": {
+      "en": "Crystal Palace",
+      "es": "Crystal Palace",
+      "tr": "Crystal Palace"
+    },
+    "club-cska-moscow": {
+      "en": "CSKA Moscow",
+      "es": "CSKA Moscow",
+      "tr": "CSKA Moscow"
+    },
+    "club-defensa-y-justicia": {
+      "en": "Defensa y Justicia",
+      "es": "Defensa y Justicia",
+      "tr": "Defensa y Justicia"
+    },
+    "club-defensor-sporting": {
+      "en": "Defensor Sporting",
+      "es": "Defensor Sporting",
+      "tr": "Defensor Sporting"
+    },
+    "club-deportes-tolima": {
+      "en": "Deportes Tolima",
+      "es": "Deportes Tolima",
+      "tr": "Deportes Tolima"
+    },
+    "club-deportivo-cali": {
+      "en": "Deportivo Cali",
+      "es": "Deportivo Cali",
+      "tr": "Deportivo Cali"
+    },
+    "club-deportivo-la-coruna": {
+      "en": "Deportivo La Coruña",
+      "es": "Deportivo La Coruña",
+      "tr": "Deportivo La Coruña"
+    },
+    "club-derby-county": {
+      "en": "Derby County",
+      "es": "Derby County",
+      "tr": "Derby County"
+    },
+    "club-dijon": {
+      "en": "Dijon",
+      "es": "Dijon",
+      "tr": "Dijon"
+    },
+    "club-dila-gori": {
+      "en": "Dila Gori",
+      "es": "Dila Gori",
+      "tr": "Dila Gori"
+    },
+    "club-dinamo-batumi": {
+      "en": "Dinamo Batumi",
+      "es": "Dinamo Batumi",
+      "tr": "Dinamo Batumi"
+    },
+    "club-dinamo-tbilisi": {
+      "en": "Dinamo Tbilisi",
+      "es": "Dinamo Tbilisi",
+      "tr": "Dinamo Tbilisi"
+    },
+    "club-dnipro": {
+      "en": "Dnipro",
+      "es": "Dnipro",
+      "tr": "Dnipro"
+    },
+    "club-dnipro-dnipropetrovsk": {
+      "en": "Dnipro Dnipropetrovsk",
+      "es": "Dnipro Dnipropetrovsk",
+      "tr": "Dnipro Dnipropetrovsk"
+    },
+    "club-dundee": {
+      "en": "Dundee",
+      "es": "Dundee",
+      "tr": "Dundee"
+    },
+    "club-dynamo-kyiv": {
+      "en": "Dynamo Kyiv",
+      "es": "Dynamo Kyiv",
+      "tr": "Dynamo Kyiv"
+    },
+    "club-dynamo-moscow": {
+      "en": "Dynamo Moscow",
+      "es": "Dynamo Moscow",
+      "tr": "Dynamo Moscow"
+    },
+    "club-eintracht-frankfurt": {
+      "en": "Eintracht Frankfurt",
+      "es": "Eintracht Frankfurt",
+      "tr": "Eintracht Frankfurt"
+    },
+    "club:eintracht-frankfurt": {
+      "en": "Eintracht Frankfurt",
+      "es": "Eintracht Frankfurt",
+      "tr": "Eintracht Frankfurt"
+    },
+    "club-empoli": {
+      "en": "Empoli",
+      "es": "Empoli",
+      "tr": "Empoli"
+    },
+    "club-esbjerg-fb": {
+      "en": "Esbjerg fB",
+      "es": "Esbjerg fB",
+      "tr": "Esbjerg fB"
+    },
+    "club-espanyol": {
+      "en": "Espanyol",
+      "es": "Espanyol",
+      "tr": "Espanyol"
+    },
+    "club-estoril": {
+      "en": "Estoril",
+      "es": "Estoril",
+      "tr": "Estoril"
+    },
+    "club-estudiantes": {
+      "en": "Estudiantes",
+      "es": "Estudiantes",
+      "tr": "Estudiantes"
+    },
+    "club:everton": {
+      "en": "Everton",
+      "es": "Everton",
+      "tr": "Everton"
+    },
+    "club-fc-augsburg": {
+      "en": "FC Augsburg",
+      "es": "FC Augsburg",
+      "tr": "FC Augsburg"
+    },
+    "club:fc-barcelona": {
+      "en": "FC Barcelona",
+      "es": "FC Barcelona",
+      "tr": "FC Barcelona"
+    },
+    "fc-barcelona": {
+      "en": "FC Barcelona",
+      "es": "FC Barcelona",
+      "tr": "FC Barcelona"
+    },
+    "club-fc-basel": {
+      "en": "FC Basel",
+      "es": "FC Basel",
+      "tr": "FC Basel"
+    },
+    "club:fc-bayern-munich": {
+      "en": "FC Bayern Munich",
+      "es": "FC Bayern Munich",
+      "tr": "FC Bayern Munich"
+    },
+    "club-fc-copenhagen": {
+      "en": "FC Copenhagen",
+      "es": "FC Copenhagen",
+      "tr": "FC Copenhagen"
+    },
+    "club-fc-famalicao": {
+      "en": "FC Famalicão",
+      "es": "FC Famalicão",
+      "tr": "FC Famalicão"
+    },
+    "club-fc-groningen": {
+      "en": "FC Groningen",
+      "es": "FC Groningen",
+      "tr": "FC Groningen"
+    },
+    "club-fc-krasnodar": {
+      "en": "FC Krasnodar",
+      "es": "FC Krasnodar",
+      "tr": "FC Krasnodar"
+    },
+    "club-fc-luzern": {
+      "en": "FC Luzern",
+      "es": "FC Luzern",
+      "tr": "FC Luzern"
+    },
+    "club:fc-porto": {
+      "en": "FC Porto",
+      "es": "FC Porto",
+      "tr": "FC Porto"
+    },
+    "club-fc-schalke-04": {
+      "en": "FC Schalke 04",
+      "es": "FC Schalke 04",
+      "tr": "FC Schalke 04"
+    },
+    "club:fc-schalke-04": {
+      "en": "FC Schalke 04",
+      "es": "FC Schalke 04",
+      "tr": "FC Schalke 04"
+    },
+    "club-fc-twente": {
+      "en": "FC Twente",
+      "es": "FC Twente",
+      "tr": "FC Twente"
+    },
+    "club-fc-zurich": {
+      "en": "FC Zürich",
+      "es": "FC Zürich",
+      "tr": "FC Zürich"
+    },
+    "club:wl-fenerbahce": {
+      "en": "Fenerbahçe",
+      "es": "Fenerbahçe",
+      "tr": "Fenerbahçe"
+    },
+    "club-ferencvaros": {
+      "en": "Ferencváros",
+      "es": "Ferencváros",
+      "tr": "Ferencváros"
+    },
+    "club-feyenoord": {
+      "en": "Feyenoord",
+      "es": "Feyenoord",
+      "tr": "Feyenoord"
+    },
+    "club-flamengo": {
+      "en": "Flamengo",
+      "es": "Flamengo",
+      "tr": "Flamengo"
+    },
+    "club-fluminense": {
+      "en": "Fluminense",
+      "es": "Fluminense",
+      "tr": "Fluminense"
+    },
+    "club-frosinone": {
+      "en": "Frosinone",
+      "es": "Frosinone",
+      "tr": "Frosinone"
+    },
+    "club:wl-fulham": {
+      "en": "Fulham",
+      "es": "Fulham",
+      "tr": "Fulham"
+    },
+    "club:wl-galatasaray": {
+      "en": "Galatasaray",
+      "es": "Galatasaray",
+      "tr": "Galatasaray"
+    },
+    "club-genclerbirligi": {
+      "en": "Gençlerbirliği",
+      "es": "Gençlerbirliği",
+      "tr": "Gençlerbirliği"
+    },
+    "club-genoa": {
+      "en": "Genoa",
+      "es": "Genoa",
+      "tr": "Genoa"
+    },
+    "club:genoa-cfc": {
+      "en": "Genoa CFC",
+      "es": "Genoa CFC",
+      "tr": "Genoa CFC"
+    },
+    "club-gent": {
+      "en": "Gent",
+      "es": "Gent",
+      "tr": "Gent"
+    },
+    "club-getafe": {
+      "en": "Getafe",
+      "es": "Getafe",
+      "tr": "Getafe"
+    },
+    "club-gil-vicente": {
+      "en": "Gil Vicente",
+      "es": "Gil Vicente",
+      "tr": "Gil Vicente"
+    },
+    "club-gimnasia-la-plata": {
+      "en": "Gimnasia La Plata",
+      "es": "Gimnasia La Plata",
+      "tr": "Gimnasia La Plata"
+    },
+    "club-gimnastic": {
+      "en": "Gimnàstic",
+      "es": "Gimnàstic",
+      "tr": "Gimnàstic"
+    },
+    "club-goias": {
+      "en": "Goiás",
+      "es": "Goiás",
+      "tr": "Goiás"
+    },
+    "club-grasshoppers": {
+      "en": "Grasshoppers",
+      "es": "Grasshoppers",
+      "tr": "Grasshoppers"
+    },
+    "club-gremio": {
+      "en": "Grêmio",
+      "es": "Grêmio",
+      "tr": "Grêmio"
+    },
+    "club:wl-groningen": {
+      "en": "Groningen",
+      "es": "Groningen",
+      "tr": "Groningen"
+    },
+    "club-guarani": {
+      "en": "Guaraní",
+      "es": "Guaraní",
+      "tr": "Guaraní"
+    },
+    "club-gyori-eto": {
+      "en": "Győri ETO",
+      "es": "Győri ETO",
+      "tr": "Győri ETO"
+    },
+    "club-hamburger-sv": {
+      "en": "Hamburger SV",
+      "es": "Hamburger SV",
+      "tr": "Hamburger SV"
+    },
+    "club:hamburger-sv": {
+      "en": "Hamburger SV",
+      "es": "Hamburger SV",
+      "tr": "Hamburger SV"
+    },
+    "club-hatayspor": {
+      "en": "Hatayspor",
+      "es": "Hatayspor",
+      "tr": "Hatayspor"
+    },
+    "club:wl-heerenveen": {
+      "en": "Heerenveen",
+      "es": "Heerenveen",
+      "tr": "Heerenveen"
+    },
+    "club-hellas-verona": {
+      "en": "Hellas Verona",
+      "es": "Hellas Verona",
+      "tr": "Hellas Verona"
+    },
+    "club-heracles-almelo": {
+      "en": "Heracles Almelo",
+      "es": "Heracles Almelo",
+      "tr": "Heracles Almelo"
+    },
+    "club-hertha-bsc": {
+      "en": "Hertha BSC",
+      "es": "Hertha BSC",
+      "tr": "Hertha BSC"
+    },
+    "club:hertha-bsc": {
+      "en": "Hertha BSC",
+      "es": "Hertha BSC",
+      "tr": "Hertha BSC"
+    },
+    "club-hull-city": {
+      "en": "Hull City",
+      "es": "Hull City",
+      "tr": "Hull City"
+    },
+    "club-huracan": {
+      "en": "Huracán",
+      "es": "Huracán",
+      "tr": "Huracán"
+    },
+    "club-ifk-goteborg": {
+      "en": "IFK Göteborg",
+      "es": "IFK Göteborg",
+      "tr": "IFK Göteborg"
+    },
+    "club-independiente": {
+      "en": "Independiente",
+      "es": "Independiente",
+      "tr": "Independiente"
+    },
+    "club-independiente-medellin": {
+      "en": "Independiente Medellín",
+      "es": "Independiente Medellín",
+      "tr": "Independiente Medellín"
+    },
+    "club-independiente-santa-fe": {
+      "en": "Independiente Santa Fe",
+      "es": "Independiente Santa Fe",
+      "tr": "Independiente Santa Fe"
+    },
+    "club-inter-baku": {
+      "en": "Inter Baku",
+      "es": "Inter Baku",
+      "tr": "Inter Baku"
+    },
+    "club-inter-miami": {
+      "en": "Inter Miami",
+      "es": "Inter Miami",
+      "tr": "Inter Miami"
+    },
+    "club:inter-milan": {
+      "en": "Inter Milan",
+      "es": "Inter Milan",
+      "tr": "Inter Milan"
+    },
+    "club-internacional": {
+      "en": "Internacional",
+      "es": "Internacional",
+      "tr": "Internacional"
+    },
+    "club-istanbul-basaksehir": {
+      "en": "İstanbul Başakşehir",
+      "es": "İstanbul Başakşehir",
+      "tr": "İstanbul Başakşehir"
+    },
+    "club-junior": {
+      "en": "Junior",
+      "es": "Junior",
+      "tr": "Junior"
+    },
+    "club:juventus": {
+      "en": "Juventus",
+      "es": "Juventus",
+      "tr": "Juventus"
+    },
+    "club-kaiserslautern": {
+      "en": "Kaiserslautern",
+      "es": "Kaiserslautern",
+      "tr": "Kaiserslautern"
+    },
+    "club-karlsruher-sc": {
+      "en": "Karlsruher SC",
+      "es": "Karlsruher SC",
+      "tr": "Karlsruher SC"
+    },
+    "club-karpaty-lviv": {
+      "en": "Karpaty Lviv",
+      "es": "Karpaty Lviv",
+      "tr": "Karpaty Lviv"
+    },
+    "club-kartalspor": {
+      "en": "Kartalspor",
+      "es": "Kartalspor",
+      "tr": "Kartalspor"
+    },
+    "club-kashima-antlers": {
+      "en": "Kashima Antlers",
+      "es": "Kashima Antlers",
+      "tr": "Kashima Antlers"
+    },
+    "club-kayserispor": {
+      "en": "Kayserispor",
+      "es": "Kayserispor",
+      "tr": "Kayserispor"
+    },
+    "club-kocaelispor": {
+      "en": "Kocaelispor",
+      "es": "Kocaelispor",
+      "tr": "Kocaelispor"
+    },
+    "club-konyaspor": {
+      "en": "Konyaspor",
+      "es": "Konyaspor",
+      "tr": "Konyaspor"
+    },
+    "club-lazio": {
+      "en": "Lazio",
+      "es": "Lazio",
+      "tr": "Lazio"
+    },
+    "club-lech-poznan": {
+      "en": "Lech Poznań",
+      "es": "Lech Poznań",
+      "tr": "Lech Poznań"
+    },
+    "club-leeds-united": {
+      "en": "Leeds United",
+      "es": "Leeds United",
+      "tr": "Leeds United"
+    },
+    "club:leeds-united": {
+      "en": "Leeds United",
+      "es": "Leeds United",
+      "tr": "Leeds United"
+    },
+    "club-legia-warsaw": {
+      "en": "Legia Warsaw",
+      "es": "Legia Warsaw",
+      "tr": "Legia Warsaw"
+    },
+    "club:leicester-city": {
+      "en": "Leicester City",
+      "es": "Leicester City",
+      "tr": "Leicester City"
+    },
+    "club-levante": {
+      "en": "Levante",
+      "es": "Levante",
+      "tr": "Levante"
+    },
+    "club-libertad": {
+      "en": "Libertad",
+      "es": "Libertad",
+      "tr": "Libertad"
+    },
+    "club:liverpool": {
+      "en": "Liverpool",
+      "es": "Liverpool",
+      "tr": "Liverpool"
+    },
+    "club-liverpool-montevideo": {
+      "en": "Liverpool Montevideo",
+      "es": "Liverpool Montevideo",
+      "tr": "Liverpool Montevideo"
+    },
+    "club-locomotive-tbilisi": {
+      "en": "Locomotive Tbilisi",
+      "es": "Locomotive Tbilisi",
+      "tr": "Locomotive Tbilisi"
+    },
+    "club-lokomotiv-moscow": {
+      "en": "Lokomotiv Moscow",
+      "es": "Lokomotiv Moscow",
+      "tr": "Lokomotiv Moscow"
+    },
+    "club:losc-lille": {
+      "en": "LOSC Lille",
+      "es": "LOSC Lille",
+      "tr": "LOSC Lille"
+    },
+    "club-maccabi-haifa": {
+      "en": "Maccabi Haifa",
+      "es": "Maccabi Haifa",
+      "tr": "Maccabi Haifa"
+    },
+    "club:wl-malaga": {
+      "en": "Málaga",
+      "es": "Málaga",
+      "tr": "Málaga"
+    },
+    "club:manchester-city": {
+      "en": "Manchester City",
+      "es": "Manchester City",
+      "tr": "Manchester City"
+    },
+    "club:manchester-united": {
+      "en": "Manchester United",
+      "es": "Manchester United",
+      "tr": "Manchester United"
+    },
+    "club-metalurh-donetsk": {
+      "en": "Metalurh Donetsk",
+      "es": "Metalurh Donetsk",
+      "tr": "Metalurh Donetsk"
+    },
+    "club:wl-metz": {
+      "en": "Metz",
+      "es": "Metz",
+      "tr": "Metz"
+    },
+    "club-middlesbrough": {
+      "en": "Middlesbrough",
+      "es": "Middlesbrough",
+      "tr": "Middlesbrough"
+    },
+    "club-millonarios": {
+      "en": "Millonarios",
+      "es": "Millonarios",
+      "tr": "Millonarios"
+    },
+    "club-monterrey": {
+      "en": "Monterrey",
+      "es": "Monterrey",
+      "tr": "Monterrey"
+    },
+    "club:montpellier-hsc": {
+      "en": "Montpellier HSC",
+      "es": "Montpellier HSC",
+      "tr": "Montpellier HSC"
+    },
+    "club:wl-monza": {
+      "en": "Monza",
+      "es": "Monza",
+      "tr": "Monza"
+    },
+    "club-msv-duisburg": {
+      "en": "MSV Duisburg",
+      "es": "MSV Duisburg",
+      "tr": "MSV Duisburg"
+    },
+    "club-nac-breda": {
+      "en": "NAC Breda",
+      "es": "NAC Breda",
+      "tr": "NAC Breda"
+    },
+    "club-nacional": {
+      "en": "Nacional",
+      "es": "Nacional",
+      "tr": "Nacional"
+    },
+    "club-nantes": {
+      "en": "Nantes",
+      "es": "Nantes",
+      "tr": "Nantes"
+    },
+    "club-nec-nijmegen": {
+      "en": "NEC Nijmegen",
+      "es": "NEC Nijmegen",
+      "tr": "NEC Nijmegen"
+    },
+    "club-new-york-cosmos": {
+      "en": "New York Cosmos",
+      "es": "New York Cosmos",
+      "tr": "New York Cosmos"
+    },
+    "club-new-york-red-bulls": {
+      "en": "New York Red Bulls",
+      "es": "New York Red Bulls",
+      "tr": "New York Red Bulls"
+    },
+    "club-newcastle-jets": {
+      "en": "Newcastle Jets",
+      "es": "Newcastle Jets",
+      "tr": "Newcastle Jets"
+    },
+    "club-newcastle-united": {
+      "en": "Newcastle United",
+      "es": "Newcastle United",
+      "tr": "Newcastle United"
+    },
+    "club:newcastle-united": {
+      "en": "Newcastle United",
+      "es": "Newcastle United",
+      "tr": "Newcastle United"
+    },
+    "club:wl-norwich-city": {
+      "en": "Norwich City",
+      "es": "Norwich City",
+      "tr": "Norwich City"
+    },
+    "club-nottingham-forest": {
+      "en": "Nottingham Forest",
+      "es": "Nottingham Forest",
+      "tr": "Nottingham Forest"
+    },
+    "club:nottingham-forest": {
+      "en": "Nottingham Forest",
+      "es": "Nottingham Forest",
+      "tr": "Nottingham Forest"
+    },
+    "club-ogc-nice": {
+      "en": "OGC Nice",
+      "es": "OGC Nice",
+      "tr": "OGC Nice"
+    },
+    "club:ogc-nice": {
+      "en": "OGC Nice",
+      "es": "OGC Nice",
+      "tr": "OGC Nice"
+    },
+    "club-olimpia": {
+      "en": "Olimpia",
+      "es": "Olimpia",
+      "tr": "Olimpia"
+    },
+    "club-olympiacos": {
+      "en": "Olympiacos",
+      "es": "Olympiacos",
+      "tr": "Olympiacos"
+    },
+    "club:wl-olympiacos": {
+      "en": "Olympiacos",
+      "es": "Olympiacos",
+      "tr": "Olympiacos"
+    },
+    "club-olympique-de-marseille": {
+      "en": "Olympique de Marseille",
+      "es": "Olympique de Marseille",
+      "tr": "Olympique de Marseille"
+    },
+    "club:olympique-de-marseille": {
+      "en": "Olympique de Marseille",
+      "es": "Olympique de Marseille",
+      "tr": "Olympique de Marseille"
+    },
+    "club-olympique-lyon": {
+      "en": "Olympique Lyon",
+      "es": "Olympique Lyon",
+      "tr": "Olympique Lyon"
+    },
+    "club-olympique-lyonnais": {
+      "en": "Olympique Lyonnais",
+      "es": "Olympique Lyonnais",
+      "tr": "Olympique Lyonnais"
+    },
+    "club:olympique-lyonnais": {
+      "en": "Olympique Lyonnais",
+      "es": "Olympique Lyonnais",
+      "tr": "Olympique Lyonnais"
+    },
+    "club-pafos-fc": {
+      "en": "Pafos FC",
+      "es": "Pafos FC",
+      "tr": "Pafos FC"
+    },
+    "club:palermo-fc": {
+      "en": "Palermo FC",
+      "es": "Palermo FC",
+      "tr": "Palermo FC"
+    },
+    "club-palmeiras": {
+      "en": "Palmeiras",
+      "es": "Palmeiras",
+      "tr": "Palmeiras"
+    },
+    "club:paris-saint-germain": {
+      "en": "Paris Saint-Germain",
+      "es": "Paris Saint-Germain",
+      "tr": "Paris Saint-Germain"
+    },
+    "club-parma": {
+      "en": "Parma",
+      "es": "Parma",
+      "tr": "Parma"
+    },
+    "club:parma-calcio-1913": {
+      "en": "Parma Calcio 1913",
+      "es": "Parma Calcio 1913",
+      "tr": "Parma Calcio 1913"
+    },
+    "club-partizan": {
+      "en": "Partizan",
+      "es": "Partizan",
+      "tr": "Partizan"
+    },
+    "club-penarol": {
+      "en": "Peñarol",
+      "es": "Peñarol",
+      "tr": "Peñarol"
+    },
+    "club-persepolis": {
+      "en": "Persepolis",
+      "es": "Persepolis",
+      "tr": "Persepolis"
+    },
+    "club-philadelphia-union": {
+      "en": "Philadelphia Union",
+      "es": "Philadelphia Union",
+      "tr": "Philadelphia Union"
+    },
+    "club-pogon-szczecin": {
+      "en": "Pogoń Szczecin",
+      "es": "Pogoń Szczecin",
+      "tr": "Pogoń Szczecin"
+    },
+    "club-portsmouth": {
+      "en": "Portsmouth",
+      "es": "Portsmouth",
+      "tr": "Portsmouth"
+    },
+    "club-portuguesa": {
+      "en": "Portuguesa",
+      "es": "Portuguesa",
+      "tr": "Portuguesa"
+    },
+    "club-psv-eindhoven": {
+      "en": "PSV Eindhoven",
+      "es": "PSV Eindhoven",
+      "tr": "PSV Eindhoven"
+    },
+    "club:psv-eindhoven": {
+      "en": "PSV Eindhoven",
+      "es": "PSV Eindhoven",
+      "tr": "PSV Eindhoven"
+    },
+    "club-qarabag": {
+      "en": "Qarabağ",
+      "es": "Qarabağ",
+      "tr": "Qarabağ"
+    },
+    "club:wl-queens-park-rangers": {
+      "en": "Queens Park Rangers",
+      "es": "Queens Park Rangers",
+      "tr": "Queens Park Rangers"
+    },
+    "club-racing-club": {
+      "en": "Racing Club",
+      "es": "Racing Club",
+      "tr": "Racing Club"
+    },
+    "club-randers-fc": {
+      "en": "Randers FC",
+      "es": "Randers FC",
+      "tr": "Randers FC"
+    },
+    "club-rangers": {
+      "en": "Rangers",
+      "es": "Rangers",
+      "tr": "Rangers"
+    },
+    "club:rangers": {
+      "en": "Rangers",
+      "es": "Rangers",
+      "tr": "Rangers"
+    },
+    "club-rapid-vienna": {
+      "en": "Rapid Vienna",
+      "es": "Rapid Vienna",
+      "tr": "Rapid Vienna"
+    },
+    "club:wl-rayo-vallecano": {
+      "en": "Rayo Vallecano",
+      "es": "Rayo Vallecano",
+      "tr": "Rayo Vallecano"
+    },
+    "club-rayo-vallecano": {
+      "en": "Rayo Vallecano",
+      "es": "Rayo Vallecano",
+      "tr": "Rayo Vallecano"
+    },
+    "club:wl-rb-leipzig": {
+      "en": "RB Leipzig",
+      "es": "RB Leipzig",
+      "tr": "RB Leipzig"
+    },
+    "club:rc-lens": {
+      "en": "RC Lens",
+      "es": "RC Lens",
+      "tr": "RC Lens"
+    },
+    "club:rc-strasbourg-alsace": {
+      "en": "RC Strasbourg Alsace",
+      "es": "RC Strasbourg Alsace",
+      "tr": "RC Strasbourg Alsace"
+    },
+    "club-reading": {
+      "en": "Reading",
+      "es": "Reading",
+      "tr": "Reading"
+    },
+    "club-real-betis": {
+      "en": "Real Betis",
+      "es": "Real Betis",
+      "tr": "Real Betis"
+    },
+    "real-madrid-cf": {
+      "en": "Real Madrid",
+      "es": "Real Madrid",
+      "tr": "Real Madrid"
+    },
+    "club:real-madrid-cf": {
+      "en": "Real Madrid CF",
+      "es": "Real Madrid CF",
+      "tr": "Real Madrid CF"
+    },
+    "club-real-sociedad": {
+      "en": "Real Sociedad",
+      "es": "Real Sociedad",
+      "tr": "Real Sociedad"
+    },
+    "club:real-sociedad": {
+      "en": "Real Sociedad",
+      "es": "Real Sociedad",
+      "tr": "Real Sociedad"
+    },
+    "club-real-zaragoza": {
+      "en": "Real Zaragoza",
+      "es": "Real Zaragoza",
+      "tr": "Real Zaragoza"
+    },
+    "club-red-star-belgrade": {
+      "en": "Red Star Belgrade",
+      "es": "Red Star Belgrade",
+      "tr": "Red Star Belgrade"
+    },
+    "club-river-plate": {
+      "en": "River Plate",
+      "es": "River Plate",
+      "tr": "River Plate"
+    },
+    "club-rostov": {
+      "en": "Rostov",
+      "es": "Rostov",
+      "tr": "Rostov"
+    },
+    "club-royal-antwerp": {
+      "en": "Royal Antwerp",
+      "es": "Royal Antwerp",
+      "tr": "Royal Antwerp"
+    },
+    "club:wl-rubin-kazan": {
+      "en": "Rubin Kazan",
+      "es": "Rubin Kazan",
+      "tr": "Rubin Kazan"
+    },
+    "club-rubin-kazan": {
+      "en": "Rubin Kazan",
+      "es": "Rubin Kazan",
+      "tr": "Rubin Kazan"
+    },
+    "club-saburtalo-tbilisi": {
+      "en": "Saburtalo Tbilisi",
+      "es": "Saburtalo Tbilisi",
+      "tr": "Saburtalo Tbilisi"
+    },
+    "club-sampdoria": {
+      "en": "Sampdoria",
+      "es": "Sampdoria",
+      "tr": "Sampdoria"
+    },
+    "club-samtredia": {
+      "en": "Samtredia",
+      "es": "Samtredia",
+      "tr": "Samtredia"
+    },
+    "club-san-jose-earthquakes": {
+      "en": "San Jose Earthquakes",
+      "es": "San Jose Earthquakes",
+      "tr": "San Jose Earthquakes"
+    },
+    "club-san-lorenzo": {
+      "en": "San Lorenzo",
+      "es": "San Lorenzo",
+      "tr": "San Lorenzo"
+    },
+    "club-santos": {
+      "en": "Santos",
+      "es": "Santos",
+      "tr": "Santos"
+    },
+    "club-sao-paulo": {
+      "en": "São Paulo",
+      "es": "São Paulo",
+      "tr": "São Paulo"
+    },
+    "club-sao-paulo-fc": {
+      "en": "São Paulo FC",
+      "es": "São Paulo FC",
+      "tr": "São Paulo FC"
+    },
+    "club:sc-braga": {
+      "en": "SC Braga",
+      "es": "SC Braga",
+      "tr": "SC Braga"
+    },
+    "club:sc-freiburg": {
+      "en": "SC Freiburg",
+      "es": "SC Freiburg",
+      "tr": "SC Freiburg"
+    },
+    "club-sc-freiburg": {
+      "en": "SC Freiburg",
+      "es": "SC Freiburg",
+      "tr": "SC Freiburg"
+    },
+    "club-schalke-04": {
+      "en": "Schalke 04",
+      "es": "Schalke 04",
+      "tr": "Schalke 04"
+    },
+    "club-seattle-sounders": {
+      "en": "Seattle Sounders",
+      "es": "Seattle Sounders",
+      "tr": "Seattle Sounders"
+    },
+    "club-sepahan": {
+      "en": "Sepahan",
+      "es": "Sepahan",
+      "tr": "Sepahan"
+    },
+    "club-sevilla-atletico": {
+      "en": "Sevilla Atlético",
+      "es": "Sevilla Atlético",
+      "tr": "Sevilla Atlético"
+    },
+    "club:sevilla-fc": {
+      "en": "Sevilla FC",
+      "es": "Sevilla FC",
+      "tr": "Sevilla FC"
+    },
+    "club-shakhtar-donetsk": {
+      "en": "Shakhtar Donetsk",
+      "es": "Shakhtar Donetsk",
+      "tr": "Shakhtar Donetsk"
+    },
+    "club:wl-sheffield-united": {
+      "en": "Sheffield United",
+      "es": "Sheffield United",
+      "tr": "Sheffield United"
+    },
+    "club-sinop": {
+      "en": "Sinop",
+      "es": "Sinop",
+      "tr": "Sinop"
+    },
+    "club-ska-khabarovsk": {
+      "en": "SKA-Khabarovsk",
+      "es": "SKA-Khabarovsk",
+      "tr": "SKA-Khabarovsk"
+    },
+    "club-skonto-fc": {
+      "en": "Skonto FC",
+      "es": "Skonto FC",
+      "tr": "Skonto FC"
+    },
+    "club:sl-benfica": {
+      "en": "SL Benfica",
+      "es": "SL Benfica",
+      "tr": "SL Benfica"
+    },
+    "club-slavia-prague": {
+      "en": "Slavia Prague",
+      "es": "Slavia Prague",
+      "tr": "Slavia Prague"
+    },
+    "club-slovan-bratislava": {
+      "en": "Slovan Bratislava",
+      "es": "Slovan Bratislava",
+      "tr": "Slovan Bratislava"
+    },
+    "club-sochaux": {
+      "en": "Sochaux",
+      "es": "Sochaux",
+      "tr": "Sochaux"
+    },
+    "club:wl-southampton": {
+      "en": "Southampton",
+      "es": "Southampton",
+      "tr": "Southampton"
+    },
+    "club-southampton": {
+      "en": "Southampton",
+      "es": "Southampton",
+      "tr": "Southampton"
+    },
+    "club-sparta-rotterdam": {
+      "en": "Sparta Rotterdam",
+      "es": "Sparta Rotterdam",
+      "tr": "Sparta Rotterdam"
+    },
+    "club-spartak-moscow": {
+      "en": "Spartak Moscow",
+      "es": "Spartak Moscow",
+      "tr": "Spartak Moscow"
+    },
+    "club-spartak-nalchik": {
+      "en": "Spartak Nalchik",
+      "es": "Spartak Nalchik",
+      "tr": "Spartak Nalchik"
+    },
+    "club:sporting-cp": {
+      "en": "Sporting CP",
+      "es": "Sporting CP",
+      "tr": "Sporting CP"
+    },
+    "club-sporting-gijon": {
+      "en": "Sporting Gijón",
+      "es": "Sporting Gijón",
+      "tr": "Sporting Gijón"
+    },
+    "club:ssc-napoli": {
+      "en": "SSC Napoli",
+      "es": "SSC Napoli",
+      "tr": "SSC Napoli"
+    },
+    "club-stab-k": {
+      "en": "Stabæk",
+      "es": "Stabæk",
+      "tr": "Stabæk"
+    },
+    "club-stade-de-reims": {
+      "en": "Stade de Reims",
+      "es": "Stade de Reims",
+      "tr": "Stade de Reims"
+    },
+    "club-stade-rennais": {
+      "en": "Stade Rennais",
+      "es": "Stade Rennais",
+      "tr": "Stade Rennais"
+    },
+    "club:stade-rennais-fc": {
+      "en": "Stade Rennais FC",
+      "es": "Stade Rennais FC",
+      "tr": "Stade Rennais FC"
+    },
+    "club-standard-liege": {
+      "en": "Standard Liège",
+      "es": "Standard Liège",
+      "tr": "Standard Liège"
+    },
+    "club-stoke-city": {
+      "en": "Stoke City",
+      "es": "Stoke City",
+      "tr": "Stoke City"
+    },
+    "club:wl-stoke-city": {
+      "en": "Stoke City",
+      "es": "Stoke City",
+      "tr": "Stoke City"
+    },
+    "club-strasbourg": {
+      "en": "Strasbourg",
+      "es": "Strasbourg",
+      "tr": "Strasbourg"
+    },
+    "club-sturm-graz": {
+      "en": "Sturm Graz",
+      "es": "Sturm Graz",
+      "tr": "Sturm Graz"
+    },
+    "club-sunderland": {
+      "en": "Sunderland",
+      "es": "Sunderland",
+      "tr": "Sunderland"
+    },
+    "club:sunderland": {
+      "en": "Sunderland",
+      "es": "Sunderland",
+      "tr": "Sunderland"
+    },
+    "club-swansea-city": {
+      "en": "Swansea City",
+      "es": "Swansea City",
+      "tr": "Swansea City"
+    },
+    "club-tobol-kostanay": {
+      "en": "Tobol Kostanay",
+      "es": "Tobol Kostanay",
+      "tr": "Tobol Kostanay"
+    },
+    "club-torino": {
+      "en": "Torino",
+      "es": "Torino",
+      "tr": "Torino"
+    },
+    "club:torino-fc": {
+      "en": "Torino FC",
+      "es": "Torino FC",
+      "tr": "Torino FC"
+    },
+    "club-torpedo-kutaisi": {
+      "en": "Torpedo Kutaisi",
+      "es": "Torpedo Kutaisi",
+      "tr": "Torpedo Kutaisi"
+    },
+    "club-torpedo-moscow": {
+      "en": "Torpedo Moscow",
+      "es": "Torpedo Moscow",
+      "tr": "Torpedo Moscow"
+    },
+    "club:tottenham-hotspur": {
+      "en": "Tottenham Hotspur",
+      "es": "Tottenham Hotspur",
+      "tr": "Tottenham Hotspur"
+    },
+    "club:wl-toulouse": {
+      "en": "Toulouse",
+      "es": "Toulouse",
+      "tr": "Toulouse"
+    },
+    "club-trabzonspor": {
+      "en": "Trabzonspor",
+      "es": "Trabzonspor",
+      "tr": "Trabzonspor"
+    },
+    "club:wl-trabzonspor": {
+      "en": "Trabzonspor",
+      "es": "Trabzonspor",
+      "tr": "Trabzonspor"
+    },
+    "club-udinese": {
+      "en": "Udinese",
+      "es": "Udinese",
+      "tr": "Udinese"
+    },
+    "club-ulsan-hyundai": {
+      "en": "Ulsan Hyundai",
+      "es": "Ulsan Hyundai",
+      "tr": "Ulsan Hyundai"
+    },
+    "club-union-berlin": {
+      "en": "Union Berlin",
+      "es": "Union Berlin",
+      "tr": "Union Berlin"
+    },
+    "club-universidad-catolica": {
+      "en": "Universidad Católica",
+      "es": "Universidad Católica",
+      "tr": "Universidad Católica"
+    },
+    "club-universidad-de-chile": {
+      "en": "Universidad de Chile",
+      "es": "Universidad de Chile",
+      "tr": "Universidad de Chile"
+    },
+    "club-universitatea-craiova": {
+      "en": "Universitatea Craiova",
+      "es": "Universitatea Craiova",
+      "tr": "Universitatea Craiova"
+    },
+    "club-ural-yekaterinburg": {
+      "en": "Ural Yekaterinburg",
+      "es": "Ural Yekaterinburg",
+      "tr": "Ural Yekaterinburg"
+    },
+    "club:valencia-cf": {
+      "en": "Valencia CF",
+      "es": "Valencia CF",
+      "tr": "Valencia CF"
+    },
+    "club-valenciennes": {
+      "en": "Valenciennes",
+      "es": "Valenciennes",
+      "tr": "Valenciennes"
+    },
+    "club-vasco-da-gama": {
+      "en": "Vasco da Gama",
+      "es": "Vasco da Gama",
+      "tr": "Vasco da Gama"
+    },
+    "club-velez-sarsfield": {
+      "en": "Vélez Sarsfield",
+      "es": "Vélez Sarsfield",
+      "tr": "Vélez Sarsfield"
+    },
+    "club:vfb-stuttgart": {
+      "en": "VfB Stuttgart",
+      "es": "VfB Stuttgart",
+      "tr": "VfB Stuttgart"
+    },
+    "club-vfb-stuttgart": {
+      "en": "VfB Stuttgart",
+      "es": "VfB Stuttgart",
+      "tr": "VfB Stuttgart"
+    },
+    "club-vfl-bochum": {
+      "en": "VfL Bochum",
+      "es": "VfL Bochum",
+      "tr": "VfL Bochum"
+    },
+    "club-vfl-wolfsburg": {
+      "en": "VfL Wolfsburg",
+      "es": "VfL Wolfsburg",
+      "tr": "VfL Wolfsburg"
+    },
+    "club:wl-vfl-wolfsburg": {
+      "en": "VfL Wolfsburg",
+      "es": "VfL Wolfsburg",
+      "tr": "VfL Wolfsburg"
+    },
+    "club-villarreal": {
+      "en": "Villarreal",
+      "es": "Villarreal",
+      "tr": "Villarreal"
+    },
+    "club:villarreal-cf": {
+      "en": "Villarreal CF",
+      "es": "Villarreal CF",
+      "tr": "Villarreal CF"
+    },
+    "club-vitesse": {
+      "en": "Vitesse",
+      "es": "Vitesse",
+      "tr": "Vitesse"
+    },
+    "club-watford": {
+      "en": "Watford",
+      "es": "Watford",
+      "tr": "Watford"
+    },
+    "club-werder-bremen": {
+      "en": "Werder Bremen",
+      "es": "Werder Bremen",
+      "tr": "Werder Bremen"
+    },
+    "club:wl-west-bromwich-albion": {
+      "en": "West Bromwich Albion",
+      "es": "West Bromwich Albion",
+      "tr": "West Bromwich Albion"
+    },
+    "club:west-ham-united": {
+      "en": "West Ham United",
+      "es": "West Ham United",
+      "tr": "West Ham United"
+    },
+    "club-willem-ii": {
+      "en": "Willem II",
+      "es": "Willem II",
+      "tr": "Willem II"
+    },
+    "club-wolfsberger-ac": {
+      "en": "Wolfsberger AC",
+      "es": "Wolfsberger AC",
+      "tr": "Wolfsberger AC"
+    },
+    "club-wolfsburg": {
+      "en": "Wolfsburg",
+      "es": "Wolfsburg",
+      "tr": "Wolfsburg"
+    },
+    "club-wolverhampton-wanderers": {
+      "en": "Wolverhampton Wanderers",
+      "es": "Wolverhampton Wanderers",
+      "tr": "Wolverhampton Wanderers"
+    },
+    "club-zenit-saint-petersburg": {
+      "en": "Zenit Saint Petersburg",
+      "es": "Zenit Saint Petersburg",
+      "tr": "Zenit Saint Petersburg"
+    },
+    "club-zestaponi": {
+      "en": "Zestaponi",
+      "es": "Zestaponi",
+      "tr": "Zestaponi"
+    },
+    "manager:andoni-iraola": {
+      "en": "Andoni Iraola",
+      "es": "Andoni Iraola",
+      "tr": "Andoni Iraola"
+    },
+    "manager:antonio-conte": {
+      "en": "Antonio Conte",
+      "es": "Antonio Conte",
+      "tr": "Antonio Conte"
+    },
+    "manager:arsene-wenger": {
+      "en": "Arsène Wenger",
+      "es": "Arsène Wenger",
+      "tr": "Arsène Wenger"
+    },
+    "manager:brendan-rodgers": {
+      "en": "Brendan Rodgers",
+      "es": "Brendan Rodgers",
+      "tr": "Brendan Rodgers"
+    },
+    "manager:carlo-ancelotti": {
+      "en": "Carlo Ancelotti",
+      "es": "Carlo Ancelotti",
+      "tr": "Carlo Ancelotti"
+    },
+    "manager:claudio-ranieri": {
+      "en": "Claudio Ranieri",
+      "es": "Claudio Ranieri",
+      "tr": "Claudio Ranieri"
+    },
+    "manager:david-moyes": {
+      "en": "David Moyes",
+      "es": "David Moyes",
+      "tr": "David Moyes"
+    },
+    "manager:didier-deschamps": {
+      "en": "Didier Deschamps",
+      "es": "Didier Deschamps",
+      "tr": "Didier Deschamps"
+    },
+    "manager:diego-simeone": {
+      "en": "Diego Simeone",
+      "es": "Diego Simeone",
+      "tr": "Diego Simeone"
+    },
+    "manager:eddie-howe": {
+      "en": "Eddie Howe",
+      "es": "Eddie Howe",
+      "tr": "Eddie Howe"
+    },
+    "manager:erik-ten-hag": {
+      "en": "Erik ten Hag",
+      "es": "Erik ten Hag",
+      "tr": "Erik ten Hag"
+    },
+    "manager:fatih-terim": {
+      "en": "Fatih Terim",
+      "es": "Fatih Terim",
+      "tr": "Fatih Terim"
+    },
+    "manager:gian-piero-gasperini": {
+      "en": "Gian Piero Gasperini",
+      "es": "Gian Piero Gasperini",
+      "tr": "Gian Piero Gasperini"
+    },
+    "manager:graham-potter": {
+      "en": "Graham Potter",
+      "es": "Graham Potter",
+      "tr": "Graham Potter"
+    },
+    "manager:guus-hiddink": {
+      "en": "Guus Hiddink",
+      "es": "Guus Hiddink",
+      "tr": "Guus Hiddink"
+    },
+    "manager:hansi-flick": {
+      "en": "Hansi Flick",
+      "es": "Hansi Flick",
+      "tr": "Hansi Flick"
+    },
+    "manager:jorge-sampaoli": {
+      "en": "Jorge Sampaoli",
+      "es": "Jorge Sampaoli",
+      "tr": "Jorge Sampaoli"
+    },
+    "manager:jose-mourinho": {
+      "en": "José Mourinho",
+      "es": "José Mourinho",
+      "tr": "José Mourinho"
+    },
+    "manager:jupp-heynckes": {
+      "en": "Jupp Heynckes",
+      "es": "Jupp Heynckes",
+      "tr": "Jupp Heynckes"
+    },
+    "manager:jurgen-klopp": {
+      "en": "Jürgen Klopp",
+      "es": "Jürgen Klopp",
+      "tr": "Jürgen Klopp"
+    },
+    "manager:lionel-scaloni": {
+      "en": "Lionel Scaloni",
+      "es": "Lionel Scaloni",
+      "tr": "Lionel Scaloni"
+    },
+    "manager:louis-van-gaal": {
+      "en": "Louis van Gaal",
+      "es": "Louis van Gaal",
+      "tr": "Louis van Gaal"
+    },
+    "manager:luciano-spalletti": {
+      "en": "Luciano Spalletti",
+      "es": "Luciano Spalletti",
+      "tr": "Luciano Spalletti"
+    },
+    "manager:luis-enrique": {
+      "en": "Luis Enrique",
+      "es": "Luis Enrique",
+      "tr": "Luis Enrique"
+    },
+    "manager:marcelo-bielsa": {
+      "en": "Marcelo Bielsa",
+      "es": "Marcelo Bielsa",
+      "tr": "Marcelo Bielsa"
+    },
+    "manager:massimiliano-allegri": {
+      "en": "Massimiliano Allegri",
+      "es": "Massimiliano Allegri",
+      "tr": "Massimiliano Allegri"
+    },
+    "manager:mauricio-pochettino": {
+      "en": "Mauricio Pochettino",
+      "es": "Mauricio Pochettino",
+      "tr": "Mauricio Pochettino"
+    },
+    "manager:maurizio-sarri": {
+      "en": "Maurizio Sarri",
+      "es": "Maurizio Sarri",
+      "tr": "Maurizio Sarri"
+    },
+    "manager:mikel-arteta": {
+      "en": "Mikel Arteta",
+      "es": "Mikel Arteta",
+      "tr": "Mikel Arteta"
+    },
+    "manager:mircea-lucescu": {
+      "en": "Mircea Lucescu",
+      "es": "Mircea Lucescu",
+      "tr": "Mircea Lucescu"
+    },
+    "manager:nuno-espirito-santo": {
+      "en": "Nuno Espírito Santo",
+      "es": "Nuno Espírito Santo",
+      "tr": "Nuno Espírito Santo"
+    },
+    "manager:pep-guardiola": {
+      "en": "Pep Guardiola",
+      "es": "Pep Guardiola",
+      "tr": "Pep Guardiola"
+    },
+    "manager:rafael-benitez": {
+      "en": "Rafael Benítez",
+      "es": "Rafael Benítez",
+      "tr": "Rafael Benítez"
+    },
+    "manager:roberto-de-zerbi": {
+      "en": "Roberto De Zerbi",
+      "es": "Roberto De Zerbi",
+      "tr": "Roberto De Zerbi"
+    },
+    "manager:roberto-mancini": {
+      "en": "Roberto Mancini",
+      "es": "Roberto Mancini",
+      "tr": "Roberto Mancini"
+    },
+    "manager:ronald-koeman": {
+      "en": "Ronald Koeman",
+      "es": "Ronald Koeman",
+      "tr": "Ronald Koeman"
+    },
+    "manager:ruben-amorim": {
+      "en": "Rúben Amorim",
+      "es": "Rúben Amorim",
+      "tr": "Rúben Amorim"
+    },
+    "manager:simone-inzaghi": {
+      "en": "Simone Inzaghi",
+      "es": "Simone Inzaghi",
+      "tr": "Simone Inzaghi"
+    },
+    "manager:thomas-tuchel": {
+      "en": "Thomas Tuchel",
+      "es": "Thomas Tuchel",
+      "tr": "Thomas Tuchel"
+    },
+    "manager:unai-emery": {
+      "en": "Unai Emery",
+      "es": "Unai Emery",
+      "tr": "Unai Emery"
+    },
+    "manager:vincent-kompany": {
+      "en": "Vincent Kompany",
+      "es": "Vincent Kompany",
+      "tr": "Vincent Kompany"
+    },
+    "manager:xabi-alonso": {
+      "en": "Xabi Alonso",
+      "es": "Xabi Alonso",
+      "tr": "Xabi Alonso"
+    },
+    "manager:zinedine-zidane": {
+      "en": "Zinedine Zidane",
+      "es": "Zinedine Zidane",
+      "tr": "Zinedine Zidane"
+    },
+    "teammate:ffe0f4ba-9681-4373-bf8b-672f5b3ccc00": {
+      "en": "Played with Alberto Gilardino",
+      "es": "Jugó con Alberto Gilardino",
+      "tr": "Alberto Gilardino ile oynadı"
+    },
+    "teammate:56740d17-5ee9-4ef2-8ad4-766dbea01ec3": {
+      "en": "Played with Alessandro Del Piero",
+      "es": "Jugó con Alessandro Del Piero",
+      "tr": "Alessandro Del Piero ile oynadı"
+    },
+    "teammate:9448e69e-02d9-4325-927b-d019623053b3": {
+      "en": "Played with Alessandro Nesta",
+      "es": "Jugó con Alessandro Nesta",
+      "tr": "Alessandro Nesta ile oynadı"
+    },
+    "teammate:874dcca0-cd6f-42ba-a156-899674c407f3": {
+      "en": "Played with Alexis Sánchez",
+      "es": "Jugó con Alexis Sánchez",
+      "tr": "Alexis Sánchez ile oynadı"
+    },
+    "teammate:8943778d-0ed2-4928-8bdf-33d17130897a": {
+      "en": "Played with Alisson",
+      "es": "Jugó con Alisson",
+      "tr": "Alisson ile oynadı"
+    },
+    "teammate:a6efbb7a-2d73-432d-962d-710d9bb58ca6": {
+      "en": "Played with Alisson",
+      "es": "Jugó con Alisson",
+      "tr": "Alisson ile oynadı"
+    },
+    "teammate:a98dad31-b705-412b-997c-d8d64b97e1ce": {
+      "en": "Played with Álvaro Morata",
+      "es": "Jugó con Álvaro Morata",
+      "tr": "Álvaro Morata ile oynadı"
+    },
+    "teammate:a7a8ac8d-3636-473f-8dd4-ff9604581b7a": {
+      "en": "Played with Andrea Pirlo",
+      "es": "Jugó con Andrea Pirlo",
+      "tr": "Andrea Pirlo ile oynadı"
+    },
+    "teammate:a2d0edec-b0f0-4753-82fc-2063465443be": {
+      "en": "Played with Andrés Iniesta",
+      "es": "Jugó con Andrés Iniesta",
+      "tr": "Andrés Iniesta ile oynadı"
+    },
+    "teammate:4e8e1d4f-c0eb-4c5d-b435-4d34ea7add8e": {
+      "en": "Played with Andriy Shevchenko",
+      "es": "Jugó con Andriy Shevchenko",
+      "tr": "Andriy Shevchenko ile oynadı"
+    },
+    "teammate:87560b0d-f5b9-4181-ac9b-040a207c3e9a": {
+      "en": "Played with Ángel Di María",
+      "es": "Jugó con Ángel Di María",
+      "tr": "Ángel Di María ile oynadı"
+    },
+    "teammate:76b4b848-d3e6-4b2c-b06a-459481cc238d": {
+      "en": "Played with Antoine Griezmann",
+      "es": "Jugó con Antoine Griezmann",
+      "tr": "Antoine Griezmann ile oynadı"
+    },
+    "teammate:b581974b-b344-4837-838c-617537fd0102": {
+      "en": "Played with Arjen Robben",
+      "es": "Jugó con Arjen Robben",
+      "tr": "Arjen Robben ile oynadı"
+    },
+    "teammate:b9628126-b65b-4e12-af8c-66ca0fdcb8f8": {
+      "en": "Played with Ashley Cole",
+      "es": "Jugó con Ashley Cole",
+      "tr": "Ashley Cole ile oynadı"
+    },
+    "teammate:069e3451-910d-47aa-a4d2-fd3681bf1be6": {
+      "en": "Played with Bastian Schweinsteiger",
+      "es": "Jugó con Bastian Schweinsteiger",
+      "tr": "Bastian Schweinsteiger ile oynadı"
+    },
+    "teammate:36eb6f42-b8ec-46d6-97d7-b60079e9a574": {
+      "en": "Played with Bernardo Silva",
+      "es": "Jugó con Bernardo Silva",
+      "tr": "Bernardo Silva ile oynadı"
+    },
+    "teammate:f79f5e64-6b60-46b5-b604-d1f79e4794f0": {
+      "en": "Played with Bixente Lizarazu",
+      "es": "Jugó con Bixente Lizarazu",
+      "tr": "Bixente Lizarazu ile oynadı"
+    },
+    "teammate:393ab52a-2257-471c-aab9-0c39944e1517": {
+      "en": "Played with Cafu",
+      "es": "Jugó con Cafu",
+      "tr": "Cafu ile oynadı"
+    },
+    "teammate:710290b5-7649-4e45-b333-ef87e2afad8b": {
+      "en": "Played with Cafú",
+      "es": "Jugó con Cafú",
+      "tr": "Cafú ile oynadı"
+    },
+    "teammate:83322574-6256-45cf-bd03-b0c3c10a2930": {
+      "en": "Played with Carles Puyol",
+      "es": "Jugó con Carles Puyol",
+      "tr": "Carles Puyol ile oynadı"
+    },
+    "teammate:70b63468-1914-4c8e-ad35-199485821756": {
+      "en": "Played with Carlos Tevez",
+      "es": "Jugó con Carlos Tevez",
+      "tr": "Carlos Tevez ile oynadı"
+    },
+    "teammate:5ecd7d07-810b-4bc2-bcc7-36b5eee2c8c8": {
+      "en": "Played with Casemiro",
+      "es": "Jugó con Casemiro",
+      "tr": "Casemiro ile oynadı"
+    },
+    "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe": {
+      "en": "Played with Cesc Fàbregas",
+      "es": "Jugó con Cesc Fàbregas",
+      "tr": "Cesc Fàbregas ile oynadı"
+    },
+    "teammate:a2eacacd-5578-49a7-a904-87797ea05a27": {
+      "en": "Played with Christian Panucci",
+      "es": "Jugó con Christian Panucci",
+      "tr": "Christian Panucci ile oynadı"
+    },
+    "teammate:f5e93e41-8aec-43f4-98cf-84d7eead31da": {
+      "en": "Played with Christian Vieri",
+      "es": "Jugó con Christian Vieri",
+      "tr": "Christian Vieri ile oynadı"
+    },
+    "teammate:11d05aba-2ecc-4161-91b8-ac594ad47d6e": {
+      "en": "Played with Christian Ziege",
+      "es": "Jugó con Christian Ziege",
+      "tr": "Christian Ziege ile oynadı"
+    },
+    "teammate:8d922b88-81cb-433e-a5fe-51a72dddab07": {
+      "en": "Played with Clarence Seedorf",
+      "es": "Jugó con Clarence Seedorf",
+      "tr": "Clarence Seedorf ile oynadı"
+    },
+    "teammate:ed20a005-af82-417c-9a6a-678bdca47f0f": {
+      "en": "Played with Claude Makélélé",
+      "es": "Jugó con Claude Makélélé",
+      "tr": "Claude Makélélé ile oynadı"
+    },
+    "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf": {
+      "en": "Played with Cristiano Ronaldo",
+      "es": "Jugó con Cristiano Ronaldo",
+      "tr": "Cristiano Ronaldo ile oynadı"
+    },
+    "teammate:c665d6ed-84df-4dab-ab6c-5fc3832a84a5": {
+      "en": "Played with David Beckham",
+      "es": "Jugó con David Beckham",
+      "tr": "David Beckham ile oynadı"
+    },
+    "teammate:6348cd86-93bb-4cfa-b0af-7325eeed9074": {
+      "en": "Played with David Silva",
+      "es": "Jugó con David Silva",
+      "tr": "David Silva ile oynadı"
+    },
+    "teammate:3946442e-9177-48d2-8481-374f9532c08c": {
+      "en": "Played with David Trezeguet",
+      "es": "Jugó con David Trezeguet",
+      "tr": "David Trezeguet ile oynadı"
+    },
+    "teammate:bc6c5770-8a05-41a0-b9e7-2c3ce02b0b11": {
+      "en": "Played with David Villa",
+      "es": "Jugó con David Villa",
+      "tr": "David Villa ile oynadı"
+    },
+    "teammate:fb5d0137-39c7-4f0c-bfd4-6214bddf3dd4": {
+      "en": "Played with Deco",
+      "es": "Jugó con Deco",
+      "tr": "Deco ile oynadı"
+    },
+    "teammate:3c704932-c880-4891-bc4a-d4749efd0ed9": {
+      "en": "Played with Dida",
+      "es": "Jugó con Dida",
+      "tr": "Dida ile oynadı"
+    },
+    "teammate:4ef80d07-1167-4628-b028-351f0a6a20e4": {
+      "en": "Played with Didier Deschamps",
+      "es": "Jugó con Didier Deschamps",
+      "tr": "Didier Deschamps ile oynadı"
+    },
+    "teammate:79164c34-4051-436f-9cfd-ef7c051b0aec": {
+      "en": "Played with Didier Drogba",
+      "es": "Jugó con Didier Drogba",
+      "tr": "Didier Drogba ile oynadı"
+    },
+    "teammate:9d538d4a-ec62-4e2b-b74d-38388cab76b6": {
+      "en": "Played with Diego Forlán",
+      "es": "Jugó con Diego Forlán",
+      "tr": "Diego Forlán ile oynadı"
+    },
+    "teammate:cff06e7f-acc0-4266-aa96-f098a6f0ee80": {
+      "en": "Played with Eden Hazard",
+      "es": "Jugó con Eden Hazard",
+      "tr": "Eden Hazard ile oynadı"
+    },
+    "teammate:dc2a6a10-3024-4cf0-9fe2-54aa6d2aa7f2": {
+      "en": "Played with Edinson Cavani",
+      "es": "Jugó con Edinson Cavani",
+      "tr": "Edinson Cavani ile oynadı"
+    },
+    "teammate:ecb10845-29ae-4fcd-9f8d-7dcf27c138e9": {
+      "en": "Played with Edwin van der Sar",
+      "es": "Jugó con Edwin van der Sar",
+      "tr": "Edwin van der Sar ile oynadı"
+    },
+    "teammate:32df1564-6c30-419e-95b3-865d02967233": {
+      "en": "Played with Emerson Ferreira",
+      "es": "Jugó con Emerson Ferreira",
+      "tr": "Emerson Ferreira ile oynadı"
+    },
+    "teammate:b14d1033-723f-4776-ae31-1084179f159c": {
+      "en": "Played with Emiliano Martínez",
+      "es": "Jugó con Emiliano Martínez",
+      "tr": "Emiliano Martínez ile oynadı"
+    },
+    "teammate:b7c75af7-95c4-48ce-89eb-375bd0420d96": {
+      "en": "Played with Emmanuel Petit",
+      "es": "Jugó con Emmanuel Petit",
+      "tr": "Emmanuel Petit ile oynadı"
+    },
+    "teammate:ce85c5c4-3316-47c7-880c-0c17df3189f2": {
+      "en": "Played with Erling Haaland",
+      "es": "Jugó con Erling Haaland",
+      "tr": "Erling Haaland ile oynadı"
+    },
+    "teammate:1c9bb3c5-1348-4337-8ce1-8358ad5f87fd": {
+      "en": "Played with Fabio Cannavaro",
+      "es": "Jugó con Fabio Cannavaro",
+      "tr": "Fabio Cannavaro ile oynadı"
+    },
+    "teammate:c9692588-f93b-4035-8737-8f625d1ec829": {
+      "en": "Played with Fernando Torres",
+      "es": "Jugó con Fernando Torres",
+      "tr": "Fernando Torres ile oynadı"
+    },
+    "teammate:0da7ce6e-ad1a-4e3e-b896-d6e2a10e681d": {
+      "en": "Played with Filippo Inzaghi",
+      "es": "Jugó con Filippo Inzaghi",
+      "tr": "Filippo Inzaghi ile oynadı"
+    },
+    "teammate:ee700bd6-f14a-4b1f-aefe-ccc7f90c3c1e": {
+      "en": "Played with Francesco Toldo",
+      "es": "Jugó con Francesco Toldo",
+      "tr": "Francesco Toldo ile oynadı"
+    },
+    "teammate:4b6d87c2-9df7-4947-92d2-40e682a5a758": {
+      "en": "Played with Francesco Totti",
+      "es": "Jugó con Francesco Totti",
+      "tr": "Francesco Totti ile oynadı"
+    },
+    "teammate:f3bbdb8e-b31e-46f5-b600-ef48ef5f1ea7": {
+      "en": "Played with Franck Ribéry",
+      "es": "Jugó con Franck Ribéry",
+      "tr": "Franck Ribéry ile oynadı"
+    },
+    "teammate:ba41ef23-6f93-4269-ab41-aacdc4759e90": {
+      "en": "Played with Frank Lampard",
+      "es": "Jugó con Frank Lampard",
+      "tr": "Frank Lampard ile oynadı"
+    },
+    "teammate:2d9a65ee-0acd-429c-831d-43bb445feae3": {
+      "en": "Played with Frank Rijkaard",
+      "es": "Jugó con Frank Rijkaard",
+      "tr": "Frank Rijkaard ile oynadı"
+    },
+    "teammate:b500a5c9-3250-41d4-b8c5-6c5f9690a71c": {
+      "en": "Played with Gareth Bale",
+      "es": "Jugó con Gareth Bale",
+      "tr": "Gareth Bale ile oynadı"
+    },
+    "teammate:a49b3b81-b933-4ee9-b97f-93bbe86f23e7": {
+      "en": "Played with Gennaro Gattuso",
+      "es": "Jugó con Gennaro Gattuso",
+      "tr": "Gennaro Gattuso ile oynadı"
+    },
+    "teammate:a0a8c8fe-113a-43e1-aba1-6a7de652540a": {
+      "en": "Played with George Weah",
+      "es": "Jugó con George Weah",
+      "tr": "George Weah ile oynadı"
+    },
+    "teammate:769e1327-0c83-4245-bd8b-1362c8dce939": {
+      "en": "Played with Gerard Piqué",
+      "es": "Jugó con Gerard Piqué",
+      "tr": "Gerard Piqué ile oynadı"
+    },
+    "teammate:d560f9f0-ac2c-4161-957a-88a95660208c": {
+      "en": "Played with Gianluca Zambrotta",
+      "es": "Jugó con Gianluca Zambrotta",
+      "tr": "Gianluca Zambrotta ile oynadı"
+    },
+    "teammate:8eae3bf5-471d-4d89-aebb-34bbddb0a0f1": {
+      "en": "Played with Gianluigi Buffon",
+      "es": "Jugó con Gianluigi Buffon",
+      "tr": "Gianluigi Buffon ile oynadı"
+    },
+    "teammate:57cc1914-cd2c-42d4-bcd5-e32923c8f72f": {
+      "en": "Played with Giorgio Chiellini",
+      "es": "Jugó con Giorgio Chiellini",
+      "tr": "Giorgio Chiellini ile oynadı"
+    },
+    "teammate:2f6e8c2b-8a4d-4d2b-ab99-15c84ffb15bb": {
+      "en": "Played with Giovane Élber",
+      "es": "Jugó con Giovane Élber",
+      "tr": "Giovane Élber ile oynadı"
+    },
+    "teammate:bf8492a7-7d36-4731-b093-218a7564472b": {
+      "en": "Played with Gonzalo Higuaín",
+      "es": "Jugó con Gonzalo Higuaín",
+      "tr": "Gonzalo Higuaín ile oynadı"
+    },
+    "teammate:413f894b-7f2c-425b-9183-9b17f46d71c8": {
+      "en": "Played with Harry Kane",
+      "es": "Jugó con Harry Kane",
+      "tr": "Harry Kane ile oynadı"
+    },
+    "teammate:3b2cb5df-5e85-488f-91d6-d4997bd892fc": {
+      "en": "Played with Hernán Crespo",
+      "es": "Jugó con Hernán Crespo",
+      "tr": "Hernán Crespo ile oynadı"
+    },
+    "teammate:1f1ec8e8-adc0-4570-aaf3-97389ef696cb": {
+      "en": "Played with Hugo Lloris",
+      "es": "Jugó con Hugo Lloris",
+      "tr": "Hugo Lloris ile oynadı"
+    },
+    "teammate:46f4f931-c4da-4904-a559-eddd40d3aa87": {
+      "en": "Played with Iker Casillas",
+      "es": "Jugó con Iker Casillas",
+      "tr": "Iker Casillas ile oynadı"
+    },
+    "teammate:fcb1d942-af7e-47f3-a74c-f937b04a0638": {
+      "en": "Played with İlkay Gündoğan",
+      "es": "Jugó con İlkay Gündoğan",
+      "tr": "İlkay Gündoğan ile oynadı"
+    },
+    "teammate:7290bf29-993b-4110-a14d-ad041a698f0f": {
+      "en": "Played with Jaap Stam",
+      "es": "Jugó con Jaap Stam",
+      "tr": "Jaap Stam ile oynadı"
+    },
+    "teammate:7626cd0c-987a-4049-89c8-e074a153d060": {
+      "en": "Played with Javier Mascherano",
+      "es": "Jugó con Javier Mascherano",
+      "tr": "Javier Mascherano ile oynadı"
+    },
+    "teammate:395d5f3d-5361-4175-8048-b3b5369f3614": {
+      "en": "Played with Javier Zanetti",
+      "es": "Jugó con Javier Zanetti",
+      "tr": "Javier Zanetti ile oynadı"
+    },
+    "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4": {
+      "en": "Played with John Terry",
+      "es": "Jugó con John Terry",
+      "tr": "John Terry ile oynadı"
+    },
+    "teammate:d0a233f5-36ae-4187-ba49-73fe1da1e23e": {
+      "en": "Played with Juan Sebastián Verón",
+      "es": "Jugó con Juan Sebastián Verón",
+      "tr": "Juan Sebastián Verón ile oynadı"
+    },
+    "teammate:916237e7-b5be-4aad-a811-700a1a1fb1dd": {
+      "en": "Played with Jude Bellingham",
+      "es": "Jugó con Jude Bellingham",
+      "tr": "Jude Bellingham ile oynadı"
+    },
+    "teammate:9c64c119-952e-43cd-aff0-75d54146d069": {
+      "en": "Played with Julián Alvarez",
+      "es": "Jugó con Julián Alvarez",
+      "tr": "Julián Alvarez ile oynadı"
+    },
+    "teammate:a6119f25-7985-4c2a-b13c-49990efcc75f": {
+      "en": "Played with Kaká",
+      "es": "Jugó con Kaká",
+      "tr": "Kaká ile oynadı"
+    },
+    "teammate:79a18ff7-b3e4-42cd-b497-600e86dbd631": {
+      "en": "Played with Karim Benzema",
+      "es": "Jugó con Karim Benzema",
+      "tr": "Karim Benzema ile oynadı"
+    },
+    "teammate:513de7ba-249f-4f2e-9877-d1ab4121cd1e": {
+      "en": "Played with Kevin De Bruyne",
+      "es": "Jugó con Kevin De Bruyne",
+      "tr": "Kevin De Bruyne ile oynadı"
+    },
+    "teammate:7e969cc5-120d-4af9-9fdd-f6d2db3170a8": {
+      "en": "Played with Kylian Mbappé",
+      "es": "Jugó con Kylian Mbappé",
+      "tr": "Kylian Mbappé ile oynadı"
+    },
+    "teammate:6407948c-511a-4932-93f3-5fd72227abc8": {
+      "en": "Played with Laurent Blanc",
+      "es": "Jugó con Laurent Blanc",
+      "tr": "Laurent Blanc ile oynadı"
+    },
+    "teammate:f683502a-15b9-4276-9886-0977f5d6bc2e": {
+      "en": "Played with Lautaro Martínez",
+      "es": "Jugó con Lautaro Martínez",
+      "tr": "Lautaro Martínez ile oynadı"
+    },
+    "teammate:a1c506f1-8f65-4333-b320-8caf3e587708": {
+      "en": "Played with Lilian Thuram",
+      "es": "Jugó con Lilian Thuram",
+      "tr": "Lilian Thuram ile oynadı"
+    },
+    "teammate:55989ce0-0b52-4553-a11d-42c03f5b9da1": {
+      "en": "Played with Lionel Messi",
+      "es": "Jugó con Lionel Messi",
+      "tr": "Lionel Messi ile oynadı"
+    },
+    "teammate:fa9680f8-85b9-4997-834e-a7530a75ca96": {
+      "en": "Played with Luca Toni",
+      "es": "Jugó con Luca Toni",
+      "tr": "Luca Toni ile oynadı"
+    },
+    "teammate:6396e575-92e5-42be-a193-d8cf85f40aec": {
+      "en": "Played with Lúcio",
+      "es": "Jugó con Lúcio",
+      "tr": "Lúcio ile oynadı"
+    },
+    "teammate:87233e88-4d99-421b-96bb-77aad81c02b1": {
+      "en": "Played with Luís Figo",
+      "es": "Jugó con Luís Figo",
+      "tr": "Luís Figo ile oynadı"
+    },
+    "teammate:428e1f3c-fe81-4f10-9f00-9ff6ec0573d6": {
+      "en": "Played with Luis Suárez",
+      "es": "Jugó con Luis Suárez",
+      "tr": "Luis Suárez ile oynadı"
+    },
+    "teammate:05e1b3df-4194-4aef-a256-eec199cef42b": {
+      "en": "Played with Luis Suárez",
+      "es": "Jugó con Luis Suárez",
+      "tr": "Luis Suárez ile oynadı"
+    },
+    "teammate:6e0542a2-0bbb-45ae-a7ff-2526230b870a": {
+      "en": "Played with Luka Modrić",
+      "es": "Jugó con Luka Modrić",
+      "tr": "Luka Modrić ile oynadı"
+    },
+    "teammate:753e6bd5-2f36-4d7c-9f5a-d14d956928bd": {
+      "en": "Played with Manuel Neuer",
+      "es": "Jugó con Manuel Neuer",
+      "tr": "Manuel Neuer ile oynadı"
+    },
+    "teammate:f0dcf96e-9b08-4087-ab03-bf1a13f4e245": {
+      "en": "Played with Marc Overmars",
+      "es": "Jugó con Marc Overmars",
+      "tr": "Marc Overmars ile oynadı"
+    },
+    "teammate:78ef4772-426c-4c50-916e-23d2e664f605": {
+      "en": "Played with Marcel Desailly",
+      "es": "Jugó con Marcel Desailly",
+      "tr": "Marcel Desailly ile oynadı"
+    },
+    "teammate:a795bb2e-32ee-4c95-a77a-5fa9f272d7b3": {
+      "en": "Played with Marcelo",
+      "es": "Jugó con Marcelo",
+      "tr": "Marcelo ile oynadı"
+    },
+    "teammate:3003d159-6fdc-47a3-a00b-a63232e4cb28": {
+      "en": "Played with Marcelo",
+      "es": "Jugó con Marcelo",
+      "tr": "Marcelo ile oynadı"
+    },
+    "teammate:7d9d3daf-12fa-4224-9f3d-428d9611814f": {
+      "en": "Played with Marco Reus",
+      "es": "Jugó con Marco Reus",
+      "tr": "Marco Reus ile oynadı"
+    },
+    "teammate:de7df9c2-c81f-464d-a8ac-a4e01d2492dd": {
+      "en": "Played with Mario Balotelli",
+      "es": "Jugó con Mario Balotelli",
+      "tr": "Mario Balotelli ile oynadı"
+    },
+    "teammate:095087b4-20b3-4f73-91dd-8bce1598729f": {
+      "en": "Played with Mario Götze",
+      "es": "Jugó con Mario Götze",
+      "tr": "Mario Götze ile oynadı"
+    },
+    "teammate:afacf855-4426-4fca-b2fe-33afe829a562": {
+      "en": "Played with Mario Mandzukic",
+      "es": "Jugó con Mario Mandzukic",
+      "tr": "Mario Mandzukic ile oynadı"
+    },
+    "teammate:5cc5f245-49fc-4c0a-9583-aeb622e99535": {
+      "en": "Played with Mats Hummels",
+      "es": "Jugó con Mats Hummels",
+      "tr": "Mats Hummels ile oynadı"
+    },
+    "teammate:151dfbb9-27f3-4276-b45d-cb2a35432285": {
+      "en": "Played with Mesut Özil",
+      "es": "Jugó con Mesut Özil",
+      "tr": "Mesut Özil ile oynadı"
+    },
+    "teammate:ddeb8efc-a7d6-40a6-a20f-82df76421c3d": {
+      "en": "Played with Michael Owen",
+      "es": "Jugó con Michael Owen",
+      "tr": "Michael Owen ile oynadı"
+    },
+    "teammate:d7e32780-afb5-4863-927c-8a14a929fc73": {
+      "en": "Played with Míchel Salgado",
+      "es": "Jugó con Míchel Salgado",
+      "tr": "Míchel Salgado ile oynadı"
+    },
+    "teammate:51522f00-03bc-4b79-ab38-5214f4bac740": {
+      "en": "Played with Miroslav Klose",
+      "es": "Jugó con Miroslav Klose",
+      "tr": "Miroslav Klose ile oynadı"
+    },
+    "teammate:e71ad820-cc78-4c32-8fb5-806eac3c1214": {
+      "en": "Played with Mohamed Salah",
+      "es": "Jugó con Mohamed Salah",
+      "tr": "Mohamed Salah ile oynadı"
+    },
+    "teammate:a09872bb-bd33-4cce-9613-7cf86a1010ee": {
+      "en": "Played with N'Golo Kanté",
+      "es": "Jugó con N'Golo Kanté",
+      "tr": "N'Golo Kanté ile oynadı"
+    },
+    "teammate:10aa4f1f-9fc1-4c3b-93b5-217bdba110dd": {
+      "en": "Played with Neymar",
+      "es": "Jugó con Neymar",
+      "tr": "Neymar ile oynadı"
+    },
+    "teammate:54f941a2-12df-4694-b7ff-305922645866": {
+      "en": "Played with Nicolas Anelka",
+      "es": "Jugó con Nicolas Anelka",
+      "tr": "Nicolas Anelka ile oynadı"
+    },
+    "teammate:936e1b41-8681-4fc6-8f72-dd7f4c58fd2f": {
+      "en": "Played with Nwankwo Kanu",
+      "es": "Jugó con Nwankwo Kanu",
+      "tr": "Nwankwo Kanu ile oynadı"
+    },
+    "teammate:eee827b7-634e-46aa-b76a-65f9ee55943d": {
+      "en": "Played with Oliver Kahn",
+      "es": "Jugó con Oliver Kahn",
+      "tr": "Oliver Kahn ile oynadı"
+    },
+    "teammate:2ee9513d-f64a-47f0-b43b-dc934bfacf6e": {
+      "en": "Played with Olivier Giroud",
+      "es": "Jugó con Olivier Giroud",
+      "tr": "Olivier Giroud ile oynadı"
+    },
+    "teammate:34c46dcc-7ca8-49a3-947f-393558edb1c0": {
+      "en": "Played with Ousmane Dembélé",
+      "es": "Jugó con Ousmane Dembélé",
+      "tr": "Ousmane Dembélé ile oynadı"
+    },
+    "teammate:492f244f-1fc1-4c2b-b2df-57c2c29d4f03": {
+      "en": "Played with Paolo Maldini",
+      "es": "Jugó con Paolo Maldini",
+      "tr": "Paolo Maldini ile oynadı"
+    },
+    "teammate:252ed9f2-8daa-4c7a-b3f2-5c24eece525f": {
+      "en": "Played with Patrice Evra",
+      "es": "Jugó con Patrice Evra",
+      "tr": "Patrice Evra ile oynadı"
+    },
+    "teammate:62499ade-0175-4188-aef6-d1b33f82f209": {
+      "en": "Played with Patrick Vieira",
+      "es": "Jugó con Patrick Vieira",
+      "tr": "Patrick Vieira ile oynadı"
+    },
+    "teammate:94ae19d5-de36-4e4e-8a9f-3d0db0904707": {
+      "en": "Played with Paul Pogba",
+      "es": "Jugó con Paul Pogba",
+      "tr": "Paul Pogba ile oynadı"
+    },
+    "teammate:7e228da6-46f8-4a0c-9acc-0f1bf27ab50c": {
+      "en": "Played with Paul Scholes",
+      "es": "Jugó con Paul Scholes",
+      "tr": "Paul Scholes ile oynadı"
+    },
+    "teammate:a9dc8fb6-3e2c-4bc9-98cc-49d4231ff392": {
+      "en": "Played with Pelé",
+      "es": "Jugó con Pelé",
+      "tr": "Pelé ile oynadı"
+    },
+    "teammate:1da98c87-dc4e-41f2-99db-cc8443a00e3d": {
+      "en": "Played with Petr Cech",
+      "es": "Jugó con Petr Cech",
+      "tr": "Petr Cech ile oynadı"
+    },
+    "teammate:42fa50a7-a8ca-4fdd-855d-e41b88c17a6a": {
+      "en": "Played with Philipp Lahm",
+      "es": "Jugó con Philipp Lahm",
+      "tr": "Philipp Lahm ile oynadı"
+    },
+    "teammate:3be1aed0-97a2-48cb-b6b1-42da5a17cd5e": {
+      "en": "Played with Philippe Coutinho",
+      "es": "Jugó con Philippe Coutinho",
+      "tr": "Philippe Coutinho ile oynadı"
+    },
+    "teammate:7a8f230c-cadf-45a7-820e-d12948a1479c": {
+      "en": "Played with Raphaël Varane",
+      "es": "Jugó con Raphaël Varane",
+      "tr": "Raphaël Varane ile oynadı"
+    },
+    "teammate:952874aa-43d3-4cb1-9f87-9eb340029f15": {
+      "en": "Played with Raúl",
+      "es": "Jugó con Raúl",
+      "tr": "Raúl ile oynadı"
+    },
+    "teammate:33316d7f-7ef0-4e59-b112-2af62492a0af": {
+      "en": "Played with Ricardo Carvalho",
+      "es": "Jugó con Ricardo Carvalho",
+      "tr": "Ricardo Carvalho ile oynadı"
+    },
+    "teammate:b841bcc9-7df4-438e-8e72-2f1b3a3c4a92": {
+      "en": "Played with Rio Ferdinand",
+      "es": "Jugó con Rio Ferdinand",
+      "tr": "Rio Ferdinand ile oynadı"
+    },
+    "teammate:8eb86174-29f3-4034-99d5-7f9d39b5bdbb": {
+      "en": "Played with Rivaldo",
+      "es": "Jugó con Rivaldo",
+      "tr": "Rivaldo ile oynadı"
+    },
+    "teammate:05ddf5ed-a20f-4b8a-9e27-dae9eb957981": {
+      "en": "Played with Robert Lewandowski",
+      "es": "Jugó con Robert Lewandowski",
+      "tr": "Robert Lewandowski ile oynadı"
+    },
+    "teammate:b0fc2fee-8b88-42d3-be5d-87a592e225c8": {
+      "en": "Played with Roberto Ayala",
+      "es": "Jugó con Roberto Ayala",
+      "tr": "Roberto Ayala ile oynadı"
+    },
+    "teammate:e2d22f1d-ca6d-4d89-b839-05dfdd310f6b": {
+      "en": "Played with Robin van Persie",
+      "es": "Jugó con Robin van Persie",
+      "tr": "Robin van Persie ile oynadı"
+    },
+    "teammate:65532349-06d9-44bf-baee-159b35bb1688": {
+      "en": "Played with Robinho",
+      "es": "Jugó con Robinho",
+      "tr": "Robinho ile oynadı"
+    },
+    "teammate:81d69d4d-1c11-4f75-824d-e267a8e04926": {
+      "en": "Played with Romelu Lukaku",
+      "es": "Jugó con Romelu Lukaku",
+      "tr": "Romelu Lukaku ile oynadı"
+    },
+    "teammate:381bcc4e-e3ea-4416-9d13-5ffefd86efde": {
+      "en": "Played with Ronaldinho",
+      "es": "Jugó con Ronaldinho",
+      "tr": "Ronaldinho ile oynadı"
+    },
+    "teammate:95faf5b6-9e1c-4879-854d-6a8746bbc3b8": {
+      "en": "Played with Ronaldo Nazario",
+      "es": "Jugó con Ronaldo Nazario",
+      "tr": "Ronaldo Nazario ile oynadı"
+    },
+    "teammate:b218bed6-3707-4c89-8f9c-90bd27866f5f": {
+      "en": "Played with Ryan Giggs",
+      "es": "Jugó con Ryan Giggs",
+      "tr": "Ryan Giggs ile oynadı"
+    },
+    "teammate:74f7efb0-092c-485f-a8c9-a741fd840309": {
+      "en": "Played with Sadio Mané",
+      "es": "Jugó con Sadio Mané",
+      "tr": "Sadio Mané ile oynadı"
+    },
+    "teammate:75fecc05-1515-4b6d-add7-0eedeb86fe60": {
+      "en": "Played with Samuel Eto'o",
+      "es": "Jugó con Samuel Eto'o",
+      "tr": "Samuel Eto'o ile oynadı"
+    },
+    "teammate:e247be38-7dac-4d06-a238-1ce8e286d061": {
+      "en": "Played with Sergio Agüero",
+      "es": "Jugó con Sergio Agüero",
+      "tr": "Sergio Agüero ile oynadı"
+    },
+    "teammate:87193ffc-9280-4676-8421-f65753ec1b9f": {
+      "en": "Played with Sergio Busquets",
+      "es": "Jugó con Sergio Busquets",
+      "tr": "Sergio Busquets ile oynadı"
+    },
+    "teammate:ff2328a1-79ce-4368-9633-a8cb4b02256f": {
+      "en": "Played with Sergio Ramos",
+      "es": "Jugó con Sergio Ramos",
+      "tr": "Sergio Ramos ile oynadı"
+    },
+    "teammate:9c5cf1e6-fc4c-479d-9f2e-4b49d825c551": {
+      "en": "Played with Son",
+      "es": "Jugó con Son",
+      "tr": "Son ile oynadı"
+    },
+    "teammate:d5b268f7-07d1-463d-a0b2-03f380aaf6e1": {
+      "en": "Played with Steven Gerrard",
+      "es": "Jugó con Steven Gerrard",
+      "tr": "Steven Gerrard ile oynadı"
+    },
+    "teammate:cdbea2ca-e4a4-409f-aa38-38e162190082": {
+      "en": "Played with Teddy Sheringham",
+      "es": "Jugó con Teddy Sheringham",
+      "tr": "Teddy Sheringham ile oynadı"
+    },
+    "teammate:0bd15fe1-fdbc-49ca-9b50-e5c70c39e7cf": {
+      "en": "Played with Thiago Silva",
+      "es": "Jugó con Thiago Silva",
+      "tr": "Thiago Silva ile oynadı"
+    },
+    "teammate:662e7c41-0436-4be0-a5dc-8b3fabe93ecf": {
+      "en": "Played with Thierry Henry",
+      "es": "Jugó con Thierry Henry",
+      "tr": "Thierry Henry ile oynadı"
+    },
+    "teammate:f8d86381-21c2-4bd2-bdc4-6914e832dda7": {
+      "en": "Played with Thomas Müller",
+      "es": "Jugó con Thomas Müller",
+      "tr": "Thomas Müller ile oynadı"
+    },
+    "teammate:960f7a60-bc19-48e6-a2be-0d5c77a72954": {
+      "en": "Played with Toni Kroos",
+      "es": "Jugó con Toni Kroos",
+      "tr": "Toni Kroos ile oynadı"
+    },
+    "teammate:67218b50-63a8-4fc8-a92f-f9970672e758": {
+      "en": "Played with Vincent Kompany",
+      "es": "Jugó con Vincent Kompany",
+      "tr": "Vincent Kompany ile oynadı"
+    },
+    "teammate:de965f63-5812-4ab3-b35b-e914867dc6e7": {
+      "en": "Played with Vinicius Junior",
+      "es": "Jugó con Vinicius Junior",
+      "tr": "Vinicius Junior ile oynadı"
+    },
+    "teammate:c0e27384-922f-47f5-b673-3e27754f5b9b": {
+      "en": "Played with Virgil van Dijk",
+      "es": "Jugó con Virgil van Dijk",
+      "tr": "Virgil van Dijk ile oynadı"
+    },
+    "teammate:f7679688-9eaa-41c2-a899-28f771250dc7": {
+      "en": "Played with Wayne Rooney",
+      "es": "Jugó con Wayne Rooney",
+      "tr": "Wayne Rooney ile oynadı"
+    },
+    "teammate:bd6afa46-ac3f-400e-9a68-3432b31057f5": {
+      "en": "Played with Wesley Sneijder",
+      "es": "Jugó con Wesley Sneijder",
+      "tr": "Wesley Sneijder ile oynadı"
+    },
+    "teammate:72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c": {
+      "en": "Played with Xabi Alonso",
+      "es": "Jugó con Xabi Alonso",
+      "tr": "Xabi Alonso ile oynadı"
+    },
+    "teammate:e6077d23-501c-4d47-9999-c4ebd2c1841b": {
+      "en": "Played with Xavi",
+      "es": "Jugó con Xavi",
+      "tr": "Xavi ile oynadı"
+    },
+    "teammate:243cf966-fc20-4dbe-8411-2dc4c460e133": {
+      "en": "Played with Yaya Touré",
+      "es": "Jugó con Yaya Touré",
+      "tr": "Yaya Touré ile oynadı"
+    },
+    "teammate:e91f676c-c2aa-44eb-8221-baaae4b9ee1a": {
+      "en": "Played with Youri Djorkaeff",
+      "es": "Jugó con Youri Djorkaeff",
+      "tr": "Youri Djorkaeff ile oynadı"
+    },
+    "teammate:33b40e9a-f1f7-4277-94fb-4cd5f3da5634": {
+      "en": "Played with Zé Roberto",
+      "es": "Jugó con Zé Roberto",
+      "tr": "Zé Roberto ile oynadı"
+    },
+    "teammate:e4da368d-83e5-42c1-b1b2-4309d0299309": {
+      "en": "Played with Zinedine Zidane",
+      "es": "Jugó con Zinedine Zidane",
+      "tr": "Zinedine Zidane ile oynadı"
+    },
+    "teammate:a83cf106-cda8-4634-8fe6-3d8eda733f64": {
+      "en": "Played with Zlatan Ibrahimović",
+      "es": "Jugó con Zlatan Ibrahimović",
+      "tr": "Zlatan Ibrahimović ile oynadı"
+    },
+    "teammate:12590944-66f7-4b8b-b558-5ba71ae50ce5": {
+      "en": "Played with Zvonimir Boban",
+      "es": "Jugó con Zvonimir Boban",
+      "tr": "Zvonimir Boban ile oynadı"
+    },
+    "country:dz": {
+      "en": "Algeria",
+      "es": "Argelia",
+      "tr": "Cezayir"
+    },
+    "country:ar": {
+      "en": "Argentina",
+      "es": "Argentina",
+      "tr": "Arjantin"
+    },
+    "country:at": {
+      "en": "Austria",
+      "es": "Austria",
+      "tr": "Avusturya"
+    },
+    "country:be": {
+      "en": "Belgium",
+      "es": "Bélgica",
+      "tr": "Belçika"
+    },
+    "country-belgium": {
+      "en": "Belgium",
+      "es": "Bélgica",
+      "tr": "Belçika"
+    },
+    "country:br": {
+      "en": "Brazil",
+      "es": "Brasil",
+      "tr": "Brezilya"
+    },
+    "brazil": {
+      "en": "Brazil",
+      "es": "Brasil",
+      "tr": "Brezilya"
+    },
+    "country:cm": {
+      "en": "Cameroon",
+      "es": "Camerún",
+      "tr": "Kamerun"
+    },
+    "country-chile": {
+      "en": "Chile",
+      "es": "Chile",
+      "tr": "Şili"
+    },
+    "country-colombia": {
+      "en": "Colombia",
+      "es": "Colombia",
+      "tr": "Kolombiya"
+    },
+    "country:co": {
+      "en": "Colombia",
+      "es": "Colombia",
+      "tr": "Kolombiya"
+    },
+    "country-cote-d-ivoire": {
+      "en": "Cote d'Ivoire",
+      "es": "Costa de Marfil",
+      "tr": "Fildişi Sahili"
+    },
+    "country:ci": {
+      "en": "Côte d’Ivoire",
+      "es": "Costa de Marfil",
+      "tr": "Fildişi Sahili"
+    },
+    "country:hr": {
+      "en": "Croatia",
+      "es": "Croacia",
+      "tr": "Hırvatistan"
+    },
+    "country-croatia": {
+      "en": "Croatia",
+      "es": "Croacia",
+      "tr": "Hırvatistan"
+    },
+    "country:dk": {
+      "en": "Denmark",
+      "es": "Dinamarca",
+      "tr": "Danimarka"
+    },
+    "country:gb-eng": {
+      "en": "England",
+      "es": "Inglaterra",
+      "tr": "İngiltere"
+    },
+    "country:fr": {
+      "en": "France",
+      "es": "Francia",
+      "tr": "Fransa"
+    },
+    "france": {
+      "en": "France",
+      "es": "Francia",
+      "tr": "Fransa"
+    },
+    "country-georgia": {
+      "en": "Georgia",
+      "es": "Georgia",
+      "tr": "Gürcistan"
+    },
+    "country:de": {
+      "en": "Germany",
+      "es": "Alemania",
+      "tr": "Almanya"
+    },
+    "country:gh": {
+      "en": "Ghana",
+      "es": "Ghana",
+      "tr": "Gana"
+    },
+    "country:gr": {
+      "en": "Greece",
+      "es": "Grecia",
+      "tr": "Yunanistan"
+    },
+    "country:ie": {
+      "en": "Ireland",
+      "es": "Irlanda",
+      "tr": "İrlanda"
+    },
+    "country:it": {
+      "en": "Italy",
+      "es": "Italia",
+      "tr": "İtalya"
+    },
+    "country:jp": {
+      "en": "Japan",
+      "es": "Japón",
+      "tr": "Japonya"
+    },
+    "country:ml": {
+      "en": "Mali",
+      "es": "Malí",
+      "tr": "Mali"
+    },
+    "country:mx": {
+      "en": "Mexico",
+      "es": "México",
+      "tr": "Meksika"
+    },
+    "country-morocco": {
+      "en": "Morocco",
+      "es": "Marruecos",
+      "tr": "Fas"
+    },
+    "country:ma": {
+      "en": "Morocco",
+      "es": "Marruecos",
+      "tr": "Fas"
+    },
+    "country:nl": {
+      "en": "Netherlands",
+      "es": "Países Bajos",
+      "tr": "Hollanda"
+    },
+    "country:ng": {
+      "en": "Nigeria",
+      "es": "Nigeria",
+      "tr": "Nijerya"
+    },
+    "country-nigeria": {
+      "en": "Nigeria",
+      "es": "Nigeria",
+      "tr": "Nijerya"
+    },
+    "country:no": {
+      "en": "Norway",
+      "es": "Noruega",
+      "tr": "Norveç"
+    },
+    "country:pl": {
+      "en": "Poland",
+      "es": "Polonia",
+      "tr": "Polonya"
+    },
+    "country:pt": {
+      "en": "Portugal",
+      "es": "Portugal",
+      "tr": "Portekiz"
+    },
+    "country:ru": {
+      "en": "Russia",
+      "es": "Rusia",
+      "tr": "Rusya"
+    },
+    "country:gb-sct": {
+      "en": "Scotland",
+      "es": "Escocia",
+      "tr": "İskoçya"
+    },
+    "country:sn": {
+      "en": "Senegal",
+      "es": "Senegal",
+      "tr": "Senegal"
+    },
+    "country-serbia": {
+      "en": "Serbia",
+      "es": "Serbia",
+      "tr": "Sırbistan"
+    },
+    "country:rs": {
+      "en": "Serbia",
+      "es": "Serbia",
+      "tr": "Sırbistan"
+    },
+    "country:es": {
+      "en": "Spain",
+      "es": "España",
+      "tr": "İspanya"
+    },
+    "spain": {
+      "en": "Spain",
+      "es": "España",
+      "tr": "İspanya"
+    },
+    "country:se": {
+      "en": "Sweden",
+      "es": "Suecia",
+      "tr": "İsveç"
+    },
+    "country:ch": {
+      "en": "Switzerland",
+      "es": "Suiza",
+      "tr": "İsviçre"
+    },
+    "country-turkey": {
+      "en": "Turkey",
+      "es": "Turquía",
+      "tr": "Türkiye"
+    },
+    "country:tr": {
+      "en": "Türkiye",
+      "es": "Türkiye",
+      "tr": "Türkiye"
+    },
+    "country-t-rkiye": {
+      "en": "Türkiye",
+      "es": "Türkiye",
+      "tr": "Türkiye"
+    },
+    "country:ua": {
+      "en": "Ukraine",
+      "es": "Ucrania",
+      "tr": "Ukrayna"
+    },
+    "country-united-states": {
+      "en": "United States",
+      "es": "Estados Unidos",
+      "tr": "ABD"
+    },
+    "country:us": {
+      "en": "United States",
+      "es": "Estados Unidos",
+      "tr": "ABD"
+    },
+    "country-uruguay": {
+      "en": "Uruguay",
+      "es": "Uruguay",
+      "tr": "Uruguay"
+    },
+    "country:uy": {
+      "en": "Uruguay",
+      "es": "Uruguay",
+      "tr": "Uruguay"
+    },
+    "country:gb-wls": {
+      "en": "Wales",
+      "es": "Gales",
+      "tr": "Galler"
+    },
+    "league:belgian-pro-league": {
+      "en": "Belgian Pro League",
+      "es": "Liga Belga",
+      "tr": "Belçika Pro Ligi"
+    },
+    "league:bundesliga": {
+      "en": "Bundesliga",
+      "es": "Bundesliga",
+      "tr": "Bundesliga"
+    },
+    "league:eredivisie": {
+      "en": "Eredivisie",
+      "es": "Eredivisie",
+      "tr": "Eredivisie"
+    },
+    "league:la-liga": {
+      "en": "La Liga",
+      "es": "La Liga",
+      "tr": "La Liga"
+    },
+    "league:ligue-1": {
+      "en": "Ligue 1",
+      "es": "Ligue 1",
+      "tr": "Ligue 1"
+    },
+    "league:premier-league": {
+      "en": "Premier League",
+      "es": "Premier League",
+      "tr": "Premier Lig"
+    },
+    "league:primeira-liga": {
+      "en": "Primeira Liga",
+      "es": "Primeira Liga",
+      "tr": "Primeira Liga"
+    },
+    "league:scottish-premiership": {
+      "en": "Scottish Premiership",
+      "es": "Scottish Premiership",
+      "tr": "Scottish Premiership"
+    },
+    "league:serie-a": {
+      "en": "Serie A",
+      "es": "Serie A",
+      "tr": "Serie A"
+    },
+    "league:super-lig": {
+      "en": "Süper Lig",
+      "es": "Süper Lig",
+      "tr": "Süper Lig"
+    },
+    "trophy:bundesliga-title": {
+      "en": "Bundesliga winner",
+      "es": "Campeón Bundesliga",
+      "tr": "Bundesliga Şampiyonu"
+    },
+    "trophy:copa-del-rey": {
+      "en": "Copa del Rey winner",
+      "es": "Campeón Copa del Rey",
+      "tr": "Copa del Rey Şampiyonu"
+    },
+    "trophy:coppa-italia": {
+      "en": "Coppa Italia winner",
+      "es": "Campeón Coppa Italia",
+      "tr": "Coppa Italia Şampiyonu"
+    },
+    "trophy:dfb-pokal": {
+      "en": "DFB-Pokal winner",
+      "es": "Campeón DFB-Pokal",
+      "tr": "DFB-Pokal Şampiyonu"
+    },
+    "trophy:fa-cup": {
+      "en": "FA Cup winner",
+      "es": "Campeón FA Cup",
+      "tr": "FA Cup Şampiyonu"
+    },
+    "trophy:knvb-cup": {
+      "en": "KNVB Cup winner",
+      "es": "Campeón KNVB",
+      "tr": "KNVB Kupası Şampiyonu"
+    },
+    "trophy:la-liga-title": {
+      "en": "La Liga winner",
+      "es": "Campeón La Liga",
+      "tr": "La Liga Şampiyonu"
+    },
+    "trophy:ligue-1-title": {
+      "en": "Ligue 1 winner",
+      "es": "Campeón Ligue 1",
+      "tr": "Ligue 1 Şampiyonu"
+    },
+    "trophy:premier-league-title": {
+      "en": "Premier League winner",
+      "es": "Campeón Premier League",
+      "tr": "Premier Lig Şampiyonu"
+    },
+    "trophy:serie-a-title": {
+      "en": "Serie A winner",
+      "es": "Campeón Serie A",
+      "tr": "Serie A Şampiyonu"
+    },
+    "trophy:uefa-champions-league": {
+      "en": "UEFA Champions League winner",
+      "es": "Campeón UEFA Champions League",
+      "tr": "Şampiyonlar Ligi Şampiyonu"
+    },
+    "trophy:uefa-europa-league": {
+      "en": "UEFA Europa League winner",
+      "es": "Campeón UEFA Europa League",
+      "tr": "UEFA Avrupa Ligi Şampiyonu"
+    },
+    "wildcard:international-caps-100": {
+      "en": "100+ international caps",
+      "es": "100+ partidos internacionales",
+      "tr": "100+ Millî Maç"
+    },
+    "wildcard:champions-league-2plus": {
+      "en": "2+ Champions League titles",
+      "es": "2+ Champions League",
+      "tr": "2+ Şampiyonlar Ligi Kupası"
+    },
+    "wildcard:born-1970s": {
+      "en": "Born in the 1970s",
+      "es": "Nacido en los 70",
+      "tr": "70'lerde Doğdu"
+    },
+    "wildcard:born-1980s": {
+      "en": "Born in the 1980s",
+      "es": "Nacido en los 80",
+      "tr": "1980'lerde Doğdu"
+    },
+    "wildcard:born-1990s": {
+      "en": "Born in the 1990s",
+      "es": "Nacidos en los 90",
+      "tr": "90'larda Doğdu"
+    },
+    "wildcard:born-2000s": {
+      "en": "Born in the 2000s",
+      "es": "Nacidos en los 2000",
+      "tr": "2000'lerde Doğdu"
+    },
+    "wildcard:position-def": {
+      "en": "Defender",
+      "es": "Defensa",
+      "tr": "Defans"
+    },
+    "wildcard:position-fwd": {
+      "en": "Forward",
+      "es": "Delantero",
+      "tr": "Forvet"
+    },
+    "wildcard:position-gk": {
+      "en": "Goalkeeper",
+      "es": "Portero",
+      "tr": "Kaleci"
+    },
+    "wildcard:titles-multiple-countries": {
+      "en": "League champion in multiple countries",
+      "es": "Campeón de Liga en varios países",
+      "tr": "Çok ülkede lig şampiyonu"
+    },
+    "wildcard:position-mid": {
+      "en": "Midfielder",
+      "es": "Mediocampista",
+      "tr": "Orta Saha"
+    },
+    "wildcard:played-for-rivals": {
+      "en": "Played for both sides of a derby",
+      "es": "Jugó para ambos rivales",
+      "tr": "Derbi Takımlarında Oynadı"
+    },
+    "wildcard:major-leagues-3": {
+      "en": "Played in 3+ major leagues",
+      "es": "Jugó en 3+ ligas top",
+      "tr": "3+ Büyük Ligde Oynadı"
+    },
+    "wildcard:treble-winner": {
+      "en": "Treble winner",
+      "es": "Ganador del triplete",
+      "tr": "Üç Kupa Kazandı"
+    }
+  }
+}

@@ -90,6 +90,8 @@ interface GridCriterionRow {
   family: FootballGridCriterionView['family'];
   label_en: string;
   label_ka: string;
+  label_es: string | null;
+  label_tr: string | null;
   asset_key: string | null;
   difficulty: FootballGridCriterionView['difficulty'];
 }
@@ -226,6 +228,8 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView {
     family: row.family,
     labelEn: row.label_en,
     labelKa: row.label_ka,
+    labelEs: row.label_es,
+    labelTr: row.label_tr,
     assetKey: row.asset_key,
     difficulty: row.difficulty,
   };
@@ -257,7 +261,7 @@ async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promis
   if (!board) throw new Error(`Football Grid board not found: ${boardId}`);
   const criterionIds = [...board.row_criteria, ...board.column_criteria];
   const criteria = await executor.unsafe<GridCriterionRow[]>(
-    `SELECT id, criterion_key, family, label_en, label_ka, asset_key, difficulty
+    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, asset_key, difficulty
        FROM football_grid_criteria
       WHERE id = ANY($1::uuid[])`,
     [criterionIds],

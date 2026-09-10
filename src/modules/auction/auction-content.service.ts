@@ -413,14 +413,52 @@ async function attachSeasonSnapshots(
   // clue columns — placeholder rows from the stats pivot, not authored hints.
   // A real hint is a sentence; the length floor filters the labels out, and a
   // card without authored hints simply serves the five stat facets alone.
-  const authoredClues = (card.clues ?? [])
-    .filter((text): text is string => typeof text === 'string' && text.trim().length >= 25)
+  const authoredHints = (card.clues ?? [])
+    .map((text, index) => ({ index, text }))
+    .filter((hint): hint is { index: number; text: string } => typeof hint.text === 'string' && hint.text.trim().length >= 25)
     .slice(0, AUCTION_TEXT_HINTS_PER_LOT);
-  card.clues = [
-    ...(card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS),
-    ...authoredClues,
-  ];
+  const facets = card.positionGroup === 'GK' ? SNAPSHOT_FACETS_GK : SNAPSHOT_FACETS;
+  card.clues = [...facets, ...authoredHints.map((hint) => hint.text)];
+  card.cluesByLocale = await localizedClueSteps(card, facets, authoredHints);
   return card;
+}
+
+/**
+ * The same reveal steps in every content locale, so each seat reads the text
+ * hints in its own language regardless of which locale the match was dealt in.
+ * Sibling rows (same player + variant) supply the same hint slots; a missing or
+ * placeholder sibling text falls back to the match-locale hint.
+ */
+async function localizedClueSteps(
+  card: PublishedAuctionCard,
+  facets: readonly string[],
+  authoredHints: ReadonlyArray<{ index: number; text: string }>
+): Promise<AuctionFootballer['cluesByLocale']> {
+  if (authoredHints.length === 0) return undefined;
+  let siblings: Awaited<ReturnType<typeof auctionContentRepo.getPublishedClueSiblings>>;
+  try {
+    siblings = await auctionContentRepo.getPublishedClueSiblings(card.clueCardId);
+  } catch (error) {
+    logger.warn({ error, clueCardId: card.clueCardId }, 'Failed to load localized auction clues');
+    return undefined;
+  }
+  const byLocale: NonNullable<AuctionFootballer['cluesByLocale']> = {};
+  for (const sibling of siblings) {
+    if (!isAuctionContentLocale(sibling.locale)) continue;
+    const texts = [sibling.clue_1, sibling.clue_2, sibling.clue_3];
+    byLocale[sibling.locale] = [
+      ...facets,
+      ...authoredHints.map((hint) => {
+        const text = texts[hint.index];
+        return typeof text === 'string' && text.trim().length >= 25 ? text : hint.text;
+      }),
+    ];
+  }
+  return Object.keys(byLocale).length > 0 ? byLocale : undefined;
+}
+
+function isAuctionContentLocale(value: string): value is AuctionContentLocale {
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr';
 }
 
 export type { AuctionContentLocale };

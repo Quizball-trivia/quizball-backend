@@ -95,7 +95,7 @@ export type PublicAuctionFootballer = Pick<
   'positionGroup' | 'startingPrice'
 > & Partial<Pick<
   AuctionFootballer,
-  | 'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'imageUrl'
+  | 'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'cluesByLocale' | 'imageUrl'
   | 'currentClub' | 'nationality' | 'league' | 'snapshots'
 >>;
 
@@ -238,6 +238,15 @@ function minimizeHiddenSnapshots(
   ];
 }
 
+function sliceCluesByLocale(
+  cluesByLocale: NonNullable<AuctionFootballer['cluesByLocale']>,
+  revealedCount: number
+): NonNullable<AuctionFootballer['cluesByLocale']> {
+  return Object.fromEntries(
+    Object.entries(cluesByLocale).map(([locale, clues]) => [locale, (clues ?? []).slice(0, revealedCount)])
+  );
+}
+
 export function toHiddenFootballer(
   footballer: AuctionFootballer,
   revealedClues: readonly string[] = []
@@ -246,6 +255,9 @@ export function toHiddenFootballer(
     positionGroup: footballer.positionGroup,
     startingPrice: footballer.startingPrice,
     clues: [...revealedClues],
+    ...(footballer.cluesByLocale
+      ? { cluesByLocale: sliceCluesByLocale(footballer.cluesByLocale, revealedClues.length) }
+      : {}),
     // Only what the pre-reveal UI actually renders travels: the SCOUT season
     // (earliest) plus a stub carrying the value season's label. Middle seasons,
     // the final season's stats/league, and every historical value beyond the
@@ -266,6 +278,7 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
     trueValue: footballer.trueValue,
     startingPrice: footballer.startingPrice,
     clues: footballer.clues ? [...footballer.clues] : undefined,
+    ...(footballer.cluesByLocale ? { cluesByLocale: footballer.cluesByLocale } : {}),
     imageUrl: footballer.imageUrl,
     currentClub: footballer.currentClub,
     nationality: footballer.nationality,

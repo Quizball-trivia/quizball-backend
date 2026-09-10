@@ -11,6 +11,7 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedAuctionCardById: vi.fn(),
     getRecentlySeenFootballPlayerIds: vi.fn(),
     recordSeenClueCards: vi.fn(),
+    getPublishedClueSiblings: vi.fn(async () => []),
   },
   AUCTION_CARD_HISTORY_WINDOW_DAYS: 14,
 }));
@@ -507,5 +508,44 @@ describe('auctionContentService', () => {
       auctionContentService.findRandomPublishedAuctionCard({ locale: 'en' })
     ).resolves.toBeNull();
     expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('localized clue steps', () => {
+  beforeEach(() => {
+    (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(DEFAULT_SEASON_ROWS);
+    (auctionContentRepo.claimScoutEncounter as Mock).mockResolvedValue(0);
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+  });
+
+  it('carries every sibling locale aligned to the same hint slots, falling back to the match locale for placeholder text', async () => {
+    (auctionContentRepo.getPublishedClueSiblings as Mock).mockResolvedValue([
+      { locale: 'en', clue_1: basePublishedCard.clue_1, clue_2: basePublishedCard.clue_2, clue_3: basePublishedCard.clue_3 },
+      { locale: 'tr', clue_1: 'İlk Premier Lig sezonunda çok sayıda gol attı.', clue_2: 'Goals', clue_3: 'Norveç milli takımında oynuyor.' },
+      { locale: 'xx', clue_1: 'ignored', clue_2: 'ignored', clue_3: 'ignored' },
+    ]);
+
+    const card = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(auctionContentRepo.getPublishedClueSiblings).toHaveBeenCalledWith(CLUE_CARD_ID);
+    // Two authored hints ride after the five facets in the match locale.
+    expect(card.clues).toEqual(['Goals', 'Assists', 'Market value', 'Age', 'League', basePublishedCard.clue_1, basePublishedCard.clue_2]);
+    expect(Object.keys(card.cluesByLocale ?? {})).toEqual(['en', 'tr']);
+    expect(card.cluesByLocale?.en).toEqual(card.clues);
+    // Slot 2 of the Turkish sibling is a facet placeholder, so the English hint stands in.
+    expect(card.cluesByLocale?.tr).toEqual([
+      'Goals', 'Assists', 'Market value', 'Age', 'League',
+      'İlk Premier Lig sezonunda çok sayıda gol attı.',
+      basePublishedCard.clue_2,
+    ]);
+  });
+
+  it('serves the card without localized steps when the sibling lookup fails', async () => {
+    (auctionContentRepo.getPublishedClueSiblings as Mock).mockRejectedValue(new Error('db down'));
+
+    const card = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(card.clues).toHaveLength(7);
+    expect(card.cluesByLocale).toBeUndefined();
   });
 });

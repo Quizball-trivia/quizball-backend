@@ -58,13 +58,13 @@ export const footballGridPackPreviewController = {
         SELECT b.id, b.difficulty, b.familiarity_score,
           (SELECT json_agg(json_build_object(
              'key', c.criterion_key, 'family', c.family, 'labelEn', c.label_en,
-             'labelKa', c.label_ka, 'assetKey', c.asset_key, 'difficulty', c.difficulty
+             'labelKa', c.label_ka, 'labelEs', c.label_es, 'labelTr', c.label_tr, 'assetKey', c.asset_key, 'difficulty', c.difficulty
            ) ORDER BY ord)
            FROM unnest(b.row_criteria) WITH ORDINALITY AS r(cid, ord)
            JOIN football_grid_criteria c ON c.id = r.cid) AS rows,
           (SELECT json_agg(json_build_object(
              'key', c.criterion_key, 'family', c.family, 'labelEn', c.label_en,
-             'labelKa', c.label_ka, 'assetKey', c.asset_key, 'difficulty', c.difficulty
+             'labelKa', c.label_ka, 'labelEs', c.label_es, 'labelTr', c.label_tr, 'assetKey', c.asset_key, 'difficulty', c.difficulty
            ) ORDER BY ord)
            FROM unnest(b.column_criteria) WITH ORDINALITY AS r(cid, ord)
            JOIN football_grid_criteria c ON c.id = r.cid) AS columns

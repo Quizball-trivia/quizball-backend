@@ -381,6 +381,25 @@ export const auctionContentRepo = {
     `;
   },
 
+  /**
+   * Published rows for the same player + card variant in every locale. The
+   * Spanish/Turkish imports copy football_player_id and variant_key from the
+   * source card, so this is the reliable cross-locale link.
+   */
+  async getPublishedClueSiblings(
+    clueCardId: string
+  ): Promise<Array<{ locale: string; clue_1: string; clue_2: string; clue_3: string }>> {
+    return await sql<Array<{ locale: string; clue_1: string; clue_2: string; clue_3: string }>>`
+      SELECT sibling.locale, sibling.clue_1, sibling.clue_2, sibling.clue_3
+      FROM player_clue_cards source
+      JOIN player_clue_cards sibling
+        ON sibling.football_player_id = source.football_player_id
+       AND sibling.variant_key IS NOT DISTINCT FROM source.variant_key
+       AND sibling.status = 'published'
+      WHERE source.id = ${clueCardId}
+    `;
+  },
+
   async getPublishedAuctionCardById(clueCardId: string): Promise<PublishedAuctionCardRow | null> {
     const [row] = await sql<PublishedAuctionCardRow[]>`
       SELECT *

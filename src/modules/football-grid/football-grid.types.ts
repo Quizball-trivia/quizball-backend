@@ -84,6 +84,8 @@ export interface FootballGridCriterionView {
   family: 'club' | 'country' | 'league' | 'manager' | 'teammate' | 'trophy_award' | 'wildcard';
   labelEn: string;
   labelKa: string;
+  labelEs?: string | null;
+  labelTr?: string | null;
   assetKey: string | null;
   difficulty: FootballGridDifficulty;
 }

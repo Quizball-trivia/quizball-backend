@@ -93,3 +93,34 @@ describe('snapshot exposure over the wire', () => {
     expect(revealed.snapshots!.at(-1)!.valueEur).toBe(30_000_000);
   });
 });
+
+describe('localized clues over the wire', () => {
+  const localized: AuctionFootballer = {
+    ...footballer,
+    clues: [...footballer.clues!, 'Hint one in English', 'Hint two in English'],
+    cluesByLocale: {
+      en: [...footballer.clues!, 'Hint one in English', 'Hint two in English'],
+      tr: [...footballer.clues!, 'İpucu bir', 'İpucu iki'],
+    },
+  };
+
+  it('hidden lots slice every locale to the revealed prefix', () => {
+    const hidden = toHiddenFootballer(localized, localized.clues!.slice(0, 6));
+
+    expect(hidden.clues).toHaveLength(6);
+    expect(hidden.cluesByLocale?.tr).toEqual([...footballer.clues!, 'İpucu bir']);
+    expect(hidden.cluesByLocale?.en).toHaveLength(6);
+  });
+
+  it('hidden lots omit the map when the card has no localized steps', () => {
+    expect('cluesByLocale' in toHiddenFootballer(footballer, ['Goals'])).toBe(false);
+  });
+
+  it('hidden lots omit the map before the first reveal so a mystery card stays blind', () => {
+    expect('cluesByLocale' in toHiddenFootballer(localized)).toBe(false);
+  });
+
+  it('revealed lots carry the full map', () => {
+    expect(toRevealedFootballer(localized).cluesByLocale?.tr).toHaveLength(7);
+  });
+});

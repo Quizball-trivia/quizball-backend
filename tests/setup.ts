@@ -8,7 +8,7 @@ process.env.NODE_ENV = 'local';
 process.env.PORT = '8000';
 process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent'; // Suppress logs during tests
 process.env.CORS_ORIGINS = 'http://localhost:3000';
-const gridTestDatabase = process.env.FOOTBALL_GRID_TEST_DATABASE_URL;
+const gridTestDatabase = process.env.FOOTBALL_GRID_TEST_DATABASE_URL || undefined;
 if (gridTestDatabase && !['localhost', '127.0.0.1', '[::1]'].includes(new URL(gridTestDatabase).hostname)) {
   throw new Error('Grid integration tests require a local database');
 }

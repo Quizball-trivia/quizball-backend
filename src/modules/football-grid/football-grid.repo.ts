@@ -1806,13 +1806,14 @@ export const footballGridRepo = {
       if (seriesId) {
         const [previous] = await tx.unsafe<Array<{
           closed_at: string | null; status: string; current_match_id: string | null;
-          next_pairing_token: string | null; format: FootballGridSeriesFormat;
+          next_pairing_token: string | null; format: FootballGridSeriesFormat; theme: string | null;
         }>>(
-          `SELECT closed_at, status, current_match_id, next_pairing_token, format
+          `SELECT closed_at, status, current_match_id, next_pairing_token, format, theme
              FROM football_grid_series WHERE id = $1 FOR UPDATE`,
           [seriesId],
         );
         if (!previous) throw new Error('SERIES_CLOSED');
+        theme = input.theme ?? previous.theme ?? 'european';
         if (previous.closed_at) {
           // A rematch is a NEW series, not another board in the finished one.
           // Reusing the old ID reset game_index but not rematch_index, making

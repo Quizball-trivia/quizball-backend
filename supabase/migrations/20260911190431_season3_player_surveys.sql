@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.season3_survey_responses (
   sent_at timestamptz,
   UNIQUE(user_id,kind),
   CHECK ((kind='vote' AND remove_order IS NOT NULL AND remove_who IS NOT NULL AND idea IS NULL)
-      OR (kind='idea' AND remove_order IS NULL AND remove_who IS NULL AND length(trim(idea)) BETWEEN 1 AND 500))
+      OR (kind='idea' AND remove_order IS NULL AND remove_who IS NULL AND idea IS NOT NULL AND length(trim(idea)) BETWEEN 1 AND 500))
 );
 CREATE INDEX IF NOT EXISTS season3_survey_email_pending ON public.season3_survey_responses(email_status,attempted_at)
   WHERE email_status IN ('pending','sending');

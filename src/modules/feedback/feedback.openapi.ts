@@ -11,6 +11,7 @@ export function registerFeedbackOpenApi(registry: OpenAPIRegistry): void {
     registerEndpoint(registry,{
       method:'post',path:`/api/v1/feedback/season3${operation==='submit'?'':`/${operation}`}`,
       summary:`Season 3 survey ${operation} (authenticated)`,tags:['Feedback'],
+      security:[{bearerAuth:[]}],
       body:operation==='submit'?season3ResponseSchema:season3MatchSchema,
       responses:{200:{description:'Survey operation completed',schema:operation==='claim'?z.object({kind:z.enum(['vote','idea']).nullable(),saved:z.boolean()}):submitFeedbackResponseSchema},
       400:{description:'Invalid or expired survey',schema:errorResponseSchema},401:{description:'Authentication required',schema:errorResponseSchema},429:{description:'Too many requests',schema:errorResponseSchema}},

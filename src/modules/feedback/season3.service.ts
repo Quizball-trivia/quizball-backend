@@ -46,7 +46,20 @@ export async function deliverSeason3Feedback() {
     }
   } finally { busy=false; }
 }
+let workerTimer: ReturnType<typeof setInterval> | undefined;
+let workerRun: Promise<void> | undefined;
 export function startSeason3FeedbackWorker() {
-  const timer=setInterval(()=>{void deliverSeason3Feedback().catch(()=>logger.error('Season 3 feedback worker failed'));},60000);
-  timer.unref();
+  if(workerTimer) return;
+  workerTimer=setInterval(()=>{
+    if(workerRun) return;
+    workerRun=deliverSeason3Feedback()
+      .catch(()=>logger.error('Season 3 feedback worker failed'))
+      .finally(()=>{workerRun=undefined;});
+  },60000);
+  workerTimer.unref();
+}
+export async function stopSeason3FeedbackWorker() {
+  clearInterval(workerTimer);
+  workerTimer=undefined;
+  await workerRun;
 }

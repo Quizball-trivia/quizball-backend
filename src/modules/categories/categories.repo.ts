@@ -53,6 +53,7 @@ export interface ListCategoriesFilter {
   parentId?: string;
   isActive?: boolean;
   minQuestions?: number;
+  slugs?: string[];
 }
 
 export interface ListCategoriesResult {
@@ -83,20 +84,28 @@ export const categoriesRepo = {
     // questions". Every active category except the non-MCQ game-mode ones above
     // clears the threshold, so we exclude by slug instead of running the old
     // per-category JSONB validation subquery (the load-test DB hot spot).
+    // "Playable" also means what matchmaking would offer: SEO campaign-only
+    // categories back the /football-quiz pages and never enter a match.
     const minQuestionsFilter =
       filter?.minQuestions !== undefined
-        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]})`
+        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]}) AND campaign_only = false`
         : sql``;
 
     // Split the page fetch from the total count. `COUNT(*) OVER()` forced the
     // window to run the WHERE clause for ALL matching rows on every request,
     // ignoring LIMIT; splitting lets the page query stop at `limit` and the
     // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
+    const slugsFilter =
+      filter?.slugs && filter.slugs.length > 0
+        ? sql`AND slug = ANY(${filter.slugs})`
+        : sql``;
+
     const whereClause = sql`
       WHERE 1=1
         ${parentIdFilter}
         ${isActiveFilter}
         ${minQuestionsFilter}
+        ${slugsFilter}
         AND NOT EXISTS (
           SELECT 1
           FROM campaign_quiz_manual_questions managed

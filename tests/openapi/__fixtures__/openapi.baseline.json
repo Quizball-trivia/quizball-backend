@@ -18618,6 +18618,15 @@
           },
           {
             "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "required": false,
+            "name": "slugs",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1
             },

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Json } from '../../db/types.js';
-import { getOrLoadJson } from '../../core/json-cache.js';
+import { getOrLoadJson, readJsonCache } from '../../core/json-cache.js';
 import {
   AuthorizationError,
   DailyChallengeAlreadyCompletedError,
@@ -52,6 +52,17 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 import { buildFifaFaceUrl } from './fifa-face-url.js';
+import { guestRepo } from '../guest/guest.repo.js';
+
+/** Placeholder actor for guest set building: never written anywhere (no served-history, no completion). */
+const GUEST_ACTOR = '00000000-0000-4000-8000-000000000000';
+const guestSetKey = (day: string, type: string, locale?: string) => `guest:daily:v1:${day}:${type}:${locale ?? 'en'}`;
+const guestSetMemo = new Map<string, { value: unknown; expiresAt: number }>();
+function secondsUntilNextUtcDay(): number {
+  const now = new Date();
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(60, Math.floor((next - now.getTime()) / 1000));
+}
 
 function getDailyChallengeDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -316,7 +327,7 @@ function pickDaySeeded<T>(rows: T[], count: number, day: string, idOf: (row: T) 
   return picked.slice(0, count);
 }
 
-async function markQuestionsServed(
+async function markQuestionsServedForUser(
   userId: string,
   served: Array<{ id: string; answerKeys: string[] }>
 ): Promise<void> {
@@ -1206,11 +1217,11 @@ export const dailyChallengesService = {
   },
 
   /** Today's most accurate Stat Sniper players (top N) plus the caller's own rank. */
-  async getStatSniperLeaderboard(userId: string, limit = 10) {
+  async getStatSniperLeaderboard(userId: string | null, limit = 10) {
     const day = getDailyChallengeDay();
     const [rows, me] = await Promise.all([
       dailyChallengesRepo.listTopCompletionsForDay('statSniper', day, limit),
-      dailyChallengesRepo.getCompletionRankForDay(userId, 'statSniper', day),
+      userId ? dailyChallengesRepo.getCompletionRankForDay(userId, 'statSniper', day) : Promise.resolve(null),
     ]);
     return {
       challengeDay: day,
@@ -1226,19 +1237,29 @@ export const dailyChallengesService = {
     };
   },
 
-  async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string) {
+  /**
+   * Today's set for a player. Guests (public game pages) get the same selection
+   * rules and real content but no completion gate and no served-history: they
+   * have no users row, and their play must not consume a member's history.
+   */
+  async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string, options: { guest?: boolean } = {}) {
     const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
     }
 
-    const completion = await dailyChallengesRepo.getCompletionForUserOnDay(userId, challengeType, day);
-    if (completion) {
-      throwAlreadyCompleted(challengeType);
+    if (!options.guest) {
+      const completion = await dailyChallengesRepo.getCompletionForUserOnDay(userId, challengeType, day);
+      if (completion) {
+        throwAlreadyCompleted(challengeType);
+      }
     }
 
-    const recentlyServed = await loadRecentlyServed(userId);
+    const recentlyServed = options.guest ? { ids: new Set<string>(), answerKeys: new Set<string>() } : await loadRecentlyServed(userId);
+    const markQuestionsServed = options.guest
+      ? async () => undefined
+      : (id: string, served: Array<{ id: string; answerKeys: string[] }>) => markQuestionsServedForUser(id, served);
 
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
@@ -1707,7 +1728,8 @@ export const dailyChallengesService = {
       const selected = pickDaySeeded(
         ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount,
-        getDailyChallengeDay(),
+        // Guests get their own paper: the members' day-seeded set must not be readable without an account.
+        options.guest ? `${getDailyChallengeDay()}:guest` : getDailyChallengeDay(),
         ({ row }) => row.id,
         ({ row }) => row.difficulty,
         footballLogicDifficultyQuota(settings.questionCount),
@@ -1780,6 +1802,49 @@ export const dailyChallengesService = {
             : getQuestionClue(row.explanation, locale),
       })),
     };
+  },
+
+  /**
+   * The guest set for a day/type/locale is frozen on first use and served to every
+   * guest, so freely minted guest identities can only ever read one bounded set per
+   * day instead of walking the question bank. Redis holds it across replicas; an
+   * in-process copy covers a Redis outage.
+   */
+  async getGuestChallengeSession(challengeType: DailyChallengeType, rawLocale?: string) {
+    const day = getDailyChallengeDay();
+    // Canonical locale: an unknown or aliased value must not mint another frozen set / cache key.
+    const locale = normalizeDailyChallengeLocale(rawLocale);
+    const key = guestSetKey(day, challengeType, locale);
+    const local = guestSetMemo.get(key);
+    if (local && local.expiresAt > Date.now()) return local.value;
+    const value = await getOrLoadJson(key, secondsUntilNextUtcDay(), () => this.getChallengeSession(GUEST_ACTOR, challengeType, locale, { guest: true }));
+    guestSetMemo.set(key, { value, expiresAt: Date.now() + secondsUntilNextUtcDay() * 1000 });
+    return value;
+  },
+
+  /** True when the puzzle belongs to one of today's frozen guest sets (any locale); guests may only link inside those. */
+  async isGuestPuzzleToday(puzzleId: string): Promise<boolean> {
+    const day = getDailyChallengeDay();
+    for (const locale of SUPPORTED_DAILY_CHALLENGE_LOCALES) {
+      const key = guestSetKey(day, 'passChain', locale);
+      // Read-only: a miss must not cache a null set for the locale.
+      const cached = guestSetMemo.get(key)?.value ?? (await readJsonCache(key));
+      const puzzles = (cached as { puzzles?: Array<{ id: string }> } | null)?.puzzles ?? [];
+      if (puzzles.some((p) => p.id === puzzleId)) return true;
+    }
+    return false;
+  },
+
+  /** A guest's result: best score of the day is kept for the results screen; nothing is awarded. */
+  async completeChallengeForGuest(guestId: string, challengeType: DailyChallengeType, score: number) {
+    const day = getDailyChallengeDay();
+    const config = await dailyChallengesRepo.getConfig(challengeType);
+    if (!config || !config.is_active) {
+      throw new NotFoundError('Daily challenge not available');
+    }
+    const cappedScore = clampScoreForCompletion(challengeType, score, config.settings);
+    const saved = await guestRepo.upsertDailyCompletion({ guestId, challengeType, challengeDay: day, score: cappedScore });
+    return { status: 'completed' as const, guest: true as const, score: cappedScore, bestScore: saved.best_score, attempts: saved.attempts, coinsAwarded: 0, xpAwarded: 0 };
   },
 
   async completeChallenge(

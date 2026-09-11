@@ -7,13 +7,15 @@ import type {
   FootballGridUserRankQuery,
 } from './football-grid-leaderboard.schemas.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
+import { AuthenticationError } from '../../core/errors.js';
 
 export const footballGridLeaderboardController = {
   async getLeaderboard(req: Request, res: Response): Promise<void> {
     const { limit, offset, scope } = req.validated.query as FootballGridLeaderboardQuery;
     let country: string | undefined;
     if (scope === 'country') {
-      const user = await usersRepo.getById(req.user!.id);
+      if (!req.user) throw new AuthenticationError('Sign in to see your country board');
+      const user = await usersRepo.getById(req.user.id);
       country = normalizeSupportedCountryCode(user?.country) ?? undefined;
       if (!country) {
         res.json({ entries: [] });

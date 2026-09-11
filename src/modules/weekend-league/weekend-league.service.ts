@@ -14,6 +14,7 @@ import type {
 
 const COUNTS_CACHE_TTL_SECONDS = 5;
 /** The hall of fame only changes when an event completes — once a week. */
+const STANDINGS_CACHE_TTL_SECONDS = 15;
 const HALL_OF_FAME_CACHE_TTL_SECONDS = 300;
 /** Bounded history — the payload must not grow with every season played. */
 const HALL_OF_FAME_MAX_EDITIONS = 12;
@@ -101,6 +102,19 @@ export const weekendLeagueService = {
   }> {
     const tournament = await weekendLeagueRepo.getCurrentTournament();
     if (!tournament) return { tournament_id: null, game_index: null, entries: [] };
+    // Public read (signed-out visitors poll it): one shared snapshot per short window.
+    return getOrLoadJson(`wl:standings:v1:${tournament.id}`, STANDINGS_CACHE_TTL_SECONDS, () => this.loadStandings(tournament));
+  },
+
+  async loadStandings(tournament: WlTournamentRow): Promise<{
+    tournament_id: string | null;
+    game_index: number | null;
+    entries: Array<{
+      user_id: string; nickname: string | null; avatar_url: string | null;
+      country: string | null; tier: string; rank: number; points: number;
+      advanced: boolean;
+    }>;
+  }> {
     const [latest] = await sql<Array<{ game_index: number }>>`
       SELECT max(game_index)::int AS game_index FROM wl_game_results
       WHERE tournament_id = ${tournament.id}
@@ -115,7 +129,7 @@ export const weekendLeagueService = {
           country: string | null; rp: number | null; rank: number; score: number;
           advanced: boolean;
         }>>`
-          SELECT r.user_id, u.nickname, u.avatar_url, u.country,
+          SELECT CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN 'hidden-' || md5(r.user_id::text || r.tournament_id::text) ELSE r.user_id::text END AS user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
                  p.rp::int AS rp, r.rank, r.score, r.advanced
           FROM wl_game_results r
           JOIN users u ON u.id = r.user_id
@@ -142,7 +156,7 @@ export const weekendLeagueService = {
             SELECT user_id, advanced FROM wl_game_results
             WHERE tournament_id = ${tournament.id} AND game_index = ${latest.game_index}
           )
-          SELECT a.user_id, u.nickname, u.avatar_url, u.country,
+          SELECT CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN 'hidden-' || md5(a.user_id::text || ${tournament.id}::text) ELSE a.user_id::text END AS user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
                  p.rp::int AS rp,
                  rank() OVER (ORDER BY a.total DESC, a.total_time ASC)::int AS rank,
                  a.total AS score,
@@ -209,7 +223,7 @@ export const weekendLeagueService = {
           WHERE e.tournament_id IN (SELECT id FROM recent)
           GROUP BY e.tournament_id
         )
-        SELECT rc.week_key::text, r.rank, u.nickname, u.avatar_url, r.score,
+        SELECT rc.week_key::text, r.rank, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, r.score,
                COALESCE(ec.entrants, 0) AS entrants
         FROM wl_game_results r
         JOIN recent rc ON rc.id = r.tournament_id
@@ -232,7 +246,8 @@ export const weekendLeagueService = {
         JOIN users u ON u.id = r.user_id
         WHERE t.is_test = false AND t.status = 'completed'
           AND r.game_index = ${WL_FINAL_GAME_INDEX} AND u.is_ai = false
-        GROUP BY u.nickname, u.avatar_url
+          AND NOT (u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL)
+        GROUP BY u.id, u.nickname, u.avatar_url
         HAVING count(*) FILTER (WHERE r.rank <= 3) > 0
         ORDER BY gold DESC, silver DESC, bronze DESC, finals_played DESC
         LIMIT 10
@@ -254,7 +269,8 @@ export const weekendLeagueService = {
   },
 
 
-  async current(userId: string): Promise<WlCurrentResponse> {
+  /** `userId` null = signed-out visitor: the tournament without a personal block. */
+  async current(userId: string | null): Promise<WlCurrentResponse> {
     const tournament = await weekendLeagueRepo.getCurrentTournament();
     if (!tournament) {
       return { tournament: null, you: null };
@@ -272,9 +288,9 @@ export const weekendLeagueService = {
           ? weekendLeagueRepo.getFinalCounts(tournament.id)
           : weekendLeagueRepo.getCounts(tournament.id))
       ),
-      weekendLeagueRepo.getEntry(tournament.id, userId),
-      loadQp(tournament, userId),
-      weekendLeagueRepo.getLastGameRank(tournament.id, userId),
+      userId ? weekendLeagueRepo.getEntry(tournament.id, userId) : Promise.resolve(null),
+      userId ? loadQp(tournament, userId) : Promise.resolve(null),
+      userId ? weekendLeagueRepo.getLastGameRank(tournament.id, userId) : Promise.resolve(null),
     ]);
 
     const tournamentCfg = wlConfigFrom(tournament.config);
@@ -307,14 +323,14 @@ export const weekendLeagueService = {
         spectator_delay_ms: spectatorDelayMs,
         server_now_ms: Date.now(),
       },
-      you: {
+      you: userId && qp ? {
         entered: entry != null,
         state: entry?.state ?? null,
         checked_in: entry?.checked_in_at != null,
         final_checked_in: entry?.final_checked_in_at != null,
         last_game_rank: entry != null ? lastGameRank : null,
         qp,
-      },
+      } : null,
     };
   },
 

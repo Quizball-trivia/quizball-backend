@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
 import { rankedController } from '../../modules/ranked/ranked.controller.js';
 import { validate } from '../middleware/validate.js';
 import {
@@ -9,6 +9,20 @@ import {
 
 const router = Router();
 
+/**
+ * GET /api/v1/ranked/leaderboard?scope=global|country&limit=50&offset=0
+ * Leaderboard entries sorted by RP descending. Readable without an account
+ * (signed-out visitors browse the board); the country scope needs a session.
+ */
+router.get(
+  '/leaderboard',
+  optionalAuthMiddleware,
+  validate({ query: rankedLeaderboardQuerySchema }),
+  rankedController.getLeaderboard
+);
+
+router.get('/leaderboard/seasons', optionalAuthMiddleware, rankedController.listSeasons);
+
 router.use(authMiddleware);
 
 /**
@@ -16,18 +30,6 @@ router.use(authMiddleware);
  * Get the authenticated user's ranked profile (RP, tier, placement status).
  */
 router.get('/profile', rankedController.getProfile);
-
-/**
- * GET /api/v1/ranked/leaderboard?scope=global|country&limit=50&offset=0
- * Get leaderboard entries sorted by RP descending.
- */
-router.get(
-  '/leaderboard',
-  validate({ query: rankedLeaderboardQuerySchema }),
-  rankedController.getLeaderboard
-);
-
-router.get('/leaderboard/seasons', rankedController.listSeasons);
 
 /**
  * GET /api/v1/ranked/leaderboard/me?scope=global|country

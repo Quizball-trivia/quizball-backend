@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { footballGridLeaderboardController } from '../../modules/football-grid/football-grid-leaderboard.controller.js';
 import { footballGridTypeaheadController } from '../../modules/football-grid/football-grid-typeahead.controller.js';
@@ -11,13 +11,15 @@ import {
 
 const router = Router();
 
-router.use(authMiddleware);
-
+// Readable without an account (signed-out visitors browse the board); the country scope needs a session.
 router.get(
   '/leaderboard',
+  optionalAuthMiddleware,
   validate({ query: footballGridLeaderboardQuerySchema }),
   footballGridLeaderboardController.getLeaderboard,
 );
+
+router.use(authMiddleware);
 
 router.get(
   '/leaderboard/me',

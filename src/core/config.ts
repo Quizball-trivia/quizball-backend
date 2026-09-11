@@ -268,6 +268,17 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
+  /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
+  GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
+  /**
+   * Season 3: ranked / friendly possession matches serve MCQs only (Who Am I and
+   * Put in Order live in the daily challenges). Flip at the season reset; the
+   * category eligibility rules follow it.
+   */
+  POSSESSION_MCQ_ONLY: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_XP_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")

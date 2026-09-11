@@ -60,9 +60,15 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
     req.user = { id: USER_ID, role: 'user' };
     next();
   }),
+  optionalAuthMiddleware: vi.fn((req, _res, next) => {
+    req.user = { id: USER_ID, role: 'user' };
+    next();
+  }),
 }));
 
 const { auctionRoutes } = await import('../../src/http/routes/auction.routes.js');
+const authModule = await import('../../src/http/middleware/auth.js');
+const { AuthenticationError } = await import('../../src/core/errors.js');
 const { auctionLeaderboardRepo } = await import(
   '../../src/modules/auction/auction-leaderboard.repo.js'
 );
@@ -127,6 +133,30 @@ describe('auction leaderboard repo', () => {
   it('returns null when the user has no auction points yet', async () => {
     dbMocks.sql.taggedResults.push([]);
     expect(await auctionLeaderboardRepo.getUserRank(USER_ID)).toBeNull();
+  });
+});
+
+describe('GET /api/v1/auction/leaderboard without a session', () => {
+  const asGuest = () => vi.mocked(authModule.optionalAuthMiddleware).mockImplementationOnce((_req, _res, next) => next());
+
+  it('serves the global board to signed-out visitors', async () => {
+    asGuest();
+    dbMocks.sql.taggedResults.push([]);
+    const res = await request(createApp()).get('/api/v1/auction/leaderboard');
+    expect(res.status).toBe(200);
+    expect(usersRepoMock.getById).not.toHaveBeenCalled();
+  });
+
+  it('refuses the country scope without a session', async () => {
+    asGuest();
+    const res = await request(createApp()).get('/api/v1/auction/leaderboard?scope=country');
+    expect(res.status).toBe(401);
+  });
+
+  it('keeps /me behind the session', async () => {
+    vi.mocked(authModule.authMiddleware).mockImplementationOnce((_req, _res, next) => next(new AuthenticationError('Authentication required')));
+    const res = await request(createApp()).get('/api/v1/auction/leaderboard/me');
+    expect(res.status).toBe(401);
   });
 });
 

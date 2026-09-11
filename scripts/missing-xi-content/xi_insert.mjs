@@ -24,7 +24,8 @@ try {
     for (const s of squads) {
       const qid = randomUUID(); ids.push(qid);
       const prompt = { en: `${s.team.en} – ${s.match_label.en}`, ka: `${s.team.ka} – ${s.match_label.ka}`, es: `${s.team.es} – ${s.match_label.es}` };
-      const payload = { type: 'missing_xi', team: s.team, opponent: s.opponent, match_label: s.match_label, formation: s.formation, score: s.score, season: s.season,
+      // `verified` ({ source, matchId?, checkedAt }) is what the picker keys on: unverified line-ups never reach players.
+      const payload = { type: 'missing_xi', team: s.team, opponent: s.opponent, match_label: s.match_label, formation: s.formation, score: s.score, season: s.season, ...(s.verified ? { verified: s.verified } : {}),
         slots: s.slots.map((sl) => ({ id: sl.id, position: sl.position, number: sl.number, x: sl.x, y: sl.y, name: sl.name, accepted_answers: sl.accepted_answers, tm_id: sl.tm_id })) };
       await tx`insert into questions (id, category_id, type, difficulty, status, prompt, explanation, ranked_eligible, visibility) values (${qid}, ${cat}, 'missing_xi', ${s.difficulty}, 'published', ${tx.json(prompt)}, null, true, 'public')`;
       await tx`insert into question_payloads (question_id, payload) values (${qid}, ${tx.json(payload)})`;

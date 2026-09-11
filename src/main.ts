@@ -1,4 +1,5 @@
 import { createServer } from 'http';
+import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { createApp } from './app.js';
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
@@ -66,6 +67,7 @@ startBotChallengeResponder();
 startBotRenameWorker();
 startDailyComebackReminderWorker();
 startRetentionEmailWorker();
+startSeason3FeedbackWorker();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -137,6 +139,7 @@ const shutdown = async (signal: string) => {
     stopRoadToGoalSweeper(),
     stopDailyComebackReminderWorker(),
     stopRetentionEmailWorker(),
+    stopSeason3FeedbackWorker(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

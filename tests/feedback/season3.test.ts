@@ -14,7 +14,7 @@ describe('Season 3 surveys',()=>{
     expect(season3ResponseSchema.safeParse({matchId,locale:'ka',kind:'vote',removeOrder:true}).success).toBe(false);
   });
   it('accepts all production locales and trims ideas',()=>{
-    for(const locale of ['en','ka','es','tr'])expect(season3ResponseSchema.parse({matchId,locale,kind:'idea',idea:' Duel '}).kind).toBe('idea');
+    for(const locale of ['en','ka','es','tr'])expect(season3ResponseSchema.parse({matchId,locale,kind:'idea',idea:' Duel '})).toMatchObject({kind:'idea',idea:'Duel'});
   });
   it('saves staging feedback permanently suppressed with fixed recipient and escaped content',async()=>{
     await season3Service.submit('user',{matchId,locale:'en',kind:'idea',idea:'<script>bad</script>'},{username:'<name>',email:'reply@example.com'});

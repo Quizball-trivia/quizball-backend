@@ -25187,6 +25187,11 @@
         "tags": [
           "Feedback"
         ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -25274,6 +25279,11 @@
         "tags": [
           "Feedback"
         ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -25351,6 +25361,11 @@
         "summary": "Season 3 survey submit (authenticated)",
         "tags": [
           "Feedback"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "requestBody": {
           "required": true,

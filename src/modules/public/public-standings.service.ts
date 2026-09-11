@@ -73,7 +73,7 @@ async function board(competition: PublicCompetition): Promise<PublicStandingsBlo
   if ((retryAfter.get(competition) ?? 0) > now) return unavailable();
   try {
     const value = await getOrLoadJson(`public:leaderboard:v1:${competition}`, CACHE_SECONDS, loaders[competition]);
-    lastGood.set(competition, { value, at: Date.now() });
+    lastGood.set(competition, { value, at: Date.parse(value.updated_at) || Date.now() });
     retryAfter.delete(competition);
     return value;
   } catch (error) {

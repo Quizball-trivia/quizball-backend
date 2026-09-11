@@ -17,7 +17,7 @@ const ids = JSON.parse(fs.readFileSync(idsFile, 'utf8'));
 if (ids.length !== squads.length) { console.error(`id count ${ids.length} != squads ${squads.length}`); process.exit(1); }
 
 const sql = postgres(dbUrl, { max: 2, ssl: dbUrl.includes('localhost') ? false : 'require' });
-const rows = await sql`select question_id, payload->'team'->>'en' as team, payload->'match_label'->>'en' as label, payload->>'season' as season, payload ? 'verified' as has_verified from question_payloads where question_id = any(${ids})`;
+const rows = await sql`select question_id, payload->'team'->>'en' as team, payload->'match_label'->>'en' as label, payload->>'season' as season, jsonb_typeof(payload->'verified') = 'object' as has_verified from question_payloads where question_id = any(${ids})`;
 const byId = new Map(rows.map((r) => [r.question_id, r]));
 
 const updates = [];
@@ -36,7 +36,7 @@ if (apply && updates.length) {
   await sql.begin(async (tx) => {
     for (const u of updates) await tx`update question_payloads set payload = payload || ${tx.json({ verified: u.verified })} where question_id = ${u.id}`;
   });
-  const [{ n }] = await sql`select count(*)::int as n from question_payloads where question_id = any(${ids}) and payload ? 'verified'`;
+  const [{ n }] = await sql`select count(*)::int as n from question_payloads where question_id = any(${ids}) and jsonb_typeof(payload->'verified') = 'object'`;
   console.log('verified records now present:', n);
 }
 await sql.end();

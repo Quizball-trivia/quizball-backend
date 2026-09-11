@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes } from 'crypto';
+import { config } from '../../core/config.js';
 import { AuthenticationError } from '../../core/errors.js';
 import { guestRepo, type GuestSessionRow } from './guest.repo.js';
 
@@ -15,7 +16,9 @@ export const GUEST_PURGE_DAYS = 45;
 export const GUEST_TOKEN_SHAPE = /^[a-f0-9]{64}$/;
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
-const hashSignal = (value: string | null | undefined) => (value ? createHash('sha256').update(value).digest('hex').slice(0, 32) : null);
+// Keyed: a database reader cannot enumerate IPv4 addresses against ip_hash.
+const signalKey = () => config.GUEST_SIGNAL_HMAC_KEY ?? config.SUPABASE_SECRET_KEY ?? config.SUPABASE_SERVICE_ROLE_KEY ?? 'guest-signal';
+const hashSignal = (value: string | null | undefined) => (value ? createHmac('sha256', signalKey()).update(value).digest('hex').slice(0, 32) : null);
 
 export const guestService = {
   async createSession(input: { locale: string | null; ip: string | null; deviceId: string | null }): Promise<{ token: string; guestId: string }> {

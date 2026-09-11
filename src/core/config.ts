@@ -268,6 +268,8 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
+  /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
+  GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
   FOOTBALL_GRID_XP_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")

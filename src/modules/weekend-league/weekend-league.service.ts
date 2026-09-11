@@ -129,7 +129,7 @@ export const weekendLeagueService = {
           country: string | null; rp: number | null; rank: number; score: number;
           advanced: boolean;
         }>>`
-          SELECT r.user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
+          SELECT CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN 'hidden-' || md5(r.user_id::text || r.tournament_id::text) ELSE r.user_id::text END AS user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
                  p.rp::int AS rp, r.rank, r.score, r.advanced
           FROM wl_game_results r
           JOIN users u ON u.id = r.user_id
@@ -156,7 +156,7 @@ export const weekendLeagueService = {
             SELECT user_id, advanced FROM wl_game_results
             WHERE tournament_id = ${tournament.id} AND game_index = ${latest.game_index}
           )
-          SELECT a.user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
+          SELECT CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN 'hidden-' || md5(a.user_id::text || ${tournament.id}::text) ELSE a.user_id::text END AS user_id, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.country END AS country,
                  p.rp::int AS rp,
                  rank() OVER (ORDER BY a.total DESC, a.total_time ASC)::int AS rank,
                  a.total AS score,
@@ -236,7 +236,7 @@ export const weekendLeagueService = {
         nickname: string | null; avatar_url: string | null;
         gold: number; silver: number; bronze: number; finals_played: number;
       }>>`
-        SELECT CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.nickname END AS nickname, CASE WHEN u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL THEN NULL ELSE u.avatar_url END AS avatar_url,
+        SELECT u.nickname, u.avatar_url,
                count(*) FILTER (WHERE r.rank = 1)::int AS gold,
                count(*) FILTER (WHERE r.rank = 2)::int AS silver,
                count(*) FILTER (WHERE r.rank = 3)::int AS bronze,
@@ -246,7 +246,8 @@ export const weekendLeagueService = {
         JOIN users u ON u.id = r.user_id
         WHERE t.is_test = false AND t.status = 'completed'
           AND r.game_index = ${WL_FINAL_GAME_INDEX} AND u.is_ai = false
-        GROUP BY 1, 2
+          AND NOT (u.is_deleted OR u.deleted_at IS NOT NULL OR u.pending_deletion_at IS NOT NULL)
+        GROUP BY u.id, u.nickname, u.avatar_url
         HAVING count(*) FILTER (WHERE r.rank <= 3) > 0
         ORDER BY gold DESC, silver DESC, bronze DESC, finals_played DESC
         LIMIT 10

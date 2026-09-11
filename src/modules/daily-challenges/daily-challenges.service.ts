@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Json } from '../../db/types.js';
-import { getOrLoadJson } from '../../core/json-cache.js';
+import { getOrLoadJson, readJsonCache } from '../../core/json-cache.js';
 import {
   AuthorizationError,
   DailyChallengeAlreadyCompletedError,
@@ -1810,8 +1810,10 @@ export const dailyChallengesService = {
    * day instead of walking the question bank. Redis holds it across replicas; an
    * in-process copy covers a Redis outage.
    */
-  async getGuestChallengeSession(challengeType: DailyChallengeType, locale?: string) {
+  async getGuestChallengeSession(challengeType: DailyChallengeType, rawLocale?: string) {
     const day = getDailyChallengeDay();
+    // Canonical locale: an unknown or aliased value must not mint another frozen set / cache key.
+    const locale = normalizeDailyChallengeLocale(rawLocale);
     const key = guestSetKey(day, challengeType, locale);
     const local = guestSetMemo.get(key);
     if (local && local.expiresAt > Date.now()) return local.value;
@@ -1823,9 +1825,10 @@ export const dailyChallengesService = {
   /** True when the puzzle belongs to one of today's frozen guest sets (any locale); guests may only link inside those. */
   async isGuestPuzzleToday(puzzleId: string): Promise<boolean> {
     const day = getDailyChallengeDay();
-    for (const locale of ['en', 'ka', 'es']) {
+    for (const locale of SUPPORTED_DAILY_CHALLENGE_LOCALES) {
       const key = guestSetKey(day, 'passChain', locale);
-      const cached = guestSetMemo.get(key)?.value ?? (await getOrLoadJson(key, secondsUntilNextUtcDay(), async () => null).catch(() => null));
+      // Read-only: a miss must not cache a null set for the locale.
+      const cached = guestSetMemo.get(key)?.value ?? (await readJsonCache(key));
       const puzzles = (cached as { puzzles?: Array<{ id: string }> } | null)?.puzzles ?? [];
       if (puzzles.some((p) => p.id === puzzleId)) return true;
     }

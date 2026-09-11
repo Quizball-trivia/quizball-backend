@@ -52,11 +52,16 @@ export function createApp(): Express {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
+  // Any first-party subdomain is implicitly trusted: adding cms.quizball.io in
+  // Vercel silently broke CMS login with a CORS 403 because the env allowlist
+  // only knew the old domain (2026-09-09). The env var still covers
+  // non-quizball origins (local dev, preview deploys).
+  const FIRST_PARTY_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*quizball\.io$/;
   app.use(
     cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl)
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin || allowedOrigins.includes(origin) || FIRST_PARTY_ORIGIN.test(origin)) {
           callback(null, true);
         } else {
           callback(new AuthorizationError('CORS origin not allowed'));

@@ -83,9 +83,11 @@ export const categoriesRepo = {
     // questions". Every active category except the non-MCQ game-mode ones above
     // clears the threshold, so we exclude by slug instead of running the old
     // per-category JSONB validation subquery (the load-test DB hot spot).
+    // "Playable" also means what matchmaking would offer: SEO campaign-only
+    // categories back the /football-quiz pages and never enter a match.
     const minQuestionsFilter =
       filter?.minQuestions !== undefined
-        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]})`
+        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]}) AND campaign_only = false`
         : sql``;
 
     // Split the page fetch from the total count. `COUNT(*) OVER()` forced the

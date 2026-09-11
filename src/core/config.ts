@@ -270,6 +270,15 @@ const configSchema = z.object({
   FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
+  /**
+   * Season 3: ranked / friendly possession matches serve MCQs only (Who Am I and
+   * Put in Order live in the daily challenges). Flip at the season reset; the
+   * category eligibility rules follow it.
+   */
+  POSSESSION_MCQ_ONLY: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_XP_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")
@@ -544,6 +553,16 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
         { nodeEnv: result.data.NODE_ENV, assetOrigin, storageOrigin },
       );
     }
+  }
+
+  if (
+    result.data.NODE_ENV !== "local"
+    && !(result.data.GUEST_SIGNAL_HMAC_KEY || result.data.SUPABASE_SECRET_KEY || result.data.SUPABASE_SERVICE_ROLE_KEY)
+  ) {
+    throw new ConfigError(
+      "Invalid configuration: GUEST_SIGNAL_HMAC_KEY (or a Supabase secret key) is required outside local to key stored guest signals.",
+      { nodeEnv: result.data.NODE_ENV },
+    );
   }
 
   if (

@@ -1,4 +1,5 @@
 import { sql } from './index.js';
+import { config } from '../core/config.js';
 
 const NORMALIZED_MCQ_PAYLOAD = sql`
   (
@@ -52,10 +53,16 @@ export const MCQ_VALIDATION_CONDITIONS = sql`
  * Requires >= 4 valid MCQs plus at least 1 of each in-match special type.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
  */
+/** Season 3 (POSSESSION_MCQ_ONLY): categories no longer need the special types to be eligible. */
+const SPECIAL_TYPE_COUNTS = () => (config.POSSESSION_MCQ_ONLY
+  ? sql``
+  : sql`
+    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
+    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1`);
+
 export const RANKED_ELIGIBILITY_HAVING = sql`
   HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 4
-    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
-    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
+    ${SPECIAL_TYPE_COUNTS()}
 `;
 
 /**
@@ -77,8 +84,7 @@ export const RANKED_ELIGIBILITY_HAVING = sql`
 export function buildPossessionEligibilityHavingCounts(minMcqQuestions: number) {
   return sql`
   HAVING COUNT(*) FILTER (WHERE q.type = 'mcq_single') >= ${minMcqQuestions}
-    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
-    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
+    ${SPECIAL_TYPE_COUNTS()}
 `;
 }
 

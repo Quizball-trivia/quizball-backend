@@ -16,8 +16,9 @@ export const GUEST_PURGE_DAYS = 45;
 export const GUEST_TOKEN_SHAPE = /^[a-f0-9]{64}$/;
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
-// Keyed: a database reader cannot enumerate IPv4 addresses against ip_hash.
-const signalKey = () => config.GUEST_SIGNAL_HMAC_KEY ?? config.SUPABASE_SECRET_KEY ?? config.SUPABASE_SERVICE_ROLE_KEY ?? 'guest-signal';
+// Keyed: a database reader cannot enumerate IPv4 addresses against ip_hash. Outside
+// local the SMS hook secret is already mandatory, so a real key always exists.
+const signalKey = () => config.GUEST_SIGNAL_HMAC_KEY ?? config.SUPABASE_SMS_HOOK_SECRET ?? config.SUPABASE_SECRET_KEY ?? 'guest-signal-local';
 const hashSignal = (value: string | null | undefined) => (value ? createHmac('sha256', signalKey()).update(value).digest('hex').slice(0, 32) : null);
 
 export const guestService = {

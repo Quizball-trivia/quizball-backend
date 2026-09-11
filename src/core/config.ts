@@ -557,16 +557,6 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
 
   if (
     result.data.NODE_ENV !== "local"
-    && !(result.data.GUEST_SIGNAL_HMAC_KEY || result.data.SUPABASE_SECRET_KEY || result.data.SUPABASE_SERVICE_ROLE_KEY)
-  ) {
-    throw new ConfigError(
-      "Invalid configuration: GUEST_SIGNAL_HMAC_KEY (or a Supabase secret key) is required outside local to key stored guest signals.",
-      { nodeEnv: result.data.NODE_ENV },
-    );
-  }
-
-  if (
-    result.data.NODE_ENV !== "local"
     && (result.data.FOOTBALL_GRID_COINS_ENABLED || result.data.FOOTBALL_GRID_POINTS_ENABLED)
     && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32
   ) {

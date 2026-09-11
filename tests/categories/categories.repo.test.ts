@@ -33,6 +33,12 @@ describe('categoriesRepo.list playable filter', () => {
     expect(page?.text).toContain('campaign_only = false');
   });
 
+  it('restricts to the requested slugs when given', async () => {
+    await categoriesRepo.list({ isActive: true, minQuestions: 5, slugs: ['world-cup', 'premier-league'] }, 1, 50, 'en');
+    const page = dbMocks.sql.taggedCalls.find((c) => c.text.includes('SELECT *'));
+    expect(page?.text).toContain('slug = ANY(');
+  });
+
   it('keeps campaign-only categories in the plain catalog listing', async () => {
     await categoriesRepo.list({ isActive: true }, 1, 50, 'en');
     const page = dbMocks.sql.taggedCalls.find((c) => c.text.includes('SELECT *'));

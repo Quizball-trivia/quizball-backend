@@ -31,6 +31,8 @@ export const listCategoriesQuerySchema = z.object({
     .transform((val) => val === 'true')
     .optional(),
   min_questions: z.coerce.number().int().min(1).optional(),
+  /** Comma-separated slugs: fetch a fixed set (the training match pins its ban categories). */
+  slugs: z.string().max(500).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });

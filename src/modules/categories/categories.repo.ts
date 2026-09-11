@@ -53,6 +53,7 @@ export interface ListCategoriesFilter {
   parentId?: string;
   isActive?: boolean;
   minQuestions?: number;
+  slugs?: string[];
 }
 
 export interface ListCategoriesResult {
@@ -94,11 +95,17 @@ export const categoriesRepo = {
     // window to run the WHERE clause for ALL matching rows on every request,
     // ignoring LIMIT; splitting lets the page query stop at `limit` and the
     // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
+    const slugsFilter =
+      filter?.slugs && filter.slugs.length > 0
+        ? sql`AND slug = ANY(${filter.slugs})`
+        : sql``;
+
     const whereClause = sql`
       WHERE 1=1
         ${parentIdFilter}
         ${isActiveFilter}
         ${minQuestionsFilter}
+        ${slugsFilter}
         AND NOT EXISTS (
           SELECT 1
           FROM campaign_quiz_manual_questions managed

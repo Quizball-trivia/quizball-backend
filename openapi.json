@@ -1235,7 +1235,13 @@
               "free_kicks_payout",
               "road_to_goal_stake",
               "road_to_goal_payout",
-              "guess_the_goal_reward"
+              "guess_the_goal_reward",
+              "trivia_mines_stake",
+              "trivia_mines_payout",
+              "trivia_mines_refund",
+              "squad_spin_stake",
+              "squad_spin_payout",
+              "squad_spin_refund"
             ]
           },
           "outcome": {
@@ -1383,7 +1389,13 @@
                     "free_kicks_payout",
                     "road_to_goal_stake",
                     "road_to_goal_payout",
-                    "guess_the_goal_reward"
+                    "guess_the_goal_reward",
+                    "trivia_mines_stake",
+                    "trivia_mines_payout",
+                    "trivia_mines_refund",
+                    "squad_spin_stake",
+                    "squad_spin_payout",
+                    "squad_spin_refund"
                   ]
                 },
                 "outcome": {
@@ -5024,6 +5036,199 @@
               "display_answer",
               "accepted_answers"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "missing_xi"
+                ]
+              },
+              "team": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "opponent": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "match_label": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "formation": {
+                "type": "string",
+                "minLength": 1
+              },
+              "score": {
+                "type": "string",
+                "nullable": true
+              },
+              "season": {
+                "type": "integer",
+                "nullable": true
+              },
+              "slots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "position": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "accepted_answers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "position",
+                    "number",
+                    "x",
+                    "y",
+                    "name",
+                    "accepted_answers"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "team",
+              "opponent",
+              "match_label",
+              "formation",
+              "slots"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pass_chain"
+                ]
+              },
+              "start_tm_id": {
+                "type": "integer"
+              },
+              "target_tm_id": {
+                "type": "integer"
+              },
+              "par": {
+                "type": "integer"
+              },
+              "bridges": {
+                "type": "integer",
+                "nullable": true
+              },
+              "solution": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "tm_id": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "club",
+                        "manager"
+                      ]
+                    },
+                    "via": {
+                      "$ref": "#/components/schemas/I18nField"
+                    }
+                  },
+                  "required": [
+                    "tm_id",
+                    "via"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "type",
+              "start_tm_id",
+              "target_tm_id",
+              "par",
+              "solution"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stat_sniper"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1
+              },
+              "prompt": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "unit": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "value": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "step": {
+                "type": "number"
+              },
+              "source": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": {
+                  "nullable": true
+                }
+              }
+            },
+            "required": [
+              "type",
+              "kind",
+              "prompt",
+              "unit",
+              "value",
+              "min",
+              "max",
+              "step"
+            ]
           }
         ]
       },
@@ -5050,7 +5255,10 @@
               "imposter_multi_select",
               "career_path",
               "high_low",
-              "football_logic"
+              "football_logic",
+              "missing_xi",
+              "pass_chain",
+              "stat_sniper"
             ]
           },
           "difficulty": {
@@ -5385,7 +5593,10 @@
               "highLow",
               "footballLogic",
               "fifaCards",
-              "cardDetective"
+              "cardDetective",
+              "missingXi",
+              "passChain",
+              "statSniper"
             ]
           },
           "title": {
@@ -5808,6 +6019,108 @@
             },
             "required": [
               "cardCount",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "squadCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "secondsPerSquad": {
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 300
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "missingXi"
+                ]
+              }
+            },
+            "required": [
+              "squadCount",
+              "secondsPerSquad",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "puzzleCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "secondsPerPuzzle": {
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 300
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "passChain"
+                ]
+              }
+            },
+            "required": [
+              "puzzleCount",
+              "secondsPerPuzzle",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "secondsPerQuestion": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 120
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "statSniper"
+                ]
+              }
+            },
+            "required": [
+              "questionCount",
+              "secondsPerQuestion",
               "challengeType"
             ]
           }
@@ -6512,6 +6825,14 @@
                       },
                       "minItems": 2
                     },
+                    "clubMatchNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 2
+                    },
                     "displayAnswer": {
                       "type": "string",
                       "minLength": 1
@@ -6531,6 +6852,7 @@
                     "difficulty",
                     "prompt",
                     "clubs",
+                    "clubMatchNames",
                     "displayAnswer",
                     "acceptedAnswers"
                   ]
@@ -6747,6 +7069,423 @@
                     "displayAnswer",
                     "acceptedAnswers",
                     "explanation"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "questionCount",
+              "secondsPerQuestion",
+              "questions"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "missingXi"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "squadCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerSquad": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "squads": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    },
+                    "team": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "opponent": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "matchLabel": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "score": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "formation": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "slots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "number": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "acceptedAnswers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "minItems": 1
+                          },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "position",
+                          "number",
+                          "x",
+                          "y",
+                          "name",
+                          "acceptedAnswers",
+                          "imageUrl"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "difficulty",
+                    "team",
+                    "opponent",
+                    "matchLabel",
+                    "score",
+                    "formation",
+                    "slots"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "squadCount",
+              "secondsPerSquad",
+              "squads"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "passChain"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "puzzleCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerPuzzle": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "puzzles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    },
+                    "par": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "start": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clubs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "imageUrl": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "clubs",
+                        "imageUrl"
+                      ]
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clubs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "imageUrl": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "clubs",
+                        "imageUrl"
+                      ]
+                    },
+                    "solution": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "player": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "clubs": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "clubs",
+                              "imageUrl"
+                            ]
+                          },
+                          "via": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "club",
+                              "manager"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "player",
+                          "via",
+                          "kind"
+                        ]
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "difficulty",
+                    "par",
+                    "start",
+                    "target",
+                    "solution"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "puzzleCount",
+              "secondsPerPuzzle",
+              "puzzles"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "statSniper"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerQuestion": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "unit": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {
+                      "type": "number"
+                    },
+                    "min": {
+                      "type": "number"
+                    },
+                    "max": {
+                      "type": "number"
+                    },
+                    "step": {
+                      "type": "number",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "difficulty",
+                    "kind",
+                    "prompt",
+                    "unit",
+                    "value",
+                    "min",
+                    "max",
+                    "step"
                   ]
                 },
                 "minItems": 1
@@ -7143,7 +7882,10 @@
               "highLow",
               "footballLogic",
               "fifaCards",
-              "cardDetective"
+              "cardDetective",
+              "missingXi",
+              "passChain",
+              "statSniper"
             ]
           },
           "completedToday": {
@@ -7270,7 +8012,10 @@
               "highLow",
               "footballLogic",
               "fifaCards",
-              "cardDetective"
+              "cardDetective",
+              "missingXi",
+              "passChain",
+              "statSniper"
             ]
           },
           "reset": {
@@ -7301,7 +8046,10 @@
               "highLow",
               "footballLogic",
               "fifaCards",
-              "cardDetective"
+              "cardDetective",
+              "missingXi",
+              "passChain",
+              "statSniper"
             ]
           },
           "title": {
@@ -7711,6 +8459,108 @@
                 },
                 "required": [
                   "cardCount",
+                  "challengeType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "categoryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "default": []
+                  },
+                  "squadCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "secondsPerSquad": {
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 300
+                  },
+                  "challengeType": {
+                    "type": "string",
+                    "enum": [
+                      "missingXi"
+                    ]
+                  }
+                },
+                "required": [
+                  "squadCount",
+                  "secondsPerSquad",
+                  "challengeType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "categoryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "default": []
+                  },
+                  "puzzleCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "secondsPerPuzzle": {
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 300
+                  },
+                  "challengeType": {
+                    "type": "string",
+                    "enum": [
+                      "passChain"
+                    ]
+                  }
+                },
+                "required": [
+                  "puzzleCount",
+                  "secondsPerPuzzle",
+                  "challengeType"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "categoryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "default": []
+                  },
+                  "questionCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "secondsPerQuestion": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 120
+                  },
+                  "challengeType": {
+                    "type": "string",
+                    "enum": [
+                      "statSniper"
+                    ]
+                  }
+                },
+                "required": [
+                  "questionCount",
+                  "secondsPerQuestion",
                   "challengeType"
                 ]
               }
@@ -13976,7 +14826,13 @@
                 "free_kicks_payout",
                 "road_to_goal_stake",
                 "road_to_goal_payout",
-                "guess_the_goal_reward"
+                "guess_the_goal_reward",
+                "trivia_mines_stake",
+                "trivia_mines_payout",
+                "trivia_mines_refund",
+                "squad_spin_stake",
+                "squad_spin_payout",
+                "squad_spin_refund"
               ]
             },
             "required": false,
@@ -14073,7 +14929,13 @@
                               "free_kicks_payout",
                               "road_to_goal_stake",
                               "road_to_goal_payout",
-                              "guess_the_goal_reward"
+                              "guess_the_goal_reward",
+                              "trivia_mines_stake",
+                              "trivia_mines_payout",
+                              "trivia_mines_refund",
+                              "squad_spin_stake",
+                              "squad_spin_payout",
+                              "squad_spin_refund"
                             ]
                           },
                           "outcome": {
@@ -17756,6 +18618,15 @@
           },
           {
             "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "required": false,
+            "name": "slugs",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1
             },
@@ -18691,7 +19562,10 @@
                 "imposter_multi_select",
                 "career_path",
                 "high_low",
-                "football_logic"
+                "football_logic",
+                "missing_xi",
+                "pass_chain",
+                "stat_sniper"
               ]
             },
             "required": false,
@@ -18798,7 +19672,10 @@
                       "imposter_multi_select",
                       "career_path",
                       "high_low",
-                      "football_logic"
+                      "football_logic",
+                      "missing_xi",
+                      "pass_chain",
+                      "stat_sniper"
                     ]
                   },
                   "difficulty": {
@@ -18997,7 +19874,10 @@
                       "imposter_multi_select",
                       "career_path",
                       "high_low",
-                      "football_logic"
+                      "football_logic",
+                      "missing_xi",
+                      "pass_chain",
+                      "stat_sniper"
                     ]
                   },
                   "difficulty": {
@@ -19231,7 +20111,10 @@
                             "imposter_multi_select",
                             "career_path",
                             "high_low",
-                            "football_logic"
+                            "football_logic",
+                            "missing_xi",
+                            "pass_chain",
+                            "stat_sniper"
                           ]
                         },
                         "difficulty": {
@@ -19647,7 +20530,10 @@
                               "highLow",
                               "footballLogic",
                               "fifaCards",
-                              "cardDetective"
+                              "cardDetective",
+                              "missingXi",
+                              "passChain",
+                              "statSniper"
                             ]
                           },
                           "title": {
@@ -19751,7 +20637,10 @@
                 "highLow",
                 "footballLogic",
                 "fifaCards",
-                "cardDetective"
+                "cardDetective",
+                "missingXi",
+                "passChain",
+                "statSniper"
               ]
             },
             "required": true,
@@ -20428,6 +21317,14 @@
                                 },
                                 "minItems": 2
                               },
+                              "clubMatchNames": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "minItems": 2
+                              },
                               "displayAnswer": {
                                 "type": "string",
                                 "minLength": 1
@@ -20447,6 +21344,7 @@
                               "difficulty",
                               "prompt",
                               "clubs",
+                              "clubMatchNames",
                               "displayAnswer",
                               "acceptedAnswers"
                             ]
@@ -20663,6 +21561,423 @@
                               "displayAnswer",
                               "acceptedAnswers",
                               "explanation"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "questionCount",
+                        "secondsPerQuestion",
+                        "questions"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "missingXi"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "squadCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerSquad": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "squads": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              },
+                              "team": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "opponent": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "matchLabel": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "score": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "formation": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "slots": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "position": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "number": {
+                                      "type": "integer",
+                                      "nullable": true
+                                    },
+                                    "x": {
+                                      "type": "number"
+                                    },
+                                    "y": {
+                                      "type": "number"
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "acceptedAnswers": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "minItems": 1
+                                    },
+                                    "imageUrl": {
+                                      "type": "string",
+                                      "nullable": true
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "position",
+                                    "number",
+                                    "x",
+                                    "y",
+                                    "name",
+                                    "acceptedAnswers",
+                                    "imageUrl"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "difficulty",
+                              "team",
+                              "opponent",
+                              "matchLabel",
+                              "score",
+                              "formation",
+                              "slots"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "squadCount",
+                        "secondsPerSquad",
+                        "squads"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "passChain"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "puzzleCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerPuzzle": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "puzzles": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              },
+                              "par": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              },
+                              "start": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "clubs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "imageUrl": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "clubs",
+                                  "imageUrl"
+                                ]
+                              },
+                              "target": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "clubs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "imageUrl": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "clubs",
+                                  "imageUrl"
+                                ]
+                              },
+                              "solution": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "player": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "type": "string",
+                                          "format": "uuid"
+                                        },
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "clubs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "imageUrl": {
+                                          "type": "string",
+                                          "nullable": true
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "name",
+                                        "clubs",
+                                        "imageUrl"
+                                      ]
+                                    },
+                                    "via": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "club",
+                                        "manager"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "player",
+                                    "via",
+                                    "kind"
+                                  ]
+                                },
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "difficulty",
+                              "par",
+                              "start",
+                              "target",
+                              "solution"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "puzzleCount",
+                        "secondsPerPuzzle",
+                        "puzzles"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "statSniper"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "questionCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerQuestion": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "questions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "unit": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "value": {
+                                "type": "number"
+                              },
+                              "min": {
+                                "type": "number"
+                              },
+                              "max": {
+                                "type": "number"
+                              },
+                              "step": {
+                                "type": "number",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "difficulty",
+                              "kind",
+                              "prompt",
+                              "unit",
+                              "value",
+                              "min",
+                              "max",
+                              "step"
                             ]
                           },
                           "minItems": 1
@@ -21224,6 +22539,265 @@
         }
       }
     },
+    "/api/v1/daily-challenges/stat-sniper/leaderboard": {
+      "get": {
+        "summary": "Today's most accurate Stat Sniper players and the caller's rank",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Leaderboard for the current challenge day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "challengeDay": {
+                      "type": "string"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "userId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "rank": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "username": {
+                            "type": "string"
+                          },
+                          "avatarCustomization": {
+                            "nullable": true
+                          },
+                          "country": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "score": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "userId",
+                          "rank",
+                          "username",
+                          "country",
+                          "score"
+                        ]
+                      }
+                    },
+                    "me": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rank": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "score": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "rank",
+                        "score",
+                        "total"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "challengeDay",
+                    "entries",
+                    "me"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges/pass-chain/link": {
+      "post": {
+        "summary": "Validate one typed link in a Pass Chain puzzle",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "puzzleId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "fromPlayerId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "locale": {
+                    "type": "string",
+                    "maxLength": 10
+                  }
+                },
+                "required": [
+                  "puzzleId",
+                  "fromPlayerId",
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Link verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "linked",
+                        "unknown",
+                        "noLink"
+                      ]
+                    },
+                    "player": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clubs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "imageUrl": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "clubs",
+                        "imageUrl"
+                      ]
+                    },
+                    "viaClub": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "viaKind": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "club",
+                        "manager"
+                      ]
+                    },
+                    "reachesTarget": {
+                      "type": "boolean"
+                    },
+                    "targetClub": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "targetKind": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "club",
+                        "manager"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "player",
+                    "viaClub",
+                    "viaKind",
+                    "reachesTarget",
+                    "targetClub",
+                    "targetKind"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Puzzle not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/daily-challenges/{challengeType}/complete": {
       "post": {
         "summary": "Complete a daily challenge for the day",
@@ -21250,7 +22824,10 @@
                 "highLow",
                 "footballLogic",
                 "fifaCards",
-                "cardDetective"
+                "cardDetective",
+                "missingXi",
+                "passChain",
+                "statSniper"
               ]
             },
             "required": true,
@@ -21327,7 +22904,10 @@
                         "highLow",
                         "footballLogic",
                         "fifaCards",
-                        "cardDetective"
+                        "cardDetective",
+                        "missingXi",
+                        "passChain",
+                        "statSniper"
                       ]
                     },
                     "completedToday": {
@@ -21457,7 +23037,10 @@
                 "highLow",
                 "footballLogic",
                 "fifaCards",
-                "cardDetective"
+                "cardDetective",
+                "missingXi",
+                "passChain",
+                "statSniper"
               ]
             },
             "required": true,
@@ -21486,7 +23069,10 @@
                         "highLow",
                         "footballLogic",
                         "fifaCards",
-                        "cardDetective"
+                        "cardDetective",
+                        "missingXi",
+                        "passChain",
+                        "statSniper"
                       ]
                     },
                     "reset": {
@@ -21564,7 +23150,10 @@
                               "highLow",
                               "footballLogic",
                               "fifaCards",
-                              "cardDetective"
+                              "cardDetective",
+                              "missingXi",
+                              "passChain",
+                              "statSniper"
                             ]
                           },
                           "title": {
@@ -21976,6 +23565,108 @@
                                   "cardCount",
                                   "challengeType"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "squadCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 5
+                                  },
+                                  "secondsPerSquad": {
+                                    "type": "integer",
+                                    "minimum": 30,
+                                    "maximum": 300
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missingXi"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "squadCount",
+                                  "secondsPerSquad",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "puzzleCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 5
+                                  },
+                                  "secondsPerPuzzle": {
+                                    "type": "integer",
+                                    "minimum": 30,
+                                    "maximum": 300
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "passChain"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "puzzleCount",
+                                  "secondsPerPuzzle",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "questionCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20
+                                  },
+                                  "secondsPerQuestion": {
+                                    "type": "integer",
+                                    "minimum": 10,
+                                    "maximum": 120
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "statSniper"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "questionCount",
+                                  "secondsPerQuestion",
+                                  "challengeType"
+                                ]
                               }
                             ]
                           },
@@ -22108,7 +23799,10 @@
                 "highLow",
                 "footballLogic",
                 "fifaCards",
-                "cardDetective"
+                "cardDetective",
+                "missingXi",
+                "passChain",
+                "statSniper"
               ]
             },
             "required": true,

@@ -141,6 +141,11 @@ export async function createLobby(
       }
 
       const hostIsGuest = socket.data.user.is_guest === true;
+      // Drain: provisioning off closes NEW guest rooms (live rooms may finish).
+      if (hostIsGuest && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+        result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+        return;
+      }
       if (hostIsGuest && !(await allowGuestOperation(`user:${userId}`, 'lobby_create'))) {
         result = { ok: false, code: 'RATE_LIMITED', message: 'Too many rooms created. Please wait a while.', retryable: true, correlationId };
         return;
@@ -327,6 +332,12 @@ export async function joinByCode(
         );
         // Guest rooms: check the membership AND the mode the room would normalize
         // into after this join (an already-present guest rejoining is exempt).
+        if (!alreadyMember && socket.data.user.is_guest === true && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+          // Drain: no new guest memberships either; a guest already in the room may rejoin.
+          socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now' });
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+          return;
+        }
         if (!alreadyMember) {
           const nextMembers = [...members, { user_id: userId, is_guest: socket.data.user.is_guest === true }];
           const nextMode = normalizedModeForMemberCount(normalizeFriendlyGameMode(lobby.game_mode), nextMembers.length);
@@ -437,11 +448,18 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
 
   let shouldStartDraft = false;
   try {
+    // Fresh read under the lock: a settings change may have moved the mode
+    // (or the lobby may have started) since the pre-lock read above.
+    const lockedLobby = await lobbiesRepo.getById(lobbyId);
+    if (!lockedLobby || lockedLobby.status !== 'waiting') {
+      logger.debug({ lobbyId, status: lockedLobby?.status ?? 'missing' }, 'Lobby ready check skipped: lobby not waiting');
+      return;
+    }
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const memberCount = await lobbiesRepo.countMembers(lobbyId);
 
-    if (lobby.mode === 'friendly') {
-      const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
+    if (lockedLobby.mode === 'friendly') {
+      const friendlyMode = normalizeFriendlyGameMode(lockedLobby.game_mode);
       const allReady = memberCount > 0 && readyCount === memberCount;
 
       if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount)) {
@@ -455,7 +473,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
 
     if (memberCount === 2 && readyCount === 2) {
       const readyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lobby.game_mode));
+      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
       if (readyViolation) {
         socket.emit('error', { code: readyViolation.code, message: readyViolation.message, meta: readyViolation.meta });
         return;

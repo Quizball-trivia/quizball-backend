@@ -45,6 +45,7 @@ describe('socketAuthMiddleware — guest tokens', () => {
 
   it('provisions a guest through the guest provider, never the Supabase one', async () => {
     flags.GUEST_LOBBIES_PROVISIONING_ENABLED = true;
+    flags.GUEST_LOBBIES_RECONNECT_ENABLED = true;
     const { socketAuthMiddleware } = await import('../../src/realtime/socket-auth.js');
     const next = vi.fn();
     const socket = socketFor(GUEST_TOKEN);
@@ -66,13 +67,24 @@ describe('socketAuthMiddleware — guest tokens', () => {
     expect(getOrCreateGuest).toHaveBeenLastCalledWith(expect.anything(), null, { allowCreate: false });
   });
 
-  it('drain the other way: provisioning on, reconnect off — a returning guest is refused', async () => {
+  it('reconnect off refuses every guest token before any lookup, even with provisioning on', async () => {
     flags.GUEST_LOBBIES_PROVISIONING_ENABLED = true;
-    getOrCreateGuest.mockResolvedValueOnce({ user: { id: 'u-guest', is_guest: true }, created: false });
     const { socketAuthMiddleware } = await import('../../src/realtime/socket-auth.js');
     const next = vi.fn();
     await socketAuthMiddleware(socketFor(GUEST_TOKEN) as never, next);
     expect(next.mock.calls[0]?.[0]?.message).toBe('Authentication required');
+    expect(guestVerify).not.toHaveBeenCalled();
+    expect(getOrCreateGuest).not.toHaveBeenCalled();
+  });
+
+  it('a banned guest is refused with the ban reason (the users service throws like it does for members)', async () => {
+    flags.GUEST_LOBBIES_RECONNECT_ENABLED = true;
+    const { AppError } = await import('../../src/core/errors.js');
+    getOrCreateGuest.mockRejectedValueOnce(new AppError('Account is banned', 403, 'FORBIDDEN' as never, { reason: 'banned' }));
+    const { socketAuthMiddleware } = await import('../../src/realtime/socket-auth.js');
+    const next = vi.fn();
+    await socketAuthMiddleware(socketFor(GUEST_TOKEN) as never, next);
+    expect(next.mock.calls[0]?.[0]?.message).toBe('Account is banned');
   });
 
   it('members are untouched by the guest flags', async () => {
@@ -82,5 +94,29 @@ describe('socketAuthMiddleware — guest tokens', () => {
     expect(next).toHaveBeenCalledWith();
     expect(getOrCreateFromIdentity).toHaveBeenCalled();
     expect(guestVerify).not.toHaveBeenCalled();
+  });
+});
+
+describe('socketIpBucket — trusted-edge address policy', () => {
+  const env = config as unknown as { NODE_ENV: string };
+  const original = env.NODE_ENV;
+  const socketWith = (headers: Record<string, string>, address = '10.0.0.7') => ({ handshake: { headers, address } });
+
+  it('local: the transport address, never a header', async () => {
+    env.NODE_ENV = 'local';
+    const { socketIpBucket } = await import('../../src/realtime/socket-auth.js');
+    expect(socketIpBucket(socketWith({ 'x-forwarded-for': '9.9.9.9', 'x-real-ip': '8.8.8.8' }, '::ffff:192.168.1.5') as never)).toBe('192.168.1.5');
+    env.NODE_ENV = original;
+  });
+
+  it('deployed: only X-Real-IP counts; a caller-controlled X-Forwarded-For cannot rotate the key', async () => {
+    env.NODE_ENV = 'staging';
+    const { socketIpBucket } = await import('../../src/realtime/socket-auth.js');
+    expect(socketIpBucket(socketWith({ 'x-forwarded-for': '9.9.9.9' }) as never)).toBe('unknown');
+    expect(socketIpBucket(socketWith({ 'x-forwarded-for': '9.9.9.9', 'x-real-ip': '203.0.113.9' }) as never)).toBe('203.0.113.9');
+    expect(socketIpBucket(socketWith({ 'x-real-ip': '::ffff:203.0.113.9' }) as never)).toBe('203.0.113.9');
+    expect(socketIpBucket(socketWith({ 'x-real-ip': '2001:db8:1:2:aaaa::1' }) as never)).toBe('2001:0db8:0001:0002');
+    expect(socketIpBucket(socketWith({ 'x-real-ip': '1.2.3.4, 5.6.7.8' }) as never)).toBe('unknown');
+    env.NODE_ENV = original;
   });
 });

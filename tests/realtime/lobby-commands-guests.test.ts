@@ -3,7 +3,7 @@
  * a playable mode and is budgeted, the join path validates the room the join
  * would leave behind (final normalized mode + guest cap) under the lobby lock.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -38,7 +38,9 @@ vi.mock('../../src/db/readonly-breaker.js', () => ({ isDbWriteOutage: () => fals
 
 const { createLobby, joinByCode, updateSettings } = await import('../../src/realtime/services/lobby-commands.service.js');
 const { config } = await import('../../src/core/config.js');
-(config as unknown as { FOOTBALL_GRID_LOBBY_ENABLED: boolean }).FOOTBALL_GRID_LOBBY_ENABLED = true;
+const flags = config as unknown as { FOOTBALL_GRID_LOBBY_ENABLED: boolean; GUEST_LOBBIES_PROVISIONING_ENABLED: boolean };
+flags.FOOTBALL_GRID_LOBBY_ENABLED = true;
+flags.GUEST_LOBBIES_PROVISIONING_ENABLED = true;
 
 const socketFor = (id: string, guest = false, lobbyId?: string) => ({ id: `s-${id}`, data: { user: { id, is_guest: guest }, lobbyId }, emit: vi.fn(), join: vi.fn() });
 const io = { to: vi.fn(() => ({ emit: vi.fn() })), in: vi.fn(() => ({ fetchSockets: async () => [] })) };
@@ -135,5 +137,38 @@ describe('guest rooms — settings', () => {
     const host = socketFor('host', false, 'L');
     await updateSettings(io as never, host as never, { gameMode: 'auction' });
     expect(host.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'NOT_HOST' }));
+  });
+});
+
+describe('guest rooms — drain (provisioning off)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allowGuestOperation.mockResolvedValue(true);
+    flags.GUEST_LOBBIES_PROVISIONING_ENABLED = false;
+    lobbiesRepo.createLobby.mockImplementation(async (data: { gameMode?: string }) => ({ id: 'L', game_mode: data.gameMode ?? 'friendly_possession' }));
+    lobbiesRepo.addMember.mockResolvedValue(undefined);
+    lobbiesRepo.getByInviteCode.mockResolvedValue(lobby('football_grid'));
+    lobbiesRepo.getById.mockResolvedValue(lobby('football_grid'));
+  });
+  afterEach(() => { flags.GUEST_LOBBIES_PROVISIONING_ENABLED = true; });
+
+  it('a guest can neither open a room nor join a new one; members are unaffected', async () => {
+    const created = await createLobby(io as never, socketFor('g', true) as never, { mode: 'friendly', correlationId: 'c' });
+    expect(created).toMatchObject({ ok: false, code: 'CAPABILITY_REQUIRED' });
+    expect(lobbiesRepo.createLobby).not.toHaveBeenCalled();
+
+    lobbiesRepo.listMembersWithUser.mockResolvedValue([member('host')]);
+    const joined = await joinByCode(io as never, socketFor('g', true) as never, 'ABC123', 'c');
+    expect(joined).toMatchObject({ ok: false, code: 'CAPABILITY_REQUIRED' });
+    expect(lobbiesRepo.addMember).not.toHaveBeenCalled();
+
+    const memberJoined = await joinByCode(io as never, socketFor('m') as never, 'ABC123', 'c');
+    expect(memberJoined).toMatchObject({ ok: true });
+  });
+
+  it('a guest already in the room may still rejoin (finishing a live game)', async () => {
+    lobbiesRepo.listMembersWithUser.mockResolvedValue([member('host'), member('g', true)]);
+    const rejoined = await joinByCode(io as never, socketFor('g', true) as never, 'ABC123', 'c');
+    expect(rejoined).toMatchObject({ ok: true, alreadyMember: true });
   });
 });

@@ -275,7 +275,19 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
   // Guests stay in `participants` (opponent lookup, scoring) but never receive rewards.
   const humans = participants.filter((participant) => !participant.is_bot && !participant.is_guest);
   const results = new Map<string, FootballGridRewardResult>();
+  // Durable: readSettledRewardsInTx rebuilds rewards from eligibility rows, and
+  // result delivery is deferred while any human lacks one — a guest without a
+  // row would stall the member's results on every replay.
   for (const guest of participants.filter((participant) => participant.is_guest)) {
+    const opponent = participants.find((candidate) => candidate.user_id !== guest.user_id);
+    await tx.unsafe(
+      `INSERT INTO football_grid_reward_eligibility (
+         match_id, user_id, evaluator_version, opponent_type, origin,
+         participation, decision, reason, points_decision, points_reason
+       ) VALUES ($1,$2,1,$3,$4,'{}'::jsonb,'ineligible','guest','ineligible','guest')
+       ON CONFLICT (match_id, user_id, evaluator_version) DO NOTHING`,
+      [matchId, guest.user_id, opponent?.is_bot ? 'bot' : 'human', row.origin],
+    );
     results.set(guest.user_id, { xp: 0, coins: 0, tp: 0, eligibilityReason: 'guest', coinEligibilityReason: 'guest', tpEligibilityReason: 'guest' });
   }
   // Best-of-N: rewards are paid once, on the game that decides the series,

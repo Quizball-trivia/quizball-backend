@@ -205,18 +205,21 @@ export const warmupRealtimeService = {
       let isNewPlayerBest: Record<string, boolean>;
       let isNewPairBest: boolean;
       try {
-        // Personal/pair bests are member records; a pair with a guest is not persisted.
+        // Guests get no records: members keep their personal best, the pair record needs two members.
         const memberUsers = await usersRepo.getByIds(state.memberIds);
-        if (state.memberIds.some((id) => memberUsers.get(id)?.is_guest)) throw new Error('guest_pair_not_persisted');
-        scoreResult = await warmupRepo.saveScore(state.memberIds, state.bounceCount);
+        const memberIds = state.memberIds.filter((id) => memberUsers.get(id)?.is_guest === false);
+        if (memberIds.length === 0) throw new Error('guest_pair_not_persisted');
+        const persistPair = memberIds.length === 2;
+        scoreResult = await warmupRepo.saveScore(state.memberIds, state.bounceCount, { personalUserIds: memberIds, persistPair });
         isNewPlayerBest = Object.fromEntries(
           state.memberIds.map((id) => {
+            if (!memberIds.includes(id)) return [id, false];
             const oldBest = scoreResult.playerOldBests[id];
-            return [id, oldBest === null || state.bounceCount > oldBest];
+            return [id, oldBest === null || oldBest === undefined || state.bounceCount > oldBest];
           })
         );
-        isNewPairBest =
-          scoreResult.pairOldBest === null || state.bounceCount > scoreResult.pairOldBest;
+        isNewPairBest = persistPair
+          && (scoreResult.pairOldBest === null || state.bounceCount > scoreResult.pairOldBest);
       } catch (error) {
         logger.warn({ error, lobbyId, score: state.bounceCount }, 'Failed to save warmup score');
         scoreResult = {

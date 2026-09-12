@@ -77,3 +77,44 @@ describe('usersRepo.createGuestWithIdentity', () => {
     expect(rows.length).toBe(0);
   });
 });
+
+describe('guest isolation against the real schema', () => {
+  it('refill_tickets_global() skips guests (live and tombstoned) but still pays members', async () => {
+    if (!dbAvailable) return;
+    const s = subject();
+    const guest = await usersRepo.createGuestWithIdentity({ nicknameCandidates: [`Cron Guest ${s}`] }, { provider: 'guest', subject: s });
+    cleanupUserIds.push(guest.user.id);
+    const [member] = await sql<{ id: string }[]>`INSERT INTO users (nickname, is_ai, onboarding_complete, tickets) VALUES (${`Cron Member ${s}`}, false, true, 3) RETURNING id`;
+    cleanupUserIds.push(member.id);
+    const [tombstone] = await sql<{ id: string }[]>`INSERT INTO users (nickname, is_ai, is_guest, onboarding_complete, tickets) VALUES (NULL, false, true, true, 0) RETURNING id`;
+    cleanupUserIds.push(tombstone.id);
+
+    await sql`SELECT refill_tickets_global()`;
+
+    const rows = await sql<{ id: string; tickets: number }[]>`SELECT id, tickets FROM users WHERE id = ANY(${[guest.user.id, member.id, tombstone.id]})`;
+    const tickets = Object.fromEntries(rows.map((r) => [r.id, r.tickets]));
+    expect(tickets[guest.user.id]).toBe(0);
+    expect(tickets[tombstone.id]).toBe(0);
+    expect(tickets[member.id]).toBe(4);
+  });
+
+  it('retireSession tombstones the row, revokes the identity and deletes the session in one transaction', async () => {
+    if (!dbAvailable) return;
+    const { guestRepo } = await import('../../src/modules/guest/guest.repo.js');
+    const session = await guestRepo.insert({ tokenHash: `h-${Date.now()}-${Math.random()}`.slice(0, 64), locale: 'en', ipHash: null, deviceHash: null });
+    cleanupSubjects.push(session.id);
+    const guest = await usersRepo.createGuestWithIdentity({ nicknameCandidates: [`Retire Guest ${session.id.slice(0, 8)}`], avatarCustomization: { jersey: 'jersey_blue' } }, { provider: 'guest', subject: session.id });
+    cleanupUserIds.push(guest.user.id);
+
+    expect(await guestRepo.retireSession(session.id, 'guest')).toEqual({ userId: guest.user.id });
+
+    const [row] = await sql<{ nickname: string | null; avatar_customization: unknown; is_guest: boolean }[]>`SELECT nickname, avatar_customization, is_guest FROM users WHERE id = ${guest.user.id}`;
+    expect(row).toMatchObject({ nickname: null, avatar_customization: null, is_guest: true });
+    expect(await sql`SELECT 1 FROM user_identities WHERE provider = 'guest' AND subject = ${session.id}`).toHaveLength(0);
+    expect(await sql`SELECT 1 FROM guest_sessions WHERE id = ${session.id}`).toHaveLength(0);
+    // Daily-only session (no users row): just deleted.
+    const daily = await guestRepo.insert({ tokenHash: `d-${Date.now()}-${Math.random()}`.slice(0, 64), locale: null, ipHash: null, deviceHash: null });
+    expect(await guestRepo.retireSession(daily.id, 'guest')).toEqual({ userId: null });
+    expect(await sql`SELECT 1 FROM guest_sessions WHERE id = ${daily.id}`).toHaveLength(0);
+  });
+});

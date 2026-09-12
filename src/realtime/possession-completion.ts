@@ -413,8 +413,14 @@ export async function completePossessionMatch(
     const completionSideEffectsStartedAt = Date.now();
     let unlockedAchievements: NonNullable<MatchFinalResultsPayload['unlockedAchievements']> = {};
     // Guests never unlock achievements; they stay in finalPlayers for results/analytics.
-    const finalUsers = await usersRepo.getByIds(finalPlayers.map((player) => player.user_id)).catch(() => new Map());
-    const achievementUserIds = finalPlayers.map((player) => player.user_id).filter((userId) => !finalUsers.get(userId)?.is_guest);
+    // Unresolved players are skipped (fail closed): a lookup failure must not award a guest.
+    const finalUsers = await usersRepo.getByIds(finalPlayers.map((player) => player.user_id)).catch((err: unknown) => {
+      logger.warn({ err, matchId }, 'Achievement recipient classification failed; skipping unresolved players');
+      return new Map<string, { is_guest: boolean }>();
+    });
+    const achievementUserIds = finalPlayers
+      .map((player) => player.user_id)
+      .filter((userId) => finalUsers.get(userId)?.is_guest === false);
     const [xpAwardResult, achievementResult] = await Promise.allSettled([
       progressionService.awardCompletedMatchXp(matchId),
       achievementsService.evaluateForMatch(

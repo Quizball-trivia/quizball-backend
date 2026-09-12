@@ -43,6 +43,32 @@ export const guestRepo = {
     `;
     return rows.map((row) => row.id);
   },
+  /**
+   * Retires one idle session atomically: tombstone the users row (identifying
+   * fields cleared, row kept for RESTRICT FKs), revoke the identity mapping,
+   * delete the session. Any failure rolls the whole thing back so the next
+   * sweep still finds the identity it needs. Returns the user id, if any.
+   */
+  async retireSession(sessionId: string, provider: string): Promise<{ userId: string | null }> {
+    return sql.begin(async (tx) => {
+      const [identity] = await tx.unsafe<{ user_id: string }[]>(
+        'SELECT user_id FROM user_identities WHERE provider = $1 AND subject = $2 FOR UPDATE',
+        [provider, sessionId],
+      );
+      if (identity) {
+        await tx.unsafe(
+          `UPDATE users
+              SET nickname = NULL, email = NULL, phone_number = NULL, avatar_url = NULL, avatar_customization = NULL,
+                  country = NULL, favorite_club = NULL, updated_at = now()
+            WHERE id = $1 AND is_guest = true`,
+          [identity.user_id],
+        );
+        await tx.unsafe('DELETE FROM user_identities WHERE provider = $1 AND subject = $2', [provider, sessionId]);
+      }
+      await tx.unsafe('DELETE FROM guest_sessions WHERE id = $1', [sessionId]);
+      return { userId: identity?.user_id ?? null };
+    });
+  },
   async deleteByIds(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
     const rows = await sql`DELETE FROM guest_sessions WHERE id = ANY(${sql.array(ids)}::uuid[]) RETURNING id`;

@@ -138,6 +138,7 @@ export const usersRepo = {
       SELECT id, nickname FROM users
       WHERE lower(nickname) = lower(${trimmed})
         AND (is_ai = false OR ai_kind = 'persistent')
+        AND is_guest = false
         AND is_deleted = false
         AND deleted_at IS NULL
         AND pending_deletion_at IS NULL
@@ -432,11 +433,13 @@ export const usersRepo = {
    * More efficient than calling getById in a loop (avoids N+1 queries).
    * Returns a Map for O(1) lookup by ID (unordered).
    */
-  async getByIds(ids: string[]): Promise<Map<string, User>> {
+  async getByIds(ids: string[], tx?: TransactionSql): Promise<Map<string, User>> {
     if (ids.length === 0) return new Map();
 
     const uniqueIds = [...new Set(ids)];
-    const results = await sql<User[]>`
+    const results = tx
+      ? await tx.unsafe<User[]>('SELECT * FROM users WHERE id = ANY($1::uuid[])', [uniqueIds])
+      : await sql<User[]>`
       SELECT * FROM users WHERE id = ANY(${sql.array(uniqueIds)}::uuid[])
     `;
 

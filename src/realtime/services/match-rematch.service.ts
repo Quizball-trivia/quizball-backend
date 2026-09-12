@@ -214,6 +214,11 @@ export async function handlePlayAgain(
         return;
       }
 
+      // Rematch rooms open in friendly_possession (member-only); a guest gets the sign-up prompt instead.
+      if (socket.data.user.is_guest === true) {
+        socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'An account is required to play again' });
+        return;
+      }
       const players = await matchPlayersRepo.listMatchPlayers(payload.matchId);
       if (!players.some((player) => player.user_id === userId)) {
         socket.emit('error', {

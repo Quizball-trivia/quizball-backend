@@ -331,10 +331,14 @@ export const usersService = {
     opts?: { allowCreate?: boolean },
   ): Promise<{ user: User; created: boolean }> {
     const cached = await getCachedUser(identity.provider, identity.subject);
-    if (cached) return { user: cached, created: false };
+    if (cached) {
+      assertUserAccountActive(cached);
+      return { user: cached, created: false };
+    }
     const existingIdentity = await identitiesRepo.getByProviderSubject(identity.provider, identity.subject);
     const existing = existingIdentity?.user ?? null;
     if (existing) {
+      assertUserAccountActive(existing);
       try {
         await setCachedUser(identity.provider, identity.subject, existing);
       } catch (err) {
@@ -355,6 +359,9 @@ export const usersService = {
     );
     if (creation.created) {
       logger.info({ userId: creation.user.id, provider: identity.provider }, 'Created guest user');
+    } else {
+      // Lost the insert race to a concurrent handshake: same active-account rule as above.
+      assertUserAccountActive(creation.user);
     }
     try {
       await setCachedUser(identity.provider, identity.subject, creation.user);
@@ -721,7 +728,7 @@ export const usersService = {
 
   async assertPublicUserVisible(id: string): Promise<void> {
     const user = await usersRepo.getById(id);
-    if (!user || isUserAccountInactive(user)) {
+    if (!user || isUserAccountInactive(user) || user.is_guest) {
       throw new NotFoundError('User not found');
     }
   },
@@ -851,7 +858,8 @@ export const usersService = {
    */
   async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
     const user = await usersRepo.getById(targetUserId);
-    if (!user || isUserAccountInactive(user)) {
+    // Guests have no public projection (no profile, rank, history or achievements).
+    if (!user || isUserAccountInactive(user) || user.is_guest) {
       throw new NotFoundError('User not found');
     }
 

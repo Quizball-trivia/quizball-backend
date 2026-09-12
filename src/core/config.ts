@@ -268,8 +268,10 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
-  // Guest friend lobbies (two flags so a rollback can DRAIN: stop new guests
-  // first, let live guest matches reconnect and finish, then close the door).
+  // Guest friend lobbies (two flags so a rollback can DRAIN). Provisioning off:
+  // no new guest users, no new guest rooms/memberships; guests already in a
+  // room may reconnect and finish. Reconnect off: every guest token is refused
+  // (HTTP principal and socket), so provisioning is only usable with reconnect on.
   GUEST_LOBBIES_PROVISIONING_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

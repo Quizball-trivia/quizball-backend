@@ -274,6 +274,16 @@ describe('usersService.getPublicProfile', () => {
       .toThrow(NotFoundError);
   });
 
+  it('hides guests from public profiles and visibility checks', async () => {
+    getByIdMock.mockResolvedValue({ ...MOCK_USER, is_guest: true });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    const { NotFoundError } = await import('../../src/core/errors.js');
+
+    await expect(usersService.getPublicProfile('user-target-id', 'viewer-id')).rejects.toThrow(NotFoundError);
+    await expect(usersService.assertPublicUserVisible('user-target-id')).rejects.toThrow(NotFoundError);
+    expect(getProfileMock).not.toHaveBeenCalled();
+  });
+
   it('hides users pending deletion from public profiles', async () => {
     getByIdMock.mockResolvedValue({
       ...MOCK_USER,

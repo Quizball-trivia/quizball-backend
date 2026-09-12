@@ -5,7 +5,8 @@ import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
-import { isPersistentBot, isRankedSettleEligible, isUserAccountFinalized } from '../users/ai-classification.js';
+import { isPersistentBot, isUserAccountFinalized } from '../users/ai-classification.js';
+import { isProgressionEligible } from '../users/capabilities.js';
 import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
@@ -418,7 +419,7 @@ export const rankedService = {
     // transaction (applySettlement) against a finalization racing this read.
     const settleEligiblePlayers = players.filter((player) => {
       const user = byUserId.get(player.user_id);
-      return user != null && isRankedSettleEligible(user) && !isUserAccountFinalized(user);
+      return user != null && isProgressionEligible(user) && !isUserAccountFinalized(user);
     });
     if (settleEligiblePlayers.length === 0) {
       logger.debug({ matchId }, 'Ranked settlement skipped: no settle-eligible players');
@@ -564,7 +565,7 @@ export const rankedService = {
       // rating (and ensureProfile would recreate a row for a deleted user).
       const opponentProfile = opponent
         && opponentUser
-        && isRankedSettleEligible(opponentUser)
+        && isProgressionEligible(opponentUser)
         && !isUserAccountFinalized(opponentUser)
         ? (profileByUser.get(opponent.user_id) ?? await rankedRepo.ensureProfile(opponent.user_id))
         : null;

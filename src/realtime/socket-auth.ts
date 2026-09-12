@@ -5,6 +5,7 @@ import { GuestAuthProvider, getGuestAuthProvider } from '../modules/auth/guest-a
 import { config } from '../core/config.js';
 import { allowGuestOperation } from '../modules/guest/guest-rate-limit.js';
 import { bucketIp } from '../core/ip-bucket.js';
+import { normalizeClientIp } from '../http/client-ip.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
@@ -33,11 +34,15 @@ function safeDecode(value: string): string {
   }
 }
 
-/** Proxy-aware address bucket for the handshake (first x-forwarded-for hop, else the transport address). */
-function socketIpBucket(socket: Socket): string {
-  const forwarded = socket.handshake.headers?.['x-forwarded-for'];
-  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
-  return bucketIp(first || socket.handshake.address);
+/**
+ * Address bucket for the handshake budget. Same trust policy as the HTTP
+ * limiter (http/client-ip.ts): only Railway's X-Real-IP outside local, never
+ * X-Forwarded-For (caller-controlled, would let one host rotate the key).
+ */
+export function socketIpBucket(socket: Pick<Socket, 'handshake'>): string {
+  if (config.NODE_ENV === 'local') return bucketIp(normalizeClientIp(socket.handshake.address));
+  const realIp = socket.handshake.headers?.['x-real-ip'];
+  return bucketIp(normalizeClientIp(Array.isArray(realIp) ? realIp[0] : realIp));
 }
 
 function extractToken(socket: Socket): string | null {
@@ -83,10 +88,12 @@ export async function socketAuthMiddleware(
 
       span.setAttribute('quizball.auth_token_present', true);
       // Guest tokens (64 hex, minted for the public pages) authenticate friend-room
-      // play only. Two flags so a rollback can drain: provisioning admits NEW
-      // guests, reconnect admits guests who already have a users row.
+      // play only. Drain order: provisioning off stops NEW guests and new rooms
+      // (existing guests may finish); reconnect off refuses every guest socket.
+      // The web resolves its principal over HTTP before the first handshake, so
+      // reconnect must stay on for provisioning to be usable at all.
       const isGuestToken = GuestAuthProvider.handles(token);
-      if (isGuestToken && !config.GUEST_LOBBIES_PROVISIONING_ENABLED && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+      if (isGuestToken && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
         span.setAttribute('quizball.guest_refused', 'disabled');
         next(new Error('Authentication required'));
         return;
@@ -113,11 +120,6 @@ export async function socketAuthMiddleware(
         const guest = await usersService.getOrCreateGuest(identity, detectedCountry, {
           allowCreate: config.GUEST_LOBBIES_PROVISIONING_ENABLED,
         });
-        if (!guest.created && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
-          span.setAttribute('quizball.guest_refused', 'reconnect_disabled');
-          next(new Error('Authentication required'));
-          return;
-        }
         user = guest.user;
         span.setAttribute('quizball.is_guest', true);
       } else {

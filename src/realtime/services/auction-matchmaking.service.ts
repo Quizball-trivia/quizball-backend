@@ -3,6 +3,7 @@ import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
 import { ErrorCode } from '../../core/errors.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
+import { appMetrics, setAuctionMatchmakingQueueDepth } from '../../core/metrics.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { getRedisClient } from '../redis.js';
 import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
@@ -39,8 +40,21 @@ import {
 const AUCTION_MM_QUEUE_KEY = 'auction:mm:queue';
 const AUCTION_MM_USER_MAP_KEY = 'auction:mm:user';
 const AUCTION_MM_SEARCH_KEY_PREFIX = 'auction:mm:search:';
+const AUCTION_MM_CLAIM_KEY_PREFIX = 'auction:mm:claim:';
+const AUCTION_MM_CLAIMS_KEY = 'auction:mm:claims';
+const AUCTION_MM_CLAIM_USER_MAP_KEY = 'auction:mm:claim:user';
+const SHARED_PAIRING_USER_KEY_PREFIX = 'session:pairing:user:';
 const AUCTION_MM_LOCK_KEY = 'lock:auction:mm';
 const AUCTION_MM_LOCK_TTL_MS = 30_000;
+const AUCTION_MM_CLAIM_LEASE_MS = 60_000;
+const AUCTION_MM_CLAIM_HEARTBEAT_MS = 15_000;
+const AUCTION_MM_CLAIM_TTL_SEC = 10 * 60;
+const AUCTION_MM_DRAIN_INTERVAL_MS = 250;
+const AUCTION_MM_RECOVERY_INTERVAL_MS = 5_000;
+const AUCTION_MM_MAX_CONCURRENT_STARTS = 4;
+const AUCTION_MM_MAX_GROUPS_PER_DRAIN = 12;
+const AUCTION_MM_HUMAN_JOIN_WINDOW_MS = 5_000;
+const AUCTION_MM_HUMAN_WAIT_EXTENSION_MS = 4_000;
 // A claimed search whose match failed to start is requeued this soon; after
 // this many consecutive failures it is dropped with a client-visible error.
 const AUCTION_MM_START_RETRY_MS = 3_000;
@@ -81,7 +95,31 @@ interface QueuedAuctionSearch {
   /** Transient match-start failures while this search was claimed — the search
    *  is requeued (not dropped) until AUCTION_MM_MAX_START_FAILURES. */
   startFailures?: number;
+  /** A near-deadline human arrival can extend this search once, never more. */
+  humanWaitExtended?: boolean;
 }
+
+interface ClaimedAuctionGroup {
+  claimToken: string;
+  matchId: string;
+  claimedAt: number;
+  leaseUntil: number;
+  searches: QueuedAuctionSearch[];
+}
+
+interface ClaimStartJob {
+  io: QuizballServer;
+  claim: ClaimedAuctionGroup;
+  resolve: () => void;
+}
+
+let matchmakingIo: QuizballServer | null = null;
+let drainTimer: NodeJS.Timeout | null = null;
+let recoveryTimer: NodeJS.Timeout | null = null;
+let drainRunning = false;
+let recoveryRunning = false;
+let activeClaimStarts = 0;
+const pendingClaimStarts: ClaimStartJob[] = [];
 
 export interface AuctionSearchStartServiceInput {
   formation?: FormationName;
@@ -94,6 +132,38 @@ export type AuctionMatchmakingFillPayload = {
 };
 
 export const auctionMatchmakingService = {
+  start(io: QuizballServer): void {
+    matchmakingIo = io;
+    if (!drainTimer) {
+      drainTimer = setInterval(() => {
+        void runPeriodicDrain().catch((error) => {
+          logger.error({ error }, 'Auction matchmaking drain failed');
+        });
+      }, AUCTION_MM_DRAIN_INTERVAL_MS);
+      drainTimer.unref();
+    }
+    if (!recoveryTimer) {
+      recoveryTimer = setInterval(() => {
+        void recoverAbandonedClaims().catch((error) => {
+          logger.error({ error }, 'Auction matchmaking claim recovery failed');
+        });
+      }, AUCTION_MM_RECOVERY_INTERVAL_MS);
+      recoveryTimer.unref();
+    }
+    void recoverAbandonedClaims().catch((error) => {
+      logger.error({ error }, 'Auction matchmaking boot claim recovery failed');
+    });
+    logger.info({ concurrency: AUCTION_MM_MAX_CONCURRENT_STARTS }, 'Auction matchmaking drain started');
+  },
+
+  stop(): void {
+    if (drainTimer) clearInterval(drainTimer);
+    if (recoveryTimer) clearInterval(recoveryTimer);
+    drainTimer = null;
+    recoveryTimer = null;
+    matchmakingIo = null;
+  },
+
   async handleSearchStart(
     io: QuizballServer,
     socket: QuizballSocket,
@@ -219,7 +289,9 @@ export const auctionMatchmakingService = {
             .catch(() => null);
           if (activeNow && (await isUserInLiveAuctionMatch(activeNow, user.id))) {
             await rejoinAuctionMatch(io, socket, activeNow).catch(() => {});
-            return true;
+            return {
+              claims: [] as ClaimedAuctionGroup[], search: null, group: [], reattached: false, queueDepth: 0,
+            };
           }
           const existingSearchId = await redis.hGet(AUCTION_MM_USER_MAP_KEY, user.id);
           if (existingSearchId) {
@@ -233,20 +305,10 @@ export const auctionMatchmakingService = {
                 fallbackAt: Date.now() + randomFallbackDelayMs(),
               };
               await writeSearch(redis, rearmed);
-              await scheduleAuctionMatchmakingFill(rearmed);
               const queued = await listQueuedSearches(redis);
               const group = queueGroupForSearch(queued, rearmed.searchId);
-              emitSearchStarted(io, rearmed, group);
-              logger.info(
-                {
-                  userId: user.id,
-                  searchId: rearmed.searchId,
-                  locale: rearmed.locale,
-                  queueDepth: queued.length,
-                },
-                'Auction matchmaking search reattached'
-              );
-              return true;
+              const claims = await claimFullHumanMatchesLocked(redis);
+              return { claims, search: rearmed, group, reattached: true, queueDepth: queued.length };
             }
             await redis.hDel(AUCTION_MM_USER_MAP_KEY, user.id);
           }
@@ -263,26 +325,10 @@ export const auctionMatchmakingService = {
             fallbackAt: now + randomFallbackDelayMs(),
           };
           await writeSearch(redis, search);
-          await scheduleAuctionMatchmakingFill(search);
           const queued = await listQueuedSearches(redis);
           const group = queueGroupForSearch(queued, search.searchId);
-          // A join changes the visible lobby for everyone already in this
-          // three-seat group. Broadcast the same authoritative roster to all
-          // of them so a player connected to another Railway replica updates
-          // at the same time as the newly joined player.
-          emitSearchStarted(io, search, group);
-          emitSearchStatuses(io, group);
-          logger.info(
-            {
-              userId: user.id,
-              searchId: search.searchId,
-              locale: search.locale,
-              queueDepth: queued.length,
-            },
-            'Auction matchmaking search joined'
-          );
-          await tryStartFullHumanMatchesLocked(io);
-          return true;
+          const claims = await claimFullHumanMatchesLocked(redis);
+          return { claims, search, group, reattached: false, queueDepth: queued.length };
         });
         // Lock still busy after the bounded wait: the client got NOTHING —
         // surface a retryable error instead of a silent non-search.
@@ -291,7 +337,43 @@ export const auctionMatchmakingService = {
             code: 'AUCTION_SEARCH_BUSY',
             message: 'Auction matchmaking is busy. Please retry.',
           });
+          return;
         }
+        if (lockOutcome.search) {
+          const claimed = lockOutcome.claims.some((claim) => (
+            claim.searches.some((entry) => entry.searchId === lockOutcome.search?.searchId)
+          ));
+          if (!claimed) {
+            try {
+              await scheduleAuctionMatchmakingFill(lockOutcome.search);
+            } catch (error) {
+              await withAuctionMatchmakingLock(() => (
+                removeQueuedSearchForUser(redis, lockOutcome.search!.userId)
+              )).catch(() => null);
+              emitAuctionError(socket, toAuctionErrorPayload(error, {
+                fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+                fallbackMessage: 'Auction matchmaking failed',
+              }));
+              return;
+            }
+          }
+          // Queue I/O and socket fan-out are intentionally outside the global
+          // lock; only the shared queue mutation and seat claim are fenced.
+          emitSearchStarted(io, lockOutcome.search, lockOutcome.group);
+          if (!lockOutcome.reattached) emitSearchStatuses(io, lockOutcome.group);
+          logger.info(
+            {
+              userId: user.id,
+              searchId: lockOutcome.search.searchId,
+              locale: lockOutcome.search.locale,
+              queueDepth: lockOutcome.queueDepth,
+            },
+            lockOutcome.reattached
+              ? 'Auction matchmaking search reattached'
+              : 'Auction matchmaking search joined',
+          );
+        }
+        await Promise.all(lockOutcome.claims.map((claim) => enqueueClaimStart(io, claim)));
       },
       {
         code: 'AUCTION_SEARCH_BUSY',
@@ -316,6 +398,14 @@ export const auctionMatchmakingService = {
       socket,
       async () => {
         const result = await withAuctionMatchmakingLock(async () => {
+          const claimToken = await redis.hGet(AUCTION_MM_CLAIM_USER_MAP_KEY, user.id);
+          if (claimToken) {
+            emitAuctionError(socket, {
+              code: 'auction_search_cancel_rejected',
+              message: 'Auction match is starting',
+            });
+            return;
+          }
           const activeMatchId = await auctionStateStore
             .getActiveMatchIdForUser(user.id)
             .catch(() => null);
@@ -387,37 +477,58 @@ export const auctionMatchmakingService = {
     const redis = getRedisClient();
     if (!redis?.isOpen) return;
 
-    const completed = await withAuctionMatchmakingLock(async () => {
+    const outcome = await withAuctionMatchmakingLock(async (): Promise<
+      | { kind: 'none' }
+      | { kind: 'extended'; searches: QueuedAuctionSearch[] }
+      | { kind: 'claimed'; claim: ClaimedAuctionGroup }
+    > => {
       const anchor = await readSearch(redis, payload.searchId);
-      if (!anchor) return;
+      if (!anchor) return { kind: 'none' };
       // A concurrent handler already requeued/re-armed this search (its
       // fallbackAt moved into the future) — this stale firing must not retry
       // the same group again in the same wave.
-      if (anchor.fallbackAt > Date.now() + 500) return;
+      if (anchor.fallbackAt > Date.now() + 500) return { kind: 'none' };
 
       const queued = await listQueuedSearches(redis);
       const fillGroup = queued.slice(0, 3);
-      if (!fillGroup.some((entry) => entry.searchId === anchor.searchId)) return;
-      if (fillGroup.length === 0) return;
+      if (!fillGroup.some((entry) => entry.searchId === anchor.searchId)) return { kind: 'none' };
+      if (fillGroup.length === 0) return { kind: 'none' };
 
       // Enough real humans to run a pure-human match — start it now.
       if (fillGroup.length >= 3) {
-        await startMatchFromQueuedSearches(io, redis, fillGroup.slice(0, 3));
-        return;
+        const claim = await claimSearchGroupLocked(redis, fillGroup.slice(0, 3));
+        return claim ? { kind: 'claimed', claim } : { kind: 'none' };
+      }
+
+      // If another human arrived in the last five seconds, give this group one
+      // short, shared grace window before filling the remaining seats with
+      // bots. Mark every member now so overlapping durable timers cannot stack
+      // extensions for the same searches.
+      const now = Date.now();
+      const anotherRecentHuman = fillGroup.some((entry) => (
+        entry.searchId !== anchor.searchId
+        && now - entry.queuedAt <= AUCTION_MM_HUMAN_JOIN_WINDOW_MS
+      ));
+      if (!anchor.humanWaitExtended && anotherRecentHuman) {
+        const extended = fillGroup.map((search) => ({
+          ...search,
+          humanWaitExtended: true,
+          fallbackAt: now + AUCTION_MM_HUMAN_WAIT_EXTENSION_MS,
+        }));
+        for (const search of extended) await writeSearch(redis, search);
+        return { kind: 'extended', searches: extended };
       }
 
       // Ranked-style bot fallback: once the human wait expires, select and
       // reserve the real smart-bot profiles, then start. We never expose a
       // synthetic "bot joined" count without the corresponding username.
-      await startMatchFromQueuedSearches(io, redis, fillGroup);
-      return true;
+      const claim = await claimSearchGroupLocked(redis, fillGroup);
+      return claim ? { kind: 'claimed', claim } : { kind: 'none' };
     });
 
-    // Lock still busy after the bounded wait (a burst of match starts holds it
-    // for a while): this timer firing is the search's ONLY fill signal, so it
-    // must re-arm rather than be consumed — a dropped fill strands the
-    // searcher in the queue forever.
-    if (completed === null) {
+    // The lock now contains queue mutation only, but a consumed durable timer
+    // must still re-arm if another replica briefly owns it.
+    if (outcome === null) {
       const stillQueued = await readSearch(redis, payload.searchId).catch(() => null);
       if (!stillQueued) return;
       logger.warn(
@@ -430,31 +541,41 @@ export const auctionMatchmakingService = {
         new Date(Date.now() + 2_000),
         { kind: 'auction_matchmaking_fill', searchId: payload.searchId }
       );
+      return;
+    }
+
+    if (outcome.kind === 'extended') {
+      await Promise.all(outcome.searches.map(scheduleAuctionMatchmakingFill));
+      emitSearchStatuses(io, outcome.searches);
+      return;
+    }
+    if (outcome.kind === 'claimed') {
+      await enqueueClaimStart(io, outcome.claim);
     }
   },
 };
 
-async function tryStartFullHumanMatchesLocked(io: QuizballServer): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis?.isOpen) return;
-
-  while (true) {
+async function claimFullHumanMatchesLocked(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  maxGroups = Math.min(AUCTION_MM_MAX_GROUPS_PER_DRAIN, availableClaimStartSlots()),
+): Promise<ClaimedAuctionGroup[]> {
+  const claims: ClaimedAuctionGroup[] = [];
+  while (claims.length < maxGroups) {
     const queued = await listQueuedSearches(redis);
-    if (queued.length < 3) return;
-    const started = await startMatchFromQueuedSearches(io, redis, queued.slice(0, 3));
-    // A failed start requeues its searches — looping here would re-pick the
-    // same trio in a tight loop. Their fill timers own the retry cadence.
-    if (!started) return;
+    if (queued.length < 3) break;
+    const claim = await claimSearchGroupLocked(redis, queued.slice(0, 3));
+    if (!claim) break;
+    claims.push(claim);
   }
+  return claims;
 }
 
-async function startMatchFromQueuedSearches(
+async function startClaimedGroup(
   io: QuizballServer,
-  redis: NonNullable<ReturnType<typeof getRedisClient>>,
-  searches: readonly QueuedAuctionSearch[]
-): Promise<boolean> {
-  const oldest = searches[0];
-  const humans = searches.map((search) => ({
+  claim: ClaimedAuctionGroup,
+): Promise<void> {
+  const oldest = claim.searches[0];
+  const humans = claim.searches.map((search) => ({
     userId: search.userId,
     displayName: search.displayName,
     ...(search.avatarCustomization
@@ -462,7 +583,7 @@ async function startMatchFromQueuedSearches(
       : {}),
   }));
 
-  await claimSearches(redis, searches);
+  const heartbeat = startClaimHeartbeat(claim);
   try {
     // Match humans from one shared queue, regardless of their UI language,
     // just like ranked matchmaking. Auction state currently has one shared
@@ -473,6 +594,9 @@ async function startMatchFromQueuedSearches(
       formation: oldest.formation,
       locale: oldest.locale,
     }, {
+      context: {
+        createId: (kind) => kind === 'match' ? claim.matchId : randomUUID(),
+      },
       beforeStartEvents: (prepared) => {
         emitMatchFound(
           io,
@@ -484,77 +608,457 @@ async function startMatchFromQueuedSearches(
         );
       },
     });
+    await completeClaim(claim, 'completed');
     const botPlayers = botPlayerSummaries(match.seats);
+    const humanSeatShare = humans.length / Math.max(1, match.seats.length);
+    for (const search of claim.searches) {
+      appMetrics.auctionMatchmakingQueueWaitDuration.record(
+        Math.max(0, Date.now() - search.queuedAt),
+        { human_seats: String(humans.length) },
+      );
+    }
+    appMetrics.auctionMatchmakingHumanSeatShare.record(humanSeatShare, {
+      human_seats: String(humans.length),
+    });
     logger.info(
       {
         matchId: match.matchId,
+        claimToken: claim.claimToken,
         humanUserIds: humans.map((human) => human.userId),
         botCount: botPlayers.length,
         locale: oldest.locale,
       },
       'Auction matchmaking started match'
     );
-    return true;
   } catch (error) {
+    // The state save is the commit point. A later socket/timer failure must not
+    // requeue these users into a second match; reconnect and boot recovery can
+    // redeliver the already-indexed match.
+    const committed = await auctionStateStore.load(claim.matchId).catch(() => null);
+    if (committed) {
+      await completeClaim(claim, 'completed');
+      logger.warn(
+        { error, claimToken: claim.claimToken, matchId: claim.matchId },
+        'Auction match committed; handoff deferred to reconnect recovery',
+      );
+      return;
+    }
+
     // Transient start failures (DB admission shed under a burst, content
     // retries exhausted) must NOT eject users from the queue — the searches
     // were already claimed, so REQUEUE them with a fresh fill timer and only
     // give up (with a client-visible error) after repeated failures.
-    const droppedSearches: QueuedAuctionSearch[] = [];
-    for (const search of searches) {
-      // The failure may have happened AFTER the match was durably saved and
-      // indexed (socket attach, timers): those users are seated in a live
-      // match — requeueing them would fork a duplicate match.
-      const activeMatchId = await auctionStateStore
-        .getActiveMatchIdForUser(search.userId)
-        .catch(() => null);
-      if (activeMatchId) continue;
-
-      const startFailures = (search.startFailures ?? 0) + 1;
-      if (startFailures >= AUCTION_MM_MAX_START_FAILURES) {
-        droppedSearches.push(search);
-        continue;
-      }
-      const requeued: QueuedAuctionSearch = {
-        ...search,
-        startFailures,
-        fallbackAt: Date.now() + harnessDelayMs(AUCTION_MM_START_RETRY_MS, 1_000),
-      };
-      try {
-        await writeSearch(redis, requeued);
-        // A requeued search without a fill timer is stranded — treat a failed
-        // schedule as a drop so the user at least gets the error.
-        await scheduleRealtimeTimer(
-          'auction_matchmaking_fill',
-          fillTimerKey(requeued.searchId),
-          new Date(requeued.fallbackAt),
-          { kind: 'auction_matchmaking_fill', searchId: requeued.searchId }
-        );
-      } catch {
-        await removeQueuedSearchForUser(redis, search.userId).catch(() => {});
-        droppedSearches.push(search);
-      }
-    }
+    const { requeued, dropped } = await requeueFailedClaim(claim);
 
     const payload = toAuctionErrorPayload(error, {
       fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
       fallbackMessage: 'Auction matchmaking failed',
     });
-    for (const search of droppedSearches) {
+    for (const search of dropped) {
       io.to(`user:${search.userId}`).emit('auction:error', payload);
     }
     logger.warn(
       {
         error,
+        claimToken: claim.claimToken,
         humanUserIds: humans.map((human) => human.userId),
-        requeuedCount: searches.length - droppedSearches.length,
-        droppedCount: droppedSearches.length,
+        requeuedCount: requeued.length,
+        droppedCount: dropped.length,
         code: payload.code,
       },
       'Auction matchmaking failed to start match'
     );
-    return false;
+  } finally {
+    heartbeat.stop();
   }
+}
+
+function availableClaimStartSlots(): number {
+  return Math.max(0, AUCTION_MM_MAX_CONCURRENT_STARTS - activeClaimStarts - pendingClaimStarts.length);
+}
+
+function enqueueClaimStart(io: QuizballServer, claim: ClaimedAuctionGroup): Promise<void> {
+  return new Promise((resolve) => {
+    pendingClaimStarts.push({ io, claim, resolve });
+    pumpClaimStarts();
+  });
+}
+
+function pumpClaimStarts(): void {
+  while (activeClaimStarts < AUCTION_MM_MAX_CONCURRENT_STARTS) {
+    const job = pendingClaimStarts.shift();
+    if (!job) return;
+    activeClaimStarts += 1;
+    void startClaimedGroup(job.io, job.claim)
+      .catch((error) => {
+        logger.error(
+          { error, claimToken: job.claim.claimToken },
+          'Auction claimed match start rejected unexpectedly',
+        );
+      })
+      .finally(() => {
+        activeClaimStarts = Math.max(0, activeClaimStarts - 1);
+        job.resolve();
+        pumpClaimStarts();
+      });
+  }
+}
+
+async function runPeriodicDrain(): Promise<void> {
+  if (drainRunning) return;
+  const io = matchmakingIo;
+  const redis = getRedisClient();
+  const available = availableClaimStartSlots();
+  if (!io || !redis?.isOpen || available <= 0) return;
+  drainRunning = true;
+  try {
+    const claims = await withAuctionMatchmakingLock(() => (
+      claimFullHumanMatchesLocked(redis, available)
+    ));
+    if (!claims) return;
+    for (const claim of claims) void enqueueClaimStart(io, claim);
+  } finally {
+    drainRunning = false;
+  }
+}
+
+async function recoverAbandonedClaims(): Promise<void> {
+  if (recoveryRunning) return;
+  const io = matchmakingIo;
+  const redis = getRedisClient();
+  if (!io || !redis?.isOpen) return;
+  recoveryRunning = true;
+  try {
+    const dueTokens = await redis.zRangeByScore(AUCTION_MM_CLAIMS_KEY, 0, Date.now(), {
+      LIMIT: { offset: 0, count: 50 },
+    });
+    for (const claimToken of dueTokens) {
+      const claim = await readClaim(redis, claimToken);
+      if (!claim) {
+        await redis.zRem(AUCTION_MM_CLAIMS_KEY, claimToken);
+        continue;
+      }
+      if (claim.leaseUntil > Date.now()) continue;
+      const committed = await auctionStateStore.load(claim.matchId).catch(() => null);
+      if (committed) {
+        await completeClaim(claim, 'recovered_committed');
+        continue;
+      }
+      const result = await requeueFailedClaim(claim, io);
+      logger.warn(
+        {
+          claimToken,
+          requeuedCount: result.requeued.length,
+          droppedCount: result.dropped.length,
+        },
+        'Recovered abandoned Auction matchmaking claim',
+      );
+    }
+  } finally {
+    recoveryRunning = false;
+  }
+}
+
+async function claimSearchGroupLocked(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  searches: readonly QueuedAuctionSearch[],
+): Promise<ClaimedAuctionGroup | null> {
+  if (searches.length < 1 || searches.length > 3) return null;
+  const current = await Promise.all(searches.map((search) => readSearch(redis, search.searchId)));
+  if (current.some((search, index) => (
+    !search || search.userId !== searches[index].userId
+  ))) return null;
+  const currentIds = await Promise.all(
+    searches.map((search) => redis.hGet(AUCTION_MM_USER_MAP_KEY, search.userId)),
+  );
+  if (currentIds.some((searchId, index) => searchId !== searches[index].searchId)) return null;
+
+  const claimToken = randomUUID();
+  const claimedUserIds: string[] = [];
+  for (const search of searches) {
+    const claimed = await redis.set(sharedPairingUserKey(search.userId), claimToken, {
+      NX: true,
+      PX: AUCTION_MM_CLAIM_LEASE_MS,
+    });
+    if (claimed !== 'OK') {
+      await userSessionGuardService.releaseActivityFences(claimedUserIds, claimToken);
+      return null;
+    }
+    claimedUserIds.push(search.userId);
+  }
+
+  const claimedAt = Date.now();
+  const claim: ClaimedAuctionGroup = {
+    claimToken,
+    matchId: claimToken,
+    claimedAt,
+    leaseUntil: claimedAt + AUCTION_MM_CLAIM_LEASE_MS,
+    searches: searches.map((search) => ({ ...search })),
+  };
+  try {
+    const searchIds = claim.searches.map((search) => search.searchId);
+    const userIds = claim.searches.map((search) => search.userId);
+    const transaction = redis
+      .multi()
+      .hSet(claimKey(claimToken), claimHashFields(claim, 'claimed'))
+      .expire(claimKey(claimToken), AUCTION_MM_CLAIM_TTL_SEC)
+      .zAdd(AUCTION_MM_CLAIMS_KEY, { score: claim.leaseUntil, value: claimToken })
+      .zRem(AUCTION_MM_QUEUE_KEY, searchIds)
+      .hDel(AUCTION_MM_USER_MAP_KEY, userIds)
+      .hSet(AUCTION_MM_CLAIM_USER_MAP_KEY, Object.fromEntries(
+        userIds.map((userId) => [userId, claimToken]),
+      ));
+    for (const search of claim.searches) {
+      transaction.hSet(searchKey(search.searchId), {
+        status: 'claimed',
+        claimToken,
+      });
+    }
+    await transaction.exec();
+    setAuctionMatchmakingQueueDepth(Math.max(0, await redis.zCard(AUCTION_MM_QUEUE_KEY)));
+  } catch (error) {
+    // EXEC can have an uncertain outcome if the connection drops after Redis
+    // commits but before the reply reaches this process. If the durable claim
+    // is visible, keep its fences and continue; recovery owns any later crash.
+    try {
+      const committedClaim = await readClaim(redis, claimToken);
+      if (committedClaim) return committedClaim;
+    } catch (readError) {
+      // Do not release an uncertain fence. Its bounded TTL is safer than
+      // allowing the same users into another mode while a committed claim may
+      // be recovered on a different replica.
+      logger.warn({ error: readError, claimToken }, 'Auction claim outcome could not be verified');
+      throw error;
+    }
+    await userSessionGuardService.releaseActivityFences(claimedUserIds, claimToken);
+    throw error;
+  }
+
+  // Durable timer cancellation is best-effort and deliberately outside the
+  // global lock. A late timer is harmless because claimed searches no longer
+  // read as queued.
+  void Promise.all(claim.searches.map((search) => (
+    cancelAuctionMatchmakingFill(search.searchId)
+  ))).catch((error) => {
+    logger.warn({ error, claimToken }, 'Auction claim timer cancellation failed');
+  });
+  return claim;
+}
+
+function startClaimHeartbeat(claim: ClaimedAuctionGroup): { stop: () => void } {
+  const timer = setInterval(() => {
+    void renewClaimLease(claim).catch((error) => {
+      logger.warn({ error, claimToken: claim.claimToken }, 'Auction claim heartbeat failed');
+    });
+  }, AUCTION_MM_CLAIM_HEARTBEAT_MS);
+  timer.unref();
+  return { stop: () => clearInterval(timer) };
+}
+
+async function renewClaimLease(claim: ClaimedAuctionGroup): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  const renewed = await withAuctionMatchmakingLock(async () => {
+    const row = await redis.hGetAll(claimKey(claim.claimToken));
+    if (row.status !== 'claimed') return false;
+    const leaseUntil = Date.now() + AUCTION_MM_CLAIM_LEASE_MS;
+    await redis
+      .multi()
+      .hSet(claimKey(claim.claimToken), { leaseUntil: String(leaseUntil) })
+      .expire(claimKey(claim.claimToken), AUCTION_MM_CLAIM_TTL_SEC)
+      .zAdd(AUCTION_MM_CLAIMS_KEY, { score: leaseUntil, value: claim.claimToken })
+      .exec();
+    return true;
+  });
+  if (renewed) {
+    await userSessionGuardService.renewActivityFences(
+      claim.searches.map((search) => search.userId),
+      claim.claimToken,
+      AUCTION_MM_CLAIM_LEASE_MS,
+    );
+  }
+}
+
+async function completeClaim(
+  claim: ClaimedAuctionGroup,
+  status: 'completed' | 'recovered_committed',
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  const completed = await withAuctionMatchmakingLock(async () => {
+    const row = await redis.hGetAll(claimKey(claim.claimToken));
+    if (row.status !== 'claimed') return false;
+    await redis
+      .multi()
+      .hSet(claimKey(claim.claimToken), {
+        status,
+        completedAt: String(Date.now()),
+      })
+      .expire(claimKey(claim.claimToken), AUCTION_MM_CLAIM_TTL_SEC)
+      .zRem(AUCTION_MM_CLAIMS_KEY, claim.claimToken)
+      .hDel(
+        AUCTION_MM_CLAIM_USER_MAP_KEY,
+        claim.searches.map((search) => search.userId),
+      )
+      .exec();
+    return true;
+  });
+  if (completed) {
+    await userSessionGuardService.releaseActivityFences(
+      claim.searches.map((search) => search.userId),
+      claim.claimToken,
+    );
+  }
+}
+
+async function requeueFailedClaim(
+  claim: ClaimedAuctionGroup,
+  io: QuizballServer | null = matchmakingIo,
+): Promise<{ requeued: QueuedAuctionSearch[]; dropped: QueuedAuctionSearch[] }> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return { requeued: [], dropped: [...claim.searches] };
+  const result = await withAuctionMatchmakingLock(async () => {
+    const row = await redis.hGetAll(claimKey(claim.claimToken));
+    if (row.status !== 'claimed') return { requeued: [], dropped: [] };
+
+    const fencesOwned = await ensureClaimFences(redis, claim);
+    const states = fencesOwned
+      ? await userSessionGuardService.resolveStates(claim.searches.map((search) => search.userId))
+      : new Map();
+
+    const requeued: QueuedAuctionSearch[] = [];
+    const dropped: QueuedAuctionSearch[] = [];
+    for (const search of claim.searches) {
+      const startFailures = (search.startFailures ?? 0) + 1;
+      const state = states.get(search.userId);
+      const hasConflictingSession = !fencesOwned
+        || !state
+        || Boolean(state.activeMatchId)
+        || Boolean(state.queueSearchId)
+        || state.openLobbyIds.length > 0;
+      if (hasConflictingSession || startFailures >= AUCTION_MM_MAX_START_FAILURES) {
+        dropped.push(search);
+      } else {
+        requeued.push({
+          ...search,
+          startFailures,
+          fallbackAt: Date.now() + harnessDelayMs(AUCTION_MM_START_RETRY_MS, 1_000),
+        });
+      }
+    }
+
+    const transaction = redis
+      .multi()
+      .hSet(claimKey(claim.claimToken), {
+        status: 'requeued',
+        completedAt: String(Date.now()),
+      })
+      .expire(claimKey(claim.claimToken), AUCTION_MM_CLAIM_TTL_SEC)
+      .zRem(AUCTION_MM_CLAIMS_KEY, claim.claimToken)
+      .hDel(
+        AUCTION_MM_CLAIM_USER_MAP_KEY,
+        claim.searches.map((search) => search.userId),
+      );
+    for (const search of requeued) {
+      transaction
+        .hSet(searchKey(search.searchId), searchHashFields(search, 'queued'))
+        .expire(searchKey(search.searchId), AUCTION_MM_SEARCH_TTL_SEC)
+        .zAdd(AUCTION_MM_QUEUE_KEY, { score: search.queuedAt, value: search.searchId })
+        .hSet(AUCTION_MM_USER_MAP_KEY, search.userId, search.searchId);
+    }
+    for (const search of dropped) {
+      transaction.hSet(searchKey(search.searchId), { status: 'failed' });
+    }
+    await transaction.exec();
+    setAuctionMatchmakingQueueDepth(Math.max(0, await redis.zCard(AUCTION_MM_QUEUE_KEY)));
+    return { requeued, dropped };
+  });
+
+  await userSessionGuardService.releaseActivityFences(
+    claim.searches.map((search) => search.userId),
+    claim.claimToken,
+  );
+  if (!result) return { requeued: [], dropped: [] };
+
+  const scheduled: QueuedAuctionSearch[] = [];
+  const scheduleDropped = [...result.dropped];
+  for (const search of result.requeued) {
+    try {
+      await scheduleAuctionMatchmakingFill(search);
+      scheduled.push(search);
+    } catch {
+      await removeQueuedSearchForUser(redis, search.userId).catch(() => {});
+      scheduleDropped.push(search);
+    }
+  }
+  if (io && scheduled.length > 0) {
+    emitAllQueueStatuses(io, await listQueuedSearches(redis));
+  }
+  return { requeued: scheduled, dropped: scheduleDropped };
+}
+
+async function ensureClaimFences(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  claim: ClaimedAuctionGroup,
+): Promise<boolean> {
+  for (const search of claim.searches) {
+    const key = sharedPairingUserKey(search.userId);
+    const current = await redis.get(key);
+    if (current === claim.claimToken) continue;
+    if (current !== null) return false;
+    const acquired = await redis.set(key, claim.claimToken, {
+      NX: true,
+      PX: AUCTION_MM_CLAIM_LEASE_MS,
+    });
+    if (acquired !== 'OK') return false;
+  }
+  return true;
+}
+
+async function readClaim(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  claimToken: string,
+): Promise<ClaimedAuctionGroup | null> {
+  const row = await redis.hGetAll(claimKey(claimToken));
+  if (row.status !== 'claimed' || !row.snapshot) return null;
+  try {
+    const searches = JSON.parse(row.snapshot) as QueuedAuctionSearch[];
+    const claimedAt = Number(row.claimedAt);
+    const leaseUntil = Number(row.leaseUntil);
+    if (!Array.isArray(searches) || searches.length < 1 || searches.length > 3) return null;
+    if (!Number.isFinite(claimedAt) || !Number.isFinite(leaseUntil)) return null;
+    return {
+      claimToken,
+      matchId: row.matchId || claimToken,
+      claimedAt,
+      leaseUntil,
+      searches,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function claimHashFields(
+  claim: ClaimedAuctionGroup,
+  status: string,
+): Record<string, string> {
+  return {
+    claimToken: claim.claimToken,
+    matchId: claim.matchId,
+    status,
+    claimedAt: String(claim.claimedAt),
+    leaseUntil: String(claim.leaseUntil),
+    snapshot: JSON.stringify(claim.searches),
+  };
+}
+
+function claimKey(claimToken: string): string {
+  return `${AUCTION_MM_CLAIM_KEY_PREFIX}${claimToken}`;
+}
+
+function sharedPairingUserKey(userId: string): string {
+  return `${SHARED_PAIRING_USER_KEY_PREFIX}${userId}`;
 }
 
 function emitMatchFound(
@@ -729,20 +1233,7 @@ async function writeSearch(
 ): Promise<void> {
   await redis
     .multi()
-    .hSet(searchKey(search.searchId), {
-      searchId: search.searchId,
-      userId: search.userId,
-      displayName: search.displayName,
-      avatarCustomization: search.avatarCustomization
-        ? JSON.stringify(search.avatarCustomization)
-        : '',
-      locale: search.locale,
-      formation: search.formation ?? '',
-      status: 'queued',
-      queuedAt: String(search.queuedAt),
-      fallbackAt: String(search.fallbackAt),
-      startFailures: String(search.startFailures ?? 0),
-    })
+    .hSet(searchKey(search.searchId), searchHashFields(search, 'queued'))
     .expire(searchKey(search.searchId), AUCTION_MM_SEARCH_TTL_SEC)
     .zAdd(AUCTION_MM_QUEUE_KEY, { score: search.queuedAt, value: search.searchId })
     .hSet(AUCTION_MM_USER_MAP_KEY, search.userId, search.searchId)
@@ -770,6 +1261,28 @@ async function readSearch(
     queuedAt,
     fallbackAt,
     startFailures: Number.isFinite(Number(row.startFailures)) ? Number(row.startFailures) : 0,
+    humanWaitExtended: row.humanWaitExtended === '1',
+  };
+}
+
+function searchHashFields(
+  search: QueuedAuctionSearch,
+  status: 'queued' | 'claimed' | 'cancelled' | 'failed',
+): Record<string, string> {
+  return {
+    searchId: search.searchId,
+    userId: search.userId,
+    displayName: search.displayName,
+    avatarCustomization: search.avatarCustomization
+      ? JSON.stringify(search.avatarCustomization)
+      : '',
+    locale: search.locale,
+    formation: search.formation ?? '',
+    status,
+    queuedAt: String(search.queuedAt),
+    fallbackAt: String(search.fallbackAt),
+    startFailures: String(search.startFailures ?? 0),
+    humanWaitExtended: search.humanWaitExtended ? '1' : '0',
   };
 }
 
@@ -794,23 +1307,11 @@ async function listQueuedSearches(
   if (deadIds.length > 0) {
     await redis.zRem(AUCTION_MM_QUEUE_KEY, deadIds).catch(() => {});
   }
-  return searches
+  const queued = searches
     .filter((search): search is QueuedAuctionSearch => search !== null)
     .sort((a, b) => a.queuedAt - b.queuedAt);
-}
-
-async function claimSearches(
-  redis: NonNullable<ReturnType<typeof getRedisClient>>,
-  searches: readonly QueuedAuctionSearch[]
-): Promise<void> {
-  await Promise.all(searches.map((search) => cancelAuctionMatchmakingFill(search.searchId)));
-  const searchIds = searches.map((search) => search.searchId);
-  const userIds = searches.map((search) => search.userId);
-  const multi = redis.multi().zRem(AUCTION_MM_QUEUE_KEY, searchIds).hDel(AUCTION_MM_USER_MAP_KEY, userIds);
-  for (const search of searches) {
-    multi.hSet(searchKey(search.searchId), { status: 'matched' });
-  }
-  await multi.exec();
+  setAuctionMatchmakingQueueDepth(queued.length);
+  return queued;
 }
 
 async function removeQueuedSearchForUser(

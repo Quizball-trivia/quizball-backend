@@ -26,6 +26,29 @@ const rankedMatchmakingStageDuration = meter.createHistogram(
   }
 );
 
+let auctionMatchmakingQueueDepthValue = 0;
+const auctionMatchmakingQueueDepth = meter.createObservableGauge(
+  'quizball_auction_matchmaking_queue_depth',
+  { description: 'Current number of queued Auction searches on this shared fleet' },
+);
+auctionMatchmakingQueueDepth.addCallback((result) => {
+  result.observe(auctionMatchmakingQueueDepthValue);
+});
+
+export function setAuctionMatchmakingQueueDepth(depth: number): void {
+  auctionMatchmakingQueueDepthValue = Math.max(0, Math.floor(depth));
+}
+
+const auctionMatchmakingQueueWaitDuration = meter.createHistogram(
+  'quizball_auction_matchmaking_queue_wait_duration_ms',
+  { description: 'Auction search-to-match wait per human seat', unit: 'ms' },
+);
+
+const auctionMatchmakingHumanSeatShare = meter.createHistogram(
+  'quizball_auction_matchmaking_human_seat_share',
+  { description: 'Share of human seats in each queue-origin Auction match', unit: '1' },
+);
+
 const socketReconnects = meter.createCounter('quizball_socket_reconnects_total', {
   description: 'Number of active-match rejoins on connect',
 });
@@ -122,6 +145,8 @@ export const appMetrics = {
   rankedAiFallbacks,
   rankedHumanMatches,
   rankedMatchmakingStageDuration,
+  auctionMatchmakingQueueWaitDuration,
+  auctionMatchmakingHumanSeatShare,
   socketReconnects,
   matchPauses,
   cacheRebuilds,

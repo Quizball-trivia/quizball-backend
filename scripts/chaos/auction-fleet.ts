@@ -10,6 +10,7 @@
  *
  * Usage (staging — NEVER prod; guarded):
  *   npx tsx scripts/chaos/auction-fleet.ts --target staging --sockets 100 --matches-per-client 1
+ *   npx tsx scripts/chaos/auction-fleet.ts --target staging --wave-clients 500 --ramp-s 120
  *   npx tsx scripts/chaos/auction-fleet.ts --target local --api http://localhost:8000 --sockets 20
  *
  * Mixed-load scenarios: run this alongside the ranked fleet (scripts/chaos/run.ts
@@ -31,13 +32,17 @@ const flagValue = (name: string, fallback: string): string => {
 };
 const numFlag = (name: string, fallback: number): number => Number(flagValue(name, String(fallback)));
 const TARGET = flagValue('target', 'staging');
-const SOCKETS = numFlag('sockets', 50);
+const WAVE_CLIENTS = numFlag('wave-clients', 0);
+const WAVE_MODE = WAVE_CLIENTS > 0;
+const SOCKETS = WAVE_MODE ? WAVE_CLIENTS : numFlag('sockets', 50);
 const MATCHES_PER_CLIENT = numFlag('matches-per-client', 1);
-const RAMP_SEC = numFlag('ramp', Math.min(120, SOCKETS));
+const RAMP_SEC = numFlag('ramp-s', numFlag('ramp', Math.min(120, SOCKETS)));
 const OFFSET = numFlag('offset', 0);
 const API_OVERRIDE = flagValue('api', '');
 const REPORT = flagValue('report', '');
-const MATCH_START_TIMEOUT_MS = 180_000;
+const AUTH_CACHE = flagValue('auth-cache', '');
+const PREPARE_ONLY = args.includes('--prepare-only');
+const MATCH_START_TIMEOUT_MS = WAVE_MODE ? 60_000 : 180_000;
 const MATCH_FINISH_TIMEOUT_MS = 25 * 60_000; // 21 rounds x ~45s + slack
 const STALL_TIMEOUT_MS = 150_000; // no auction event at all for this long = stranded
 
@@ -71,8 +76,12 @@ interface Metrics {
   matchesFound: number;
   matchesStarted: number;
   matchesFinished: number;
+  cleanForfeits: number;
   stranded: number;
   startTimeouts: number;
+  duplicateSeatViolations: number;
+  humanSeats: number;
+  totalSeats: number;
   bids: number;
   folds: number;
   soloPicks: number;
@@ -80,6 +89,14 @@ interface Metrics {
   playerForfeitSignals: number;
   errors: Map<string, number>;
   disconnects: Map<string, number>;
+  clientFailures: Array<{
+    clientIndex: number;
+    userId: string;
+    matchId: string | null;
+    phase: string;
+    reason: string;
+    idleMs: number;
+  }>;
   searchToFoundMs: number[];
   bidAckMs: number[];
   foldAckMs: number[];
@@ -88,11 +105,19 @@ interface Metrics {
 }
 const metrics: Metrics = {
   searchesStarted: 0, matchesFound: 0, matchesStarted: 0, matchesFinished: 0,
+  cleanForfeits: 0,
   stranded: 0, startTimeouts: 0, bids: 0, folds: 0, soloPicks: 0,
+  duplicateSeatViolations: 0, humanSeats: 0, totalSeats: 0,
   forfeitedCleanups: 0, playerForfeitSignals: 0,
   errors: new Map(), disconnects: new Map(),
+  clientFailures: [],
   searchToFoundMs: [], bidAckMs: [], foldAckMs: [], matchDurationSec: [], roundsPerMatch: [],
 };
+const measuredMatchRosters = new Map<string, string[]>();
+const matchedUserToMatch = new Map<string, string>();
+const startedMatchIds = new Set<string>();
+const finishedMatchIds = new Set<string>();
+const cleanForfeitMatchIds = new Set<string>();
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
 const percentile = (values: number[], p: number): number => {
   if (values.length === 0) return 0;
@@ -126,6 +151,16 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
     const done = new Promise<void>((resolveDone) => {
       const finish = (outcome: 'finished' | 'failed', reason?: string) => {
         if (phase === 'finished' || phase === 'failed') return;
+        if (outcome === 'failed' && reason) {
+          metrics.clientFailures.push({
+            clientIndex,
+            userId: user.userId,
+            matchId,
+            phase,
+            reason,
+            idleMs: Math.max(0, Date.now() - lastEventAt),
+          });
+        }
         phase = outcome;
         if (outcome === 'failed' && reason) bump(metrics.errors, `client:${reason}`);
         socket.disconnect();
@@ -199,23 +234,75 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         }
       });
 
-      socket.on('auction:match_found', (payload: { matchId: string }) => {
+      socket.on('auction:match_found', (payload: {
+        matchId: string;
+        humanUserIds?: string[];
+        botCount?: number;
+      }) => {
         touch();
         matchId = payload.matchId;
         metrics.matchesFound += 1;
         metrics.searchToFoundMs.push(Date.now() - searchStartedAt);
+        const humanUserIds = payload.humanUserIds ?? [];
+        if (!measuredMatchRosters.has(payload.matchId)) {
+          measuredMatchRosters.set(payload.matchId, [...humanUserIds]);
+          metrics.humanSeats += humanUserIds.length;
+          metrics.totalSeats += humanUserIds.length + Math.max(0, payload.botCount ?? 0);
+          if (new Set(humanUserIds).size !== humanUserIds.length) {
+            metrics.duplicateSeatViolations += 1;
+          }
+          for (const humanUserId of humanUserIds) {
+            const previousMatchId = matchedUserToMatch.get(humanUserId);
+            if (previousMatchId && previousMatchId !== payload.matchId) {
+              metrics.duplicateSeatViolations += 1;
+            } else {
+              matchedUserToMatch.set(humanUserId, payload.matchId);
+            }
+          }
+        } else {
+          const expected = measuredMatchRosters.get(payload.matchId) ?? [];
+          if (expected.join(',') !== humanUserIds.join(',')) {
+            metrics.duplicateSeatViolations += 1;
+          }
+        }
+        if (!humanUserIds.includes(user.userId)) {
+          metrics.duplicateSeatViolations += 1;
+        }
       });
 
       socket.on('auction:match_started', (payload: {
         matchId: string;
-        state: { seats: Array<{ seatId: string; userId?: string | null }> };
+        state: { seats: Array<{ seatId: string; userId?: string | null; isBot?: boolean }> };
       }) => {
         touch();
         matchId = payload.matchId;
         mySeatId = payload.state.seats.find((seat) => seat.userId === user.userId)?.seatId ?? null;
         matchStartedAt = Date.now();
         metrics.matchesStarted += 1;
+        startedMatchIds.add(payload.matchId);
+        const humanSeatUserIds = payload.state.seats
+          .filter((seat) => !seat.isBot && seat.userId)
+          .map((seat) => seat.userId as string);
+        if (new Set(humanSeatUserIds).size !== humanSeatUserIds.length) {
+          metrics.duplicateSeatViolations += 1;
+        }
         phase = 'playing';
+        if (WAVE_MODE) {
+          // The wave gate targets matchmaking, not 21-round content throughput.
+          // Exercise the real explicit-forfeit cleanup after seating so every
+          // started client reaches a verified terminal path without a 25-minute
+          // fleet run. Stagger forfeits by human seat order: firing all three
+          // concurrently creates an artificial mutation race where the final
+          // seat can observe an already-finished state before its own forfeit
+          // signal is broadcast. Sequential departures model an orderly clean
+          // exit and still finish each wave match within seconds.
+          const humanSeatOrdinal = Math.max(0, humanSeatUserIds.indexOf(user.userId));
+          setTimeout(() => {
+            if (phase === 'playing' && matchId) {
+              socket.emit('auction:forfeit', { matchId });
+            }
+          }, 1_500 + humanSeatOrdinal * 5_000 + jitter(0, 500));
+        }
       });
 
       // Mirror every readiness gate exactly like the web client.
@@ -300,7 +387,15 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
         }, jitter(800, 3_000));
       });
 
-      socket.on('auction:player_forfeited', () => { touch(); metrics.playerForfeitSignals += 1; });
+      socket.on('auction:player_forfeited', (payload: { matchId: string; userId: string }) => {
+        touch();
+        metrics.playerForfeitSignals += 1;
+        cleanForfeitMatchIds.add(payload.matchId);
+        if (WAVE_MODE && payload.userId === user.userId) {
+          metrics.cleanForfeits += 1;
+          finish('finished');
+        }
+      });
       socket.on('auction:error', (payload: { code?: string }) => {
         touch();
         bump(metrics.errors, `auction:${payload?.code ?? 'unknown'}`);
@@ -309,6 +404,7 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
       socket.on('auction:match_finished', () => {
         touch();
         metrics.matchesFinished += 1;
+        if (matchId) finishedMatchIds.add(matchId);
         if (matchStartedAt > 0) {
           metrics.matchDurationSec.push(Math.round((Date.now() - matchStartedAt) / 1000));
           metrics.roundsPerMatch.push(roundsSeen);
@@ -344,30 +440,45 @@ async function runClient(user: ChaosUser, clientIndex: number): Promise<void> {
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   console.log('━'.repeat(72));
-  console.log(`AUCTION FLEET  target=${TARGET} api=${apiBase} sockets=${SOCKETS} matches/client=${MATCHES_PER_CLIENT} ramp=${RAMP_SEC}s offset=${OFFSET}`);
+  console.log(`AUCTION FLEET  target=${TARGET} api=${apiBase} mode=${WAVE_MODE ? 'wave' : 'regression'} sockets=${SOCKETS} matches/client=${MATCHES_PER_CLIENT} ramp=${RAMP_SEC}s offset=${OFFSET}`);
   console.log('━'.repeat(72));
   if (!serviceRoleKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY missing.');
 
-  console.log(`Provisioning ${SOCKETS} confirmed test users…`);
-  const users = await provisionUsers({
-    apiBase,
-    supabaseUrl,
-    serviceRoleKey,
-    count: SOCKETS,
-    startIndex: OFFSET,
-    password: 'ChaosTest12345!',
-    emailPrefix: 'chaos',
-    emailDomain: 'quizball.io',
-    concurrency: 10,
-    loginIntervalMs: 2_200,
-    bypassToken,
-  });
+  let users: ChaosUser[];
+  if (AUTH_CACHE && existsSync(resolve(AUTH_CACHE))) {
+    const cached = JSON.parse(readFileSync(resolve(AUTH_CACHE), 'utf8')) as ChaosUser[];
+    users = cached.slice(0, SOCKETS);
+    if (users.length < SOCKETS || users.some((user) => !user.token || !user.userId)) {
+      throw new Error(`Auth cache has ${users.length}/${SOCKETS} usable users.`);
+    }
+    console.log(`Loaded ${users.length} users from the local auth cache.`);
+  } else {
+    console.log(`Provisioning ${SOCKETS} confirmed test users…`);
+    users = await provisionUsers({
+      apiBase,
+      supabaseUrl,
+      serviceRoleKey,
+      count: SOCKETS,
+      startIndex: OFFSET,
+      password: 'ChaosTest12345!',
+      emailPrefix: 'chaos',
+      emailDomain: 'quizball.io',
+      concurrency: 10,
+      loginIntervalMs: 2_200,
+      bypassToken,
+    });
+    if (AUTH_CACHE) {
+      writeFileSync(resolve(AUTH_CACHE), JSON.stringify(users), { mode: 0o600 });
+      console.log(`  → local auth cache written (${users.length} users).`);
+    }
+  }
   console.log(`  → ${users.length} users authenticated.`);
   if (users.length < SOCKETS) console.log(`  ! only ${users.length}/${SOCKETS} usable — running with those.`);
+  if (PREPARE_ONLY) return;
 
   const startedAt = new Date();
   const progress = setInterval(() => {
-    console.log(`[fleet] searches=${metrics.searchesStarted} found=${metrics.matchesFound} started=${metrics.matchesStarted} finished=${metrics.matchesFinished} bids=${metrics.bids} folds=${metrics.folds} solo=${metrics.soloPicks} stranded=${metrics.stranded} errors=${[...metrics.errors.values()].reduce((a, b) => a + b, 0)}`);
+    console.log(`[fleet] searches=${metrics.searchesStarted} found=${metrics.matchesFound} started=${metrics.matchesStarted} finished=${metrics.matchesFinished} forfeits=${metrics.cleanForfeits} bids=${metrics.bids} folds=${metrics.folds} solo=${metrics.soloPicks} stranded=${metrics.stranded} errors=${[...metrics.errors.values()].reduce((a, b) => a + b, 0)}`);
   }, 15_000);
 
   await Promise.all(users.map(async (user, index) => {
@@ -380,15 +491,32 @@ async function main(): Promise<void> {
   }));
   clearInterval(progress);
 
+  const terminalClients = metrics.matchesFinished + metrics.cleanForfeits;
+  const completionRate = metrics.matchesStarted > 0 ? (terminalClients / metrics.matchesStarted) * 100 : 0;
+  const terminalMatchIds = new Set([...finishedMatchIds, ...cleanForfeitMatchIds]);
+  const uniqueCompletionRate = startedMatchIds.size > 0
+    ? (terminalMatchIds.size / startedMatchIds.size) * 100
+    : 0;
   const summary = {
     startedAt: startedAt.toISOString(),
     endedAt: new Date().toISOString(),
     target: TARGET,
     sockets: users.length,
     matchesPerClient: MATCHES_PER_CLIENT,
+    waveMode: WAVE_MODE,
     ...metrics,
     errors: Object.fromEntries(metrics.errors),
     disconnects: Object.fromEntries(metrics.disconnects),
+    uniqueMatches: {
+      found: measuredMatchRosters.size,
+      started: startedMatchIds.size,
+      finished: finishedMatchIds.size,
+      cleanForfeit: cleanForfeitMatchIds.size,
+    },
+    uniqueMatchedUsers: matchedUserToMatch.size,
+    humanSeatShare: metrics.totalSeats > 0 ? metrics.humanSeats / metrics.totalSeats : 0,
+    terminalClientRate: completionRate / 100,
+    terminalUniqueMatchRate: uniqueCompletionRate / 100,
     percentiles: {
       searchToFoundMs: { p50: percentile(metrics.searchToFoundMs, 50), p95: percentile(metrics.searchToFoundMs, 95), max: percentile(metrics.searchToFoundMs, 100) },
       bidAckMs: { p50: percentile(metrics.bidAckMs, 50), p95: percentile(metrics.bidAckMs, 95), max: percentile(metrics.bidAckMs, 100) },
@@ -396,11 +524,12 @@ async function main(): Promise<void> {
       matchDurationSec: { p50: percentile(metrics.matchDurationSec, 50), p95: percentile(metrics.matchDurationSec, 95), max: percentile(metrics.matchDurationSec, 100) },
     },
   };
-  const completionRate = metrics.matchesStarted > 0 ? (metrics.matchesFinished / metrics.matchesStarted) * 100 : 0;
 
   console.log('━'.repeat(72));
   console.log(`RESULT sockets=${users.length}`);
-  console.log(`  matches: found=${metrics.matchesFound} started=${metrics.matchesStarted} finished=${metrics.matchesFinished} (${completionRate.toFixed(1)}% completion) stranded=${metrics.stranded} startTimeouts=${metrics.startTimeouts}`);
+  console.log(`  matches: found=${metrics.matchesFound} started=${metrics.matchesStarted} finished=${metrics.matchesFinished} cleanForfeits=${metrics.cleanForfeits} (${completionRate.toFixed(1)}% terminal) stranded=${metrics.stranded} startTimeouts=${metrics.startTimeouts}`);
+  console.log(`  unique matches: started=${startedMatchIds.size} terminal=${terminalMatchIds.size} (${uniqueCompletionRate.toFixed(1)}%)`);
+  console.log(`  seats: human=${metrics.humanSeats}/${metrics.totalSeats} share=${(summary.humanSeatShare * 100).toFixed(1)}% duplicateViolations=${metrics.duplicateSeatViolations}`);
   console.log(`  actions: bids=${metrics.bids} folds=${metrics.folds} soloPicks=${metrics.soloPicks}`);
   console.log(`  latency: search→found p50=${summary.percentiles.searchToFoundMs.p50}ms p95=${summary.percentiles.searchToFoundMs.p95}ms | bid→ack p50=${summary.percentiles.bidAckMs.p50}ms p95=${summary.percentiles.bidAckMs.p95}ms`);
   console.log(`  match duration: p50=${summary.percentiles.matchDurationSec.p50}s p95=${summary.percentiles.matchDurationSec.p95}s | rounds/match p50=${percentile(metrics.roundsPerMatch, 50)}`);
@@ -413,7 +542,16 @@ async function main(): Promise<void> {
     writeFileSync(path, JSON.stringify(summary, null, 2));
     console.log(`  report → ${path}`);
   }
-  process.exit(metrics.stranded === 0 && metrics.startTimeouts === 0 ? 0 : 1);
+  const wavePassed = !WAVE_MODE || (
+    matchedUserToMatch.size === users.length
+    && summary.percentiles.searchToFoundMs.p95 <= 20_000
+    && summary.humanSeatShare >= 0.9
+    && metrics.stranded === 0
+    && metrics.startTimeouts === 0
+    && metrics.duplicateSeatViolations === 0
+    && uniqueCompletionRate >= 95
+  );
+  process.exit(metrics.stranded === 0 && metrics.startTimeouts === 0 && wavePassed ? 0 : 1);
 }
 
 main().catch((error) => {

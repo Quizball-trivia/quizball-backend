@@ -190,7 +190,7 @@ export function createApp(): Express {
       max: 5, // 5 submissions per window per IP
       standardHeaders: true,
       legacyHeaders: false,
-      skip: skipForChaos,
+      skip: (req) => req.path === '/season3' || req.path.startsWith('/season3/') || skipForChaos(req),
       message: {
         code: 'RATE_LIMIT_EXCEEDED',
         message: 'Too many feedback submissions, please try again later',

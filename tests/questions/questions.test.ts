@@ -104,6 +104,14 @@ const mockTrueFalsePayload = {
   ],
 };
 
+const mockCountdownPayload = {
+  type: 'countdown_list' as const,
+  prompt: { en: 'Name every club to win the Premier League' },
+  answer_groups: [
+    { id: 'g1', display: { en: 'Arsenal' }, accepted_answers: ['Arsenal'] },
+  ],
+};
+
 const mockQuestion = {
   id: '123e4567-e89b-12d3-a456-426614174000',
   category_id: '123e4567-e89b-12d3-a456-426614174001',
@@ -465,6 +473,61 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('BAD_REQUEST');
+    });
+
+    it('should reject an mcq prompt over the 130-char stem cap', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+
+      const response = await request(app)
+        .post('/api/v1/questions')
+        .send({
+          category_id: mockQuestion.category_id,
+          type: 'mcq_single',
+          difficulty: 'medium',
+          prompt: { en: 'x'.repeat(131) },
+          payload: mockMcqPayload,
+        });
+
+      expect(response.status).toBe(422);
+      expect(JSON.stringify(response.body)).toContain('131 chars');
+    });
+
+    it('should reject a Georgian prompt over the 150-char cap even when en fits', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+
+      const response = await request(app)
+        .post('/api/v1/questions')
+        .send({
+          category_id: mockQuestion.category_id,
+          type: 'mcq_single',
+          difficulty: 'medium',
+          prompt: { en: 'Short question?', ka: 'ა'.repeat(151) },
+          payload: mockMcqPayload,
+        });
+
+      expect(response.status).toBe(422);
+      expect(JSON.stringify(response.body)).toContain('151 chars');
+    });
+
+    it('should allow countdown_list prompts up to 180 chars', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (questionsRepo.createWithPayload as Mock).mockResolvedValue({
+        ...mockQuestion,
+        type: 'countdown_list',
+        payload: mockCountdownPayload,
+      });
+
+      const response = await request(app)
+        .post('/api/v1/questions')
+        .send({
+          category_id: mockQuestion.category_id,
+          type: 'countdown_list',
+          difficulty: 'medium',
+          prompt: { en: 'x'.repeat(180) },
+          payload: mockCountdownPayload,
+        });
+
+      expect(response.status).toBe(201);
     });
 
     it('should validate difficulty enum', async () => {

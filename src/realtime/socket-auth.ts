@@ -1,6 +1,11 @@
 import type { Socket } from 'socket.io';
 import { detectCountryFromHeaders } from '../core/geo.js';
 import { getAuthProvider } from '../modules/auth/index.js';
+import { GuestAuthProvider, getGuestAuthProvider } from '../modules/auth/guest-auth-provider.js';
+import { config } from '../core/config.js';
+import { allowGuestOperation } from '../modules/guest/guest-rate-limit.js';
+import { bucketIp } from '../core/ip-bucket.js';
+import { normalizeClientIp } from '../http/client-ip.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
@@ -27,6 +32,17 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
+}
+
+/**
+ * Address bucket for the handshake budget. Same trust policy as the HTTP
+ * limiter (http/client-ip.ts): only Railway's X-Real-IP outside local, never
+ * X-Forwarded-For (caller-controlled, would let one host rotate the key).
+ */
+export function socketIpBucket(socket: Pick<Socket, 'handshake'>): string {
+  if (config.NODE_ENV === 'local') return bucketIp(normalizeClientIp(socket.handshake.address));
+  const realIp = socket.handshake.headers?.['x-real-ip'];
+  return bucketIp(normalizeClientIp(Array.isArray(realIp) ? realIp[0] : realIp));
 }
 
 function extractToken(socket: Socket): string | null {
@@ -71,7 +87,23 @@ export async function socketAuthMiddleware(
       }
 
       span.setAttribute('quizball.auth_token_present', true);
-      const authProvider = getAuthProvider();
+      // Guest tokens (64 hex, minted for the public pages) authenticate friend-room
+      // play only. Drain order: provisioning off stops NEW guests and new rooms
+      // (existing guests may finish); reconnect off refuses every guest socket.
+      // The web resolves its principal over HTTP before the first handshake, so
+      // reconnect must stay on for provisioning to be usable at all.
+      const isGuestToken = GuestAuthProvider.handles(token);
+      if (isGuestToken && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+        span.setAttribute('quizball.guest_refused', 'disabled');
+        next(new Error('Authentication required'));
+        return;
+      }
+      if (isGuestToken && !(await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'socket_admission'))) {
+        span.setAttribute('quizball.guest_refused', 'rate_limited');
+        next(new Error('Too many connections'));
+        return;
+      }
+      const authProvider = isGuestToken ? getGuestAuthProvider() : getAuthProvider();
       const identity = await authProvider.verifyToken(token);
       const cached = await getCachedUser(identity.provider, identity.subject);
       // Only hit the (potentially 3s, external ip-api.com) geo lookup when we
@@ -83,10 +115,16 @@ export async function socketAuthMiddleware(
       const detectedCountry = cached?.country
         ? null
         : await detectCountryFromHeaders(socket.handshake.headers, socket.handshake.address);
-      const user = await usersService.getOrCreateFromIdentity(
-        identity,
-        detectedCountry,
-      );
+      let user: DbUser;
+      if (isGuestToken) {
+        const guest = await usersService.getOrCreateGuest(identity, detectedCountry, {
+          allowCreate: config.GUEST_LOBBIES_PROVISIONING_ENABLED,
+        });
+        user = guest.user;
+        span.setAttribute('quizball.is_guest', true);
+      } else {
+        user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
+      }
       if (detectedCountry) {
         await rememberCurrentCountry(user.id, detectedCountry);
       }

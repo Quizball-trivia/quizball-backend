@@ -11,6 +11,12 @@ export interface CreateIdentityData {
 }
 
 export const identitiesRepo = {
+  async deleteByProviderSubject(provider: string, subject: string): Promise<string | null> {
+    const [row] = await sql<{ user_id: string }[]>`
+      DELETE FROM user_identities WHERE provider = ${provider} AND subject = ${subject} RETURNING user_id
+    `;
+    return row?.user_id ?? null;
+  },
   async create(data: CreateIdentityData): Promise<UserIdentity> {
     const [identity] = await sql<UserIdentity[]>`
       INSERT INTO user_identities (id, user_id, provider, subject, email)

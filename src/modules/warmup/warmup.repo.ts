@@ -56,7 +56,9 @@ export const warmupRepo = {
 
   async saveScore(
     userIds: [string, string],
-    score: number
+    score: number,
+    /** Guests never get a row: personal bests only for `personalUserIds`, the pair row only when both are members. */
+    options: { personalUserIds?: string[]; persistPair?: boolean } = {}
   ): Promise<{
     playerBests: Record<string, number>;
     playerOldBests: Record<string, number | null>;
@@ -67,8 +69,8 @@ export const warmupRepo = {
       const playerBests: Record<string, number> = {};
       const playerOldBests: Record<string, number | null> = {};
 
-      // UPSERT both player bests
-      for (const userId of userIds) {
+      const personalUserIds = options.personalUserIds ?? userIds;
+      for (const userId of personalUserIds) {
         const [row] = await tx.unsafe<(WarmupPlayerBestRow & { old_best_score: number | null })[]>(
           `WITH old_record AS (
              SELECT best_score AS old_best_score
@@ -88,6 +90,9 @@ export const warmupRepo = {
         playerOldBests[userId] = row.old_best_score;
       }
 
+      if (options.persistPair === false) {
+        return { playerBests, playerOldBests, pairBest: score, pairOldBest: null };
+      }
       // UPSERT pair best with JS-sorted canonicalization
       // Use a CTE to capture the old best_score before the update
       const [a, b] = sortPair(userIds[0], userIds[1]);

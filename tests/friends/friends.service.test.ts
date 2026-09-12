@@ -226,3 +226,20 @@ describe('friendsService', () => {
     );
   });
 });
+
+describe('friendsService.createRequest — guests', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('refuses a guest sender with the typed capability error', async () => {
+    getByIdMock.mockImplementation(async (id: string) => (id === 'guest' ? { id, is_guest: true, is_ai: false } : { id, is_guest: false, is_ai: false }));
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+    await expect(friendsService.createRequest('guest', 'member')).rejects.toMatchObject({ code: 'CAPABILITY_REQUIRED' });
+    expect(createFriendRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('treats a guest target as not found (guests are not discoverable)', async () => {
+    getByIdMock.mockImplementation(async (id: string) => (id === 'guest' ? { id, is_guest: true, is_ai: false } : { id, is_guest: false, is_ai: false }));
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+    await expect(friendsService.createRequest('member', 'guest')).rejects.toThrow('Target user not found');
+  });
+});

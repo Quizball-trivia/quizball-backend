@@ -349,3 +349,18 @@ describe('acceptChallenge — ZERO ACCEPTS for an is_ai target (hard invariant)'
     expect(updateInvitationStatusMock).toHaveBeenCalledWith('invite-3', 'accepted');
   });
 });
+
+describe('guest challenge guard', () => {
+  it('a guest cannot challenge, and a guest cannot be challenged', async () => {
+    const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
+    const guest = makeSocket('guest-1');
+    (guest.socket as unknown as { data: { user: { is_guest?: boolean } } }).data.user.is_guest = true;
+    await challengeFriend({} as never, guest.socket, { toUserId: 'human-1' });
+    expect(guest.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'CAPABILITY_REQUIRED' }));
+
+    getByIdMock.mockResolvedValue({ id: 'guest-2', is_ai: false, is_guest: true });
+    const member = makeSocket('human-1');
+    await challengeFriend({} as never, member.socket, { toUserId: 'guest-2' });
+    expect(member.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_CHALLENGE_INVALID' }));
+  });
+});

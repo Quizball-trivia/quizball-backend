@@ -2,6 +2,7 @@ import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { isRankedSettleEligible } from '../users/ai-classification.js';
+import { isProgressionEligible } from '../users/capabilities.js';
 import { trackLevelUp } from '../../core/analytics/game-events.js';
 import { getProgressionFromTotalXp, getMatchXpReward } from './progression.logic.js';
 import { progressionRepo } from './progression.repo.js';
@@ -50,18 +51,21 @@ export const progressionService = {
 
     const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
     // XP/progression is in scope for persistent bots (they level like humans);
-    // ephemeral/auction AI stay excluded. Single source of truth for eligibility.
-    const xpEligiblePlayers = players.filter((player) => {
+    // ephemeral/auction AI stay excluded. Match SEMANTICS (head-to-head) come from
+    // the settle-eligible participants — guests included, so a member who beats a
+    // guest still played a real head-to-head — while the RECIPIENTS also exclude guests.
+    const settleEligiblePlayers = players.filter((player) => {
       const user = usersById.get(player.user_id);
       return user != null && isRankedSettleEligible(user);
     });
+    const xpEligiblePlayers = settleEligiblePlayers.filter((player) => isProgressionEligible(usersById.get(player.user_id)!));
     if (xpEligiblePlayers.length === 0) {
       return;
     }
 
     const winnerDecisionMethod = getWinnerDecisionMethod(match.state_payload);
     const isForfeitDecision = winnerDecisionMethod === 'forfeit';
-    const isHeadToHead = xpEligiblePlayers.length === 2;
+    const isHeadToHead = settleEligiblePlayers.length === 2;
 
     await progressionRepo.runInTransaction(async (tx) => {
       for (const player of xpEligiblePlayers) {

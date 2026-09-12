@@ -1,5 +1,7 @@
 import type { QuizballServer } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { validateGuestLobby } from './lobby-guest-rules.js';
+import { normalizeFriendlyGameMode } from '../lobby-utils.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { MIN_QUESTIONS_PER_CATEGORY } from '../../modules/lobbies/lobbies.constants.js';
 import { getRedisClient } from '../redis.js';
@@ -89,7 +91,7 @@ export async function abortRankedDraftStartForTickets(
  * callbacks) can distinguish a silent no-op from a started draft. All previous
  * callers ignored the void return, so widening the type is non-breaking.
  */
-export type DraftStartResult = 'started' | 'lobby_missing' | 'lock_busy' | 'already_active' | 'insufficient_categories';
+export type DraftStartResult = 'started' | 'lobby_missing' | 'lock_busy' | 'already_active' | 'insufficient_categories' | 'guest_rules';
 
 export async function startDraft(
   io: QuizballServer,
@@ -152,6 +154,14 @@ export async function startDraft(
           span.setAttribute('quizball.lobby_status', lockedLobby.status);
           logger.info({ lobbyId, status: lockedLobby.status }, 'Draft start skipped: lobby already advanced');
           return 'already_active';
+        }
+        // Ready/host-start validated before THIS lock; a join or settings change
+        // may have landed in between. Guests never reach a member-only mode.
+        const lockedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+        const guestViolation = validateGuestLobby(lockedMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
+        if (guestViolation) {
+          logger.warn({ lobbyId, code: guestViolation.code }, 'Draft start refused: guest rules violated at activation');
+          return 'guest_rules';
         }
       }
 

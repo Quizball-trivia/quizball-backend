@@ -545,7 +545,7 @@ function emitAuctionMatchFinishedReplay(socket: QuizballSocket, state: AuctionMa
   for (const ranking of rankings) {
     if (ranking.isBot || !ranking.userId) continue;
     const rankedSeat = state.seats.find((s) => s.seatId === ranking.seatId);
-    const earned = rankedSeat && !rankedSeat.forfeited;
+    const earned = rankedSeat && !rankedSeat.forfeited && !rankedSeat.isGuest;
     coinsByUserId[ranking.userId] = earned ? auctionCoinsForPlacement(ranking.rank) : 0;
     if (apByUserId) apByUserId[ranking.userId] = earned ? auctionPointsForPlacement(ranking.rank) : 0;
   }

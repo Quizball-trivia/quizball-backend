@@ -392,6 +392,7 @@ export const objectivesRepo = {
       penalty_goals_against: number;
       is_dev: boolean;
       is_ai: boolean;
+      is_guest: boolean;
       second_half_goals: number;
       played_with_friend: boolean;
       category_correct: Json;
@@ -408,6 +409,7 @@ export const objectivesRepo = {
         SELECT
           mp.*,
           u.is_ai,
+          u.is_guest,
           (
             SELECT mp_opp.user_id
             FROM match_players mp_opp
@@ -443,6 +445,7 @@ export const objectivesRepo = {
         ), 0) AS penalty_goals_against,
         mb.is_dev,
         pr.is_ai,
+        pr.is_guest,
         COALESCE((
           SELECT COUNT(*)::int
           FROM match_goal_events mge
@@ -506,6 +509,7 @@ export const objectivesRepo = {
         penaltyGoalsAgainst: row.penalty_goals_against,
         isDev: row.is_dev,
         isAi: row.is_ai,
+        isGuest: row.is_guest,
         secondHalfGoals: row.second_half_goals,
         correctByCategory,
         playedWithFriend: row.played_with_friend,
@@ -533,7 +537,7 @@ export const objectivesRepo = {
           WHERE m.status = 'completed'
             AND m.mode = 'ranked'
             AND m.is_dev = false
-            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
             AND COALESCE(m.ended_at, m.started_at) >= ${periodStart}
             AND COALESCE(m.ended_at, m.started_at) < ${periodEnd}
         ) sub
@@ -566,7 +570,7 @@ export const objectivesRepo = {
           WHERE m.status = 'completed'
             AND m.mode = 'ranked'
             AND m.is_dev = false
-            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
             AND COALESCE(m.ended_at, m.started_at) >= $2
             AND COALESCE(m.ended_at, m.started_at) < $3
         ) sub

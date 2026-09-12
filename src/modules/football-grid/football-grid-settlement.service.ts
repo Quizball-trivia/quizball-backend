@@ -39,6 +39,7 @@ interface SettlementRow {
 interface ParticipantFacts {
   user_id: string;
   is_bot: boolean;
+  is_guest: boolean;
   claim_count: number;
   answer_turn_count: number;
 }
@@ -70,13 +71,14 @@ function isForfeitReason(reason: string | null): boolean {
 
 async function readParticipants(tx: TransactionSql, matchId: string): Promise<ParticipantFacts[]> {
   return tx.unsafe<ParticipantFacts[]>(
-    `SELECT p.user_id, p.is_bot,
+    `SELECT p.user_id, p.is_bot, COALESCE(u.is_guest, false) AS is_guest,
             (SELECT count(*)::int FROM football_grid_claims c
               WHERE c.match_id = p.match_id AND c.claimant_user_id = p.user_id) AS claim_count,
             (SELECT count(DISTINCT a.turn_number)::int FROM football_grid_attempts a
               WHERE a.match_id = p.match_id AND a.actor_user_id = p.user_id
                 AND a.cell_index IS NOT NULL) AS answer_turn_count
        FROM football_grid_participants p
+       LEFT JOIN users u ON u.id = p.user_id
       WHERE p.match_id = $1
       ORDER BY p.user_id`,
     [matchId],
@@ -270,8 +272,24 @@ async function settleInTx(tx: TransactionSql, matchId: string): Promise<Map<stri
     [row.outbox_id],
   );
   const participants = await readParticipants(tx, matchId);
-  const humans = participants.filter((participant) => !participant.is_bot);
+  // Guests stay in `participants` (opponent lookup, scoring) but never receive rewards.
+  const humans = participants.filter((participant) => !participant.is_bot && !participant.is_guest);
   const results = new Map<string, FootballGridRewardResult>();
+  // Durable: readSettledRewardsInTx rebuilds rewards from eligibility rows, and
+  // result delivery is deferred while any human lacks one — a guest without a
+  // row would stall the member's results on every replay.
+  for (const guest of participants.filter((participant) => participant.is_guest)) {
+    const opponent = participants.find((candidate) => candidate.user_id !== guest.user_id);
+    await tx.unsafe(
+      `INSERT INTO football_grid_reward_eligibility (
+         match_id, user_id, evaluator_version, opponent_type, origin,
+         participation, decision, reason, points_decision, points_reason
+       ) VALUES ($1,$2,1,$3,$4,'{}'::jsonb,'ineligible','guest','ineligible','guest')
+       ON CONFLICT (match_id, user_id, evaluator_version) DO NOTHING`,
+      [matchId, guest.user_id, opponent?.is_bot ? 'bot' : 'human', row.origin],
+    );
+    results.set(guest.user_id, { xp: 0, coins: 0, tp: 0, eligibilityReason: 'guest', coinEligibilityReason: 'guest', tpEligibilityReason: 'guest' });
+  }
   // Best-of-N: rewards are paid once, on the game that decides the series,
   // for the series result. Earlier games settle as 'series_in_progress'.
   if (series?.pending) {

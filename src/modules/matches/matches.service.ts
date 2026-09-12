@@ -1015,7 +1015,10 @@ export const matchesService = {
       // instead of inflating the player's draw count.
       const isRealDraw = winnerId === null && players.length >= 2;
 
-      const statRows = players.map((player) => {
+      // Guests keep the match row (results, opponent history) but no per-mode stats.
+      // Through `tx`: a pooled lookup while holding this transaction's slot can deadlock the pool.
+      const usersById = await usersRepo.getByIds(players.map((player) => player.user_id), tx);
+      const statRows = players.filter((player) => !usersById.get(player.user_id)?.is_guest).map((player) => {
         const isWinner = winnerId !== null && winnerId === player.user_id;
         return {
           userId: player.user_id,

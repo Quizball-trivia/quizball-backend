@@ -1,3 +1,4 @@
+import { assertCapability } from './capabilities.js';
 import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { usersRepo } from './users.repo.js';
@@ -52,6 +53,7 @@ export const usersController = {
    * Update current user profile.
    */
   async updateMe(req: Request, res: Response): Promise<void> {
+    assertCapability(req.user!, 'profileEdit');
     const userId = req.user!.id;
     const data = req.validated.body as UpdateProfileRequest;
 

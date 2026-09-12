@@ -1,3 +1,4 @@
+import { assertCapability } from '../../modules/users/capabilities.js';
 import { randomUUID } from 'crypto';
 import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
 import { ErrorCode } from '../../core/errors.js';
@@ -100,6 +101,7 @@ export const auctionMatchmakingService = {
     input: AuctionSearchStartServiceInput
   ): Promise<void> {
     const user = socket.data.user;
+    if (user) assertCapability(user, 'queueEntry');
     if (!user?.id) {
       emitAuctionError(socket, {
         code: ErrorCode.AUTHENTICATION_ERROR,

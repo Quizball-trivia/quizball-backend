@@ -20,6 +20,8 @@ export const ErrorCode = {
   DAILY_CHALLENGE_CONTENT_UNAVAILABLE: 'DAILY_CHALLENGE_CONTENT_UNAVAILABLE',
   AUCTION_CONTENT_UNAVAILABLE: 'auction_content_unavailable',
   AUCTION_STARTING_PRICE_UNAVAILABLE: 'auction_starting_price_unavailable',
+  /** The caller's account kind (a guest) cannot do this; the client opens the sign-up dialog. */
+  CAPABILITY_REQUIRED: 'CAPABILITY_REQUIRED',
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -47,6 +49,12 @@ export class AppError extends Error {
 
     // Maintains proper stack trace for where error was thrown
     Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+export class CapabilityRequiredError extends AppError {
+  constructor(capability: string, message = 'An account is required for this action') {
+    super(message, 403, ErrorCode.CAPABILITY_REQUIRED, { capability });
   }
 }
 

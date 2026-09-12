@@ -57,6 +57,8 @@ export interface LobbyMember {
   avatarCustomization?: AvatarCustomization | null;
   isReady: boolean;
   isHost: boolean;
+  /** Account-less guest (friend rooms only); absent for members. */
+  isGuest?: boolean;
 }
 
 export interface MatchParticipant {

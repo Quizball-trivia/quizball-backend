@@ -25,6 +25,13 @@ export interface NicknameQuota {
 
 export type AiKind = 'ephemeral' | 'persistent' | 'auction';
 
+/** Postgres unique_violation on either nickname index (claimable / real). */
+function isNicknameUniqueViolation(error: unknown): boolean {
+  const e = error as { code?: string; constraint_name?: string; constraint?: string } | null;
+  const constraint = e?.constraint_name ?? e?.constraint ?? '';
+  return e?.code === '23505' && /nickname/.test(constraint);
+}
+
 export interface CreateUserData {
   email?: string | null;
   phoneNumber?: string | null;
@@ -213,6 +220,67 @@ export const usersRepo = {
       RETURNING *
     `;
     return user;
+  },
+
+  /**
+   * Guest (account-less friend-room player): ONE insert with is_guest=true and
+   * ZERO coins/tickets — the column defaults would hand out the 500-coin / 5-ticket
+   * starter pack. Same provider/subject advisory lock + identity recheck as
+   * createWithIdentity, so two replicas provisioning the same token agree.
+   * Nickname candidates are tried in order behind a SAVEPOINT: a unique
+   * violation on the claimable-nickname index moves to the next candidate
+   * (guests share the member namespace).
+   */
+  async createGuestWithIdentity(
+    userData: { nicknameCandidates: string[]; country?: string | null; avatarCustomization?: AvatarCustomization | null },
+    identityData: CreateIdentityData
+  ): Promise<{ user: User; created: boolean }> {
+    return sql.begin(async (tx) => {
+      await tx.unsafe(
+        `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+        [`user_identity:${identityData.provider}`, identityData.subject]
+      );
+      const existing = await tx.unsafe<{ user_data: User }[]>(
+        `SELECT row_to_json(u.*) as user_data
+         FROM user_identities ui
+         JOIN users u ON u.id = ui.user_id
+         WHERE ui.provider = $1 AND ui.subject = $2
+         LIMIT 1`,
+        [identityData.provider, identityData.subject]
+      );
+      if (existing[0]?.user_data) {
+        return { user: existing[0].user_data, created: false };
+      }
+      const avatarCustomizationJson = (userData.avatarCustomization ?? null) as Json;
+      let user: User | null = null;
+      for (const nickname of userData.nicknameCandidates) {
+        // tx.savepoint: postgres.js rolls back to the savepoint itself on failure;
+        // a manual ROLLBACK TO SAVEPOINT would still poison the outer begin().
+        try {
+          user = await tx.savepoint(async (sp) => {
+            const rows = await sp.unsafe<User[]>(
+              `INSERT INTO users (id, email, nickname, country, avatar_customization, onboarding_complete, is_ai, is_guest, coins, tickets)
+               VALUES (gen_random_uuid(), NULL, $1, $2, $3::jsonb, true, false, true, 0, 0)
+               RETURNING *`,
+              [nickname, userData.country ?? null, avatarCustomizationJson]
+            );
+            return rows[0];
+          });
+          break;
+        } catch (error) {
+          if (!isNicknameUniqueViolation(error)) throw error;
+        }
+      }
+      if (!user) {
+        throw new Error('Could not allocate a guest nickname');
+      }
+      await tx.unsafe(
+        `INSERT INTO user_identities (id, user_id, provider, subject, email)
+         VALUES (gen_random_uuid(), $1, $2, $3, NULL)`,
+        [user.id, identityData.provider, identityData.subject]
+      );
+      return { user, created: true };
+    });
   },
 
   /**

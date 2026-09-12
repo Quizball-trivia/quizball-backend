@@ -1,6 +1,8 @@
 import type { Socket } from 'socket.io';
 import { detectCountryFromHeaders } from '../core/geo.js';
 import { getAuthProvider } from '../modules/auth/index.js';
+import { GuestAuthProvider, getGuestAuthProvider } from '../modules/auth/guest-auth-provider.js';
+import { config } from '../core/config.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
@@ -71,7 +73,16 @@ export async function socketAuthMiddleware(
       }
 
       span.setAttribute('quizball.auth_token_present', true);
-      const authProvider = getAuthProvider();
+      // Guest tokens (64 hex, minted for the public pages) authenticate friend-room
+      // play only. Two flags so a rollback can drain: provisioning admits NEW
+      // guests, reconnect admits guests who already have a users row.
+      const isGuestToken = GuestAuthProvider.handles(token);
+      if (isGuestToken && !config.GUEST_LOBBIES_PROVISIONING_ENABLED && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+        span.setAttribute('quizball.guest_refused', 'disabled');
+        next(new Error('Authentication required'));
+        return;
+      }
+      const authProvider = isGuestToken ? getGuestAuthProvider() : getAuthProvider();
       const identity = await authProvider.verifyToken(token);
       const cached = await getCachedUser(identity.provider, identity.subject);
       // Only hit the (potentially 3s, external ip-api.com) geo lookup when we
@@ -83,10 +94,21 @@ export async function socketAuthMiddleware(
       const detectedCountry = cached?.country
         ? null
         : await detectCountryFromHeaders(socket.handshake.headers, socket.handshake.address);
-      const user = await usersService.getOrCreateFromIdentity(
-        identity,
-        detectedCountry,
-      );
+      let user: DbUser;
+      if (isGuestToken) {
+        const guest = await usersService.getOrCreateGuest(identity, detectedCountry, {
+          allowCreate: config.GUEST_LOBBIES_PROVISIONING_ENABLED,
+        });
+        if (!guest.created && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+          span.setAttribute('quizball.guest_refused', 'reconnect_disabled');
+          next(new Error('Authentication required'));
+          return;
+        }
+        user = guest.user;
+        span.setAttribute('quizball.is_guest', true);
+      } else {
+        user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
+      }
       if (detectedCountry) {
         await rememberCurrentCountry(user.id, detectedCountry);
       }

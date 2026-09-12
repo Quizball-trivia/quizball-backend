@@ -43,6 +43,7 @@ import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-mo
 import { trackAccountCreated } from '../../core/analytics.js';
 import type { CampaignAttribution } from '../../core/campaign-attribution.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
+import { guestKitFor, guestNameCandidates } from '../guest/guest-identity.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
@@ -317,6 +318,52 @@ async function notifyProgressionChange(
  * NO Express types (req/res). NO direct Prisma calls.
  */
 export const usersService = {
+  /**
+   * Guest provisioning (friend lobbies). Unlike getOrCreateFromIdentity it never
+   * emits account_created, never backfills profile fields, and inserts the row
+   * with zero balances. `created` tells socket auth whether admission was a
+   * first-time provision (gated by GUEST_LOBBIES_PROVISIONING_ENABLED) or a
+   * returning guest (gated by GUEST_LOBBIES_RECONNECT_ENABLED).
+   */
+  async getOrCreateGuest(
+    identity: AuthIdentity,
+    detectedCountry?: string | null,
+    opts?: { allowCreate?: boolean },
+  ): Promise<{ user: User; created: boolean }> {
+    const cached = await getCachedUser(identity.provider, identity.subject);
+    if (cached) return { user: cached, created: false };
+    const existingIdentity = await identitiesRepo.getByProviderSubject(identity.provider, identity.subject);
+    const existing = existingIdentity?.user ?? null;
+    if (existing) {
+      try {
+        await setCachedUser(identity.provider, identity.subject, existing);
+      } catch (err) {
+        logger.warn({ err, userId: existing.id }, 'Cache population failed (non-fatal)');
+      }
+      return { user: existing, created: false };
+    }
+    if (opts?.allowCreate === false) {
+      throw new AuthenticationError('Guest provisioning is disabled');
+    }
+    const creation = await usersRepo.createGuestWithIdentity(
+      {
+        nicknameCandidates: guestNameCandidates(identity.subject),
+        country: normalizeSupportedCountryCode(detectedCountry) ?? undefined,
+        avatarCustomization: guestKitFor(identity.subject),
+      },
+      { provider: identity.provider, subject: identity.subject },
+    );
+    if (creation.created) {
+      logger.info({ userId: creation.user.id, provider: identity.provider }, 'Created guest user');
+    }
+    try {
+      await setCachedUser(identity.provider, identity.subject, creation.user);
+    } catch (err) {
+      logger.warn({ err, userId: creation.user.id }, 'Cache population failed (non-fatal)');
+    }
+    return creation;
+  },
+
   /**
    * Get or create user from auth identity.
    * This is the main entry point after JWT verification.

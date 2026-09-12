@@ -268,6 +268,16 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
+  // Guest friend lobbies (two flags so a rollback can DRAIN: stop new guests
+  // first, let live guest matches reconnect and finish, then close the door).
+  GUEST_LOBBIES_PROVISIONING_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  GUEST_LOBBIES_RECONNECT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
   /**

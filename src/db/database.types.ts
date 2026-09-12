@@ -3032,6 +3032,7 @@ export type Database = {
           is_banned: boolean
           is_deleted: boolean
           is_seed: boolean
+          is_guest: boolean
           nickname: string | null
           onboarding_complete: boolean
           pending_deletion_at: string | null
@@ -3065,6 +3066,7 @@ export type Database = {
           is_banned?: boolean
           is_deleted?: boolean
           is_seed?: boolean
+          is_guest?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null
@@ -3098,6 +3100,7 @@ export type Database = {
           is_banned?: boolean
           is_deleted?: boolean
           is_seed?: boolean
+          is_guest?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null

@@ -1,6 +1,10 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { guestService } from './guest.service.js';
+import { usersService } from '../users/users.service.js';
+import { config } from '../../core/config.js';
+import { AuthenticationError } from '../../core/errors.js';
+import { GUEST_IDENTITY_PROVIDER } from './guest-identity.js';
 import { dailyChallengesService } from '../daily-challenges/daily-challenges.service.js';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { NotFoundError } from '../../core/errors.js';
@@ -24,6 +28,30 @@ export const guestController = {
     res.status(201).json({ token: session.token, guest_id: session.guestId });
   },
 
+  /**
+   * Friend lobbies: resolves (or, when provisioning is on, creates) the users row
+   * behind this guest token BEFORE the socket connects, so the client knows its
+   * user id, name and kit up front. Zero balances, no account_created event.
+   */
+  async principal(req: Request, res: Response): Promise<void> {
+    if (!config.GUEST_LOBBIES_PROVISIONING_ENABLED && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+      throw new AuthenticationError('Guest play is not available');
+    }
+    const { user, created } = await usersService.getOrCreateGuest(
+      { provider: GUEST_IDENTITY_PROVIDER, subject: req.guest!.id, claims: {} },
+      null,
+      { allowCreate: config.GUEST_LOBBIES_PROVISIONING_ENABLED },
+    );
+    if (!created && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+      throw new AuthenticationError('Guest play is not available');
+    }
+    res.status(created ? 201 : 200).json({
+      user_id: user.id,
+      nickname: user.nickname,
+      avatar_customization: user.avatar_customization,
+      is_guest: true,
+    });
+  },
   /** Today's real daily set for a guest: same selection rules, no served-history, no completion gate. */
   async createDailySession(req: Request, res: Response): Promise<void> {
     const { challengeType } = req.validated.params as DailyChallengeParam;

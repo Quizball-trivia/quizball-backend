@@ -52,6 +52,8 @@ const router = Router();
 router.post('/session', mintLimiter, validate({ body: createGuestSessionSchema }), guestController.createSession);
 router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await publicStandingsService.get()); });
 
+// Friend lobbies: the principal behind a token (rate-limited like every guest call).
+router.post('/principal', guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter, guestController.principal);
 const daily = Router();
 daily.use(guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter);
 daily.get('/stat-sniper/leaderboard', guestController.statSniperLeaderboard);

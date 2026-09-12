@@ -109,6 +109,7 @@ export interface LobbyMemberWithUser {
   favorite_club: string | null;
   is_ai: boolean;
   ai_kind: string | null;
+  is_guest: boolean;
 }
 
 export interface LobbyCategoryWithDetails {

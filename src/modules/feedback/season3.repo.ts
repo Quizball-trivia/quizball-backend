@@ -42,7 +42,8 @@ export const season3Repo = {
     });
   },
   async claimEmail() {
-    await sql`UPDATE season3_survey_responses SET email_status='review' WHERE email_status IN ('pending','sending') AND first_attempt_at < now()-interval '23 hours'`;
+    await sql`UPDATE season3_survey_responses SET email_status='review' WHERE email_status IN ('pending','sending') AND first_attempt_at < now()-interval '23 hours'
+      AND (email_status='pending' OR attempted_at IS NULL OR attempted_at < now()-interval '5 minutes')`;
     const [row] = await sql`UPDATE season3_survey_responses SET email_status='sending',claim_token=gen_random_uuid(),attempted_at=now(),first_attempt_at=coalesce(first_attempt_at,now())
       WHERE id=(SELECT id FROM season3_survey_responses WHERE email_status IN ('pending','sending')
       AND (attempted_at IS NULL OR attempted_at < now()-interval '5 minutes')

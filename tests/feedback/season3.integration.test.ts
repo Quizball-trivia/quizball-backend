@@ -52,6 +52,15 @@ describe.skipIf(!process.env.SEASON3_TEST_DATABASE_URL)('Season 3 isolated datab
     await sql`INSERT INTO season3_survey_responses(user_id,match_id,kind,locale,idea,email_status) VALUES(${u},${m},'idea','en','Team mode','pending')`;
     const rows=await Promise.all([season3Repo.claimEmail(),season3Repo.claimEmail()]);expect(rows.filter(Boolean)).toHaveLength(1);
   });
+  it('preserves an active sending lease across the 23-hour boundary',async()=>{
+    await sql`INSERT INTO season3_survey_responses(user_id,match_id,kind,locale,idea,email_status) VALUES(${u},${m},'idea','en','Team mode','pending')`;
+    const active=(await season3Repo.claimEmail())!;
+    await sql`UPDATE season3_survey_responses SET first_attempt_at=now()-interval '23 hours 1 second'`;
+    expect(await season3Repo.claimEmail()).toBeUndefined();
+    expect((await sql`SELECT email_status FROM season3_survey_responses`)[0]!.email_status).toBe('sending');
+    await season3Repo.finishEmail(active.id,active.claim_token,true);
+    expect((await sql`SELECT email_status FROM season3_survey_responses`)[0]!.email_status).toBe('sent');
+  });
   it('ignores stale worker completion after a lease is reclaimed',async()=>{
     await sql`INSERT INTO season3_survey_responses(user_id,match_id,kind,locale,idea,email_status) VALUES(${u},${m},'idea','en','Team mode','pending')`;
     const a=(await season3Repo.claimEmail())!;

@@ -8,7 +8,9 @@ import { feedbackController, submitFeedbackBodySchema } from '../../modules/feed
 // Public (no auth) so logged-out visitors can report bugs / contact us.
 // Spam is bounded by the dedicated feedback rate-limiter in app.ts.
 const router = Router();
-router.use('/season3',authMiddleware,rateLimit({windowMs:600000,max:30,keyGenerator:req=>req.user!.id,standardHeaders:true,legacyHeaders:false}));
+router.use('/season3',authMiddleware,rateLimit({windowMs:600000,max:30,keyGenerator:req=>req.user!.id,standardHeaders:true,legacyHeaders:false,
+  message:{code:'RATE_LIMIT_EXCEEDED',message:'Too many requests, please try again later',details:null,request_id:null},
+}));
 
 router.post('/season3/claim',authMiddleware,validate({body:season3MatchSchema}),async(req,res)=>{
   res.json(await season3Service.claim(req.user!.id,season3MatchSchema.parse(req.validated.body).matchId));

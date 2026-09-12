@@ -3,6 +3,8 @@ import { detectCountryFromHeaders } from '../core/geo.js';
 import { getAuthProvider } from '../modules/auth/index.js';
 import { GuestAuthProvider, getGuestAuthProvider } from '../modules/auth/guest-auth-provider.js';
 import { config } from '../core/config.js';
+import { allowGuestOperation } from '../modules/guest/guest-rate-limit.js';
+import { bucketIp } from '../core/ip-bucket.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
@@ -29,6 +31,13 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
+}
+
+/** Proxy-aware address bucket for the handshake (first x-forwarded-for hop, else the transport address). */
+function socketIpBucket(socket: Socket): string {
+  const forwarded = socket.handshake.headers?.['x-forwarded-for'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
+  return bucketIp(first || socket.handshake.address);
 }
 
 function extractToken(socket: Socket): string | null {
@@ -80,6 +89,11 @@ export async function socketAuthMiddleware(
       if (isGuestToken && !config.GUEST_LOBBIES_PROVISIONING_ENABLED && !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
         span.setAttribute('quizball.guest_refused', 'disabled');
         next(new Error('Authentication required'));
+        return;
+      }
+      if (isGuestToken && !(await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'socket_admission'))) {
+        span.setAttribute('quizball.guest_refused', 'rate_limited');
+        next(new Error('Too many connections'));
         return;
       }
       const authProvider = isGuestToken ? getGuestAuthProvider() : getAuthProvider();

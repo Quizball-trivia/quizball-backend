@@ -663,6 +663,21 @@ export const usersRepo = {
    * Delete an AI-only user. Refuses to delete non-AI rows as a safety guard.
    * Used during dev quick-match cleanup when the match was never created.
    */
+  /**
+   * Guest tombstone: the row stays (grid claims / series winners / lobby hosts
+   * reference it with RESTRICT), its identifying fields go. nickname → NULL so
+   * the claimable-nickname unique index never collides on a shared placeholder.
+   */
+  async tombstoneGuest(id: string): Promise<boolean> {
+    const result = await sql`
+      UPDATE users
+      SET nickname = NULL, email = NULL, phone_number = NULL, avatar_url = NULL, avatar_customization = NULL,
+          country = NULL, favorite_club = NULL, updated_at = now()
+      WHERE id = ${id} AND is_guest = true
+    `;
+    return result.count > 0;
+  },
+
   async deleteAiUser(id: string): Promise<boolean> {
     const result = await sql`
       DELETE FROM users

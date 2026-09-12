@@ -36,6 +36,18 @@ export const guestRepo = {
     const rows = await sql`DELETE FROM guest_sessions WHERE last_seen_at < now() - make_interval(days => ${days}) RETURNING id`;
     return rows.length;
   },
+  /** Idle sessions the sweeper must tombstone BEFORE deleting (the identity subject is only text). */
+  async listIdleIds(days: number, limit = 500): Promise<string[]> {
+    const rows = await sql<{ id: string }[]>`
+      SELECT id FROM guest_sessions WHERE last_seen_at < now() - make_interval(days => ${days}) ORDER BY last_seen_at ASC LIMIT ${limit}
+    `;
+    return rows.map((row) => row.id);
+  },
+  async deleteByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const rows = await sql`DELETE FROM guest_sessions WHERE id = ANY(${sql.array(ids)}::uuid[]) RETURNING id`;
+    return rows.length;
+  },
 
   async upsertDailyCompletion(data: { guestId: string; challengeType: string; challengeDay: string; score: number }): Promise<{ best_score: number; attempts: number }> {
     const [row] = await sql<Array<{ best_score: number; attempts: number }>>`

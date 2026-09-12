@@ -1108,6 +1108,9 @@ export type LobbyCreateResult =
       ok: false;
       code:
         | 'CAPABILITY_REQUIRED'
+        | 'LOBBY_GUEST_LIMIT'
+        | 'LOBBY_MODE_REQUIRES_ACCOUNT'
+        | 'RATE_LIMITED'
         | 'ALREADY_IN_LOBBY'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_LOBBY_CREATE'
@@ -1132,6 +1135,9 @@ export type LobbyJoinByCodeResult =
       ok: false;
       code:
         | 'CAPABILITY_REQUIRED'
+        | 'LOBBY_GUEST_LIMIT'
+        | 'LOBBY_MODE_REQUIRES_ACCOUNT'
+        | 'RATE_LIMITED'
         | 'ALREADY_IN_LOBBY'
         | 'LOBBY_NOT_FOUND'
         | 'LOBBY_FULL'
@@ -1364,7 +1370,7 @@ export interface SystemStatusPayload {
 }
 
 export interface ForceLogoutPayload {
-  reason: 'account_deleted' | 'admin_revoked' | 'banned';
+  reason: 'account_deleted' | 'admin_revoked' | 'banned' | 'guest_expired';
 }
 
 export interface NotificationPayload {

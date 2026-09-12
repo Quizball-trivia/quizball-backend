@@ -14,8 +14,9 @@ import {
   type ScenarioKind,
 } from './lobby-lifecycle-fleet.js';
 import {
-  ageLobby,
+  ageLobbiesForUsers,
   checkLobbyInvariants,
+  closeSharedClients,
   resetLobbyFixtures,
   type LobbyInvariantReport,
 } from './lobby-lifecycle-invariants.js';
@@ -47,6 +48,8 @@ interface Args {
   report?: string;
   manageBackend: boolean;
   backendCmd: string;
+  /** Shell command that restarts a REMOTE backend (e.g. `railway redeploy ...`); enables restart chaos on staging. */
+  restartCmd?: string;
   restartAtSec: number[];
   restartSignal: NodeJS.Signals;
   /** abandon_then_restart storyline may restart the backend (local only). */
@@ -102,13 +105,15 @@ function parseArgs(argv: string[]): Args {
     ? restartRaw.split(',').map((part) => Number(part.trim())).filter((n) => Number.isFinite(n) && n > 0)
     : [];
   const manageBackend = argv.includes('--manage-backend');
+  const restartCmd = value(argv, 'restart-cmd');
   const scenarioRestarts = integer(argv, 'scenario-restarts', 0, 0);
-  if ((restartAtSec.length > 0 || scenarioRestarts > 0) && !manageBackend) {
-    throw new Error('--restart-at-s / --scenario-restarts require --manage-backend (the harness must own the process it kills).');
+  if ((restartAtSec.length > 0 || scenarioRestarts > 0) && !manageBackend && !restartCmd) {
+    throw new Error('--restart-at-s / --scenario-restarts require --manage-backend (local) or --restart-cmd (remote).');
   }
   if (manageBackend && target !== 'local') {
     throw new Error('--manage-backend is local-only.');
   }
+  if (manageBackend && restartCmd) throw new Error('Use either --manage-backend or --restart-cmd, not both.');
   const restartSignal = (value(argv, 'restart-signal') ?? 'SIGKILL') as NodeJS.Signals;
   if (restartSignal !== 'SIGKILL' && restartSignal !== 'SIGTERM') {
     throw new Error('--restart-signal must be SIGKILL (crash) or SIGTERM (deploy).');
@@ -131,6 +136,7 @@ function parseArgs(argv: string[]): Args {
     report: value(argv, 'report'),
     manageBackend,
     backendCmd: value(argv, 'backend-cmd') ?? 'node_modules/.bin/tsx src/bootstrap.ts',
+    restartCmd,
     restartAtSec,
     restartSignal,
     scenarioRestarts,
@@ -271,6 +277,7 @@ async function provisionWithTokenCache(args: Args, target: TargetConfig): Promis
   if (!useCache && !partialResume) cache = {};
   if (partialResume) console.log(`token cache: resuming, ${freshCached.length}/${wantedEmails.length} cached`);
   const users: ChaosUser[] = [];
+  const skipped: string[] = [];
   let fresh = 0;
   let nextLoginAt = Date.now();
   for (const email of emails) {
@@ -302,11 +309,24 @@ async function provisionWithTokenCache(args: Args, target: TargetConfig): Promis
         await sleep(backoffMs);
       }
     }
-    if (lastError) throw lastError;
+    if (lastError) {
+      // A login that stays unreachable after the retry budget is a client-side
+      // network problem, not a reason to lose the whole run: drop that identity.
+      const status = lastError instanceof ChaosLoginError ? lastError.status : -1;
+      if (status === 0) {
+        skipped.push(email);
+        console.log(`login ${email} unreachable after retries; skipping this identity`);
+      } else {
+        throw lastError;
+      }
+    }
     if (fresh % 25 === 0) writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
   }
   writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
-  console.log(`tokens: ${users.length - fresh} cached, ${fresh} fresh logins`);
+  console.log(`tokens: ${users.length - fresh} cached, ${fresh} fresh logins, ${skipped.length} skipped`);
+  if (users.length < Math.ceil(wantedEmails.length * 0.95)) {
+    throw new Error(`only ${users.length}/${wantedEmails.length} identities usable (${skipped.length} unreachable) — below the 95% floor`);
+  }
   return users;
 }
 
@@ -427,6 +447,53 @@ async function startManagedBackend(args: Args, target: TargetConfig): Promise<Ma
   };
 }
 
+/**
+ * Restart chaos for a backend the harness does not own: run a command
+ * (a Railway redeploy on staging = the rolling restart a real deploy does),
+ * then wait for /health to answer again. Ordering, bookkeeping and settle()
+ * match the managed backend so the fleet treats both the same way.
+ */
+async function startRemoteRestarter(args: Args, target: TargetConfig): Promise<ManagedBackend> {
+  const restarts: ManagedBackend['restarts'] = [];
+  const failures: ManagedBackend['failures'] = [];
+  let attempts = 0;
+  let restartChain: Promise<void> = Promise.resolve();
+  const runCmd = (): Promise<void> => new Promise((resolveRun, rejectRun) => {
+    const child = spawn('/bin/sh', ['-c', args.restartCmd!], { stdio: ['ignore', 'inherit', 'inherit'] });
+    child.on('exit', (code) => (code === 0 ? resolveRun() : rejectRun(new Error(`restart command exited ${code}`))));
+    child.on('error', rejectRun);
+  });
+  return {
+    restarts,
+    failures,
+    get attempts() { return attempts; },
+    restart: (atSec, reason) => {
+      const run = restartChain.then(async () => {
+        attempts++;
+        const downAt = Date.now();
+        console.log(`[chaos] remote restart at t+${atSec}s (${reason}): ${args.restartCmd}`);
+        try {
+          await runCmd();
+          // A rolling deploy may never show as unhealthy from outside; give
+          // the new instances a bounded window to come up, then require health.
+          await sleep(15_000);
+          if (!(await waitHealthy(target.apiBase, 180_000))) throw new Error('backend not healthy after remote restart');
+        } catch (error) {
+          failures.push({ atSec, error: error instanceof Error ? error.message : String(error) });
+          throw error;
+        }
+        const downMs = Date.now() - downAt;
+        restarts.push({ atSec, signal: 'remote', downMs, reason });
+        console.log(`[chaos] remote restart done after ${downMs}ms`);
+      });
+      restartChain = run.catch(() => undefined);
+      return run;
+    },
+    settle: () => restartChain,
+    stop: async () => { await restartChain; },
+  };
+}
+
 function evaluate(
   fleet: LobbyFleetSummary,
   invariants: LobbyInvariantReport,
@@ -457,6 +524,7 @@ async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log('Usage: tsx scripts/chaos/lobby-lifecycle.ts --target=local|staging --clients=N [--env-file=.env.harness]');
     console.log('       [--manage-backend --restart-at-s=90,240 --scenario-restarts=3 --restart-signal=SIGKILL|SIGTERM]');
+    console.log('       [--restart-cmd="railway redeploy --service quizball-backend --environment staging -y" --scenario-restarts=2]  remote restart chaos');
     console.log('       [--scenarios=create_abandon,guest_disconnect,...] [--concurrency=40] [--grace-wait-ms=22000] [--seed=1337]');
     console.log('       [--age-stranded-min=31]  backdate abandoned lobbies before the ranked probe (tests the >30min heal)');
     console.log(`Scenarios: ${SCENARIOS.map((spec) => `${spec.kind}(${spec.users})`).join(' ')}`);
@@ -472,7 +540,11 @@ async function main(): Promise<void> {
     + `${args.manageBackend ? ` managed-backend restarts=[${args.restartAtSec.join(',')}]s signal=${args.restartSignal}` : ''}`);
   console.log('═'.repeat(72));
 
-  const backend = args.manageBackend ? await startManagedBackend(args, target) : null;
+  const backend = args.manageBackend
+    ? await startManagedBackend(args, target)
+    : args.restartCmd
+      ? await startRemoteRestarter(args, target)
+      : null;
   try {
     const users = await provisionWithTokenCache(args, target);
     console.log(`provisioned ${users.length} users`);
@@ -499,7 +571,8 @@ async function main(): Promise<void> {
     let lastScenarioRestartAt = 0;
     const requestRestart = backend && args.scenarioRestarts > 0
       ? async (): Promise<boolean> => {
-        if (scenarioRestartsLeft <= 0 || Date.now() - lastScenarioRestartAt < 45_000) return false;
+        const spacingMs = args.restartCmd ? 150_000 : 45_000;
+        if (scenarioRestartsLeft <= 0 || Date.now() - lastScenarioRestartAt < spacingMs) return false;
         scenarioRestartsLeft--;
         lastScenarioRestartAt = Date.now();
         try {
@@ -549,7 +622,7 @@ async function main(): Promise<void> {
       restartsSince: backend
         ? (sinceMs) => backend.restarts.filter((r) => fleetStartedAt + r.atSec * 1_000 >= sinceMs - 1_000).length
         : undefined,
-      ageLobby: args.ageStrandedMin > 0 ? (lobbyId, minutes) => ageLobby(target.databaseUrl, lobbyId, minutes) : undefined,
+      ageLobbies: args.ageStrandedMin > 0 ? (userIds, minutes) => ageLobbiesForUsers(target.databaseUrl, userIds, minutes) : undefined,
       ageStrandedMinutes: args.ageStrandedMin,
       onScenarioDone: (result) => {
         done++;
@@ -624,6 +697,7 @@ async function main(): Promise<void> {
     if (!verdict.ok) process.exitCode = 1;
   } finally {
     await backend?.stop();
+    await closeSharedClients();
   }
 }
 

@@ -78,7 +78,7 @@ export interface LobbyFleetConfig {
    * The server's stranded-lobby heal only fires past a 30-minute idle
    * threshold; ageing lets a 10-minute run judge that heal.
    */
-  ageLobby?: (lobbyId: string, minutes: number) => Promise<void>;
+  ageLobbies?: (userIds: string[], minutes: number) => Promise<number>;
   ageStrandedMinutes?: number;
   /** How many backend restarts happened since `sinceMs` (managed backend only). */
   restartsSince?: (sinceMs: number) => number;
@@ -381,9 +381,11 @@ async function runScenario(
     try {
       await sleep(cfg.graceWaitMs);
       // Whatever the storyline left behind is, by now, an abandoned lobby (every
-      // socket is gone) — age it so the probe judges the heal, not the 30-min wait.
-      if (ctx.lobbyId && cfg.ageLobby && cfg.ageStrandedMinutes) {
-        await cfg.ageLobby(ctx.lobbyId, cfg.ageStrandedMinutes);
+      // socket is gone) — age it so the probe judges the heal, not the 30-min
+      // wait. Keyed by the players, so a lobby whose create ack was lost in a
+      // restart is aged too.
+      if (cfg.ageLobbies && cfg.ageStrandedMinutes) {
+        await cfg.ageLobbies(users.map((user) => user.userId), cfg.ageStrandedMinutes);
       }
       for (const user of users) {
         const probe = await rankedProbe(cfg.apiBase, user, spec);

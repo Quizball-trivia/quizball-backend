@@ -1,3 +1,4 @@
+import { hasCapability } from '../../modules/users/capabilities.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   LobbyCreateResult,
@@ -122,6 +123,10 @@ export async function createLobby(
       }
 
       if (payload.mode === 'ranked') {
+        if (!hasCapability(socket.data.user, 'rankedEntry')) {
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'An account is required to play ranked', retryable: false, correlationId };
+          return;
+        }
         logger.info({ userId, correlationId }, 'Lobby create (ranked AI simulation) requested');
         await startRankedAiForUser(io, userId);
         result = {

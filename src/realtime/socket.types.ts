@@ -1107,6 +1107,7 @@ export type LobbyCreateResult =
   | {
       ok: false;
       code:
+        | 'CAPABILITY_REQUIRED'
         | 'ALREADY_IN_LOBBY'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_LOBBY_CREATE'
@@ -1130,6 +1131,7 @@ export type LobbyJoinByCodeResult =
   | {
       ok: false;
       code:
+        | 'CAPABILITY_REQUIRED'
         | 'ALREADY_IN_LOBBY'
         | 'LOBBY_NOT_FOUND'
         | 'LOBBY_FULL'

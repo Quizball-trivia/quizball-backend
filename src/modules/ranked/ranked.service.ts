@@ -10,6 +10,29 @@ import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
+
+/** Not persisted: the ranked identity a guest seat shows (unplaced, starting RP). */
+function guestRankedProfile(userId: string): RankedProfileRow {
+  const now = new Date().toISOString();
+  return {
+    user_id: userId,
+    rp: 450,
+    tier: 'Youth Prospect' as RankedProfileRow['tier'],
+    country: null,
+    placement_status: 'unplaced',
+    placement_required: 3,
+    placement_played: 0,
+    placement_wins: 0,
+    placement_seed_rp: null,
+    placement_perf_sum: 0,
+    placement_points_for_sum: 0,
+    placement_points_against_sum: 0,
+    current_win_streak: 0,
+    last_ranked_match_at: null,
+    created_at: now,
+    updated_at: now,
+  };
+}
 import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
@@ -268,6 +291,10 @@ export const rankedService = {
   },
 
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
+    // Guests (friend rooms) never own a ranked profile: every presentation path
+    // (auction cards, grid HUD, lobby RP) gets a synthetic unplaced profile instead.
+    const user = await usersRepo.getById(userId);
+    if (user?.is_guest) return guestRankedProfile(userId);
     const profile = await rankedRepo.ensureProfile(userId);
     const normalizedTier = tierFromRp(profile.rp);
     if (profile.tier === normalizedTier) return profile;

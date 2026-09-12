@@ -1,3 +1,4 @@
+import { assertCapability } from '../../modules/users/capabilities.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
@@ -765,6 +766,7 @@ export const footballGridMatchmakingService = {
   },
 
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
+    assertCapability(socket.data.user, 'queueEntry');
     const userId = socket.data.user.id;
     appMetrics.footballGridQueueJoins.add(1);
     if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {

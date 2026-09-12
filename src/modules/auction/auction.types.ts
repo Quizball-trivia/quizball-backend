@@ -83,6 +83,8 @@ export interface AuctionPlayer {
   tier?: string | null;
   rp?: number | null;
   isBot: boolean;
+  /** Account-less friend-room guest: no coins / AP, never a ranked identity. */
+  isGuest?: boolean;
   /**
    * The budget this seat STARTED with. Ranking reconstructs spend from it, so
    * a state created under an older economy (e.g. the €1B era) keeps scoring

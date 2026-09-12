@@ -412,11 +412,14 @@ export async function completePossessionMatch(
 
     const completionSideEffectsStartedAt = Date.now();
     let unlockedAchievements: NonNullable<MatchFinalResultsPayload['unlockedAchievements']> = {};
+    // Guests never unlock achievements; they stay in finalPlayers for results/analytics.
+    const finalUsers = await usersRepo.getByIds(finalPlayers.map((player) => player.user_id)).catch(() => new Map());
+    const achievementUserIds = finalPlayers.map((player) => player.user_id).filter((userId) => !finalUsers.get(userId)?.is_guest);
     const [xpAwardResult, achievementResult] = await Promise.allSettled([
       progressionService.awardCompletedMatchXp(matchId),
       achievementsService.evaluateForMatch(
         matchId,
-        finalPlayers.map((player) => player.user_id),
+        achievementUserIds,
         match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
       ),
     ]);

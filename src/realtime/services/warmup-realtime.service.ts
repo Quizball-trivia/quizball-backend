@@ -3,6 +3,7 @@ import type { WarmupTapInput, WarmupDroppedInput } from '../schemas/warmup.schem
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
 import { warmupRepo } from '../../modules/warmup/warmup.repo.js';
 import { logger } from '../../core/logger.js';
 
@@ -204,6 +205,9 @@ export const warmupRealtimeService = {
       let isNewPlayerBest: Record<string, boolean>;
       let isNewPairBest: boolean;
       try {
+        // Personal/pair bests are member records; a pair with a guest is not persisted.
+        const memberUsers = await usersRepo.getByIds(state.memberIds);
+        if (state.memberIds.some((id) => memberUsers.get(id)?.is_guest)) throw new Error('guest_pair_not_persisted');
         scoreResult = await warmupRepo.saveScore(state.memberIds, state.bounceCount);
         isNewPlayerBest = Object.fromEntries(
           state.memberIds.map((id) => {

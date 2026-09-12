@@ -494,6 +494,7 @@ export const usersRepo = {
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
+        AND u.is_guest = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL

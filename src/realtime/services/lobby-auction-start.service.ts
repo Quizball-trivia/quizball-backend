@@ -81,6 +81,7 @@ export async function startAuctionMatchFromLobby(
     userId: member.user_id,
     displayName: member.nickname ?? 'Player',
     avatarCustomization: member.avatar_customization ?? null,
+    ...(member.is_guest ? { isGuest: true } : {}),
   }));
 
   let matchId: string;

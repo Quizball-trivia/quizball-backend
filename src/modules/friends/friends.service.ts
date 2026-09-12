@@ -1,3 +1,4 @@
+import { assertCapability } from '../users/capabilities.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { isUserAccountInactive, usersRepo } from '../users/users.repo.js';
 import { progressionService } from '../progression/progression.service.js';
@@ -82,8 +83,11 @@ export const friendsService = {
       throw new BadRequestError('You cannot send a friend request to yourself');
     }
 
+    const senderUser = await usersRepo.getById(senderUserId);
+    if (senderUser) assertCapability(senderUser, 'social');
     const targetUser = await usersRepo.getById(targetUserId);
-    if (!targetUser || isUserAccountInactive(targetUser)) {
+    // A guest is never a friend target either: it is not a discoverable account.
+    if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest) {
       throw new NotFoundError('Target user not found');
     }
 

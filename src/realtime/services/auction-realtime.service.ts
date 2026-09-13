@@ -1,3 +1,4 @@
+import { assertCapability } from '../../modules/users/capabilities.js';
 import { logger } from '../../core/logger.js';
 import { ErrorCode } from '../../core/errors.js';
 import {
@@ -84,6 +85,8 @@ export interface AuctionMatchHumanPlayer {
   /** Ranked identity for the pre-match showdown cards. */
   tier?: string | null;
   rp?: number | null;
+  /** Account-less friend-room guest: no ranked identity is created for the card. */
+  isGuest?: boolean;
 }
 
 export interface StartAuctionMatchForHumansInput {
@@ -104,6 +107,7 @@ export const auctionRealtimeService = {
     options: AuctionStartAiMatchOptions = {}
   ): Promise<void> {
     const user = socket.data.user;
+    if (user) assertCapability(user, 'queueEntry');
     if (!user?.id) {
       emitAuctionError(socket, {
         code: ErrorCode.AUTHENTICATION_ERROR,
@@ -355,7 +359,7 @@ async function resolveHumanAvatars(
         // Ranked identity dresses the showdown card (tier frame + RP). The
         // SERVICE (not repo) path also repairs tier/RP drift, so auction never
         // shows a tier ranked itself would normalize away.
-        if (resolved.tier == null || resolved.rp == null) {
+        if (!player.isGuest && (resolved.tier == null || resolved.rp == null)) {
           const profile = await rankedService.ensureProfile(player.userId);
           resolved = { ...resolved, tier: profile.tier ?? null, rp: profile.rp ?? null };
         }

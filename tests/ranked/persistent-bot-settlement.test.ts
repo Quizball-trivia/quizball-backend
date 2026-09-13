@@ -144,7 +144,7 @@ function createPlayer(userId: string, seat: number, totalPoints: number, goals =
   };
 }
 
-type TestUser = { id: string; is_ai: boolean; ai_kind: string | null; coins?: number };
+type TestUser = { id: string; is_ai: boolean; ai_kind: string | null; coins?: number; is_guest?: boolean };
 
 function wireUsers(users: TestUser[]): void {
   const byId = new Map(users.map((u) => [u.id, u]));
@@ -222,6 +222,33 @@ describe('settleCompletedRankedMatch — persistent bot participation', () => {
     // Analytics fire for the human only.
     expect(trackRankPointsChangedMock).toHaveBeenCalledTimes(1);
     expect(trackRankPointsChangedMock).toHaveBeenCalledWith('human-1', expect.any(Number), expect.any(Number), 'ranked_match');
+  });
+
+  it('a guest never settles: no profile is created for it and the member is rated against the anchor, not a guest profile', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'human-1', { aiAnchorRp: 1000 }, 'goals')
+    );
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('human-1', 1, 900, 1),
+      createPlayer('guest-1', 2, 400, 0),
+    ]);
+    wireUsers([
+      { id: 'human-1', is_ai: false, ai_kind: null },
+      { id: 'guest-1', is_ai: false, ai_kind: null, is_guest: true },
+    ]);
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
+      createProfile({ user_id: userId, rp: 1200, tier: rankedService.tierFromRp(1200), placement_status: 'placed', placement_played: 3 })
+    );
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    expect(outcome?.byUserId['human-1']).toBeDefined();
+    expect(outcome?.byUserId['guest-1']).toBeUndefined();
+    expect((rankedRepo.ensureProfile as Mock).mock.calls.map((c) => c[0])).toEqual(['human-1']);
+    const entries = (rankedRepo.applySettlement as Mock).mock.calls[0][0] as Array<{ change: { userId: string; opponentRp?: number | null } }>;
+    expect(entries.map((e) => e.change.userId)).toEqual(['human-1']);
   });
 
   it('per-participant placement: a placed bot vs an unplaced human settle by their own status', async () => {

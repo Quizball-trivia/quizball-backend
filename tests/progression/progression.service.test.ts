@@ -304,3 +304,37 @@ describe('progressionService.awardCompletedMatchXp', () => {
     expect(grantXpInTxMock).not.toHaveBeenCalled();
   });
 });
+
+describe('progressionService.awardCompletedMatchXp — guests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runInTransactionMock.mockImplementation(async (callback: (tx: object) => Promise<unknown>) => callback({ tx: true }));
+    grantXpInTxMock.mockResolvedValue({ awarded: true, totalXp: 0 });
+  });
+
+  it('pays the member but never the guest, and still treats the match as head-to-head for forfeit XP', async () => {
+    getMatchMock.mockResolvedValue({
+      id: 'match-g', mode: 'friendly', status: 'completed', is_dev: false, winner_user_id: 'guest',
+      state_payload: { winnerDecisionMethod: 'forfeit' },
+    });
+    listMatchPlayersMock.mockResolvedValue([{ user_id: 'member' }, { user_id: 'guest' }]);
+    getUserByIdMock.mockImplementation(async (id: string) => (id === 'guest' ? { id, is_ai: false, ai_kind: null, is_guest: true } : { id, is_ai: false, ai_kind: null, is_guest: false }));
+    const { progressionService } = await import('../../src/modules/progression/progression.service.js');
+    const { getMatchXpReward } = await import('../../src/modules/progression/progression.logic.js');
+    await progressionService.awardCompletedMatchXp('match-g');
+    expect(grantXpInTxMock).toHaveBeenCalledTimes(1);
+    expect(grantXpInTxMock).toHaveBeenCalledWith({ tx: true }, expect.objectContaining({
+      userId: 'member',
+      xpDelta: getMatchXpReward({ mode: 'friendly', result: 'loss', isForfeitLoss: true }),
+    }));
+  });
+
+  it('persistent bots still level (the bot policy is untouched)', async () => {
+    getMatchMock.mockResolvedValue({ id: 'match-b', mode: 'friendly', status: 'completed', is_dev: false, winner_user_id: 'bot', state_payload: { winnerDecisionMethod: 'goals' } });
+    listMatchPlayersMock.mockResolvedValue([{ user_id: 'member' }, { user_id: 'bot' }]);
+    getUserByIdMock.mockImplementation(async (id: string) => (id === 'bot' ? { id, is_ai: true, ai_kind: 'persistent', is_guest: false } : { id, is_ai: false, ai_kind: null, is_guest: false }));
+    const { progressionService } = await import('../../src/modules/progression/progression.service.js');
+    await progressionService.awardCompletedMatchXp('match-b');
+    expect(grantXpInTxMock.mock.calls.map((c) => (c[1] as { userId: string }).userId).sort()).toEqual(['bot', 'member']);
+  });
+});

@@ -1,3 +1,4 @@
+import { assertCapability } from '../users/capabilities.js';
 import type { Request, Response } from 'express';
 import { storeService } from './store.service.js';
 import type {
@@ -22,6 +23,7 @@ export const storeController = {
   },
 
   async purchaseWithCoins(req: Request, res: Response): Promise<void> {
+    assertCapability(req.user!, 'wallet');
     const body = req.validated.body as PurchaseWithCoinsBody;
     const result = await storeService.purchaseWithCoins(req.user!.id, body.productSlug);
     res.json(result);

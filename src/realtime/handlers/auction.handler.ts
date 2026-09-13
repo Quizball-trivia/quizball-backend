@@ -19,6 +19,14 @@ import {
 } from '../services/auction-turn.service.js';
 import { acknowledgeAuctionUiReady } from '../services/auction-ui-ready.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
+
+/** A guest hitting a member-only entry: forward the typed code so the web opens sign-up instead of "search failed". */
+function emitCapabilityError(socket: QuizballSocket, error: unknown): boolean {
+  if (!(error instanceof AppError) || error.code !== ErrorCode.CAPABILITY_REQUIRED) return false;
+  socket.emit('auction:error', { code: error.code, message: error.message, meta: (error.details ?? {}) as Record<string, unknown> });
+  return true;
+}
 
 export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('auction:start_ai_match', async (payload) => {
@@ -36,6 +44,7 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     try {
       await auctionRealtimeService.handleStartAiMatch(io, socket, parsed.data);
     } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
       logger.error({ error, userId: socket.data.user?.id }, 'auction:start_ai_match handler failed');
       socket.emit('auction:error', {
         code: 'auction_content_unavailable',
@@ -158,6 +167,7 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     try {
       await auctionMatchmakingService.handleSearchStart(io, socket, parsed.data);
     } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
       logger.error({ error, userId: socket.data.user?.id }, 'auction:search_start handler failed');
       socket.emit('auction:error', {
         code: 'auction_search_failed',

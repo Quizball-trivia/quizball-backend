@@ -48,6 +48,7 @@ export interface CreateInitialAuctionMatchInput {
     avatarCustomization?: unknown | null;
     tier?: string | null;
     rp?: number | null;
+    isGuest?: boolean;
   }[];
   // AI bidder profiles (name + avatar) for the seats not filled by humans.
   // Picked by the realtime layer from the shared AI pool so bots look like
@@ -99,6 +100,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
       tier: player.tier ?? null,
       rp: player.rp ?? null,
       isBot: false,
+      ...(player.isGuest ? { isGuest: true } : {}),
       budget: STARTING_BUDGET,
       startingBudget: STARTING_BUDGET,
       team: createEmptyTeam(formation),

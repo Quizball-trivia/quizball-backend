@@ -38,6 +38,7 @@ function toLobbyMember(
     ...(rankPointsByUserId.has(row.user_id) ? { rankPoints: rankPointsByUserId.get(row.user_id) } : {}),
     isReady: row.is_ready,
     isHost: row.user_id === hostUserId,
+    ...(row.is_guest ? { isGuest: true } : {}),
   };
 }
 

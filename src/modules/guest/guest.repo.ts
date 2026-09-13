@@ -36,6 +36,44 @@ export const guestRepo = {
     const rows = await sql`DELETE FROM guest_sessions WHERE last_seen_at < now() - make_interval(days => ${days}) RETURNING id`;
     return rows.length;
   },
+  /** Idle sessions the sweeper must tombstone BEFORE deleting (the identity subject is only text). */
+  async listIdleIds(days: number, limit = 500): Promise<string[]> {
+    const rows = await sql<{ id: string }[]>`
+      SELECT id FROM guest_sessions WHERE last_seen_at < now() - make_interval(days => ${days}) ORDER BY last_seen_at ASC LIMIT ${limit}
+    `;
+    return rows.map((row) => row.id);
+  },
+  /**
+   * Retires one idle session atomically: tombstone the users row (identifying
+   * fields cleared, row kept for RESTRICT FKs), revoke the identity mapping,
+   * delete the session. Any failure rolls the whole thing back so the next
+   * sweep still finds the identity it needs. Returns the user id, if any.
+   */
+  async retireSession(sessionId: string, provider: string): Promise<{ userId: string | null }> {
+    return sql.begin(async (tx) => {
+      const [identity] = await tx.unsafe<{ user_id: string }[]>(
+        'SELECT user_id FROM user_identities WHERE provider = $1 AND subject = $2 FOR UPDATE',
+        [provider, sessionId],
+      );
+      if (identity) {
+        await tx.unsafe(
+          `UPDATE users
+              SET nickname = NULL, email = NULL, phone_number = NULL, avatar_url = NULL, avatar_customization = NULL,
+                  country = NULL, favorite_club = NULL, updated_at = now()
+            WHERE id = $1 AND is_guest = true`,
+          [identity.user_id],
+        );
+        await tx.unsafe('DELETE FROM user_identities WHERE provider = $1 AND subject = $2', [provider, sessionId]);
+      }
+      await tx.unsafe('DELETE FROM guest_sessions WHERE id = $1', [sessionId]);
+      return { userId: identity?.user_id ?? null };
+    });
+  },
+  async deleteByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const rows = await sql`DELETE FROM guest_sessions WHERE id = ANY(${sql.array(ids)}::uuid[]) RETURNING id`;
+    return rows.length;
+  },
 
   async upsertDailyCompletion(data: { guestId: string; challengeType: string; challengeDay: string; score: number }): Promise<{ best_score: number; attempts: number }> {
     const [row] = await sql<Array<{ best_score: number; attempts: number }>>`

@@ -31,7 +31,7 @@ export const auctionLeaderboardRepo = {
         CASE WHEN rp.placement_status = 'placed' THEN rp.tier END AS "tier"
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
-      WHERE u.is_ai = false
+      WHERE u.is_ai = false AND u.is_guest = false
         AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
@@ -62,7 +62,7 @@ export const auctionLeaderboardRepo = {
         FROM users u
         LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
         WHERE u.id = ${userId}
-          AND u.is_ai = false
+          AND u.is_ai = false AND u.is_guest = false
           AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
@@ -75,7 +75,7 @@ export const auctionLeaderboardRepo = {
         target.tier AS "tier",
         (SELECT COUNT(*)::int + 1
          FROM users u
-         WHERE u.is_ai = false
+         WHERE u.is_ai = false AND u.is_guest = false
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL
@@ -89,7 +89,7 @@ export const auctionLeaderboardRepo = {
         ) AS rank,
         (SELECT COUNT(*)::int
          FROM users u
-         WHERE u.is_ai = false
+         WHERE u.is_ai = false AND u.is_guest = false
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL

@@ -1,3 +1,6 @@
+import { hasCapability } from '../../modules/users/capabilities.js';
+import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
+import { guestCompatibleInitialMode, normalizedModeForMemberCount, validateGuestLobby } from './lobby-guest-rules.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   LobbyCreateResult,
@@ -122,6 +125,10 @@ export async function createLobby(
       }
 
       if (payload.mode === 'ranked') {
+        if (!hasCapability(socket.data.user, 'rankedEntry')) {
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'An account is required to play ranked', retryable: false, correlationId };
+          return;
+        }
         logger.info({ userId, correlationId }, 'Lobby create (ranked AI simulation) requested');
         await startRankedAiForUser(io, userId);
         result = {
@@ -133,6 +140,16 @@ export async function createLobby(
         return;
       }
 
+      const hostIsGuest = socket.data.user.is_guest === true;
+      // Drain: provisioning off closes NEW guest rooms (live rooms may finish).
+      if (hostIsGuest && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+        result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+        return;
+      }
+      if (hostIsGuest && !(await allowGuestOperation(`user:${userId}`, 'lobby_create'))) {
+        result = { ok: false, code: 'RATE_LIMITED', message: 'Too many rooms created. Please wait a while.', retryable: true, correlationId };
+        return;
+      }
       const inviteCode = generateInviteCode(6);
       const displayName = generateLobbyName();
       const lobby = await lobbiesRepo.createLobby({
@@ -141,6 +158,8 @@ export async function createLobby(
         inviteCode,
         isPublic: payload.isPublic ?? false,
         displayName,
+        // The repo default (friendly_possession) is locked for guests: open in a playable mode.
+        ...(hostIsGuest ? { gameMode: guestCompatibleInitialMode() } : {}),
       });
 
       await lobbiesRepo.addMember(lobby.id, userId, false);
@@ -311,6 +330,25 @@ export async function joinByCode(
         const capacity = maxMembersForFriendlyGameMode(
           normalizeFriendlyGameMode(lobby.game_mode)
         );
+        // Guest rooms: check the membership AND the mode the room would normalize
+        // into after this join (an already-present guest rejoining is exempt).
+        if (!alreadyMember && socket.data.user.is_guest === true && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+          // Drain: no new guest memberships either; a guest already in the room may rejoin.
+          socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now' });
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+          return;
+        }
+        if (!alreadyMember) {
+          const nextMembers = [...members, { user_id: userId, is_guest: socket.data.user.is_guest === true }];
+          const nextMode = normalizedModeForMemberCount(normalizeFriendlyGameMode(lobby.game_mode), nextMembers.length);
+          const violation = validateGuestLobby(nextMembers, nextMode);
+          if (violation) {
+            logger.warn({ lobbyId: lobby.id, userId, code: violation.code }, 'Lobby join refused by guest rules');
+            socket.emit('error', { code: violation.code, message: violation.message, meta: violation.meta });
+            result = { ok: false, code: violation.code, message: violation.message, retryable: false, correlationId };
+            return;
+          }
+        }
         if (!alreadyMember && members.length >= capacity) {
           logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
           socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
@@ -410,11 +448,18 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
 
   let shouldStartDraft = false;
   try {
+    // Fresh read under the lock: a settings change may have moved the mode
+    // (or the lobby may have started) since the pre-lock read above.
+    const lockedLobby = await lobbiesRepo.getById(lobbyId);
+    if (!lockedLobby || lockedLobby.status !== 'waiting') {
+      logger.debug({ lobbyId, status: lockedLobby?.status ?? 'missing' }, 'Lobby ready check skipped: lobby not waiting');
+      return;
+    }
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const memberCount = await lobbiesRepo.countMembers(lobbyId);
 
-    if (lobby.mode === 'friendly') {
-      const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
+    if (lockedLobby.mode === 'friendly') {
+      const friendlyMode = normalizeFriendlyGameMode(lockedLobby.game_mode);
       const allReady = memberCount > 0 && readyCount === memberCount;
 
       if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount)) {
@@ -427,6 +472,12 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     }
 
     if (memberCount === 2 && readyCount === 2) {
+      const readyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
+      if (readyViolation) {
+        socket.emit('error', { code: readyViolation.code, message: readyViolation.message, meta: readyViolation.meta });
+        return;
+      }
       const acquiredGuard = await tryAcquireDraftStartGuard(lobbyId);
       if (!acquiredGuard) {
         logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
@@ -498,7 +549,24 @@ export async function updateSettings(
   }
 
   try {
-    const memberCount = await lobbiesRepo.countMembers(lobbyId);
+    // The pre-lock read is stale by definition (host transfer, start, close can
+    // land in between): validate ownership and status again on a fresh row.
+    const lockedLobby = await lobbiesRepo.getById(lobbyId);
+    if (!lockedLobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+    if (socket.data.user.id !== lockedLobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can update settings' });
+      return;
+    }
+    if (lockedLobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
+      return;
+    }
+    const lobby = lockedLobby;
+    const lockedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const memberCount = lockedMembers.length;
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     if (memberCount > 0 && readyCount === memberCount) {
       socket.emit('error', { code: 'LOBBY_READY_LOCKED', message: 'Cannot edit settings after both players are ready' });
@@ -569,6 +637,12 @@ export async function updateSettings(
       }
     }
 
+    // Guest rooms: the FINAL normalized mode must stay playable for guests.
+    const guestViolation = validateGuestLobby(lockedMembers, nextSettings.gameMode);
+    if (guestViolation) {
+      socket.emit('error', { code: guestViolation.code, message: guestViolation.message, meta: guestViolation.meta });
+      return;
+    }
     if (nextSettings.gameMode === 'auction' || nextSettings.gameMode === 'football_grid') {
       // Auction has no lobby categories of its own.
       nextSettings.friendlyRandom = true;
@@ -730,12 +804,18 @@ export async function startFriendlyMatch(
       socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
       return;
     }
-    const currentMemberCount = await lobbiesRepo.countMembers(lobbyId);
+    const currentMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const currentMemberCount = currentMembers.length;
     const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
     const currentValidStart = isValidFriendlyStartShape(currentFriendlyMode, currentMemberCount);
     if (!currentValidStart || !currentAllReady) {
       socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
+      return;
+    }
+    const startViolation = validateGuestLobby(currentMembers, currentFriendlyMode);
+    if (startViolation) {
+      socket.emit('error', { code: startViolation.code, message: startViolation.message, meta: startViolation.meta });
       return;
     }
 

@@ -346,7 +346,7 @@ export const objectivesService = {
         // the evaluator INPUT — not just the delta — means AI users produce ZERO
         // rows. Persistent bots are AI here (capability matrix: objectives are a
         // human-only reward surface).
-        if (fact.isDev || fact.isAi) continue;
+        if (fact.isDev || fact.isAi || fact.isGuest) continue;
         // One multi-row upsert covers ensureCurrentRows AND the per-definition
         // ensureProgress below (db-optimize.md #5: this loop used to issue
         // ~2 x M individual INSERT .. ON CONFLICT per player per match).

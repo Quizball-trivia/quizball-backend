@@ -6,6 +6,7 @@ import type {
 
 const visibleLeaderboardUsers = sql`
   u.is_ai = false
+  AND u.is_guest = false
   AND u.is_seed = false
   AND u.is_deleted = false
   AND u.deleted_at IS NULL

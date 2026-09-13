@@ -169,6 +169,12 @@ export async function persistFinishedAuctionMatch(
       // governor yet, so letting bots accrue AP would be the be#175 failure mode
       // (bots crowding the human leaderboard) with no way to damp it.
       if (row.isBot) continue;
+      // Guests (friend rooms) never earn coins or AP — reported at 0 like a forfeiter.
+      if (row.ranking.player?.isGuest) {
+        coinsByUserId[row.userId] = 0;
+        if (apByUserId) apByUserId[row.userId] = 0;
+        continue;
+      }
 
       if (row.forfeited) {
         // A forfeiter earns nothing, but is still reported at 0 so the client

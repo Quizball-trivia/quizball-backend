@@ -76,6 +76,10 @@ export async function challengeFriend(
   const userId = socket.data.user.id;
   const toUserId = payload.toUserId;
   const gameMode = payload.gameMode ?? 'friendly_possession';
+  if (socket.data.user.is_guest) {
+    socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'An account is required to challenge friends' });
+    return;
+  }
   if (gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
     socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe challenges are temporarily unavailable' });
     return;
@@ -90,7 +94,7 @@ export async function challengeFriend(
   }
 
   const targetUser = await usersRepo.getById(toUserId);
-  if (!targetUser || isUserAccountInactive(targetUser)) {
+  if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest) {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_INVALID',
       message: 'This player is unavailable',

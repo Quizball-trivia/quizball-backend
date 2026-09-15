@@ -5,6 +5,8 @@ const correlationIdSchema = z.string().min(1).max(128).optional();
 export const lobbyCreateSchema = z.object({
   mode: z.enum(['friendly', 'ranked']),
   isPublic: z.boolean().optional(),
+  // Open the room straight in a friend-playable mode (the game modals' "Play with friend").
+  gameMode: z.enum(['football_grid', 'auction']).optional(),
   correlationId: correlationIdSchema,
 });
 

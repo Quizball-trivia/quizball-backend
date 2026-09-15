@@ -1112,6 +1112,7 @@ export type LobbyCreateResult =
         | 'LOBBY_MODE_REQUIRES_ACCOUNT'
         | 'RATE_LIMITED'
         | 'ALREADY_IN_LOBBY'
+        | 'GRID_UNAVAILABLE'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_LOBBY_CREATE'
         | 'LOBBY_CREATE_ERROR'
@@ -1240,7 +1241,7 @@ export interface ClientToServerEvents {
     ) => void
   ) => void;
   'lobby:create': (
-    data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
+    data: { mode: MatchMode; isPublic?: boolean; gameMode?: 'football_grid' | 'auction'; correlationId?: string },
     ack?: (result: LobbyCreateResult) => void
   ) => void;
   'lobby:challenge': (data: { toUserId: string; gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid' }) => void;

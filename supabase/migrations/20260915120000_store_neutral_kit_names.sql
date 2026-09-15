@@ -2,7 +2,7 @@
 -- (the PES / eFootball convention). Slugs, avatar part ids and asset files keep their internal names.
 -- Idempotent: only rows still carrying the old English name are renamed, so later edits are never clobbered.
 UPDATE public.store_products p
-SET name = jsonb_build_object('en', m.en, 'ka', m.ka, 'es', m.es, 'tr', m.tr)
+SET name = p.name || jsonb_build_object('en', m.en, 'ka', m.ka, 'es', m.es, 'tr', m.tr)
 FROM (VALUES
   ('avatar_jersey_real', 'Real Madrid Jersey', 'Madrid White', 'მადრიდის თეთრი', 'Madrid Blanco', 'Madrid Beyaz'),
   ('avatar_jersey_atletico_madrid', 'Atletico Madrid Jersey', 'Madrid Red & White', 'მადრიდის წითელ-თეთრი', 'Madrid Rojiblanco', 'Madrid Kırmızı-Beyaz'),

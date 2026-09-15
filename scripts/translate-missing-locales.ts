@@ -40,15 +40,6 @@ const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20 });
 
 const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
-/** A string that is a name, not a sentence: short, few words, no sentence punctuation, mostly capitalised words. */
-function looksLikeProperNoun(en: string): boolean {
-  const s = en.trim();
-  if (s.length > 40 || /[?:;!,.]/.test(s)) return false;
-  const words = s.split(/\s+/);
-  if (words.length > 5) return false;
-  const capitalised = words.filter((w) => /^[A-ZÀ-ÝÇĞİÖŞÜ0-9(]/.test(w) || /^(de|da|di|van|von|der|del|la|le|of|and|the|&)$/i.test(w)).length;
-  return capitalised === words.length;
-}
 type Json = unknown;
 type Node = Record<string, unknown>;
 const isTextNode = (v: Json): v is Node => !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as Node).en === 'string';
@@ -71,7 +62,7 @@ async function translateBatch(locale: string, items: Array<{ key: string; en: st
       { role: 'system', content: locale === 'ka'
         ? `You translate football (soccer) trivia UI strings from English to Georgian for a Georgian football app. Rules: write EVERYTHING in Georgian script — transliterate player, club, stadium, competition and person names into Georgian the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the terminology a Georgian fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`
         : `You translate football (soccer) trivia UI strings from English to ${LANG[locale]}. Rules: keep player, club, stadium, competition and person names exactly as written in Latin script (do not translate or localise them); keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the football terminology a native ${LANG[locale]} fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.` },
-      ...(mode === 'recheck-copies' ? [{ role: 'system', content: 'Some inputs are proper nouns (players, clubs, stadiums) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.' }] : []),
+      { role: 'system', content: 'Some inputs are just proper nouns (players, clubs, stadiums, competitions) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.' },
       { role: 'user', content: JSON.stringify(Object.fromEntries(items.map((i) => [i.key, i.en]))) },
     ],
   };
@@ -93,37 +84,29 @@ async function main() {
   // Work items: one per (row, node, locale) with an empty slot.
   type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };
   const items: Item[] = [];
-  // A node whose Spanish equals its English is a proper noun (player, club, competition): Latin-script
-  // locales copy it instead of asking the model. Georgian still needs its transliteration.
-  const copies: Array<{ row: typeof rows[number]; node: Node; locale: string }> = [];
   for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
-    if (!empty(n[l])) continue;
-    if (l !== 'ka' && typeof n.es === 'string' && n.es === n.en && looksLikeProperNoun(n.en as string)) { copies.push({ row: r, node: n, locale: l }); continue; }
-    items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
+    if (empty(n[l])) items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
   }
-  console.log(`proper-noun copies (en → locale, no model): ${copies.length}`);
   // recheck-copies: slots that equal their English (copied earlier, or never localised) go to the model, which returns
   // proper nouns unchanged and translates everything else. Existing values stay intact until a translation succeeds.
   if (mode === 'recheck-copies') {
-    items.length = 0; copies.length = 0;
+    items.length = 0;
     for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
       if (l === 'ka' || typeof n[l] !== 'string' || n[l] !== n.en) continue;
       items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
     }
     console.log(`slots equal to English to re-check with the model: ${items.length}`);
   }
+  const byTypeLocale = new Map<string, number>();
+  for (const it of items) { const k = `${it.row.type} ${it.locale}`; byTypeLocale.set(k, (byTypeLocale.get(k) ?? 0) + 1); }
+  console.log(`${mode === 'recheck-copies' ? 'slots to re-check' : 'empty locale slots'}: ${items.length} across ${new Set(items.map((i) => i.row.id)).size} rows`);
+  for (const [k, c] of [...byTypeLocale.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${c}`);
   if (mode === 'count') return;
   if (!API_KEY) { console.error('ABORT: OPENROUTER_API_KEY missing in .env'); process.exit(1); }
-  // --limit bounds the apply workload (copies first, then model items); sample only ever spends it on model items.
-  const copyWork = mode === 'apply' ? (LIMIT > 0 ? copies.slice(0, LIMIT) : copies) : [];
-  const work = LIMIT > 0 ? items.slice(0, Math.max(0, LIMIT - copyWork.length)) : items;
+  const work = LIMIT > 0 ? items.slice(0, LIMIT) : items;
   const touched = new Map<string, typeof rows[number]>();
   const snapshot: Array<{ id: string; prompt: Json; payload: Json }> = [];
   let filled = 0, failed = 0;
-  if (mode === 'apply') for (const c of copyWork) {
-    if (!touched.has(c.row.id)) { touched.set(c.row.id, c.row); snapshot.push({ id: c.row.id, prompt: JSON.parse(JSON.stringify(c.row.prompt)), payload: JSON.parse(JSON.stringify(c.row.payload)) }); }
-    if (empty(c.node[c.locale])) { c.node[c.locale] = c.node.en; filled += 1; }
-  }
   for (const locale of LOCALES) {
     const mine = work.filter((w) => w.locale === locale);
     for (let i = 0; i < mine.length; i += BATCH) {

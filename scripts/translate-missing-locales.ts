@@ -71,6 +71,7 @@ async function translateBatch(locale: string, items: Array<{ key: string; en: st
       { role: 'system', content: locale === 'ka'
         ? `You translate football (soccer) trivia UI strings from English to Georgian for a Georgian football app. Rules: write EVERYTHING in Georgian script — transliterate player, club, stadium, competition and person names into Georgian the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the terminology a Georgian fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`
         : `You translate football (soccer) trivia UI strings from English to ${LANG[locale]}. Rules: keep player, club, stadium, competition and person names exactly as written in Latin script (do not translate or localise them); keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the football terminology a native ${LANG[locale]} fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.` },
+      ...(mode === 'recheck-copies' ? [{ role: 'system', content: 'Some inputs are proper nouns (players, clubs, stadiums) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.' }] : []),
       { role: 'user', content: JSON.stringify(Object.fromEntries(items.map((i) => [i.key, i.en]))) },
     ],
   };
@@ -101,23 +102,20 @@ async function main() {
     items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
   }
   console.log(`proper-noun copies (en → locale, no model): ${copies.length}`);
-  // recheck-copies: slots filled by copying English earlier that are sentences, not names — translate them after all.
+  // recheck-copies: slots that equal their English (copied earlier, or never localised) go to the model, which returns
+  // proper nouns unchanged and translates everything else. Existing values stay intact until a translation succeeds.
   if (mode === 'recheck-copies') {
     items.length = 0; copies.length = 0;
     for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
-      if (l === 'ka' || typeof n[l] !== 'string' || n[l] !== n.en || looksLikeProperNoun(n.en as string)) continue;
-      n[l] = ''; items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
+      if (l === 'ka' || typeof n[l] !== 'string' || n[l] !== n.en) continue;
+      items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
     }
-    console.log(`copied-English sentences to translate: ${items.length}`);
+    console.log(`slots equal to English to re-check with the model: ${items.length}`);
   }
-  const byTypeLocale = new Map<string, number>();
-  for (const it of items) { const k = `${it.row.type} ${it.locale}`; byTypeLocale.set(k, (byTypeLocale.get(k) ?? 0) + 1); }
-  console.log(`empty locale slots: ${items.length} across ${new Set(items.map((i) => i.row.id)).size} rows`);
-  for (const [k, c] of [...byTypeLocale.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${c}`);
   if (mode === 'count') return;
   if (!API_KEY) { console.error('ABORT: OPENROUTER_API_KEY missing in .env'); process.exit(1); }
-  // --limit bounds the whole apply workload: copies first, then model items.
-  const copyWork = LIMIT > 0 ? copies.slice(0, LIMIT) : copies;
+  // --limit bounds the apply workload (copies first, then model items); sample only ever spends it on model items.
+  const copyWork = mode === 'apply' ? (LIMIT > 0 ? copies.slice(0, LIMIT) : copies) : [];
   const work = LIMIT > 0 ? items.slice(0, Math.max(0, LIMIT - copyWork.length)) : items;
   const touched = new Map<string, typeof rows[number]>();
   const snapshot: Array<{ id: string; prompt: Json; payload: Json }> = [];
@@ -140,7 +138,7 @@ async function main() {
         if (!t) { failed += 1; continue; }
         if (mode === 'sample') { console.log(`[${locale}] ${b.en}\n   → ${t}`); continue; }
         if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)) }); }
-        if (empty(b.node[locale])) { b.node[locale] = t; filled += 1; }
+        if (mode === 'recheck-copies' ? b.node[locale] === b.en : empty(b.node[locale])) { b.node[locale] = t; filled += 1; }
       }
       process.stdout.write(`\r${locale}: ${Math.min(i + BATCH, mine.length)}/${mine.length}   `);
     }

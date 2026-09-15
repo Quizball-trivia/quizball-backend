@@ -1240,7 +1240,7 @@ export interface ClientToServerEvents {
     ) => void
   ) => void;
   'lobby:create': (
-    data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
+    data: { mode: MatchMode; isPublic?: boolean; gameMode?: 'football_grid' | 'auction'; correlationId?: string },
     ack?: (result: LobbyCreateResult) => void
   ) => void;
   'lobby:challenge': (data: { toUserId: string; gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid' }) => void;

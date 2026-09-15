@@ -78,7 +78,7 @@ const MATCH_START_LOCK_WAIT_MS = 5000;
 export async function createLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; correlationId?: string }
+  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; gameMode?: 'football_grid' | 'auction'; correlationId?: string }
 ): Promise<LobbyCreateResult> {
   const userId = socket.data.user.id;
   const correlationId = payload.correlationId ?? 'missing';
@@ -150,16 +150,22 @@ export async function createLobby(
         result = { ok: false, code: 'RATE_LIMITED', message: 'Too many rooms created. Please wait a while.', retryable: true, correlationId };
         return;
       }
+      if (payload.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+        result = { ok: false, code: 'LOBBY_CREATE_ERROR', message: 'Football Tic Tac Toe lobbies are temporarily unavailable', retryable: false, correlationId };
+        return;
+      }
       const inviteCode = generateInviteCode(6);
       const displayName = generateLobbyName();
+      // A requested mode opens the room in it (auction / grid are guest-playable); otherwise the repo
+      // default (friendly_possession), which is locked for guests, so a guest host opens in a playable mode.
+      const initialGameMode = payload.gameMode ?? (hostIsGuest ? guestCompatibleInitialMode() : undefined);
       const lobby = await lobbiesRepo.createLobby({
         mode: 'friendly',
         hostUserId: userId,
         inviteCode,
         isPublic: payload.isPublic ?? false,
         displayName,
-        // The repo default (friendly_possession) is locked for guests: open in a playable mode.
-        ...(hostIsGuest ? { gameMode: guestCompatibleInitialMode() } : {}),
+        ...(initialGameMode ? { gameMode: initialGameMode } : {}),
       });
 
       await lobbiesRepo.addMember(lobby.id, userId, false);

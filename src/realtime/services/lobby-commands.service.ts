@@ -96,6 +96,10 @@ export async function createLobby(
       correlationId,
     };
   }
+  // Refused before any session cleanup: a disabled mode must not evict the host from a room they are already in.
+  if (payload.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+    return { ok: false, code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable', retryable: false, correlationId };
+  }
   let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
@@ -148,10 +152,6 @@ export async function createLobby(
       }
       if (hostIsGuest && !(await allowGuestOperation(`user:${userId}`, 'lobby_create'))) {
         result = { ok: false, code: 'RATE_LIMITED', message: 'Too many rooms created. Please wait a while.', retryable: true, correlationId };
-        return;
-      }
-      if (payload.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
-        result = { ok: false, code: 'LOBBY_CREATE_ERROR', message: 'Football Tic Tac Toe lobbies are temporarily unavailable', retryable: false, correlationId };
         return;
       }
       const inviteCode = generateInviteCode(6);

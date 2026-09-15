@@ -1112,6 +1112,7 @@ export type LobbyCreateResult =
         | 'LOBBY_MODE_REQUIRES_ACCOUNT'
         | 'RATE_LIMITED'
         | 'ALREADY_IN_LOBBY'
+        | 'GRID_UNAVAILABLE'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_LOBBY_CREATE'
         | 'LOBBY_CREATE_ERROR'

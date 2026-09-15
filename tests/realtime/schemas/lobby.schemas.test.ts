@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lobbyCreateSchema } from '../lobby.schemas.js';
+import { lobbyCreateSchema } from '../../../src/realtime/schemas/lobby.schemas.js';
 
 describe('lobbyCreateSchema', () => {
   it('accepts a friend-playable initial game mode and rejects the others', () => {

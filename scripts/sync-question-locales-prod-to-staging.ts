@@ -62,7 +62,9 @@ function merge(into: Json, from: Json, locales: string[]): number {
 async function main() {
   console.log(`SOURCE prod ${PROD_REF} → TARGET staging ${STAGING_REF} · locales ${LOCALES.join(',')} · ${EXECUTE ? 'EXECUTE' : 'DRY RUN'}\n`);
   const rows = await target<Array<{ id: string; type: string; prompt: Json; payload: Json }>>`
-    SELECT q.id, q.type, q.prompt, qp.payload FROM questions q JOIN question_payloads qp ON qp.question_id = q.id WHERE q.status = 'published'`;
+    SELECT q.id, q.type, q.prompt, qp.payload FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+    WHERE q.status = 'published'
+      AND NOT EXISTS (SELECT 1 FROM campaign_quiz_manual_questions m WHERE m.question_id = q.id)`;
   const lacks = (v: Json) => JSON.stringify(v).length > 0 && LOCALES.some((l) => (function walk(x: Json): boolean {
     if (isTextNode(x)) return empty(x[l]);
     if (Array.isArray(x)) return x.some(walk);

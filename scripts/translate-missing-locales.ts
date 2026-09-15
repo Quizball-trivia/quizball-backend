@@ -62,7 +62,8 @@ async function translateBatch(locale: string, items: Array<{ key: string; en: st
       { role: 'system', content: locale === 'ka'
         ? `You translate football (soccer) trivia UI strings from English to Georgian for a Georgian football app. Rules: write EVERYTHING in Georgian script — transliterate player, club, stadium, competition and person names into Georgian the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the terminology a Georgian fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`
         : `You translate football (soccer) trivia UI strings from English to ${LANG[locale]}. Rules: keep player, club, stadium, competition and person names exactly as written in Latin script (do not translate or localise them); keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the football terminology a native ${LANG[locale]} fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.` },
-      { role: 'system', content: 'Some inputs are just proper nouns (players, clubs, stadiums, competitions) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.' },
+      // Latin-script locales keep names verbatim; Georgian transliterates them (its main instruction above), so no override there.
+      ...(locale === 'ka' ? [] : [{ role: 'system', content: 'Some inputs are just proper nouns (players, clubs, stadiums, competitions) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.' }]),
       { role: 'user', content: JSON.stringify(Object.fromEntries(items.map((i) => [i.key, i.en]))) },
     ],
   };
@@ -80,7 +81,10 @@ async function main() {
   console.log(`STAGING ${STAGING_REF} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
   const rows = await sql<Array<{ id: string; type: string; prompt: Json; payload: Json }>>`
     SELECT q.id, q.type, q.prompt, qp.payload FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
-    WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``} ORDER BY q.type, q.id`;
+    WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
+      -- Quiz Page questions are curated in the CMS (a trigger refuses direct writes); leave them to it.
+      AND NOT EXISTS (SELECT 1 FROM campaign_quiz_manual_questions m WHERE m.question_id = q.id)
+    ORDER BY q.type, q.id`;
   // Work items: one per (row, node, locale) with an empty slot.
   type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };
   const items: Item[] = [];

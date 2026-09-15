@@ -22,6 +22,8 @@ const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith
 const LOCALES = opt('locales', 'tr,es,ka').split(',');
 const TYPES = opt('types', '').split(',').filter(Boolean);
 const LIMIT = Number(opt('limit', '0'));
+/** Only rows updated in the last N hours (e.g. recheck-copies after a fill run). */
+const SINCE_HOURS = Number(opt('since', '0'));
 const BATCH = 40;
 
 const env = readFileSync('.env', 'utf8');
@@ -88,6 +90,7 @@ async function main() {
     WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
       -- Quiz Page questions are curated in the CMS (a trigger refuses direct writes); leave them to it.
       AND NOT EXISTS (SELECT 1 FROM campaign_quiz_manual_questions m WHERE m.question_id = q.id)
+      ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
     ORDER BY q.type, q.id`;
   // Work items: one per (row, node, locale) with an empty slot.
   type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };

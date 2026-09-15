@@ -35,6 +35,9 @@ scripts/*
 !scripts/football-grid-label-locales.ts
 !scripts/football-grid-label-locales.json
 !scripts/sync-content-from-prod.ts
+!scripts/sync-question-locales-prod-to-staging.ts
+!scripts/translate-missing-locales.ts
+!scripts/translate-goal-choreographies.ts
 !scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
@@ -101,3 +104,4 @@ node_modules
 !scripts/pass-chain-content/
 !scripts/stat-sniper-content/
 !scripts/squad-spin-content/
+scripts/.snapshots/

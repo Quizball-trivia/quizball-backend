@@ -9,17 +9,29 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import postgres from 'postgres';
 
 const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const [mode = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const PROD_REF = 'lfbwhxvwubzeqkztghok';
+const MODES = ['count', 'sample', 'apply'] as const;
+const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+if (!(MODES as readonly string[]).includes(modeArg)) { console.error(`ABORT: mode must be one of ${MODES.join(' | ')}`); process.exit(1); }
+const mode = modeArg as (typeof MODES)[number];
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
 const LOCALES = opt('locales', 'es,tr').split(',');
 const LIMIT = Number(opt('limit', '0'));
 const env = readFileSync('.env', 'utf8');
 const envVar = (k: string) => env.match(new RegExp(`^${k}\\s*=\\s*"?([^"\\n]+)"?`, 'm'))?.[1];
+/** Strict target check: the staging project must be the connection's user or host, and the prod ref must not appear anywhere. */
+function assertStagingUrl(url: string, prodRef: string, stagingRef: string): void {
+  let host = '', user = '';
+  try { const u = new URL(url); host = u.hostname; user = decodeURIComponent(u.username); } catch { console.error('ABORT: DATABASE_URL is not a valid URL'); process.exit(1); }
+  const targetsStaging = host.startsWith(`db.${stagingRef}.`) || user.endsWith(`.${stagingRef}`) || user === `postgres.${stagingRef}`;
+  if (!targetsStaging || url.includes(prodRef)) { console.error(`ABORT: DATABASE_URL must target the staging project ${stagingRef} (host or pooler user), never ${prodRef}`); process.exit(1); }
+}
 const dbUrl = envVar('DATABASE_URL') ?? '';
-if (!dbUrl.includes(STAGING_REF)) { console.error('ABORT: .env DATABASE_URL is not staging'); process.exit(1); }
+assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
 const API_KEY = envVar('OPENROUTER_API_KEY'); const MODEL = envVar('OPENROUTER_MODEL') ?? 'google/gemini-3-flash-preview';
 const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20 });
 const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish' };
+for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
 type Node = Record<string, unknown>;
 const isTextNode = (v: unknown): v is Node => !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as Node).en === 'string';
 const empty = (v: unknown) => typeof v !== 'string' || v.trim() === '';

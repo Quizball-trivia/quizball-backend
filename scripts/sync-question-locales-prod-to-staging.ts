@@ -10,7 +10,7 @@
  *
  * Usage: npx tsx scripts/sync-question-locales-prod-to-staging.ts [--execute] [--locales=ka,es,tr]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import postgres from 'postgres';
 
 const PROD_REF = 'lfbwhxvwubzeqkztghok';
@@ -25,8 +25,11 @@ function databaseUrlFrom(file: string): string {
 }
 const sourceUrl = databaseUrlFrom('.env.prod.bak');
 const targetUrl = databaseUrlFrom('.env');
-if (!sourceUrl.includes(PROD_REF) || !targetUrl.includes(STAGING_REF) || targetUrl.includes(PROD_REF)) {
-  console.error('ABORT: source must be prod and target must be staging.');
+function projectOf(url: string): string {
+  try { const u = new URL(url); return `${u.hostname} ${decodeURIComponent(u.username)}`; } catch { return ''; }
+}
+if (!projectOf(sourceUrl).includes(PROD_REF) || !projectOf(targetUrl).includes(STAGING_REF) || targetUrl.includes(PROD_REF)) {
+  console.error('ABORT: source must be the prod project and target the staging project (checked on host/user, not substrings).');
   process.exit(1);
 }
 const source = postgres(sourceUrl, { ssl: 'require', max: 1, connect_timeout: 20 });
@@ -85,6 +88,7 @@ async function main() {
   console.log(`rows completable from prod: ${plans.length}; locale slots to fill: ${plans.reduce((n, p) => n + p.filled, 0)}`);
   for (const [t, c] of [...byType.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${t}: ${c}`);
   if (!EXECUTE) { console.log('\nDry run — re-run with --execute to apply.'); return; }
+  mkdirSync('scripts/.snapshots', { recursive: true });
   const snapFile = `scripts/.snapshots/locale-sync-${Date.now()}.json`;
   writeFileSync(snapFile, JSON.stringify(snapshot));
   console.log(`snapshot of touched rows: ${snapFile}`);

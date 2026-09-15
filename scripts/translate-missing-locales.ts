@@ -13,7 +13,11 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import postgres from 'postgres';
 
 const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const [mode = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const PROD_REF = 'lfbwhxvwubzeqkztghok';
+const MODES = ['count', 'sample', 'apply', 'recheck-copies'] as const;
+const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+if (!(MODES as readonly string[]).includes(modeArg)) { console.error(`ABORT: mode must be one of ${MODES.join(' | ')}`); process.exit(1); }
+const mode = modeArg as (typeof MODES)[number];
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
 const LOCALES = opt('locales', 'tr,es,ka').split(',');
 const TYPES = opt('types', '').split(',').filter(Boolean);
@@ -22,12 +26,29 @@ const BATCH = 40;
 
 const env = readFileSync('.env', 'utf8');
 const envVar = (k: string) => env.match(new RegExp(`^${k}\\s*=\\s*"?([^"\\n]+)"?`, 'm'))?.[1];
+/** Strict target check: the staging project must be the connection's user or host, and the prod ref must not appear anywhere. */
+function assertStagingUrl(url: string, prodRef: string, stagingRef: string): void {
+  let host = '', user = '';
+  try { const u = new URL(url); host = u.hostname; user = decodeURIComponent(u.username); } catch { console.error('ABORT: DATABASE_URL is not a valid URL'); process.exit(1); }
+  const targetsStaging = host.startsWith(`db.${stagingRef}.`) || user.endsWith(`.${stagingRef}`) || user === `postgres.${stagingRef}`;
+  if (!targetsStaging || url.includes(prodRef)) { console.error(`ABORT: DATABASE_URL must target the staging project ${stagingRef} (host or pooler user), never ${prodRef}`); process.exit(1); }
+}
 const dbUrl = envVar('DATABASE_URL') ?? '';
-if (!dbUrl.includes(STAGING_REF)) { console.error('ABORT: .env DATABASE_URL is not staging'); process.exit(1); }
+assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
 const API_KEY = envVar('OPENROUTER_API_KEY'); const MODEL = envVar('OPENROUTER_MODEL') ?? 'google/gemini-3-flash-preview';
 const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20 });
 
 const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian' };
+for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
+/** A string that is a name, not a sentence: short, few words, no sentence punctuation, mostly capitalised words. */
+function looksLikeProperNoun(en: string): boolean {
+  const s = en.trim();
+  if (s.length > 40 || /[?:;!,.]/.test(s)) return false;
+  const words = s.split(/\s+/);
+  if (words.length > 5) return false;
+  const capitalised = words.filter((w) => /^[A-ZÀ-ÝÇĞİÖŞÜ0-9(]/.test(w) || /^(de|da|di|van|von|der|del|la|le|of|and|the|&)$/i.test(w)).length;
+  return capitalised === words.length;
+}
 type Json = unknown;
 type Node = Record<string, unknown>;
 const isTextNode = (v: Json): v is Node => !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as Node).en === 'string';
@@ -76,21 +97,32 @@ async function main() {
   const copies: Array<{ row: typeof rows[number]; node: Node; locale: string }> = [];
   for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
     if (!empty(n[l])) continue;
-    if (l !== 'ka' && typeof n.es === 'string' && n.es === n.en) { copies.push({ row: r, node: n, locale: l }); continue; }
+    if (l !== 'ka' && typeof n.es === 'string' && n.es === n.en && looksLikeProperNoun(n.en as string)) { copies.push({ row: r, node: n, locale: l }); continue; }
     items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
   }
   console.log(`proper-noun copies (en → locale, no model): ${copies.length}`);
+  // recheck-copies: slots filled by copying English earlier that are sentences, not names — translate them after all.
+  if (mode === 'recheck-copies') {
+    items.length = 0; copies.length = 0;
+    for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
+      if (l === 'ka' || typeof n[l] !== 'string' || n[l] !== n.en || looksLikeProperNoun(n.en as string)) continue;
+      n[l] = ''; items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
+    }
+    console.log(`copied-English sentences to translate: ${items.length}`);
+  }
   const byTypeLocale = new Map<string, number>();
   for (const it of items) { const k = `${it.row.type} ${it.locale}`; byTypeLocale.set(k, (byTypeLocale.get(k) ?? 0) + 1); }
   console.log(`empty locale slots: ${items.length} across ${new Set(items.map((i) => i.row.id)).size} rows`);
   for (const [k, c] of [...byTypeLocale.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${c}`);
   if (mode === 'count') return;
   if (!API_KEY) { console.error('ABORT: OPENROUTER_API_KEY missing in .env'); process.exit(1); }
-  const work = LIMIT > 0 ? items.slice(0, LIMIT) : items;
+  // --limit bounds the whole apply workload: copies first, then model items.
+  const copyWork = LIMIT > 0 ? copies.slice(0, LIMIT) : copies;
+  const work = LIMIT > 0 ? items.slice(0, Math.max(0, LIMIT - copyWork.length)) : items;
   const touched = new Map<string, typeof rows[number]>();
   const snapshot: Array<{ id: string; prompt: Json; payload: Json }> = [];
   let filled = 0, failed = 0;
-  if (mode === 'apply') for (const c of copies) {
+  if (mode === 'apply') for (const c of copyWork) {
     if (!touched.has(c.row.id)) { touched.set(c.row.id, c.row); snapshot.push({ id: c.row.id, prompt: JSON.parse(JSON.stringify(c.row.prompt)), payload: JSON.parse(JSON.stringify(c.row.payload)) }); }
     if (empty(c.node[c.locale])) { c.node[c.locale] = c.node.en; filled += 1; }
   }

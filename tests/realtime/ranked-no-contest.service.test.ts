@@ -194,6 +194,16 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([HUMAN_A]);
   });
 
+  it('records content exhaustion separately from player forfeits without applying ranked settlement', async () => {
+    const { finalizeRankedMatchAsNoContest } = await import('../../src/realtime/services/ranked-no-contest.service.js');
+    await finalizeRankedMatchAsNoContest({ matchId: MATCH_ID, roundsPlayed: 6, reason: 'question_pool_exhausted' });
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(MATCH_ID, expect.objectContaining({
+      cancelledNoContest: true, cancellationReason: 'question_pool_exhausted', roundsPlayed: 6,
+    }));
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
   it('is a no-op when the match is no longer active (idempotent under lock races)', async () => {
     getMatchMock.mockResolvedValue({ id: MATCH_ID, status: 'completed' });
 

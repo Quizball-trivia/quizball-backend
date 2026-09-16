@@ -919,11 +919,11 @@ export async function sendPossessionMatchQuestion(
           cacheSnapshot: cache,
           roundsPlayed: cache.currentQIndex,
           reason: 'question_pool_exhausted',
+        }).catch(async (error) => {
+          await deferQuestionTimer(matchId, qIndex, 5000);
+          throw error;
         });
         if (cancellation.completed) {
-          await scheduleRealtimeTimer('match_final_results', matchId, new Date(Date.now() + 5000), {
-            kind: 'match_final_results', matchId, resultVersion: cancellation.resultVersion,
-          });
           clearQuestionTimer(matchId, qIndex);
           const payload = await buildFinalResultsPayload(matchId, cancellation.resultVersion);
           if (payload) {

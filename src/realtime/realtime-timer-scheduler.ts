@@ -376,13 +376,15 @@ export async function scheduleRealtimeTimer(
   kind: RealtimeTimerKind,
   key: string,
   dueAt: Date,
-  payload: RealtimeTimerPayload
+  payload: RealtimeTimerPayload,
+  options?: { requireDurable?: boolean }
 ): Promise<void> {
   const member = timerMember(kind, key);
   clearLocalFallbackTimer(member);
 
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) {
+    if (options?.requireDurable) throw new Error('Durable realtime timer requires Redis');
     scheduleLocalFallback(member, dueAt.getTime(), payload);
     return;
   }

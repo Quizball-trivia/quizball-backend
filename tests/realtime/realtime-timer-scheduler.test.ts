@@ -150,6 +150,14 @@ describe('realtime timer scheduler', () => {
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
   });
 
+  it('rejects a required durable timer when Redis is unavailable', async () => {
+    redis = null;
+    const { scheduleRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+    await expect(scheduleRealtimeTimer('match_final_results', 'm1', new Date(), {
+      kind: 'match_final_results', matchId: 'm1', resultVersion: 123,
+    }, { requireDurable: true })).rejects.toThrow('requires Redis');
+  });
+
   it('retains and retries failed terminal-result delivery after a scheduler restart', async () => {
     const handled = vi.fn().mockRejectedValueOnce(new Error('temporary delivery failure')).mockResolvedValue(undefined);
     const { __realtimeTimerInternals, scheduleRealtimeTimer, startRealtimeTimerScheduler, stopRealtimeTimerScheduler } =

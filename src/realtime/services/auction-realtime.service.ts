@@ -3,7 +3,7 @@ import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
 import { config } from '../../core/config.js';
 import { socketIpBucket } from '../socket-auth.js';
-import { beginPracticeStart, finishPracticeStart, isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
+import { beginPracticeStart, claimPracticeSeating, finishPracticeStart, isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import { logger } from '../../core/logger.js';
@@ -80,6 +80,8 @@ export interface AuctionStartAiMatchOptions {
   anonymousBots?: boolean;
   /** Practice: checked right before bots are reserved (a cancel may have landed during the wait/admission). */
   stillWanted?: () => boolean;
+  /** Practice: claims the non-cancellable seating step right before the table is saved; false = abandon. */
+  claimSeating?: () => boolean;
   /**
    * Matchmaking uses this seam after every human socket has joined the match
    * room, but before any live Auction state is emitted. This guarantees the
@@ -254,7 +256,12 @@ async function handleStartPracticeMatch(
         locale: input.locale,
         origin: 'practice',
         sourceSocket: socket,
-      }, { ...options, anonymousBots: true, stillWanted: () => current() && socket.connected });
+      }, {
+        ...options,
+        anonymousBots: true,
+        stillWanted: () => current() && socket.connected,
+        claimSeating: () => socket.connected && claimPracticeSeating(key, token),
+      });
       logger.info(
         { matchId: saved.matchId, userId: user.id, locale: input.locale, formation: saved.formation },
         'Auction guest practice match started'
@@ -344,8 +351,9 @@ export async function startAuctionMatchForHumans(
       context
     );
 
-    // Last look before the table exists; reservations are released by the compensation below.
-    if (options.stillWanted && !options.stillWanted()) throw new AuctionPracticeStartAbandonedError();
+    // Last look before the table exists (reservations are released by the
+    // compensation below); from here on a cancel can no longer undo the seating.
+    if (options.claimSeating && !options.claimSeating()) throw new AuctionPracticeStartAbandonedError();
     saved = await auctionStateStore.save(withRound, {
       now: context.now(),
     });

@@ -18,7 +18,11 @@ interface PendingStart {
   searchId: string | null;
   timer: NodeJS.Timeout | null;
   resolve: ((proceed: boolean) => void) | null;
+  /** Seating is being written: no longer cancellable. */
+  committed: boolean;
 }
+
+export type PracticeCancelResult = 'cancelled' | 'mismatch' | 'committed' | 'none';
 
 const pending = new Map<string, PendingStart>();
 let nextToken = 1;
@@ -41,7 +45,7 @@ export function beginPracticeStart(key: string, searchId: string | null = null):
   const previous = pending.get(key);
   if (previous) abandon(previous);
   const token = nextToken++;
-  pending.set(key, { token, searchId, timer: null, resolve: null });
+  pending.set(key, { token, searchId, timer: null, resolve: null, committed: false });
   return token;
 }
 
@@ -71,6 +75,17 @@ export function waitForPracticeStart(key: string, token: number, delayMs: number
   });
 }
 
+/**
+ * Claims the non-cancellable seating step right before the match/table is
+ * written. False when the start is no longer current (cancelled/superseded).
+ */
+export function claimPracticeSeating(key: string, token: number): boolean {
+  const entry = pending.get(key);
+  if (!entry || entry.token !== token) return false;
+  entry.committed = true;
+  return true;
+}
+
 /** The start seated its table or gave up: forget it (only if still current). */
 export function finishPracticeStart(key: string, token: number): void {
   if (isPracticeStartCurrent(key, token)) pending.delete(key);
@@ -78,16 +93,16 @@ export function finishPracticeStart(key: string, token: number): void {
 
 /**
  * Abandons the pending start. With `searchId`, only a start for that search
- * is cancelled (a stale cancel must not kill a newer search). Returns whether
- * anything was pending.
+ * is cancelled — before the id is announced (entry.searchId null) or for a
+ * different id the cancel is stale ('mismatch'). A start already writing its
+ * seating reports 'committed' and stays.
  */
-export function cancelPracticeStart(key: string, searchId?: string): boolean {
+export function cancelPracticeStart(key: string, searchId?: string): PracticeCancelResult {
   const entry = pending.get(key);
-  if (!entry) return false;
-  // A cancel that names a search only hits that search; before the id is
-  // announced (entry.searchId null) such a cancel can only be stale.
-  if (searchId && entry.searchId !== searchId) return false;
+  if (!entry) return 'none';
+  if (searchId && entry.searchId !== searchId) return 'mismatch';
+  if (entry.committed) return 'committed';
   abandon(entry);
   pending.delete(key);
-  return true;
+  return 'cancelled';
 }

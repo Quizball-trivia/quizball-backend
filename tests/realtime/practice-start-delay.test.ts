@@ -5,7 +5,7 @@ vi.mock('../../src/core/config.js', () => ({
 }));
 
 import {
-  attachPracticeSearchId, beginPracticeStart, cancelPracticeStart, finishPracticeStart,
+  attachPracticeSearchId, beginPracticeStart, cancelPracticeStart, claimPracticeSeating, finishPracticeStart,
   isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart,
 } from '../../src/realtime/services/practice-start-delay.js';
 
@@ -27,7 +27,7 @@ describe('practice start delay', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await expect(wait).resolves.toBe(true);
     expect(isPracticeStartCurrent('grid:u1', token)).toBe(true);
-    expect(cancelPracticeStart('grid:u1')).toBe(true);
+    expect(cancelPracticeStart('grid:u1')).toBe('cancelled');
     expect(isPracticeStartCurrent('grid:u1', token)).toBe(false);
     finishPracticeStart('grid:u1', token);
   });
@@ -47,14 +47,23 @@ describe('practice start delay', () => {
   it('cancels only the matching search id; a stale cancel leaves the newer search alone', async () => {
     const token = beginPracticeStart('grid:u2');
     // Before the search id is announced, a cancel naming a search can only be stale.
-    expect(cancelPracticeStart('grid:u2', 'search-old')).toBe(false);
+    expect(cancelPracticeStart('grid:u2', 'search-old')).toBe('mismatch');
     expect(isPracticeStartCurrent('grid:u2', token)).toBe(true);
     attachPracticeSearchId('grid:u2', token, 'search-b');
     const wait = waitForPracticeStart('grid:u2', token, 10_000);
-    expect(cancelPracticeStart('grid:u2', 'search-a')).toBe(false);
+    expect(cancelPracticeStart('grid:u2', 'search-a')).toBe('mismatch');
     expect(isPracticeStartCurrent('grid:u2', token)).toBe(true);
-    expect(cancelPracticeStart('grid:u2', 'search-b')).toBe(true);
+    expect(cancelPracticeStart('grid:u2', 'search-b')).toBe('cancelled');
     await expect(wait).resolves.toBe(false);
-    expect(cancelPracticeStart('grid:u2')).toBe(false);
+    expect(cancelPracticeStart('grid:u2')).toBe('none');
+  });
+
+  it('a start that claimed its seating can no longer be cancelled', () => {
+    const token = beginPracticeStart('grid:u3');
+    expect(claimPracticeSeating('grid:u3', token)).toBe(true);
+    expect(cancelPracticeStart('grid:u3')).toBe('committed');
+    expect(isPracticeStartCurrent('grid:u3', token)).toBe(true);
+    finishPracticeStart('grid:u3', token);
+    expect(claimPracticeSeating('grid:u3', token)).toBe(false);
   });
 });

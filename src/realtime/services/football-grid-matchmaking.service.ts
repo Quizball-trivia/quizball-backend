@@ -5,6 +5,7 @@ import {
   attachPracticeSearchId,
   beginPracticeStart,
   cancelPracticeStart,
+  claimPracticeSeating,
   finishPracticeStart,
   isPracticeStartCurrent,
   practiceStartDelayMs,
@@ -584,8 +585,10 @@ interface BotPairOptions {
    * a failure leaves the guest idle instead of re-queueing them.
    */
   requireQueued?: boolean;
-  /** Practice: re-checked under the lock right before the match is created (a cancel may have landed meanwhile). */
+  /** Practice: re-checked under the lock before reserving a bot (a cancel may have landed meanwhile). */
   stillWanted?: () => boolean;
+  /** Practice: claims the non-cancellable seating step right before the match is created; false = abandon. */
+  claimSeating?: () => boolean;
 }
 
 async function startBotPair(
@@ -637,8 +640,9 @@ async function startBotPair(
         const openerUserId = randomInt(2) === 0 ? search.userId : selected.bot.user_id;
         const seed = randomInt(1, 2_147_483_647);
         // Last look before the match exists: a practice cancel that landed during
-        // reservation/pairing aborts here (reservation + pairing are compensated below).
-        if (options.stillWanted && !options.stillWanted()) throw new Error('GRID_PRACTICE_START_ABANDONED');
+        // reservation/pairing aborts here (reservation + pairing are compensated
+        // below); from here on a cancel can no longer undo the seating.
+        if (options.claimSeating && !options.claimSeating()) throw new Error('GRID_PRACTICE_START_ABANDONED');
         state = (await withPairingHeartbeat(pairingToken, () => (
           footballGridService.createMatch({
             pairingToken,
@@ -957,7 +961,11 @@ export const footballGridMatchmakingService = {
         return;
       }
       // Outside the per-user lock: startBotPair takes it itself.
-      const paired = await startBotPair(io, search, { requireQueued: false, stillWanted: () => current() && socket.connected });
+      const paired = await startBotPair(io, search, {
+        requireQueued: false,
+        stillWanted: () => current() && socket.connected,
+        claimSeating: () => socket.connected && claimPracticeSeating(key, token),
+      });
       if (!paired) {
         // Cancelled while seating: the guest already got its idle state.
         if (!current()) return;
@@ -1065,12 +1073,15 @@ export const footballGridMatchmakingService = {
   async handleSearchCancel(io: QuizballServer, socket: QuizballSocket, expectedSearchId: string): Promise<void> {
     const userId = socket.data.user.id;
     // A guest practice search waiting for its bot is process-local, not queued.
-    // Only a cancel for THAT search counts; a stale id falls through to the queue path.
-    if (cancelPracticeStart(`grid:${userId}`, expectedSearchId)) {
+    // Only a cancel for THAT search counts; a stale id, or a start already
+    // writing its seating, is ignored (the match_found that follows wins).
+    const practiceCancel = cancelPracticeStart(`grid:${userId}`, expectedSearchId);
+    if (practiceCancel === 'cancelled') {
       emitSearchState(io, userId, { state: 'idle', searchId: expectedSearchId });
       await userSessionGuardService.emitState(io, userId).catch(() => {});
       return;
     }
+    if (practiceCancel !== 'none') return;
     const redis = getRedisClient();
     if (!redis?.isOpen) return;
     const locked = await withMatchmakingLock(async () => {

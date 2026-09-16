@@ -514,6 +514,11 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       { fieldErrors },
     );
   }
+  if (result.data.GUEST_BOT_MATCH_DELAY_MIN_MS > result.data.GUEST_BOT_MATCH_DELAY_MAX_MS) {
+    throw new ConfigError('Invalid configuration: GUEST_BOT_MATCH_DELAY_MIN_MS must not exceed GUEST_BOT_MATCH_DELAY_MAX_MS', {
+      fieldErrors: { GUEST_BOT_MATCH_DELAY_MAX_MS: ['must be >= GUEST_BOT_MATCH_DELAY_MIN_MS'] },
+    });
+  }
 
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking
   // delays for the test harness. They MUST never run outside local — in

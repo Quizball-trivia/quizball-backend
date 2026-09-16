@@ -11,6 +11,38 @@ import {
   type QuizballServer,
 } from '../../src/realtime/socket-server.js';
 import { runPossessionAiAnswer } from '../../src/realtime/possession-match-flow.js';
+import { buildFinalResultsPayload, emitFinalResultsToMatchParticipants } from '../../src/realtime/services/match-final-results.service.js';
+
+vi.mock('../../src/realtime/services/match-final-results.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/realtime/services/match-final-results.service.js')>(),
+  buildFinalResultsPayload: vi.fn(),
+  emitFinalResultsToMatchParticipants: vi.fn(),
+}));
+
+describe('terminal final-results timer', () => {
+  const payload = { kind: 'match_final_results' as const, matchId: 'cancelled-match', resultVersion: 123 };
+
+  it('delivers results independently of the terminal match question timer', async () => {
+    const results = { matchId: payload.matchId, cancelledNoContest: true };
+    vi.mocked(buildFinalResultsPayload).mockResolvedValueOnce(results as never);
+    await buildRealtimeTimerHandlers().match_final_results!({} as QuizballServer, payload);
+    expect(buildFinalResultsPayload).toHaveBeenCalledWith(payload.matchId, 123);
+    expect(emitFinalResultsToMatchParticipants).toHaveBeenCalledWith({}, payload.matchId, results);
+  });
+
+  it('rejects unavailable results so the scheduler retries', async () => {
+    vi.mocked(buildFinalResultsPayload).mockResolvedValueOnce(null);
+    await expect(buildRealtimeTimerHandlers().match_final_results!({} as QuizballServer, payload))
+      .rejects.toThrow('Final results unavailable');
+  });
+
+  it('propagates delivery errors so the scheduler retries', async () => {
+    vi.mocked(buildFinalResultsPayload).mockResolvedValueOnce({ matchId: payload.matchId } as never);
+    vi.mocked(emitFinalResultsToMatchParticipants).mockRejectedValueOnce(new Error('temporary delivery failure'));
+    await expect(buildRealtimeTimerHandlers().match_final_results!({} as QuizballServer, payload))
+      .rejects.toThrow('temporary delivery failure');
+  });
+});
 
 vi.mock('../../src/realtime/possession-match-flow.js', () => ({
   finalizeHalftime: vi.fn(),

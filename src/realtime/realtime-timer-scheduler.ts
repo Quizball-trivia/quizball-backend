@@ -32,6 +32,7 @@ export type RealtimeTimerKind =
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
   | 'match_disconnect_forfeit'
+  | 'match_final_results'
   | 'match_resume_countdown'
   | 'party_question'
   | 'party_round_transition'
@@ -56,6 +57,7 @@ export type RealtimeTimerPayload =
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string; disconnectMarkerMs?: number }
+  | { kind: 'match_final_results'; matchId: string; resultVersion: number }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
   | { kind: 'party_round_transition'; matchId: string; resolvedQIndex: number; nextQIndex: number }
@@ -124,6 +126,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'
     && kind !== 'match_disconnect_forfeit'
+    && kind !== 'match_final_results'
     && kind !== 'match_resume_countdown'
     && kind !== 'party_question'
     && kind !== 'party_round_transition'

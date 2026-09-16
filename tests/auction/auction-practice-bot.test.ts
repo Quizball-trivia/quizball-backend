@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+vi.hoisted(() => { process.env.GUEST_BOT_MATCH_DELAY_MIN_MS = '0'; process.env.GUEST_BOT_MATCH_DELAY_MAX_MS = '0'; });
 import '../setup.js';
 
 const auctionContentServiceMock = vi.hoisted(() => ({
@@ -102,6 +103,7 @@ function publishedCard(overrides: Record<string, unknown> = {}) {
 
 function createSocket(user: { id: string; nickname: string | null; is_guest?: boolean } | null = { id: 'user-1', nickname: 'Human' }) {
   return {
+    connected: true,
     data: user ? { user } : {},
     join: vi.fn(),
     leave: vi.fn(),

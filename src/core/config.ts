@@ -288,6 +288,9 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val === "true" || val === "1"),
+  /** Random wait before a guest practice table is seated, so it feels like matchmaking. */
+  GUEST_BOT_MATCH_DELAY_MIN_MS: z.coerce.number().int().min(0).default(5_000),
+  GUEST_BOT_MATCH_DELAY_MAX_MS: z.coerce.number().int().min(0).default(25_000),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
   /**
@@ -510,6 +513,11 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       `Invalid configuration: ${JSON.stringify(fieldErrors)}`,
       { fieldErrors },
     );
+  }
+  if (result.data.GUEST_BOT_MATCH_DELAY_MIN_MS > result.data.GUEST_BOT_MATCH_DELAY_MAX_MS) {
+    throw new ConfigError('Invalid configuration: GUEST_BOT_MATCH_DELAY_MIN_MS must not exceed GUEST_BOT_MATCH_DELAY_MAX_MS', {
+      fieldErrors: { GUEST_BOT_MATCH_DELAY_MAX_MS: ['must be >= GUEST_BOT_MATCH_DELAY_MIN_MS'] },
+    });
   }
 
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking

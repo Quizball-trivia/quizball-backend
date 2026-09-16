@@ -13,6 +13,7 @@ import {
 import { handleAuctionForfeit, handleAuctionRejoin } from '../services/auction-disconnect.service.js';
 import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
+import { cancelPracticeStart } from '../services/practice-start-delay.js';
 import {
   handleAuctionBid,
   handleAuctionFold,
@@ -248,6 +249,11 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
 
   socket.on('auction:search_cancel', async () => {
     try {
+      // A guest practice table still waiting for its seats is not a queued search.
+      if (socket.data.user?.id && cancelPracticeStart(`auction:${socket.data.user.id}`) === 'cancelled') {
+        socket.emit('auction:search_cancelled', { searchId: null, reason: 'cancelled' });
+        return;
+      }
       await auctionMatchmakingService.handleSearchCancel(io, socket);
     } catch (error) {
       logger.error({ error, userId: socket.data.user?.id }, 'auction:search_cancel handler failed');

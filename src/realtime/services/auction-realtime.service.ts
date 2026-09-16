@@ -344,6 +344,8 @@ export async function startAuctionMatchForHumans(
       context
     );
 
+    // Last look before the table exists; reservations are released by the compensation below.
+    if (options.stillWanted && !options.stillWanted()) throw new AuctionPracticeStartAbandonedError();
     saved = await auctionStateStore.save(withRound, {
       now: context.now(),
     });

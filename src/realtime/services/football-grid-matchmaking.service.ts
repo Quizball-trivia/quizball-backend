@@ -636,6 +636,9 @@ async function startBotPair(
         await removeSearch(search);
         const openerUserId = randomInt(2) === 0 ? search.userId : selected.bot.user_id;
         const seed = randomInt(1, 2_147_483_647);
+        // Last look before the match exists: a practice cancel that landed during
+        // reservation/pairing aborts here (reservation + pairing are compensated below).
+        if (options.stillWanted && !options.stillWanted()) throw new Error('GRID_PRACTICE_START_ABANDONED');
         state = (await withPairingHeartbeat(pairingToken, () => (
           footballGridService.createMatch({
             pairingToken,

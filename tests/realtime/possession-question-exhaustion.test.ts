@@ -206,6 +206,19 @@ describe('possession question exhaustion', () => {
     expect(finalizeNoContestMock).not.toHaveBeenCalled();
   });
 
+  it('keeps a durable terminal-results retry when result delivery fails', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(createCache('LAST_ATTACK'));
+    emitFinalResultsMock.mockRejectedValueOnce(new Error('temporary delivery failure'));
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    const { scheduleRealtimeTimer, cancelRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+    await expect(sendPossessionMatchQuestion(createIo(), 'match-exhausted', 6))
+      .rejects.toThrow('temporary delivery failure');
+    expect(scheduleRealtimeTimer).toHaveBeenCalledWith('match_final_results', 'match-exhausted', expect.any(Date), {
+      kind: 'match_final_results', matchId: 'match-exhausted', resultVersion: 1,
+    });
+    expect(cancelRealtimeTimer).not.toHaveBeenCalledWith('match_final_results', 'match-exhausted');
+  });
+
   it('arms a durable retry when another finalizer holds the no-contest lock', async () => {
     getMatchCacheOrRebuildMock.mockResolvedValue(createCache('LAST_ATTACK'));
     finalizeNoContestMock.mockResolvedValue({ completed: false });

@@ -89,7 +89,19 @@ export function buildPossessionEligibilityHavingCounts(minMcqQuestions: number) 
 `;
 }
 
-export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHavingCounts(5);
+// Ranked depth must count usable MCQs. A correlated payload check keeps the
+// callers' one-row-per-question shape (and needs no qp join at each call site).
+// Friendly counts-only callers retain their existing lightweight coverage check.
+export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
+  HAVING COUNT(*) FILTER (
+    WHERE q.type = 'mcq_single' AND EXISTS (
+      SELECT 1 FROM question_payloads qp
+      WHERE qp.question_id = q.id AND ${MCQ_VALIDATION_CONDITIONS}
+    )
+  ) >= 5
+    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
+    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
+`;
 
 /**
  * Game-mode/daily-challenge categories must never enter matchmaking pools

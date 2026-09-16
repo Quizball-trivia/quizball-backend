@@ -881,9 +881,15 @@ export async function sendPossessionMatchQuestion(
           reason: 'question_pool_exhausted',
         });
         if (cancellation.completed) {
+          await scheduleRealtimeTimer('match_final_results', matchId, new Date(Date.now() + 5000), {
+            kind: 'match_final_results', matchId, resultVersion: cancellation.resultVersion,
+          });
           clearQuestionTimer(matchId, qIndex);
           const payload = await buildFinalResultsPayload(matchId, cancellation.resultVersion);
-          if (payload) await emitFinalResultsToMatchParticipants(io, matchId, payload);
+          if (payload) {
+            await emitFinalResultsToMatchParticipants(io, matchId, payload);
+            await cancelRealtimeTimer('match_final_results', matchId);
+          }
         } else {
           // A competing finalizer may own the lock. Leave a durable retry;
           // missing-question recovery re-enters dispatch instead of spinning.

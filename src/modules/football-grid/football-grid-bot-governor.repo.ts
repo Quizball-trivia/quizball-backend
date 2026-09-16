@@ -82,6 +82,9 @@ export const footballGridBotGovernorRepo = {
           AND bot.is_bot = true
          JOIN football_grid_participants human
            ON human.match_id = gm.match_id AND human.is_bot = false
+         -- Guest "Play now" outcomes are not a signal about member difficulty.
+         JOIN users human_user
+           ON human_user.id = human.user_id AND human_user.is_guest = false
         WHERE gm.match_id = $1
           AND m.status = 'completed'
           AND gm.bot_model_version = 2
@@ -127,6 +130,7 @@ export const footballGridBotGovernorRepo = {
          )
          AND EXISTS (
            SELECT 1 FROM football_grid_participants human
+             JOIN users human_user ON human_user.id = human.user_id AND human_user.is_guest = false
             WHERE human.match_id = gm.match_id AND human.is_bot = false
          )
          AND (SELECT count(*) FROM football_grid_participants participants

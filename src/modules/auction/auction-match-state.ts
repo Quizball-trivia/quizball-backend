@@ -70,7 +70,8 @@ export interface AuctionSoloPickState {
  * this field existed, which is why readers must treat undefined as 'queue'
  * (see `auctionMatchOrigin`).
  */
-export type AuctionMatchOrigin = 'queue' | 'lobby';
+/** 'practice' = guest "Play now" table against anonymous bots: no AP, no leaderboard, no lobby. */
+export type AuctionMatchOrigin = 'queue' | 'lobby' | 'practice';
 
 export interface AuctionMatchState {
   matchId: string;

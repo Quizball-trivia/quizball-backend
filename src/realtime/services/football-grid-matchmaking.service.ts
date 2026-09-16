@@ -1,4 +1,6 @@
-import { assertCapability } from '../../modules/users/capabilities.js';
+import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
+import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
+import { socketIpBucket } from '../socket-auth.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
@@ -61,6 +63,11 @@ interface QueuedGridSearch {
   theme: FootballGridTheme;
   queuedAt: number;
   fallbackAt: number;
+  /**
+   * Guest "Play now": never queued, paired with a bot immediately. Persisted in
+   * the pairing snapshot so recovery can never restore it into the human queue.
+   */
+  practice?: boolean;
 }
 
 interface HumanPairStart {
@@ -209,6 +216,8 @@ function normalizeTheme(value: unknown): FootballGridTheme {
 
 async function restoreSearch(io: QuizballServer, search: QueuedGridSearch): Promise<boolean> {
   if (isSearchExpired(search)) return false;
+  // A practice search was never in the queue and must not enter it now.
+  if (search.practice) return false;
   const session = await userSessionGuardService.resolveState(search.userId);
   if (
     session.activeMatchId
@@ -558,13 +567,37 @@ async function runHumanPairSweep(io: QuizballServer): Promise<boolean> {
   return acquiredAtLeastOnce;
 }
 
-async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promise<BotPairStart | null> {
+interface BotPairOptions {
+  /**
+   * Queue fallback (default): the search must still be exclusively queued.
+   * Guest "Play now" pairs a search that never entered the Redis queue — no
+   * human can ever be paired with it — so the membership check is skipped and
+   * a failure leaves the guest idle instead of re-queueing them.
+   */
+  requireQueued?: boolean;
+}
+
+async function startBotPair(
+  io: QuizballServer,
+  search: QueuedGridSearch,
+  options: BotPairOptions = {},
+): Promise<BotPairStart | null> {
+  const requireQueued = options.requireQueued !== false;
   if (isSearchExpired(search)) return null;
   if (!config.FOOTBALL_GRID_QUEUE_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) return null;
   if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return null;
+  // Guests get a synthetic unplaced profile here (no ranked row is created).
   const humanProfile = await rankedService.ensureProfile(search.userId);
   const paired = await userSessionGuardService.withUserSessionLocks([search.userId], async () => {
-    if (!await searchesStillExclusivelyQueued([search])) return null;
+    if (requireQueued) {
+      if (!await searchesStillExclusivelyQueued([search])) return null;
+    } else {
+      // Not queued, so the queue check cannot vouch for exclusivity: re-read the
+      // session under the lock so a duplicate start (second tab, repeated event)
+      // cannot create a second match or reserve a second bot.
+      const session = await userSessionGuardService.resolveState(search.userId);
+      if (session.activeMatchId || session.openLobbyIds.length > 0 || session.queueSearchId !== null) return null;
+    }
     const selected = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: search.userId,
       humanProfile,
@@ -622,7 +655,12 @@ async function startBotPair(io: QuizballServer, search: QueuedGridSearch): Promi
         logger.error({ error, pairingToken, userId: search.userId, botUserId: selected.bot.user_id }, 'Football Grid bot pairing failed');
         await footballGridRepo.markPairingFailed(pairingToken, error instanceof Error ? error.message : 'unknown').catch(() => {});
         await reservationService.abortLobby(search.searchId, 'match_found_cancel');
-        await restoreSearchOrIdle(io, search);
+        if (requireQueued) {
+          await restoreSearchOrIdle(io, search);
+        } else {
+          emitSearchState(io, search.userId, { state: 'idle', searchId: search.searchId });
+          await userSessionGuardService.emitState(io, search.userId).catch(() => {});
+        }
         return null;
       }
       return { pairingToken, state, search, botUserId: selected.bot.user_id };
@@ -639,8 +677,11 @@ async function deliverBotPair(io: QuizballServer, result: BotPairStart): Promise
     await syntheticBotSelectionService.recordRecentlyFaced(search.userId, botUserId);
     emitSearchState(io, search.userId, { state: 'matched', searchId: search.searchId });
     await footballGridRealtimeService.emitMatchFound(io, state);
-    appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: 'random' });
-    appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
+    appMetrics.footballGridMatches.add(1, { opponent_type: 'bot', origin: search.practice ? 'practice' : 'random' });
+    // Practice never waited in the queue: keep it out of the wait-time series.
+    if (!search.practice) {
+      appMetrics.footballGridQueueWaitDuration.record(Date.now() - search.queuedAt, { opponent_type: 'bot' });
+    }
     await userSessionGuardService.emitState(io, search.userId);
   } catch (error) {
     logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot handoff deferred to recovery');
@@ -670,6 +711,40 @@ async function deliverBotPair(io: QuizballServer, result: BotPairStart): Promise
   } catch (error) {
     logger.warn({ error, pairingToken, matchId: state.matchId }, 'Football Grid bot pairing analytics failed');
   }
+}
+
+/**
+ * A player who still owns a live match gets it re-delivered instead of a new
+ * search. Returns true when the match was resumed; otherwise stale bindings
+ * are cleared and the caller starts fresh.
+ */
+async function resumeActiveMatchOnStart(io: QuizballServer, userId: string): Promise<boolean> {
+  const activeMatchId = await footballGridRepo.getActiveMatchIdForUser(userId);
+  if (!activeMatchId) return false;
+  const outcome = await footballGridService.resolveStaleMatchOnSearchStart({
+    matchId: activeMatchId,
+    userId,
+  });
+  if (outcome === 'resumable') {
+    const state = await footballGridService.getState(activeMatchId, userId);
+    // emitMatchFound re-reads authoritative state; when it reports the
+    // match terminalized mid-flight we sweep and fall through to a fresh
+    // search instead of leaving the player's request unanswered.
+    const resumed = state.phase !== 'terminal'
+      ? await footballGridRealtimeService.emitMatchFound(io, state)
+      : false;
+    if (resumed) return true;
+  }
+  // Clear local replicas' stale bindings for the dead match. Sockets on
+  // other replicas keep their binding, but disconnect cleanup now
+  // consults the DB instead of trusting it.
+  const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => []);
+  for (const s of sockets) {
+    if (s.data.gridMatchId === activeMatchId) s.data.gridMatchId = undefined;
+    if (s.data.matchId === activeMatchId) s.data.matchId = undefined;
+  }
+  // 'gone', cancelled, or resumable-but-terminalized: fresh search.
+  return false;
 }
 
 export const footballGridMatchmakingService = {
@@ -765,6 +840,83 @@ export const footballGridMatchmakingService = {
     matchmakingSweepRunning = false;
   },
 
+  /**
+   * Guest "Play now" from the public Tic Tac Toe page: the real bot fallback,
+   * started immediately and without the queue. Guests never earn rewards
+   * (settlement rule) and see the bot under an anonymous guest-style name
+   * (football-grid-realtime emitMatchFound).
+   */
+  async handlePracticeBotStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
+    const user = socket.data.user;
+    if (!isGuestUser(user)) {
+      socket.emit('grid:error', { code: 'GRID_PRACTICE_GUEST_ONLY', message: 'Members play Football Tic Tac Toe through matchmaking' });
+      return;
+    }
+    const userId = user.id;
+    if (
+      !config.GUEST_BOT_MATCHES_ENABLED
+      || !config.FOOTBALL_GRID_QUEUE_ENABLED
+      || !config.FOOTBALL_GRID_CONTENT_ENABLED
+      || !config.FOOTBALL_GRID_BOTS_ENABLED
+    ) {
+      socket.emit('grid:error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe is temporarily unavailable' });
+      return;
+    }
+    if (await resumeActiveMatchOnStart(io, userId)) return;
+    if (
+      !await allowGuestOperation(`user:${userId}`, 'bot_match')
+      || !await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')
+    ) {
+      socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many matches started. Please try again later.' });
+      return;
+    }
+    const search = await userSessionGuardService.withUserSessionLock(userId, async () => {
+      const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
+      if (!prepared.ok) {
+        userSessionGuardService.emitBlocked(socket, {
+          reason: prepared.reason ?? 'ACTIVE_MATCH',
+          message: prepared.message ?? 'You are already in an active session',
+          operation: 'grid:practice_bot_start',
+          stateSnapshot: prepared.snapshot,
+        });
+        return null;
+      }
+      const now = Date.now();
+      const practiceSearch: QueuedGridSearch = {
+        searchId: randomUUID(),
+        userId,
+        displayName: user.nickname ?? 'Player',
+        locale: input.locale,
+        theme: input.theme,
+        queuedAt: now,
+        fallbackAt: now,
+        practice: true,
+      };
+      trackFootballGridQueueJoined({
+        userId,
+        searchId: practiceSearch.searchId,
+        locale: practiceSearch.locale,
+        queuedAt: new Date(practiceSearch.queuedAt),
+      });
+      emitSearchState(io, userId, {
+        state: 'searching', searchId: practiceSearch.searchId,
+        queuedAt: new Date(practiceSearch.queuedAt).toISOString(),
+        fallbackAt: new Date(practiceSearch.fallbackAt).toISOString(),
+      });
+      return practiceSearch;
+    });
+    if (!search) return;
+    // Outside the per-user lock: startBotPair takes it itself.
+    const paired = await startBotPair(io, search, { requireQueued: false });
+    if (!paired) {
+      emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+      await userSessionGuardService.emitState(io, userId).catch(() => {});
+      socket.emit('grid:error', { code: 'GRID_BOT_UNAVAILABLE', message: 'No opponent is available right now. Please try again.' });
+      return;
+    }
+    await deliverBotPair(io, paired);
+  },
+
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
     assertCapability(socket.data.user, 'queueEntry');
     const userId = socket.data.user.id;
@@ -778,34 +930,7 @@ export const footballGridMatchmakingService = {
       socket.emit('grid:error', { code: 'GRID_QUEUE_UNAVAILABLE', message: 'Matchmaking is temporarily unavailable' });
       return;
     }
-    const activeMatchId = await footballGridRepo.getActiveMatchIdForUser(userId);
-    if (activeMatchId) {
-      const outcome = await footballGridService.resolveStaleMatchOnSearchStart({
-        matchId: activeMatchId,
-        userId,
-      });
-      if (outcome === 'resumable') {
-        const state = await footballGridService.getState(activeMatchId, userId);
-        // emitMatchFound re-reads authoritative state; when it reports the
-        // match terminalized mid-flight we sweep and fall through to a fresh
-        // search instead of leaving the player's request unanswered.
-        const resumed = state.phase !== 'terminal'
-          ? await footballGridRealtimeService.emitMatchFound(io, state)
-          : false;
-        if (resumed) return;
-      }
-      if (activeMatchId) {
-        // Clear local replicas' stale bindings for the dead match. Sockets on
-        // other replicas keep their binding, but disconnect cleanup now
-        // consults the DB instead of trusting it.
-        const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => []);
-        for (const s of sockets) {
-          if (s.data.gridMatchId === activeMatchId) s.data.gridMatchId = undefined;
-          if (s.data.matchId === activeMatchId) s.data.matchId = undefined;
-        }
-      }
-      // 'gone', cancelled, or resumable-but-terminalized: fresh search.
-    }
+    if (await resumeActiveMatchOnStart(io, userId)) return;
     // Queue admission is per-user and does not need the global pairing lock.
     // Keeping it behind the global lock made a burst behave like a try-lock:
     // every caller except the current match creator was rejected instead of

@@ -7,6 +7,7 @@ import {
   auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
+  auctionPracticeBotStartSchema,
   auctionUiReadySchema,
 } from '../schemas/auction.schemas.js';
 import { handleAuctionForfeit, handleAuctionRejoin } from '../services/auction-disconnect.service.js';
@@ -46,6 +47,30 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     } catch (error) {
       if (emitCapabilityError(socket, error)) return;
       logger.error({ error, userId: socket.data.user?.id }, 'auction:start_ai_match handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_content_unavailable',
+        message: 'Failed to start auction match',
+      });
+    }
+  });
+
+  socket.on('auction:practice_bot_start', async (payload) => {
+    const parsed = auctionPracticeBotStartSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:practice_bot_start payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction start payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await auctionRealtimeService.handleStartPracticeMatch(io, socket, parsed.data);
+    } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:practice_bot_start handler failed');
       socket.emit('auction:error', {
         code: 'auction_content_unavailable',
         message: 'Failed to start auction match',

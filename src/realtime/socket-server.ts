@@ -56,6 +56,7 @@ import {
   type RealtimeTimerHandlers,
 } from './realtime-timer-scheduler.js';
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
+import { buildFinalResultsPayload, emitFinalResultsToMatchParticipants } from './services/match-final-results.service.js';
 import { startReservationSweeper } from './services/synthetic-bot-reservation-sweeper.service.js';
 import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
 import { startWlOrchestrator } from '../modules/weekend-league/wl-orchestrator.js';
@@ -541,6 +542,14 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     possession_question: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'possession_question') return;
       await resolvePossessionRound(server, payload.matchId, payload.qIndex, true);
+    },
+    match_final_results: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'match_final_results') return;
+      const results = await buildFinalResultsPayload(payload.matchId, payload.resultVersion);
+      // Throwing keeps this dedicated timer retryable even after the match
+      // is terminal and its question timers have been cleared.
+      if (!results) throw new Error(`Final results unavailable for ${payload.matchId}`);
+      await emitFinalResultsToMatchParticipants(server, payload.matchId, results);
     },
     match_disconnect_forfeit: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_disconnect_forfeit') return;

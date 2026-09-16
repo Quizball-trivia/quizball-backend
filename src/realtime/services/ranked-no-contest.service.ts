@@ -9,6 +9,7 @@ import { deleteMatchCache, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import { lastMatchKey } from '../match-keys.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
+import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
@@ -40,6 +41,14 @@ interface RankedNoContestParams {
 export async function finalizeRankedNoContest(
   params: RankedNoContestParams
 ): Promise<number> {
+  const resultVersion = Date.now();
+  if (params.reason === 'question_pool_exhausted') {
+    // Establish durable delivery before any terminal database write. If Redis
+    // rejects this write, the match stays active and dispatch can safely retry.
+    await scheduleRealtimeTimer('match_final_results', params.matchId, new Date(Date.now() + 5000), {
+      kind: 'match_final_results', matchId: params.matchId, resultVersion,
+    }, { requireDurable: true });
+  }
   await matchesRepo.setMatchStatePayload(params.matchId, {
     ...params.statePayload,
     winnerDecisionMethod: 'forfeit',
@@ -73,7 +82,6 @@ export async function finalizeRankedNoContest(
   // and orphan paths that route their early-forfeit through here).
   await reservationService.releaseIfSettled(params.matchId, 'no_contest');
 
-  const resultVersion = Date.now();
   const redis = getRedisClient();
   if (redis) {
     const cleanupKeys = params.cleanupRedisKeys?.filter(Boolean) ?? [];

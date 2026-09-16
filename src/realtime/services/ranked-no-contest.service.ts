@@ -9,6 +9,7 @@ import { deleteMatchCache, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import { lastMatchKey } from '../match-keys.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
+import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
@@ -22,6 +23,7 @@ interface RankedNoContestParams {
   roster: Array<{ user_id: string }>;
   statePayload: Record<string, unknown>;
   roundsPlayed: number;
+  reason?: 'zero_human_interaction' | 'question_pool_exhausted';
   cleanupRedisKeys?: string[];
   /** Users the refund must SKIP (e.g. a penalized serial forfeiter). */
   suppressRefundUserIds?: string[];
@@ -39,10 +41,19 @@ interface RankedNoContestParams {
 export async function finalizeRankedNoContest(
   params: RankedNoContestParams
 ): Promise<number> {
+  const resultVersion = Date.now();
+  if (params.reason === 'question_pool_exhausted') {
+    // Establish durable delivery before any terminal database write. If Redis
+    // rejects this write, the match stays active and dispatch can safely retry.
+    await scheduleRealtimeTimer('match_final_results', params.matchId, new Date(Date.now() + 5000), {
+      kind: 'match_final_results', matchId: params.matchId, resultVersion,
+    }, { requireDurable: true });
+  }
   await matchesRepo.setMatchStatePayload(params.matchId, {
     ...params.statePayload,
     winnerDecisionMethod: 'forfeit',
     cancelledNoContest: true,
+    ...(params.reason ? { cancellationReason: params.reason } : {}),
     roundsPlayed: params.roundsPlayed,
   });
   await matchesService.abandonMatch(params.matchId);
@@ -71,7 +82,6 @@ export async function finalizeRankedNoContest(
   // and orphan paths that route their early-forfeit through here).
   await reservationService.releaseIfSettled(params.matchId, 'no_contest');
 
-  const resultVersion = Date.now();
   const redis = getRedisClient();
   if (redis) {
     const cleanupKeys = params.cleanupRedisKeys?.filter(Boolean) ?? [];
@@ -102,9 +112,8 @@ export interface FinalizeRankedNoContestResult {
 }
 
 /**
- * Void a ranked match as a no-contest with no forfeiter (zero-interaction
- * safety net): every human got timeout-backfilled the whole match, so there is
- * no legitimate result. Abandon it, refund all humans, and stamp replay
+ * Void a ranked match with no forfeiter: either no human interacted, or the
+ * server exhausted all eligible questions. Abandon it, refund all humans, and stamp replay
  * markers — the same terminal state as an early forfeit, minus the per-player
  * forfeit penalty since nobody chose to leave.
  */
@@ -114,6 +123,7 @@ export async function finalizeRankedMatchAsNoContest(params: {
   cacheSnapshot?: MatchCache | null;
   cleanupRedisKeys?: string[];
   roundsPlayed: number;
+  reason?: 'zero_human_interaction' | 'question_pool_exhausted';
 }): Promise<FinalizeRankedNoContestResult> {
   const lockKey = `lock:match:${params.matchId}:complete`;
   const lockTtlMs = 15_000;
@@ -136,11 +146,12 @@ export async function finalizeRankedMatchAsNoContest(params: {
       roster,
       statePayload: currentPayload,
       roundsPlayed: params.roundsPlayed,
+      reason: params.reason,
       cleanupRedisKeys: params.cleanupRedisKeys,
     });
     logger.info(
-      { matchId: params.matchId, roundsPlayed: params.roundsPlayed },
-      'Ranked match cancelled as no-contest (zero human interaction) — RP unchanged, tickets refunded'
+      { matchId: params.matchId, roundsPlayed: params.roundsPlayed, reason: params.reason ?? 'zero_human_interaction' },
+      'Ranked match cancelled as no-contest — RP unchanged, tickets refunded'
     );
     return { matchId: params.matchId, resultVersion, completed: true };
   } finally {

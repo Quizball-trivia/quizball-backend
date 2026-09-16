@@ -164,6 +164,32 @@ describe('realtime timer scheduler', () => {
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
   });
 
+  it('rejects a required durable timer when Redis is unavailable', async () => {
+    redis = null;
+    const { scheduleRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+    await expect(scheduleRealtimeTimer('match_final_results', 'm1', new Date(), {
+      kind: 'match_final_results', matchId: 'm1', resultVersion: 123,
+    }, { requireDurable: true })).rejects.toThrow('requires Redis');
+  });
+
+  it('retains and retries failed terminal-result delivery after a scheduler restart', async () => {
+    const handled = vi.fn().mockRejectedValueOnce(new Error('temporary delivery failure')).mockResolvedValue(undefined);
+    const { __realtimeTimerInternals, scheduleRealtimeTimer, startRealtimeTimerScheduler, stopRealtimeTimerScheduler } =
+      await import('../../src/realtime/realtime-timer-scheduler.js');
+    const payload = { kind: 'match_final_results' as const, matchId: 'm1', resultVersion: 123 };
+    await scheduleRealtimeTimer('match_final_results', 'm1', new Date(Date.now() + 1000), payload);
+    startRealtimeTimerScheduler({} as QuizballServer, { match_final_results: handled });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handled).toHaveBeenCalledTimes(1);
+    stopRealtimeTimerScheduler();
+    startRealtimeTimerScheduler({} as QuizballServer, { match_final_results: handled });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handled).toHaveBeenCalledTimes(2);
+    expect(handled).toHaveBeenLastCalledWith(expect.anything(), payload);
+    const member = __realtimeTimerInternals.timerMember('match_final_results', 'm1');
+    expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
+  });
+
   it('bounds a due timer burst and prevents overlapping polls', async () => {
     let active = 0;
     let maxActive = 0;

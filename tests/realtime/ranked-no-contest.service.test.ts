@@ -25,6 +25,10 @@ const buildFinalResultsPayloadMock = vi.fn();
 const emitFinalResultsToMatchParticipantsMock = vi.fn();
 const clearAiMapsMock = vi.fn();
 const clearHalftimeTimerMock = vi.fn();
+const scheduleTimerMock = vi.fn();
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
+  scheduleRealtimeTimer: (...args: unknown[]) => scheduleTimerMock(...args),
+}));
 
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: (...a: unknown[]) => acquireLockMock(...a),
@@ -192,6 +196,30 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     await finalizeRankedMatchAsNoContest({ matchId: MATCH_ID, roundsPlayed: 12 });
 
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([HUMAN_A]);
+  });
+
+  it('records content exhaustion separately from player forfeits without applying ranked settlement', async () => {
+    const { finalizeRankedMatchAsNoContest } = await import('../../src/realtime/services/ranked-no-contest.service.js');
+    await finalizeRankedMatchAsNoContest({ matchId: MATCH_ID, roundsPlayed: 6, reason: 'question_pool_exhausted' });
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(MATCH_ID, expect.objectContaining({
+      cancelledNoContest: true, cancellationReason: 'question_pool_exhausted', roundsPlayed: 6,
+    }));
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(scheduleTimerMock).toHaveBeenCalledWith('match_final_results', MATCH_ID, expect.any(Date),
+      expect.objectContaining({ matchId: MATCH_ID, kind: 'match_final_results' }), { requireDurable: true });
+    expect(scheduleTimerMock.mock.invocationCallOrder[0]).toBeLessThan(setMatchStatePayloadMock.mock.invocationCallOrder[0]);
+  });
+
+  it('does not commit cancellation if its durable delivery timer cannot be written', async () => {
+    scheduleTimerMock.mockRejectedValueOnce(new Error('Redis transaction failed'));
+    const { finalizeRankedMatchAsNoContest } = await import('../../src/realtime/services/ranked-no-contest.service.js');
+    await expect(finalizeRankedMatchAsNoContest({ matchId: MATCH_ID, roundsPlayed: 6, reason: 'question_pool_exhausted' }))
+      .rejects.toThrow('Redis transaction failed');
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(refundRankedTicketsMock).not.toHaveBeenCalled();
+    expect(releaseLockMock).toHaveBeenCalled();
   });
 
   it('is a no-op when the match is no longer active (idempotent under lock races)', async () => {

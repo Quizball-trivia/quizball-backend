@@ -52,6 +52,7 @@ import {
   deferQuestionTimer,
   emitMatchState,
   scheduleNextPossessionQuestion,
+  sendPossessionMatchQuestion,
 } from './possession-question-dispatch.js';
 import {
   answerLogFields,
@@ -168,6 +169,17 @@ export async function resolvePossessionRound(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: missing current question'
       );
+      if (fromTimeout && cache.mode === 'ranked'
+        && (cache.statePayload.phase === 'LAST_ATTACK' || cache.statePayload.phase === 'NORMAL_PLAY')) {
+        const dispatched = await sendPossessionMatchQuestion(io, matchId, qIndex);
+        // Dispatch owns the new deadline. Do not clear
+        // that timer or overwrite it with this obsolete round's 5s retry.
+        if (dispatched) fromTimeout = false;
+        else {
+          const match = await matchesRepo.getMatch(matchId);
+          roundConcluded = Boolean(match && match.status !== 'active');
+        }
+      }
       return;
     }
 

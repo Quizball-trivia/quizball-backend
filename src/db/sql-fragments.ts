@@ -50,7 +50,9 @@ export const MCQ_VALIDATION_CONDITIONS = sql`
 
 /**
  * Shared HAVING clause for ranked-eligible category queries.
- * Requires >= 4 valid MCQs plus at least 1 of each in-match special type.
+ * Requires normal-play MCQs plus one last attack: five in mixed mode,
+ * seven in MCQ-only mode,
+ * as well as at least 1 of each in-match special type.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
  */
 /** Season 3 (POSSESSION_MCQ_ONLY): categories no longer need the special types to be eligible. */
@@ -60,8 +62,10 @@ const SPECIAL_TYPE_COUNTS = () => (config.POSSESSION_MCQ_ONLY
     AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1`);
 
+const RANKED_MIN_MCQ_QUESTIONS = config.POSSESSION_MCQ_ONLY ? 7 : 5;
+
 export const RANKED_ELIGIBILITY_HAVING = sql`
-  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 4
+  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= ${RANKED_MIN_MCQ_QUESTIONS}
     ${SPECIAL_TYPE_COUNTS()}
 `;
 
@@ -88,7 +92,18 @@ export function buildPossessionEligibilityHavingCounts(minMcqQuestions: number) 
 `;
 }
 
-export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHavingCounts(4);
+// Ranked depth must count usable MCQs. A correlated payload check keeps the
+// callers' one-row-per-question shape (and needs no qp join at each call site).
+// Friendly counts-only callers retain their existing lightweight coverage check.
+export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
+  HAVING COUNT(*) FILTER (
+    WHERE q.type = 'mcq_single' AND EXISTS (
+      SELECT 1 FROM question_payloads qp
+      WHERE qp.question_id = q.id AND ${MCQ_VALIDATION_CONDITIONS}
+    )
+  ) >= ${RANKED_MIN_MCQ_QUESTIONS}
+    ${SPECIAL_TYPE_COUNTS()}
+`;
 
 /**
  * Game-mode/daily-challenge categories must never enter matchmaking pools

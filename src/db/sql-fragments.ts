@@ -50,7 +50,8 @@ export const MCQ_VALIDATION_CONDITIONS = sql`
 
 /**
  * Shared HAVING clause for ranked-eligible category queries.
- * Requires >= 5 valid MCQs: four normal slots plus a possible last attack,
+ * Requires normal-play MCQs plus one last attack: five in mixed mode,
+ * seven in MCQ-only mode,
  * as well as at least 1 of each in-match special type.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
  */
@@ -61,8 +62,10 @@ const SPECIAL_TYPE_COUNTS = () => (config.POSSESSION_MCQ_ONLY
     AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1`);
 
+const RANKED_MIN_MCQ_QUESTIONS = config.POSSESSION_MCQ_ONLY ? 7 : 5;
+
 export const RANKED_ELIGIBILITY_HAVING = sql`
-  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 5
+  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= ${RANKED_MIN_MCQ_QUESTIONS}
     ${SPECIAL_TYPE_COUNTS()}
 `;
 
@@ -98,9 +101,8 @@ export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
       SELECT 1 FROM question_payloads qp
       WHERE qp.question_id = q.id AND ${MCQ_VALIDATION_CONDITIONS}
     )
-  ) >= 5
-    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
-    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
+  ) >= ${RANKED_MIN_MCQ_QUESTIONS}
+    ${SPECIAL_TYPE_COUNTS()}
 `;
 
 /**

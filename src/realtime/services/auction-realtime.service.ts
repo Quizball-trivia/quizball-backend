@@ -1,4 +1,10 @@
-import { assertCapability } from '../../modules/users/capabilities.js';
+import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
+import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
+import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
+import { config } from '../../core/config.js';
+import { socketIpBucket } from '../socket-auth.js';
+import { userSessionGuardService } from './user-session-guard.service.js';
+import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import { logger } from '../../core/logger.js';
 import { ErrorCode } from '../../core/errors.js';
 import {
@@ -65,6 +71,12 @@ export interface AuctionStartAiMatchServiceInput {
 
 export interface AuctionStartAiMatchOptions {
   context?: AuctionEngineContext;
+  /**
+   * Guest "Play now": every bot seat is presented as an anonymous guest-style
+   * player (name, no avatar, no ranked identity) so the table looks like a
+   * room of guests. Bidding behaviour is untouched.
+   */
+  anonymousBots?: boolean;
   /**
    * Matchmaking uses this seam after every human socket has joined the match
    * room, but before any live Auction state is emitted. This guarantees the
@@ -146,7 +158,81 @@ export const auctionRealtimeService = {
       logger.warn({ error, userId: user.id, code: payload.code }, 'auction:start_ai_match failed');
     }
   },
+
+  /** Guest "Play now" from the public Auction page: an anonymous bot table, no AP, no leaderboard. */
+  handleStartPracticeMatch,
 };
+
+async function handleStartPracticeMatch(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  input: AuctionStartAiMatchServiceInput,
+  options: AuctionStartAiMatchOptions = {}
+): Promise<void> {
+  const user = socket.data.user;
+  if (!user?.id) {
+    emitAuctionError(socket, { code: ErrorCode.AUTHENTICATION_ERROR, message: 'Authentication required' });
+    return;
+  }
+  if (!isGuestUser(user)) {
+    emitAuctionError(socket, { code: 'AUCTION_PRACTICE_GUEST_ONLY', message: 'Members play the auction through matchmaking' });
+    return;
+  }
+  if (!config.GUEST_BOT_MATCHES_ENABLED) {
+    emitAuctionError(socket, { code: ErrorCode.AUCTION_CONTENT_UNAVAILABLE, message: 'Practice auctions are temporarily unavailable' });
+    return;
+  }
+  // A reload or second tab re-attaches to the table the guest is still seated at.
+  const activeMatchId = await auctionStateStore.getActiveMatchIdForUser(user.id).catch(() => null);
+  if (activeMatchId) {
+    const state = await auctionStateStore.load(activeMatchId).catch(() => null);
+    const seat = state ? findAuctionSeatByUserId(state, user.id) : null;
+    if (state && state.phase !== 'finished' && seat && !seat.isBot && !seat.forfeited) {
+      if (await rejoinAuctionMatch(io, socket, activeMatchId)) return;
+    }
+    await auctionStateStore.clearUserMatchIndex(user.id, activeMatchId).catch(() => {});
+  }
+  if (
+    !await allowGuestOperation(`user:${user.id}`, 'bot_match')
+    || !await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')
+  ) {
+    emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
+    return;
+  }
+  await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+    const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
+    const snapshot = prepared.snapshot;
+    if (!prepared.ok || snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
+      userSessionGuardService.emitBlocked(socket, {
+        reason: prepared.reason ?? 'ACTIVE_MATCH',
+        message: prepared.message ?? 'You are already in an active session',
+        operation: 'auction:practice_bot_start',
+        stateSnapshot: snapshot,
+      });
+      return;
+    }
+    try {
+      const saved = await startAuctionMatchForHumans(io, {
+        humanPlayers: [{ userId: user.id, displayName: user.nickname ?? 'Player', isGuest: true }],
+        formation: input.formation,
+        locale: input.locale,
+        origin: 'practice',
+        sourceSocket: socket,
+      }, { ...options, anonymousBots: true });
+      logger.info(
+        { matchId: saved.matchId, userId: user.id, locale: input.locale, formation: saved.formation },
+        'Auction guest practice match started'
+      );
+    } catch (error) {
+      const payload = toAuctionErrorPayload(error, {
+        fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+        fallbackMessage: 'Auction content unavailable',
+      });
+      emitAuctionError(socket, payload);
+      logger.warn({ error, userId: user.id, code: payload.code }, 'auction:practice_bot_start failed');
+    }
+  }, { operation: 'auction:practice_bot_start' });
+}
 
 export async function startAuctionMatchForHumans(
   io: QuizballServer,
@@ -174,7 +260,9 @@ export async function startAuctionMatchForHumans(
     humanUserIds: input.humanPlayers.map((player) => player.userId),
   });
   const ephemeralBots = await generateAuctionBotProfiles(botCount - persistentBots.length);
-  const bots = [...persistentBots, ...ephemeralBots];
+  const bots = options.anonymousBots
+    ? anonymizeAuctionBots(matchId, [...persistentBots, ...ephemeralBots])
+    : [...persistentBots, ...ephemeralBots];
 
   // Everything from here to the state SAVE is compensated: once reservations are
   // held, a throw before the match state exists would strand those bots with no
@@ -296,6 +384,21 @@ export async function startAuctionMatchForHumans(
   });
 
   return saved;
+}
+
+/**
+ * Re-dress bot seats as anonymous guests for a guest-hosted practice table:
+ * distinct guest-style names derived from the match id (stable across
+ * reloads), no avatar, no tier/RP. Reservation ids and bot profiles stay.
+ */
+function anonymizeAuctionBots(matchId: string, bots: readonly AuctionBotSeatProfile[]): AuctionBotSeatProfile[] {
+  const names = guestNameCandidates(`auction-bot:${matchId}`, bots.length + 6);
+  const used = new Set<string>();
+  return bots.map((bot, index) => {
+    const displayName = names.find((name) => !used.has(name)) ?? `${names[index % names.length]} ${index + 1}`;
+    used.add(displayName);
+    return { ...bot, displayName, avatarUrl: null, tier: null, rp: null };
+  });
 }
 
 /**

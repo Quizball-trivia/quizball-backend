@@ -64,5 +64,8 @@ export const footballGridRematchDeclineSchema = z.object({
 });
 
 export type FootballGridSearchStartInput = z.infer<typeof footballGridSearchStartSchema>;
+
+/** Guest "Play now": same payload as a search, but the server pairs a bot immediately. */
+export const footballGridPracticeBotStartSchema = footballGridSearchStartSchema;
 export type FootballGridVersionedCommandInput = z.infer<typeof footballGridVersionedCommandSchema>;
 export type FootballGridSubmitAnswerInput = z.infer<typeof footballGridSubmitAnswerSchema>;

@@ -6,7 +6,7 @@ import { getRedisClient } from '../../realtime/redis.js';
  * fleet. Falls back to a per-process map when Redis is down, same as the
  * Football Grid limiter it mirrors.
  */
-export type GuestOperation = 'socket_admission' | 'lobby_create' | 'principal';
+export type GuestOperation = 'socket_admission' | 'lobby_create' | 'principal' | 'bot_match' | 'bot_match_ip';
 
 const RULES: Record<GuestOperation, { limit: number; windowSec: number }> = {
   /** Handshakes per IP bucket before any identity or geo work. */
@@ -15,6 +15,10 @@ const RULES: Record<GuestOperation, { limit: number; windowSec: number }> = {
   lobby_create: { limit: 5, windowSec: 3_600 },
   /** Principal resolutions per IP bucket per hour. */
   principal: { limit: 120, windowSec: 3_600 },
+  /** "Play now" bot matches (Tic Tac Toe + Auction) a single guest may start per hour. */
+  bot_match: { limit: 12, windowSec: 3_600 },
+  /** ...and per IP bucket, so a burst of fresh guests cannot drain the shared bot roster. */
+  bot_match_ip: { limit: 60, windowSec: 3_600 },
 };
 
 const local = new Map<string, { count: number; resetAt: number }>();

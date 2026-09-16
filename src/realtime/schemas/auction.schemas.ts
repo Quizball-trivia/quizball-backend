@@ -21,6 +21,9 @@ export type AuctionStartAiMatchInput = z.infer<typeof auctionStartAiMatchSchema>
 
 export const auctionSearchStartSchema = auctionStartAiMatchSchema;
 
+/** Guest "Play now": an anonymous bot table, same payload as the AI match. */
+export const auctionPracticeBotStartSchema = auctionStartAiMatchSchema;
+
 export type AuctionSearchStartInput = z.infer<typeof auctionSearchStartSchema>;
 
 export const auctionBidSchema = z.object({

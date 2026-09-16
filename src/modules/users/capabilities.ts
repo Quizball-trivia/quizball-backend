@@ -12,6 +12,7 @@ import { isRankedSettleEligible, type AiClassifiable } from './ai-classification
  *   auction:search_start         → auctionMatchmaking.handleSearchStart → queueEntry
  *   auction:start_ai_match       → auctionRealtime.handleStartAiMatch  → queueEntry
  *   grid:search_start            → footballGridMatchmaking.handleSearchStart → queueEntry
+ *   grid:practice_bot_start / auction:practice_bot_start → guest-only "Play now" bot matches (isGuestUser, not a capability)
  *   lobby:create {mode:'friendly'} / lobby:join_by_code           → createFriendlyRoom / joinFriendlyRoom
  *   lobby:challenge_* / friends HTTP                              → social
  *   WL enter / checkin (HTTP, authMiddleware — guests never carry a Supabase JWT) → weekendLeague

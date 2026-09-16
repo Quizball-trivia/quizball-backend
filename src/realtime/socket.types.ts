@@ -1265,6 +1265,8 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
+  /** Guest "Play now" (public Auction page): anonymous table against bots, no rewards. */
+  'auction:practice_bot_start': (data?: AuctionStartAiMatchPayload) => void;
   'auction:search_start': (data?: AuctionSearchStartPayload) => void;
   'auction:search_cancel': () => void;
   'auction:bid': (data: AuctionBidPayload) => void;
@@ -1277,6 +1279,8 @@ export interface ClientToServerEvents {
   // the server re-attaches the socket and runs the resume "get ready" countdown.
   'auction:rejoin': (data: { matchId: string }) => void;
   'grid:search_start': (data?: FootballGridSearchStartPayload) => void;
+  /** Guest "Play now" (public Tic Tac Toe page): immediate bot pairing, no queue, no rewards. */
+  'grid:practice_bot_start': (data?: FootballGridSearchStartPayload) => void;
   'grid:search_cancel': (data: { searchId: string }) => void;
   'grid:match_found_ack': (data: FootballGridVersionedCommandPayload) => void;
   'grid:client_ready': (data: FootballGridVersionedCommandPayload) => void;

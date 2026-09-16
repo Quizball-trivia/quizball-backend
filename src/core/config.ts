@@ -280,6 +280,14 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /**
+   * Guest "Play now" bot matches (Tic Tac Toe / Auction) from the public game
+   * pages. Kill switch only — a guest still needs provisioning + reconnect on.
+   */
+  GUEST_BOT_MATCHES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val === "true" || val === "1"),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
   /**

@@ -8,6 +8,7 @@ import {
   trackFootballGridMissingAnswerReported,
 } from '../../core/analytics/game-events.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { guestKitFor, guestNameCandidates } from '../../modules/guest/guest-identity.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
@@ -437,6 +438,37 @@ async function publishServiceInterruptionIfNeeded(io: QuizballServer, matchId: s
   await emitState(io, state);
 }
 
+/**
+ * What the client learns about the other seat. A guest playing a bot ("Play now"
+ * from the public page) sees an anonymous guest-style opponent — deterministic
+ * per match so reloads agree — never the bot's roster identity or RP.
+ */
+export function opponentIdentity(input: {
+  opponent: { userId: string; isBot?: boolean };
+  opponentUser: { nickname: string | null; avatar_url: string | null; avatar_customization: unknown } | undefined;
+  matchId: string;
+  viewerIsGuest: boolean;
+  rp: number | undefined;
+}): OpponentInfo {
+  const { opponent, opponentUser, matchId, viewerIsGuest, rp } = input;
+  if (viewerIsGuest && opponent.isBot) {
+    const seed = `grid-bot:${matchId}`;
+    return {
+      id: opponent.userId,
+      username: guestNameCandidates(seed, 1)[0],
+      avatarUrl: null,
+      avatarCustomization: guestKitFor(seed),
+    };
+  }
+  return {
+    id: opponent.userId,
+    username: opponentUser?.nickname ?? 'Player',
+    avatarUrl: opponentUser?.avatar_url ?? null,
+    avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
+    ...(rp !== undefined ? { rp } : {}),
+  };
+}
+
 export const footballGridRealtimeService = {
   async recoverTerminalDeliveries(io: QuizballServer, matchId?: string): Promise<number> {
     return recoverTerminalResultDeliveries(io, matchId ?? null);
@@ -633,13 +665,13 @@ export const footballGridRealtimeService = {
         matchId: state.matchId,
         state,
         series,
-        opponent: {
-          id: opponent.userId,
-          username: opponentUser?.nickname ?? 'Player',
-          avatarUrl: opponentUser?.avatar_url ?? null,
-          avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
-          ...(rpByUserId.has(opponent.userId) ? { rp: rpByUserId.get(opponent.userId) } : {}),
-        },
+        opponent: opponentIdentity({
+          opponent,
+          opponentUser,
+          matchId: state.matchId,
+          viewerIsGuest: users.get(player.userId)?.is_guest === true,
+          rp: rpByUserId.get(opponent.userId),
+        }),
         capabilities: {
           canAddFriend: !opponent.isBot,
           canChallenge: !opponent.isBot,
@@ -885,13 +917,13 @@ export const footballGridRealtimeService = {
       socket.data.gridMatchId = matchId;
       socket.emit('grid:match_found', {
         matchId, state, series, serverNow: new Date().toISOString(),
-        opponent: {
-          id: opponent.userId,
-          username: opponentUser?.nickname ?? 'Player',
-          avatarUrl: opponentUser?.avatar_url ?? null,
-          avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
-          ...(profile ? { rp: profile.rp } : {}),
-        },
+        opponent: opponentIdentity({
+          opponent,
+          opponentUser,
+          matchId,
+          viewerIsGuest: socket.data.user.is_guest === true,
+          rp: profile?.rp,
+        }),
         capabilities: { canAddFriend: !opponent.isBot, canChallenge: !opponent.isBot },
       });
     }

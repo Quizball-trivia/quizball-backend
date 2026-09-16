@@ -3,7 +3,7 @@ import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
 import { config } from '../../core/config.js';
 import { socketIpBucket } from '../socket-auth.js';
-import { practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
+import { beginPracticeStart, finishPracticeStart, isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import { logger } from '../../core/logger.js';
@@ -183,30 +183,50 @@ async function handleStartPracticeMatch(
     emitAuctionError(socket, { code: ErrorCode.AUCTION_CONTENT_UNAVAILABLE, message: 'Practice auctions are temporarily unavailable' });
     return;
   }
+  // Claim the start before any async step: a newer start (second tab,
+  // reconnect retry) supersedes this one at every await below.
+  const key = `auction:${user.id}`;
+  const token = beginPracticeStart(key);
+  const current = () => isPracticeStartCurrent(key, token);
   // A reload or second tab re-attaches to the table the guest is still seated at.
-  const activeMatchId = await auctionStateStore.getActiveMatchIdForUser(user.id).catch(() => null);
-  if (activeMatchId) {
+  const rejoinLiveTable = async (): Promise<boolean> => {
+    const activeMatchId = await auctionStateStore.getActiveMatchIdForUser(user.id).catch(() => null);
+    if (!activeMatchId) return false;
     const state = await auctionStateStore.load(activeMatchId).catch(() => null);
     const seat = state ? findAuctionSeatByUserId(state, user.id) : null;
     if (state && state.phase !== 'finished' && seat && !seat.isBot && !seat.forfeited) {
-      if (await rejoinAuctionMatch(io, socket, activeMatchId)) return;
+      if (await rejoinAuctionMatch(io, socket, activeMatchId)) return true;
     }
     await auctionStateStore.clearUserMatchIndex(user.id, activeMatchId).catch(() => {});
-  }
-  if (
-    !await allowGuestOperation(`user:${user.id}`, 'bot_match')
-    || !await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')
-  ) {
-    emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
-    return;
-  }
-  // "Searching" for a random while before the table is seated; a cancel or a
-  // newer start abandons the wait, and a guest who left gets no table.
-  const proceed = await waitForPracticeStart(`auction:${user.id}`, practiceStartDelayMs());
-  if (!proceed || !socket.connected) return;
+    return false;
+  };
+  try {
+    if (await rejoinLiveTable()) return;
+    if (!current()) return;
+    // Per-IP throttle at entry (abuse); the per-guest seated budget is charged
+    // only once the wait is over, so cancelled starts do not burn it.
+    if (!await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')) {
+      emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
+      return;
+    }
+    if (!current()) return;
+    // "Searching" for a random while before the table is seated; a cancel or a
+    // newer start abandons the wait, and a guest who left gets no table.
+    const proceed = await waitForPracticeStart(key, token, practiceStartDelayMs());
+    if (!proceed || !socket.connected) return;
+    // Live auctions live in Redis (the session guard only sees Postgres): a
+    // table seated meanwhile by another replica/tab is re-attached, never doubled.
+    if (await rejoinLiveTable()) return;
+    if (!current()) return;
+    if (!await allowGuestOperation(`user:${user.id}`, 'bot_match')) {
+      emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
+      return;
+    }
   await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+    if (!current() || !socket.connected) return;
     const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
     const snapshot = prepared.snapshot;
+    if (!current()) return;
     if (!prepared.ok || snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
       userSessionGuardService.emitBlocked(socket, {
         reason: prepared.reason ?? 'ACTIVE_MATCH',
@@ -237,6 +257,9 @@ async function handleStartPracticeMatch(
       logger.warn({ error, userId: user.id, code: payload.code }, 'auction:practice_bot_start failed');
     }
   }, { operation: 'auction:practice_bot_start' });
+  } finally {
+    finishPracticeStart(key, token);
+  }
 }
 
 export async function startAuctionMatchForHumans(

@@ -250,7 +250,10 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
   socket.on('auction:search_cancel', async () => {
     try {
       // A guest practice table still waiting for its seats is not a queued search.
-      if (socket.data.user?.id && cancelPracticeStart(`auction:${socket.data.user.id}`)) return;
+      if (socket.data.user?.id && cancelPracticeStart(`auction:${socket.data.user.id}`)) {
+        socket.emit('auction:search_cancelled', { searchId: null, reason: 'cancelled' });
+        return;
+      }
       await auctionMatchmakingService.handleSearchCancel(io, socket);
     } catch (error) {
       logger.error({ error, userId: socket.data.user?.id }, 'auction:search_cancel handler failed');

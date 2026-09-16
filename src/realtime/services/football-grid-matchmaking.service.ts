@@ -1,7 +1,15 @@
 import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { socketIpBucket } from '../socket-auth.js';
-import { cancelPracticeStart, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
+import {
+  attachPracticeSearchId,
+  beginPracticeStart,
+  cancelPracticeStart,
+  finishPracticeStart,
+  isPracticeStartCurrent,
+  practiceStartDelayMs,
+  waitForPracticeStart,
+} from './practice-start-delay.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
@@ -866,65 +874,93 @@ export const footballGridMatchmakingService = {
       socket.emit('grid:error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe is temporarily unavailable' });
       return;
     }
-    if (await resumeActiveMatchOnStart(io, userId)) return;
-    if (
-      !await allowGuestOperation(`user:${userId}`, 'bot_match')
-      || !await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')
-    ) {
-      socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many matches started. Please try again later.' });
-      return;
-    }
-    // The guest "searches" for a random while before the bot turns up; the
-    // client shows the ordinary search screen with this fallback time.
-    const queuedAt = Date.now();
-    const delayMs = practiceStartDelayMs();
-    const search: QueuedGridSearch = {
-      searchId: randomUUID(),
-      userId,
-      displayName: user.nickname ?? 'Player',
-      locale: input.locale,
-      theme: input.theme,
-      queuedAt,
-      fallbackAt: queuedAt + delayMs,
-      practice: true,
-    };
-    emitSearchState(io, userId, {
-      state: 'searching', searchId: search.searchId,
-      queuedAt: new Date(search.queuedAt).toISOString(),
-      fallbackAt: new Date(search.fallbackAt).toISOString(),
-    });
-    const proceed = await waitForPracticeStart(`grid:${userId}`, delayMs);
-    // Cancelled, superseded by a newer start, or the guest left: nothing to pair.
-    if (!proceed || !socket.connected) return;
-    const admitted = await userSessionGuardService.withUserSessionLock(userId, async () => {
-      const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
-      if (!prepared.ok) {
-        userSessionGuardService.emitBlocked(socket, {
-          reason: prepared.reason ?? 'ACTIVE_MATCH',
-          message: prepared.message ?? 'You are already in an active session',
-          operation: 'grid:practice_bot_start',
-          stateSnapshot: prepared.snapshot,
-        });
-        return false;
-      }
-      return true;
-    });
-    if (!admitted) {
-      emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
-      return;
-    }
-    // Outside the per-user lock: startBotPair takes it itself.
-    const paired = await startBotPair(io, search, { requireQueued: false });
-    if (!paired) {
-      // A concurrent start (second tab, repeated event) may have won the lock
-      // and created the match: re-deliver it instead of reporting a failure.
+    // Claim the start before any async step: a newer start (second tab,
+    // reconnect retry) supersedes this one at every await below.
+    const key = `grid:${userId}`;
+    const token = beginPracticeStart(key);
+    const current = () => isPracticeStartCurrent(key, token);
+    try {
       if (await resumeActiveMatchOnStart(io, userId)) return;
-      emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
-      await userSessionGuardService.emitState(io, userId).catch(() => {});
-      socket.emit('grid:error', { code: 'GRID_BOT_UNAVAILABLE', message: 'No opponent is available right now. Please try again.' });
-      return;
+      if (!current()) return;
+      // Per-IP throttle at entry (abuse); the per-guest seated budget is charged
+      // only once the wait is over, so cancelled starts do not burn it.
+      if (!await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')) {
+        socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many matches started. Please try again later.' });
+        return;
+      }
+      if (!current()) return;
+      // The guest "searches" for a random while before the bot turns up; the
+      // client shows the ordinary search screen with this fallback time.
+      const queuedAt = Date.now();
+      const delayMs = practiceStartDelayMs();
+      const search: QueuedGridSearch = {
+        searchId: randomUUID(),
+        userId,
+        displayName: user.nickname ?? 'Player',
+        locale: input.locale,
+        theme: input.theme,
+        queuedAt,
+        fallbackAt: queuedAt + delayMs,
+        practice: true,
+      };
+      attachPracticeSearchId(key, token, search.searchId);
+      emitSearchState(io, userId, {
+        state: 'searching', searchId: search.searchId,
+        queuedAt: new Date(search.queuedAt).toISOString(),
+        fallbackAt: new Date(search.fallbackAt).toISOString(),
+      });
+      const proceed = await waitForPracticeStart(key, token, delayMs);
+      // Cancelled, superseded, or the guest left: nothing to pair.
+      if (!proceed || !socket.connected) return;
+      // Anything the guest started meanwhile (a friend room in another tab, a
+      // match) wins over this delayed start — never clean it up to make room.
+      const session = await userSessionGuardService.resolveState(userId);
+      if (!current()) return;
+      if (session.activeMatchId || session.openLobbyIds.length > 0 || session.queueSearchId !== null) {
+        if (!(session.activeMatchId && await resumeActiveMatchOnStart(io, userId))) {
+          emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+        }
+        return;
+      }
+      if (!await allowGuestOperation(`user:${userId}`, 'bot_match')) {
+        emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+        socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many matches started. Please try again later.' });
+        return;
+      }
+      if (!current()) return;
+      const admitted = await userSessionGuardService.withUserSessionLock(userId, async () => {
+        if (!current()) return false;
+        const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
+        if (!prepared.ok) {
+          userSessionGuardService.emitBlocked(socket, {
+            reason: prepared.reason ?? 'ACTIVE_MATCH',
+            message: prepared.message ?? 'You are already in an active session',
+            operation: 'grid:practice_bot_start',
+            stateSnapshot: prepared.snapshot,
+          });
+          return false;
+        }
+        return true;
+      });
+      if (!admitted || !current() || !socket.connected) {
+        emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+        return;
+      }
+      // Outside the per-user lock: startBotPair takes it itself.
+      const paired = await startBotPair(io, search, { requireQueued: false });
+      if (!paired) {
+        // A concurrent start (second tab, repeated event) may have won the lock
+        // and created the match: re-deliver it instead of reporting a failure.
+        if (await resumeActiveMatchOnStart(io, userId)) return;
+        emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+        await userSessionGuardService.emitState(io, userId).catch(() => {});
+        socket.emit('grid:error', { code: 'GRID_BOT_UNAVAILABLE', message: 'No opponent is available right now. Please try again.' });
+        return;
+      }
+      await deliverBotPair(io, paired);
+    } finally {
+      finishPracticeStart(key, token);
     }
-    await deliverBotPair(io, paired);
   },
 
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
@@ -1017,7 +1053,8 @@ export const footballGridMatchmakingService = {
   async handleSearchCancel(io: QuizballServer, socket: QuizballSocket, expectedSearchId: string): Promise<void> {
     const userId = socket.data.user.id;
     // A guest practice search waiting for its bot is process-local, not queued.
-    if (cancelPracticeStart(`grid:${userId}`)) {
+    // Only a cancel for THAT search counts; a stale id falls through to the queue path.
+    if (cancelPracticeStart(`grid:${userId}`, expectedSearchId)) {
       emitSearchState(io, userId, { state: 'idle', searchId: expectedSearchId });
       await userSessionGuardService.emitState(io, userId).catch(() => {});
       return;

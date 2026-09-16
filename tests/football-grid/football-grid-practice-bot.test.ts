@@ -106,6 +106,8 @@ vi.mock('../../src/core/config.js', () => ({
     FOOTBALL_GRID_MM_SWEEP_MS: 750,
     FOOTBALL_GRID_BOT_MODEL_VERSION: 2,
     get GUEST_BOT_MATCHES_ENABLED() { return flags.guestBotMatches; },
+    GUEST_BOT_MATCH_DELAY_MIN_MS: 0,
+    GUEST_BOT_MATCH_DELAY_MAX_MS: 0,
   },
 }));
 vi.mock('../../src/modules/guest/guest-rate-limit.js', () => ({
@@ -209,6 +211,7 @@ import { footballGridMatchmakingService } from '../../src/realtime/services/foot
 function socket(userId: string, isGuest = true) {
   return {
     id: `socket-${userId}`,
+    connected: true,
     data: { user: { id: userId, nickname: userId, is_guest: isGuest } },
     emit: vi.fn(),
     handshake: { address: '127.0.0.1', headers: {} },

@@ -3,6 +3,7 @@ import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
 import { config } from '../../core/config.js';
 import { socketIpBucket } from '../socket-auth.js';
+import { practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import { logger } from '../../core/logger.js';
@@ -199,6 +200,10 @@ async function handleStartPracticeMatch(
     emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
     return;
   }
+  // "Searching" for a random while before the table is seated; a cancel or a
+  // newer start abandons the wait, and a guest who left gets no table.
+  const proceed = await waitForPracticeStart(`auction:${user.id}`, practiceStartDelayMs());
+  if (!proceed || !socket.connected) return;
   await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
     const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
     const snapshot = prepared.snapshot;

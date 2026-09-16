@@ -288,6 +288,9 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val === "true" || val === "1"),
+  /** Random wait before a guest practice table is seated, so it feels like matchmaking. */
+  GUEST_BOT_MATCH_DELAY_MIN_MS: z.coerce.number().int().min(0).default(5_000),
+  GUEST_BOT_MATCH_DELAY_MAX_MS: z.coerce.number().int().min(0).default(25_000),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
   /**

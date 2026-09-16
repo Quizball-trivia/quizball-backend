@@ -1,6 +1,7 @@
 import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { socketIpBucket } from '../socket-auth.js';
+import { cancelPracticeStart, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
@@ -873,7 +874,29 @@ export const footballGridMatchmakingService = {
       socket.emit('grid:error', { code: 'GRID_RATE_LIMITED', message: 'Too many matches started. Please try again later.' });
       return;
     }
-    const search = await userSessionGuardService.withUserSessionLock(userId, async () => {
+    // The guest "searches" for a random while before the bot turns up; the
+    // client shows the ordinary search screen with this fallback time.
+    const queuedAt = Date.now();
+    const delayMs = practiceStartDelayMs();
+    const search: QueuedGridSearch = {
+      searchId: randomUUID(),
+      userId,
+      displayName: user.nickname ?? 'Player',
+      locale: input.locale,
+      theme: input.theme,
+      queuedAt,
+      fallbackAt: queuedAt + delayMs,
+      practice: true,
+    };
+    emitSearchState(io, userId, {
+      state: 'searching', searchId: search.searchId,
+      queuedAt: new Date(search.queuedAt).toISOString(),
+      fallbackAt: new Date(search.fallbackAt).toISOString(),
+    });
+    const proceed = await waitForPracticeStart(`grid:${userId}`, delayMs);
+    // Cancelled, superseded by a newer start, or the guest left: nothing to pair.
+    if (!proceed || !socket.connected) return;
+    const admitted = await userSessionGuardService.withUserSessionLock(userId, async () => {
       const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
       if (!prepared.ok) {
         userSessionGuardService.emitBlocked(socket, {
@@ -882,27 +905,14 @@ export const footballGridMatchmakingService = {
           operation: 'grid:practice_bot_start',
           stateSnapshot: prepared.snapshot,
         });
-        return null;
+        return false;
       }
-      const now = Date.now();
-      const practiceSearch: QueuedGridSearch = {
-        searchId: randomUUID(),
-        userId,
-        displayName: user.nickname ?? 'Player',
-        locale: input.locale,
-        theme: input.theme,
-        queuedAt: now,
-        fallbackAt: now,
-        practice: true,
-      };
-      emitSearchState(io, userId, {
-        state: 'searching', searchId: practiceSearch.searchId,
-        queuedAt: new Date(practiceSearch.queuedAt).toISOString(),
-        fallbackAt: new Date(practiceSearch.fallbackAt).toISOString(),
-      });
-      return practiceSearch;
+      return true;
     });
-    if (!search) return;
+    if (!admitted) {
+      emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
+      return;
+    }
     // Outside the per-user lock: startBotPair takes it itself.
     const paired = await startBotPair(io, search, { requireQueued: false });
     if (!paired) {
@@ -1005,9 +1015,15 @@ export const footballGridMatchmakingService = {
   },
 
   async handleSearchCancel(io: QuizballServer, socket: QuizballSocket, expectedSearchId: string): Promise<void> {
+    const userId = socket.data.user.id;
+    // A guest practice search waiting for its bot is process-local, not queued.
+    if (cancelPracticeStart(`grid:${userId}`)) {
+      emitSearchState(io, userId, { state: 'idle', searchId: expectedSearchId });
+      await userSessionGuardService.emitState(io, userId).catch(() => {});
+      return;
+    }
     const redis = getRedisClient();
     if (!redis?.isOpen) return;
-    const userId = socket.data.user.id;
     const locked = await withMatchmakingLock(async () => {
       const transitioned = await userSessionGuardService.withUserSessionLock(userId, async () => {
         const searchId = await redis.hGet(USER_MAP_KEY, userId);

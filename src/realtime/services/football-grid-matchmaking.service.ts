@@ -584,6 +584,8 @@ interface BotPairOptions {
    * a failure leaves the guest idle instead of re-queueing them.
    */
   requireQueued?: boolean;
+  /** Practice: re-checked under the lock right before the match is created (a cancel may have landed meanwhile). */
+  stillWanted?: () => boolean;
 }
 
 async function startBotPair(
@@ -606,6 +608,7 @@ async function startBotPair(
       // cannot create a second match or reserve a second bot.
       const session = await userSessionGuardService.resolveState(search.userId);
       if (session.activeMatchId || session.openLobbyIds.length > 0 || session.queueSearchId !== null) return null;
+      if (options.stillWanted && !options.stillWanted()) return null;
     }
     const selected = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: search.userId,
@@ -930,6 +933,10 @@ export const footballGridMatchmakingService = {
       if (!current()) return;
       const admitted = await userSessionGuardService.withUserSessionLock(userId, async () => {
         if (!current()) return false;
+        // Re-read under the lock: prepareForQueueJoin cleans up open lobbies,
+        // and a room the guest joined since the wait began must survive.
+        const locked = await userSessionGuardService.resolveState(userId);
+        if (locked.activeMatchId || locked.openLobbyIds.length > 0 || locked.queueSearchId !== null) return false;
         const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId, 'grid');
         if (!prepared.ok) {
           userSessionGuardService.emitBlocked(socket, {
@@ -947,8 +954,10 @@ export const footballGridMatchmakingService = {
         return;
       }
       // Outside the per-user lock: startBotPair takes it itself.
-      const paired = await startBotPair(io, search, { requireQueued: false });
+      const paired = await startBotPair(io, search, { requireQueued: false, stillWanted: () => current() && socket.connected });
       if (!paired) {
+        // Cancelled while seating: the guest already got its idle state.
+        if (!current()) return;
         // A concurrent start (second tab, repeated event) may have won the lock
         // and created the match: re-deliver it instead of reporting a failure.
         if (await resumeActiveMatchOnStart(io, userId)) return;

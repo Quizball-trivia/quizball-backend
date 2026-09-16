@@ -84,7 +84,9 @@ export function finishPracticeStart(key: string, token: number): void {
 export function cancelPracticeStart(key: string, searchId?: string): boolean {
   const entry = pending.get(key);
   if (!entry) return false;
-  if (searchId && entry.searchId && entry.searchId !== searchId) return false;
+  // A cancel that names a search only hits that search; before the id is
+  // announced (entry.searchId null) such a cancel can only be stale.
+  if (searchId && entry.searchId !== searchId) return false;
   abandon(entry);
   pending.delete(key);
   return true;

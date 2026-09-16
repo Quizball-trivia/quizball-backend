@@ -78,6 +78,8 @@ export interface AuctionStartAiMatchOptions {
    * room of guests. Bidding behaviour is untouched.
    */
   anonymousBots?: boolean;
+  /** Practice: checked right before bots are reserved (a cancel may have landed during the wait/admission). */
+  stillWanted?: () => boolean;
   /**
    * Matchmaking uses this seam after every human socket has joined the match
    * room, but before any live Auction state is emitted. This guarantees the
@@ -164,6 +166,11 @@ export const auctionRealtimeService = {
   handleStartPracticeMatch,
 };
 
+/** The guest cancelled (or left) between admission and seating: no table, no error to show. */
+class AuctionPracticeStartAbandonedError extends Error {
+  constructor() { super('auction practice start abandoned'); }
+}
+
 async function handleStartPracticeMatch(
   io: QuizballServer,
   socket: QuizballSocket,
@@ -224,6 +231,10 @@ async function handleStartPracticeMatch(
     }
   await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
     if (!current() || !socket.connected) return;
+    // Under the lock: a table another replica/tab seated since the wait is
+    // re-attached here, so two starts can never produce two tables.
+    if (await rejoinLiveTable()) return;
+    if (!current()) return;
     const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
     const snapshot = prepared.snapshot;
     if (!current()) return;
@@ -243,12 +254,13 @@ async function handleStartPracticeMatch(
         locale: input.locale,
         origin: 'practice',
         sourceSocket: socket,
-      }, { ...options, anonymousBots: true });
+      }, { ...options, anonymousBots: true, stillWanted: () => current() && socket.connected });
       logger.info(
         { matchId: saved.matchId, userId: user.id, locale: input.locale, formation: saved.formation },
         'Auction guest practice match started'
       );
     } catch (error) {
+      if (error instanceof AuctionPracticeStartAbandonedError) return;
       const payload = toAuctionErrorPayload(error, {
         fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
         fallbackMessage: 'Auction content unavailable',
@@ -280,6 +292,9 @@ export async function startAuctionMatchForHumans(
   const context = resolveRealtimeAuctionContext(options);
   const matchId = context.createId('match');
 
+  if (options.stillWanted && !options.stillWanted()) {
+    throw new AuctionPracticeStartAbandonedError();
+  }
   // Persistent roster bots first; any seat we cannot reserve falls back to an
   // ephemeral generated profile, so a thin roster degrades seat-by-seat.
   const persistentBots = await reserveAuctionPersistentBots({

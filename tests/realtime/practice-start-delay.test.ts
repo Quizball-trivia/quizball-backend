@@ -46,6 +46,9 @@ describe('practice start delay', () => {
 
   it('cancels only the matching search id; a stale cancel leaves the newer search alone', async () => {
     const token = beginPracticeStart('grid:u2');
+    // Before the search id is announced, a cancel naming a search can only be stale.
+    expect(cancelPracticeStart('grid:u2', 'search-old')).toBe(false);
+    expect(isPracticeStartCurrent('grid:u2', token)).toBe(true);
     attachPracticeSearchId('grid:u2', token, 'search-b');
     const wait = waitForPracticeStart('grid:u2', token, 10_000);
     expect(cancelPracticeStart('grid:u2', 'search-a')).toBe(false);

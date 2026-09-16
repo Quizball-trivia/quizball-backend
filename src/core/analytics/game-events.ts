@@ -452,7 +452,7 @@ export function trackFootballGridMatchFound(params: {
   userId: string;
   matchId: string;
   searchId?: string | null;
-  origin: 'random' | 'challenge' | 'private' | 'public' | 'code';
+  origin: 'random' | 'challenge' | 'private' | 'public' | 'code' | 'practice';
   opponentType: 'human' | 'bot';
   queueWaitMs?: number | null;
   boardId: string;
@@ -506,7 +506,7 @@ export function trackFootballGridMatchStarted(params: {
 export interface TrackFootballGridMatchCompletedOptions {
   userId: string;
   matchId: string;
-  origin: 'random' | 'challenge' | 'private' | 'public' | 'code';
+  origin: 'random' | 'challenge' | 'private' | 'public' | 'code' | 'practice';
   opponentType: 'human' | 'bot';
   result: 'win' | 'draw' | 'loss';
   completionReason: string;

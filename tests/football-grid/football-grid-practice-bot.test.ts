@@ -75,6 +75,7 @@ const state = vi.hoisted(() => ({
   redis: null as FakeRedis | null,
   lobbyConflictUserId: null as string | null,
   activeSessionUserId: null as string | null,
+  activeMatchByUser: new Map<string, string>(),
   stalePairings: [] as Array<Record<string, unknown>>,
   markPairingFailed: vi.fn(),
   createPairing: vi.fn(),
@@ -135,7 +136,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
 vi.mock('../../src/modules/football-grid/index.js', () => ({
   FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
-    getActiveMatchIdForUser: vi.fn(async () => null),
+    getActiveMatchIdForUser: vi.fn(async (userId: string) => state.activeMatchByUser.get(userId) ?? null),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>
       new Map(opponentIds.map((opponentId) => [opponentId, 0]))),
     createPairing: (...args: unknown[]) => state.createPairing(...args),
@@ -145,7 +146,8 @@ vi.mock('../../src/modules/football-grid/index.js', () => ({
   },
   footballGridService: {
     createMatch: (...args: unknown[]) => state.createMatch(...args),
-    getState: vi.fn(),
+    getState: vi.fn(async (matchId: string) => ({ matchId, phase: 'active', players: [] })),
+    resolveStaleMatchOnSearchStart: vi.fn(async () => 'resumable'),
   },
 }));
 vi.mock('../../src/realtime/services/football-grid-realtime.service.js', () => ({
@@ -231,6 +233,7 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     state.redis = new FakeRedis();
     state.lobbyConflictUserId = null;
     state.activeSessionUserId = null;
+    state.activeMatchByUser = new Map();
     state.stalePairings = [];
     state.matchmakingLockAvailable = true;
     state.heartbeatPairing.mockResolvedValue(true);
@@ -283,6 +286,23 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     await footballGridMatchmakingService.handlePracticeBotStart(io, guest, { locale: 'en', theme: 'european' });
     expect(state.createMatch).not.toHaveBeenCalled();
     expect(emitted(guest, 'grid:error')).toEqual([expect.objectContaining({ code: 'GRID_BOT_UNAVAILABLE' })]);
+  });
+
+  it('re-delivers the match a concurrent start already created instead of failing', async () => {
+    // The session re-check under the lock refuses this request (the other tab
+    // won), and by then the winner's match is the guest's active match.
+    state.activeSessionUserId = 'guest-7';
+    state.withUserSessionLocks.mockImplementation(async (_userIds, work) => {
+      state.activeMatchByUser.set('guest-7', 'winner-match');
+      return work();
+    });
+    state.emitMatchFound.mockResolvedValueOnce(true);
+    const guest = socket('guest-7');
+    await footballGridMatchmakingService.handlePracticeBotStart(io, guest, { locale: 'en', theme: 'european' });
+    expect(state.createMatch).not.toHaveBeenCalled();
+    expect(state.emitMatchFound).toHaveBeenCalledWith(io, expect.objectContaining({ matchId: 'winner-match' }));
+    expect(emitted(guest, 'grid:error')).toEqual([]);
+    expect(emitted(guest, 'grid:search_state').some((payload) => (payload as { state: string }).state === 'idle')).toBe(false);
   });
 
   it('leaves the guest idle (never queued) when the bot match cannot be created', async () => {

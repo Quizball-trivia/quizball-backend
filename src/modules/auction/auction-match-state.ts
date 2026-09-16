@@ -144,13 +144,20 @@ export type PublicAuctionMatchState = Omit<
 };
 
 export function toPublicAuctionRankings(
-  rankings: AuctionPlayerRanking[] | null
+  rankings: AuctionPlayerRanking[] | null,
+  options: PublicProjectionOptions = {}
 ): PublicAuctionPlayerRanking[] | null {
   if (!rankings) return null;
-  return rankings.map(({ isBot: _isBot, player, ...rest }) => ({
+  return rankings.map(({ isBot, player, ...rest }) => ({
     ...rest,
-    player: player ? toPublicAuctionPlayer(player) : undefined,
+    ...(options.hideBotIds && isBot ? { userId: null } : {}),
+    player: player ? toPublicAuctionPlayer(player, options) : undefined,
   }));
+}
+
+interface PublicProjectionOptions {
+  /** Guest practice tables: bots are anonymous, so their roster user ids stay server-side too. */
+  hideBotIds?: boolean;
 }
 
 /**
@@ -179,10 +186,11 @@ export function findAuctionSeatByUserId(
 
 export function toPublicAuctionMatchState(state: AuctionMatchState): PublicAuctionMatchState {
   const { sourceLobbyId: _sourceLobbyId, ...publicState } = state;
+  const projection: PublicProjectionOptions = { hideBotIds: state.origin === 'practice' };
   return {
     ...publicState,
-    seats: state.seats.map(toPublicAuctionPlayer),
-    rankings: toPublicAuctionRankings(state.rankings),
+    seats: state.seats.map((seat) => toPublicAuctionPlayer(seat, projection)),
+    rankings: toPublicAuctionRankings(state.rankings, projection),
     currentRound: state.currentRound ? toPublicAuctionRound(state.currentRound) : null,
     completedRounds: state.completedRounds.map((round) => toPublicAuctionRound({
       ...round,
@@ -290,12 +298,13 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
   };
 }
 
-function toPublicAuctionPlayer(player: AuctionPlayer): PublicAuctionPlayer {
+function toPublicAuctionPlayer(player: AuctionPlayer, options: PublicProjectionOptions = {}): PublicAuctionPlayer {
   // botProfile AND isBot are server-only: leaking either would let a client
   // tell bots from humans, which the product rule forbids.
-  const { botProfile: _botProfile, isBot: _isBot, ...publicFields } = player;
+  const { botProfile: _botProfile, isBot, ...publicFields } = player;
   return {
     ...publicFields,
+    ...(options.hideBotIds && isBot ? { userId: null } : {}),
     team: {
       ...player.team,
       slots: {

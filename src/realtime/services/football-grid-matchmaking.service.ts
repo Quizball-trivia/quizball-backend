@@ -689,19 +689,22 @@ async function deliverBotPair(io: QuizballServer, result: BotPairStart): Promise
   try {
     const deadlineMs = Date.parse(state.phaseDeadlineAt ?? '');
     const matchedAt = new Date(Number.isFinite(deadlineMs) ? deadlineMs - FOOTBALL_GRID_HANDOFF_MS : Date.now());
-    trackFootballGridQueueLeft({
-      userId: search.userId,
-      searchId: search.searchId,
-      reason: 'matched',
-      queuedAt: new Date(search.queuedAt),
-      leftAt: matchedAt,
-      opponentType: 'bot',
-    });
+    // A practice search never queued: no queue funnel events for it.
+    if (!search.practice) {
+      trackFootballGridQueueLeft({
+        userId: search.userId,
+        searchId: search.searchId,
+        reason: 'matched',
+        queuedAt: new Date(search.queuedAt),
+        leftAt: matchedAt,
+        opponentType: 'bot',
+      });
+    }
     trackFootballGridMatchFound({
       userId: search.userId,
       matchId: state.matchId,
       searchId: search.searchId,
-      origin: 'random',
+      origin: search.practice ? 'practice' : 'random',
       opponentType: 'bot',
       queueWaitMs: Math.max(0, matchedAt.getTime() - search.queuedAt),
       boardId: state.board.boardId,
@@ -892,12 +895,6 @@ export const footballGridMatchmakingService = {
         fallbackAt: now,
         practice: true,
       };
-      trackFootballGridQueueJoined({
-        userId,
-        searchId: practiceSearch.searchId,
-        locale: practiceSearch.locale,
-        queuedAt: new Date(practiceSearch.queuedAt),
-      });
       emitSearchState(io, userId, {
         state: 'searching', searchId: practiceSearch.searchId,
         queuedAt: new Date(practiceSearch.queuedAt).toISOString(),
@@ -909,6 +906,9 @@ export const footballGridMatchmakingService = {
     // Outside the per-user lock: startBotPair takes it itself.
     const paired = await startBotPair(io, search, { requireQueued: false });
     if (!paired) {
+      // A concurrent start (second tab, repeated event) may have won the lock
+      // and created the match: re-deliver it instead of reporting a failure.
+      if (await resumeActiveMatchOnStart(io, userId)) return;
       emitSearchState(io, userId, { state: 'idle', searchId: search.searchId });
       await userSessionGuardService.emitState(io, userId).catch(() => {});
       socket.emit('grid:error', { code: 'GRID_BOT_UNAVAILABLE', message: 'No opponent is available right now. Please try again.' });

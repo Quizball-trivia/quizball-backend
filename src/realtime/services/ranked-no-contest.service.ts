@@ -22,6 +22,7 @@ interface RankedNoContestParams {
   roster: Array<{ user_id: string }>;
   statePayload: Record<string, unknown>;
   roundsPlayed: number;
+  reason?: 'zero_human_interaction' | 'question_pool_exhausted';
   cleanupRedisKeys?: string[];
   /** Users the refund must SKIP (e.g. a penalized serial forfeiter). */
   suppressRefundUserIds?: string[];
@@ -43,6 +44,7 @@ export async function finalizeRankedNoContest(
     ...params.statePayload,
     winnerDecisionMethod: 'forfeit',
     cancelledNoContest: true,
+    ...(params.reason ? { cancellationReason: params.reason } : {}),
     roundsPlayed: params.roundsPlayed,
   });
   await matchesService.abandonMatch(params.matchId);
@@ -102,9 +104,8 @@ export interface FinalizeRankedNoContestResult {
 }
 
 /**
- * Void a ranked match as a no-contest with no forfeiter (zero-interaction
- * safety net): every human got timeout-backfilled the whole match, so there is
- * no legitimate result. Abandon it, refund all humans, and stamp replay
+ * Void a ranked match with no forfeiter: either no human interacted, or the
+ * server exhausted all eligible questions. Abandon it, refund all humans, and stamp replay
  * markers — the same terminal state as an early forfeit, minus the per-player
  * forfeit penalty since nobody chose to leave.
  */
@@ -114,6 +115,7 @@ export async function finalizeRankedMatchAsNoContest(params: {
   cacheSnapshot?: MatchCache | null;
   cleanupRedisKeys?: string[];
   roundsPlayed: number;
+  reason?: 'zero_human_interaction' | 'question_pool_exhausted';
 }): Promise<FinalizeRankedNoContestResult> {
   const lockKey = `lock:match:${params.matchId}:complete`;
   const lockTtlMs = 15_000;
@@ -136,11 +138,12 @@ export async function finalizeRankedMatchAsNoContest(params: {
       roster,
       statePayload: currentPayload,
       roundsPlayed: params.roundsPlayed,
+      reason: params.reason,
       cleanupRedisKeys: params.cleanupRedisKeys,
     });
     logger.info(
-      { matchId: params.matchId, roundsPlayed: params.roundsPlayed },
-      'Ranked match cancelled as no-contest (zero human interaction) — RP unchanged, tickets refunded'
+      { matchId: params.matchId, roundsPlayed: params.roundsPlayed, reason: params.reason ?? 'zero_human_interaction' },
+      'Ranked match cancelled as no-contest — RP unchanged, tickets refunded'
     );
     return { matchId: params.matchId, resultVersion, completed: true };
   } finally {

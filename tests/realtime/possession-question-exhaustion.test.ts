@@ -9,6 +9,19 @@ const getRandomQuestionCandidatesForMatchMock = vi.fn();
 const getRecentlySeenQuestionIdsMock = vi.fn();
 const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
+const finalizeNoContestMock = vi.fn();
+const emitFinalResultsMock = vi.fn();
+vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
+  lobbiesRepo: { listAllRankedEligibleCategories: vi.fn(async () => [{ id: 'other-category' }]) },
+}));
+
+vi.mock('../../src/realtime/services/ranked-no-contest.service.js', () => ({
+  finalizeRankedMatchAsNoContest: (...args: unknown[]) => finalizeNoContestMock(...args),
+}));
+vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
+  buildFinalResultsPayload: vi.fn(async () => ({ cancelledNoContest: true, winnerId: null })),
+  emitFinalResultsToMatchParticipants: (...args: unknown[]) => emitFinalResultsMock(...args),
+}));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -57,7 +70,7 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
 }));
 
 vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
-  cancelRealtimeTimer: vi.fn(),
+  cancelRealtimeTimer: vi.fn(async () => undefined),
   hasPendingRealtimeTimer: vi.fn(),
   scheduleRealtimeTimer: vi.fn(),
 }));
@@ -89,7 +102,7 @@ vi.mock('../../src/realtime/services/match-entry.service.js', () => ({
   markMatchEnteredForSocket: vi.fn(),
 }));
 
-function createCache(phase: 'PENALTY_SHOOTOUT' | 'NORMAL_PLAY'): MatchCache {
+function createCache(phase: 'PENALTY_SHOOTOUT' | 'NORMAL_PLAY' | 'LAST_ATTACK'): MatchCache {
   const state = createInitialPossessionState('ranked_sim');
   state.phase = phase;
   state.penaltyCategoryId = 'category-penalty';
@@ -120,6 +133,7 @@ function createIo(): QuizballServer {
 describe('possession question exhaustion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    finalizeNoContestMock.mockResolvedValue({ completed: true, resultVersion: 1 });
     getMatchMock.mockResolvedValue({ status: 'active' });
     getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
     completePossessionMatchMock.mockResolvedValue({
@@ -154,6 +168,53 @@ describe('possession question exhaustion', () => {
     await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 6)).resolves.toBeNull();
 
     expect(completePossessionMatchMock).not.toHaveBeenCalled();
+    expect(finalizeNoContestMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'question_pool_exhausted' }));
+  });
+
+  it('voids exhausted last attack, emits no-contest, and never awards a winner', async () => {
+    const cache = createCache('LAST_ATTACK');
+    cache.currentQIndex = 6;
+    cache.statePayload.lastAttack.attackerSeat = 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await sendPossessionMatchQuestion(createIo(), cache.matchId, 6);
+    expect(finalizeNoContestMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: cache.matchId, roundsPlayed: 6, reason: 'question_pool_exhausted',
+    }));
+    expect(emitFinalResultsMock).toHaveBeenCalledWith(expect.anything(), cache.matchId,
+      expect.objectContaining({ cancelledNoContest: true, winnerId: null }));
+    expect(completePossessionMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a globally eligible MCQ only after the last-attack category ladder is exhausted', async () => {
+    const cache = createCache('LAST_ATTACK');
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { categoryIds: string[] }) =>
+      params.categoryIds.includes('other-category') ? [{ id: 'global-mcq', category_id: 'other-category', payload: {
+        type: 'mcq_single', options: [
+          { id: 'a', text: { en: 'A' }, is_correct: true },
+          { id: 'b', text: { en: 'B' }, is_correct: false },
+          { id: 'c', text: { en: 'C' }, is_correct: false },
+          { id: 'd', text: { en: 'D' }, is_correct: false },
+        ],
+      } }] : []);
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await sendPossessionMatchQuestion(createIo(), cache.matchId, 6);
+    expect(getRandomQuestionCandidatesForMatchMock.mock.calls.slice(0, -1)
+      .every(([params]) => !params.categoryIds.includes('other-category'))).toBe(true);
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(expect.objectContaining({ questionId: 'global-mcq', phaseKind: 'last_attack' }));
+    expect(finalizeNoContestMock).not.toHaveBeenCalled();
+  });
+
+  it('arms a durable retry when another finalizer holds the no-contest lock', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(createCache('LAST_ATTACK'));
+    finalizeNoContestMock.mockResolvedValue({ completed: false });
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    const { scheduleRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+    await sendPossessionMatchQuestion(createIo(), 'match-exhausted', 6);
+    expect(scheduleRealtimeTimer).toHaveBeenCalledWith('possession_question', expect.any(String), expect.any(Date),
+      expect.objectContaining({ matchId: 'match-exhausted', qIndex: 6 }));
+    expect(emitFinalResultsMock).not.toHaveBeenCalled();
   });
 
   it('applies the history exclusion inside the pick query and only drops it for the repeat rung', async () => {

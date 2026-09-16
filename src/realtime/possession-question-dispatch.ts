@@ -2,6 +2,7 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
+import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
@@ -65,6 +66,8 @@ import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload
 import { createReadyGateRegistry } from './ready-gate.js';
 import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
 import { completePossessionMatch } from './possession-completion.js';
+import { finalizeRankedMatchAsNoContest } from './services/ranked-no-contest.service.js';
+import { buildFinalResultsPayload, emitFinalResultsToMatchParticipants } from './services/match-final-results.service.js';
 import {
   markMatchEnteredForRoom,
   markMatchEnteredForSocket,
@@ -630,6 +633,24 @@ async function maybePickQuestionForState(
     }
   }
 
+  if (!picked && state.phase === 'LAST_ATTACK') {
+    // A thin drafted category can use every MCQ during normal play. Broaden
+    // only this final fallback; never repeat a question within the match or
+    // relax published/public/ranked-eligible/active-category checks.
+    // Reuse the draft pool so campaign-only, daily, and featured categories
+    // cannot leak into ranked through this fallback.
+    const fallbackCategories = await lobbiesRepo.listAllRankedEligibleCategories();
+    const rows = fallbackCategories.length > 0 ? await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+      matchId,
+      categoryIds: fallbackCategories.map((category) => category.id),
+      questionTypes: ['mcq_single'],
+      difficulties: ['easy', 'medium', 'hard'],
+      allowImageMcqs: true,
+      limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+    }) : [];
+    picked = pickFirstValidCandidate(rows, 'mcq_single', { matchId, categoryIds, globalFallback: true });
+  }
+
   return picked;
 }
 
@@ -851,6 +872,22 @@ export async function sendPossessionMatchQuestion(
             { matchId, qIndex, reason: completion.reason ?? null },
             'Failed to complete possession match after penalty question pool exhaustion'
           );
+        }
+      } else if (cache.mode === 'ranked') {
+        const cancellation = await finalizeRankedMatchAsNoContest({
+          matchId,
+          cacheSnapshot: cache,
+          roundsPlayed: cache.currentQIndex,
+          reason: 'question_pool_exhausted',
+        });
+        if (cancellation.completed) {
+          clearQuestionTimer(matchId, qIndex);
+          const payload = await buildFinalResultsPayload(matchId, cancellation.resultVersion);
+          if (payload) await emitFinalResultsToMatchParticipants(io, matchId, payload);
+        } else {
+          // A competing finalizer may own the lock. Leave a durable retry;
+          // missing-question recovery re-enters dispatch instead of spinning.
+          await deferQuestionTimer(matchId, qIndex, 5000);
         }
       }
       return null;

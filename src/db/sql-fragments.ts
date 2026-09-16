@@ -50,7 +50,8 @@ export const MCQ_VALIDATION_CONDITIONS = sql`
 
 /**
  * Shared HAVING clause for ranked-eligible category queries.
- * Requires >= 4 valid MCQs plus at least 1 of each in-match special type.
+ * Requires >= 5 valid MCQs: four normal slots plus a possible last attack,
+ * as well as at least 1 of each in-match special type.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
  */
 /** Season 3 (POSSESSION_MCQ_ONLY): categories no longer need the special types to be eligible. */
@@ -61,7 +62,7 @@ const SPECIAL_TYPE_COUNTS = () => (config.POSSESSION_MCQ_ONLY
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1`);
 
 export const RANKED_ELIGIBILITY_HAVING = sql`
-  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 4
+  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 5
     ${SPECIAL_TYPE_COUNTS()}
 `;
 
@@ -88,7 +89,7 @@ export function buildPossessionEligibilityHavingCounts(minMcqQuestions: number) 
 `;
 }
 
-export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHavingCounts(4);
+export const RANKED_ELIGIBILITY_HAVING_COUNTS = buildPossessionEligibilityHavingCounts(5);
 
 /**
  * Game-mode/daily-challenge categories must never enter matchmaking pools

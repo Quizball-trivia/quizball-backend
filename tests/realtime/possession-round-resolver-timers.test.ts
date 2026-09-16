@@ -14,6 +14,9 @@ const scheduleNextPossessionQuestionMock = vi.fn();
 const emitMatchStateMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
 const redisGetMock = vi.fn();
+const sendQuestionMock = vi.fn();
+const deferQuestionTimerMock = vi.fn();
+const getMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -61,6 +64,8 @@ vi.mock('../../src/realtime/possession-match-flow.js', () => ({
 }));
 
 vi.mock('../../src/realtime/possession-question-dispatch.js', () => ({
+  sendPossessionMatchQuestion: (...args: unknown[]) => sendQuestionMock(...args),
+  deferQuestionTimer: (...args: unknown[]) => deferQuestionTimerMock(...args),
   clearQuestionTimer: (...args: unknown[]) => clearQuestionTimerMock(...args),
   emitMatchState: (...args: unknown[]) => emitMatchStateMock(...args),
   scheduleNextPossessionQuestion: (...args: unknown[]) => scheduleNextPossessionQuestionMock(...args),
@@ -77,6 +82,7 @@ const setMatchStatePayloadMock = vi.fn(async () => undefined);
 const touchMatchRoundMock = vi.fn(async () => undefined);
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
+    getMatch: (...args: unknown[]) => getMatchMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     touchMatchRound: (...args: unknown[]) => touchMatchRoundMock(...args),
   },
@@ -192,6 +198,39 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
     releaseLockMock.mockResolvedValue(true);
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
+    getMatchMock.mockResolvedValue({ status: 'active' });
+  });
+
+  it('redispatches a missing ranked last-attack question without replacing its new deadline', async () => {
+    const cache = createCache({ mode: 'ranked', currentQuestion: null });
+    cache.statePayload.phase = 'LAST_ATTACK';
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    sendQuestionMock.mockResolvedValue({ correctIndex: 1 });
+    await resolveRound(true);
+    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX);
+    expect(deferQuestionTimerMock).not.toHaveBeenCalled();
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('clears the old timer when missing-question recovery cancels the match', async () => {
+    const cache = createCache({ mode: 'ranked', currentQuestion: null });
+    cache.statePayload.phase = 'LAST_ATTACK';
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    sendQuestionMock.mockResolvedValue(null);
+    getMatchMock.mockResolvedValue({ status: 'abandoned' });
+    await resolveRound(true);
+    expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
+    expect(deferQuestionTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps recovery armed if redispatch is paused or a finalization lock is busy', async () => {
+    const cache = createCache({ mode: 'ranked', currentQuestion: null });
+    cache.statePayload.phase = 'LAST_ATTACK';
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    sendQuestionMock.mockResolvedValue(null);
+    await resolveRound(true);
+    expect(deferQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX, 5000);
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
   });
 
   it('leaves timers armed when waiting for more answers (the flapping freeze window)', async () => {

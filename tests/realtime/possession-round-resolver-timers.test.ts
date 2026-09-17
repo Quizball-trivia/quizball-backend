@@ -18,6 +18,8 @@ const redisGetMock = vi.fn();
 const sendQuestionMock = vi.fn();
 const deferQuestionTimerMock = vi.fn();
 const getMatchMock = vi.fn();
+const deleteCountdownPlayerKeysMock = vi.fn(async () => undefined);
+const updatePlayerTotalsMock = vi.fn(async () => undefined);
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -43,7 +45,7 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
   answerCount: (cache: { answers: Record<string, unknown> }) => Object.keys(cache.answers).length,
   buildAnswerPayload: (answer: unknown) => answer,
   countdownGetFound: vi.fn(async () => []),
-  deleteCountdownPlayerKeys: vi.fn(async () => undefined),
+  deleteCountdownPlayerKeys: (...args: unknown[]) => deleteCountdownPlayerKeysMock(...args),
   getExpectedUserIds: (cache: { players: Array<{ userId: string }> }) =>
     cache.players.map((player) => player.userId),
   getMatchCacheOrRebuild: (...args: unknown[]) => getMatchCacheOrRebuildMock(...args),
@@ -99,7 +101,7 @@ vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
 
 vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   matchPlayersRepo: {
-    updatePlayerTotals: vi.fn(async () => undefined),
+    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
   },
 }));
 
@@ -424,6 +426,53 @@ describe('possession round resolver lease loss', () => {
     // Not concluded: the round keeps its timers so a fresh resolve retries.
     expect(clearQuestionTimerMock).not.toHaveBeenCalled();
     expect(deferQuestionTimerMock).toHaveBeenCalled();
+  });
+
+  it('lease lost AFTER the first mutating side effect (countdown keys deleted): the round still commits, once', async () => {
+    // Aborting after deleteCountdownPlayerKeys / the non-MCQ totals increment
+    // would leave a retry with no countdown answers and double-incremented
+    // totals. Past the first side effect the round is committed-in-progress.
+    vi.useFakeTimers();
+    extendLockMock.mockResolvedValue(false);
+    const cache = createCache({
+      currentQuestion: {
+        ...createQuestion(),
+        kind: 'countdown',
+        evaluation: {
+          kind: 'countdown',
+          answerGroups: [
+            { id: 'g1', displays: ['x'], accepted: ['x'] },
+            { id: 'g2', displays: ['y'], accepted: ['y'] },
+          ],
+        } as unknown as CachedQuestion['evaluation'],
+      },
+      answers: {},
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    // The renewal interval fires (and reports the lease lost) while the
+    // countdown keys are being deleted — i.e. after the first side effect.
+    deleteCountdownPlayerKeysMock.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(io, MATCH_ID, Q_INDEX, true);
+    await Promise.resolve(); await Promise.resolve();
+
+    expect(deleteCountdownPlayerKeysMock).toHaveBeenCalledTimes(1);
+    expect(extendLockMock).toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith('match:round_result', expect.objectContaining({ qIndex: Q_INDEX }));
+    expect(setMatchCacheMock).toHaveBeenCalledWith(cache);
+    expect(cache.currentQIndex).toBe(Q_INDEX + 1);
+    // Each player's totals were applied exactly once.
+    const totalsCalls = updatePlayerTotalsMock.mock.calls.map((call) => call[1]);
+    expect(totalsCalls.sort()).toEqual(['user-1', 'user-2']);
+    expect(scheduleNextPossessionQuestionMock).toHaveBeenCalled();
+    // Concluded: no retry is armed, the round's timers are cleared.
+    expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
+    expect(deferQuestionTimerMock).not.toHaveBeenCalled();
   });
 });
 

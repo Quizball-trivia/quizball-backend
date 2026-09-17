@@ -5,7 +5,9 @@ import {
   getMatchCacheOrRebuild,
   type MatchCache,
 } from './match-cache.js';
+import { matchPauseKey } from './match-keys.js';
 import { clampRevealAckMs } from './possession-timing.js';
+import { getRedisClient } from './redis.js';
 import {
   cacheLogFields,
   questionLogFields,
@@ -60,6 +62,20 @@ export async function handlePossessionQuestionRevealed(
     logger.warn(
       { eventName: 'match:question_revealed', matchId, qIndex, userId, ...cacheLogFields(cache) },
       'Possession question reveal ack ignored: user is not a match player'
+    );
+    return;
+  }
+
+  // While the match is paused (the disconnect service's pause marker — the
+  // same signal the resume path keys off) no ack may be recorded: one that
+  // landed between the resume's overlay clean-up and the re-dispatch would
+  // survive with pre-resume timing. The client re-acks the resumed question.
+  const redis = getRedisClient();
+  const pauseStartedAt = redis && redis.isOpen ? await redis.get(matchPauseKey(matchId)) : null;
+  if (pauseStartedAt) {
+    logger.debug(
+      { eventName: 'match:question_revealed', matchId, qIndex, userId, pauseStartedAt },
+      'Possession question reveal ack ignored: match paused'
     );
     return;
   }

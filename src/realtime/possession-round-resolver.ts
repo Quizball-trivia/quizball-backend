@@ -149,22 +149,39 @@ export async function resolvePossessionRound(
   // missing answer. Cancelling them on a no-op is what froze penalty
   // shootouts under disconnect flapping.
   let roundConcluded = false;
-  // Ownership fence (see RESOLVE_FENCE_TTL_MS): taken right before the first
-  // mutating side effect and released after the cache commit. The round lock
-  // alone cannot protect the post-side-effect commit — once its lease is lost
-  // a timeout resolver can acquire the expired lock and run the same round —
-  // but that competitor sees this marker and backs off.
+  // Ownership fence (see RESOLVE_FENCE_TTL_MS): taken right after the round
+  // lock, before ANY write (cache refresh, redispatch, side effects), and
+  // released after the cache commit. The round lock alone cannot protect the
+  // post-side-effect commit — once its lease is lost a timeout resolver can
+  // acquire the expired lock and run the same round — but that competitor
+  // sees this marker and backs off. The marker's value is our lock token, so
+  // the release is the compare-and-delete helper: an expired marker re-taken
+  // by another holder is never deleted by us.
   const fenceKey = resolveInProgressKey(matchId, qIndex);
   let fenceHeld = false;
   const releaseFence = async (): Promise<void> => {
     if (!fenceHeld) return;
     fenceHeld = false;
-    await redis.del(fenceKey).catch((error: unknown) => {
+    await releaseLock(fenceKey, lockToken).catch((error: unknown) => {
       logger.warn({ error, matchId, qIndex }, 'Failed to clear resolve fence; it expires with its TTL');
     });
   };
 
   try {
+    const fenced = await redis.set(fenceKey, lockToken, { NX: true, PX: RESOLVE_FENCE_TTL_MS });
+    if (fenced !== 'OK') {
+      // Another holder is mid-resolve on this round (its lock lease lapsed
+      // but its side effects are applied): no-op and let the timeout retry
+      // (re-armed in finally) observe the committed result. Never touch its
+      // marker.
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
+        'Possession round resolve skipped: another resolver holds the in-progress fence'
+      );
+      return;
+    }
+    fenceHeld = true;
+
     let cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       // A genuinely terminal match no longer needs round timers; a missing
@@ -274,20 +291,9 @@ export async function resolvePossessionRound(
       'Possession round resolve started'
     );
 
-    // LAST abort point: nothing below this line is safe to repeat.
+    // LAST abort point: nothing below this line is safe to repeat (the fence
+    // taken above is released by finally on this abort).
     if (abortIfLeaseLost('pre_side_effects')) return;
-    const fenced = await redis.set(fenceKey, lockToken, { NX: true, PX: RESOLVE_FENCE_TTL_MS });
-    if (fenced !== 'OK') {
-      // Another holder is mid-resolve on this round (its lock lease lapsed
-      // but its side effects are applied): no-op and let the timeout retry
-      // observe the committed result. Never touch its marker.
-      logger.warn(
-        { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
-        'Possession round resolve skipped: another resolver holds the in-progress fence'
-      );
-      return;
-    }
-    fenceHeld = true;
 
     if (fromTimeout) {
       const timeoutDurationMs = getQuestionDurationMs(

@@ -6,6 +6,13 @@ import type { QuizballSocket } from '../../src/realtime/socket-server.js';
 
 const getMatchCacheOrRebuildMock = vi.hoisted(() => vi.fn());
 const commitCachedRevealAckMock = vi.hoisted(() => vi.fn());
+const redisValues = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../src/realtime/redis.js', () => ({
+  getRedisClient: () => ({
+    isOpen: true,
+    get: async (key: string) => redisValues.get(key) ?? null,
+  }),
+}));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -24,6 +31,8 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
 }));
 
 import { handlePossessionQuestionRevealed } from '../../src/realtime/possession-reveal-ack.js';
+import { matchPauseKey } from '../../src/realtime/match-keys.js';
+import { logger } from '../../src/core/logger.js';
 
 const MATCH_ID = 'match-1';
 const SHOWN_AT_MS = new Date('2026-07-04T12:00:00.000Z').getTime();
@@ -98,11 +107,37 @@ describe('handlePossessionQuestionRevealed', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(SHOWN_AT_MS + 500));
     vi.clearAllMocks();
+    redisValues.clear();
     commitCachedRevealAckMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('ignores an ack while the match is paused (no in-memory ack, no overlay write), then records one after resume', async () => {
+    // An ack committed between the resume's overlay clean-up and the
+    // re-dispatch would survive with pre-resume timing. The pause marker the
+    // disconnect service sets is the same signal the resume path relies on.
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    redisValues.set(matchPauseKey(MATCH_ID), String(SHOWN_AT_MS + 200));
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks).toEqual({});
+    expect(commitCachedRevealAckMock).not.toHaveBeenCalled();
+    expect(vi.mocked(logger.debug)).toHaveBeenCalledWith(
+      expect.objectContaining({ eventName: 'match:question_revealed', matchId: MATCH_ID, userId: 'u1' }),
+      expect.stringMatching(/paused/i)
+    );
+
+    // Resume clears the pause marker; the next ack is recorded normally.
+    redisValues.delete(matchPauseKey(MATCH_ID));
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
+    expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 500);
   });
 
   it('stores the first reveal ack for the current player and question', async () => {

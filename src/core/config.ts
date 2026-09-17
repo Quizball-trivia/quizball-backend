@@ -86,10 +86,13 @@ const configSchema = z.object({
   // Keep the default conservative for small/local pools; large synchronized
   // gameplay starts can raise this explicitly after sizing the DB bulkhead.
   REALTIME_TIMER_HANDLER_CONCURRENCY: z.coerce.number().int().min(1).max(30).default(4),
-  // Optional safety bound for penalty shootouts. Zero preserves the current
-  // unlimited sudden-death behavior; staging can validate a finite bound
-  // before any production gameplay-policy decision is made.
-  POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: z.coerce.number().int().min(0).max(20).default(0),
+  // Sudden-death cap for penalty shootouts: after the regulation 5 kicks each,
+  // at most this many extra PAIRS of kicks before a still-level shootout is
+  // decided by the deterministic winner chain (possession-completion.ts
+  // decideWinner: total points → correct answers → seat 1). Default 5 ends a
+  // shootout by kick 20 at the latest; equal points is a save (no time
+  // tie-break), so without a cap equally-good players never finish. 0 = unlimited.
+  POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: z.coerce.number().int().min(0).max(20).default(5),
   /** Auth requests per 15 min per IP. Carrier NAT puts a whole city on one IP. */
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).max(10_000).default(400),
   RANKED_HUMAN_QUEUE_ENABLED: z

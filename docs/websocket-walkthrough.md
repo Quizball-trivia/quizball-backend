@@ -598,7 +598,7 @@ if (nextIndex >= match.total_questions) {
 | `match:question` | `{matchId, qIndex, total, question, deadlineAt}` | New question |
 | `match:answer_ack` | `{isCorrect, correctIndex, myTotalPoints, oppAnswered, opponentPointsEarned?, opponentTotalPoints?, opponentIsCorrect?, opponentSelectedIndex?, ...}` | Answer received (PRIVATE). The `opponent*` fields are set whenever the opponent's answer is already committed, so the opponent score flight never depends on `match:opponent_answered` ordering |
 | `match:opponent_answered` | `{matchId, qIndex, opponentTotalPoints, pointsEarned, isCorrect, selectedIndex}` | Opponent answered |
-| `match:round_result` | `{correctIndex, players, deltas: {penaltyOutcome, penaltyOutcomeReason?, ...}}` | Round complete. `penaltyOutcomeReason` ∈ `shooter_missed \| keeper_missed \| shooter_faster \| keeper_faster` (tie → `keeper_faster`) |
+| `match:round_result` | `{correctIndex, players, deltas: {penaltyOutcome, ...}}` | Round complete. In a penalty duel, `penaltyOutcome` is `goal` iff the shooter is correct and the keeper wrong, or the shooter out-scores the keeper; equal points is `saved` |
 | `match:final_results` | `{winnerId, players, durationMs}` | Match complete |
 
 ---

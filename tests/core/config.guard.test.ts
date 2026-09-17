@@ -113,8 +113,11 @@ describe('realtime timer capacity configuration', () => {
 });
 
 describe('penalty shootout safety bound configuration', () => {
-  it('preserves existing behavior by default and accepts a staging trial bound', () => {
-    expect(parseConfig(baseEnv()).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(0);
+  it('bounds sudden death at 5 pairs by default (shootout ends by kick 20) and accepts an override', () => {
+    expect(parseConfig(baseEnv()).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(5);
+    expect(parseConfig(baseEnv({
+      POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: '0',
+    })).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(0);
     expect(parseConfig(baseEnv({
       POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: '3',
     })).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(3);

@@ -4,13 +4,17 @@ import type { CachedPlayer } from '../../src/realtime/match-cache.js';
 import { applyPenaltyResolution } from '../../src/realtime/possession-resolution.js';
 import type { Seat } from '../../src/realtime/possession-state.js';
 
-// Reproduces the "0-0 marathon" bug reported from prod (match 2e85cbbb…):
-// scoring is stepped in 10-point buckets with a 500ms full-points grace
-// window, so two players who both answer correctly and fast land on IDENTICAL
-// points round after round. With ties resolving as a save, neither player can
-// EVER score — 23% of prod shootouts exceeded the regulation 10 kicks, the
-// worst reaching 40. The fix breaks point-ties on raw answer time: the
-// faster correct answer wins the duel; an exact time tie stays a save.
+// Penalty duel rule (product decision, 2026-09-17): a goal iff the shooter is
+// correct and the keeper is wrong, OR the shooter out-scores the keeper on
+// points. Both correct with EQUAL points is ALWAYS a save — no millisecond
+// tie-break — so the score bar explains every outcome on its own.
+//
+// History: #575 broke point-ties on raw answer time because scoring is
+// stepped in 10-point buckets with a full-points grace window, equally-good
+// players tied constantly, and prod shootouts ran 18-40 kicks at 0-0 (23%
+// exceeded the regulation 10). That tie-break is gone; the sudden-death cap
+// (POSSESSION_MAX_SUDDEN_DEATH_ROUNDS, default 5 → a shootout ends by kick
+// 20 at the latest) is now the guard against marathons.
 
 function players(): CachedPlayer[] {
   return [
@@ -49,16 +53,16 @@ function duel(params: {
   return { state, outcome, shooterUserId: `seat-${shooterSeat}` };
 }
 
-describe('penalty duel tie-break on answer time', () => {
-  it('both correct with equal points: FASTER shooter scores (prod repro: both <1s → both 100pts)', () => {
-    const { outcome, shooterUserId } = duel({
+describe('penalty duel: equal points is a save', () => {
+  it('both correct with equal points and a FASTER shooter: SAVE (no time tie-break)', () => {
+    const { outcome } = duel({
       shooter: { correct: true, timeMs: 769, points: 100 },
       keeper: { correct: true, timeMs: 935, points: 100 },
     });
-    expect(outcome.goalScoredByUserId).toBe(shooterUserId);
+    expect(outcome.goalScoredByUserId).toBeNull();
   });
 
-  it('both correct with equal points: SLOWER shooter is saved', () => {
+  it('both correct with equal points and a SLOWER shooter: save', () => {
     const { outcome } = duel({
       shooter: { correct: true, timeMs: 935, points: 100 },
       keeper: { correct: true, timeMs: 769, points: 100 },
@@ -66,7 +70,7 @@ describe('penalty duel tie-break on answer time', () => {
     expect(outcome.goalScoredByUserId).toBeNull();
   });
 
-  it('both correct with equal points and EXACTLY equal time: save (keeper keeps the edge)', () => {
+  it('both correct with equal points and EXACTLY equal time: save', () => {
     const { outcome } = duel({
       shooter: { correct: true, timeMs: 1_000, points: 100 },
       keeper: { correct: true, timeMs: 1_000, points: 100 },
@@ -74,34 +78,23 @@ describe('penalty duel tie-break on answer time', () => {
     expect(outcome.goalScoredByUserId).toBeNull();
   });
 
-  it('both wrong: never a goal, regardless of speed', () => {
-    const { outcome } = duel({
-      shooter: { correct: false, timeMs: 400, points: 0 },
-      keeper: { correct: false, timeMs: 9_000, points: 0 },
-    });
-    expect(outcome.goalScoredByUserId).toBeNull();
-  });
-
-  it('shooter timeout (no answer) against a wrong keeper: still no goal', () => {
-    const shooterSeat: Seat = 1;
-    const answers = new Map([
-      ['seat-2', { is_correct: false, time_ms: 3_000, points_earned: 0 }],
-    ]);
-    const state = penaltyState();
-    const outcome = applyPenaltyResolution(state, players(), answers, shooterSeat);
-    expect(outcome.goalScoredByUserId).toBeNull();
-  });
-
-  it('tie-break never overrides a points win: keeper with FEWER points but faster time still concedes', () => {
+  it('both correct, shooter has MORE points: goal, even when the shooter was slower on the clock', () => {
     const { outcome, shooterUserId } = duel({
       shooter: { correct: true, timeMs: 4_000, points: 70 },
       keeper: { correct: true, timeMs: 800, points: 60 },
     });
-    // Slower shooter, but strictly more points — points stay authoritative.
     expect(outcome.goalScoredByUserId).toBe(shooterUserId);
   });
 
-  it('correct shooter vs wrong keeper stays a goal even at 0 points (existing rule preserved)', () => {
+  it('both correct, keeper has MORE points: save, even when the shooter was faster', () => {
+    const { outcome } = duel({
+      shooter: { correct: true, timeMs: 800, points: 60 },
+      keeper: { correct: true, timeMs: 4_000, points: 70 },
+    });
+    expect(outcome.goalScoredByUserId).toBeNull();
+  });
+
+  it('correct shooter vs wrong keeper is a goal even at 0 points', () => {
     const { outcome, shooterUserId } = duel({
       shooter: { correct: true, timeMs: 9_900, points: 0 },
       keeper: { correct: false, timeMs: 1_000, points: 0 },
@@ -109,32 +102,59 @@ describe('penalty duel tie-break on answer time', () => {
     expect(outcome.goalScoredByUserId).toBe(shooterUserId);
   });
 
-  it('a consistently faster player now wins in regulation instead of a 0-0 marathon', () => {
-    // Regression for the marathon itself, modelled on the prod match: both
-    // players always correct and always inside the full-points grace bucket,
-    // one consistently ~200ms quicker. Pre-fix every duel was a 100-100 tie →
-    // save → 0-0 forever (prod: 18-40 kicks). Post-fix the quicker player
-    // scores as shooter AND saves as keeper, so the shootout resolves inside
-    // regulation via the mercy rule.
+  it('correct shooter vs keeper timeout (no answer) is a goal', () => {
+    const answers = new Map([
+      ['seat-1', { is_correct: true, time_ms: 1_500, points_earned: 90 }],
+    ]);
+    const state = penaltyState();
+    const outcome = applyPenaltyResolution(state, players(), answers, 1);
+    expect(outcome.goalScoredByUserId).toBe('seat-1');
+  });
+
+  it('wrong shooter never scores, whatever the keeper did', () => {
+    expect(duel({
+      shooter: { correct: false, timeMs: 400, points: 0 },
+      keeper: { correct: true, timeMs: 2_000, points: 80 },
+    }).outcome.goalScoredByUserId).toBeNull();
+    expect(duel({
+      shooter: { correct: false, timeMs: 400, points: 0 },
+      keeper: { correct: false, timeMs: 9_000, points: 0 },
+    }).outcome.goalScoredByUserId).toBeNull();
+  });
+
+  it('shooter timeout (no answer) against a wrong keeper: still no goal', () => {
+    const answers = new Map([
+      ['seat-2', { is_correct: false, time_ms: 3_000, points_earned: 0 }],
+    ]);
+    const state = penaltyState();
+    const outcome = applyPenaltyResolution(state, players(), answers, 1);
+    expect(outcome.goalScoredByUserId).toBeNull();
+  });
+
+  it('two equally fast, always-correct players: every kick is a save and the cap ends it by kick 20', () => {
+    // The marathon #575 fixed with the time tie-break. With equal points as a
+    // save neither player can score, so the sudden-death cap (default 5 pairs
+    // after the first 5 kicks each) is what terminates the shootout.
     const state = penaltyState();
     const cached = players();
-    const timeFor = (userId: string) => (userId === 'seat-1' ? 700 : 900);
     let shooterSeat: Seat = 1;
     let kicks = 0;
-    while (state.phase === 'PENALTY_SHOOTOUT' && kicks < 30) {
+    let forced = false;
+    while (state.phase === 'PENALTY_SHOOTOUT' && kicks < 60) {
       const keeperSeat: Seat = shooterSeat === 1 ? 2 : 1;
       const answers = new Map([
-        [`seat-${shooterSeat}`, { is_correct: true, time_ms: timeFor(`seat-${shooterSeat}`), points_earned: 100 }],
-        [`seat-${keeperSeat}`, { is_correct: true, time_ms: timeFor(`seat-${keeperSeat}`), points_earned: 100 }],
+        [`seat-${shooterSeat}`, { is_correct: true, time_ms: 700, points_earned: 100 }],
+        [`seat-${keeperSeat}`, { is_correct: true, time_ms: 900, points_earned: 100 }],
       ]);
-      applyPenaltyResolution(state, cached, answers, shooterSeat);
+      const outcome = applyPenaltyResolution(state, cached, answers, shooterSeat, 5);
+      forced = outcome.forcedBySuddenDeathCap;
       kicks += 1;
       shooterSeat = state.penalty.shooterSeat;
     }
     expect(state.phase).toBe('COMPLETED');
-    // Seat 1 scores every kick, seat 2 never does — the mercy rule
-    // (p1 > p2 + remaining2) ends it well inside the regulation 10.
-    expect(state.penaltyGoals.seat1).toBeGreaterThan(state.penaltyGoals.seat2);
-    expect(kicks).toBeLessThanOrEqual(10);
+    expect(forced).toBe(true);
+    expect(kicks).toBe(20);
+    expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 0 });
+    expect(state.penalty.kicksTaken).toEqual({ seat1: 10, seat2: 10 });
   });
 });

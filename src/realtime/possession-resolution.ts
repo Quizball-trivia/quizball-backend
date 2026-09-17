@@ -5,7 +5,6 @@ import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
 import { nextSeat, type Seat } from './possession-state.js';
 import { clamp } from './scoring.js';
-import type { PenaltyOutcomeReason } from './socket.types.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
 export interface StreakAnswer {
@@ -249,18 +248,14 @@ export function applyPenaltyResolution(
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
   shooterSeat: Seat,
   maxSuddenDeathRounds = 0,
-): {
-  goalScoredByUserId: string | null;
-  forcedBySuddenDeathCap: boolean;
-  penaltyOutcomeReason: PenaltyOutcomeReason | null;
-} {
+): { goalScoredByUserId: string | null; forcedBySuddenDeathCap: boolean } {
   const keeperSeat = nextSeat(shooterSeat);
   const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
   const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false, penaltyOutcomeReason: null };
+    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -272,30 +267,17 @@ export function applyPenaltyResolution(
 
   // A correct shot against a wrong keeper is always a goal, even when the
   // shooter's answer was slow enough to floor to 0 points. Otherwise points
-  // decide the duel — but points are stepped in 10-point buckets with a full-
-  // points grace window, so two fast correct answers tie CONSTANTLY. With a
-  // tie as a plain save, equally-good players could never score and prod
-  // shootouts ran to 18-40 kicks at 0-0. Break point-ties on raw answer time
-  // (faster correct answer wins); an exact-ms tie still favours the keeper.
-  // Both-wrong stays a miss: the shooter must at least be correct to score.
-  const shooterTimeMs = shooterAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
-  const keeperTimeMs = keeperAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
-  const tieBrokenByTime =
-    shooterCorrect &&
-    keeperCorrect &&
-    shooterPoints === keeperPoints &&
-    shooterTimeMs < keeperTimeMs;
-  const isGoal =
-    (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints || tieBrokenByTime;
-  // Surface WHY to the clients: a correct keeper beaten on speed otherwise
-  // sees an unexplained goal.
-  const penaltyOutcomeReason: PenaltyOutcomeReason = !shooterCorrect
-    ? 'shooter_missed'
-    : !keeperCorrect
-      ? 'keeper_missed'
-      : isGoal
-        ? 'shooter_faster'
-        : 'keeper_faster';
+  // decide the duel, and EQUAL points is a save (product decision 2026-09-17:
+  // the score bar then explains every outcome on its own). Both-wrong stays a
+  // miss: the shooter must at least be correct to score.
+  //
+  // History: points are stepped in 10-point buckets with a full-points grace
+  // window, so two fast correct answers tie constantly; #575 broke those ties
+  // on raw answer time because equally-good players otherwise ran 18-40 kick
+  // 0-0 shootouts. That tie-break is gone — the sudden-death cap below
+  // (maxSuddenDeathRounds, config default 5) is now the guard against
+  // marathons.
+  const isGoal = (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints;
 
   let goalScoredByUserId: string | null = null;
   if (isGoal) {
@@ -317,7 +299,7 @@ export function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId, forcedBySuddenDeathCap: false, penaltyOutcomeReason };
+    return { goalScoredByUserId, forcedBySuddenDeathCap: false };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -338,13 +320,16 @@ export function applyPenaltyResolution(
     && state.penaltyGoals.seat1 === state.penaltyGoals.seat2
   );
   if (forcedBySuddenDeathCap) {
-    // Both players received the same number of sudden-death kicks. Complete
-    // through the existing deterministic winner fallback (total points,
-    // followed by seat 1 only if every gameplay signal is still tied).
+    // Both players have taken 5 + maxSuddenDeathRounds kicks each and are
+    // still level. Completing here routes through the natural winner chain in
+    // possession-completion.ts decideWinner: goals (tied, or we would not be
+    // in a shootout) → penalty goals (tied by construction) → whole-match
+    // total points → whole-match correct answers → seat 1. Every layer is
+    // deterministic and, bar the final seat-1 coin, symmetric.
     state.phase = 'COMPLETED';
   }
   state.currentQuestion = null;
-  return { goalScoredByUserId, forcedBySuddenDeathCap, penaltyOutcomeReason };
+  return { goalScoredByUserId, forcedBySuddenDeathCap };
 }
 
 export function categoryIdsForCurrentHalf(

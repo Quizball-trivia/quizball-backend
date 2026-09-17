@@ -362,19 +362,9 @@ export interface MatchRoundResultPlayer {
   clueIndex?: number | null;
 }
 
-/**
- * Why a penalty duel resolved the way it did. `shooter_missed`: shooter wrong
- * (regardless of the keeper). `keeper_missed`: shooter correct, keeper wrong.
- * `shooter_faster` / `keeper_faster`: both correct, decided on points then
- * raw answer time; an exact tie is `keeper_faster` (the keeper keeps the edge).
- */
-export type PenaltyOutcomeReason = 'shooter_missed' | 'keeper_missed' | 'shooter_faster' | 'keeper_faster';
-
 export interface MatchRoundResultDeltas {
   possessionDelta: number;
   penaltyOutcome: 'goal' | 'saved' | null;
-  /** Set alongside a non-null `penaltyOutcome`. */
-  penaltyOutcomeReason?: PenaltyOutcomeReason;
   goalScoredBySeat: 1 | 2 | null;
   /** Seat whose possession gain was doubled by the 2× speed streak THIS round
    *  (the previous holder). null when no boost was applied. The live streak

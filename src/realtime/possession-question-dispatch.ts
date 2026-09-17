@@ -14,6 +14,7 @@ import {
   countdownGetFound,
   getMatchCacheOrRebuild,
   setMatchCache,
+  shiftCachedRevealAcks,
   type MatchCache,
 } from './match-cache.js';
 import { matchPauseKey, questionTimerKey } from './match-keys.js';
@@ -36,6 +37,7 @@ import {
 } from './possession-debug-logging.js';
 import {
   buildCachedAnswerAckPayload,
+  lookupAiOpponent,
   questionKindForType,
   questionTypeForState,
 } from './possession-payload-mappers.js';
@@ -196,7 +198,11 @@ async function emitPossessionAnswerSnapshotToSocket(
   cache: MatchCache
 ): Promise<void> {
   const userId = socket.data.user.id;
-  const answerAck = buildCachedAnswerAckPayload(cache, userId);
+  const answerAck = buildCachedAnswerAckPayload(
+    cache,
+    userId,
+    await lookupAiOpponent(cache.matchId, resolveAiUserIdForMatch)
+  );
   if (answerAck) {
     socket.emit('match:answer_ack', answerAck);
     logger.info(
@@ -1147,6 +1153,11 @@ export async function resumePossessionMatchQuestion(
   currentQuestion.shownAt = playableAt.toISOString();
   currentQuestion.deadlineAt = deadlineAt.toISOString();
   cache.currentQIndex = qIndex;
+  // The answer clock prefers each player's recorded reveal ack over shownAt,
+  // so the acks must move by the same pause or time_ms includes the pause
+  // (which flips the penalty speed tie-break). Both sides suppress a second
+  // ack for the same qIndex, so shifting — not clearing — is the only fix.
+  await shiftCachedRevealAcks(cache, { pauseStartedAtMs, resumedAtMs });
 
   await setMatchCache(cache);
   fireAndForget('setQuestionTiming(resumeQuestion)', async () => {

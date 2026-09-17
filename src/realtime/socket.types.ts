@@ -299,6 +299,18 @@ export interface MatchAnswerAckPayload {
   correctIndex?: number;
   myTotalPoints: number;
   oppAnswered: boolean;
+  /**
+   * The opponent's committed result, present whenever `oppAnswered` is true
+   * and their answer is in the round cache. `match:opponent_answered` is a
+   * room broadcast with no ordering guarantee against this private ack (and
+   * the rejoin snapshot never replays it), so the "+N" opponent score flight
+   * must be able to run from the ack alone. `opponentTotalPoints` is computed
+   * exactly like the opponent's own `myTotalPoints` at their commit.
+   */
+  opponentPointsEarned?: number;
+  opponentTotalPoints?: number;
+  opponentIsCorrect?: boolean;
+  opponentSelectedIndex?: number | null;
   pointsEarned: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
@@ -347,9 +359,19 @@ export interface MatchRoundResultPlayer {
   clueIndex?: number | null;
 }
 
+/**
+ * Why a penalty duel resolved the way it did. `shooter_missed`: shooter wrong
+ * (regardless of the keeper). `keeper_missed`: shooter correct, keeper wrong.
+ * `shooter_faster` / `keeper_faster`: both correct, decided on points then
+ * raw answer time; an exact tie is `keeper_faster` (the keeper keeps the edge).
+ */
+export type PenaltyOutcomeReason = 'shooter_missed' | 'keeper_missed' | 'shooter_faster' | 'keeper_faster';
+
 export interface MatchRoundResultDeltas {
   possessionDelta: number;
   penaltyOutcome: 'goal' | 'saved' | null;
+  /** Set alongside a non-null `penaltyOutcome`. */
+  penaltyOutcomeReason?: PenaltyOutcomeReason;
   goalScoredBySeat: 1 | 2 | null;
   /** Seat whose possession gain was doubled by the 2× speed streak THIS round
    *  (the previous holder). null when no boost was applied. The live streak

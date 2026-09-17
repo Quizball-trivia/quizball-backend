@@ -26,6 +26,12 @@ describe('ranked possession AI skill scaling', () => {
     );
   });
 
+  it('scales correctness by the measured human accuracy ratio per label (easy 0.702, medium 0.537, hard 0.420)', () => {
+    expect(difficultyAdjustedCorrectness(0.5, 'easy')).toBeCloseTo(0.65, 2);
+    expect(difficultyAdjustedCorrectness(0.5, 'medium')).toBeCloseTo(0.5, 6);
+    expect(difficultyAdjustedCorrectness(0.5, 'hard')).toBeCloseTo(0.39, 2);
+  });
+
   it('clamps adjusted correctness and treats unknown difficulty as medium', () => {
     expect(difficultyAdjustedCorrectness(2, 'easy')).toBe(0.97);
     expect(difficultyAdjustedCorrectness(0, 'hard')).toBe(0.10);
@@ -77,15 +83,38 @@ describe('ranked possession AI skill scaling', () => {
     expect(wrongDelayMs).toBeGreaterThan(correctDelayMs);
   });
 
-  it('never plans non-countdown answer delays below 800ms', () => {
+  it('never plans non-countdown answer delays below the human p10 for that cell', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
 
+    // normal / easy / correct p10 = 911ms (prod ranked humans, 30d to 2026-09-17).
     expect(getAiAnswerDelayMs({
       questionKind: 'multipleChoice',
       difficulty: 'easy',
       delayProfile: { minMs: 100, maxMs: 100 },
       isCorrect: true,
       questionTimeMs: 30000,
-    })).toBe(800);
+    })).toBe(911);
+    // normal / hard / wrong p10 = 1751ms.
+    expect(getAiAnswerDelayMs({
+      questionKind: 'multipleChoice',
+      difficulty: 'hard',
+      delayProfile: { minMs: 100, maxMs: 100 },
+      isCorrect: false,
+      questionTimeMs: 30000,
+    })).toBe(1751);
+  });
+
+  it('scales the profile delay by the human median for (phase, difficulty, correctness)', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5); // jitter multiplier = 1
+    const delayProfile = { minMs: 2441, maxMs: 2441 }; // == normal/medium/correct median → scale 1
+
+    const at = (phaseKind: 'normal' | 'penalty', difficulty: string, isCorrect: boolean) => getAiAnswerDelayMs({
+      questionKind: 'multipleChoice', phaseKind, difficulty, delayProfile, isCorrect, questionTimeMs: 30000,
+    });
+    expect(at('normal', 'medium', true)).toBe(2441);
+    expect(at('normal', 'hard', true)).toBe(2477);
+    expect(at('normal', 'hard', false)).toBe(5263);
+    expect(at('penalty', 'hard', true)).toBe(2492);
+    expect(at('normal', 'easy', true)).toBe(1676);
   });
 });

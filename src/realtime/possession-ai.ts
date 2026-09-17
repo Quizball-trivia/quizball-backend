@@ -9,6 +9,8 @@ import { usersRepo } from '../modules/users/users.repo.js';
 import { isPersistentBot } from '../modules/users/ai-classification.js';
 import { parseBotModelParams, type BotModelParams } from '../modules/bots/calibration/params-schema.js';
 import { HARD_THETA_CEILING_FALLBACK } from '../modules/bots/calibration/hard-clamps.js';
+import { humanTimingPrior } from '../modules/bots/calibration/human-timing-priors.js';
+import { humanAccuracyRatioToMedium } from '../modules/bots/calibration/human-accuracy-priors.js';
 import { questionStatsRepo, type QuestionModelInputs } from '../modules/bots/question-stats.repo.js';
 import type { PersistentBotModelPin } from '../modules/lobbies/lobbies.types.js';
 import {
@@ -38,6 +40,7 @@ import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-sch
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints, calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from './scoring.js';
+import { computePredictedElapsedMs } from './possession-timing.js';
 import {
   getQuestionDurationMs,
   getQuestionPreAnswerDelayMs,
@@ -168,26 +171,9 @@ function normalizedDifficulty(difficulty?: string): QuestionDifficulty {
   return 'medium';
 }
 
+/** Measured human accuracy for the label relative to medium (easy ~1.31, hard ~0.78). */
 function difficultyCorrectnessMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 1.35;
-    case 'hard':
-      return 0.65;
-    case 'medium':
-      return 1;
-  }
-}
-
-function difficultyDelayMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 0.6;
-    case 'hard':
-      return 1.4;
-    case 'medium':
-      return 1;
-  }
+  return humanAccuracyRatioToMedium(normalizedDifficulty(difficulty));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -278,6 +264,7 @@ export function difficultyAdjustedCorrectness(base: number, difficulty?: string)
 
 export function getAiAnswerDelayMs(options: {
   questionKind?: MatchQuestionKind;
+  phaseKind?: MatchPhaseKind;
   difficulty?: string;
   delayProfile?: AiDelayProfile | null;
   isCorrect?: boolean;
@@ -291,19 +278,19 @@ export function getAiAnswerDelayMs(options: {
   const profile = normalizeAiDelayProfile(options.delayProfile);
   const rangeMs = Math.max(0, profile.maxMs - profile.minMs);
   const baseMs = profile.minMs + Math.floor(getRandom() * (rangeMs + 1));
-  const hesitationMultiplier = options.isCorrect === false
-    ? 1.3 + getRandom() * 0.3
-    : 1;
+  // Human-shaped: the profile is calibrated against a normal/medium/correct
+  // answer; scale it by the measured human median for THIS phase/difficulty/
+  // correctness (which already carries the 1.5-2.1x wrong-answer dwell) and
+  // never go under the human p10 for the cell. See human-timing-priors.ts.
+  const isCorrect = options.isCorrect !== false;
+  const prior = humanTimingPrior(options.phaseKind, normalizedDifficulty(options.difficulty), isCorrect);
+  const reference = humanTimingPrior('normal', 'medium', true);
   const jitterMultiplier = 0.85 + getRandom() * 0.3;
-  const rawDelayMs =
-    baseMs *
-    difficultyDelayMultiplier(options.difficulty) *
-    hesitationMultiplier *
-    jitterMultiplier;
+  const rawDelayMs = baseMs * (prior.medianMs / reference.medianMs) * jitterMultiplier;
   const maxDelayMs = typeof options.questionTimeMs === 'number' && Number.isFinite(options.questionTimeMs)
     ? Math.max(AI_DELAY_MIN_MS, options.questionTimeMs - AI_DELAY_QUESTION_BUFFER_MS)
     : AI_DELAY_FALLBACK_MAX_MS;
-  return harnessDelayMs(Math.round(clamp(rawDelayMs, AI_DELAY_MIN_MS, maxDelayMs)));
+  return harnessDelayMs(Math.round(clamp(Math.max(rawDelayMs, prior.p10Ms), AI_DELAY_MIN_MS, maxDelayMs)));
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -406,7 +393,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     matchId: string,
     questionId: string,
     questionKind: MatchQuestionKind,
-    clueCount?: number,
+    clueCount: number | undefined,
+    timing: { phaseKind: MatchPhaseKind; difficulty?: string },
   ): Promise<{
     isCorrect: boolean;
     clueIndex: number | null;
@@ -430,7 +418,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     // The mcq decision yields both the Bernoulli correctness (mcq only) AND the
     // calibrated, speed-floor-clamped answer time, which all formats reuse for
     // their think-time (the timing model is shared).
-    const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys);
+    const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys, timing);
 
     // Schedule time only needs correctness (for the delay hesitation), the clue
     // reveal index (drives the clue answer time), and the think-time. The
@@ -657,6 +645,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           cache.currentQuestion.questionId,
           options.questionKind,
           clueCountForDelay,
+          { phaseKind: options.phaseKind, difficulty: questionDifficulty },
         )
       : null;
 
@@ -706,6 +695,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       ? clamp(persistentDecision.answerTimeMs, 0, questionTimeMsForDelay)
       : getAiAnswerDelayMs({
           questionKind: options.questionKind,
+          phaseKind: options.phaseKind,
           difficulty: questionDifficulty,
           delayProfile: aiSettings.aiDelayProfile,
           isCorrect: plannedIsCorrect,
@@ -898,7 +888,24 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       const persistentSpeedFloorMs = persistentModel && question.kind !== 'countdown'
         ? Math.min(topCohortSpeedFloorMs(persistentModel.params), questionTimeMs)
         : 0;
-      const answerTimeMs = clamp(plannedAnswerTimeMs, persistentSpeedFloorMs, questionTimeMs);
+      // Score the bot on the ACTUAL elapsed time at commit, measured against
+      // the same authoritative reference humans use (now - shownAt), so timer
+      // poll jitter and lock waits are charged to the bot exactly as network
+      // latency is charged to a human. Floored at the planned think time so an
+      // early timer never makes the bot faster than planned, and clamped to
+      // the question window like every other answer.
+      const actualElapsedMs = computePredictedElapsedMs({
+        shownAt: question.shownAt,
+        deadlineAt: question.deadlineAt,
+        nowMs: Date.now(),
+        clientTimeMs: plannedAnswerTimeMs,
+        questionTimeMs,
+      });
+      const answerTimeMs = clamp(
+        Math.max(actualElapsedMs, plannedAnswerTimeMs),
+        persistentSpeedFloorMs,
+        questionTimeMs
+      );
       let isCorrect = false;
       let selectedIndex: number | null = null;
       let pointsEarned = 0;
@@ -1067,6 +1074,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             answerCount: answerCount(live),
             expectedCount: liveExpected.length,
             totalPoints: livePlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+            plannedAnswerTimeMs,
+            actualElapsedMs,
             ...questionLogFields(question),
             ...answerLogFields(answer),
           },
@@ -1120,7 +1129,10 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         });
       }
 
-      if (committed.phaseKind !== 'penalty' && committed.questionKind !== 'countdown') {
+      // Bots behave like humans, penalties included: the human handler emits
+      // live in all phases. Countdown stays hidden (open-ended typing whose
+      // found-count is resolved at the round result).
+      if (committed.questionKind !== 'countdown') {
         io.to(`match:${matchId}`).emit('match:opponent_answered', {
           matchId,
           qIndex,

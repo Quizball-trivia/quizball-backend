@@ -49,6 +49,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', () => ({
   fireAndForget: (_label: string, work: () => Promise<void>) => {
     void work().catch(() => {});
   },
+  resolveAiUserIdForMatch: vi.fn(async () => null),
   resolvePossessionRound: (...args: unknown[]) => resolvePossessionRoundMock(...args),
 }));
 

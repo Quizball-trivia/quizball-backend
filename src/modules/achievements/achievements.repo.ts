@@ -175,9 +175,14 @@ export const achievementsRepo = {
             m.winner_user_id,
             -- A non-win starts a new streak group, EXCEPT a drawn shootout
             -- (no winner, decision 'draw'), which neither extends nor breaks it.
-            SUM(CASE WHEN m.winner_user_id IS DISTINCT FROM ${userId}
-                      AND NOT (m.winner_user_id IS NULL AND m.state_payload->>'winnerDecisionMethod' = 'draw')
-                     THEN 1 ELSE 0 END)
+            -- Explicit branches + COALESCE: a NULL winner with a NULL/other
+            -- decision must fall to ELSE (break), never to SQL unknown.
+            SUM(CASE
+                  WHEN m.winner_user_id = ${userId} THEN 0                                                   -- win
+                  WHEN m.winner_user_id IS NULL
+                   AND COALESCE(m.state_payload->>'winnerDecisionMethod', '') = 'draw' THEN 0          -- drawn shootout: neither
+                  ELSE 1                                                                             -- any other non-win breaks it
+                END)
               OVER (ORDER BY COALESCE(m.ended_at, m.started_at) ASC, m.id ASC) AS grp
           FROM matches m
           JOIN match_players mp ON mp.match_id = m.id AND mp.user_id = ${userId}

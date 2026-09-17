@@ -515,11 +515,17 @@ export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer
  * (which win over the blob on every read); the caller persists the blob
  * itself. Acks for other questions are left alone.
  *
- * Returns false when shifted acks could NOT be written to the overlay (Redis
- * unavailable or the HSET failed): the caller must then ABORT the resume —
- * publishing the resumed question would leave the stale pre-pause `r:` field
- * winning on every later read, charging the whole pause to that player.
+ * The stale pre-pause `r:` field must never survive: it wins over the blob on
+ * every later read and would charge the whole pause to that player. The HSET
+ * is retried; if it keeps failing, the current question's `r:` fields are
+ * DELETED instead (and the in-memory acks cleared) so answer timing falls
+ * back to the shifted authoritative shownAt — correct and safe. Returns false
+ * only when even that delete fails; the caller's fallback (a fresh dispatch
+ * with reset timing) is then a genuine last resort.
  */
+export const REVEAL_ACK_SHIFT_ATTEMPTS = 3;
+const REVEAL_ACK_SHIFT_RETRY_BASE_MS = 100;
+
 export async function shiftCachedRevealAcks(
   cache: MatchCache,
   pause: { pauseStartedAtMs: number; resumedAtMs: number }
@@ -527,9 +533,13 @@ export async function shiftCachedRevealAcks(
   const { pauseStartedAtMs, resumedAtMs } = pause;
   if (!Number.isFinite(pauseStartedAtMs) || !Number.isFinite(resumedAtMs)) return true;
   const pauseMs = Math.max(0, resumedAtMs - pauseStartedAtMs);
+  const revealAcks = cache.revealAcks ?? {};
+  const currentUserIds = Object.entries(revealAcks)
+    .filter(([, ack]) => ack.qIndex === cache.currentQIndex)
+    .map(([userId]) => userId);
   const fields: Record<string, string> = {};
-  for (const [userId, ack] of Object.entries(cache.revealAcks ?? {})) {
-    if (ack.qIndex !== cache.currentQIndex) continue;
+  for (const userId of currentUserIds) {
+    const ack = revealAcks[userId]!;
     const rebased = Math.round(
       ack.revealAtMs <= pauseStartedAtMs ? ack.revealAtMs + pauseMs : resumedAtMs
     );
@@ -539,21 +549,47 @@ export async function shiftCachedRevealAcks(
   }
   if (Object.keys(fields).length === 0) return true;
   const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return false;
   const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  const logFields = { matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs };
+
+  let lastError: unknown = null;
+  for (let attempt = 1; redis && redis.isOpen && attempt <= REVEAL_ACK_SHIFT_ATTEMPTS; attempt += 1) {
+    try {
+      await redis.hSet(key, fields);
+      // TTL refresh is best-effort: the key keeps its previous expiry.
+      await redis.expire(key, MATCH_CACHE_TTL_SEC).catch((error: unknown) => {
+        logger.warn({ error, ...logFields }, 'Failed to refresh reveal ack overlay TTL after resume');
+      });
+      return true;
+    } catch (error) {
+      lastError = error;
+      logger.warn({ error, attempt, ...logFields }, 'Failed to shift reveal ack overlay after resume; retrying');
+      if (attempt < REVEAL_ACK_SHIFT_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, REVEAL_ACK_SHIFT_RETRY_BASE_MS * attempt));
+      }
+    }
+  }
+
+  // Fallback: drop the current question's acks entirely so timing uses the
+  // shifted shownAt for everyone.
+  if (!redis || !redis.isOpen) {
+    logger.error({ ...logFields }, 'Cannot shift or drop reveal ack overlay after resume: Redis unavailable');
+    return false;
+  }
   try {
-    await redis.hSet(key, fields);
+    await redis.hDel(key, currentUserIds.map((userId) => `r:${userId}`));
   } catch (error) {
     logger.error(
-      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs },
-      'Failed to shift reveal ack overlay after resume'
+      { error, shiftError: lastError, ...logFields },
+      'Failed to drop stale reveal ack overlay after resume; resume must fall back to a fresh dispatch'
     );
     return false;
   }
-  // TTL refresh is best-effort: the key keeps its previous expiry.
-  await redis.expire(key, MATCH_CACHE_TTL_SEC).catch((error: unknown) => {
-    logger.warn({ error, matchId: cache.matchId, qIndex: cache.currentQIndex }, 'Failed to refresh reveal ack overlay TTL after resume');
-  });
+  for (const userId of currentUserIds) delete revealAcks[userId];
+  logger.warn(
+    { shiftError: lastError, droppedUserIds: currentUserIds, ...logFields },
+    'Reveal ack overlay shift kept failing; dropped the acks so timing falls back to the shifted shownAt'
+  );
   return true;
 }
 

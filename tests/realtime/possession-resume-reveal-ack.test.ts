@@ -27,6 +27,7 @@ type FakeRedis = {
   hSet: ReturnType<typeof vi.fn>;
   hSetNX: ReturnType<typeof vi.fn>;
   hGetAll: ReturnType<typeof vi.fn>;
+  hDel: ReturnType<typeof vi.fn>;
   expire: ReturnType<typeof vi.fn>;
 };
 let redis: FakeRedis;
@@ -60,6 +61,12 @@ function createRedis(): FakeRedis {
       return true;
     }),
     hGetAll: vi.fn(async (key: string) => Object.fromEntries(hashes.get(key) ?? [])),
+    hDel: vi.fn(async (key: string, fields: string | string[]) => {
+      const list = Array.isArray(fields) ? fields : [fields];
+      let n = 0;
+      for (const f of list) if (hash(key).delete(f)) n += 1;
+      return n;
+    }),
     expire: vi.fn(async () => true),
   };
 }
@@ -333,23 +340,68 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     expect(overlay?.get('r:u1')).toBe(String(U1_REVEAL_AT + PAUSE_MS));
   });
 
-  it('ABORTS the resume when the shifted reveal acks cannot be written to the overlay (stale r: field would win)', async () => {
-    // shiftCachedRevealAcks used to swallow an hSet failure, so the resumed
-    // question was published while the pre-pause r:<user> overlay field kept
-    // winning on every later cache read — charging the pause to the player.
+  it('retries the overlay shift and, when it keeps failing, DROPS the stale acks (hDel) and still resumes', async () => {
+    // The caller (completeResumeCountdown) has already deleted the pause key
+    // by the time resume runs; a `false` here falls through to a FRESH
+    // dispatch with reset timing — worse than the stale ack. So: retry the
+    // HSET, then fall back to deleting the r:<user> fields so timing uses the
+    // (shifted) authoritative shownAt, which is correct and safe.
     vi.useFakeTimers();
     vi.setSystemTime(new Date(RESUMED_AT));
-    redis.hSet.mockRejectedValueOnce(new Error('redis write failed'));
+    redis.hSet.mockRejectedValue(new Error('redis write failed'));
     const emit = vi.fn();
     const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
 
-    const resumed = await resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+    const resumedPromise = resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+    await vi.advanceTimersByTimeAsync(2_000); // let the backoff between retries elapse
+    const resumed = await resumedPromise;
+
+    expect(resumed).toBe(true);
+    expect(redis.hSet).toHaveBeenCalledTimes(3);
+    expect(redis.hDel).toHaveBeenCalledWith(matchAnswersOverlayKey(MATCH_ID, Q_INDEX), ['r:u1']);
+    // In-memory acks for THIS question are gone (the stale previous-question ack is untouched).
+    expect(cache.revealAcks?.u1).toBeUndefined();
+    expect(cache.revealAcks?.u2).toEqual({ qIndex: Q_INDEX - 1, revealAtMs: T - 30_000 });
+    // Overlay carries no r: field any more.
+    const overlay = redis.hashes.get(matchAnswersOverlayKey(MATCH_ID, Q_INDEX));
+    expect([...(overlay?.keys() ?? [])].filter((k) => k.startsWith('r:'))).toEqual([]);
+    // The question was resumed with the SHIFTED timing, not re-dispatched.
+    expect(setMatchCacheMock).toHaveBeenCalledWith(cache);
+    const question = emit.mock.calls.find((call) => call[0] === 'match:question')?.[1] as { playableAt: string; deadlineAt: string };
+    expect(question).toBeDefined();
+    expect(new Date(question.playableAt).getTime()).toBe(T + PAUSE_MS);
+    expect(new Date(question.deadlineAt).getTime()).toBe(RESUMED_AT + (T + QUESTION_TIME_MS - PAUSE_STARTED_AT));
+    // Answer timing now falls back to the shifted shownAt: 2.5s of play before the pause + 0.5s after.
+    const elapsed = resolveAnswerElapsedMs({
+      revealAtMs: cache.revealAcks?.u1?.revealAtMs,
+      shownAt: cache.currentQuestion!.shownAt,
+      deadlineAt: cache.currentQuestion!.deadlineAt,
+      nowMs: RESUMED_AT + 500,
+      clientTimeMs: 3_500,
+      questionTimeMs: QUESTION_TIME_MS,
+    });
+    expect(elapsed.source).toBe('authoritative');
+    expect(elapsed.elapsedMs).toBe(3_500);
+  });
+
+  it('returns false (last-resort fresh dispatch) only when the hDel fallback fails too', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(RESUMED_AT));
+    redis.hSet.mockRejectedValue(new Error('redis write failed'));
+    redis.hDel.mockRejectedValue(new Error('redis write failed'));
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+
+    const resumedPromise = resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const resumed = await resumedPromise;
 
     expect(resumed).toBe(false);
+    expect(redis.hSet).toHaveBeenCalledTimes(3);
+    expect(redis.hDel).toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith('match:question', expect.anything());
     expect(setMatchCacheMock).not.toHaveBeenCalled();
     expect(vi.mocked(scheduleRealtimeTimer)).not.toHaveBeenCalled();
-    // The persisted overlay still holds the pre-pause value (nothing half-written).
     expect(redis.hashes.get(matchAnswersOverlayKey(MATCH_ID, Q_INDEX))?.get('r:u1')).toBe(String(U1_REVEAL_AT));
   });
 });

@@ -1117,14 +1117,16 @@ export async function resumePossessionMatchQuestion(
   // so the acks must move by the same pause or time_ms includes the pause
   // (which flips the penalty speed tie-break). Both sides suppress a second
   // ack for the same qIndex, so shifting — not clearing — is the only fix.
+  // shiftCachedRevealAcks retries the overlay write and, failing that, drops
+  // the stale acks (timing then uses the shifted shownAt). It only reports
+  // false when the drop failed too — never publish the resumed question over a
+  // stale overlay; the caller (completeResumeCountdown, which has already
+  // cleared the pause) then falls back to a fresh dispatch as a last resort.
   const acksShifted = await shiftCachedRevealAcks(cache, { pauseStartedAtMs, resumedAtMs });
   if (!acksShifted) {
-    // Never publish the resumed question over a stale overlay: the match stays
-    // paused (nothing was persisted or emitted) and the caller's retry path
-    // re-enters here with the same pause bounds.
     logger.error(
       { eventName: 'match:question', matchId, qIndex, pauseStartedAtMs, resumedAtMs, ...questionLogFields(currentQuestion) },
-      'Possession question resume aborted: could not persist shifted reveal acks; leaving the match paused'
+      'Possession question resume refused: could not shift or drop stale reveal acks; caller falls back to a fresh dispatch'
     );
     return false;
   }

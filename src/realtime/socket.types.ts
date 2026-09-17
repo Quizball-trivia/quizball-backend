@@ -463,7 +463,9 @@ export interface RankedUserOutcomePayload {
   oldRp: number;
   newRp: number;
   deltaRp: number;
-  /** Coin participation reward granted with the ranked settlement (win/loss). */
+  /** How this player's ranked settlement was scored. 'draw' = level shootout. */
+  result?: 'win' | 'loss' | 'draw';
+  /** Coin participation reward granted with the ranked settlement (win 700 / draw 475 / loss 250). */
   coinsAwarded?: number;
   /** Weekend League QP this result earned (win 25 / loss 10; 0 outside the
    *  Mon-Fri window or for bots) and the weekly total after it. */
@@ -494,7 +496,13 @@ export interface MatchFinalResultsPayload {
   unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | 'draw' | null;
+  /**
+   * A level penalty shootout: `winnerId` is null, `winnerDecisionMethod` is
+   * 'draw', both players placed 1st, and each ranked participant settles
+   * with `rankedOutcome.byUserId[id].result === 'draw'` (+10 RP, 475 coins).
+   */
+  isDraw?: boolean;
   cancelledNoContest?: boolean;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: RankedMatchOutcomePayload | null;

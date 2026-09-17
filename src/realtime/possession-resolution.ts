@@ -3,7 +3,9 @@ import { harnessDelayMs } from '../core/harness-timing.js';
 import type { CachedPlayer, MatchCache } from './match-cache.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
-import { nextSeat, type Seat } from './possession-state.js';
+import { isShootoutDraw, nextSeat, type Seat } from './possession-state.js';
+
+export { isShootoutDraw };
 import { clamp } from './scoring.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
@@ -248,14 +250,14 @@ export function applyPenaltyResolution(
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
   shooterSeat: Seat,
   maxSuddenDeathRounds = 0,
-): { goalScoredByUserId: string | null; forcedBySuddenDeathCap: boolean } {
+): { goalScoredByUserId: string | null; shootoutDrawn: boolean } {
   const keeperSeat = nextSeat(shooterSeat);
   const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
   const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false };
+    return { goalScoredByUserId: null, shootoutDrawn: false };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -274,9 +276,9 @@ export function applyPenaltyResolution(
   // History: points are stepped in 10-point buckets with a full-points grace
   // window, so two fast correct answers tie constantly; #575 broke those ties
   // on raw answer time because equally-good players otherwise ran 18-40 kick
-  // 0-0 shootouts. That tie-break is gone — the sudden-death cap below
-  // (maxSuddenDeathRounds, config default 5) is now the guard against
-  // marathons.
+  // 0-0 shootouts. That tie-break is gone — a shootout still level after the
+  // regulation kicks (+ maxSuddenDeathRounds extra pairs) is a DRAW, so no
+  // marathon is possible.
   const isGoal = (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints;
 
   let goalScoredByUserId: string | null = null;
@@ -299,7 +301,7 @@ export function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId, forcedBySuddenDeathCap: false };
+    return { goalScoredByUserId, shootoutDrawn: false };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -312,24 +314,19 @@ export function applyPenaltyResolution(
   ) {
     state.penalty.suddenDeath = true;
   }
-  const forcedBySuddenDeathCap = Boolean(
-    maxSuddenDeathRounds > 0
-    && state.penalty.suddenDeath
-    && state.penalty.kicksTaken.seat1 === state.penalty.kicksTaken.seat2
-    && state.penalty.kicksTaken.seat1 >= 5 + maxSuddenDeathRounds
-    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2
-  );
-  if (forcedBySuddenDeathCap) {
-    // Both players have taken 5 + maxSuddenDeathRounds kicks each and are
-    // still level. Completing here routes through the natural winner chain in
-    // possession-completion.ts decideWinner: goals (tied, or we would not be
-    // in a shootout) → penalty goals (tied by construction) → whole-match
-    // total points → whole-match correct answers → seat 1. Every layer is
-    // deterministic and, bar the final seat-1 coin, symmetric.
+  // DRAW: level after a completed pair once both have taken the regulation 5
+  // kicks plus `maxSuddenDeathRounds` sudden-death pairs (0 = straight after
+  // 5 each). Completion (possession-completion.ts) turns this into a
+  // no-winner result via isShootoutDraw — there is no fallback winner.
+  const shootoutDrawn =
+    state.penalty.kicksTaken.seat1 === state.penalty.kicksTaken.seat2
+    && state.penalty.kicksTaken.seat1 >= 5 + Math.max(0, maxSuddenDeathRounds)
+    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2;
+  if (shootoutDrawn) {
     state.phase = 'COMPLETED';
   }
   state.currentQuestion = null;
-  return { goalScoredByUserId, forcedBySuddenDeathCap };
+  return { goalScoredByUserId, shootoutDrawn };
 }
 
 export function categoryIdsForCurrentHalf(

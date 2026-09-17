@@ -26,6 +26,7 @@ import { acquireLock, releaseLock, startLockHeartbeat } from './locks.js';
 import { clearAiMaps, clearHalftimeTimer, fireAndForget } from './possession-match-flow.js';
 import {
   getUserIdBySeat,
+  isShootoutDraw,
   LAST_MATCH_REPLAY_TTL_SEC,
   parsePossessionState,
   type ResolutionDecision,
@@ -227,9 +228,15 @@ export async function completePossessionMatch(
         total_points: player.total_points,
         correct_answers: player.correct_answers,
       }));
+    // Natural completion of a LEVEL shootout is a draw: no winner, no
+    // total-points fallback. decideWinner's fallback chain stays in place for
+    // every other natural completion; the progress strategy (forfeit /
+    // disconnect / orphan paths) is untouched.
     const decision: CompletionDecision | null = options.decisionStrategy === 'progress'
       ? decideWinnerFromProgress(decisionInput, completionState)
-      : { ...decideWinner(decisionInput, completionState), basis: 'natural' };
+      : isShootoutDraw(completionState)
+        ? { winnerId: null, method: 'draw', totalPointsFallbackUsed: false, basis: 'natural' }
+        : { ...decideWinner(decisionInput, completionState), basis: 'natural' };
     if (!decision) {
       logger.info(
         {
@@ -316,6 +323,12 @@ export async function completePossessionMatch(
     }
 
     await matchesService.completeMatch(matchId, decision.winnerId);
+    if (decision.method === 'draw') {
+      // Both sides finish level: placement 1 for each.
+      await Promise.all(
+        decisionInput.map((player) => matchPlayersRepo.setPlacement(matchId, player.user_id, 1))
+      );
+    }
 
     const [avgTimes, playerRows] = await Promise.all([
       matchesService.computeAvgTimes(matchId),
@@ -465,6 +478,7 @@ export async function completePossessionMatch(
       durationMs,
       resultVersion,
       winnerDecisionMethod: decision.method,
+      ...(decision.method === 'draw' ? { isDraw: true } : {}),
       totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
       ...(rankedOutcome ? { rankedOutcome } : {}),
     };

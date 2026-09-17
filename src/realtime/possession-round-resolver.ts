@@ -568,14 +568,14 @@ export async function resolvePossessionRound(
           goalScoredByUserId: penaltyOutcome.goalScoredByUserId,
           statePhase: state.phase,
           penaltyRound: state.penalty.round,
-          forcedBySuddenDeathCap: penaltyOutcome.forcedBySuddenDeathCap,
+          shootoutDrawn: penaltyOutcome.shootoutDrawn,
           maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
           ...questionLogFields(question),
         },
         'Possession penalty resolution computed'
       );
-      if (penaltyOutcome.forcedBySuddenDeathCap) {
-        logger.warn(
+      if (penaltyOutcome.shootoutDrawn) {
+        logger.info(
           {
             matchId,
             qIndex,
@@ -584,7 +584,7 @@ export async function resolvePossessionRound(
             kicksTaken: state.penalty.kicksTaken,
             maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
           },
-          'Possession shootout reached configured sudden-death bound; using deterministic fallback'
+          'Possession shootout level after regulation and configured sudden-death rounds; completing as a draw'
         );
       }
 

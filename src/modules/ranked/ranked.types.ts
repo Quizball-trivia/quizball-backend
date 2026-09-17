@@ -43,7 +43,7 @@ export interface RankedRpChangeRow {
   old_rp: number;
   delta_rp: number;
   new_rp: number;
-  result: 'win' | 'loss';
+  result: 'win' | 'loss' | 'draw';
   is_placement: boolean;
   placement_game_no: number | null;
   placement_anchor_rp: number | null;
@@ -74,6 +74,8 @@ export interface RankedUserOutcome {
   oldRp: number;
   newRp: number;
   deltaRp: number;
+  /** How this settlement was scored; 'draw' = level penalty shootout (+10 RP each). */
+  result: 'win' | 'loss' | 'draw';
   /** Coin participation reward granted with the settlement (win/loss). */
   coinsAwarded: number;
   /**

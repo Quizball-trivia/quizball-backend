@@ -335,7 +335,8 @@ export type MatchWinnerDecisionMethod =
   | 'penalty_goals'
   | 'total_points'
   | 'total_points_fallback'
-  | 'forfeit';
+  | 'forfeit'
+  | 'draw';
 
 /**
  * Image MCQ pre-picked for a half's image slot. `imageUrl` is the raw stored
@@ -1008,11 +1009,13 @@ export const matchesService = {
       if (players.length === 0) return;
 
       // A no-winner match is only a genuine DRAW when both players were present
-      // and the result was tied. When fewer than 2 players are recorded (the
-      // opponent never joined / the match was abandoned), winnerId is null but
-      // it is NOT a draw — the ranked RP system already scores these as losses,
-      // so classify them as a loss to keep the W/L/D record consistent with RP
-      // instead of inflating the player's draw count.
+      // and the result was tied (a level penalty shootout: winnerDecisionMethod
+      // 'draw', which ranked RP scores as +10 for both — NOT as losses). When
+      // fewer than 2 players are recorded (the opponent never joined / the
+      // match was abandoned), winnerId is null but it is NOT a draw — the
+      // ranked RP system scores those as losses, so classify them as a loss to
+      // keep the W/L/D record consistent with RP instead of inflating the
+      // player's draw count.
       const isRealDraw = winnerId === null && players.length >= 2;
 
       // Guests keep the match row (results, opponent history) but no per-mode stats.

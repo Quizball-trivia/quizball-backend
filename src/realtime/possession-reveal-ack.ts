@@ -93,8 +93,20 @@ export async function handlePossessionQuestionRevealed(
   const revealAtMs = clampRevealAckMs(receivedAtMs, cache.currentQuestion.shownAt);
   cache.revealAcks[userId] = { qIndex, revealAtMs };
 
-  const stored = await commitCachedRevealAck(cache, userId, revealAtMs);
-  if (!stored) {
+  const committed = await commitCachedRevealAck(cache, userId, revealAtMs);
+  if (committed === 'fenced') {
+    // A resume is shifting/dropping this question's acks (the fence lives in
+    // the overlay and the check+write is atomic, unlike the pause pre-check
+    // above). Recording this ack would give it pre-resume timing; the client
+    // re-acks the resumed question.
+    delete cache.revealAcks[userId];
+    logger.debug(
+      { eventName: 'match:question_revealed', matchId, qIndex, userId },
+      'Possession question reveal ack ignored: fenced by an in-progress resume'
+    );
+    return;
+  }
+  if (committed === 'duplicate') {
     delete cache.revealAcks[userId];
     logger.debug(
       { eventName: 'match:question_revealed', matchId, qIndex, userId },

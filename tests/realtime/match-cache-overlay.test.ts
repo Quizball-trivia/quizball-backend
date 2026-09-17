@@ -45,6 +45,24 @@ vi.mock('../../src/realtime/redis.js', () => ({
     async hGetAll(key: string): Promise<Record<string, string>> {
       return Object.fromEntries(store.hashes.get(key) ?? new Map());
     },
+    async hDel(key: string, fields: string | string[]): Promise<number> {
+      const list = Array.isArray(fields) ? fields : [fields];
+      const hash = store.hashes.get(key);
+      let n = 0;
+      for (const f of list) if (hash?.delete(f)) n += 1;
+      return n;
+    },
+    // Mirrors the reveal-ack Lua script: -1 while the resume fence is up,
+    // else HSETNX semantics (1 stored / 0 duplicate).
+    async eval(_script: string, opts: { keys: string[]; arguments: string[] }): Promise<number> {
+      const hash = store.hashes.get(opts.keys[0]!) ?? new Map<string, string>();
+      store.hashes.set(opts.keys[0]!, hash);
+      if (hash.has('fence')) return -1;
+      const [field, value] = opts.arguments;
+      if (hash.has(field!)) return 0;
+      hash.set(field!, value!);
+      return 1;
+    },
     async expire(): Promise<boolean> {
       return true;
     },
@@ -174,9 +192,9 @@ describe('match cache answer overlay (db-optimize #7)', () => {
     const blobBefore = store.values.get(matchCacheKey(MATCH_ID));
 
     cache.revealAcks = { u1: { qIndex: 3, revealAtMs: 1234 } };
-    await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe(true);
+    await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe('stored');
     cache.revealAcks.u1 = { qIndex: 3, revealAtMs: 5678 };
-    await expect(commitCachedRevealAck(cache, 'u1', 5678)).resolves.toBe(false);
+    await expect(commitCachedRevealAck(cache, 'u1', 5678)).resolves.toBe('duplicate');
 
     expect(store.values.get(matchCacheKey(MATCH_ID))).toBe(blobBefore);
     const overlay = store.hashes.get(matchAnswersOverlayKey(MATCH_ID, 3));
@@ -184,5 +202,38 @@ describe('match cache answer overlay (db-optimize #7)', () => {
 
     const merged = await getMatchCache(MATCH_ID);
     expect(merged?.revealAcks?.u1).toEqual({ qIndex: 3, revealAtMs: 1234 });
+  });
+
+  it('commitCachedRevealAck is rejected atomically while the resume fence field is set, and succeeds once it is cleared', async () => {
+    // The pause pre-check in the handler is not atomic with the overlay
+    // write: a handler that passed it before the pause could HSETNX after the
+    // resume's clean-up. The fence lives in the SAME hash and the check +
+    // write are one Lua script, so no such ack can land.
+    const cache = createCache();
+    await setMatchCache(cache);
+    const overlayKey = matchAnswersOverlayKey(MATCH_ID, 3);
+    store.hashes.set(overlayKey, new Map([['fence', '1']]));
+
+    await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe('fenced');
+    expect(store.hashes.get(overlayKey)?.has('r:u1')).toBe(false);
+    // The fenced attempt must not degrade into a full blob write either.
+    const merged = await getMatchCache(MATCH_ID);
+    expect(merged?.revealAcks).toEqual({});
+
+    store.hashes.get(overlayKey)!.delete('fence');
+    await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe('stored');
+    expect(store.hashes.get(overlayKey)?.get('r:u1')).toBe('1234');
+  });
+
+  it('getMatchCache ignores the fence field when merging the overlay', async () => {
+    const cache = createCache();
+    await setMatchCache(cache);
+    const overlayKey = matchAnswersOverlayKey(MATCH_ID, 3);
+    store.hashes.set(overlayKey, new Map([['fence', '1'], ['r:u1', '1234']]));
+
+    const merged = await getMatchCache(MATCH_ID);
+    expect(merged?.revealAcks).toEqual({ u1: { qIndex: 3, revealAtMs: 1234 } });
+    expect(merged?.answers).toEqual({});
+    expect(JSON.stringify(merged)).not.toContain('"fence"');
   });
 });

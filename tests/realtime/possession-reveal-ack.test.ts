@@ -108,7 +108,7 @@ describe('handlePossessionQuestionRevealed', () => {
     vi.setSystemTime(new Date(SHOWN_AT_MS + 500));
     vi.clearAllMocks();
     redisValues.clear();
-    commitCachedRevealAckMock.mockResolvedValue(true);
+    commitCachedRevealAckMock.mockResolvedValue('stored');
   });
 
   afterEach(() => {
@@ -138,6 +138,24 @@ describe('handlePossessionQuestionRevealed', () => {
 
     expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
     expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 500);
+  });
+
+  it('does not record an ack the overlay rejected as fenced (resume in progress); the client re-acks later', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    commitCachedRevealAckMock.mockResolvedValueOnce('fenced');
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks).toEqual({});
+    expect(vi.mocked(logger.debug)).toHaveBeenCalledWith(
+      expect.objectContaining({ eventName: 'match:question_revealed', matchId: MATCH_ID, userId: 'u1' }),
+      expect.stringMatching(/fenced|resum/i)
+    );
+
+    // Fence gone: a fresh ack for the same question is recorded normally.
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
   });
 
   it('stores the first reveal ack for the current player and question', async () => {
@@ -250,7 +268,7 @@ describe('handlePossessionQuestionRevealed', () => {
   it('rolls back the in-memory ack when the overlay write loses the race', async () => {
     const cache = makeCache();
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
-    commitCachedRevealAckMock.mockResolvedValue(false);
+    commitCachedRevealAckMock.mockResolvedValue('duplicate');
 
     await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
 

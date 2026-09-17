@@ -384,6 +384,39 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     expect(elapsed.elapsedMs).toBe(3_500);
   });
 
+  it('drops acks from the LIVE overlay (two-pass), catching an ack committed during the retry backoff', async () => {
+    // The old delete used the snapshot taken before the ~300ms of retries, so
+    // an ack committed concurrently escaped and left one player on ack timing
+    // and the other on shownAt timing. The delete must read the overlay's
+    // current r: fields, delete them, then re-read and delete again.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(RESUMED_AT));
+    redis.hSet.mockRejectedValue(new Error('redis write failed'));
+    const overlayKey = matchAnswersOverlayKey(MATCH_ID, Q_INDEX);
+    // u2's ack lands in the overlay AFTER the first read of the delete path.
+    let reads = 0;
+    redis.hGetAll.mockImplementation(async (key: string) => {
+      const snapshot = Object.fromEntries(redis.hashes.get(key) ?? []);
+      reads += 1;
+      if (key === overlayKey && reads === 1) redis.hashes.get(key)!.set('r:u2', String(PAUSE_STARTED_AT + 1_000));
+      return snapshot;
+    });
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+
+    const resumedPromise = resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const resumed = await resumedPromise;
+
+    expect(resumed).toBe(true);
+    expect(reads).toBeGreaterThanOrEqual(2);
+    const overlay = redis.hashes.get(overlayKey);
+    expect([...(overlay?.keys() ?? [])].filter((k) => k.startsWith('r:'))).toEqual([]);
+    expect(Object.values(cache.revealAcks ?? {}).filter((ack) => ack.qIndex === Q_INDEX)).toEqual([]);
+    // Non-ack overlay fields (answers, totals) are never touched.
+    expect(redis.hDel.mock.calls.every((call) => (call[1] as string[]).every((f) => f.startsWith('r:')))).toBe(true);
+  });
+
   it('returns false (last-resort fresh dispatch) only when the hDel fallback fails too', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(RESUMED_AT));

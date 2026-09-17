@@ -576,8 +576,19 @@ export async function shiftCachedRevealAcks(
     logger.error({ ...logFields }, 'Cannot shift or drop reveal ack overlay after resume: Redis unavailable');
     return false;
   }
+  // Delete from the LIVE overlay, not the pre-retry snapshot: an ack committed
+  // during the backoff above would otherwise escape and leave one player on
+  // ack timing and the other on shownAt timing. Two passes close the window
+  // between the read and the delete.
+  const dropped: string[] = [];
   try {
-    await redis.hDel(key, currentUserIds.map((userId) => `r:${userId}`));
+    for (let pass = 0; pass < 2; pass += 1) {
+      const overlay = await redis.hGetAll(key);
+      const ackFields = Object.keys(overlay).filter((field) => field.startsWith('r:'));
+      if (ackFields.length === 0) break;
+      await redis.hDel(key, ackFields);
+      dropped.push(...ackFields);
+    }
   } catch (error) {
     logger.error(
       { error, shiftError: lastError, ...logFields },
@@ -585,9 +596,11 @@ export async function shiftCachedRevealAcks(
     );
     return false;
   }
-  for (const userId of currentUserIds) delete revealAcks[userId];
+  for (const [userId, ack] of Object.entries(revealAcks)) {
+    if (ack.qIndex === cache.currentQIndex) delete revealAcks[userId];
+  }
   logger.warn(
-    { shiftError: lastError, droppedUserIds: currentUserIds, ...logFields },
+    { shiftError: lastError, droppedFields: dropped, ...logFields },
     'Reveal ack overlay shift kept failing; dropped the acks so timing falls back to the shifted shownAt'
   );
   return true;

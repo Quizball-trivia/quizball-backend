@@ -15,6 +15,9 @@ const scheduleNextPossessionQuestionMock = vi.fn();
 const emitMatchStateMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
 const redisGetMock = vi.fn();
+const redisValues = new Map<string, string>();
+const redisSetMock = vi.fn();
+const redisDelMock = vi.fn();
 const sendQuestionMock = vi.fn();
 const deferQuestionTimerMock = vi.fn();
 const getMatchMock = vi.fn();
@@ -79,6 +82,8 @@ vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => ({
     isOpen: true,
     get: (...args: unknown[]) => redisGetMock(...args),
+    set: (...args: unknown[]) => redisSetMock(...args),
+    del: (...args: unknown[]) => redisDelMock(...args),
   }),
 }));
 
@@ -194,6 +199,28 @@ async function resolveRound(fromTimeout = false): Promise<void> {
   const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
   await resolvePossessionRound(createIo(), MATCH_ID, Q_INDEX, fromTimeout);
 }
+
+const FENCE_KEY = `resolve:inprogress:${MATCH_ID}:${Q_INDEX}`;
+
+function installFenceRedis(): void {
+  redisValues.clear();
+  redisSetMock.mockImplementation(async (key: string, value: string, options?: { NX?: boolean; PX?: number; EX?: number }) => {
+    if (options?.NX && redisValues.has(key)) return null;
+    redisValues.set(key, value);
+    return 'OK';
+  });
+  redisDelMock.mockImplementation(async (keys: string | string[]) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    let n = 0;
+    for (const key of list) if (redisValues.delete(key)) n += 1;
+    return n;
+  });
+}
+
+// Every describe gets a fresh, deterministic fence redis (SET NX / DEL over a map).
+beforeEach(() => {
+  installFenceRedis();
+});
 
 describe('possession round resolver durable-timer survival (penalty-freeze regression)', () => {
   beforeEach(() => {
@@ -392,6 +419,7 @@ describe('possession round resolver lease loss', () => {
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({ status: 'active' });
+    installFenceRedis();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -426,6 +454,8 @@ describe('possession round resolver lease loss', () => {
     // Not concluded: the round keeps its timers so a fresh resolve retries.
     expect(clearQuestionTimerMock).not.toHaveBeenCalled();
     expect(deferQuestionTimerMock).toHaveBeenCalled();
+    // (d) the in-progress fence never outlives a pre-side-effect abort.
+    expect(redisValues.has(FENCE_KEY)).toBe(false);
   });
 
   it('lease lost AFTER the first mutating side effect (countdown keys deleted): the round still commits, once', async () => {
@@ -473,6 +503,91 @@ describe('possession round resolver lease loss', () => {
     // Concluded: no retry is armed, the round's timers are cleared.
     expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
     expect(deferQuestionTimerMock).not.toHaveBeenCalled();
+    // (c) the fence was taken for the commit and cleared afterwards.
+    expect(redisSetMock).toHaveBeenCalledWith(FENCE_KEY, expect.any(String), expect.objectContaining({ NX: true }));
+    expect(redisValues.has(FENCE_KEY)).toBe(false);
+  });
+});
+
+describe('possession round resolver in-progress fence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    releaseLockMock.mockResolvedValue(true);
+    redisGetMock.mockResolvedValue(null);
+    rebuildCacheFromDBMock.mockResolvedValue(null);
+    getMatchMock.mockResolvedValue({ status: 'active' });
+    installFenceRedis();
+  });
+
+  it('(a) marker already present (another holder mid-resolve): no-ops with no side effects and re-arms the timeout', async () => {
+    redisValues.set(FENCE_KEY, 'other-replica');
+    const cache = createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(io, MATCH_ID, Q_INDEX, true);
+
+    expect(emit).not.toHaveBeenCalledWith('match:round_result', expect.anything());
+    expect(setMatchCacheMock).not.toHaveBeenCalled();
+    expect(updatePlayerTotalsMock).not.toHaveBeenCalled();
+    expect(deleteCountdownPlayerKeysMock).not.toHaveBeenCalled();
+    expect(cache.currentQIndex).toBe(Q_INDEX);
+    expect(deferQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX, expect.any(Number));
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+    // The other holder's marker is left alone.
+    expect(redisValues.get(FENCE_KEY)).toBe('other-replica');
+    expect(releaseLockMock).toHaveBeenCalled();
+  });
+
+  it('(b) a normal resolve SETs the marker NX with a TTL before the first side effect and clears it after the cache commit', async () => {
+    const cache = createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    let fencePresentAtCommit: boolean | null = null;
+    setMatchCacheMock.mockImplementation(async () => {
+      fencePresentAtCommit = redisValues.has(FENCE_KEY);
+    });
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(io, MATCH_ID, Q_INDEX, false);
+
+    const setCall = redisSetMock.mock.calls.find((call) => call[0] === FENCE_KEY);
+    expect(setCall).toBeDefined();
+    const options = setCall![2] as { NX?: boolean; PX?: number; EX?: number };
+    expect(options.NX).toBe(true);
+    const ttlMs = options.PX ?? (options.EX ?? 0) * 1000;
+    expect(ttlMs).toBeGreaterThanOrEqual(10_000);
+    expect(ttlMs).toBeLessThanOrEqual(60_000);
+    expect(emit).toHaveBeenCalledWith('match:round_result', expect.anything());
+    expect(fencePresentAtCommit).toBe(true);
+    expect(redisDelMock).toHaveBeenCalledWith(FENCE_KEY);
+    expect(redisValues.has(FENCE_KEY)).toBe(false);
+  });
+
+  it('a stale marker never blocks resolution: the SET NX is the only gate, so an expired key lets the next resolve through', async () => {
+    // Simulate TTL expiry: the previous holder crashed, Redis dropped the key.
+    redisValues.set(FENCE_KEY, 'crashed-replica');
+    redisValues.delete(FENCE_KEY);
+    const cache = createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(io, MATCH_ID, Q_INDEX, true);
+
+    expect(emit).toHaveBeenCalledWith('match:round_result', expect.anything());
+    expect(redisValues.has(FENCE_KEY)).toBe(false);
   });
 });
 

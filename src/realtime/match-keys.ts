@@ -1,3 +1,8 @@
+/** Ownership fence for one round resolution; SET NX with a TTL so a crashed holder frees it. */
+export function resolveInProgressKey(matchId: string, qIndex: number): string {
+  return `resolve:inprogress:${matchId}:${qIndex}`;
+}
+
 export function questionTimerKey(matchId: string, qIndex: number): string {
   return `${matchId}:${qIndex}`;
 }

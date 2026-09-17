@@ -596,10 +596,10 @@ if (nextIndex >= match.total_questions) {
 | `draft:complete` | `{allowedCategoryIds: [2]}` | Draft done |
 | `match:start` | `{matchId, opponent}` | Match begins |
 | `match:question` | `{matchId, qIndex, total, question, deadlineAt}` | New question |
-| `match:answer_ack` | `{isCorrect, correctIndex, myTotalPoints, ...}` | Answer received (PRIVATE) |
-| `match:opponent_answered` | `{matchId, qIndex}` | Opponent answered |
-| `match:round_result` | `{correctIndex, players}` | Round complete |
-| `match:final_results` | `{winnerId, players, durationMs}` | Match complete |
+| `match:answer_ack` | `{isCorrect, correctIndex, myTotalPoints, oppAnswered, opponentPointsEarned?, opponentTotalPoints?, opponentIsCorrect?, opponentSelectedIndex?, ...}` | Answer received (PRIVATE). The `opponent*` fields are set whenever the opponent's answer is already committed, so the opponent score flight never depends on `match:opponent_answered` ordering |
+| `match:opponent_answered` | `{matchId, qIndex, opponentTotalPoints, pointsEarned, isCorrect, selectedIndex}` | Opponent answered |
+| `match:round_result` | `{correctIndex, players, deltas: {penaltyOutcome, ...}}` | Round complete. In a penalty duel, `penaltyOutcome` is `goal` iff the shooter is correct and the keeper wrong, or the shooter out-scores the keeper; equal points is `saved` |
+| `match:final_results` | `{winnerId, players, durationMs, winnerDecisionMethod, isDraw?, rankedOutcome?}` | Match complete. A level penalty shootout is a DRAW: `winnerId: null`, `winnerDecisionMethod: 'draw'`, `isDraw: true`, and each `rankedOutcome.byUserId[id]` has `result: 'draw'` (+10 RP, 475 coins) |
 
 ---
 

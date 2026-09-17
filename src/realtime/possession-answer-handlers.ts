@@ -16,6 +16,7 @@ import {
 } from './match-cache.js';
 import {
   fireAndForget,
+  resolveAiUserIdForMatch,
   resolvePossessionRound,
 } from './possession-match-flow.js';
 import {
@@ -52,7 +53,13 @@ import {
   idListLogFields,
   questionLogFields,
 } from './possession-debug-logging.js';
-import { buildCachedAnswerAckPayload } from './possession-payload-mappers.js';
+import {
+  buildCachedAnswerAckPayload,
+  lookupAiOpponent,
+  opponentAnswerAckFields,
+  snapshotOpponentAnswer,
+  type AiOpponentLookup,
+} from './possession-payload-mappers.js';
 import {
   asSeat,
   getQuestionDurationMs,
@@ -74,6 +81,8 @@ function resolveAnswerTimingFromCache(params: {
   cache: MatchCache;
   question: NonNullable<MatchCache['currentQuestion']>;
   userId: string;
+  /** Server receipt time of the answer, taken at handler entry before any I/O. */
+  receivedAtMs: number;
   clientTimeMs: number;
   questionTimeMs: number;
 }): ResolvedAnswerElapsed {
@@ -82,10 +91,21 @@ function resolveAnswerTimingFromCache(params: {
     revealAtMs: revealAck?.qIndex === params.question.qIndex ? revealAck.revealAtMs : null,
     shownAt: params.question.shownAt,
     deadlineAt: params.question.deadlineAt,
-    nowMs: Date.now(),
+    nowMs: params.receivedAtMs,
     clientTimeMs: params.clientTimeMs,
     questionTimeMs: params.questionTimeMs,
   });
+}
+
+/**
+ * Only decides ack suppression. Runs BEFORE the round lock with a strict bound
+ * (fail-closed to 'unknown' → opponent fields omitted): it is never charged to
+ * the answer time (receivedAtMs is captured first), never holds the lock, and
+ * never delays the ack — which is emitted INSIDE the lock so a timeout
+ * resolver cannot publish match:round_result ahead of it.
+ */
+function lookupAiOpponentForMatch(matchId: string): Promise<AiOpponentLookup> {
+  return lookupAiOpponent(matchId, resolveAiUserIdForMatch);
 }
 
 function answerTimingLogFields(timing: ResolvedAnswerElapsed): Record<string, number | string | null> {
@@ -109,6 +129,7 @@ export async function handlePossessionAnswer(
     timeMs: number;
   }
 ): Promise<void> {
+  const receivedAtMs = Date.now();
   if (!isRedisAvailable()) {
     emitRedisUnavailable(socket, 'Match');
     return;
@@ -139,7 +160,8 @@ export async function handlePossessionAnswer(
     answerCount: number;
   };
 
-  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async () => {
+  const aiOpponent = await lookupAiOpponentForMatch(matchId);
+  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async (lease) => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -202,21 +224,8 @@ export async function handlePossessionAnswer(
     if (existingAnswer) {
       const expectedCount = getExpectedUserIds(cache).length;
       const currentAnswerCount = answerCount(cache);
-      const shouldWaitForOpponent = expectedCount > 1 && currentAnswerCount < expectedCount;
-      socket.emit('match:answer_ack', {
-        matchId,
-        qIndex,
-        questionKind: question.kind,
-        selectedIndex: existingAnswer.selectedIndex,
-        isCorrect: existingAnswer.isCorrect,
-        correctIndex: getCachedMultipleChoiceCorrectIndex(question) ?? undefined,
-        myTotalPoints: player.totalPoints,
-        oppAnswered: !shouldWaitForOpponent,
-        pointsEarned: existingAnswer.pointsEarned,
-        phaseKind: question.phaseKind,
-        phaseRound: question.phaseRound,
-        shooterSeat: question.shooterSeat,
-      });
+      const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
+      if (answerAck) socket.emit('match:answer_ack', answerAck);
       logger.debug(
         {
           eventName: 'match:answer',
@@ -250,6 +259,7 @@ export async function handlePossessionAnswer(
       cache,
       question,
       userId,
+      receivedAtMs,
       clientTimeMs: timeMs,
       questionTimeMs: questionDurationMs,
     });
@@ -294,6 +304,11 @@ export async function handlePossessionAnswer(
 
     // Hot path: one small overlay HSET instead of re-serializing the whole
     // cache blob per answer (see commitCachedAnswer / db-optimize.md #7).
+    if (lease.leaseLost()) {
+      logger.warn({ eventName: 'match:answer', matchId, qIndex, userId }, 'Possession answer dropped: round lock lease lost before commit');
+      emitMatchBusy(socket);
+      return null;
+    }
     await commitCachedAnswer(cache, answer);
     logger.debug(
       {
@@ -318,6 +333,25 @@ export async function handlePossessionAnswer(
       `Possession MCQ answer committed: q${qIndex} user=${userId} correct=${isCorrect} pointsEarned=${pointsEarned} timeMs=${authoritativeTimeMs}`
     );
 
+    // Ack INSIDE the lock (no external I/O): the documented order is
+    // answer_ack then round_result, and a timeout resolver contends on this
+    // same lock.
+    socket.emit('match:answer_ack', {
+      matchId,
+      qIndex,
+      questionKind: question.kind,
+      selectedIndex,
+      isCorrect,
+      correctIndex: getCachedMultipleChoiceCorrectIndex(question) ?? undefined,
+      myTotalPoints: player.totalPoints,
+      oppAnswered: !(expectedCount > 1 && currentAnswerCount < expectedCount),
+      ...opponentAnswerAckFields(snapshotOpponentAnswer(cache, userId), aiOpponent),
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+    });
+
     return {
       question,
       isCorrect,
@@ -330,8 +364,6 @@ export async function handlePossessionAnswer(
   });
 
   if (!committed) return;
-
-  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
 
   fireAndForget('insertMatchAnswer(handlePossessionAnswer)', async () => {
     await matchAnswersRepo.insertMatchAnswerIfMissing({
@@ -354,21 +386,6 @@ export async function handlePossessionAnswer(
       committed.pointsEarned,
       committed.isCorrect
     );
-  });
-
-  socket.emit('match:answer_ack', {
-    matchId,
-    qIndex,
-    questionKind: committed.question.kind,
-    selectedIndex,
-    isCorrect: committed.isCorrect,
-    correctIndex: getCachedMultipleChoiceCorrectIndex(committed.question) ?? undefined,
-    myTotalPoints: committed.myTotalPoints,
-    oppAnswered: !shouldWaitForOpponent,
-    pointsEarned: committed.pointsEarned,
-    phaseKind: committed.question.phaseKind,
-    phaseRound: committed.question.phaseRound,
-    shooterSeat: committed.question.shooterSeat,
   });
 
   // Emit live in all phases, penalties included, so the opponent's pick and
@@ -598,6 +615,7 @@ export async function handlePossessionPutInOrderAnswer(
     timeMs: number;
   }
 ): Promise<void> {
+  const receivedAtMs = Date.now();
   if (!isRedisAvailable()) {
     emitRedisUnavailable(socket, 'Put-in-order');
     return;
@@ -629,7 +647,8 @@ export async function handlePossessionPutInOrderAnswer(
     foundCount: number;
   };
 
-  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async () => {
+  const aiOpponent = await lookupAiOpponentForMatch(matchId);
+  const committed = await withAnswerLock<Committed | null>(matchId, 'round', () => emitMatchBusy(socket), async (lease) => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -677,7 +696,7 @@ export async function handlePossessionPutInOrderAnswer(
 
     const existingAnswer = cache.answers[userId];
     if (existingAnswer) {
-      const answerAck = buildCachedAnswerAckPayload(cache, userId);
+      const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
       logger.debug(
         {
@@ -708,6 +727,7 @@ export async function handlePossessionPutInOrderAnswer(
       cache,
       question,
       userId,
+      receivedAtMs,
       clientTimeMs: timeMs,
       questionTimeMs: questionDurationMs,
     });
@@ -732,6 +752,11 @@ export async function handlePossessionPutInOrderAnswer(
 
     const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
+    if (lease.leaseLost()) {
+      logger.warn({ eventName: 'match:put_in_order_answer', matchId, qIndex, userId }, 'Possession answer dropped: round lock lease lost before commit');
+      emitMatchBusy(socket);
+      return null;
+    }
     await commitCachedAnswer(cache, answer);
     logger.debug(
       {
@@ -754,6 +779,24 @@ export async function handlePossessionPutInOrderAnswer(
       'Possession put-in-order answer committed'
     );
 
+    // Ack INSIDE the lock (no external I/O) so round_result can never precede it.
+    socket.emit('match:answer_ack', {
+      matchId,
+      qIndex,
+      questionKind: question.kind,
+      selectedIndex: null,
+      isCorrect,
+      myTotalPoints: player.totalPoints + pointsEarned,
+      oppAnswered: !(expectedCount > 1 && currentAnswerCount < expectedCount),
+      ...opponentAnswerAckFields(snapshotOpponentAnswer(cache, userId), aiOpponent),
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      foundCount,
+      submittedOrderIds: orderedItemIds,
+    });
+
     return {
       question,
       isCorrect,
@@ -767,24 +810,6 @@ export async function handlePossessionPutInOrderAnswer(
   });
 
   if (!committed) return;
-
-  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
-
-  socket.emit('match:answer_ack', {
-    matchId,
-    qIndex,
-    questionKind: committed.question.kind,
-    selectedIndex: null,
-    isCorrect: committed.isCorrect,
-    myTotalPoints: committed.myTotalPoints,
-    oppAnswered: !shouldWaitForOpponent,
-    pointsEarned: committed.pointsEarned,
-    phaseKind: committed.question.phaseKind,
-    phaseRound: committed.question.phaseRound,
-    shooterSeat: committed.question.shooterSeat,
-    foundCount: committed.foundCount,
-    submittedOrderIds: orderedItemIds,
-  });
 
   fireAndForget('insertMatchAnswer(handlePossessionPutInOrderAnswer)', async () => {
     await matchAnswersRepo.insertMatchAnswerIfMissing({
@@ -853,6 +878,7 @@ export async function handlePossessionCluesAnswer(
         timeMs: number;
       }
 ): Promise<void> {
+  const receivedAtMs = Date.now();
   if (!isRedisAvailable()) {
     emitRedisUnavailable(socket, 'Clues');
     return;
@@ -896,7 +922,8 @@ export async function handlePossessionCluesAnswer(
     | { kind: 'committed'; data: Committed }
     | { kind: 'noop' };
 
-  const outcome = await withAnswerLock<LockOutcome>(matchId, 'round', () => emitMatchBusy(socket), async () => {
+  const aiOpponent = await lookupAiOpponentForMatch(matchId);
+  const outcome = await withAnswerLock<LockOutcome>(matchId, 'round', () => emitMatchBusy(socket), async (lease) => {
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -944,7 +971,7 @@ export async function handlePossessionCluesAnswer(
 
     const existingAnswer = cache.answers[userId];
     if (existingAnswer) {
-      const answerAck = buildCachedAnswerAckPayload(cache, userId);
+      const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
       logger.debug(
         {
@@ -965,6 +992,7 @@ export async function handlePossessionCluesAnswer(
       cache,
       question,
       userId,
+      receivedAtMs,
       clientTimeMs: timeMs,
       questionTimeMs: questionDurationMs,
     });
@@ -1018,6 +1046,11 @@ export async function handlePossessionCluesAnswer(
     cache.answers[userId] = answer;
 
     const currentAnswerCount = answerCount(cache);
+    if (lease.leaseLost()) {
+      logger.warn({ eventName: 'match:clues_answer', matchId, qIndex, userId }, 'Possession answer dropped: round lock lease lost before commit');
+      emitMatchBusy(socket);
+      return { kind: 'noop' };
+    }
     await commitCachedAnswer(cache, answer);
     logger.debug(
       {
@@ -1042,6 +1075,24 @@ export async function handlePossessionCluesAnswer(
       'Possession clues answer committed'
     );
 
+    // Ack INSIDE the lock (no external I/O) so round_result can never precede it.
+    socket.emit('match:answer_ack', {
+      matchId,
+      qIndex,
+      questionKind: question.kind,
+      selectedIndex: null,
+      isCorrect,
+      myTotalPoints: player.totalPoints + pointsEarned,
+      oppAnswered: !(expectedCount > 1 && currentAnswerCount < expectedCount),
+      ...opponentAnswerAckFields(snapshotOpponentAnswer(cache, userId), aiOpponent),
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      clueIndex,
+      cluesDisplayAnswer: question.reveal.kind === 'clues' ? question.reveal.displayAnswer : undefined,
+    });
+
     return {
       kind: 'committed',
       data: {
@@ -1064,8 +1115,6 @@ export async function handlePossessionCluesAnswer(
   if (outcome?.kind !== 'committed') return;
   const committed = outcome.data;
 
-  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
-
   // Mirror put-in-order: persist the answer row so it survives cache
   // eviction, but leave totals to the resolver (resolver is the sole
   // updater for non-MCQ to avoid double-counting against the additive
@@ -1087,24 +1136,6 @@ export async function handlePossessionCluesAnswer(
       phaseRound: committed.question.phaseRound,
       shooterSeat: committed.question.shooterSeat,
     });
-  });
-
-  socket.emit('match:answer_ack', {
-    matchId,
-    qIndex,
-    questionKind: committed.question.kind,
-    selectedIndex: null,
-    isCorrect: committed.isCorrect,
-    myTotalPoints: committed.myTotalPoints,
-    oppAnswered: !shouldWaitForOpponent,
-    pointsEarned: committed.pointsEarned,
-    phaseKind: committed.question.phaseKind,
-    phaseRound: committed.question.phaseRound,
-    shooterSeat: committed.question.shooterSeat,
-    clueIndex: committed.clueIndex,
-    cluesDisplayAnswer: committed.question.reveal.kind === 'clues'
-      ? committed.question.reveal.displayAnswer
-      : undefined,
   });
 
   // Forensic capture for the "correct answers marked WRONG" investigation.

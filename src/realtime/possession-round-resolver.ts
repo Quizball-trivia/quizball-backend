@@ -7,7 +7,7 @@ import { matchesService } from '../modules/matches/matches.service.js';
 import { trackPenaltyTaken, trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { extendLock, releaseLock } from './locks.js';
 import { acquireLockBounded } from './possession-answer-lock.js';
-import { matchPauseKey } from './match-keys.js';
+import { matchPauseKey, resolveInProgressKey } from './match-keys.js';
 
 /** Regular penalty rounds before sudden-death kicks in. Mirrors the
  *  frontend constant in `features/possession/types/possession.types.ts`. */
@@ -18,6 +18,13 @@ const MAX_PENALTY_ROUNDS = 5;
  *  an explicit re-arm the round would be left with no resolver at all. */
 const TIMEOUT_NOOP_RETRY_MS = 5000;
 
+/**
+ * TTL of the resolve ownership fence (resolve:inprogress:<match>:<q>). Long
+ * enough to outlive a full resolution (cache rebuild, goal-write retries,
+ * completion), short enough that a crashed replica's marker expires before the
+ * next timeout retry would give up on the round.
+ */
+const RESOLVE_FENCE_TTL_MS = 30_000;
 /** Round-lock lease per extension; renewed at half-life while resolving. */
 const RESOLVE_LOCK_TTL_MS = 5000;
 import {
@@ -110,10 +117,30 @@ export async function resolvePossessionRound(
   // transaction's retries, and match completion can exceed a fixed TTL, and an
   // expired lease would let an answer commit interleave mid-resolution — the
   // exact race the shared key exists to prevent.
+  // A renewal that fails or reports the lease gone flips `leaseLost`. The
+  // resolve aborts on it only BEFORE its first mutating side effect (countdown
+  // key deletion, non-MCQ totals increments, goal writes): past that point a
+  // retry would see missing countdown answers and double-incremented totals,
+  // so the round is committed-in-progress and finishes with a warning.
   const lockToken = lock.token;
+  let leaseLost = false;
   const renewLock = setInterval(() => {
-    void extendLock(lockKey, lockToken, RESOLVE_LOCK_TTL_MS).catch(() => {});
+    void extendLock(lockKey, lockToken, RESOLVE_LOCK_TTL_MS)
+      .then((extended) => {
+        if (!extended) leaseLost = true;
+      })
+      .catch(() => {
+        leaseLost = true;
+      });
   }, Math.floor(RESOLVE_LOCK_TTL_MS / 2));
+  const abortIfLeaseLost = (stage: string): boolean => {
+    if (!leaseLost) return false;
+    logger.warn(
+      { eventName: 'match:round_result', matchId, qIndex, fromTimeout, stage },
+      'Possession round resolve aborted: round lock lease lost'
+    );
+    return true;
+  };
 
   // Only cancel the durable question/AI timers when this round has genuinely
   // concluded (resolved, or the match/round is past it). No-op returns —
@@ -122,8 +149,39 @@ export async function resolvePossessionRound(
   // missing answer. Cancelling them on a no-op is what froze penalty
   // shootouts under disconnect flapping.
   let roundConcluded = false;
+  // Ownership fence (see RESOLVE_FENCE_TTL_MS): taken right after the round
+  // lock, before ANY write (cache refresh, redispatch, side effects), and
+  // released after the cache commit. The round lock alone cannot protect the
+  // post-side-effect commit — once its lease is lost a timeout resolver can
+  // acquire the expired lock and run the same round — but that competitor
+  // sees this marker and backs off. The marker's value is our lock token, so
+  // the release is the compare-and-delete helper: an expired marker re-taken
+  // by another holder is never deleted by us.
+  const fenceKey = resolveInProgressKey(matchId, qIndex);
+  let fenceHeld = false;
+  const releaseFence = async (): Promise<void> => {
+    if (!fenceHeld) return;
+    fenceHeld = false;
+    await releaseLock(fenceKey, lockToken).catch((error: unknown) => {
+      logger.warn({ error, matchId, qIndex }, 'Failed to clear resolve fence; it expires with its TTL');
+    });
+  };
 
   try {
+    const fenced = await redis.set(fenceKey, lockToken, { NX: true, PX: RESOLVE_FENCE_TTL_MS });
+    if (fenced !== 'OK') {
+      // Another holder is mid-resolve on this round (its lock lease lapsed
+      // but its side effects are applied): no-op and let the timeout retry
+      // (re-armed in finally) observe the committed result. Never touch its
+      // marker.
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
+        'Possession round resolve skipped: another resolver holds the in-progress fence'
+      );
+      return;
+    }
+    fenceHeld = true;
+
     let cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       // A genuinely terminal match no longer needs round timers; a missing
@@ -139,6 +197,7 @@ export async function resolvePossessionRound(
       const rebuilt = await rebuildCacheFromDB(matchId);
       if (rebuilt) {
         cache = rebuilt;
+        if (abortIfLeaseLost('cache_refresh')) return;
         await setMatchCache(rebuilt);
         logger.debug(
           { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
@@ -171,6 +230,7 @@ export async function resolvePossessionRound(
       );
       if (fromTimeout && cache.mode === 'ranked'
         && (cache.statePayload.phase === 'LAST_ATTACK' || cache.statePayload.phase === 'NORMAL_PLAY')) {
+        if (abortIfLeaseLost('redispatch')) return;
         const dispatched = await sendPossessionMatchQuestion(io, matchId, qIndex);
         // Dispatch owns the new deadline. Do not clear
         // that timer or overwrite it with this obsolete round's 5s retry.
@@ -230,6 +290,10 @@ export async function resolvePossessionRound(
       },
       'Possession round resolve started'
     );
+
+    // LAST abort point: nothing below this line is safe to repeat (the fence
+    // taken above is released by finally on this abort).
+    if (abortIfLeaseLost('pre_side_effects')) return;
 
     if (fromTimeout) {
       const timeoutDurationMs = getQuestionDurationMs(
@@ -568,14 +632,14 @@ export async function resolvePossessionRound(
           goalScoredByUserId: penaltyOutcome.goalScoredByUserId,
           statePhase: state.phase,
           penaltyRound: state.penalty.round,
-          forcedBySuddenDeathCap: penaltyOutcome.forcedBySuddenDeathCap,
+          shootoutDrawn: penaltyOutcome.shootoutDrawn,
           maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
           ...questionLogFields(question),
         },
         'Possession penalty resolution computed'
       );
-      if (penaltyOutcome.forcedBySuddenDeathCap) {
-        logger.warn(
+      if (penaltyOutcome.shootoutDrawn) {
+        logger.info(
           {
             matchId,
             qIndex,
@@ -584,7 +648,7 @@ export async function resolvePossessionRound(
             kicksTaken: state.penalty.kicksTaken,
             maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
           },
-          'Possession shootout reached configured sudden-death bound; using deterministic fallback'
+          'Possession shootout level after regulation and configured sudden-death rounds; completing as a draw'
         );
       }
 
@@ -686,6 +750,16 @@ export async function resolvePossessionRound(
       },
       'Possession round result emitting'
     );
+    if (leaseLost) {
+      // Side effects already applied (countdown keys deleted, totals
+      // incremented): the round is committed-in-progress. Publish and commit
+      // from this cache — a concurrent holder reads the advanced cache and
+      // no-ops — rather than strand a half-applied round for a retry.
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, stage: 'after_side_effects' },
+        'Possession round lock lease lost after side effects were applied; committing the round anyway'
+      );
+    }
     io.to(`match:${matchId}`).emit('match:round_result', {
       matchId,
       qIndex,
@@ -711,6 +785,7 @@ export async function resolvePossessionRound(
     bumpStateVersion(state);
 
     await setMatchCache(cache);
+    await releaseFence();
     // Checkpoint policy (db-optimize.md #7): the full state_payload JSONB is
     // only persisted at recovery-relevant boundaries — phase/half changes
     // (halftime, last attack, penalties, completion), any goal, and every
@@ -808,6 +883,9 @@ export async function resolvePossessionRound(
     });
   } finally {
     clearInterval(renewLock);
+    // Any exit that did not reach the commit (throw, abort) must not leave the
+    // fence to its TTL: the retry would otherwise sit out up to 30s.
+    await releaseFence();
     await releaseLock(lockKey, lock.token);
     if (roundConcluded) {
       clearQuestionTimer(matchId, qIndex);

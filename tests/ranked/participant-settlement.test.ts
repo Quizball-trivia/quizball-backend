@@ -123,3 +123,58 @@ describe('computeParticipantSettlement', () => {
     })).coinsAwarded).toBe(250);
   });
 });
+
+describe('computeParticipantSettlement draw', () => {
+  it('post-placement draw: +10 RP, result draw, streak untouched, 475 coins, WL QP draw value', () => {
+    const result = computeParticipantSettlement(input({
+      oldRp: 900,
+      placementStatus: 'placed',
+      placementPlayed: 3,
+      placementWins: 2,
+      currentWinStreak: 4,
+      isWin: false,
+      isDraw: true,
+      decision: 'draw',
+      goalMargin: 0,
+      opponentIsStronger: true,
+      isHumanForCoins: true,
+    }));
+    expect(result).toMatchObject({
+      result: 'draw',
+      deltaRp: 10,
+      newRp: 910,
+      currentWinStreak: 4,
+      placementWins: 2,
+      placementPlayed: 3,
+      isPlacement: false,
+      calculationMethod: 'ranked_formula',
+      coinsAwarded: 475,
+      qpAwarded: 18,
+    });
+  });
+
+  it('placement draw counts as a played game, not a placement win; bots earn no coins/QP', () => {
+    const result = computeParticipantSettlement(input({
+      placementStatus: 'in_progress',
+      placementPlayed: 1,
+      placementWins: 1,
+      currentWinStreak: 1,
+      isWin: false,
+      isDraw: true,
+      decision: 'draw',
+      goalMargin: 0,
+      isHumanForCoins: false,
+    }));
+    expect(result).toMatchObject({
+      result: 'draw',
+      deltaRp: 10,
+      placementPlayed: 2,
+      placementWins: 1,
+      currentWinStreak: 1,
+      isPlacement: true,
+      calculationMethod: 'placement_seed',
+      coinsAwarded: 0,
+      qpAwarded: 0,
+    });
+  });
+});

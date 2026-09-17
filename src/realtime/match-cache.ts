@@ -499,6 +499,113 @@ export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer
   }
 }
 
+/**
+ * Re-base every reveal ack recorded for the CURRENT question around a pause.
+ * Resume moves shownAt/deadlineAt forward by the pause so the scoring clock
+ * excludes it, but resolveAnswerElapsedMs prefers the recorded ack — so the
+ * acks must move too or time_ms includes the pause.
+ *
+ * - Acked BEFORE the pause: the player played from the ack to the pause, so
+ *   shift by the pause duration (keeps that play time, drops the pause).
+ * - Acked DURING the pause (the reveal handler accepts acks while paused):
+ *   no play time has elapsed, so measure from the resume — never later, or
+ *   the next answer would score ~0 ms and maximum points.
+ *
+ * Mutates the in-memory cache AND rewrites the persisted `r:` overlay fields
+ * (which win over the blob on every read); the caller persists the blob
+ * itself. Acks for other questions are left alone.
+ *
+ * The stale pre-pause `r:` field must never survive: it wins over the blob on
+ * every later read and would charge the whole pause to that player. The HSET
+ * is retried; if it keeps failing, the current question's `r:` fields are
+ * DELETED instead (and the in-memory acks cleared) so answer timing falls
+ * back to the shifted authoritative shownAt — correct and safe. Returns false
+ * only when even that delete fails; the caller's fallback (a fresh dispatch
+ * with reset timing) is then a genuine last resort.
+ */
+export const REVEAL_ACK_SHIFT_ATTEMPTS = 3;
+const REVEAL_ACK_SHIFT_RETRY_BASE_MS = 100;
+
+export async function shiftCachedRevealAcks(
+  cache: MatchCache,
+  pause: { pauseStartedAtMs: number; resumedAtMs: number }
+): Promise<boolean> {
+  const { pauseStartedAtMs, resumedAtMs } = pause;
+  if (!Number.isFinite(pauseStartedAtMs) || !Number.isFinite(resumedAtMs)) return true;
+  const pauseMs = Math.max(0, resumedAtMs - pauseStartedAtMs);
+  const revealAcks = cache.revealAcks ?? {};
+  const currentUserIds = Object.entries(revealAcks)
+    .filter(([, ack]) => ack.qIndex === cache.currentQIndex)
+    .map(([userId]) => userId);
+  const fields: Record<string, string> = {};
+  for (const userId of currentUserIds) {
+    const ack = revealAcks[userId]!;
+    const rebased = Math.round(
+      ack.revealAtMs <= pauseStartedAtMs ? ack.revealAtMs + pauseMs : resumedAtMs
+    );
+    if (rebased === ack.revealAtMs) continue;
+    ack.revealAtMs = rebased;
+    fields[`r:${userId}`] = String(rebased);
+  }
+  if (Object.keys(fields).length === 0) return true;
+  const redis = getRedisClient();
+  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  const logFields = { matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs };
+
+  let lastError: unknown = null;
+  for (let attempt = 1; redis && redis.isOpen && attempt <= REVEAL_ACK_SHIFT_ATTEMPTS; attempt += 1) {
+    try {
+      await redis.hSet(key, fields);
+      // TTL refresh is best-effort: the key keeps its previous expiry.
+      await redis.expire(key, MATCH_CACHE_TTL_SEC).catch((error: unknown) => {
+        logger.warn({ error, ...logFields }, 'Failed to refresh reveal ack overlay TTL after resume');
+      });
+      return true;
+    } catch (error) {
+      lastError = error;
+      logger.warn({ error, attempt, ...logFields }, 'Failed to shift reveal ack overlay after resume; retrying');
+      if (attempt < REVEAL_ACK_SHIFT_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, REVEAL_ACK_SHIFT_RETRY_BASE_MS * attempt));
+      }
+    }
+  }
+
+  // Fallback: drop the current question's acks entirely so timing uses the
+  // shifted shownAt for everyone.
+  if (!redis || !redis.isOpen) {
+    logger.error({ ...logFields }, 'Cannot shift or drop reveal ack overlay after resume: Redis unavailable');
+    return false;
+  }
+  // Delete from the LIVE overlay, not the pre-retry snapshot: an ack committed
+  // during the backoff above would otherwise escape and leave one player on
+  // ack timing and the other on shownAt timing. Two passes close the window
+  // between the read and the delete.
+  const dropped: string[] = [];
+  try {
+    for (let pass = 0; pass < 2; pass += 1) {
+      const overlay = await redis.hGetAll(key);
+      const ackFields = Object.keys(overlay).filter((field) => field.startsWith('r:'));
+      if (ackFields.length === 0) break;
+      await redis.hDel(key, ackFields);
+      dropped.push(...ackFields);
+    }
+  } catch (error) {
+    logger.error(
+      { error, shiftError: lastError, ...logFields },
+      'Failed to drop stale reveal ack overlay after resume; resume must fall back to a fresh dispatch'
+    );
+    return false;
+  }
+  for (const [userId, ack] of Object.entries(revealAcks)) {
+    if (ack.qIndex === cache.currentQIndex) delete revealAcks[userId];
+  }
+  logger.warn(
+    { shiftError: lastError, droppedFields: dropped, ...logFields },
+    'Reveal ack overlay shift kept failing; dropped the acks so timing falls back to the shifted shownAt'
+  );
+  return true;
+}
+
 export async function commitCachedRevealAck(
   cache: MatchCache,
   userId: string,

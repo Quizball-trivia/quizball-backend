@@ -96,7 +96,7 @@ function createCompletedRankedMatch(
   matchId: string,
   winnerUserId: string | null,
   rankedContext?: unknown,
-  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null = null
+  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | 'draw' | null = null
 ): MatchRow {
   return {
     id: matchId,
@@ -379,6 +379,44 @@ describe('rankedService', () => {
     expect(userOutcome).toBeDefined();
     expect(userOutcome?.deltaRp).toBe(delta);
     expect(userOutcome?.newRp).toBe(newRp);
+  });
+
+  it('settles a drawn shootout: +10 RP and 475 coins for BOTH, result draw, streaks untouched, placement counted', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', null, undefined, 'draw')
+    );
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('u-1', 1, 900, 9, 1, 3),
+      createPlayer('u-2', 2, 700, 7, 1, 3),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: false,
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => createProfile({
+      user_id: userId,
+      rp: userId === 'u-1' ? 1000 : 1500,
+      tier: rankedService.tierFromRp(userId === 'u-1' ? 1000 : 1500),
+      placement_status: userId === 'u-1' ? 'placed' : 'in_progress',
+      placement_played: userId === 'u-1' ? 3 : 1,
+      current_win_streak: 3,
+    }));
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.byUserId['u-1']).toMatchObject({ deltaRp: 10, newRp: 1010, coinsAwarded: 475, result: 'draw' });
+    expect(outcome?.byUserId['u-2']).toMatchObject({ deltaRp: 10, newRp: 1510, coinsAwarded: 475, result: 'draw' });
+    const entries = (rankedRepo.applySettlement as Mock).mock.calls[0]?.[0] as Array<{
+      profile: { userId: string; currentWinStreak: number; placementPlayed: number; placementWins: number };
+      change: { result: string; deltaRp: number };
+      coinsAwarded: number;
+    }>;
+    expect(entries.map((e) => e.change.result)).toEqual(['draw', 'draw']);
+    expect(entries.map((e) => e.profile.currentWinStreak)).toEqual([3, 3]);
+    expect(entries.find((e) => e.profile.userId === 'u-2')?.profile).toMatchObject({ placementPlayed: 2, placementWins: 0 });
   });
 
   it('applies a flat -50 forfeit loss', async () => {

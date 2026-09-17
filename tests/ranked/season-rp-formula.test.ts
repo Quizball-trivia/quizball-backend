@@ -18,6 +18,7 @@ import {
   SEASON_FORFEIT_LOSS_RP,
   SEASON_OPPONENT_FORFEIT_WIN_RP,
   SEASON_BEAT_STRONGER_BONUS_RP,
+  SEASON_PENALTY_DRAW_RP,
 } from '../../src/modules/ranked/season-rp-formula.js';
 import * as rankedService from '../../src/modules/ranked/ranked.service.js';
 
@@ -68,6 +69,19 @@ describe('computeSeasonRpDelta', () => {
     expect(computeSeasonRpDelta(false, 'goals', -2, false)).toBe(SEASON_REGULAR_LOSS_RP); // -25
     expect(computeSeasonRpDelta(false, 'penalty_goals', 0, false)).toBe(SEASON_PENALTY_LOSS_RP); // -15
     expect(computeSeasonRpDelta(false, 'forfeit', 0, false)).toBe(SEASON_FORFEIT_LOSS_RP); // -50 (you quit)
+  });
+});
+
+describe('computeSeasonRpDelta draw', () => {
+  it('a drawn shootout pays +10 to both sides: no margin bonus, no upset bonus, regardless of isWin', () => {
+    expect(SEASON_PENALTY_DRAW_RP).toBe(10);
+    expect(computeSeasonRpDelta(false, 'draw', 0, false)).toBe(10);
+    expect(computeSeasonRpDelta(false, 'draw', 0, true)).toBe(10);
+    expect(computeSeasonRpDelta(true, 'draw', 3, true)).toBe(10);
+    // Not farmable relative to playing it out: a decided shootout nets the
+    // pair +20 (35 - 15), a draw nets +20 (10 + 10).
+    expect(computeSeasonRpDelta(true, 'penalty_goals', 0, false) + computeSeasonRpDelta(false, 'penalty_goals', 0, false))
+      .toBe(2 * SEASON_PENALTY_DRAW_RP);
   });
 });
 

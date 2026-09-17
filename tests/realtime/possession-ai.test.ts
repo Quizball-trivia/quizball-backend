@@ -58,8 +58,13 @@ vi.mock('../../src/realtime/redis.js', () => ({
 
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: vi.fn(async () => ({ acquired: true, token: 'lock-token' })),
+  extendLock: vi.fn(async () => true),
   releaseLock: vi.fn(async () => true),
 }));
+
+import { acquireLock, releaseLock } from '../../src/realtime/locks.js';
+import { getQuestionDurationMs } from '../../src/realtime/possession-state.js';
+import { calculatePoints } from '../../src/realtime/scoring.js';
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
   answerCount: (cache: { answers: Record<string, unknown> }) => Object.keys(cache.answers).length,
@@ -252,6 +257,135 @@ describe('possession AI timer scheduling', () => {
         selectedIndex: 2,
         isCorrect: true,
       }));
+      expect(resolveRound).toHaveBeenCalledWith(io, 'm1', 0, false);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('broadcasts match:opponent_answered for a penalty answer exactly like the human handler', async () => {
+    // Product decision: bots behave like humans, penalties included — the
+    // human handler emits live in all phases, so the bot must too.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const cache = createCache();
+      cache.statePayload = { phase: 'PENALTY_SHOOTOUT' };
+      cache.currentQuestion.phaseKind = 'penalty';
+      cache.currentQuestion.shooterSeat = 1;
+      getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+      setMatchCacheMock.mockImplementation(async (nextCache) => {
+        Object.assign(cache, nextCache);
+      });
+      const emit = vi.fn();
+      const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+      const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
+      const ai = createPossessionAi(vi.fn());
+
+      await ai.runPossessionAiAnswer(io, 'm1', 0, 2000, null);
+
+      expect(cache.answers['ai-1']).toMatchObject({ phaseKind: 'penalty', isCorrect: true });
+      expect(io.to).toHaveBeenCalledWith('match:m1');
+      expect(emit).toHaveBeenCalledWith('match:opponent_answered', expect.objectContaining({
+        matchId: 'm1',
+        qIndex: 0,
+        questionKind: 'multipleChoice',
+        isCorrect: true,
+        selectedIndex: 2,
+        pointsEarned: expect.any(Number),
+        opponentTotalPoints: expect.any(Number),
+      }));
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  describe('bot time_ms charges the replica-local delay between timer fire and commit', () => {
+    // Humans are scored on real elapsed time; the bot used to record its
+    // PLANNED think time, so a bounded lock wait was never charged. Measuring
+    // against the cache's shownAt would be wrong too: that stamp comes from
+    // the dispatching replica and prod clocks skew by ~5s (see
+    // possession-timing.ts). So the bot adds the delay measured on ITS OWN
+    // clock between the timer firing and the commit inside the lock.
+    const T0 = new Date('2026-09-17T10:00:00.000Z').getTime();
+    const QUESTION_MS = getQuestionDurationMs('multipleChoice');
+
+    async function commitWithLockDelay(lockDelayMs: number, plannedMs: number) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(T0));
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+      try {
+        const cache = createCache();
+        getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+        setMatchCacheMock.mockImplementation(async (nextCache) => {
+          Object.assign(cache, nextCache);
+        });
+        // The lock is acquired inside withAnswerLock right before the commit
+        // re-read; a slow acquisition advances the replica clock.
+        vi.mocked(acquireLock).mockImplementationOnce(async () => {
+          vi.setSystemTime(new Date(Date.now() + lockDelayMs));
+          return { acquired: true, token: 'lock-token' };
+        });
+        const io = { to: vi.fn(() => ({ emit: vi.fn() })) } as unknown as QuizballServer;
+        const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
+        const ai = createPossessionAi(vi.fn());
+        await ai.runPossessionAiAnswer(io, 'm1', 0, plannedMs, null);
+        return cache.answers['ai-1'] as { timeMs: number; pointsEarned: number; isCorrect: boolean };
+      } finally {
+        randomSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+
+    it('lock acquisition takes 300ms, planned 1500 -> time_ms 1800', async () => {
+      const answer = await commitWithLockDelay(300, 1500);
+      expect(answer.timeMs).toBe(1800);
+      expect(answer.isCorrect).toBe(true);
+      expect(answer.pointsEarned).toBe(calculatePoints(true, 1800, QUESTION_MS));
+    });
+
+    it('instant lock, planned 1500 -> time_ms 1500', async () => {
+      const answer = await commitWithLockDelay(0, 1500);
+      expect(answer.timeMs).toBe(1500);
+      expect(answer.pointsEarned).toBe(calculatePoints(true, 1500, QUESTION_MS));
+    });
+
+    it('a delay that crosses a scoring bucket lowers pointsEarned accordingly', async () => {
+      const instant = await commitWithLockDelay(0, 1500);
+      const delayed = await commitWithLockDelay(1000, 1500);
+      expect(delayed.timeMs).toBe(2500);
+      expect(delayed.pointsEarned).toBe(calculatePoints(true, 2500, QUESTION_MS));
+      expect(calculatePoints(true, 2500, QUESTION_MS)).toBeLessThan(calculatePoints(true, 1500, QUESTION_MS));
+      expect(delayed.pointsEarned).toBeLessThan(instant.pointsEarned);
+    });
+  });
+
+  it('waits out a briefly held round lock instead of dropping the bot answer', async () => {
+    // A human answering inside the bot's commit window holds
+    // `lock:match:{id}:round` for a few ms. A single NX attempt would drop
+    // the bot's answer (later backfilled as wrong at timeout); the bot must
+    // use the same bounded acquisition as the human path.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const cache = createCache();
+      getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+      setMatchCacheMock.mockImplementation(async (nextCache) => {
+        Object.assign(cache, nextCache);
+      });
+      vi.mocked(acquireLock).mockResolvedValueOnce({ acquired: false });
+      const emit = vi.fn();
+      const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+      const resolveRound = vi.fn();
+      const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
+      const ai = createPossessionAi(resolveRound);
+
+      await ai.runPossessionAiAnswer(io, 'm1', 0, 2000, null);
+
+      expect(vi.mocked(acquireLock).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(vi.mocked(acquireLock).mock.calls[0]?.[0]).toBe('lock:match:m1:round');
+      expect(cache.answers['ai-1']).toMatchObject({ isCorrect: true, selectedIndex: 2 });
+      expect(setMatchCacheMock).toHaveBeenCalledWith(cache);
+      expect(releaseLock).toHaveBeenCalledWith('lock:match:m1:round', 'lock-token');
+      expect(emit).toHaveBeenCalledWith('match:opponent_answered', expect.objectContaining({ selectedIndex: 2 }));
       expect(resolveRound).toHaveBeenCalledWith(io, 'm1', 0, false);
     } finally {
       randomSpy.mockRestore();

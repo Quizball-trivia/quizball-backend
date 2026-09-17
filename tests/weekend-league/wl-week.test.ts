@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isInQpWindow, weekKeyFor, qpForResult, WL_QP_WIN, WL_QP_LOSS } from '../../src/modules/weekend-league/wl-week.js';
+import { isInQpWindow, weekKeyFor, qpForResult, WL_QP_WIN, WL_QP_LOSS, WL_QP_DRAW } from '../../src/modules/weekend-league/wl-week.js';
 
 // GE = UTC+4 fixed. Helper builds a UTC Date from a Georgia wall-clock time.
 function geDate(iso: string): Date {
@@ -77,5 +77,10 @@ describe('qpForResult', () => {
     expect(qpForResult('win')).toBe(25);
     expect(qpForResult('loss')).toBe(WL_QP_LOSS);
     expect(qpForResult('loss')).toBe(10);
+  });
+
+  it('draw = loss value + half the win-loss gap (10 + 7.5, rounded to 18)', () => {
+    expect(WL_QP_DRAW).toBe(18);
+    expect(qpForResult('draw')).toBe(WL_QP_DRAW);
   });
 });

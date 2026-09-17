@@ -26,6 +26,7 @@ import { acquireLock, releaseLock, startLockHeartbeat } from './locks.js';
 import { clearAiMaps, clearHalftimeTimer, fireAndForget } from './possession-match-flow.js';
 import {
   getUserIdBySeat,
+  isShootoutDraw,
   LAST_MATCH_REPLAY_TTL_SEC,
   parsePossessionState,
   type ResolutionDecision,
@@ -63,7 +64,7 @@ type CompletePossessionMatchOptions = {
 };
 
 export function decideWinner(
-  players: Array<{ user_id: string; seat: number; total_points: number }>,
+  players: Array<{ user_id: string; seat: number; total_points: number; correct_answers?: number }>,
   state: PossessionStatePayload
 ): ResolutionDecision {
   const seat1UserId = getUserIdBySeat(players, 1);
@@ -94,14 +95,28 @@ export function decideWinner(
     return { winnerId: seat2UserId ?? fallbackWinnerId, method: 'total_points_fallback', totalPointsFallbackUsed: true };
   }
 
+  // Reached by the sudden-death cap (a level shootout after 5 + N pairs) with
+  // equal whole-match points: fall through to correct answers, mirroring the
+  // progress path, so the seat-1 coin below is a genuine last resort.
+  const seat1Correct = players.find((player) => player.seat === 1)?.correct_answers ?? 0;
+  const seat2Correct = players.find((player) => player.seat === 2)?.correct_answers ?? 0;
+  if (seat1Correct > seat2Correct) {
+    return { winnerId: seat1UserId ?? fallbackWinnerId, method: 'total_points_fallback', totalPointsFallbackUsed: true };
+  }
+  if (seat2Correct > seat1Correct) {
+    return { winnerId: seat2UserId ?? fallbackWinnerId, method: 'total_points_fallback', totalPointsFallbackUsed: true };
+  }
+
   logger.warn(
     {
       seat1Points,
       seat2Points,
+      seat1Correct,
+      seat2Correct,
       goals: state.goals,
       penaltyGoals: state.penaltyGoals,
     },
-    'Possession winner fallback still tied on total points, selecting seat1 deterministically'
+    'Possession winner fallback still tied on total points and correct answers, selecting seat1 deterministically'
   );
   return { winnerId: fallbackWinnerId, method: 'total_points_fallback', totalPointsFallbackUsed: true };
 }
@@ -213,9 +228,15 @@ export async function completePossessionMatch(
         total_points: player.total_points,
         correct_answers: player.correct_answers,
       }));
+    // Natural completion of a LEVEL shootout is a draw: no winner, no
+    // total-points fallback. decideWinner's fallback chain stays in place for
+    // every other natural completion; the progress strategy (forfeit /
+    // disconnect / orphan paths) is untouched.
     const decision: CompletionDecision | null = options.decisionStrategy === 'progress'
       ? decideWinnerFromProgress(decisionInput, completionState)
-      : { ...decideWinner(decisionInput, completionState), basis: 'natural' };
+      : isShootoutDraw(completionState)
+        ? { winnerId: null, method: 'draw', totalPointsFallbackUsed: false, basis: 'natural' }
+        : { ...decideWinner(decisionInput, completionState), basis: 'natural' };
     if (!decision) {
       logger.info(
         {
@@ -302,6 +323,12 @@ export async function completePossessionMatch(
     }
 
     await matchesService.completeMatch(matchId, decision.winnerId);
+    if (decision.method === 'draw') {
+      // Both sides finish level: placement 1 for each.
+      await Promise.all(
+        decisionInput.map((player) => matchPlayersRepo.setPlacement(matchId, player.user_id, 1))
+      );
+    }
 
     const [avgTimes, playerRows] = await Promise.all([
       matchesService.computeAvgTimes(matchId),
@@ -451,6 +478,7 @@ export async function completePossessionMatch(
       durationMs,
       resultVersion,
       winnerDecisionMethod: decision.method,
+      ...(decision.method === 'draw' ? { isDraw: true } : {}),
       totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
       ...(rankedOutcome ? { rankedOutcome } : {}),
     };

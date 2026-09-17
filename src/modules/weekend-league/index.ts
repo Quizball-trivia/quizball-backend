@@ -22,5 +22,6 @@ export {
   qpForResult,
   WL_QP_WIN,
   WL_QP_LOSS,
+  WL_QP_DRAW,
   WL_QP_TARGET,
 } from './wl-week.js';

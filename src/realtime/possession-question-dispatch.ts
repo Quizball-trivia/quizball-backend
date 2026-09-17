@@ -14,6 +14,7 @@ import {
   countdownGetFound,
   getMatchCacheOrRebuild,
   setMatchCache,
+  shiftCachedRevealAcks,
   type MatchCache,
 } from './match-cache.js';
 import { matchPauseKey, questionTimerKey } from './match-keys.js';
@@ -37,6 +38,7 @@ import {
 } from './possession-debug-logging.js';
 import {
   buildCachedAnswerAckPayload,
+  lookupAiOpponent,
   questionKindForType,
   questionTypeForState,
 } from './possession-payload-mappers.js';
@@ -197,7 +199,11 @@ async function emitPossessionAnswerSnapshotToSocket(
   cache: MatchCache
 ): Promise<void> {
   const userId = socket.data.user.id;
-  const answerAck = buildCachedAnswerAckPayload(cache, userId);
+  const answerAck = buildCachedAnswerAckPayload(
+    cache,
+    userId,
+    await lookupAiOpponent(cache.matchId, resolveAiUserIdForMatch)
+  );
   if (answerAck) {
     socket.emit('match:answer_ack', answerAck);
     logger.debug(
@@ -857,12 +863,12 @@ export async function sendPossessionMatchQuestion(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },
         'Failed to pick a valid question for possession state'
       );
-      // Shootouts are intentionally unbounded, but match_questions forbids
-      // reusing a question within one match. A thin penalty category can run
-      // dry during sudden death. Returning here would leave both players
-      // waiting forever for a question that cannot exist, so finish through
-      // the existing deterministic natural fallback (penalty goals, then
-      // total points).
+      // match_questions forbids reusing a question within one match, so a thin
+      // penalty category can run dry mid-shootout. Returning here would leave
+      // both players waiting forever for a question that cannot exist, so
+      // complete now: the side ahead on penalty goals wins, and a level
+      // shootout is a DRAW (isShootoutDraw in completion) — never the old
+      // total-points fallback.
       if (state.phase === 'PENALTY_SHOOTOUT') {
         const completion = await completePossessionMatch(io, matchId, state, cache, {
           source: 'penalty_question_pool_exhausted',
@@ -1107,6 +1113,23 @@ export async function resumePossessionMatchQuestion(
   currentQuestion.shownAt = playableAt.toISOString();
   currentQuestion.deadlineAt = deadlineAt.toISOString();
   cache.currentQIndex = qIndex;
+  // The answer clock prefers each player's recorded reveal ack over shownAt,
+  // so the acks must move by the same pause or time_ms includes the pause
+  // (which flips the penalty speed tie-break). Both sides suppress a second
+  // ack for the same qIndex, so shifting — not clearing — is the only fix.
+  // shiftCachedRevealAcks retries the overlay write and, failing that, drops
+  // the stale acks (timing then uses the shifted shownAt). It only reports
+  // false when the drop failed too — never publish the resumed question over a
+  // stale overlay; the caller (completeResumeCountdown, which has already
+  // cleared the pause) then falls back to a fresh dispatch as a last resort.
+  const acksShifted = await shiftCachedRevealAcks(cache, { pauseStartedAtMs, resumedAtMs });
+  if (!acksShifted) {
+    logger.error(
+      { eventName: 'match:question', matchId, qIndex, pauseStartedAtMs, resumedAtMs, ...questionLogFields(currentQuestion) },
+      'Possession question resume refused: could not shift or drop stale reveal acks; caller falls back to a fresh dispatch'
+    );
+    return false;
+  }
 
   await setMatchCache(cache);
   fireAndForget('setQuestionTiming(resumeQuestion)', async () => {

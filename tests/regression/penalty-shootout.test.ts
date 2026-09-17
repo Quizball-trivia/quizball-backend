@@ -206,7 +206,7 @@ describeLocal('regression: deterministic penalty shootout', () => {
     });
   }, 180_000);
 
-  it('bounds a fully tied shootout after three sudden-death pairs', async () => {
+  it('draws a fully tied shootout after three sudden-death pairs', async () => {
     const { config } = await import('../../src/core/config.js');
     const previousBound = config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS;
     config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS = 3;
@@ -236,7 +236,10 @@ describeLocal('regression: deterministic penalty shootout', () => {
 
       expect(kicksTaken).toMatchObject({ seat1: 8, seat2: 8 });
       expect(penaltyQuestions).toHaveLength(16);
-      expect(facts.match.winner_user_id).toBe(seat1UserId);
+      // Level after 5 + 3 pairs each: a DRAW, never a fallback winner.
+      expect(seat1UserId).toBeTruthy();
+      expect(facts.match.winner_user_id).toBeNull();
+      expect(state.winnerDecisionMethod).toBe('draw');
     } finally {
       config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS = previousBound;
     }

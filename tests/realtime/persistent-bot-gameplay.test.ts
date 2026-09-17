@@ -28,7 +28,9 @@ import {
   PROD_CLUE_INDEX_PRIOR,
   PROD_PUT_IN_ORDER_PRIOR,
   questionBetaFromStats,
+  depooledCorrectMedianMs,
   resolveQuestionStats,
+  sampleAnswerTimeMs,
   sampleHistogram,
   solveThetaCeilingBound,
   topCohortSpeedFloorMs,
@@ -36,6 +38,9 @@ import {
   type ResolvedQuestionStats,
 } from '../../src/realtime/persistent-bot-gameplay.js';
 import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
+import { mulberry32 } from '../../src/modules/bots/bot-name-evolution.js';
+import { humanTimingPrior } from '../../src/modules/bots/calibration/human-timing-priors.js';
+import { humanAccuracyPrior } from '../../src/modules/bots/calibration/human-accuracy-priors.js';
 
 // The frozen calibration artifact (PR4 output), vendored into the repo so tests
 // run on CI / any checkout without a home-dir absolute path.
@@ -513,5 +518,190 @@ describe('backoff resolves for a brand-new question with no stats', () => {
     const d = decideMcq(params, inputs(), { smoothedAccuracy: null, medianTimeMs: null, logTimeSigma: null }, null, keys);
     expect(Number.isFinite(d.pCorrect)).toBe(true);
     expect(d.answerTimeMs).toBeGreaterThanOrEqual(topCohortSpeedFloorMs(params));
+  });
+});
+
+// Human-like think time. Measured on prod (ranked, humans, 30d to 2026-09-17):
+// bots answered hard questions at ~2.2s median regardless of correctness and
+// were under 1.5s on 30% of hard questions (humans: 11%) because a missing
+// per-question timing row fell back to category/type/global medians or the
+// 1184ms top-cohort median, the wrong-answer dwell was a flat +0.15 log units
+// (humans are 1.7-2.1x slower when wrong), and the floor was one top-cohort
+// p10 regardless of difficulty.
+describe('sampleAnswerTimeMs follows the human timing priors', () => {
+  const N = 2000;
+  const NO_TIMING: ResolvedQuestionStats = { smoothedAccuracy: 0.5, medianTimeMs: null, logTimeSigma: null };
+  function samples(stats: ResolvedQuestionStats, isCorrect: boolean, timing: { phaseKind?: string; difficulty?: string }, seed = 42): number[] {
+    const next = mulberry32(seed);
+    const out: number[] = [];
+    for (let i = 0; i < N; i += 1) out.push(sampleAnswerTimeMs(params, stats, isCorrect, next, timing));
+    return out.sort((a, b) => a - b);
+  }
+  const median = (xs: number[]) => xs[Math.floor(xs.length / 2)]!;
+  const within = (value: number, target: number, tolerance: number) => {
+    expect(value).toBeGreaterThan(target * (1 - tolerance));
+    expect(value).toBeLessThan(target * (1 + tolerance));
+  };
+
+  it('normal/hard/correct without per-question timing: median ~2477, never below the human p10 (1046)', () => {
+    const xs = samples(NO_TIMING, true, { phaseKind: 'normal', difficulty: 'hard' });
+    within(median(xs), 2477, 0.15);
+    expect(xs[0]).toBeGreaterThanOrEqual(1046);
+  });
+
+  it('normal/hard/wrong without per-question timing: median ~5263', () => {
+    within(median(samples(NO_TIMING, false, { phaseKind: 'normal', difficulty: 'hard' })), 5263, 0.15);
+  });
+
+  it('penalty/hard/correct without per-question timing: median ~2492', () => {
+    within(median(samples(NO_TIMING, true, { phaseKind: 'penalty', difficulty: 'hard' })), 2492, 0.15);
+  });
+
+  it('with a per-question (pooled) median of 2000 the wrong median is the correct median x the human ratio', () => {
+    const perQuestion: ResolvedQuestionStats = { smoothedAccuracy: 0.5, medianTimeMs: 2000, logTimeSigma: 0.5, timingScope: 'question' };
+    const r = 5263 / 2477;
+    const correctMedian = 2000 / Math.sqrt(r); // de-pooled at acc 0.5
+    within(median(samples(perQuestion, true, { phaseKind: 'normal', difficulty: 'hard' })), correctMedian, 0.15);
+    within(median(samples(perQuestion, false, { phaseKind: 'normal', difficulty: 'hard' })), correctMedian * r, 0.15);
+  });
+
+  it('de-pools the per-question median with the question accuracy (pooled 3000, acc 0.5, r=2 -> correct ~2121, wrong ~4243)', () => {
+    // question_stats.median_time_ms pools correct AND wrong human answers
+    // (calibration/aggregate.ts pushes every clean timing). In log space
+    // log(pooled) ~= acc*log(mc) + (1-acc)*log(mc*r), so mc = pooled / r^(1-acc).
+    // normal/medium has r = 4347/2441 ~= 1.78; pick a cell-independent check by
+    // reading r from the table and asserting the closed form.
+    const r = 4347 / 2441;
+    const pooled = 3000;
+    const at = (acc: number, isCorrect: boolean) => median(samples(
+      { smoothedAccuracy: acc, medianTimeMs: pooled, logTimeSigma: 0.5, timingScope: 'question' },
+      isCorrect,
+      { phaseKind: 'normal', difficulty: 'medium' },
+    ));
+    within(at(0.5, true), pooled / Math.sqrt(r), 0.15);
+    within(at(0.5, false), (pooled / Math.sqrt(r)) * r, 0.15);
+    // A question everyone gets right: the pooled median IS the correct median.
+    within(at(1.0, true), pooled, 0.15);
+    // A question nobody gets right: the pooled median IS the wrong median
+    // (acc is clamped to [0.05, 0.95], so this lands within a few % of pooled).
+    within(at(0.0, false), pooled, 0.15);
+    // Unknown accuracy: fall back to the prior's expected accuracy rather than
+    // treating the pool as correct-only.
+    expect(at(0.5, false)).toBeGreaterThan(at(0.5, true));
+  });
+
+  it('closed form: r=2, acc=0.5 gives correct 2121 / wrong 4243 from a 3000 pool', () => {
+    expect(depooledCorrectMedianMs(3000, 0.5, 2)).toBeCloseTo(2121, 0);
+    expect(depooledCorrectMedianMs(3000, 0.5, 2) * 2).toBeCloseTo(4243, 0);
+    expect(depooledCorrectMedianMs(3000, 1.0, 2)).toBeCloseTo(3000 / 2 ** 0.05, 0); // acc clamped to 0.95
+    expect(depooledCorrectMedianMs(3000, 0.0, 2) * 2).toBeCloseTo(3000 * 2 ** 0.05, 0); // acc clamped to 0.05
+    expect(depooledCorrectMedianMs(3000, null, 2)).toBe(3000 / 2 ** 0.5); // unknown -> 0.5
+  });
+
+  it('a legacy row whose timingSamples fell back to answers_count still needs >= 30 to reach question scope', () => {
+    // question-stats.repo.ts maps timing_samples ?? answers_count. answers_count
+    // is a superset of the clean-window timing count, so a legacy row can only
+    // over-qualify, never under-qualify — but it still has to clear the same
+    // BACKOFF_MIN_SAMPLE (30) bar as a fresh row, and the next refresh replaces
+    // it with the real count.
+    const global: ScopeStat = {
+      answersCount: 100000, correctCount: 50000, smoothedAccuracy: 0.5,
+      timingSamples: 100000, medianTimeMs: 1184, logTimeSigma: 0.72,
+    };
+    const legacy = (answersCount: number): ScopeStat => ({
+      answersCount, correctCount: Math.round(answersCount / 2), smoothedAccuracy: 0.5,
+      timingSamples: answersCount, // <- the repo's answers_count fallback
+      medianTimeMs: 2600, logTimeSigma: 0.7,
+    });
+    expect(resolveQuestionStats(legacy(29), null, null, global).timingScope).not.toBe('question');
+    expect(resolveQuestionStats(legacy(29), null, null, global).medianTimeMs).toBe(1184);
+    expect(resolveQuestionStats(legacy(30), null, null, global).timingScope).toBe('question');
+    expect(resolveQuestionStats(legacy(30), null, null, global).medianTimeMs).toBe(2600);
+  });
+
+  it('backed-off (non question-scope) timing is ignored in favour of the priors', () => {
+    // A category/type/global median must not drag a hard question to ~1.2s.
+    const backedOff: ResolvedQuestionStats = { smoothedAccuracy: 0.5, medianTimeMs: 1184, logTimeSigma: 0.72, timingScope: 'global' };
+    within(median(samples(backedOff, true, { phaseKind: 'normal', difficulty: 'hard' })), 2477, 0.15);
+  });
+
+  it('keeps fast answers on hard questions rare (prod humans: 11% of hard answers under 1.5s; bots were 30%)', () => {
+    const under1500 = (xs: number[]) => xs.filter((x) => x < 1500).length / xs.length;
+    // Correct-only cell: a log-normal at the measured median 2477 / sigma 0.76
+    // has Phi(ln(1500/2477)/0.76) ~= 25.5% of its mass under 1.5s (the table's
+    // own p10 of 1046 already implies ~23% of correct human answers there), so
+    // the cell cannot honestly sit under 20% — bound it at 30%.
+    const correct = samples(NO_TIMING, true, { phaseKind: 'normal', difficulty: 'hard' });
+    expect(under1500(correct)).toBeLessThan(0.30);
+    // The 11% prod figure is over ALL hard answers; at ~50% accuracy the wrong
+    // half (median 5263, sigma 0.64) almost never dips under 1.5s.
+    const wrong = samples(NO_TIMING, false, { phaseKind: 'normal', difficulty: 'hard' }, 7);
+    expect(under1500(wrong)).toBeLessThan(0.05);
+    expect((under1500(correct) + under1500(wrong)) / 2).toBeLessThan(0.20);
+  });
+
+  it('prior lookup is the exported table', () => {
+    expect(humanTimingPrior('normal', 'hard', true).medianMs).toBe(2477);
+  });
+});
+
+// Label-based ACCURACY prior. Without fresh question_stats the accuracy backoff
+// lands on category_type/type/global, so every question in a category looked
+// equally hard to the bot and its correctness ignored the difficulty label.
+// Prod (ranked, humans, normal phase, 7d to 2026-09-17): easy 70.2% correct,
+// medium 53.7%, hard 42.0%. When the accuracy scope is NOT 'question' the
+// label prior replaces the backed-off accuracy before the difficulty link.
+describe('decideMcq accuracy prior by difficulty label', () => {
+  const GLOBAL_ACC = 0.60;
+  const midSkill = () => inputs({ currentRp: 1500 });
+  const backedOff = (difficulty: string) => decideMcq(
+    params, midSkill(),
+    { smoothedAccuracy: GLOBAL_ACC, accuracyScope: 'global', medianTimeMs: null, logTimeSigma: null },
+    null, keys, { phaseKind: 'normal', difficulty },
+  ).pCorrect;
+  const perQuestion = (acc: number, difficulty?: string) => decideMcq(
+    params, midSkill(),
+    { smoothedAccuracy: acc, accuracyScope: 'question', medianTimeMs: null, logTimeSigma: null },
+    null, keys, { phaseKind: 'normal', difficulty },
+  ).pCorrect;
+
+  it('backed-off accuracy: easy-labelled questions are answered correctly more often than hard ones', () => {
+    expect(backedOff('easy')).toBeGreaterThan(backedOff('medium'));
+    expect(backedOff('medium')).toBeGreaterThan(backedOff('hard'));
+    expect(backedOff('easy') - backedOff('hard')).toBeGreaterThan(0.10);
+  });
+
+  it('backed-off accuracy: P(correct) matches what the link gives for the label prior (+-0.05)', () => {
+    // Same seed => same match noise, so only beta_q differs.
+    expect(Math.abs(backedOff('easy') - perQuestion(humanAccuracyPrior('easy')))).toBeLessThan(0.05);
+    expect(Math.abs(backedOff('hard') - perQuestion(humanAccuracyPrior('hard')))).toBeLessThan(0.05);
+    expect(Math.abs(backedOff('medium') - perQuestion(0.537))).toBeLessThan(0.05);
+    // and NOT what the stale global 0.60 would have given for hard.
+    expect(backedOff('hard')).toBeLessThan(perQuestion(GLOBAL_ACC) - 0.05);
+  });
+
+  it('per-question ("question" scope) accuracy wins: the label is ignored', () => {
+    expect(perQuestion(GLOBAL_ACC, 'easy')).toBe(perQuestion(GLOBAL_ACC, 'hard'));
+    expect(perQuestion(GLOBAL_ACC, 'easy')).toBe(perQuestion(GLOBAL_ACC));
+  });
+
+  it('beta_q from the priors sits on the same link scale: easy below medium below hard', () => {
+    expect(questionBetaFromStats(params, humanAccuracyPrior('easy')))
+      .toBeLessThan(questionBetaFromStats(params, humanAccuracyPrior('medium')));
+    expect(questionBetaFromStats(params, humanAccuracyPrior('medium')))
+      .toBeLessThan(questionBetaFromStats(params, humanAccuracyPrior('hard')));
+  });
+
+  it('resolveQuestionStats reports the accuracy scope so the sampler can tell a fallback from real stats', () => {
+    const global: ScopeStat = {
+      answersCount: 100000, correctCount: 60000, smoothedAccuracy: 0.6,
+      timingSamples: 100000, medianTimeMs: 1184, logTimeSigma: 0.72,
+    };
+    const question: ScopeStat = {
+      answersCount: 40, correctCount: 30, smoothedAccuracy: 0.74,
+      timingSamples: 40, medianTimeMs: 2600, logTimeSigma: 0.7,
+    };
+    expect(resolveQuestionStats(null, null, null, global).accuracyScope).toBe('global');
+    expect(resolveQuestionStats(question, null, null, global).accuracyScope).toBe('question');
   });
 });

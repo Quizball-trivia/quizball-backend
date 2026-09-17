@@ -336,7 +336,8 @@
                     "penalty_goals",
                     "total_points",
                     "total_points_fallback",
-                    "forfeit"
+                    "forfeit",
+                    "draw"
                   ]
                 },
                 "cancelledNoContest": {
@@ -12704,7 +12705,8 @@
                               "penalty_goals",
                               "total_points",
                               "total_points_fallback",
-                              "forfeit"
+                              "forfeit",
+                              "draw"
                             ]
                           },
                           "cancelledNoContest": {

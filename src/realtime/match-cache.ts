@@ -440,6 +440,7 @@ async function mergeAnswerOverlay(
     const revealAcks = cached.revealAcks ??= {};
     const overlay = await redis.hGetAll(matchAnswersOverlayKey(cached.matchId, cached.currentQIndex));
     for (const [field, value] of Object.entries(overlay)) {
+      if (field === REVEAL_ACK_FENCE_FIELD) continue; // resume-in-progress marker, not data
       if (field.startsWith('a:')) {
         const userId = field.slice(2);
         cached.answers[userId] = JSON.parse(value) as CachedAnswer;
@@ -522,9 +523,18 @@ export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer
  * back to the shifted authoritative shownAt — correct and safe. Returns false
  * only when even that delete fails; the caller's fallback (a fresh dispatch
  * with reset timing) is then a genuine last resort.
+ *
+ * Atomicity: the reveal handler's pause pre-check is not atomic with its
+ * overlay write, so a handler that passed the check before the pause could
+ * HSETNX after this clean-up. The whole shift runs under a FENCE field in the
+ * same overlay hash; commitCachedRevealAck checks and writes in one Lua
+ * script, so such an ack is rejected ('fenced') instead of landing late. The
+ * fence is cleared in finally, including on the abort paths.
  */
 export const REVEAL_ACK_SHIFT_ATTEMPTS = 3;
 const REVEAL_ACK_SHIFT_RETRY_BASE_MS = 100;
+/** Overlay-hash field set while a resume is shifting/dropping reveal acks. */
+export const REVEAL_ACK_FENCE_FIELD = 'fence';
 
 export async function shiftCachedRevealAcks(
   cache: MatchCache,
@@ -532,6 +542,46 @@ export async function shiftCachedRevealAcks(
 ): Promise<boolean> {
   const { pauseStartedAtMs, resumedAtMs } = pause;
   if (!Number.isFinite(pauseStartedAtMs) || !Number.isFinite(resumedAtMs)) return true;
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    logger.error(
+      { matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs },
+      'Cannot shift reveal acks after resume: Redis unavailable'
+    );
+    return false;
+  }
+  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  const logFields = { matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs };
+  // Fence FIRST: from here until finally no reveal ack can be committed.
+  try {
+    await redis.hSet(key, { [REVEAL_ACK_FENCE_FIELD]: '1' });
+  } catch (error) {
+    logger.error({ error, ...logFields }, 'Cannot set the reveal ack fence after resume');
+    return false;
+  }
+  try {
+    return await shiftCachedRevealAcksFenced(cache, redis, key, { pauseStartedAtMs, resumedAtMs, logFields });
+  } finally {
+    await redis.hDel(key, REVEAL_ACK_FENCE_FIELD).catch((error: unknown) => {
+      // The fence is namespaced by qIndex and the overlay carries the cache
+      // TTL, so a leaked fence only rejects acks for THIS question until
+      // then; log loudly rather than fail the resume over it.
+      logger.error({ error, ...logFields }, 'Failed to clear the reveal ack fence after resume');
+    });
+  }
+}
+
+async function shiftCachedRevealAcksFenced(
+  cache: MatchCache,
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  key: string,
+  params: {
+    pauseStartedAtMs: number;
+    resumedAtMs: number;
+    logFields: Record<string, number | string>;
+  }
+): Promise<boolean> {
+  const { pauseStartedAtMs, resumedAtMs, logFields } = params;
   const pauseMs = Math.max(0, resumedAtMs - pauseStartedAtMs);
   const revealAcks = cache.revealAcks ?? {};
   const currentUserIds = Object.entries(revealAcks)
@@ -548,12 +598,9 @@ export async function shiftCachedRevealAcks(
     fields[`r:${userId}`] = String(rebased);
   }
   if (Object.keys(fields).length === 0) return true;
-  const redis = getRedisClient();
-  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
-  const logFields = { matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs };
 
   let lastError: unknown = null;
-  for (let attempt = 1; redis && redis.isOpen && attempt <= REVEAL_ACK_SHIFT_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= REVEAL_ACK_SHIFT_ATTEMPTS; attempt += 1) {
     try {
       await redis.hSet(key, fields);
       // TTL refresh is best-effort: the key keeps its previous expiry.
@@ -571,24 +618,13 @@ export async function shiftCachedRevealAcks(
   }
 
   // Fallback: drop the current question's acks entirely so timing uses the
-  // shifted shownAt for everyone.
-  if (!redis || !redis.isOpen) {
-    logger.error({ ...logFields }, 'Cannot shift or drop reveal ack overlay after resume: Redis unavailable');
-    return false;
-  }
-  // Delete from the LIVE overlay, not the pre-retry snapshot: an ack committed
-  // during the backoff above would otherwise escape and leave one player on
-  // ack timing and the other on shownAt timing. Two passes close the window
-  // between the read and the delete.
-  const dropped: string[] = [];
+  // shifted shownAt for everyone. Read the LIVE overlay (not the pre-retry
+  // snapshot); under the fence no new ack can land, so one pass suffices.
+  let dropped: string[] = [];
   try {
-    for (let pass = 0; pass < 2; pass += 1) {
-      const overlay = await redis.hGetAll(key);
-      const ackFields = Object.keys(overlay).filter((field) => field.startsWith('r:'));
-      if (ackFields.length === 0) break;
-      await redis.hDel(key, ackFields);
-      dropped.push(...ackFields);
-    }
+    const overlay = await redis.hGetAll(key);
+    dropped = Object.keys(overlay).filter((field) => field.startsWith('r:'));
+    if (dropped.length > 0) await redis.hDel(key, dropped);
   } catch (error) {
     logger.error(
       { error, shiftError: lastError, ...logFields },
@@ -606,24 +642,53 @@ export async function shiftCachedRevealAcks(
   return true;
 }
 
+/**
+ * Outcome of a reveal-ack commit: 'stored' (first ack wins), 'duplicate' (a
+ * value already exists for this user/question), or 'fenced' (a resume is
+ * shifting/dropping this question's acks — the caller must NOT record the
+ * ack; the client re-acks the resumed question).
+ */
+export type RevealAckCommitResult = 'stored' | 'duplicate' | 'fenced';
+
+// Check the resume fence and HSETNX in ONE round trip so no ack can slip in
+// between a pause check and the write (see shiftCachedRevealAcks).
+const COMMIT_REVEAL_ACK_SCRIPT = `
+  if redis.call("HEXISTS", KEYS[1], ARGV[3]) == 1 then
+    return -1
+  end
+  return redis.call("HSETNX", KEYS[1], ARGV[1], ARGV[2])
+`;
+
 export async function commitCachedRevealAck(
   cache: MatchCache,
   userId: string,
   revealAtMs: number
-): Promise<boolean> {
+): Promise<RevealAckCommitResult> {
   const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return false;
+  if (!redis || !redis.isOpen) return 'duplicate';
   const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
   let stored: boolean;
   try {
-    stored = await redis.hSetNX(key, `r:${userId}`, String(Math.round(revealAtMs)));
+    if (typeof redis.eval !== 'function') {
+      // A client without EVAL cannot fence atomically; keep the plain
+      // first-wins write rather than dropping acks on such (non-prod) setups.
+      logger.warn({ matchId: cache.matchId, qIndex: cache.currentQIndex }, 'Redis client missing eval; reveal ack commit is not fenced');
+      stored = await redis.hSetNX(key, `r:${userId}`, String(Math.round(revealAtMs)));
+    } else {
+      const result = await redis.eval(COMMIT_REVEAL_ACK_SCRIPT, {
+        keys: [key],
+        arguments: [`r:${userId}`, String(Math.round(revealAtMs)), REVEAL_ACK_FENCE_FIELD],
+      });
+      if (Number(result) === -1) return 'fenced';
+      stored = Number(result) === 1;
+    }
   } catch (error) {
     logger.error(
       { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId },
       'Failed to write reveal ack overlay; falling back to full cache write'
     );
     await setMatchCache(cache);
-    return true;
+    return 'stored';
   }
   // TTL refresh failure must not flip a lost hSetNX race into a full cache
   // write — that would stomp the winning ack (and concurrent overlay writes
@@ -636,7 +701,7 @@ export async function commitCachedRevealAck(
       'Failed to refresh reveal ack overlay TTL'
     );
   }
-  return stored;
+  return stored ? 'stored' : 'duplicate';
 }
 
 export async function setMatchCache(cache: MatchCache): Promise<void> {

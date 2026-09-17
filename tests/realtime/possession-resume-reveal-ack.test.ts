@@ -28,6 +28,7 @@ type FakeRedis = {
   hSetNX: ReturnType<typeof vi.fn>;
   hGetAll: ReturnType<typeof vi.fn>;
   hDel: ReturnType<typeof vi.fn>;
+  eval: ReturnType<typeof vi.fn>;
   expire: ReturnType<typeof vi.fn>;
 };
 let redis: FakeRedis;
@@ -66,6 +67,16 @@ function createRedis(): FakeRedis {
       let n = 0;
       for (const f of list) if (hash(key).delete(f)) n += 1;
       return n;
+    }),
+    // Mirrors the reveal-ack Lua script: rejected (-1) while the resume fence
+    // is up, else HSETNX semantics (1 stored / 0 duplicate).
+    eval: vi.fn(async (_script: string, opts: { keys: string[]; arguments: string[] }) => {
+      const h = hash(opts.keys[0]!);
+      if (h.has('fence')) return -1;
+      const [field, value] = opts.arguments;
+      if (h.has(field!)) return 0;
+      h.set(field!, value!);
+      return 1;
     }),
     expire: vi.fn(async () => true),
   };
@@ -247,9 +258,10 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     // u1 acked the reveal 1s after shownAt, through the real commit path
     // (in-memory + hSetNX into the overlay).
     cache.revealAcks!.u1 = { qIndex: Q_INDEX, revealAtMs: U1_REVEAL_AT };
-    expect(await commitCachedRevealAck(cache, 'u1', U1_REVEAL_AT)).toBe(true);
+    expect(await commitCachedRevealAck(cache, 'u1', U1_REVEAL_AT)).toBe('stored');
     expect(redis.hashes.get(matchAnswersOverlayKey(MATCH_ID, Q_INDEX))?.get('r:u1')).toBe(String(U1_REVEAL_AT));
     redis.hSetNX.mockClear();
+    redis.eval.mockClear();
   });
 
   it('excludes the pause from the reveal-ack elapsed time after resume', async () => {
@@ -314,7 +326,7 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     // the resume for such an ack, so it must measure from the resume.
     const IN_PAUSE_ACK_AT = PAUSE_STARTED_AT + 2_000;
     cache.revealAcks!.u2 = { qIndex: Q_INDEX, revealAtMs: IN_PAUSE_ACK_AT };
-    expect(await commitCachedRevealAck(cache, 'u2', IN_PAUSE_ACK_AT)).toBe(true);
+    expect(await commitCachedRevealAck(cache, 'u2', IN_PAUSE_ACK_AT)).toBe('stored');
     vi.useFakeTimers();
     vi.setSystemTime(new Date(RESUMED_AT));
 
@@ -348,7 +360,13 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     // (shifted) authoritative shownAt, which is correct and safe.
     vi.useFakeTimers();
     vi.setSystemTime(new Date(RESUMED_AT));
-    redis.hSet.mockRejectedValue(new Error('redis write failed'));
+    redis.hSet.mockImplementation(async (key: string, fields: Record<string, string>) => {
+      if ('fence' in fields) {
+        for (const [f, v] of Object.entries(fields)) redis.hashes.get(key)!.set(f, v);
+        return 1;
+      }
+      throw new Error('redis write failed');
+    });
     const emit = vi.fn();
     const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
 
@@ -357,7 +375,7 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     const resumed = await resumedPromise;
 
     expect(resumed).toBe(true);
-    expect(redis.hSet).toHaveBeenCalledTimes(3);
+    expect(redis.hSet.mock.calls.filter((call) => !('fence' in (call[1] as Record<string, string>)))).toHaveLength(3);
     expect(redis.hDel).toHaveBeenCalledWith(matchAnswersOverlayKey(MATCH_ID, Q_INDEX), ['r:u1']);
     // In-memory acks for THIS question are gone (the stale previous-question ack is untouched).
     expect(cache.revealAcks?.u1).toBeUndefined();
@@ -384,22 +402,89 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     expect(elapsed.elapsedMs).toBe(3_500);
   });
 
-  it('drops acks from the LIVE overlay (two-pass), catching an ack committed during the retry backoff', async () => {
-    // The old delete used the snapshot taken before the ~300ms of retries, so
-    // an ack committed concurrently escaped and left one player on ack timing
-    // and the other on shownAt timing. The delete must read the overlay's
-    // current r: fields, delete them, then re-read and delete again.
+  it('sets the fence field before touching the acks and clears it after a successful shift', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(RESUMED_AT));
-    redis.hSet.mockRejectedValue(new Error('redis write failed'));
     const overlayKey = matchAnswersOverlayKey(MATCH_ID, Q_INDEX);
-    // u2's ack lands in the overlay AFTER the first read of the delete path.
-    let reads = 0;
-    redis.hGetAll.mockImplementation(async (key: string) => {
-      const snapshot = Object.fromEntries(redis.hashes.get(key) ?? []);
-      reads += 1;
-      if (key === overlayKey && reads === 1) redis.hashes.get(key)!.set('r:u2', String(PAUSE_STARTED_AT + 1_000));
-      return snapshot;
+    const order: string[] = [];
+    redis.hSet.mockImplementation(async (key: string, fields: Record<string, string>) => {
+      order.push(`hSet:${Object.keys(fields).join(',')}`);
+      for (const [f, v] of Object.entries(fields)) redis.hashes.get(key)!.set(f, v);
+      return Object.keys(fields).length;
+    });
+    redis.hDel.mockImplementation(async (key: string, fields: string | string[]) => {
+      const list = Array.isArray(fields) ? fields : [fields];
+      order.push(`hDel:${list.join(',')}`);
+      let n = 0;
+      for (const f of list) if (redis.hashes.get(key)?.delete(f)) n += 1;
+      return n;
+    });
+
+    await resumePossessionMatchQuestion(createIo(), MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+
+    expect(order[0]).toBe('hSet:fence');
+    expect(order.indexOf('hSet:fence')).toBeLessThan(order.indexOf('hSet:r:u1'));
+    expect(order[order.length - 1]).toBe('hDel:fence');
+    expect(redis.hashes.get(overlayKey)?.has('fence')).toBe(false);
+    expect(redis.hashes.get(overlayKey)?.get('r:u1')).toBe(String(U1_REVEAL_AT + PAUSE_MS));
+  });
+
+  it('an ack that reaches the overlay DURING the resume clean-up is rejected by the fence (never lands after the delete)', async () => {
+    // The race the pause pre-check cannot close: a handler that passed the
+    // check just before the pause and whose overlay write lands after the
+    // clean-up. With the fence in the same hash and a single Lua script, the
+    // write is rejected instead of surviving with pre-resume timing.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(RESUMED_AT));
+    const overlayKey = matchAnswersOverlayKey(MATCH_ID, Q_INDEX);
+    redis.hSet.mockImplementation(async (key: string, fields: Record<string, string>) => {
+      if ('fence' in fields) {
+        for (const [f, v] of Object.entries(fields)) redis.hashes.get(key)!.set(f, v);
+        return 1;
+      }
+      throw new Error('redis write failed');
+    });
+    let raceResult: unknown = 'not attempted';
+    redis.hDel.mockImplementationOnce(async (key: string, fields: string | string[]) => {
+      // Mid clean-up: the late handler's overlay write arrives now.
+      raceResult = await commitCachedRevealAck(cache, 'u2', PAUSE_STARTED_AT - 500);
+      const list = Array.isArray(fields) ? fields : [fields];
+      let n = 0;
+      for (const f of list) if (redis.hashes.get(key)?.delete(f)) n += 1;
+      return n;
+    });
+
+    const resumedPromise = resumePossessionMatchQuestion(createIo(), MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await resumedPromise).toBe(true);
+
+    expect(raceResult).toBe('fenced');
+    const overlay = redis.hashes.get(overlayKey);
+    expect([...(overlay?.keys() ?? [])].filter((k) => k.startsWith('r:'))).toEqual([]);
+    expect(overlay?.has('fence')).toBe(false);
+    expect(Object.values(cache.revealAcks ?? {}).filter((ack) => ack.qIndex === Q_INDEX)).toEqual([]);
+    // Once the fence is gone the client's re-ack of the resumed question lands.
+    expect(await commitCachedRevealAck(cache, 'u2', RESUMED_AT + 100)).toBe('stored');
+  });
+
+  it('returns false (last-resort fresh dispatch) only when the hDel fallback fails too', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(RESUMED_AT));
+    const overlayKey = matchAnswersOverlayKey(MATCH_ID, Q_INDEX);
+    redis.hSet.mockImplementation(async (key: string, fields: Record<string, string>) => {
+      if ('fence' in fields) {
+        for (const [f, v] of Object.entries(fields)) redis.hashes.get(key)!.set(f, v);
+        return 1;
+      }
+      throw new Error('redis write failed');
+    });
+    // The r: clean-up fails; clearing the fence itself still works.
+    redis.hDel.mockImplementation(async (key: string, fields: string | string[]) => {
+      const list = Array.isArray(fields) ? fields : [fields];
+      if (list.some((f) => f.startsWith('r:'))) throw new Error('redis write failed');
+      let n = 0;
+      for (const f of list) if (redis.hashes.get(key)?.delete(f)) n += 1;
+      return n;
     });
     const emit = vi.fn();
     const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
@@ -408,30 +493,11 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     const resumed = await resumedPromise;
 
-    expect(resumed).toBe(true);
-    expect(reads).toBeGreaterThanOrEqual(2);
-    const overlay = redis.hashes.get(overlayKey);
-    expect([...(overlay?.keys() ?? [])].filter((k) => k.startsWith('r:'))).toEqual([]);
-    expect(Object.values(cache.revealAcks ?? {}).filter((ack) => ack.qIndex === Q_INDEX)).toEqual([]);
-    // Non-ack overlay fields (answers, totals) are never touched.
-    expect(redis.hDel.mock.calls.every((call) => (call[1] as string[]).every((f) => f.startsWith('r:')))).toBe(true);
-  });
-
-  it('returns false (last-resort fresh dispatch) only when the hDel fallback fails too', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(RESUMED_AT));
-    redis.hSet.mockRejectedValue(new Error('redis write failed'));
-    redis.hDel.mockRejectedValue(new Error('redis write failed'));
-    const emit = vi.fn();
-    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
-
-    const resumedPromise = resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
-    await vi.advanceTimersByTimeAsync(2_000);
-    const resumed = await resumedPromise;
-
     expect(resumed).toBe(false);
-    expect(redis.hSet).toHaveBeenCalledTimes(3);
-    expect(redis.hDel).toHaveBeenCalled();
+    expect(redis.hSet.mock.calls.filter((call) => !('fence' in (call[1] as Record<string, string>)))).toHaveLength(3);
+    expect(redis.hDel).toHaveBeenCalledWith(overlayKey, 'fence');
+    // Abort path: the fence never outlives the resume attempt.
+    expect(redis.hashes.get(overlayKey)?.has('fence')).toBe(false);
     expect(emit).not.toHaveBeenCalledWith('match:question', expect.anything());
     expect(setMatchCacheMock).not.toHaveBeenCalled();
     expect(vi.mocked(scheduleRealtimeTimer)).not.toHaveBeenCalled();

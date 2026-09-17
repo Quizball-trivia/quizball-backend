@@ -75,6 +75,11 @@ npm run chaos:lobby -- --target=local --clients=20 --env-file=.env.harness --man
 npm run chaos:lobby -- --target=local --clients=500 --env-file=.env.harness --manage-backend \
   --restart-at-s=120,300 --restart-signal=SIGKILL
 npm run chaos:lobby -- --target=staging --clients=100 --scenarios=create_abandon,auction_abandon
+# Restart chaos on staging: a Railway redeploy is the rolling restart a real
+# deploy does; --age-stranded-min backdates whatever the storylines leave
+# behind so a short run judges the 30-min heal. Logins are resumable.
+npm run chaos:lobby -- --target=staging --clients=500 --scenario-restarts=2 --age-stranded-min=31 \
+  --restart-cmd="railway redeploy --service quizball-backend --environment staging -y"
 
 # Queue-storm cleanup sends one cancellation per matched lobby, ramps those
 # cancellations within the match-found modal, and ramps ordinary disconnects.

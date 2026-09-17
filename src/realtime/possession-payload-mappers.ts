@@ -97,15 +97,39 @@ export type OpponentAnswerAckFields = Pick<
  */
 export type AiOpponentLookup = { aiUserId: string | null } | 'unknown';
 
+/** Upper bound on the AI-opponent lookup before an answer commit; memoized hits return instantly. */
+export const AI_OPPONENT_LOOKUP_TIMEOUT_MS = 150;
+
+/**
+ * Bounded and fail-closed: runs BEFORE the round lock (so a cold replica's
+ * Redis/DB lookup can never hold the lock or delay the ack past a timeout
+ * resolver) and gives up after `timeoutMs`, omitting the opponent fields.
+ */
 export async function lookupAiOpponent(
   matchId: string,
-  resolve: (matchId: string) => Promise<string | null>
+  resolve: (matchId: string) => Promise<string | null>,
+  timeoutMs: number = AI_OPPONENT_LOOKUP_TIMEOUT_MS
 ): Promise<AiOpponentLookup> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'unknown'>((settle) => {
+    timer = setTimeout(() => settle('unknown'), timeoutMs);
+    timer.unref?.();
+  });
+  const lookup: Promise<AiOpponentLookup> = resolve(matchId).then(
+    (aiUserId) => ({ aiUserId }),
+    (error: unknown) => {
+      logger.warn({ error, matchId }, 'AI opponent lookup failed; omitting opponent fields from answer ack');
+      return 'unknown' as const;
+    }
+  );
   try {
-    return { aiUserId: await resolve(matchId) };
-  } catch (error) {
-    logger.warn({ error, matchId }, 'AI opponent lookup failed; omitting opponent fields from answer ack');
-    return 'unknown';
+    const result = await Promise.race([lookup, timeout]);
+    if (result === 'unknown') {
+      logger.debug({ matchId, timeoutMs }, 'AI opponent lookup did not complete in time; omitting opponent fields from answer ack');
+    }
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

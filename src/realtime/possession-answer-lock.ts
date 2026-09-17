@@ -36,11 +36,16 @@ function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<typeof a
   return acquireLockBounded(lockKey, ANSWER_LOCK_TTL_MS, ANSWER_LOCK_WAIT_MS);
 }
 
+export interface AnswerLockLease {
+  /** True once a renewal failed or the lease could not be extended: stop writing. */
+  leaseLost: () => boolean;
+}
+
 export async function withAnswerLock<T>(
   matchId: string,
   lockSuffix: string,
   onBusy: () => void,
-  fn: () => Promise<T>
+  fn: (lease: AnswerLockLease) => Promise<T>
 ): Promise<T | undefined> {
   const lockKey = `lock:match:${matchId}:${lockSuffix}`;
   // Two players normally submit within the same answer window. A single NX
@@ -53,13 +58,22 @@ export async function withAnswerLock<T>(
     return undefined;
   }
   // Renew the lock at half the TTL so a slow fn() can't run past expiry
-  // and let a concurrent handler in. Stops on release in finally.
+  // and let a concurrent handler in. Stops on release in finally. A renewal
+  // that fails (or reports the lease gone) flips `leaseLost`, which the
+  // critical section checks before it writes.
   const token = lock.token;
+  let lost = false;
   const renew = setInterval(() => {
-    void extendLock(lockKey, token, ANSWER_LOCK_TTL_MS).catch(() => {});
+    void extendLock(lockKey, token, ANSWER_LOCK_TTL_MS)
+      .then((extended) => {
+        if (!extended) lost = true;
+      })
+      .catch(() => {
+        lost = true;
+      });
   }, ANSWER_LOCK_RENEW_MS);
   try {
-    return await fn();
+    return await fn({ leaseLost: () => lost });
   } finally {
     clearInterval(renew);
     await releaseLock(lockKey, token);

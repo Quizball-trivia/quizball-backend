@@ -166,6 +166,7 @@ import {
   matchCacheKey,
 } from '../../src/realtime/match-cache.js';
 import { resolveAnswerElapsedMs } from '../../src/realtime/possession-timing.js';
+import { scheduleRealtimeTimer } from '../../src/realtime/realtime-timer-scheduler.js';
 
 const MATCH_ID = 'match-resume';
 const Q_INDEX = 4;
@@ -330,5 +331,25 @@ describe('resumePossessionMatchQuestion reveal-ack timing', () => {
     const overlay = redis.hashes.get(matchAnswersOverlayKey(MATCH_ID, Q_INDEX));
     expect(overlay?.get('r:u2')).toBe(String(RESUMED_AT));
     expect(overlay?.get('r:u1')).toBe(String(U1_REVEAL_AT + PAUSE_MS));
+  });
+
+  it('ABORTS the resume when the shifted reveal acks cannot be written to the overlay (stale r: field would win)', async () => {
+    // shiftCachedRevealAcks used to swallow an hSet failure, so the resumed
+    // question was published while the pre-pause r:<user> overlay field kept
+    // winning on every later cache read — charging the pause to the player.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(RESUMED_AT));
+    redis.hSet.mockRejectedValueOnce(new Error('redis write failed'));
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+
+    const resumed = await resumePossessionMatchQuestion(io, MATCH_ID, Q_INDEX, PAUSE_STARTED_AT);
+
+    expect(resumed).toBe(false);
+    expect(emit).not.toHaveBeenCalledWith('match:question', expect.anything());
+    expect(setMatchCacheMock).not.toHaveBeenCalled();
+    expect(vi.mocked(scheduleRealtimeTimer)).not.toHaveBeenCalled();
+    // The persisted overlay still holds the pre-pause value (nothing half-written).
+    expect(redis.hashes.get(matchAnswersOverlayKey(MATCH_ID, Q_INDEX))?.get('r:u1')).toBe(String(U1_REVEAL_AT));
   });
 });

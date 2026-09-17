@@ -108,10 +108,28 @@ export async function resolvePossessionRound(
   // transaction's retries, and match completion can exceed a fixed TTL, and an
   // expired lease would let an answer commit interleave mid-resolution — the
   // exact race the shared key exists to prevent.
+  // A renewal that fails or reports the lease gone flips `leaseLost`; every
+  // cache write / DB persist / publish below checks it first, because a lost
+  // lease means another holder may be resolving from a fresher cache.
   const lockToken = lock.token;
+  let leaseLost = false;
   const renewLock = setInterval(() => {
-    void extendLock(lockKey, lockToken, RESOLVE_LOCK_TTL_MS).catch(() => {});
+    void extendLock(lockKey, lockToken, RESOLVE_LOCK_TTL_MS)
+      .then((extended) => {
+        if (!extended) leaseLost = true;
+      })
+      .catch(() => {
+        leaseLost = true;
+      });
   }, Math.floor(RESOLVE_LOCK_TTL_MS / 2));
+  const abortIfLeaseLost = (stage: string): boolean => {
+    if (!leaseLost) return false;
+    logger.warn(
+      { eventName: 'match:round_result', matchId, qIndex, fromTimeout, stage },
+      'Possession round resolve aborted: round lock lease lost'
+    );
+    return true;
+  };
 
   // Only cancel the durable question/AI timers when this round has genuinely
   // concluded (resolved, or the match/round is past it). No-op returns —
@@ -137,6 +155,7 @@ export async function resolvePossessionRound(
       const rebuilt = await rebuildCacheFromDB(matchId);
       if (rebuilt) {
         cache = rebuilt;
+        if (abortIfLeaseLost('cache_refresh')) return;
         await setMatchCache(rebuilt);
         logger.info(
           { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
@@ -169,6 +188,7 @@ export async function resolvePossessionRound(
       );
       if (fromTimeout && cache.mode === 'ranked'
         && (cache.statePayload.phase === 'LAST_ATTACK' || cache.statePayload.phase === 'NORMAL_PLAY')) {
+        if (abortIfLeaseLost('redispatch')) return;
         const dispatched = await sendPossessionMatchQuestion(io, matchId, qIndex);
         // Dispatch owns the new deadline. Do not clear
         // that timer or overwrite it with this obsolete round's 5s retry.
@@ -684,6 +704,7 @@ export async function resolvePossessionRound(
       },
       'Possession round result emitting'
     );
+    if (abortIfLeaseLost('round_result')) return;
     io.to(`match:${matchId}`).emit('match:round_result', {
       matchId,
       qIndex,
@@ -708,6 +729,9 @@ export async function resolvePossessionRound(
     cache.revealAcks = {};
     bumpStateVersion(state);
 
+    // Last pre-commit check: a lost lease here leaves the round un-advanced
+    // (timers stay armed → a fresh resolve retries from the live cache).
+    if (abortIfLeaseLost('commit')) return;
     await setMatchCache(cache);
     // Checkpoint policy (db-optimize.md #7): the full state_payload JSONB is
     // only persisted at recovery-relevant boundaries — phase/half changes
@@ -736,6 +760,15 @@ export async function resolvePossessionRound(
     // obsolete regardless of which exit (halftime/completed/next question) we
     // take below.
     roundConcluded = true;
+    if (leaseLost) {
+      // Post-commit: the advanced cache is now the durable truth (a concurrent
+      // holder reads it and no-ops), so finish publishing/scheduling rather
+      // than strand the match with cleared timers and no next question.
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, stage: 'post_commit' },
+        'Possession round lock lease lost after commit; finishing publish/scheduling from the committed state'
+      );
+    }
     await emitMatchState(io, matchId, state);
     logger.info(
       {

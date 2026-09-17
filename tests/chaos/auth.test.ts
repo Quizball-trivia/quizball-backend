@@ -71,6 +71,28 @@ describe('chaos user login validation', () => {
     expect(urls.filter((url) => url.endsWith('/api/v1/users/me'))).toHaveLength(2);
   });
 
+  it('retries a login 429 before provisioning succeeds', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = vi.fn();
+    existingUserResponses(fetchMock);
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'rate limited' }), { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'internal-user-id' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = provisionUsers(provisionConfig);
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual([expect.objectContaining({
+      token: 'token',
+      userId: 'internal-user-id',
+    })]);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.endsWith('/api/v1/auth/login'))).toHaveLength(2);
+  });
+
   it('retries transport failures while preparing and logging in test users', async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0);

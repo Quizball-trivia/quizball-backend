@@ -701,6 +701,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   rankedMatchmakingService.start(io);
+  auctionMatchmakingService.start(io);
 
   if (onlineCountRefreshTimer) {
     clearInterval(onlineCountRefreshTimer);

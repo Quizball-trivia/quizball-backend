@@ -26,7 +26,8 @@ class FakeRedis {
     return Promise.resolve(this.strings.get(key) ?? null);
   }
 
-  set(key: string, value: string): Promise<string> {
+  set(key: string, value: string, _options?: { NX?: boolean; PX?: number }): Promise<string | null> {
+    if (_options?.NX && this.strings.has(key)) return Promise.resolve(null);
     this.strings.set(key, value);
     return Promise.resolve('OK');
   }
@@ -95,6 +96,25 @@ class FakeRedis {
     }
     this.zsets.set(key, zset);
     return Promise.resolve(count);
+  }
+
+  zCard(key: string): Promise<number> {
+    return Promise.resolve(this.zsets.get(key)?.size ?? 0);
+  }
+
+  zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    options?: { LIMIT?: { offset: number; count: number } },
+  ): Promise<string[]> {
+    const values = [...(this.zsets.get(key) ?? new Map<string, number>()).entries()]
+      .filter(([, score]) => score >= min && score <= max)
+      .sort((a, b) => a[1] - b[1])
+      .map(([value]) => value);
+    const offset = options?.LIMIT?.offset ?? 0;
+    const count = options?.LIMIT?.count ?? values.length;
+    return Promise.resolve(values.slice(offset, offset + count));
   }
 
   expire(_key: string, _seconds: number): Promise<boolean> {
@@ -198,6 +218,14 @@ const sessionGuardMock = vi.hoisted(() => ({
       openLobbyIds: [],
       resolvedAt: '2026-06-20T10:00:00.000Z',
     })),
+    resolveStates: vi.fn(async (userIds: string[]) => new Map(userIds.map((userId) => [userId, {
+      state: 'IDLE',
+      activeMatchId: null,
+      waitingLobbyId: null,
+      queueSearchId: null,
+      openLobbyIds: [],
+      resolvedAt: '2026-06-20T10:00:00.000Z',
+    }]))),
     prepareForQueueJoin: vi.fn(async () => ({
       ok: true,
       snapshot: {
@@ -210,6 +238,15 @@ const sessionGuardMock = vi.hoisted(() => ({
         resolvedAt: '2026-06-20T10:00:00.000Z',
       },
     })),
+    renewActivityFences: vi.fn(async () => true),
+    releaseActivityFences: vi.fn(async (userIds: string[], fenceToken: string) => {
+      for (const userId of userIds) {
+        const key = `session:pairing:user:${userId}`;
+        if (redisMock.client?.strings.get(key) === fenceToken) {
+          redisMock.client.strings.delete(key);
+        }
+      }
+    }),
     emitBlocked: vi.fn(),
   },
 }));
@@ -298,6 +335,7 @@ function scheduledSearchIds(): string[] {
 
 describe('auctionMatchmakingService', () => {
   beforeEach(() => {
+    auctionMatchmakingService.stop();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-20T10:00:00.000Z'));
     redisMock.client = new FakeRedis();
@@ -306,6 +344,7 @@ describe('auctionMatchmakingService', () => {
   });
 
   afterEach(() => {
+    auctionMatchmakingService.stop();
     vi.useRealTimers();
   });
 
@@ -349,6 +388,27 @@ describe('auctionMatchmakingService', () => {
     );
     expect(foundCall).toBeGreaterThanOrEqual(0);
     expect(startedCall).toBeGreaterThan(foundCall);
+    expect(lockMock.releaseLock.mock.invocationCallOrder[0]).toBeLessThan(
+      startMatchMock.startAuctionMatchForHumans.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('uses the durable claim token as the idempotent match id', async () => {
+    const { io } = createIo();
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
+    await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+
+    const options = startMatchMock.startAuctionMatchForHumans.mock.calls[0]?.[2] as {
+      context?: { createId?: (kind: 'match' | 'round' | 'bot-seat') => string };
+    };
+    const matchId = options.context?.createId?.('match');
+    expect(matchId).toMatch(/^[0-9a-f-]{36}$/);
+    expect([...redisMock.client!.hashes.values()]).toContainEqual(expect.objectContaining({
+      status: 'completed',
+      matchId,
+    }));
   });
 
   it('matches two humans across locales, then immediately seats a named bot on the fill tick', async () => {
@@ -480,6 +540,96 @@ describe('auctionMatchmakingService', () => {
         ],
       }),
       expect.objectContaining({ beforeStartEvents: expect.any(Function) }),
+    );
+  });
+
+  it('extends a near-deadline two-human group once before bot backfill', async () => {
+    const { io } = createIo();
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
+    const firstSearchId = scheduledSearchIds()[0];
+    vi.setSystemTime(new Date('2026-06-20T10:00:17.000Z'));
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
+    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
+
+    await auctionMatchmakingService.runFillTimer(io, {
+      kind: 'auction_matchmaking_fill',
+      searchId: firstSearchId,
+    });
+
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+    const firstRow = redisMock.client!.hashes.get(`auction:mm:search:${firstSearchId}`);
+    expect(firstRow).toEqual(expect.objectContaining({
+      humanWaitExtended: '1',
+      fallbackAt: String(Date.parse('2026-06-20T10:00:24.000Z')),
+    }));
+
+    vi.setSystemTime(new Date('2026-06-20T10:00:25.000Z'));
+    await auctionMatchmakingService.runFillTimer(io, {
+      kind: 'auction_matchmaking_fill',
+      searchId: firstSearchId,
+    });
+    expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledTimes(1);
+  });
+
+  it('requeues a failed claim exactly once while preserving original queue order', async () => {
+    const { io } = createIo();
+    startMatchMock.startAuctionMatchForHumans.mockRejectedValueOnce(new Error('temporary start failure'));
+
+    await auctionMatchmakingService.handleSearchStart(io, socket('u1'), { locale: 'en' });
+    vi.setSystemTime(new Date('2026-06-20T10:00:01.000Z'));
+    await auctionMatchmakingService.handleSearchStart(io, socket('u2'), { locale: 'en' });
+    vi.setSystemTime(new Date('2026-06-20T10:00:02.000Z'));
+    await auctionMatchmakingService.handleSearchStart(io, socket('u3'), { locale: 'en' });
+
+    const queue = redisMock.client!.zsets.get('auction:mm:queue');
+    expect(queue?.size).toBe(3);
+    expect([...queue!.values()].sort((a, b) => a - b)).toEqual([
+      Date.parse('2026-06-20T10:00:00.000Z'),
+      Date.parse('2026-06-20T10:00:01.000Z'),
+      Date.parse('2026-06-20T10:00:02.000Z'),
+    ]);
+    const searchRows = [...redisMock.client!.hashes.entries()]
+      .filter(([key]) => key.startsWith('auction:mm:search:'))
+      .map(([, row]) => row);
+    expect(searchRows).toHaveLength(3);
+    expect(searchRows.every((row) => row.status === 'queued' && row.startFailures === '1')).toBe(true);
+    expect(sessionGuardMock.userSessionGuardService.releaseActivityFences).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers an expired abandoned claim and preserves its queuedAt', async () => {
+    const { io } = createIo();
+    const search = {
+      searchId: 'abandoned-search',
+      userId: 'u1',
+      displayName: 'One',
+      locale: 'en',
+      queuedAt: Date.parse('2026-06-20T09:59:50.000Z'),
+      fallbackAt: Date.parse('2026-06-20T09:59:55.000Z'),
+    };
+    redisMock.client!.hashes.set('auction:mm:claim:abandoned-claim', {
+      claimToken: 'abandoned-claim',
+      matchId: 'abandoned-claim',
+      status: 'claimed',
+      claimedAt: String(Date.parse('2026-06-20T09:59:00.000Z')),
+      leaseUntil: String(Date.parse('2026-06-20T09:59:59.000Z')),
+      snapshot: JSON.stringify([search]),
+    });
+    redisMock.client!.zsets.set('auction:mm:claims', new Map([
+      ['abandoned-claim', Date.parse('2026-06-20T09:59:59.000Z')],
+    ]));
+    redisMock.client!.hashes.set('auction:mm:claim:user', { u1: 'abandoned-claim' });
+    redisMock.client!.strings.set('session:pairing:user:u1', 'abandoned-claim');
+
+    auctionMatchmakingService.start(io);
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(redisMock.client!.zsets.get('auction:mm:queue')?.get('abandoned-search')).toBe(search.queuedAt);
+    expect(redisMock.client!.hashes.get('auction:mm:search:abandoned-search')).toEqual(
+      expect.objectContaining({ status: 'queued', startFailures: '1' }),
+    );
+    expect(redisMock.client!.hashes.get('auction:mm:claim:abandoned-claim')).toEqual(
+      expect.objectContaining({ status: 'requeued' }),
     );
   });
 
@@ -674,5 +824,54 @@ describe('auctionMatchmakingService', () => {
     );
     expect(timerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+  });
+
+  it('never runs more than four match creations concurrently on one replica', async () => {
+    const { io } = createIo();
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let peakActive = 0;
+    let matchIndex = 0;
+    startMatchMock.startAuctionMatchForHumans.mockImplementation(async (_io, input) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      matchIndex += 1;
+      return {
+        matchId: `bounded-${matchIndex}`,
+        formation: '2-2-2',
+        seats: input.humanPlayers.map((player, index) => ({
+          seatId: `seat-${index}`,
+          displayName: player.displayName,
+          isBot: false,
+        })),
+      };
+    });
+
+    const thirdJoinPromises: Promise<void>[] = [];
+    for (let group = 0; group < 5; group += 1) {
+      await auctionMatchmakingService.handleSearchStart(io, socket(`u${group * 3 + 1}`), { locale: 'en' });
+      await auctionMatchmakingService.handleSearchStart(io, socket(`u${group * 3 + 2}`), { locale: 'en' });
+      thirdJoinPromises.push(auctionMatchmakingService.handleSearchStart(
+        io,
+        socket(`u${group * 3 + 3}`),
+        { locale: 'en' },
+      ));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledTimes(4);
+    expect(peakActive).toBe(4);
+
+    releases.shift()?.();
+    await thirdJoinPromises[0];
+    auctionMatchmakingService.start(io);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledTimes(5);
+    expect(peakActive).toBe(4);
+
+    for (const release of releases.splice(0)) release();
+    await Promise.all(thirdJoinPromises);
   });
 });

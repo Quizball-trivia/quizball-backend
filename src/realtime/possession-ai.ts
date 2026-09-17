@@ -40,7 +40,6 @@ import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-sch
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints, calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from './scoring.js';
-import { computePredictedElapsedMs } from './possession-timing.js';
 import {
   getQuestionDurationMs,
   getQuestionPreAnswerDelayMs,
@@ -780,6 +779,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     plannedPutInOrderCount?: number | null,
     plannedClueSolved?: boolean | null,
   ): Promise<void> {
+    // Replica-local reference for the bot's answer clock (see the commit below).
+    const firedAtMs = Date.now();
     try {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
       if (!aiUserId) return;
@@ -888,24 +889,18 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       const persistentSpeedFloorMs = persistentModel && question.kind !== 'countdown'
         ? Math.min(topCohortSpeedFloorMs(persistentModel.params), questionTimeMs)
         : 0;
-      // Score the bot on the ACTUAL elapsed time at commit, measured against
-      // the same authoritative reference humans use (now - shownAt), so timer
-      // poll jitter and lock waits are charged to the bot exactly as network
-      // latency is charged to a human. Floored at the planned think time so an
-      // early timer never makes the bot faster than planned, and clamped to
-      // the question window like every other answer.
-      const actualElapsedMs = computePredictedElapsedMs({
-        shownAt: question.shownAt,
-        deadlineAt: question.deadlineAt,
-        nowMs: Date.now(),
-        clientTimeMs: plannedAnswerTimeMs,
-        questionTimeMs,
-      });
-      const answerTimeMs = clamp(
-        Math.max(actualElapsedMs, plannedAnswerTimeMs),
-        persistentSpeedFloorMs,
-        questionTimeMs
-      );
+      // Provisional: the planned think time. The COMMITTED time (inside the
+      // lock, below) adds the replica-local delay between the timer firing and
+      // the commit, so a bounded lock wait or scheduler jitter is charged to
+      // the bot as network latency is charged to a human. Deliberately NOT
+      // measured against the cache's shownAt/deadlineAt: those stamps come
+      // from the dispatching replica and prod clocks skew by ~5s
+      // (possession-timing.ts) — humans dodge that via the replica-local reveal
+      // ack, and the bot has no ack, so its own clock is the only skew-free one.
+      const finalizeAnswerTimeMs = (localDelayMs: number) =>
+        clamp(plannedAnswerTimeMs + localDelayMs, persistentSpeedFloorMs, questionTimeMs);
+      let answerTimeMs = finalizeAnswerTimeMs(0);
+      let localDelayMs = 0;
       let isCorrect = false;
       let selectedIndex: number | null = null;
       let pointsEarned = 0;
@@ -1048,6 +1043,18 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         const livePlayer = getCachedPlayer(live, aiUserId);
         if (!livePlayer) return null;
 
+        // Final answer clock: planned think time + everything this replica
+        // spent between the timer firing and this point (lock wait included).
+        // Points are re-derived from the committed time for the time-scored
+        // kind; the special formats score on counts, not time.
+        localDelayMs = Math.max(0, Date.now() - firedAtMs);
+        answerTimeMs = finalizeAnswerTimeMs(localDelayMs);
+        if (question.kind === 'multipleChoice') {
+          pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
+        }
+        answer.timeMs = answerTimeMs;
+        answer.pointsEarned = pointsEarned;
+
         live.answers[aiUserId] = answer;
         if (question.kind === 'multipleChoice') {
           livePlayer.totalPoints += pointsEarned;
@@ -1075,7 +1082,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             expectedCount: liveExpected.length,
             totalPoints: livePlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
             plannedAnswerTimeMs,
-            actualElapsedMs,
+            localDelayMs,
             ...questionLogFields(question),
             ...answerLogFields(answer),
           },

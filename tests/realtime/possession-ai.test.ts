@@ -63,6 +63,8 @@ vi.mock('../../src/realtime/locks.js', () => ({
 }));
 
 import { acquireLock, releaseLock } from '../../src/realtime/locks.js';
+import { getQuestionDurationMs } from '../../src/realtime/possession-state.js';
+import { calculatePoints } from '../../src/realtime/scoring.js';
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
   answerCount: (cache: { answers: Record<string, unknown> }) => Object.keys(cache.answers).length,
@@ -297,43 +299,63 @@ describe('possession AI timer scheduling', () => {
     }
   });
 
-  describe('bot time_ms is the ACTUAL elapsed time at commit, like a human', () => {
-    // Humans are scored on Date.now() minus reveal/shownAt. The bot used to
-    // record its PLANNED think time, so scheduler poll jitter and lock waits
-    // were never charged to it. Measure against currentQuestion.shownAt (the
-    // same authoritative reference), floored at the planned time so an early
-    // timer never makes the bot faster than planned.
-    const SHOWN_AT = new Date('2026-09-17T10:00:00.000Z').getTime();
+  describe('bot time_ms charges the replica-local delay between timer fire and commit', () => {
+    // Humans are scored on real elapsed time; the bot used to record its
+    // PLANNED think time, so a bounded lock wait was never charged. Measuring
+    // against the cache's shownAt would be wrong too: that stamp comes from
+    // the dispatching replica and prod clocks skew by ~5s (see
+    // possession-timing.ts). So the bot adds the delay measured on ITS OWN
+    // clock between the timer firing and the commit inside the lock.
+    const T0 = new Date('2026-09-17T10:00:00.000Z').getTime();
+    const QUESTION_MS = getQuestionDurationMs('multipleChoice');
 
-    async function commitAt(offsetMs: number, plannedMs: number) {
+    async function commitWithLockDelay(lockDelayMs: number, plannedMs: number) {
       vi.useFakeTimers();
-      vi.setSystemTime(new Date(SHOWN_AT + offsetMs));
+      vi.setSystemTime(new Date(T0));
       const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
       try {
         const cache = createCache();
-        cache.currentQuestion.shownAt = new Date(SHOWN_AT).toISOString();
-        cache.currentQuestion.deadlineAt = new Date(SHOWN_AT + 10_000).toISOString();
         getMatchCacheOrRebuildMock.mockResolvedValue(cache);
         setMatchCacheMock.mockImplementation(async (nextCache) => {
           Object.assign(cache, nextCache);
+        });
+        // The lock is acquired inside withAnswerLock right before the commit
+        // re-read; a slow acquisition advances the replica clock.
+        vi.mocked(acquireLock).mockImplementationOnce(async () => {
+          vi.setSystemTime(new Date(Date.now() + lockDelayMs));
+          return { acquired: true, token: 'lock-token' };
         });
         const io = { to: vi.fn(() => ({ emit: vi.fn() })) } as unknown as QuizballServer;
         const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
         const ai = createPossessionAi(vi.fn());
         await ai.runPossessionAiAnswer(io, 'm1', 0, plannedMs, null);
-        return cache.answers['ai-1'] as { timeMs: number };
+        return cache.answers['ai-1'] as { timeMs: number; pointsEarned: number; isCorrect: boolean };
       } finally {
         randomSpy.mockRestore();
         vi.useRealTimers();
       }
     }
 
-    it('planned 1500ms, committed 2100ms after shownAt -> records 2100', async () => {
-      expect((await commitAt(2100, 1500)).timeMs).toBe(2100);
+    it('lock acquisition takes 300ms, planned 1500 -> time_ms 1800', async () => {
+      const answer = await commitWithLockDelay(300, 1500);
+      expect(answer.timeMs).toBe(1800);
+      expect(answer.isCorrect).toBe(true);
+      expect(answer.pointsEarned).toBe(calculatePoints(true, 1800, QUESTION_MS));
     });
 
-    it('planned 1500ms, committed 1400ms after shownAt -> floored at the planned 1500', async () => {
-      expect((await commitAt(1400, 1500)).timeMs).toBe(1500);
+    it('instant lock, planned 1500 -> time_ms 1500', async () => {
+      const answer = await commitWithLockDelay(0, 1500);
+      expect(answer.timeMs).toBe(1500);
+      expect(answer.pointsEarned).toBe(calculatePoints(true, 1500, QUESTION_MS));
+    });
+
+    it('a delay that crosses a scoring bucket lowers pointsEarned accordingly', async () => {
+      const instant = await commitWithLockDelay(0, 1500);
+      const delayed = await commitWithLockDelay(1000, 1500);
+      expect(delayed.timeMs).toBe(2500);
+      expect(delayed.pointsEarned).toBe(calculatePoints(true, 2500, QUESTION_MS));
+      expect(calculatePoints(true, 2500, QUESTION_MS)).toBeLessThan(calculatePoints(true, 1500, QUESTION_MS));
+      expect(delayed.pointsEarned).toBeLessThan(instant.pointsEarned);
     });
   });
 

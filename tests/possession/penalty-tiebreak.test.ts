@@ -12,9 +12,9 @@ import type { Seat } from '../../src/realtime/possession-state.js';
 // History: #575 broke point-ties on raw answer time because scoring is
 // stepped in 10-point buckets with a full-points grace window, equally-good
 // players tied constantly, and prod shootouts ran 18-40 kicks at 0-0 (23%
-// exceeded the regulation 10). That tie-break is gone; the sudden-death cap
-// (POSSESSION_MAX_SUDDEN_DEATH_ROUNDS, default 5 → a shootout ends by kick
-// 20 at the latest) is now the guard against marathons.
+// exceeded the regulation 10). That tie-break is gone; a shootout still level
+// after the regulation kicks (+ POSSESSION_MAX_SUDDEN_DEATH_ROUNDS extra
+// pairs, default 0) is a DRAW, so no marathon is possible.
 
 function players(): CachedPlayer[] {
   return [
@@ -131,15 +131,15 @@ describe('penalty duel: equal points is a save', () => {
     expect(outcome.goalScoredByUserId).toBeNull();
   });
 
-  it('two equally fast, always-correct players: every kick is a save and the cap ends it by kick 20', () => {
+  it('two equally fast, always-correct players: every kick is a save and the shootout is drawn', () => {
     // The marathon #575 fixed with the time tie-break. With equal points as a
-    // save neither player can score, so the sudden-death cap (default 5 pairs
-    // after the first 5 kicks each) is what terminates the shootout.
+    // save neither player can score; after the regulation 5 each (+ the
+    // configured sudden-death pairs, here 5) the shootout is a DRAW.
     const state = penaltyState();
     const cached = players();
     let shooterSeat: Seat = 1;
     let kicks = 0;
-    let forced = false;
+    let drawn = false;
     while (state.phase === 'PENALTY_SHOOTOUT' && kicks < 60) {
       const keeperSeat: Seat = shooterSeat === 1 ? 2 : 1;
       const answers = new Map([
@@ -147,12 +147,12 @@ describe('penalty duel: equal points is a save', () => {
         [`seat-${keeperSeat}`, { is_correct: true, time_ms: 900, points_earned: 100 }],
       ]);
       const outcome = applyPenaltyResolution(state, cached, answers, shooterSeat, 5);
-      forced = outcome.forcedBySuddenDeathCap;
+      drawn = outcome.shootoutDrawn;
       kicks += 1;
       shooterSeat = state.penalty.shooterSeat;
     }
     expect(state.phase).toBe('COMPLETED');
-    expect(forced).toBe(true);
+    expect(drawn).toBe(true);
     expect(kicks).toBe(20);
     expect(state.penaltyGoals).toEqual({ seat1: 0, seat2: 0 });
     expect(state.penalty.kicksTaken).toEqual({ seat1: 10, seat2: 10 });

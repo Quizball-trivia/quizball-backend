@@ -103,7 +103,9 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   questionResults?: Record<string, Array<'correct' | 'wrong' | null>>;
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | 'draw' | null;
+  /** A level penalty shootout: winnerId is null and neither side lost. */
+  isDraw?: boolean;
   cancelledNoContest?: boolean;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: Awaited<ReturnType<typeof rankedService.getMatchOutcome>> | null;
@@ -211,10 +213,13 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   const winnerDecisionMethod =
     (
       match.state_payload as {
-        winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit';
+        winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | 'draw';
       } | null
     )?.winnerDecisionMethod ?? null;
-  const explicitNoWinnerForfeit = winnerDecisionMethod === 'forfeit' && match.winner_user_id === null;
+  const isDraw = winnerDecisionMethod === 'draw' && match.winner_user_id === null;
+  // A recorded no-winner result (both forfeited, or a drawn shootout) must not
+  // have a winner derived from points on replay.
+  const explicitNoWinnerForfeit = (winnerDecisionMethod === 'forfeit' || isDraw) && match.winner_user_id === null;
 
   let rankedOutcome = null;
   if (match.mode === 'ranked' && !cancelledNoContest) {
@@ -235,6 +240,7 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
     durationMs,
     resultVersion,
     winnerDecisionMethod,
+    ...(isDraw ? { isDraw: true } : {}),
     ...(cancelledNoContest ? { cancelledNoContest: true } : {}),
     totalPointsFallbackUsed: winnerDecisionMethod === 'total_points_fallback',
     ...(rankedOutcome ? { rankedOutcome } : {}),

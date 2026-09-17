@@ -119,6 +119,15 @@ export const matchPlayersRepo = {
     return rows[0] ?? null;
   },
 
+  /** Final standing for a possession draw (1 for both sides). */
+  async setPlacement(matchId: string, userId: string, placement: number): Promise<void> {
+    await sql`
+      UPDATE match_players
+      SET placement = ${placement}
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+  },
+
   async setPlayerFinalTotals(
     matchId: string,
     userId: string,

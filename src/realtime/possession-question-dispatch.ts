@@ -903,12 +903,12 @@ export async function sendPossessionMatchQuestion(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },
         'Failed to pick a valid question for possession state'
       );
-      // Shootouts are intentionally unbounded, but match_questions forbids
-      // reusing a question within one match. A thin penalty category can run
-      // dry during sudden death. Returning here would leave both players
-      // waiting forever for a question that cannot exist, so finish through
-      // the existing deterministic natural fallback (penalty goals, then
-      // total points).
+      // match_questions forbids reusing a question within one match, so a thin
+      // penalty category can run dry mid-shootout. Returning here would leave
+      // both players waiting forever for a question that cannot exist, so
+      // complete now: the side ahead on penalty goals wins, and a level
+      // shootout is a DRAW (isShootoutDraw in completion) — never the old
+      // total-points fallback.
       if (state.phase === 'PENALTY_SHOOTOUT') {
         const completion = await completePossessionMatch(io, matchId, state, cache, {
           source: 'penalty_question_pool_exhausted',

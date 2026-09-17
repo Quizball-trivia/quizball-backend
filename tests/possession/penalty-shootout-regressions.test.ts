@@ -111,6 +111,11 @@ describe('penalty goal semantics — correctness beats the points floor', () => 
 });
 
 describe('sudden death termination', () => {
+  // These cases exercise the sudden-death mechanics, so they allow extra
+  // pairs explicitly: the config default (0) draws a level shootout straight
+  // after the regulation 5 each (see penalty-draw.test.ts).
+  const SUDDEN_DEATH_ROUNDS = 3;
+
   function goalAnswersFor(shooterSeat: Seat) {
     const shooter: AnswerDetail = { is_correct: true, time_ms: 2_000, points_earned: 80 };
     const keeper: AnswerDetail = { is_correct: false, time_ms: 2_000, points_earned: 0 };
@@ -126,7 +131,7 @@ describe('sudden death termination', () => {
   function playRegulationAllScored(state: ReturnType<typeof penaltyState>) {
     for (let kick = 0; kick < 10; kick += 1) {
       const shooterSeat = state.penalty.shooterSeat;
-      const result = applyPenaltyResolution(state, players(), goalAnswersFor(shooterSeat), shooterSeat);
+      const result = applyPenaltyResolution(state, players(), goalAnswersFor(shooterSeat), shooterSeat, SUDDEN_DEATH_ROUNDS);
       expect(result.goalScoredByUserId).not.toBeNull();
     }
   }
@@ -141,12 +146,12 @@ describe('sudden death termination', () => {
     expect(state.phase).toBe('PENALTY_SHOOTOUT');
 
     const sdShooter = state.penalty.shooterSeat;
-    applyPenaltyResolution(state, players(), goalAnswersFor(sdShooter), sdShooter);
+    applyPenaltyResolution(state, players(), goalAnswersFor(sdShooter), sdShooter, SUDDEN_DEATH_ROUNDS);
     expect(state.phase).toBe('PENALTY_SHOOTOUT');
 
     const sdSecondShooter = state.penalty.shooterSeat;
     expect(sdSecondShooter).not.toBe(sdShooter);
-    applyPenaltyResolution(state, players(), missAnswersFor(sdSecondShooter), sdSecondShooter);
+    applyPenaltyResolution(state, players(), missAnswersFor(sdSecondShooter), sdSecondShooter, SUDDEN_DEATH_ROUNDS);
 
     expect(state.phase).toBe('COMPLETED');
     expect(penaltyWinnerSeat(state)).toBe(sdShooter);
@@ -157,9 +162,9 @@ describe('sudden death termination', () => {
     playRegulationAllScored(state);
 
     const first = state.penalty.shooterSeat;
-    applyPenaltyResolution(state, players(), missAnswersFor(first), first);
+    applyPenaltyResolution(state, players(), missAnswersFor(first), first, SUDDEN_DEATH_ROUNDS);
     const second = state.penalty.shooterSeat;
-    applyPenaltyResolution(state, players(), missAnswersFor(second), second);
+    applyPenaltyResolution(state, players(), missAnswersFor(second), second, SUDDEN_DEATH_ROUNDS);
 
     expect(state.phase).toBe('PENALTY_SHOOTOUT');
     expect(penaltyWinnerSeat(state)).toBeNull();

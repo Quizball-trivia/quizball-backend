@@ -35,7 +35,7 @@ interface RankedRpChangeInsertInput {
   oldRp: number;
   deltaRp: number;
   newRp: number;
-  result: 'win' | 'loss';
+  result: 'win' | 'loss' | 'draw';
   isPlacement: boolean;
   placementGameNo: number | null;
   placementAnchorRp: number | null;
@@ -439,6 +439,7 @@ export const rankedRepo = {
     userIds: string[];
     winPoints: number;
     lossPoints: number;
+    drawPoints: number;
   }): Promise<number> {
     if (input.userIds.length === 0) return 0;
     let repairedCount = 0;
@@ -456,12 +457,16 @@ export const rankedRepo = {
       WITH repaired AS (
         INSERT INTO wl_qp_awards (match_id, user_id, week_key, points, result)
         SELECT rc.match_id, rc.user_id, ${input.weekKey}::date,
-               CASE WHEN rc.result = 'win' THEN ${input.winPoints}::int ELSE ${input.lossPoints}::int END,
+               CASE rc.result
+                 WHEN 'win' THEN ${input.winPoints}::int
+                 WHEN 'draw' THEN ${input.drawPoints}::int
+                 ELSE ${input.lossPoints}::int
+               END,
                rc.result
         FROM ranked_rp_changes rc
         WHERE rc.match_id = ${input.matchId}
           AND rc.user_id = ANY(${sql.array(input.userIds)}::uuid[])
-          AND rc.result IN ('win', 'loss')
+          AND rc.result IN ('win', 'loss', 'draw')
         ON CONFLICT (match_id, user_id) DO NOTHING
         RETURNING user_id, points, result
       )

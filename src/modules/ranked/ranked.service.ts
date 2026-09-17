@@ -10,7 +10,7 @@ import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
-import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS } from '../weekend-league/wl-week.js';
+import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS, WL_QP_DRAW } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
   computeSeasonRpDelta,
@@ -103,7 +103,7 @@ export function parseRankedContext(raw: unknown): {
   };
 }
 
-function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null {
+function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | 'draw' | null {
   if (!raw) return null;
   if (typeof raw === 'string') {
     try {
@@ -119,6 +119,7 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
     || candidate === 'penalty_goals'
     || candidate === 'total_points_fallback'
     || candidate === 'forfeit'
+    || candidate === 'draw'
   ) {
     return candidate;
   }
@@ -190,6 +191,7 @@ function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow)
     coinsAwarded: row.coins_awarded,
     qpAwarded: 0,
     qpWeekTotal: 0,
+    result: row.result,
     oldTier: tierFromRp(row.old_rp),
     newTier: tierFromRp(row.new_rp),
     placementStatus: profile.placement_status,
@@ -410,6 +412,7 @@ export const rankedService = {
           userIds: humanIds,
           winPoints: WL_QP_WIN,
           lossPoints: WL_QP_LOSS,
+          drawPoints: WL_QP_DRAW,
         });
         if (repaired > 0) {
           logger.info({ matchId, qpWeekKey, repaired }, 'WL QP repaired from existing RP ledger');
@@ -447,7 +450,10 @@ export const rankedService = {
     const rankedContext = parseRankedContext(match.ranked_context);
     const winnerDecisionMethod = parseWinnerDecisionMethod(match.state_payload);
     const bothForfeit = !match.winner_user_id && winnerDecisionMethod === 'forfeit';
-    if (!match.winner_user_id && !bothForfeit) {
+    // A level penalty shootout: both players settle as a draw (+10 RP, 475
+    // coins, streak untouched) — never as two losses.
+    const isDraw = !match.winner_user_id && winnerDecisionMethod === 'draw';
+    if (!match.winner_user_id && !bothForfeit && !isDraw) {
       logger.warn({ matchId }, 'Ranked settlement skipped: no winner_user_id for completed match');
       return null;
     }
@@ -457,6 +463,7 @@ export const rankedService = {
       winnerUserId: match.winner_user_id,
       winnerDecisionMethod,
       bothForfeit,
+      isDraw,
       settleEligiblePlayerIds: settleEligiblePlayers.map((player) => player.user_id),
       missingPlayerIds: missingPlayers.map((player) => player.user_id),
       reusedExistingRowCount: existing.length,
@@ -491,7 +498,7 @@ export const rankedService = {
         oldRp: number;
         deltaRp: number;
         newRp: number;
-        result: 'win' | 'loss';
+        result: 'win' | 'loss' | 'draw';
         isPlacement: boolean;
         placementGameNo: number | null;
         placementAnchorRp: number | null;
@@ -526,7 +533,7 @@ export const rankedService = {
         ? (profileByUser.get(opponent.user_id) ?? await rankedRepo.ensureProfile(opponent.user_id))
         : null;
 
-      const isWin = !bothForfeit && match.winner_user_id === player.user_id;
+      const isWin = !bothForfeit && !isDraw && match.winner_user_id === player.user_id;
       const oldRp = profile.rp;
 
       const opponentRp = opponentProfile?.rp ?? rankedContext.aiAnchorRp ?? DEFAULT_PLACEMENT_ANCHOR_RP;
@@ -544,6 +551,7 @@ export const rankedService = {
         currentWinStreak: profile.current_win_streak,
         placementRequired: profile.placement_required,
         isWin,
+        isDraw,
         decision: winnerDecisionMethod,
         goalMargin,
         opponentRp,
@@ -614,6 +622,7 @@ export const rankedService = {
           oldRp,
           newRp: settlement.newRp,
           deltaRp: settlement.deltaRp,
+          result: settlement.result,
           coinsAwarded: settlement.coinsAwarded,
           qpAwarded: settlement.qpAwarded,
           qpWeekTotal: 0,

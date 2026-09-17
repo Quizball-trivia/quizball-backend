@@ -12,6 +12,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const WL_QP_WIN = 25;
 export const WL_QP_LOSS = 10;
+/** Drawn shootout: loss value + half the win-loss gap (10 + 7.5), rounded to 18. */
+export const WL_QP_DRAW = 18;
 export const WL_QP_TARGET = 200;
 
 /**
@@ -43,7 +45,8 @@ export function weekKeyFor(endedAt: Date): string | null {
   return saturday.toISOString().slice(0, 10);
 }
 
-export function qpForResult(result: 'win' | 'loss'): number {
+export function qpForResult(result: 'win' | 'loss' | 'draw'): number {
+  if (result === 'draw') return WL_QP_DRAW;
   return result === 'win' ? WL_QP_WIN : WL_QP_LOSS;
 }
 

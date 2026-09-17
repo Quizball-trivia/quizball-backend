@@ -41,9 +41,34 @@ export type Seat = 1 | 2;
 
 export type ResolutionDecision = {
   winnerId: string | null;
-  method: 'goals' | 'penalty_goals' | 'total_points_fallback';
+  method: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'draw';
   totalPointsFallbackUsed: boolean;
 };
+
+/**
+ * A penalty shootout that is (still) level: goals level AND penalty goals
+ * level while in — or having completed — the shootout. This is the ONLY way a
+ * possession match ends without a winner: level after the regulation kicks
+ * (plus the configured sudden-death rounds), or the penalty question pool
+ * running dry while level. Never true during normal play / last attack (a
+ * level match goes to the shootout instead of completing).
+ */
+export function isShootoutDraw(
+  state: Partial<Pick<PossessionStatePayload, 'phase' | 'goals' | 'penaltyGoals' | 'penalty'>>
+): boolean {
+  // Defensive against partial payloads (no-contest / forfeit paths hand in
+  // whatever state they have): missing sections read as "not a shootout".
+  const kicks = state.penalty?.kicksTaken;
+  const inShootout = state.phase === 'PENALTY_SHOOTOUT'
+    || (state.penalty?.round ?? 0) > 0
+    || (kicks?.seat1 ?? 0) > 0
+    || (kicks?.seat2 ?? 0) > 0;
+  return inShootout
+    && state.goals != null
+    && state.penaltyGoals != null
+    && state.goals.seat1 === state.goals.seat2
+    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2;
+}
 
 export type ExpectedAnswerInfo = {
   expectedUserIds: string[];
@@ -58,6 +83,7 @@ const VALID_WINNER_DECISION_METHODS: ReadonlySet<NonNullable<PossessionStatePayl
   'goals',
   'penalty_goals',
   'total_points_fallback',
+  'draw',
 ]);
 
 export function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {

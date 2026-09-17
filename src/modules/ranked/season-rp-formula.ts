@@ -21,6 +21,7 @@ export type WinnerDecision =
   | 'penalty_goals'
   | 'total_points_fallback'
   | 'forfeit'
+  | 'draw'
   | null;
 
 export const SEASON_INITIAL_RP = 450;
@@ -32,10 +33,15 @@ export const SEASON_PENALTY_LOSS_RP = -15;
 export const SEASON_FORFEIT_LOSS_RP = -50; // you quit
 export const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a regular win
 export const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
+// A drawn penalty shootout pays BOTH players +10: a decided shootout nets the
+// pair +20 (35 - 15) and so does a draw (10 + 10), so draws are not farmable
+// relative to playing it out. No margin bonus, no upset bonus.
+export const SEASON_PENALTY_DRAW_RP = 10;
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const RANKED_WIN_COINS = 700;
 const RANKED_LOSS_COINS = 250;
+const RANKED_DRAW_COINS = 475; // midpoint of win / loss
 
 // Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
 // Signed margin: bonus only when the player was AHEAD (margin > 0). A winner who
@@ -52,7 +58,8 @@ export function seasonMarginBonus(signedGoalMargin: number): number {
  * Season 2026 RP delta for one player in a settled match.
  * @param isWin            did this player win
  * @param decision         how the winner was decided ('penalty_goals' = shootout,
- *                         'forfeit' = a player quit, else a regular goals result)
+ *                         'forfeit' = a player quit, 'draw' = level shootout,
+ *                         else a regular goals result)
  * @param goalMargin       signed myGoals - oppGoals (bonuses a win only when ahead)
  * @param opponentIsStronger  opponent's current RP was strictly higher than mine
  */
@@ -62,6 +69,7 @@ export function computeSeasonRpDelta(
   goalMargin: number,
   opponentIsStronger: boolean,
 ): number {
+  if (decision === 'draw') return SEASON_PENALTY_DRAW_RP; // +10 to both, isWin ignored
   const isPenalty = decision === 'penalty_goals';
   const isForfeit = decision === 'forfeit';
 
@@ -91,6 +99,8 @@ export interface ParticipantSettlementInput {
   currentWinStreak: number;
   placementRequired: number;
   isWin: boolean;
+  /** A level penalty shootout: neither win nor loss. Implied by decision 'draw'. */
+  isDraw?: boolean;
   decision: WinnerDecision;
   goalMargin: number;
   opponentRp: number;
@@ -103,7 +113,7 @@ export interface ParticipantSettlement {
   deltaRp: number;
   oldTier: RankedTier;
   newTier: RankedTier;
-  result: 'win' | 'loss';
+  result: 'win' | 'loss' | 'draw';
   isPlacement: boolean;
   placementStatus: PlacementStatus;
   placementPlayed: number;
@@ -147,7 +157,9 @@ export function tierFromRp(rp: number): RankedTier {
 export function computeParticipantSettlement(
   input: ParticipantSettlementInput,
 ): ParticipantSettlement {
-  const result: 'win' | 'loss' = input.isWin ? 'win' : 'loss';
+  const isDraw = input.isDraw === true || input.decision === 'draw';
+  const isWin = !isDraw && input.isWin;
+  const result: 'win' | 'loss' | 'draw' = isDraw ? 'draw' : isWin ? 'win' : 'loss';
   const oldTier = tierFromRp(input.oldRp);
   const isPlacement = input.placementStatus !== 'placed'
     || input.placementPlayed < input.placementRequired;
@@ -162,7 +174,8 @@ export function computeParticipantSettlement(
   let placementPerfSum = input.placementPerfSum;
   let placementPointsForSum = input.placementPointsForSum;
   let placementPointsAgainstSum = input.placementPointsAgainstSum;
-  const currentWinStreak = input.isWin ? input.currentWinStreak + 1 : 0;
+  // A draw neither extends nor resets the win streak.
+  const currentWinStreak = isDraw ? input.currentWinStreak : isWin ? input.currentWinStreak + 1 : 0;
 
   let placementGameNo: number | null = null;
   let placementAnchorRp: number | null = null;
@@ -170,8 +183,8 @@ export function computeParticipantSettlement(
   let calculationMethod: 'placement_seed' | 'ranked_formula' = 'ranked_formula';
 
   const seasonDeltaRp = computeSeasonRpDelta(
-    input.isWin,
-    input.decision,
+    isWin,
+    isDraw ? 'draw' : input.decision,
     input.goalMargin,
     input.opponentIsStronger,
   );
@@ -180,7 +193,7 @@ export function computeParticipantSettlement(
     calculationMethod = 'placement_seed';
     placementStatus = 'in_progress';
     placementPlayed = Math.min(DEFAULT_PLACEMENT_MATCHES, input.placementPlayed + 1);
-    placementWins = input.placementWins + (input.isWin ? 1 : 0);
+    placementWins = input.placementWins + (isWin ? 1 : 0); // a draw is a played game, not a placement win
     placementGameNo = placementPlayed;
     placementAnchorRp = input.opponentRp;
 
@@ -203,7 +216,7 @@ export function computeParticipantSettlement(
   }
 
   const coinsAwarded = input.isHumanForCoins
-    ? (input.isWin ? RANKED_WIN_COINS : RANKED_LOSS_COINS)
+    ? (isDraw ? RANKED_DRAW_COINS : isWin ? RANKED_WIN_COINS : RANKED_LOSS_COINS)
     : 0;
   const qpAwarded = input.isHumanForCoins ? qpForResult(result) : 0;
 

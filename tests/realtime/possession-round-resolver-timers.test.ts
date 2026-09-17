@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
 import type { CachedAnswer, CachedQuestion, MatchCache } from '../../src/realtime/match-cache.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
 const acquireLockMock = vi.fn();
+const extendLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getMatchCacheOrRebuildMock = vi.fn();
 const rebuildCacheFromDBMock = vi.fn();
@@ -34,6 +35,7 @@ vi.mock('../../src/core/analytics/game-events.js', () => ({
 
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: (...args: unknown[]) => acquireLockMock(...args),
+  extendLock: (...args: unknown[]) => extendLockMock(...args),
   releaseLock: (...args: unknown[]) => releaseLockMock(...args),
 }));
 
@@ -380,6 +382,51 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
 // found-set must come from their OWN per-user key — never bleed into the other
 // seat or into a following put_in_order answer. These shape rules are what keep
 // a mid-match disconnect from corrupting the next round's scoring.
+describe('possession round resolver lease loss', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    releaseLockMock.mockResolvedValue(true);
+    redisGetMock.mockResolvedValue(null);
+    rebuildCacheFromDBMock.mockResolvedValue(null);
+    getMatchMock.mockResolvedValue({ status: 'active' });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('aborts before any cache write, DB persist or publish once extendLock reports the lease lost', async () => {
+    vi.useFakeTimers();
+    extendLockMock.mockResolvedValue(false);
+    const cache = createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    });
+    // While the resolver waits for the cache read, the renewal interval fires
+    // and the lease is reported lost.
+    getMatchCacheOrRebuildMock.mockImplementation(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+      return cache;
+    });
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) } as unknown as QuizballServer;
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(io, MATCH_ID, Q_INDEX, true);
+
+    expect(extendLockMock).toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('match:round_result', expect.anything());
+    expect(setMatchCacheMock).not.toHaveBeenCalled();
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(touchMatchRoundMock).not.toHaveBeenCalled();
+    expect(emitMatchStateMock).not.toHaveBeenCalled();
+    expect(scheduleNextPossessionQuestionMock).not.toHaveBeenCalled();
+    expect(releaseLockMock).toHaveBeenCalled();
+    // Not concluded: the round keeps its timers so a fresh resolve retries.
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+    expect(deferQuestionTimerMock).toHaveBeenCalled();
+  });
+});
+
 describe('possession round resolver timeout backfill kind/user isolation', () => {
   function putInOrderQuestion(): CachedQuestion {
     return {

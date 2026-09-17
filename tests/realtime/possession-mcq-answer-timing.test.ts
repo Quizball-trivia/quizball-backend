@@ -11,6 +11,8 @@ const insertMatchAnswerIfMissingMock = vi.hoisted(() => vi.fn());
 const updatePlayerTotalsMock = vi.hoisted(() => vi.fn());
 const resolvePossessionRoundMock = vi.hoisted(() => vi.fn());
 const resolveAiUserIdForMatchMock = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
+/** Whether the (mocked) round lock is currently held — sampled at every socket emit. */
+const lockState = vi.hoisted(() => ({ held: false }));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -59,8 +61,15 @@ vi.mock('../../src/realtime/possession-answer-lock.js', () => ({
     _matchId: string,
     _lockSuffix: string,
     _onBusy: () => void,
-    work: () => Promise<T>
-  ) => work(),
+    work: (lease: { leaseLost: () => boolean }) => Promise<T>
+  ) => {
+    lockState.held = true;
+    try {
+      return await work({ leaseLost: () => false });
+    } finally {
+      lockState.held = false;
+    }
+  },
 }));
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
@@ -157,7 +166,7 @@ function createIoMock(): QuizballServer {
 }
 
 function createSocketMock(userId: string) {
-  const emitted: Array<{ event: string; payload: unknown }> = [];
+  const emitted: Array<{ event: string; payload: unknown; lockHeld: boolean }> = [];
   const roomEmitted: Array<{ room: string; event: string; payload: unknown }> = [];
   const socket = {
     id: `socket-${userId}`,
@@ -165,7 +174,7 @@ function createSocketMock(userId: string) {
       user: { id: userId, role: 'user', is_ai: false },
     },
     emit(event: string, payload?: unknown) {
-      emitted.push({ event, payload });
+      emitted.push({ event, payload, lockHeld: lockState.held });
       return true;
     },
     to(room: string) {
@@ -181,7 +190,7 @@ function createSocketMock(userId: string) {
   return { socket, emitted, roomEmitted };
 }
 
-function answerAck(emitted: Array<{ event: string; payload: unknown }>): MatchAnswerAckPayload {
+function answerAck(emitted: Array<{ event: string; payload: unknown; lockHeld?: boolean }>): MatchAnswerAckPayload {
   const entry = emitted.find((item) => item.event === 'match:answer_ack');
   expect(entry).toBeDefined();
   return entry!.payload as MatchAnswerAckPayload;
@@ -361,6 +370,53 @@ describe('handlePossessionAnswer timing regression coverage', () => {
     expect(ack).not.toHaveProperty('opponentTotalPoints');
     expect(ack).not.toHaveProperty('opponentIsCorrect');
     expect(ack).not.toHaveProperty('opponentSelectedIndex');
+  });
+
+  it('emits the ack INSIDE the round lock even when the AI-opponent lookup is slow (bounded, fail-closed)', async () => {
+    // The documented order is answer_ack then round_result. If the ack were
+    // emitted after the lock is released (and after an unbounded lookup), a
+    // timeout resolver could grab the round lock and emit round_result first.
+    // The lookup is bounded (~150ms) BEFORE the lock, then the ack is built and
+    // emitted inside the lock callback with no external I/O.
+    vi.useRealTimers();
+    const cache = makeCache({ shownAtMs: Date.now() - 1000, revealAtMs: Date.now() - 900 });
+    cache.answers.u2 = {
+      userId: 'u2', questionKind: 'multipleChoice', selectedIndex: 3, isCorrect: false, timeMs: 800,
+      pointsEarned: 0, phaseKind: 'normal', phaseRound: 1, shooterSeat: null, answeredAt: new Date().toISOString(),
+    };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    resolveAiUserIdForMatchMock.mockImplementation(() => new Promise((resolve) => { setTimeout(() => resolve(null), 600); }));
+    const { socket, emitted } = createSocketMock('u1');
+
+    const startedAt = Date.now();
+    await handlePossessionAnswer(createIoMock(), socket, { matchId: MATCH_ID, qIndex: 3, selectedIndex: 1, timeMs: 900 });
+
+    const ack = emitted.find((item) => item.event === 'match:answer_ack');
+    expect(ack).toBeDefined();
+    expect(ack!.lockHeld).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(500); // bounded: did not wait for the 600ms lookup
+    // Lookup timed out -> fail closed: no opponent fields, but oppAnswered still true.
+    expect(ack!.payload).toMatchObject({ oppAnswered: true });
+    expect(ack!.payload).not.toHaveProperty('opponentPointsEarned');
+  });
+
+  it('emits the duplicate-submit replay ack inside the round lock as well', async () => {
+    const cache = makeCache({ shownAtMs: T, revealAtMs: T + 1000 });
+    cache.answers.u1 = {
+      userId: 'u1', questionKind: 'multipleChoice', selectedIndex: 1, isCorrect: true, timeMs: 1400,
+      pointsEarned: 100, phaseKind: 'normal', phaseRound: 1, shooterSeat: null, answeredAt: new Date(T + 1400).toISOString(),
+    };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    vi.setSystemTime(new Date(T + 5000));
+    const { socket, emitted } = createSocketMock('u1');
+
+    await handlePossessionAnswer(createIoMock(), socket, { matchId: MATCH_ID, qIndex: 3, selectedIndex: 1, timeMs: 1400 });
+
+    const ack = emitted.find((item) => item.event === 'match:answer_ack');
+    expect(ack).toBeDefined();
+    expect(ack!.lockHeld).toBe(true);
+    expect(ack!.payload).toMatchObject({ pointsEarned: 100, selectedIndex: 1 });
+    expect(commitCachedAnswerMock).not.toHaveBeenCalled();
   });
 
   it('omits the opponent fields when the opponent has not answered yet', async () => {

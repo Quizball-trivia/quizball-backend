@@ -71,8 +71,8 @@ vi.mock('../../src/realtime/possession-answer-lock.js', () => ({
     _matchId: string,
     _lockSuffix: string,
     _onBusy: () => void,
-    work: () => Promise<T>
-  ) => work(),
+    work: (lease: { leaseLost: () => boolean }) => Promise<T>
+  ) => work({ leaseLost: () => false }),
 }));
 
 vi.mock('../../src/realtime/match-cache.js', () => ({

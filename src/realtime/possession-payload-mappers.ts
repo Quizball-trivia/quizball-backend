@@ -10,6 +10,7 @@ import {
 } from './match-cache.js';
 import { getCachedMultipleChoiceCorrectIndex } from './question-compat.js';
 import { config } from '../core/config.js';
+import { logger } from '../core/logger.js';
 import type { MatchAnswerAckPayload, MatchQuestionKind } from './socket.types.js';
 
 const NORMAL_HALF_SEQUENCE: QuestionType[] = [
@@ -90,7 +91,97 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
   return payload;
 }
 
-export function buildCachedAnswerAckPayload(cache: MatchCache, userId: string): MatchAnswerAckPayload | null {
+export type OpponentAnswerAckFields = Pick<
+  MatchAnswerAckPayload,
+  'opponentPointsEarned' | 'opponentTotalPoints' | 'opponentIsCorrect' | 'opponentSelectedIndex'
+>;
+
+/**
+ * Outcome of resolving the match's AI player for ack suppression: the AI's
+ * user id (null when the match has no AI), or 'unknown' when the lookup
+ * failed — which fails closed: the opponent fields are omitted (the pre-fix
+ * ack shape) rather than risking a leak or failing the answer.
+ */
+export type AiOpponentLookup = { aiUserId: string | null } | 'unknown';
+
+export async function lookupAiOpponent(
+  matchId: string,
+  resolve: (matchId: string) => Promise<string | null>
+): Promise<AiOpponentLookup> {
+  try {
+    return { aiUserId: await resolve(matchId) };
+  } catch (error) {
+    logger.warn({ error, matchId }, 'AI opponent lookup failed; omitting opponent fields from answer ack');
+    return 'unknown';
+  }
+}
+
+export interface OpponentAnswerSnapshot {
+  opponentUserId: string;
+  /** The bot keeps its countdown answer hidden until the round result (it broadcasts every other kind, penalties included). */
+  hiddenWhenAi: boolean;
+  fields: OpponentAnswerAckFields;
+}
+
+/**
+ * The opponent's committed result for the current round, captured under the
+ * round lock (pure, no I/O). `opponentTotalPoints` mirrors the opponent's own
+ * `myTotalPoints` at commit (what `match:opponent_answered` sends): MCQ
+ * commits bump the cached total in place, the other kinds add the round
+ * points on top at reveal. Undefined until the opponent has answered.
+ */
+export function snapshotOpponentAnswer(cache: MatchCache, userId: string): OpponentAnswerSnapshot | undefined {
+  const opponentUserId = getExpectedUserIds(cache).find((candidate) => candidate !== userId);
+  if (!opponentUserId) return undefined;
+  const answer = cache.answers[opponentUserId];
+  const opponent = getCachedPlayer(cache, opponentUserId);
+  if (!answer || !opponent) return undefined;
+  return {
+    opponentUserId,
+    hiddenWhenAi: answer.questionKind === 'countdown',
+    fields: {
+      opponentPointsEarned: answer.pointsEarned,
+      opponentTotalPoints: answer.questionKind === 'multipleChoice'
+        ? opponent.totalPoints
+        : opponent.totalPoints + answer.pointsEarned,
+      opponentIsCorrect: answer.isCorrect,
+      opponentSelectedIndex: answer.selectedIndex,
+    },
+  };
+}
+
+/**
+ * Turn a snapshot into ack fields once the AI lookup is in (after the commit,
+ * so the lookup is never on the answer-timing path). Never reveals more than
+ * `match:opponent_answered` would have broadcast: the bot hides only its
+ * countdown answer until the round result (possession-ai.ts) — it broadcasts
+ * every other kind, penalties included, exactly like a human — so an AI
+ * opponent's fields are omitted only there.
+ */
+export function opponentAnswerAckFields(
+  snapshot: OpponentAnswerSnapshot | undefined,
+  lookup: AiOpponentLookup
+): OpponentAnswerAckFields | undefined {
+  if (!snapshot || lookup === 'unknown') return undefined;
+  if (snapshot.hiddenWhenAi && lookup.aiUserId !== null && snapshot.opponentUserId === lookup.aiUserId) {
+    return undefined;
+  }
+  return snapshot.fields;
+}
+
+export function buildOpponentAnswerAckFields(
+  cache: MatchCache,
+  userId: string,
+  lookup: AiOpponentLookup
+): OpponentAnswerAckFields | undefined {
+  return opponentAnswerAckFields(snapshotOpponentAnswer(cache, userId), lookup);
+}
+
+export function buildCachedAnswerAckPayload(
+  cache: MatchCache,
+  userId: string,
+  aiOpponent: AiOpponentLookup
+): MatchAnswerAckPayload | null {
   const question = cache.currentQuestion;
   const answer = cache.answers[userId];
   const player = getCachedPlayer(cache, userId);
@@ -114,6 +205,7 @@ export function buildCachedAnswerAckPayload(cache: MatchCache, userId: string): 
       : undefined,
     myTotalPoints,
     oppAnswered: !shouldWaitForOpponent,
+    ...buildOpponentAnswerAckFields(cache, userId, aiOpponent),
     pointsEarned: answer.pointsEarned,
     phaseKind: question.phaseKind,
     phaseRound: question.phaseRound,

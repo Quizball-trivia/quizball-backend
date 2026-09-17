@@ -5,6 +5,7 @@ import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
 import { nextSeat, type Seat } from './possession-state.js';
 import { clamp } from './scoring.js';
+import type { PenaltyOutcomeReason } from './socket.types.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
 export interface StreakAnswer {
@@ -248,14 +249,18 @@ export function applyPenaltyResolution(
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
   shooterSeat: Seat,
   maxSuddenDeathRounds = 0,
-): { goalScoredByUserId: string | null; forcedBySuddenDeathCap: boolean } {
+): {
+  goalScoredByUserId: string | null;
+  forcedBySuddenDeathCap: boolean;
+  penaltyOutcomeReason: PenaltyOutcomeReason | null;
+} {
   const keeperSeat = nextSeat(shooterSeat);
   const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
   const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false };
+    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false, penaltyOutcomeReason: null };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -282,6 +287,15 @@ export function applyPenaltyResolution(
     shooterTimeMs < keeperTimeMs;
   const isGoal =
     (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints || tieBrokenByTime;
+  // Surface WHY to the clients: a correct keeper beaten on speed otherwise
+  // sees an unexplained goal.
+  const penaltyOutcomeReason: PenaltyOutcomeReason = !shooterCorrect
+    ? 'shooter_missed'
+    : !keeperCorrect
+      ? 'keeper_missed'
+      : isGoal
+        ? 'shooter_faster'
+        : 'keeper_faster';
 
   let goalScoredByUserId: string | null = null;
   if (isGoal) {
@@ -303,7 +317,7 @@ export function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId, forcedBySuddenDeathCap: false };
+    return { goalScoredByUserId, forcedBySuddenDeathCap: false, penaltyOutcomeReason };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -330,7 +344,7 @@ export function applyPenaltyResolution(
     state.phase = 'COMPLETED';
   }
   state.currentQuestion = null;
-  return { goalScoredByUserId, forcedBySuddenDeathCap };
+  return { goalScoredByUserId, forcedBySuddenDeathCap, penaltyOutcomeReason };
 }
 
 export function categoryIdsForCurrentHalf(

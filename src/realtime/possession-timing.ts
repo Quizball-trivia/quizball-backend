@@ -116,7 +116,14 @@ export function clampRevealAckMs(revealAtMs: number, _shownAt: string | null): n
   return Math.round(revealAtMs);
 }
 
-function computePredictedElapsedMs(params: {
+/**
+ * Server-authoritative elapsed time: now minus shownAt (the reference every
+ * player is scored against), deadline-derived when shownAt is missing, and the
+ * caller-supplied time when neither is known. Shared by the human answer path
+ * (via resolveAnswerElapsedMs) and the bot commit, so both are charged real
+ * wall-clock time.
+ */
+export function computePredictedElapsedMs(params: {
   shownAt: string | null;
   deadlineAt: string | null;
   nowMs: number;

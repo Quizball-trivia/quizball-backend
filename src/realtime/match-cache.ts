@@ -499,6 +499,54 @@ export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer
   }
 }
 
+/**
+ * Re-base every reveal ack recorded for the CURRENT question around a pause.
+ * Resume moves shownAt/deadlineAt forward by the pause so the scoring clock
+ * excludes it, but resolveAnswerElapsedMs prefers the recorded ack — so the
+ * acks must move too or time_ms includes the pause.
+ *
+ * - Acked BEFORE the pause: the player played from the ack to the pause, so
+ *   shift by the pause duration (keeps that play time, drops the pause).
+ * - Acked DURING the pause (the reveal handler accepts acks while paused):
+ *   no play time has elapsed, so measure from the resume — never later, or
+ *   the next answer would score ~0 ms and maximum points.
+ *
+ * Mutates the in-memory cache AND rewrites the persisted `r:` overlay fields
+ * (which win over the blob on every read); the caller persists the blob
+ * itself. Acks for other questions are left alone.
+ */
+export async function shiftCachedRevealAcks(
+  cache: MatchCache,
+  pause: { pauseStartedAtMs: number; resumedAtMs: number }
+): Promise<void> {
+  const { pauseStartedAtMs, resumedAtMs } = pause;
+  if (!Number.isFinite(pauseStartedAtMs) || !Number.isFinite(resumedAtMs)) return;
+  const pauseMs = Math.max(0, resumedAtMs - pauseStartedAtMs);
+  const fields: Record<string, string> = {};
+  for (const [userId, ack] of Object.entries(cache.revealAcks ?? {})) {
+    if (ack.qIndex !== cache.currentQIndex) continue;
+    const rebased = Math.round(
+      ack.revealAtMs <= pauseStartedAtMs ? ack.revealAtMs + pauseMs : resumedAtMs
+    );
+    if (rebased === ack.revealAtMs) continue;
+    ack.revealAtMs = rebased;
+    fields[`r:${userId}`] = String(rebased);
+  }
+  if (Object.keys(fields).length === 0) return;
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return;
+  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  try {
+    await redis.hSet(key, fields);
+    await redis.expire(key, MATCH_CACHE_TTL_SEC);
+  } catch (error) {
+    logger.error(
+      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, pauseStartedAtMs, resumedAtMs },
+      'Failed to shift reveal ack overlay after resume'
+    );
+  }
+}
+
 export async function commitCachedRevealAck(
   cache: MatchCache,
   userId: string,

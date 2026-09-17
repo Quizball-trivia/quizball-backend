@@ -74,7 +74,7 @@ import {
 import { getRedisClient } from './redis.js';
 import { calculateCountdownScore } from './scoring.js';
 import type { QuizballServer } from './socket-server.js';
-import type { MatchRoundResultDeltas } from './socket.types.js';
+import type { MatchRoundResultDeltas, PenaltyOutcomeReason } from './socket.types.js';
 
 export async function resolvePossessionRound(
   io: QuizballServer,
@@ -410,6 +410,7 @@ export async function resolvePossessionRound(
     const answerByUserId = toCachedAnswerByUserId(cache);
     let possessionDelta = 0;
     let goalScoredBySeat: Seat | null = null;
+    let penaltyOutcomeReason: PenaltyOutcomeReason | null = null;
     let speedStreakBoostedSeat: Seat | null = null;
     // Snapshot before resolution so we can tell if this round crossed a
     // half/phase boundary (which clears the 2× streak) — the preset-second-half
@@ -554,6 +555,7 @@ export async function resolvePossessionRound(
         asSeat(question.shooterSeat) ?? state.penalty.shooterSeat,
         config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
       );
+      penaltyOutcomeReason = penaltyOutcome.penaltyOutcomeReason;
       if (penaltyOutcome.goalScoredByUserId) {
         const scorer = cache.players.find((player) => player.userId === penaltyOutcome.goalScoredByUserId);
         goalScoredBySeat = scorer?.seat === 1 || scorer?.seat === 2 ? scorer.seat : null;
@@ -657,6 +659,7 @@ export async function resolvePossessionRound(
       } else {
         deltas.penaltyOutcome = 'saved';
       }
+      if (penaltyOutcomeReason) deltas.penaltyOutcomeReason = penaltyOutcomeReason;
     }
 
     logger.debug(
@@ -670,6 +673,7 @@ export async function resolvePossessionRound(
         goalScoredBySeat: deltas.goalScoredBySeat,
         possessionDelta: deltas.possessionDelta,
         penaltyOutcome: deltas.penaltyOutcome,
+        penaltyOutcomeReason: deltas.penaltyOutcomeReason ?? null,
         speedStreakHolderSeat: state.speedStreakHolderSeat,
         speedStreakBoostedSeat: deltas.speedStreakBoostedSeat,
         players: Object.entries(playersPayload).map(([userId, player]) => ({

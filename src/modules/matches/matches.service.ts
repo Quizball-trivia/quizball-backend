@@ -986,13 +986,26 @@ export const matchesService = {
    * Owns the win/loss/draw policy and the is_dev skip rule — those
    * were business rules previously living in matches.repo.completeMatch,
    * which violated the "repos = data writes only" boundary.
+   *
+   * `options.placements` (a possession draw: 1 for both) are written in the
+   * SAME transaction as the status flip, so a placement failure rolls the
+   * completion back and the caller's retry re-runs the whole path.
    */
-  async completeMatch(matchId: string, winnerId: string | null, occurredAt?: Date): Promise<void> {
+  async completeMatch(
+    matchId: string,
+    winnerId: string | null,
+    occurredAt?: Date,
+    options: { placements?: Array<{ userId: string; placement: number }> } = {},
+  ): Promise<void> {
     await sql.begin(async (tx) => {
       const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId, occurredAt);
       if (!completed) {
         // Already completed/abandoned — nothing to do.
         return;
+      }
+
+      if (options.placements && options.placements.length > 0) {
+        await matchPlayersRepo.setPlacementsInTx(tx, matchId, options.placements);
       }
 
       // Dev matches don't contribute to aggregate stats.

@@ -11,6 +11,7 @@ const buildAiMatchContextMock = vi.fn();
 const markMatchCompletedMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const recordUserModeStatsMock = vi.fn();
+const setPlacementsInTxMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
 const insertMatchQuestionsMock = vi.fn();
 
@@ -78,6 +79,7 @@ vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
 
 vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   matchPlayersRepo: {
+    setPlacementsInTx: (...args: unknown[]) => setPlacementsInTxMock(...args),
     insertMatchPlayers: (...args: unknown[]) => insertMatchPlayersMock(...args),
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     updatePlayerGoalTotalsInTx: (...args: unknown[]) =>
@@ -427,6 +429,41 @@ describe('matches.service completeMatch', () => {
       { userId: userA, mode: 'friendly', wins: 0, losses: 0, draws: 1, lastMatchAt: '2026-01-01T00:00:00.000Z' },
       { userId: userB, mode: 'friendly', wins: 0, losses: 0, draws: 1, lastMatchAt: '2026-01-01T00:00:00.000Z' },
     ]);
+  });
+
+  it('writes draw placements INSIDE the completion transaction (never after commit)', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    setPlacementsInTxMock.mockResolvedValue(undefined);
+
+    await matchesService.completeMatch(matchId, null, undefined, {
+      placements: [{ userId: userA, placement: 1 }, { userId: userB, placement: 1 }],
+    });
+
+    expect(setPlacementsInTxMock).toHaveBeenCalledWith('tx', matchId, [
+      { userId: userA, placement: 1 },
+      { userId: userB, placement: 1 },
+    ]);
+    // Same transaction handle as the completion + stats writes.
+    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, null, undefined);
+    expect(recordUserModeStatsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failing placement write rolls the completion back with it (match stays active for a retry)', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    setPlacementsInTxMock.mockRejectedValue(new Error('placement write failed'));
+
+    await expect(matchesService.completeMatch(matchId, null, undefined, {
+      placements: [{ userId: userA, placement: 1 }, { userId: userB, placement: 1 }],
+    })).rejects.toThrow('placement write failed');
+
+    expect(markMatchCompletedMock).toHaveBeenCalledTimes(1);
+    expect(recordUserModeStatsMock).not.toHaveBeenCalled();
+  });
+
+  it('does not touch placements when none are given (decided possession results carry none)', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await matchesService.completeMatch(matchId, userA);
+    expect(setPlacementsInTxMock).not.toHaveBeenCalled();
   });
 
   it('skips the stats upsert entirely on dev matches', async () => {

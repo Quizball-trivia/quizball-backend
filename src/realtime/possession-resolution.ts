@@ -3,7 +3,9 @@ import { harnessDelayMs } from '../core/harness-timing.js';
 import type { CachedPlayer, MatchCache } from './match-cache.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
-import { nextSeat, type Seat } from './possession-state.js';
+import { isShootoutDraw, nextSeat, type Seat } from './possession-state.js';
+
+export { isShootoutDraw };
 import { clamp } from './scoring.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
@@ -246,15 +248,16 @@ export function applyPenaltyResolution(
   state: PossessionStatePayload,
   players: CachedPlayer[],
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
-  shooterSeat: Seat
-): { goalScoredByUserId: string | null } {
+  shooterSeat: Seat,
+  maxSuddenDeathRounds = 0,
+): { goalScoredByUserId: string | null; shootoutDrawn: boolean } {
   const keeperSeat = nextSeat(shooterSeat);
   const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
   const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId: null };
+    return { goalScoredByUserId: null, shootoutDrawn: false };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -266,21 +269,18 @@ export function applyPenaltyResolution(
 
   // A correct shot against a wrong keeper is always a goal, even when the
   // shooter's answer was slow enough to floor to 0 points. Otherwise points
-  // decide the duel — but points are stepped in 10-point buckets with a full-
-  // points grace window, so two fast correct answers tie CONSTANTLY. With a
-  // tie as a plain save, equally-good players could never score and prod
-  // shootouts ran to 18-40 kicks at 0-0. Break point-ties on raw answer time
-  // (faster correct answer wins); an exact-ms tie still favours the keeper.
-  // Both-wrong stays a miss: the shooter must at least be correct to score.
-  const shooterTimeMs = shooterAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
-  const keeperTimeMs = keeperAnswer?.time_ms ?? Number.POSITIVE_INFINITY;
-  const tieBrokenByTime =
-    shooterCorrect &&
-    keeperCorrect &&
-    shooterPoints === keeperPoints &&
-    shooterTimeMs < keeperTimeMs;
-  const isGoal =
-    (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints || tieBrokenByTime;
+  // decide the duel, and EQUAL points is a save (product decision 2026-09-17:
+  // the score bar then explains every outcome on its own). Both-wrong stays a
+  // miss: the shooter must at least be correct to score.
+  //
+  // History: points are stepped in 10-point buckets with a full-points grace
+  // window, so two fast correct answers tie constantly; #575 broke those ties
+  // on raw answer time because equally-good players otherwise ran 18-40 kick
+  // 0-0 shootouts. That tie-break is gone — a shootout still level after the
+  // regulation kicks (+ maxSuddenDeathRounds extra pairs) is a DRAW, so no
+  // marathon is possible.
+  const isGoal = (shooterCorrect && !keeperCorrect) || shooterPoints > keeperPoints;
+
   let goalScoredByUserId: string | null = null;
   if (isGoal) {
     if (shooterSeat === 1) state.penaltyGoals.seat1 += 1;
@@ -301,7 +301,7 @@ export function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId };
+    return { goalScoredByUserId, shootoutDrawn: false };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -314,8 +314,19 @@ export function applyPenaltyResolution(
   ) {
     state.penalty.suddenDeath = true;
   }
+  // DRAW: level after a completed pair once both have taken the regulation 5
+  // kicks plus `maxSuddenDeathRounds` sudden-death pairs (0 = straight after
+  // 5 each). Completion (possession-completion.ts) turns this into a
+  // no-winner result via isShootoutDraw — there is no fallback winner.
+  const shootoutDrawn =
+    state.penalty.kicksTaken.seat1 === state.penalty.kicksTaken.seat2
+    && state.penalty.kicksTaken.seat1 >= 5 + Math.max(0, maxSuddenDeathRounds)
+    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2;
+  if (shootoutDrawn) {
+    state.phase = 'COMPLETED';
+  }
   state.currentQuestion = null;
-  return { goalScoredByUserId };
+  return { goalScoredByUserId, shootoutDrawn };
 }
 
 export function categoryIdsForCurrentHalf(

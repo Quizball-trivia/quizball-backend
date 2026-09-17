@@ -75,6 +75,17 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Maximum durable realtime timers handled concurrently by each replica.
+  // Keep the default conservative for small/local pools; large synchronized
+  // gameplay starts can raise this explicitly after sizing the DB bulkhead.
+  REALTIME_TIMER_HANDLER_CONCURRENCY: z.coerce.number().int().min(1).max(30).default(4),
+  // Sudden-death rounds played BEFORE a level penalty shootout is declared a
+  // DRAW. 0 (default) = no sudden death: level after the regulation 5 kicks
+  // each is a draw straight away. N = up to N extra pairs of kicks, then a
+  // draw if still level. There is no "unlimited" setting and no fallback
+  // winner: a level shootout is always a draw (matches.winner_user_id NULL,
+  // winnerDecisionMethod 'draw', +10 RP / 475 coins each in ranked).
+  POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: z.coerce.number().int().min(0).max(20).default(0),
   /** Auth requests per 15 min per IP. Carrier NAT puts a whole city on one IP. */
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).max(10_000).default(400),
   RANKED_HUMAN_QUEUE_ENABLED: z

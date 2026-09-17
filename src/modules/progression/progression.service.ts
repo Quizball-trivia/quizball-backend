@@ -11,7 +11,8 @@ type WinnerDecisionMethod =
   | 'penalty_goals'
   | 'total_points'
   | 'total_points_fallback'
-  | 'forfeit';
+  | 'forfeit'
+  | 'draw';
 
 function getWinnerDecisionMethod(
   statePayload: Record<string, unknown> | null
@@ -22,6 +23,7 @@ function getWinnerDecisionMethod(
     || raw === 'total_points'
     || raw === 'total_points_fallback'
     || raw === 'forfeit'
+    || raw === 'draw'
     ? raw
     : null;
 }

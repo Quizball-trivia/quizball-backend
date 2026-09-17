@@ -31,7 +31,9 @@
  */
 
 import type { BotModelParams } from '../modules/bots/calibration/params-schema.js';
-import { evalFCurve, logit, resolveBackoff, sigmoid, type ScopeStat } from '../modules/bots/calibration/math.js';
+import { evalFCurve, logit, resolveBackoff, sigmoid, type BackoffScope, type ScopeStat } from '../modules/bots/calibration/math.js';
+import { humanTimingPrior, humanWrongToCorrectMedianRatio } from '../modules/bots/calibration/human-timing-priors.js';
+import { humanAccuracyPrior } from '../modules/bots/calibration/human-accuracy-priors.js';
 import {
   HARD_MIN_ANSWER_TIME_MS,
   HARD_PROB_CAP,
@@ -89,8 +91,27 @@ export interface PersistentBotSkillInputs {
  */
 export interface ResolvedQuestionStats {
   smoothedAccuracy: number | null;
+  /**
+   * Which backoff scope `smoothedAccuracy` came from. When it is an explicit
+   * fallback scope (category_type / type / global) the label-based human
+   * accuracy prior replaces it before the difficulty link; 'question' (or
+   * undefined — a caller-supplied per-question accuracy) is used as is.
+   */
+  accuracyScope?: BackoffScope;
   medianTimeMs: number | null;
   logTimeSigma: number | null;
+  /**
+   * Which backoff scope the timing summary came from. Only a 'question'-scope
+   * summary (>= BACKOFF_MIN_SAMPLE timing samples on THIS question) is used
+   * for think-time; anything coarser is replaced by the human timing priors.
+   */
+  timingScope?: BackoffScope;
+}
+
+/** Question context that selects the human timing AND accuracy prior cells. */
+export interface AnswerTimingContext {
+  phaseKind?: string | null;
+  difficulty?: string | null;
 }
 
 export interface McqDecision {
@@ -201,6 +222,24 @@ export function effectiveMinAnswerTimeMs(params: BotModelParams): number {
 }
 
 /**
+ * The human accuracy fed to the difficulty link. Per-question stats win; when
+ * the accuracy backoff explicitly fell through to a coarser scope the question
+ * inherits the label prior (human-accuracy-priors.ts) instead of a category /
+ * pool average that makes every question look equally hard. Runs through the
+ * SAME link as real stats, so an easy label lands below the pool mean on the
+ * beta scale and a hard label above it.
+ */
+export function effectiveQuestionAccuracy(
+  stats: Pick<ResolvedQuestionStats, 'smoothedAccuracy' | 'accuracyScope'>,
+  difficulty: string | null | undefined,
+): number | null {
+  if (stats.accuracyScope != null && stats.accuracyScope !== 'question') {
+    return humanAccuracyPrior(difficulty);
+  }
+  return stats.smoothedAccuracy;
+}
+
+/**
  * Question difficulty on the logit scale (beta_q) from smoothed human accuracy,
  * via the frozen difficulty link: beta ≈ intercept + slope * logit(accuracy).
  * A null accuracy (brand-new question with no stats even after backoff) falls
@@ -284,11 +323,12 @@ export function decideMcq(
   stats: ResolvedQuestionStats,
   categorySlug: string | null,
   keys: { botId: string; matchId: string; questionId: string },
+  timing: AnswerTimingContext = {},
 ): McqDecision {
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:${params.source.batchId}`);
 
   const base = baseSkillTheta(params, inputs);
-  const betaQ = questionBetaFromStats(params, stats.smoothedAccuracy);
+  const betaQ = questionBetaFromStats(params, effectiveQuestionAccuracy(stats, timing.difficulty));
   const affinity = categorySlug != null ? (inputs.categoryAffinities[categorySlug] ?? 0) : 0;
   const tilt = boundedCategoryTilt(affinity, betaQ);
 
@@ -306,33 +346,71 @@ export function decideMcq(
   const pCorrect = clamp(rawP, 0, effectiveProbCap(params));
 
   const isCorrect = next() < pCorrect;
-  const answerTimeMs = sampleAnswerTimeMs(params, stats, isCorrect, next);
+  const answerTimeMs = sampleAnswerTimeMs(params, stats, isCorrect, next, timing);
   return { isCorrect, pCorrect, answerTimeMs };
 }
 
+/** Accuracy clamp for de-pooling: never let a 0/1 accuracy zero out a term. */
+const DEPOOL_ACCURACY_MIN = 0.05;
+const DEPOOL_ACCURACY_MAX = 0.95;
+
 /**
- * Sample an answer time (ms) from the question's log-normal timing summary,
- * floored by both clamps.minAnswerTimeMs and the top-cohort speed floor
- * (ceiling.speedFloor / topMedianTimeMs) so a bot is NEVER faster than the
- * measured fastest real cohort. A correct answer trends a touch faster than an
- * incorrect one (humans dwell longer before a miss).
+ * Recover the CORRECT-answer median from a question's pooled timing median.
+ *
+ * question_stats.median_time_ms pools correct and wrong human answers
+ * (calibration/aggregate.ts pushes every clean timing regardless of
+ * correctness). Wrong answers take r x longer (human-timing-priors.ts), so in
+ * log space the pooled median satisfies
+ *   log(pooled) ~= acc * log(mc) + (1 - acc) * log(mc * r)
+ * hence mc = pooled / r^(1 - acc). The wrong-answer median is then mc * r.
+ * `acc` is the question's own human accuracy (clamped to [0.05, 0.95]; a null
+ * accuracy — no Bernoulli stats — assumes a coin flip).
+ */
+export function depooledCorrectMedianMs(pooledMedianMs: number, accuracy: number | null, wrongToCorrectRatio: number): number {
+  const acc = clamp(accuracy ?? 0.5, DEPOOL_ACCURACY_MIN, DEPOOL_ACCURACY_MAX);
+  return pooledMedianMs / Math.pow(wrongToCorrectRatio, 1 - acc);
+}
+
+/**
+ * Sample an answer time (ms) from a log-normal, human-shaped for the question.
+ *
+ * Median: when THIS question has a timing median (>= BACKOFF_MIN_SAMPLE timing
+ * samples, i.e. timingScope 'question') it is de-pooled with the question's
+ * accuracy (see depooledCorrectMedianMs) into a correct-answer median, times
+ * the human wrong/correct ratio for the cell when the answer is wrong;
+ * otherwise the human prior median for (phase, difficulty, correctness).
+ * Backed-off category/type/global medians are deliberately NOT used — they
+ * dragged hard questions to the ~1.2s pool median.
+ * Sigma: the per-question log-sigma when present, else the prior's.
+ * Floor: the hard code minimum, the measured top-cohort speed floor AND the
+ * human p10 for the cell, so a bot is never faster than the real cohort on
+ * that kind of question.
  */
 export function sampleAnswerTimeMs(
   params: BotModelParams,
   stats: ResolvedQuestionStats,
   isCorrect: boolean,
   next: () => number,
+  timing: AnswerTimingContext = {},
 ): number {
-  const median = stats.medianTimeMs ?? params.ceiling.topMedianTimeMs ?? 3000;
-  const sigma = stats.logTimeSigma ?? params.ceiling.topLogTimeSigma ?? 0.6;
+  const prior = humanTimingPrior(timing.phaseKind, timing.difficulty, isCorrect);
+  const perQuestionMedian = stats.timingScope === 'question' && stats.medianTimeMs != null
+    ? stats.medianTimeMs
+    : null;
+  let median = prior.medianMs;
+  if (perQuestionMedian != null) {
+    const ratio = humanWrongToCorrectMedianRatio(timing.phaseKind, timing.difficulty);
+    const correctMedian = depooledCorrectMedianMs(perQuestionMedian, stats.smoothedAccuracy, ratio);
+    median = isCorrect ? correctMedian : correctMedian * ratio;
+  }
+  const sigma = perQuestionMedian != null && stats.logTimeSigma != null ? stats.logTimeSigma : prior.logSigma;
   const mu = Math.log(Math.max(median, 1));
-  // Misses dwell ~15% longer on average.
-  const dwell = isCorrect ? 0 : 0.15;
-  const sampled = Math.exp(mu + dwell + standardNormal(next) * sigma);
+  const sampled = Math.exp(mu + standardNormal(next) * sigma);
 
-  // Floor by the hard code minimum AND the measured top-cohort speed floor.
+  // Floor by the hard code minimum, the measured top-cohort speed floor AND
+  // the human p10 for this phase/difficulty/correctness.
   const speedFloorMs = topCohortSpeedFloorMs(params);
-  return Math.round(Math.max(sampled, effectiveMinAnswerTimeMs(params), speedFloorMs));
+  return Math.round(Math.max(sampled, effectiveMinAnswerTimeMs(params), speedFloorMs, prior.p10Ms));
 }
 
 /**
@@ -854,7 +932,9 @@ export function resolveQuestionStats(
   const resolved = resolveBackoff(perQuestion, categoryType, type, global, BACKOFF_MIN_SAMPLE);
   return {
     smoothedAccuracy: resolved.smoothedAccuracy,
+    accuracyScope: resolved.accuracyScope,
     medianTimeMs: resolved.medianTimeMs,
     logTimeSigma: resolved.logTimeSigma,
+    timingScope: resolved.timingScope,
   };
 }

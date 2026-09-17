@@ -335,7 +335,8 @@ export type MatchWinnerDecisionMethod =
   | 'penalty_goals'
   | 'total_points'
   | 'total_points_fallback'
-  | 'forfeit';
+  | 'forfeit'
+  | 'draw';
 
 /**
  * Image MCQ pre-picked for a half's image slot. `imageUrl` is the raw stored
@@ -985,13 +986,26 @@ export const matchesService = {
    * Owns the win/loss/draw policy and the is_dev skip rule — those
    * were business rules previously living in matches.repo.completeMatch,
    * which violated the "repos = data writes only" boundary.
+   *
+   * `options.placements` (a possession draw: 1 for both) are written in the
+   * SAME transaction as the status flip, so a placement failure rolls the
+   * completion back and the caller's retry re-runs the whole path.
    */
-  async completeMatch(matchId: string, winnerId: string | null, occurredAt?: Date): Promise<void> {
+  async completeMatch(
+    matchId: string,
+    winnerId: string | null,
+    occurredAt?: Date,
+    options: { placements?: Array<{ userId: string; placement: number }> } = {},
+  ): Promise<void> {
     await sql.begin(async (tx) => {
       const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId, occurredAt);
       if (!completed) {
         // Already completed/abandoned — nothing to do.
         return;
+      }
+
+      if (options.placements && options.placements.length > 0) {
+        await matchPlayersRepo.setPlacementsInTx(tx, matchId, options.placements);
       }
 
       // Dev matches don't contribute to aggregate stats.
@@ -1003,11 +1017,13 @@ export const matchesService = {
       if (players.length === 0) return;
 
       // A no-winner match is only a genuine DRAW when both players were present
-      // and the result was tied. When fewer than 2 players are recorded (the
-      // opponent never joined / the match was abandoned), winnerId is null but
-      // it is NOT a draw — the ranked RP system already scores these as losses,
-      // so classify them as a loss to keep the W/L/D record consistent with RP
-      // instead of inflating the player's draw count.
+      // and the result was tied (a level penalty shootout: winnerDecisionMethod
+      // 'draw', which ranked RP scores as +10 for both — NOT as losses). When
+      // fewer than 2 players are recorded (the opponent never joined / the
+      // match was abandoned), winnerId is null but it is NOT a draw — the
+      // ranked RP system scores those as losses, so classify them as a loss to
+      // keep the W/L/D record consistent with RP instead of inflating the
+      // player's draw count.
       const isRealDraw = winnerId === null && players.length >= 2;
 
       const statRows = players.map((player) => {

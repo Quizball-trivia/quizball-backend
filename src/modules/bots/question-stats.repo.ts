@@ -45,7 +45,10 @@ function toScope(row: StatRow | undefined | null): ScopeStat | null {
     // Clean-window timing sample count, resolved INDEPENDENTLY of accuracy in the
     // backoff. NULL only for rows written before the timing_samples column
     // existed (migration 20260728120000); those fall back to answers_count until
-    // the next refresh repopulates the real count.
+    // the next refresh repopulates the real count. answers_count is a superset
+    // of the clean-window timing count, so a legacy row can only over-qualify
+    // for the 'question' timing scope — and it still has to clear the same
+    // BACKOFF_MIN_SAMPLE (30) bar in resolveBackoff as a fresh row.
     timingSamples: row.timing_samples ?? row.answers_count,
     medianTimeMs: row.median_time_ms,
     logTimeSigma: row.log_time_sigma,

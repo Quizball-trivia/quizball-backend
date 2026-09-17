@@ -5,7 +5,9 @@ import {
   getMatchCacheOrRebuild,
   type MatchCache,
 } from './match-cache.js';
+import { matchPauseKey } from './match-keys.js';
 import { clampRevealAckMs } from './possession-timing.js';
+import { getRedisClient } from './redis.js';
 import {
   cacheLogFields,
   questionLogFields,
@@ -64,6 +66,20 @@ export async function handlePossessionQuestionRevealed(
     return;
   }
 
+  // While the match is paused (the disconnect service's pause marker — the
+  // same signal the resume path keys off) no ack may be recorded: one that
+  // landed between the resume's overlay clean-up and the re-dispatch would
+  // survive with pre-resume timing. The client re-acks the resumed question.
+  const redis = getRedisClient();
+  const pauseStartedAt = redis && redis.isOpen ? await redis.get(matchPauseKey(matchId)) : null;
+  if (pauseStartedAt) {
+    logger.debug(
+      { eventName: 'match:question_revealed', matchId, qIndex, userId, pauseStartedAt },
+      'Possession question reveal ack ignored: match paused'
+    );
+    return;
+  }
+
   cache.revealAcks ??= {};
   if (cache.revealAcks[userId]?.qIndex === qIndex) {
     logger.debug(
@@ -77,8 +93,20 @@ export async function handlePossessionQuestionRevealed(
   const revealAtMs = clampRevealAckMs(receivedAtMs, cache.currentQuestion.shownAt);
   cache.revealAcks[userId] = { qIndex, revealAtMs };
 
-  const stored = await commitCachedRevealAck(cache, userId, revealAtMs);
-  if (!stored) {
+  const committed = await commitCachedRevealAck(cache, userId, revealAtMs);
+  if (committed === 'fenced') {
+    // A resume is shifting/dropping this question's acks (the fence lives in
+    // the overlay and the check+write is atomic, unlike the pause pre-check
+    // above). Recording this ack would give it pre-resume timing; the client
+    // re-acks the resumed question.
+    delete cache.revealAcks[userId];
+    logger.debug(
+      { eventName: 'match:question_revealed', matchId, qIndex, userId },
+      'Possession question reveal ack ignored: fenced by an in-progress resume'
+    );
+    return;
+  }
+  if (committed === 'duplicate') {
     delete cache.revealAcks[userId];
     logger.debug(
       { eventName: 'match:question_revealed', matchId, qIndex, userId },

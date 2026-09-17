@@ -9,6 +9,8 @@ import { usersRepo } from '../modules/users/users.repo.js';
 import { isPersistentBot } from '../modules/users/ai-classification.js';
 import { parseBotModelParams, type BotModelParams } from '../modules/bots/calibration/params-schema.js';
 import { HARD_THETA_CEILING_FALLBACK } from '../modules/bots/calibration/hard-clamps.js';
+import { humanTimingPrior } from '../modules/bots/calibration/human-timing-priors.js';
+import { humanAccuracyRatioToMedium } from '../modules/bots/calibration/human-accuracy-priors.js';
 import { questionStatsRepo, type QuestionModelInputs } from '../modules/bots/question-stats.repo.js';
 import type { PersistentBotModelPin } from '../modules/lobbies/lobbies.types.js';
 import {
@@ -21,7 +23,7 @@ import {
   type ClueSolveStats,
   type PersistentBotSkillInputs,
 } from './persistent-bot-gameplay.js';
-import { acquireLock, releaseLock } from './locks.js';
+import { withAnswerLock } from './possession-answer-lock.js';
 import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
 import {
   answerCount,
@@ -168,26 +170,9 @@ function normalizedDifficulty(difficulty?: string): QuestionDifficulty {
   return 'medium';
 }
 
+/** Measured human accuracy for the label relative to medium (easy ~1.31, hard ~0.78). */
 function difficultyCorrectnessMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 1.35;
-    case 'hard':
-      return 0.65;
-    case 'medium':
-      return 1;
-  }
-}
-
-function difficultyDelayMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 0.6;
-    case 'hard':
-      return 1.4;
-    case 'medium':
-      return 1;
-  }
+  return humanAccuracyRatioToMedium(normalizedDifficulty(difficulty));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -278,6 +263,7 @@ export function difficultyAdjustedCorrectness(base: number, difficulty?: string)
 
 export function getAiAnswerDelayMs(options: {
   questionKind?: MatchQuestionKind;
+  phaseKind?: MatchPhaseKind;
   difficulty?: string;
   delayProfile?: AiDelayProfile | null;
   isCorrect?: boolean;
@@ -291,19 +277,19 @@ export function getAiAnswerDelayMs(options: {
   const profile = normalizeAiDelayProfile(options.delayProfile);
   const rangeMs = Math.max(0, profile.maxMs - profile.minMs);
   const baseMs = profile.minMs + Math.floor(getRandom() * (rangeMs + 1));
-  const hesitationMultiplier = options.isCorrect === false
-    ? 1.3 + getRandom() * 0.3
-    : 1;
+  // Human-shaped: the profile is calibrated against a normal/medium/correct
+  // answer; scale it by the measured human median for THIS phase/difficulty/
+  // correctness (which already carries the 1.5-2.1x wrong-answer dwell) and
+  // never go under the human p10 for the cell. See human-timing-priors.ts.
+  const isCorrect = options.isCorrect !== false;
+  const prior = humanTimingPrior(options.phaseKind, normalizedDifficulty(options.difficulty), isCorrect);
+  const reference = humanTimingPrior('normal', 'medium', true);
   const jitterMultiplier = 0.85 + getRandom() * 0.3;
-  const rawDelayMs =
-    baseMs *
-    difficultyDelayMultiplier(options.difficulty) *
-    hesitationMultiplier *
-    jitterMultiplier;
+  const rawDelayMs = baseMs * (prior.medianMs / reference.medianMs) * jitterMultiplier;
   const maxDelayMs = typeof options.questionTimeMs === 'number' && Number.isFinite(options.questionTimeMs)
     ? Math.max(AI_DELAY_MIN_MS, options.questionTimeMs - AI_DELAY_QUESTION_BUFFER_MS)
     : AI_DELAY_FALLBACK_MAX_MS;
-  return harnessDelayMs(Math.round(clamp(rawDelayMs, AI_DELAY_MIN_MS, maxDelayMs)));
+  return harnessDelayMs(Math.round(clamp(Math.max(rawDelayMs, prior.p10Ms), AI_DELAY_MIN_MS, maxDelayMs)));
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -406,7 +392,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     matchId: string,
     questionId: string,
     questionKind: MatchQuestionKind,
-    clueCount?: number,
+    clueCount: number | undefined,
+    timing: { phaseKind: MatchPhaseKind; difficulty?: string },
   ): Promise<{
     isCorrect: boolean;
     clueIndex: number | null;
@@ -430,7 +417,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     // The mcq decision yields both the Bernoulli correctness (mcq only) AND the
     // calibrated, speed-floor-clamped answer time, which all formats reuse for
     // their think-time (the timing model is shared).
-    const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys);
+    const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys, timing);
 
     // Schedule time only needs correctness (for the delay hesitation), the clue
     // reveal index (drives the clue answer time), and the think-time. The
@@ -657,6 +644,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           cache.currentQuestion.questionId,
           options.questionKind,
           clueCountForDelay,
+          { phaseKind: options.phaseKind, difficulty: questionDifficulty },
         )
       : null;
 
@@ -706,6 +694,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       ? clamp(persistentDecision.answerTimeMs, 0, questionTimeMsForDelay)
       : getAiAnswerDelayMs({
           questionKind: options.questionKind,
+          phaseKind: options.phaseKind,
           difficulty: questionDifficulty,
           delayProfile: aiSettings.aiDelayProfile,
           isCorrect: plannedIsCorrect,
@@ -790,6 +779,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     plannedPutInOrderCount?: number | null,
     plannedClueSolved?: boolean | null,
   ): Promise<void> {
+    // Replica-local reference for the bot's answer clock (see the commit below).
+    const firedAtMs = Date.now();
     try {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
       if (!aiUserId) return;
@@ -806,17 +797,14 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         'Possession AI answer timer fired'
       );
 
-      const lockKey = `lock:match:${matchId}:answer`;
-      const lock = await acquireLock(lockKey, 2000);
-      if (!lock.acquired || !lock.token) {
+      const onRoundLockBusy = () => {
         logger.warn(
           { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId },
-          'Possession AI answer skipped: answer lock busy'
+          'Possession AI answer skipped: round lock busy'
         );
-        return;
-      }
+      };
 
-      let committed: {
+      type AiCommitted = {
         questionKind: MatchQuestionKind;
         selectedIndex: number | null;
         isCorrect: boolean;
@@ -832,195 +820,245 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         foundAnswerIds?: string[];
         submittedOrderIds?: string[];
         clueIndex?: number | null;
-      } | null = null;
+      };
 
-      try {
-        const fresh = await getMatchCacheOrRebuild(matchId);
-        if (!fresh || fresh.status !== 'active') {
-          logger.warn(
-            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
-            'Possession AI answer skipped: inactive or missing cache'
-          );
-          return;
-        }
-        if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) {
-          logger.warn(
-            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh), ...questionLogFields(fresh.currentQuestion) },
-            'Possession AI answer skipped: stale or missing current question'
-          );
-          return;
-        }
-        if (hasUserAnswered(fresh, aiUserId)) {
-          logger.info(
-            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...questionLogFields(fresh.currentQuestion) },
-            'Possession AI answer skipped: AI already answered'
-          );
-          return;
-        }
+      // Phase A (unlocked): read the cache and compute the AI's decision. The
+      // model/settings resolution below can hit the DB (persistent-bot stats,
+      // ranked context) — holding the shared round lock across it would starve
+      // human answer commits into MATCH_BUSY drops.
+      const fresh = await getMatchCacheOrRebuild(matchId);
+      if (!fresh || fresh.status !== 'active') {
+        logger.warn(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
+          'Possession AI answer skipped: inactive or missing cache'
+        );
+        return;
+      }
+      if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) {
+        logger.warn(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh), ...questionLogFields(fresh.currentQuestion) },
+          'Possession AI answer skipped: stale or missing current question'
+        );
+        return;
+      }
+      if (hasUserAnswered(fresh, aiUserId)) {
+        logger.info(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...questionLogFields(fresh.currentQuestion) },
+          'Possession AI answer skipped: AI already answered'
+        );
+        return;
+      }
 
-        const expected = getExpectedUserIds(fresh);
-        if (!expected.includes(aiUserId)) {
-          logger.warn(
-            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, expectedUserIds: expected, ...questionLogFields(fresh.currentQuestion) },
-            'Possession AI answer skipped: AI user is not expected for this question'
-          );
-          return;
+      const expected = getExpectedUserIds(fresh);
+      if (!expected.includes(aiUserId)) {
+        logger.warn(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, expectedUserIds: expected, ...questionLogFields(fresh.currentQuestion) },
+          'Possession AI answer skipped: AI user is not expected for this question'
+        );
+        return;
+      }
+
+      const question = fresh.currentQuestion;
+      const aiPlayer = getCachedPlayer(fresh, aiUserId);
+      if (!aiPlayer) {
+        logger.warn(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
+          'Possession AI answer skipped: AI user is not a match player'
+        );
+        return;
+      }
+
+      const baseAiCorrectness = await resolveAiCorrectnessForMatch(matchId);
+      const aiCorrectness = difficultyAdjustedCorrectness(baseAiCorrectness, question.questionDTO.difficulty);
+      // Persistent bot: the per-format counts (countdown found / put-in-order
+      // partial credit) come from the calibrated distributions, re-derived
+      // deterministically here with the REAL group/item count. mcq/clue
+      // correctness was already decided by the model at schedule time and is
+      // threaded via plannedIsCorrect / plannedClueIndex.
+      const persistentModel = await resolvePersistentModelForMatch(matchId);
+      const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
+        ? question.evaluation.clues.length
+        : undefined;
+      const questionTimeMs = getQuestionDurationMs(question.kind, clueCountForDuration);
+      // Persistent bots: floor the COMMITTED time at the top-cohort speed floor
+      // (countdown exempt — its pace is the drip-feed). Scheduling may have
+      // pulled plannedAnswerTimeMs down to the window/deadline; the floor is
+      // re-asserted end-to-end so a persistent bot is never faster than the
+      // measured fastest real cohort (Sol HIGH #3). The floor is capped by the
+      // question window so it can never exceed the deadline.
+      const persistentSpeedFloorMs = persistentModel && question.kind !== 'countdown'
+        ? Math.min(topCohortSpeedFloorMs(persistentModel.params), questionTimeMs)
+        : 0;
+      // Provisional: the planned think time. The COMMITTED time (inside the
+      // lock, below) adds the replica-local delay between the timer firing and
+      // the commit, so a bounded lock wait or scheduler jitter is charged to
+      // the bot as network latency is charged to a human. Deliberately NOT
+      // measured against the cache's shownAt/deadlineAt: those stamps come
+      // from the dispatching replica and prod clocks skew by ~5s
+      // (possession-timing.ts) — humans dodge that via the replica-local reveal
+      // ack, and the bot has no ack, so its own clock is the only skew-free one.
+      const finalizeAnswerTimeMs = (localDelayMs: number) =>
+        clamp(plannedAnswerTimeMs + localDelayMs, persistentSpeedFloorMs, questionTimeMs);
+      let answerTimeMs = finalizeAnswerTimeMs(0);
+      let localDelayMs = 0;
+      let isCorrect = false;
+      let selectedIndex: number | null = null;
+      let pointsEarned = 0;
+      let foundCount: number | undefined;
+      let foundAnswerIds: string[] | undefined;
+      let submittedOrderIds: string[] | undefined;
+      let clueIndex: number | null | undefined;
+
+      if (question.kind === 'multipleChoice' && question.evaluation.kind === 'multipleChoice') {
+        const optionCount = question.questionDTO.kind === 'multipleChoice'
+          ? question.questionDTO.options.length
+          : 4;
+        isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
+        selectedIndex = isCorrect
+          ? question.evaluation.correctIndex
+          : pickIncorrectIndex(question.evaluation.correctIndex, optionCount);
+        pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
+      } else if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
+        const totalGroups = question.evaluation.answerGroups.length;
+        if (persistentModel) {
+          // Prefer the value PINNED at schedule time (durable timer payload);
+          // recompute only if this timer predates the pin (in-flight upgrade).
+          foundCount = plannedFoundCount ?? await computePersistentCountdownFoundCount(persistentModel, matchId, question.questionId, totalGroups);
+        } else {
+          foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
         }
-
-        const question = fresh.currentQuestion;
-        const aiPlayer = getCachedPlayer(fresh, aiUserId);
-        if (!aiPlayer) {
-          logger.warn(
-            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
-            'Possession AI answer skipped: AI user is not a match player'
-          );
-          return;
-        }
-
-        const baseAiCorrectness = await resolveAiCorrectnessForMatch(matchId);
-        const aiCorrectness = difficultyAdjustedCorrectness(baseAiCorrectness, question.questionDTO.difficulty);
-        // Persistent bot: the per-format counts (countdown found / put-in-order
-        // partial credit) come from the calibrated distributions, re-derived
-        // deterministically here with the REAL group/item count. mcq/clue
-        // correctness was already decided by the model at schedule time and is
-        // threaded via plannedIsCorrect / plannedClueIndex.
-        const persistentModel = await resolvePersistentModelForMatch(matchId);
-        const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
-          ? question.evaluation.clues.length
-          : undefined;
-        const questionTimeMs = getQuestionDurationMs(question.kind, clueCountForDuration);
-        // Persistent bots: floor the COMMITTED time at the top-cohort speed floor
-        // (countdown exempt — its pace is the drip-feed). Scheduling may have
-        // pulled plannedAnswerTimeMs down to the window/deadline; the floor is
-        // re-asserted end-to-end so a persistent bot is never faster than the
-        // measured fastest real cohort (Sol HIGH #3). The floor is capped by the
-        // question window so it can never exceed the deadline.
-        const persistentSpeedFloorMs = persistentModel && question.kind !== 'countdown'
-          ? Math.min(topCohortSpeedFloorMs(persistentModel.params), questionTimeMs)
-          : 0;
-        const answerTimeMs = clamp(plannedAnswerTimeMs, persistentSpeedFloorMs, questionTimeMs);
-        let isCorrect = false;
-        let selectedIndex: number | null = null;
-        let pointsEarned = 0;
-        let foundCount: number | undefined;
-        let foundAnswerIds: string[] | undefined;
-        let submittedOrderIds: string[] | undefined;
-        let clueIndex: number | null | undefined;
-
-        if (question.kind === 'multipleChoice' && question.evaluation.kind === 'multipleChoice') {
-          const optionCount = question.questionDTO.kind === 'multipleChoice'
-            ? question.questionDTO.options.length
-            : 4;
+        foundAnswerIds = question.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
+        selectedIndex = foundCount;
+        pointsEarned = calculateCountdownScore(foundCount, totalGroups);
+        isCorrect = false;
+      } else if (question.kind === 'putInOrder' && question.evaluation.kind === 'putInOrder') {
+        const correctOrderIds = [...question.evaluation.items]
+          .sort((left, right) => left.sortValue - right.sortValue)
+          .map((item) => item.id);
+        selectedIndex = null;
+        const totalItems = question.evaluation.items.length;
+        if (persistentModel) {
+          // PERSISTENT: the calibrated partial-credit count IS the performance
+          // metric (NOT a Bernoulli gate). isCorrect is derived from it (all
+          // items placed = correct), and the submitted order always reflects
+          // the ceiling-capped prefix — so a "correct" Bernoulli draw can never
+          // slip the full correct order past the score cap (Sol HIGH).
+          foundCount = plannedPutInOrderCount ?? await computePersistentPutInOrderCount(persistentModel, matchId, question.questionId, totalItems);
+          isCorrect = foundCount >= totalItems;
+          submittedOrderIds = [...correctOrderIds];
+          if (submittedOrderIds.length > 1 && foundCount < submittedOrderIds.length) {
+            const fixedPrefix = submittedOrderIds.slice(0, foundCount);
+            const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
+            submittedOrderIds = [...fixedPrefix, ...shuffledTail];
+          }
+        } else {
           isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
-          selectedIndex = isCorrect
-            ? question.evaluation.correctIndex
-            : pickIncorrectIndex(question.evaluation.correctIndex, optionCount);
-          pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
-        } else if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
-          const totalGroups = question.evaluation.answerGroups.length;
-          if (persistentModel) {
-            // Prefer the value PINNED at schedule time (durable timer payload);
-            // recompute only if this timer predates the pin (in-flight upgrade).
-            foundCount = plannedFoundCount ?? await computePersistentCountdownFoundCount(persistentModel, matchId, question.questionId, totalGroups);
-          } else {
-            foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
+          // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
+          // by 0.55 so an AI that "would have" got the question right
+          // (aiCorrectness=1.0) still places ~55% of items in the correct
+          // prefix on a miss — partial credit that feels reasonable
+          // without making wrong answers nearly as rewarding as right
+          // ones. Mirrors the 0.75 factor used for countdown questions.
+          foundCount = isCorrect
+            ? totalItems
+            : Math.min(
+              totalItems - 1,
+              Math.max(0, Math.round(totalItems * aiCorrectness * 0.55))
+            );
+          submittedOrderIds = [...correctOrderIds];
+          if (!isCorrect && submittedOrderIds.length > 1) {
+            const fixedPrefix = submittedOrderIds.slice(0, foundCount);
+            const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
+            submittedOrderIds = [...fixedPrefix, ...shuffledTail];
           }
-          foundAnswerIds = question.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
-          selectedIndex = foundCount;
-          pointsEarned = calculateCountdownScore(foundCount, totalGroups);
-          isCorrect = false;
-        } else if (question.kind === 'putInOrder' && question.evaluation.kind === 'putInOrder') {
-          const correctOrderIds = [...question.evaluation.items]
-            .sort((left, right) => left.sortValue - right.sortValue)
-            .map((item) => item.id);
-          selectedIndex = null;
-          const totalItems = question.evaluation.items.length;
-          if (persistentModel) {
-            // PERSISTENT: the calibrated partial-credit count IS the performance
-            // metric (NOT a Bernoulli gate). isCorrect is derived from it (all
-            // items placed = correct), and the submitted order always reflects
-            // the ceiling-capped prefix — so a "correct" Bernoulli draw can never
-            // slip the full correct order past the score cap (Sol HIGH).
-            foundCount = plannedPutInOrderCount ?? await computePersistentPutInOrderCount(persistentModel, matchId, question.questionId, totalItems);
-            isCorrect = foundCount >= totalItems;
-            submittedOrderIds = [...correctOrderIds];
-            if (submittedOrderIds.length > 1 && foundCount < submittedOrderIds.length) {
-              const fixedPrefix = submittedOrderIds.slice(0, foundCount);
-              const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
-              submittedOrderIds = [...fixedPrefix, ...shuffledTail];
-            }
-          } else {
-            isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
-            // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
-            // by 0.55 so an AI that "would have" got the question right
-            // (aiCorrectness=1.0) still places ~55% of items in the correct
-            // prefix on a miss — partial credit that feels reasonable
-            // without making wrong answers nearly as rewarding as right
-            // ones. Mirrors the 0.75 factor used for countdown questions.
-            foundCount = isCorrect
-              ? totalItems
-              : Math.min(
-                totalItems - 1,
-                Math.max(0, Math.round(totalItems * aiCorrectness * 0.55))
-              );
-            submittedOrderIds = [...correctOrderIds];
-            if (!isCorrect && submittedOrderIds.length > 1) {
-              const fixedPrefix = submittedOrderIds.slice(0, foundCount);
-              const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
-              submittedOrderIds = [...fixedPrefix, ...shuffledTail];
-            }
-          }
-          pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
-        } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
-          selectedIndex = null;
-          if (persistentModel) {
-            // PERSISTENT: the calibrated clue decision (solve + reveal index) was
-            // PINNED at schedule time. decideClue can decide NOT to solve — a
-            // coarse (e.g. single-clue) question must sometimes fail so its SCORE
-            // distribution respects the ceiling, never a deterministic 100. Prefer
-            // the pinned solved flag + reveal index; recompute only for a pre-pin
-            // in-flight timer.
-            if (plannedClueSolved != null && plannedClueIndex != null) {
-              isCorrect = plannedClueSolved;
-              clueIndex = plannedClueIndex;
-            } else {
-              const clue = await computePersistentClue(
-                persistentModel,
-                matchId,
-                question.questionId,
-                question.evaluation.clues.length,
-              );
-              isCorrect = clue.solved;
-              clueIndex = clue.index;
-            }
-          } else {
-            isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
-            clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
-          }
-          pointsEarned = calculateCluesScore(isCorrect, clueIndex ?? 0);
         }
+        pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
+      } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
+        selectedIndex = null;
+        if (persistentModel) {
+          // PERSISTENT: the calibrated clue decision (solve + reveal index) was
+          // PINNED at schedule time. decideClue can decide NOT to solve — a
+          // coarse (e.g. single-clue) question must sometimes fail so its SCORE
+          // distribution respects the ceiling, never a deterministic 100. Prefer
+          // the pinned solved flag + reveal index; recompute only for a pre-pin
+          // in-flight timer.
+          if (plannedClueSolved != null && plannedClueIndex != null) {
+            isCorrect = plannedClueSolved;
+            clueIndex = plannedClueIndex;
+          } else {
+            const clue = await computePersistentClue(
+              persistentModel,
+              matchId,
+              question.questionId,
+              question.evaluation.clues.length,
+            );
+            isCorrect = clue.solved;
+            clueIndex = clue.index;
+          }
+        } else {
+          isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
+          clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
+        }
+        pointsEarned = calculateCluesScore(isCorrect, clueIndex ?? 0);
+      }
 
-        const answer: CachedAnswer = {
-          userId: aiUserId,
-          questionKind: question.kind,
-          selectedIndex,
-          isCorrect,
-          timeMs: answerTimeMs,
-          pointsEarned,
-          phaseKind: question.phaseKind,
-          phaseRound: question.phaseRound,
-          shooterSeat: question.shooterSeat,
-          answeredAt: new Date().toISOString(),
-          foundCount,
-          foundAnswerIds,
-          submittedOrderIds,
-          clueIndex,
-        };
+      const answer: CachedAnswer = {
+        userId: aiUserId,
+        questionKind: question.kind,
+        selectedIndex,
+        isCorrect,
+        timeMs: answerTimeMs,
+        pointsEarned,
+        phaseKind: question.phaseKind,
+        phaseRound: question.phaseRound,
+        shooterSeat: question.shooterSeat,
+        answeredAt: new Date().toISOString(),
+        foundCount,
+        foundAnswerIds,
+        submittedOrderIds,
+        clueIndex,
+      };
 
-        fresh.answers[aiUserId] = answer;
+      // Phase B (locked): re-validate and commit. The round may have resolved,
+      // or this AI answer may have landed via another replica, while the
+      // unlocked computation above ran.
+      const committed = await withAnswerLock<AiCommitted | null>(matchId, 'round', onRoundLockBusy, async () => {
+        const live = await getMatchCacheOrRebuild(matchId);
+        if (!live || live.status !== 'active' || live.currentQIndex !== qIndex || !live.currentQuestion) {
+          logger.warn(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(live) },
+            'Possession AI answer dropped: round no longer live at commit'
+          );
+          return null;
+        }
+        if (hasUserAnswered(live, aiUserId)) {
+          logger.info(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId },
+            'Possession AI answer dropped: AI already answered at commit'
+          );
+          return null;
+        }
+        const liveExpected = getExpectedUserIds(live);
+        if (!liveExpected.includes(aiUserId)) return null;
+        const livePlayer = getCachedPlayer(live, aiUserId);
+        if (!livePlayer) return null;
+
+        // Final answer clock: planned think time + everything this replica
+        // spent between the timer firing and this point (lock wait included).
+        // Points are re-derived from the committed time for the time-scored
+        // kind; the special formats score on counts, not time.
+        localDelayMs = Math.max(0, Date.now() - firedAtMs);
+        answerTimeMs = finalizeAnswerTimeMs(localDelayMs);
         if (question.kind === 'multipleChoice') {
-          aiPlayer.totalPoints += pointsEarned;
-          if (isCorrect) aiPlayer.correctAnswers += 1;
+          pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
+        }
+        answer.timeMs = answerTimeMs;
+        answer.pointsEarned = pointsEarned;
+
+        live.answers[aiUserId] = answer;
+        if (question.kind === 'multipleChoice') {
+          livePlayer.totalPoints += pointsEarned;
+          if (isCorrect) livePlayer.correctAnswers += 1;
         }
 
         if (question.kind === 'countdown' && foundAnswerIds && foundAnswerIds.length > 0) {
@@ -1032,7 +1070,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           }
         }
 
-        await setMatchCache(fresh);
+        await setMatchCache(live);
         logger.info(
           {
             eventName: 'possession_ai_answer',
@@ -1040,35 +1078,35 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             qIndex,
             aiUserId,
             aiCorrectness,
-            answerCount: answerCount(fresh),
-            expectedCount: expected.length,
-            totalPoints: aiPlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+            answerCount: answerCount(live),
+            expectedCount: liveExpected.length,
+            totalPoints: livePlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+            plannedAnswerTimeMs,
+            localDelayMs,
             ...questionLogFields(question),
             ...answerLogFields(answer),
           },
           'Possession AI answer committed'
         );
 
-        committed = {
+        return {
           questionKind: question.kind,
           selectedIndex,
           isCorrect,
           answerTimeMs,
           pointsEarned,
-          totalPoints: aiPlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+          totalPoints: livePlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
           phaseKind: question.phaseKind,
           phaseRound: question.phaseRound,
           shooterSeat: question.shooterSeat,
-          answerCount: answerCount(fresh),
-          expectedCount: expected.length,
+          answerCount: answerCount(live),
+          expectedCount: liveExpected.length,
           foundCount,
           foundAnswerIds,
           submittedOrderIds,
           clueIndex,
         };
-      } finally {
-        await releaseLock(lockKey, lock.token);
-      }
+      });
 
       if (!committed) return;
 
@@ -1098,7 +1136,10 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         });
       }
 
-      if (committed.phaseKind !== 'penalty' && committed.questionKind !== 'countdown') {
+      // Bots behave like humans, penalties included: the human handler emits
+      // live in all phases. Countdown stays hidden (open-ended typing whose
+      // found-count is resolved at the round result).
+      if (committed.questionKind !== 'countdown') {
         io.to(`match:${matchId}`).emit('match:opponent_answered', {
           matchId,
           qIndex,

@@ -11,10 +11,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<typeof acquireLock>>> {
-  const deadline = Date.now() + ANSWER_LOCK_WAIT_MS;
+/**
+ * Acquire with a bounded wait: short critical sections (answer commits,
+ * resolve no-ops) release within milliseconds, so briefly retrying beats
+ * surfacing a spurious busy to the caller. Shared by the answer handlers and
+ * the round resolver, which contend on the same `:round` key by design.
+ */
+export async function acquireLockBounded(
+  lockKey: string,
+  ttlMs: number,
+  waitMs: number
+): Promise<Awaited<ReturnType<typeof acquireLock>>> {
+  const deadline = Date.now() + waitMs;
   do {
-    const lock = await acquireLock(lockKey, ANSWER_LOCK_TTL_MS);
+    const lock = await acquireLock(lockKey, ttlMs);
     if (lock.acquired && lock.token) return lock;
     if (Date.now() >= deadline) return { acquired: false };
     await sleep(Math.min(ANSWER_LOCK_RETRY_MS, Math.max(0, deadline - Date.now())));
@@ -22,11 +32,20 @@ async function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<ty
   return { acquired: false };
 }
 
+function acquireAnswerLock(lockKey: string): Promise<Awaited<ReturnType<typeof acquireLock>>> {
+  return acquireLockBounded(lockKey, ANSWER_LOCK_TTL_MS, ANSWER_LOCK_WAIT_MS);
+}
+
+export interface AnswerLockLease {
+  /** True once a renewal failed or the lease could not be extended: stop writing. */
+  leaseLost: () => boolean;
+}
+
 export async function withAnswerLock<T>(
   matchId: string,
   lockSuffix: string,
   onBusy: () => void,
-  fn: () => Promise<T>
+  fn: (lease: AnswerLockLease) => Promise<T>
 ): Promise<T | undefined> {
   const lockKey = `lock:match:${matchId}:${lockSuffix}`;
   // Two players normally submit within the same answer window. A single NX
@@ -39,13 +58,22 @@ export async function withAnswerLock<T>(
     return undefined;
   }
   // Renew the lock at half the TTL so a slow fn() can't run past expiry
-  // and let a concurrent handler in. Stops on release in finally.
+  // and let a concurrent handler in. Stops on release in finally. A renewal
+  // that fails (or reports the lease gone) flips `leaseLost`, which the
+  // critical section checks before it writes.
   const token = lock.token;
+  let lost = false;
   const renew = setInterval(() => {
-    void extendLock(lockKey, token, ANSWER_LOCK_TTL_MS).catch(() => {});
+    void extendLock(lockKey, token, ANSWER_LOCK_TTL_MS)
+      .then((extended) => {
+        if (!extended) lost = true;
+      })
+      .catch(() => {
+        lost = true;
+      });
   }, ANSWER_LOCK_RENEW_MS);
   try {
-    return await fn();
+    return await fn({ leaseLost: () => lost });
   } finally {
     clearInterval(renew);
     await releaseLock(lockKey, token);

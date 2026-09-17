@@ -5,6 +5,7 @@ import {
   type ReservedImageMcq,
 } from '../modules/matches/matches.service.js';
 import { clamp } from './scoring.js';
+import { normalizePenaltyAttempts } from './possession-penalty-attempts.js';
 import { normalizeI18nName } from './match-utils.js';
 import { harnessDelayMs } from '../core/harness-timing.js';
 import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayload } from './socket.types.js';
@@ -40,9 +41,34 @@ export type Seat = 1 | 2;
 
 export type ResolutionDecision = {
   winnerId: string | null;
-  method: 'goals' | 'penalty_goals' | 'total_points_fallback';
+  method: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'draw';
   totalPointsFallbackUsed: boolean;
 };
+
+/**
+ * A penalty shootout that is (still) level: goals level AND penalty goals
+ * level while in — or having completed — the shootout. This is the ONLY way a
+ * possession match ends without a winner: level after the regulation kicks
+ * (plus the configured sudden-death rounds), or the penalty question pool
+ * running dry while level. Never true during normal play / last attack (a
+ * level match goes to the shootout instead of completing).
+ */
+export function isShootoutDraw(
+  state: Partial<Pick<PossessionStatePayload, 'phase' | 'goals' | 'penaltyGoals' | 'penalty'>>
+): boolean {
+  // Defensive against partial payloads (no-contest / forfeit paths hand in
+  // whatever state they have): missing sections read as "not a shootout".
+  const kicks = state.penalty?.kicksTaken;
+  const inShootout = state.phase === 'PENALTY_SHOOTOUT'
+    || (state.penalty?.round ?? 0) > 0
+    || (kicks?.seat1 ?? 0) > 0
+    || (kicks?.seat2 ?? 0) > 0;
+  return inShootout
+    && state.goals != null
+    && state.penaltyGoals != null
+    && state.goals.seat1 === state.goals.seat2
+    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2;
+}
 
 export type ExpectedAnswerInfo = {
   expectedUserIds: string[];
@@ -57,6 +83,7 @@ const VALID_WINNER_DECISION_METHODS: ReadonlySet<NonNullable<PossessionStatePayl
   'goals',
   'penalty_goals',
   'total_points_fallback',
+  'draw',
 ]);
 
 export function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
@@ -94,31 +121,6 @@ export function reservedImageMcqForHalf(
   state: Pick<PossessionStatePayload, 'half' | 'imageMcq'>
 ): ReservedImageMcq | null | undefined {
   return state.half === 1 ? state.imageMcq?.half1 : state.imageMcq?.half2;
-}
-
-function normalizePenaltyAttempts(params: {
-  attempts: unknown;
-  goals: { seat1: number; seat2: number };
-  kicksTaken: { seat1: number; seat2: number };
-}): { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> } {
-  const fromRaw = (value: unknown, goals: number, kicksTaken: number): Array<'goal' | 'miss'> => {
-    if (Array.isArray(value)) {
-      const sanitized = value.filter((entry): entry is 'goal' | 'miss' => entry === 'goal' || entry === 'miss');
-      if (sanitized.length > 0 || kicksTaken === 0) return sanitized.slice(0, Math.max(kicksTaken, sanitized.length));
-    }
-    return [
-      ...Array.from({ length: Math.max(0, goals) }, () => 'goal' as const),
-      ...Array.from({ length: Math.max(0, kicksTaken - goals) }, () => 'miss' as const),
-    ];
-  };
-
-  const raw = params.attempts && typeof params.attempts === 'object'
-    ? params.attempts as { seat1?: unknown; seat2?: unknown }
-    : {};
-  return {
-    seat1: fromRaw(raw.seat1, params.goals.seat1, params.kicksTaken.seat1),
-    seat2: fromRaw(raw.seat2, params.goals.seat2, params.kicksTaken.seat2),
-  };
 }
 
 // ── Seat helpers ──
@@ -379,7 +381,10 @@ export function phaseKindFromState(state: PossessionStatePayload): MatchPhaseKin
 
 export function getDifficultyForState(state: PossessionStatePayload): Array<'easy' | 'medium' | 'hard'> {
   const phaseKind = phaseKindFromState(state);
-  if (phaseKind === 'penalty') return ['hard'];
+  // Penalties draw medium+hard: most categories have too few hard MCQs to
+  // survive a shootout (sudden death is unbounded), and the picker's fallback
+  // ladder already relaxes to all difficulties when this pool runs dry.
+  if (phaseKind === 'penalty') return ['medium', 'hard'];
 
   const p = Math.abs(state.possessionDiff);
   if (p <= 20) return ['easy'];

@@ -299,6 +299,18 @@ export interface MatchAnswerAckPayload {
   correctIndex?: number;
   myTotalPoints: number;
   oppAnswered: boolean;
+  /**
+   * The opponent's committed result, present whenever `oppAnswered` is true
+   * and their answer is in the round cache. `match:opponent_answered` is a
+   * room broadcast with no ordering guarantee against this private ack (and
+   * the rejoin snapshot never replays it), so the "+N" opponent score flight
+   * must be able to run from the ack alone. `opponentTotalPoints` is computed
+   * exactly like the opponent's own `myTotalPoints` at their commit.
+   */
+  opponentPointsEarned?: number;
+  opponentTotalPoints?: number;
+  opponentIsCorrect?: boolean;
+  opponentSelectedIndex?: number | null;
   pointsEarned: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
@@ -448,7 +460,9 @@ export interface RankedUserOutcomePayload {
   oldRp: number;
   newRp: number;
   deltaRp: number;
-  /** Coin participation reward granted with the ranked settlement (win/loss). */
+  /** How this player's ranked settlement was scored. 'draw' = level shootout. */
+  result?: 'win' | 'loss' | 'draw';
+  /** Coin participation reward granted with the ranked settlement (win 700 / draw 475 / loss 250). */
   coinsAwarded?: number;
   /** Weekend League QP this result earned (win 25 / loss 10; 0 outside the
    *  Mon-Fri window or for bots) and the weekly total after it. */
@@ -479,7 +493,13 @@ export interface MatchFinalResultsPayload {
   unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | 'draw' | null;
+  /**
+   * A level penalty shootout: `winnerId` is null, `winnerDecisionMethod` is
+   * 'draw', both players placed 1st, and each ranked participant settles
+   * with `rankedOutcome.byUserId[id].result === 'draw'` (+10 RP, 475 coins).
+   */
+  isDraw?: boolean;
   cancelledNoContest?: boolean;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: RankedMatchOutcomePayload | null;

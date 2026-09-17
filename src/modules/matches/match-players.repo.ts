@@ -119,13 +119,24 @@ export const matchPlayersRepo = {
     return rows[0] ?? null;
   },
 
-  /** Final standing for a possession draw (1 for both sides). */
-  async setPlacement(matchId: string, userId: string, placement: number): Promise<void> {
-    await sql`
-      UPDATE match_players
-      SET placement = ${placement}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
+  /**
+   * Final standings written INSIDE the match-completion transaction (a
+   * possession draw places both sides 1st). Never a post-commit write: a
+   * failure here rolls the completion back with it, so the match stays
+   * active for the retry instead of being durably completed with no
+   * placements and no settlement.
+   */
+  async setPlacementsInTx(
+    tx: TransactionSql,
+    matchId: string,
+    placements: Array<{ userId: string; placement: number }>,
+  ): Promise<void> {
+    for (const entry of placements) {
+      await tx.unsafe(
+        `UPDATE match_players SET placement = $3 WHERE match_id = $1 AND user_id = $2`,
+        [matchId, entry.userId, entry.placement],
+      );
+    }
   },
 
   async setPlayerFinalTotals(

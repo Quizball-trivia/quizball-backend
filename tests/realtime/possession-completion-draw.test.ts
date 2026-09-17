@@ -17,7 +17,6 @@ const computeAvgTimesMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const setPlayerFinalTotalsMock = vi.fn();
 const updatePlayerAvgTimeMock = vi.fn();
-const setPlacementMock = vi.fn();
 const getByIdsMock = vi.fn();
 const trackMatchCompletedMock = vi.fn();
 const emitFinalResultsMock = vi.fn();
@@ -37,7 +36,6 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
-    setPlacement: (...args: unknown[]) => setPlacementMock(...args),
   },
 }));
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
@@ -151,7 +149,6 @@ describe('completePossessionMatch: level shootout is a draw', () => {
     computeAvgTimesMock.mockResolvedValue(new Map());
     setPlayerFinalTotalsMock.mockResolvedValue(null);
     updatePlayerAvgTimeMock.mockResolvedValue(undefined);
-    setPlacementMock.mockResolvedValue(undefined);
     getByIdsMock.mockResolvedValue(new Map([
       ['u1', { id: 'u1', is_guest: false, is_ai: false }],
       ['u2', { id: 'u2', is_guest: false, is_ai: false }],
@@ -168,9 +165,11 @@ describe('completePossessionMatch: level shootout is a draw', () => {
 
     expect(result).toMatchObject({ completed: true, winnerId: null });
     expect(cache.statePayload.winnerDecisionMethod).toBe('draw');
-    expect(completeMatchMock).toHaveBeenCalledWith(MATCH_ID, null);
-    expect(setPlacementMock).toHaveBeenCalledWith(MATCH_ID, 'u1', 1);
-    expect(setPlacementMock).toHaveBeenCalledWith(MATCH_ID, 'u2', 1);
+    // Placements are handed to completeMatch so they commit in the SAME
+    // transaction as the status flip — never as a post-commit write.
+    expect(completeMatchMock).toHaveBeenCalledWith(MATCH_ID, null, undefined, {
+      placements: [{ userId: 'u1', placement: 1 }, { userId: 'u2', placement: 1 }],
+    });
     expect(emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
       matchId: MATCH_ID,
       winnerId: null,
@@ -194,9 +193,45 @@ describe('completePossessionMatch: level shootout is a draw', () => {
     expect(result).toMatchObject({ completed: true, winnerId: 'u2' });
     expect(cache.statePayload.winnerDecisionMethod).toBe('penalty_goals');
     expect(completeMatchMock).toHaveBeenCalledWith(MATCH_ID, 'u2');
-    expect(setPlacementMock).not.toHaveBeenCalled();
+    expect(completeMatchMock.mock.calls[0]?.[3]).toBeUndefined();
     const payload = emit.mock.calls.find((call) => call[0] === 'match:final_results')?.[1] as Record<string, unknown>;
     expect(payload).toMatchObject({ winnerId: 'u2', winnerDecisionMethod: 'penalty_goals' });
     expect(payload).not.toHaveProperty('isDraw');
+  });
+
+  it('a placement write failure leaves the match active, and the retry completes AND settles the draw', async () => {
+    // With placements inside the completion transaction, a failed write rolls
+    // the status flip back too: nothing is durably completed, so the next
+    // completion attempt (round-resolver retry / replay) runs the whole path,
+    // including ranked settlement — no orphaned "completed, unsettled" match.
+    getMatchMock.mockResolvedValue({
+      id: MATCH_ID, mode: 'ranked', status: 'active', total_questions: 12,
+      started_at: new Date(Date.now() - 60_000).toISOString(), current_q_index: 20, state_payload: null,
+    });
+    const { rankedService } = await import('../../src/modules/ranked/ranked.service.js');
+    vi.mocked(rankedService.settleCompletedRankedMatch).mockResolvedValue(null);
+    completeMatchMock.mockRejectedValueOnce(new Error('placement write failed'));
+    const cache = makeCache({ seat1: 3, seat2: 3 });
+    cache.mode = 'ranked';
+    const { io, emit } = createIo();
+
+    await expect(
+      completePossessionMatch(io, MATCH_ID, cache.statePayload, cache, { source: 'round_resolver' })
+    ).rejects.toThrow('placement write failed');
+    expect(rankedService.settleCompletedRankedMatch).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('match:final_results', expect.anything());
+
+    // Retry: match is still active (completion rolled back).
+    completeMatchMock.mockResolvedValueOnce(undefined);
+    const retryCache = makeCache({ seat1: 3, seat2: 3 });
+    retryCache.mode = 'ranked';
+    const result = await completePossessionMatch(io, MATCH_ID, retryCache.statePayload, retryCache, { source: 'round_resolver' });
+
+    expect(result).toMatchObject({ completed: true, winnerId: null });
+    expect(completeMatchMock).toHaveBeenLastCalledWith(MATCH_ID, null, undefined, {
+      placements: [{ userId: 'u1', placement: 1 }, { userId: 'u2', placement: 1 }],
+    });
+    expect(rankedService.settleCompletedRankedMatch).toHaveBeenCalledWith(MATCH_ID);
+    expect(emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({ isDraw: true, winnerDecisionMethod: 'draw' }));
   });
 });

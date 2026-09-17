@@ -322,12 +322,15 @@ export async function completePossessionMatch(
       await matchesRepo.setMatchStatePayload(matchId, completionState, match.current_q_index);
     }
 
-    await matchesService.completeMatch(matchId, decision.winnerId);
+    // A draw places both sides 1st. The placements ride in the completion
+    // transaction: if they cannot be written the status flip rolls back too,
+    // so a retry (round-resolver / replay) re-enters here and still settles.
     if (decision.method === 'draw') {
-      // Both sides finish level: placement 1 for each.
-      await Promise.all(
-        decisionInput.map((player) => matchPlayersRepo.setPlacement(matchId, player.user_id, 1))
-      );
+      await matchesService.completeMatch(matchId, decision.winnerId, undefined, {
+        placements: decisionInput.map((player) => ({ userId: player.user_id, placement: 1 })),
+      });
+    } else {
+      await matchesService.completeMatch(matchId, decision.winnerId);
     }
 
     const [avgTimes, playerRows] = await Promise.all([

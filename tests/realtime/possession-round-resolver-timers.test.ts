@@ -204,6 +204,12 @@ const FENCE_KEY = `resolve:inprogress:${MATCH_ID}:${Q_INDEX}`;
 
 function installFenceRedis(): void {
   redisValues.clear();
+  // releaseLock is the compare-and-delete helper (Lua: delete only if the
+  // stored value equals the caller's token); mirror it over the fence map.
+  releaseLockMock.mockImplementation(async (key: string, token: string) => {
+    if (redisValues.get(key) === token) { redisValues.delete(key); return true; }
+    return false;
+  });
   redisSetMock.mockImplementation(async (key: string, value: string, options?: { NX?: boolean; PX?: number; EX?: number }) => {
     if (options?.NX && redisValues.has(key)) return null;
     redisValues.set(key, value);
@@ -226,7 +232,6 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
   beforeEach(() => {
     vi.clearAllMocks();
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
-    releaseLockMock.mockResolvedValue(true);
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({ status: 'active' });
@@ -415,7 +420,6 @@ describe('possession round resolver lease loss', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
-    releaseLockMock.mockResolvedValue(true);
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({ status: 'active' });
@@ -513,7 +517,6 @@ describe('possession round resolver in-progress fence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
-    releaseLockMock.mockResolvedValue(true);
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({ status: 'active' });
@@ -568,8 +571,72 @@ describe('possession round resolver in-progress fence', () => {
     expect(ttlMs).toBeLessThanOrEqual(60_000);
     expect(emit).toHaveBeenCalledWith('match:round_result', expect.anything());
     expect(fencePresentAtCommit).toBe(true);
-    expect(redisDelMock).toHaveBeenCalledWith(FENCE_KEY);
+    expect(releaseLockMock).toHaveBeenCalledWith(FENCE_KEY, 'lock-token');
+    expect(redisDelMock).not.toHaveBeenCalledWith(FENCE_KEY);
     expect(redisValues.has(FENCE_KEY)).toBe(false);
+  });
+
+  it('acquires the fence right after the round lock — BEFORE the cache-refresh write and the redispatch', async () => {
+    // No write of any kind may precede the fence: a competitor mid-resolve
+    // must be observed before this resolver touches the cache or dispatches.
+    redisValues.set(FENCE_KEY, 'other-replica');
+    const cache = createCache({ currentQIndex: Q_INDEX - 1, currentQuestion: null });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const rebuilt = createCache({ mode: 'ranked', currentQuestion: null });
+    rebuilt.statePayload.phase = 'LAST_ATTACK';
+    rebuildCacheFromDBMock.mockResolvedValue(rebuilt);
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(createIo(), MATCH_ID, Q_INDEX, true);
+
+    expect(setMatchCacheMock).not.toHaveBeenCalled();
+    expect(sendQuestionMock).not.toHaveBeenCalled();
+    expect(redisSetMock).toHaveBeenCalledWith(FENCE_KEY, expect.any(String), expect.objectContaining({ NX: true }));
+    expect(redisValues.get(FENCE_KEY)).toBe('other-replica');
+    expect(deferQuestionTimerMock).toHaveBeenCalled();
+  });
+
+  it('orders the fence SET before every write on the happy path (cache refresh included)', async () => {
+    const order: string[] = [];
+    redisSetMock.mockImplementation(async (key: string, value: string, options?: { NX?: boolean }) => {
+      order.push(`set:${key}`);
+      if (options?.NX && redisValues.has(key)) return null;
+      redisValues.set(key, value);
+      return 'OK';
+    });
+    setMatchCacheMock.mockImplementation(async () => { order.push('setMatchCache'); });
+    const cache = createCache({ currentQIndex: Q_INDEX - 1, currentQuestion: null });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    rebuildCacheFromDBMock.mockResolvedValue(createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    }));
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(createIo(), MATCH_ID, Q_INDEX, true);
+
+    expect(order.indexOf(`set:${FENCE_KEY}`)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(`set:${FENCE_KEY}`)).toBeLessThan(order.indexOf('setMatchCache'));
+  });
+
+  it('releases the fence with a token check: holder A\'s expired fence re-taken by B is NOT deleted by A', async () => {
+    // releaseLock is the compare-and-delete helper (Lua: delete only if the
+    // value matches). The mock mirrors that over the fence map.
+    const cache = createCache({
+      answers: { 'user-1': createAnswer('user-1'), 'user-2': createAnswer('user-2') },
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    // A's marker expires and B takes a fresh one while A is committing.
+    setMatchCacheMock.mockImplementationOnce(async () => {
+      redisValues.set(FENCE_KEY, 'holder-b-token');
+    });
+    const { resolvePossessionRound } = await import('../../src/realtime/possession-round-resolver.js');
+
+    await resolvePossessionRound(createIo(), MATCH_ID, Q_INDEX, false);
+
+    expect(releaseLockMock).toHaveBeenCalledWith(FENCE_KEY, 'lock-token');
+    expect(redisDelMock).not.toHaveBeenCalledWith(FENCE_KEY);
+    expect(redisDelMock).not.toHaveBeenCalledWith([FENCE_KEY]);
+    expect(redisValues.get(FENCE_KEY)).toBe('holder-b-token');
   });
 
   it('a stale marker never blocks resolution: the SET NX is the only gate, so an expired key lets the next resolve through', async () => {
@@ -642,7 +709,6 @@ describe('possession round resolver timeout backfill kind/user isolation', () =>
   beforeEach(() => {
     vi.clearAllMocks();
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
-    releaseLockMock.mockResolvedValue(true);
     redisGetMock.mockResolvedValue(null);
     rebuildCacheFromDBMock.mockResolvedValue(null);
   });

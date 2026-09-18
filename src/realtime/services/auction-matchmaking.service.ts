@@ -1,6 +1,5 @@
 import { assertCapability } from '../../modules/users/capabilities.js';
 import { randomUUID } from 'crypto';
-import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
 import { ErrorCode } from '../../core/errors.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
@@ -14,7 +13,7 @@ import {
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
-import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
+import type { FormationName } from '../../modules/auction/auction.types.js';
 import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
   parseStoredAvatarCustomization,
@@ -23,11 +22,10 @@ import {
 import {
   startAuctionMatchForHumans,
   rejoinAuctionMatch,
-  type AuctionMatchHumanPlayer,
 } from './auction-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
+import { botPlayerSummaries, emitAuctionMatchFound } from './auction-prematch.js';
 import type {
-  AuctionMatchFoundPayload,
   AuctionSearchCancelledPayload,
   AuctionSearchStartedPayload,
   AuctionSearchStatusPayload,
@@ -61,12 +59,6 @@ function randomFallbackDelayMs(): number {
   );
 }
 // Server-authoritative ranked-style pre-match sequence once all 3 seats fill.
-// The full connected lineup stays visible first, followed by the showdown and
-// then a five-second countdown shared by every browser.
-const AUCTION_PREMATCH_LINEUP_MS = 2_500;
-// 3s minimum so the showdown always reads, even when every client acks fast.
-const AUCTION_PREMATCH_SHOWDOWN_MS = 3_000;
-const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
 interface QueuedAuctionSearch {
@@ -176,7 +168,7 @@ export const auctionMatchmakingService = {
           sourceSocket: socket,
         }, {
           beforeStartEvents: (prepared) => {
-            emitMatchFound(
+            emitAuctionMatchFound(
               io,
               prepared.matchId,
               humans,
@@ -476,7 +468,7 @@ async function startMatchFromQueuedSearches(
       locale: oldest.locale,
     }, {
       beforeStartEvents: (prepared) => {
-        emitMatchFound(
+        emitAuctionMatchFound(
           io,
           prepared.matchId,
           humans,
@@ -557,69 +549,6 @@ async function startMatchFromQueuedSearches(
     );
     return false;
   }
-}
-
-function emitMatchFound(
-  io: QuizballServer,
-  matchId: string,
-  humans: readonly AuctionMatchHumanPlayer[],
-  botPlayers: AuctionMatchFoundPayload['botPlayers'],
-  locale: AuctionContentLocale,
-  formation: FormationName
-): void {
-  const serverNowMs = Date.now();
-  // Bots pop into the lineup at staggered, randomized moments — sometimes
-  // together, usually seconds apart — instead of materializing as a block.
-  // The lineup stage stretches to cover the last arrival.
-  const togetherRoll = Math.random();
-  let previousDelayMs = 0;
-  const staggeredBots = botPlayers.map((bot, index) => {
-    const joinDelayMs = index === 0
-      ? Math.round(Math.random() * 1_500)
-      : togetherRoll < 0.25
-        ? previousDelayMs
-        : previousDelayMs + Math.round(1_000 + Math.random() * 4_000);
-    previousDelayMs = joinDelayMs;
-    return { ...bot, joinDelayMs };
-  });
-  const maxJoinDelayMs = staggeredBots.reduce((max, bot) => Math.max(max, bot.joinDelayMs), 0);
-  const lineupEndsAtMs = serverNowMs + maxJoinDelayMs + AUCTION_PREMATCH_LINEUP_MS;
-  const showdownEndsAtMs = lineupEndsAtMs + AUCTION_PREMATCH_SHOWDOWN_MS;
-  const payload: AuctionMatchFoundPayload = {
-    matchId,
-    humanUserIds: humans.map((human) => human.userId),
-    botCount: staggeredBots.length,
-    botPlayers: staggeredBots,
-    locale,
-    formation,
-    serverNow: new Date(serverNowMs).toISOString(),
-    lineupEndsAt: new Date(lineupEndsAtMs).toISOString(),
-    showdownEndsAt: new Date(showdownEndsAtMs).toISOString(),
-    // Single server-chosen instant so all clients finish the countdown in sync.
-    countdownEndsAt: new Date(showdownEndsAtMs + AUCTION_PREMATCH_COUNTDOWN_MS).toISOString(),
-  };
-  const foundAt = new Date(serverNowMs);
-  for (const human of humans) {
-    io.to(`user:${human.userId}`).emit('auction:match_found', payload);
-    trackAuctionMatchFound({
-      userId: human.userId,
-      matchId,
-      humanCount: humans.length,
-      botCount: staggeredBots.length,
-      locale,
-      formation,
-      occurredAt: foundAt,
-    });
-  }
-}
-
-function botPlayerSummaries(seats: readonly AuctionPlayer[]): AuctionMatchFoundPayload['botPlayers'] {
-  return seats
-    .filter((seat) => seat.isBot)
-    .map((seat) => ({
-      seatId: seat.seatId,
-      displayName: seat.displayName,
-    }));
 }
 
 /**

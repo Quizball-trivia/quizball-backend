@@ -146,7 +146,7 @@ describe('auctionRealtimeService.handleStartPracticeMatch (guest "Play now")', (
   });
 
   it('seats the guest with anonymous guest-style bots, origin practice, no ranked identity on any seat', async () => {
-    const { io } = createIo();
+    const { io, roomEmit } = createIo();
     const socket = createSocket({ id: 'guest-1', nickname: 'Masked Keeper 4321', is_guest: true });
     await auctionRealtimeService.handleStartPracticeMatch(io, socket, { locale: 'en', formation: '2-2-2' }, { context: deterministicContext });
 
@@ -168,6 +168,23 @@ describe('auctionRealtimeService.handleStartPracticeMatch (guest "Play now")', (
     }
     expect(new Set(bots.map((bot) => bot.displayName)).size).toBe(bots.length);
     expect(socket.join).toHaveBeenCalledWith('match:match-id');
+    // The queue's pre-match sequence: search_start to the socket at the start of
+    // the wait, then match_found (lineup/showdown/countdown schedule) with the
+    // anonymous bot personas, before match_started.
+    expect(socket.emit).toHaveBeenCalledWith('auction:search_start', expect.objectContaining({
+      queuedUserCount: 1, seatsNeeded: 2, botCount: 0,
+      queuedPlayers: [expect.objectContaining({ userId: 'guest-1', displayName: 'Masked Keeper 4321' })],
+    }));
+    const found = roomEmit.mock.calls.find(([event]) => event === 'auction:match_found');
+    expect(found).toBeDefined();
+    const foundPayload = found![1] as { matchId: string; botPlayers: Array<{ displayName: string; joinDelayMs: number }>; lineupEndsAt: string; countdownEndsAt: string };
+    expect(foundPayload.matchId).toBe('match-id');
+    expect(foundPayload.botPlayers.length).toBe(bots.length);
+    for (const bot of foundPayload.botPlayers) expect(bot.displayName).toMatch(GUEST_NAME);
+    expect(Date.parse(foundPayload.countdownEndsAt)).toBeGreaterThan(Date.parse(foundPayload.lineupEndsAt));
+    const foundIndex = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_found');
+    const startedIndex = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_started');
+    expect(startedIndex).toBeGreaterThan(foundIndex);
   });
 
   it('refuses members, the rate limit and a blocked session without creating a table', async () => {

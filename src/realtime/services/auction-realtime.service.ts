@@ -1,8 +1,11 @@
 import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
+import { randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { socketIpBucket } from '../socket-auth.js';
+import { botPlayerSummaries, emitAuctionMatchFound } from './auction-prematch.js';
+import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { beginPracticeStart, claimPracticeSeating, finishPracticeStart, isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
@@ -37,6 +40,7 @@ import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
+  AuctionSearchStartedPayload,
   AuctionMatchStartedPayload,
   AuctionRoundStartedPayload,
 } from '../socket.types.js';
@@ -220,8 +224,24 @@ async function handleStartPracticeMatch(
     }
     if (!current()) return;
     // "Searching" for a random while before the table is seated; a cancel or a
-    // newer start abandons the wait, and a guest who left gets no table.
-    const proceed = await waitForPracticeStart(key, token, practiceStartDelayMs());
+    // newer start abandons the wait, and a guest who left gets no table. The
+    // client gets the same search_start it would from the queue (itself in the
+    // lineup, fallback = the end of the wait), then the match_found pre-match
+    // sequence once the table exists.
+    const delayMs = practiceStartDelayMs();
+    const searchStartedAt = Date.now();
+    const humans: AuctionMatchHumanPlayer[] = [{ userId: user.id, displayName: user.nickname ?? 'Player', isGuest: true }];
+    const avatarCustomization = parseStoredAvatarCustomization(user.avatar_customization);
+    socket.emit('auction:search_start', {
+      searchId: randomUUID(),
+      locale: input.locale,
+      queuedUserCount: 1,
+      seatsNeeded: 2,
+      fallbackAt: new Date(searchStartedAt + delayMs).toISOString(),
+      queuedPlayers: [{ userId: user.id, displayName: humans[0].displayName, avatarCustomization }],
+      botCount: 0,
+    } satisfies AuctionSearchStartedPayload);
+    const proceed = await waitForPracticeStart(key, token, delayMs);
     if (!proceed || !socket.connected) return;
     // Live auctions live in Redis (the session guard only sees Postgres): a
     // table seated meanwhile by another replica/tab is re-attached, never doubled.
@@ -251,7 +271,7 @@ async function handleStartPracticeMatch(
     }
     try {
       const saved = await startAuctionMatchForHumans(io, {
-        humanPlayers: [{ userId: user.id, displayName: user.nickname ?? 'Player', isGuest: true }],
+        humanPlayers: humans,
         formation: input.formation,
         locale: input.locale,
         origin: 'practice',
@@ -259,6 +279,9 @@ async function handleStartPracticeMatch(
       }, {
         ...options,
         anonymousBots: true,
+        beforeStartEvents: (prepared) => {
+          emitAuctionMatchFound(io, prepared.matchId, humans, botPlayerSummaries(prepared.seats), input.locale, prepared.formation, 'practice');
+        },
         stillWanted: () => current() && socket.connected,
         claimSeating: () => socket.connected && claimPracticeSeating(key, token),
       });

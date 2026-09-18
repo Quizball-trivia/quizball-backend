@@ -658,6 +658,8 @@ export function trackAuctionMatchFound(params: {
   botCount: number;
   locale: 'en' | 'ka' | 'es' | 'tr';
   formation: string;
+  /** Queue vs guest practice table, so found→started funnels can be split like match_started. */
+  origin: AuctionAnalyticsOrigin;
   occurredAt?: string | Date;
 }): void {
   const occurredAt = params.occurredAt ?? new Date();
@@ -665,6 +667,7 @@ export function trackAuctionMatchFound(params: {
     match_id: params.matchId,
     mode: 'auction',
     variant: 'auction',
+    origin: params.origin,
     human_count: params.humanCount,
     bot_count: params.botCount,
     opponent_is_ai: params.botCount > 0,

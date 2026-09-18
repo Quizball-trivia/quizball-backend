@@ -182,6 +182,10 @@ describe('auctionRealtimeService.handleStartPracticeMatch (guest "Play now")', (
     expect(foundPayload.botPlayers.length).toBe(bots.length);
     for (const bot of foundPayload.botPlayers) expect(bot.displayName).toMatch(GUEST_NAME);
     expect(Date.parse(foundPayload.countdownEndsAt)).toBeGreaterThan(Date.parse(foundPayload.lineupEndsAt));
+    const searchStartOrder = socket.emit.mock.invocationCallOrder[socket.emit.mock.calls.findIndex(([event]) => event === 'auction:search_start')];
+    const foundOrder = roomEmit.mock.invocationCallOrder[roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_found')];
+    expect(searchStartOrder).toBeLessThan(foundOrder);
+    expect(found![1]).toEqual(expect.objectContaining({ humanUserIds: ['guest-1'] }));
     const foundIndex = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_found');
     const startedIndex = roomEmit.mock.calls.findIndex(([event]) => event === 'auction:match_started');
     expect(startedIndex).toBeGreaterThan(foundIndex);

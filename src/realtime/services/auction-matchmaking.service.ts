@@ -58,7 +58,6 @@ function randomFallbackDelayMs(): number {
     1_000
   );
 }
-// Server-authoritative ranked-style pre-match sequence once all 3 seats fill.
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
 interface QueuedAuctionSearch {

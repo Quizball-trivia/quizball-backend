@@ -238,7 +238,7 @@ async function handleStartPracticeMatch(
       queuedUserCount: 1,
       seatsNeeded: 2,
       fallbackAt: new Date(searchStartedAt + delayMs).toISOString(),
-      queuedPlayers: [{ userId: user.id, displayName: humans[0].displayName, ...(avatarCustomization ? { avatarCustomization } : {}) }],
+      queuedPlayers: [{ userId: user.id, displayName: humans[0].displayName, avatarCustomization }],
       botCount: 0,
     } satisfies AuctionSearchStartedPayload);
     const proceed = await waitForPracticeStart(key, token, delayMs);
@@ -280,7 +280,7 @@ async function handleStartPracticeMatch(
         ...options,
         anonymousBots: true,
         beforeStartEvents: (prepared) => {
-          emitAuctionMatchFound(io, prepared.matchId, humans, botPlayerSummaries(prepared.seats), input.locale, prepared.formation);
+          emitAuctionMatchFound(io, prepared.matchId, humans, botPlayerSummaries(prepared.seats), input.locale, prepared.formation, 'practice');
         },
         stillWanted: () => current() && socket.connected,
         claimSeating: () => socket.connected && claimPracticeSeating(key, token),

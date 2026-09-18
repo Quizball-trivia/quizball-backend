@@ -1,4 +1,4 @@
-import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
+import { trackAuctionMatchFound, type AuctionAnalyticsOrigin } from '../../core/analytics/game-events.js';
 import type { AuctionContentLocale } from '../../modules/auction/index.js';
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer } from '../socket-server.js';
@@ -22,7 +22,8 @@ export function emitAuctionMatchFound(
   humans: readonly AuctionMatchHumanPlayer[],
   botPlayers: AuctionMatchFoundPayload['botPlayers'],
   locale: AuctionContentLocale,
-  formation: FormationName
+  formation: FormationName,
+  origin: AuctionAnalyticsOrigin = 'queue'
 ): void {
   const serverNowMs = Date.now();
   // Bots pop into the lineup at staggered, randomized moments — sometimes
@@ -65,6 +66,7 @@ export function emitAuctionMatchFound(
       botCount: staggeredBots.length,
       locale,
       formation,
+      origin,
       occurredAt: foundAt,
     });
   }

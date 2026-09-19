@@ -30,3 +30,16 @@ test('fixed production adapter refuses an arbitrary public URL or path before fe
  await assert.rejects(storage.read({...p.objects[0],publicUrl:'https://example.com/steal'}),/origin differs/);
  await assert.rejects(storage.create({...p.objects[0],key:'../live.webp'},data),/namespace/);
 });
+test('retries a temporary verification failure without overwriting; honors retry-after',async()=>{
+ const p=build();let remote=null,reads=0,writes=0;const delays=[];
+ const storage={create:async()=>{if(remote)return'exists';remote={bytes:data,contentType:'image/webp'};writes++;return'created';},read:async()=>{if(reads++===0)throw Object.assign(new Error('HTTP 502'),{retryable:true,retryAfterMs:7000});return remote;}};
+ const result=await preserveReleaseMedia({plan:p,expectedSha256:p.sha256,loadBytes:async()=>data,storage,dryRun:false,wait:async ms=>delays.push(ms)});
+ assert.equal(result.verified,1);assert.equal(result.retries,1);assert.equal(writes,1);assert.deepEqual(delays,[7000]);
+});
+test('bounds temporary retries and refuses to shorten a long server backoff',async()=>{
+ const p=build();let calls=0,delays=0;
+ const args={plan:p,expectedSha256:p.sha256,loadBytes:async()=>data,dryRun:false,wait:async()=>{delays++;},storage:{create:async()=>{calls++;throw Object.assign(new Error('HTTP 503'),{retryable:true});}}};
+ await assert.rejects(preserveReleaseMedia(args),/HTTP 503/);assert.equal(calls,4);assert.equal(delays,3);
+ calls=0;delays=0;args.storage.create=async()=>{calls++;throw Object.assign(new Error('HTTP 429'),{retryable:true,retryAfterMs:300000});};
+ await assert.rejects(preserveReleaseMedia(args),/HTTP 429/);assert.equal(calls,1);assert.equal(delays,0);
+});

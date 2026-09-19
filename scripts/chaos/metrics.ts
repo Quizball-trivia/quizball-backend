@@ -52,8 +52,8 @@ export function summarize(m: RouteMetrics, durationSec: number): RouteReport {
     name: m.name,
     sent: m.sent,
     completed: m.completed,
-    errorRatePct: m.completed ? (m.errors / m.completed) * 100 : 0,
-    clientErrPct: m.completed ? (m.clientErrors / m.completed) * 100 : 0,
+    errorRatePct: m.sent ? (m.errors / m.sent) * 100 : 0,
+    clientErrPct: m.sent ? (m.clientErrors / m.sent) * 100 : 0,
     rps: durationSec ? m.completed / durationSec : 0,
     p50: Math.round(percentile(sorted, 50)),
     p95: Math.round(percentile(sorted, 95)),
@@ -64,7 +64,7 @@ export function summarize(m: RouteMetrics, durationSec: number): RouteReport {
 }
 
 export function renderTable(reports: RouteReport[]): string {
-  const headers = ['route', 'sent', 'ok', 'rps', 'p50', 'p95', 'p99', 'max', 'err%', '4xx%', 'status'];
+  const headers = ['route', 'sent', 'ok', 'rps', 'p50', 'p95', 'p99', 'max', 'err%', 'bad4xx%', 'status'];
   const rows = reports.map((r) => [
     r.name,
     String(r.sent),

@@ -2,6 +2,7 @@ import postgres from 'postgres';
 import {contentHash} from './question-manifest.mjs';
 import {validateQuestionPackage} from './question-package.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
+import {rowsBeforeMediaBindings} from './content-media-bindings.mjs';
 
 const STAGING='nsdfiprfmhdqhbfxfwpv',PRODUCTION='lfbwhxvwubzeqkztghok';
 const FIELDS=['category_id','type','difficulty','status','prompt','explanation','ranked_eligible','visibility'];
@@ -49,6 +50,8 @@ async function currentRows(tx,ids,lock){
 async function assertDrafts(tx,plan,lock){
   const drafts=plan.preservation.additions.filter(r=>r.kind==='conflict-draft');
   const current=await currentRows(tx,drafts.map(r=>r.question.id),lock);
+  const payloads=await rowsBeforeMediaBindings(tx,plan.preservation.sha256,'question_payloads',[...current.values()].map(r=>r.payload));
+  for(const payload of payloads)current.get(payload.question_id).payload=payload;
   const receipts=await tx`SELECT * FROM question_release_rows WHERE batch_id=${plan.preservation.sha256} AND phase='import'`;
   const prior=new Map(receipts.map(r=>[key(r.table_name,r.row_id),r.after_data]));
   for(const draft of drafts){

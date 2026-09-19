@@ -1,5 +1,6 @@
 import { contentHash } from './question-manifest.mjs';
 import { validateReferencePackage } from './reference-package.mjs';
+import { rowsBeforeMediaBindings } from './content-media-bindings.mjs';
 
 const TABLES = new Set(['football_players','fifa_cards','goal_choreographies','player_clue_cards']);
 const same = (a,b) => contentHash(a) === contentHash(b);
@@ -8,15 +9,17 @@ const baseline = (current, planned) => Object.fromEntries(planned.beforeFields.m
 async function transaction(sql, fn, readOnly=false) {
   return sql.begin(readOnly ? 'ISOLATION LEVEL REPEATABLE READ READ ONLY' : '',async tx=>{
     await tx`SET LOCAL lock_timeout='2s'`;await tx`SET LOCAL statement_timeout='30s'`;
+    await tx`SET LOCAL timezone='UTC'`;
     if(!readOnly)await tx`SELECT pg_advisory_xact_lock(20260919,63255)`;
     return fn(tx);
   });
 }
-async function currentRows(sql, table, ids, lock=false) {
+async function currentRows(sql, table, ids, lock=false, batchId) {
   if(!TABLES.has(table))throw new Error('Unsupported reference table');
   if(!ids.length)return new Map();
   const rows=await sql.unsafe(`SELECT to_jsonb(t) AS row FROM public.${table} t WHERE id=ANY($1::uuid[])${lock?' FOR UPDATE':''}`,[ids]);
-  return new Map(rows.map(r=>[r.row.id,r.row]));
+  const values=rows.map(r=>r.row);
+  return new Map((batchId?await rowsBeforeMediaBindings(sql,batchId,table,values):values).map(row=>[row.id,row]));
 }
 function checkRow(row,current,receipt) {
   if(receipt){
@@ -37,7 +40,7 @@ export async function importCoreReferences(sql, input, {dryRun=true}={}) {
   const pkg=validateReferencePackage(input), report={batchId:pkg.sha256,dryRun,inserted:0,filled:0,resumed:0,preserved:0};
   await transaction(sql,async tx=>{
     for(const group of pkg.tables){
-      const current=await currentRows(tx,group.table,group.rows.map(r=>r.targetId));
+      const current=await currentRows(tx,group.table,group.rows.map(r=>r.targetId),false,pkg.sha256);
       const receipts=await tx`SELECT * FROM reference_release_rows WHERE batch_id=${pkg.sha256} AND table_name=${group.table}`;
       const prior=new Map(receipts.map(r=>[r.row_id,r]));
       for(const row of group.rows){checkRow(row,current.get(row.targetId),prior.get(row.targetId));if(row.disposition==='preserve')report.preserved++;}
@@ -54,7 +57,7 @@ export async function importCoreReferences(sql, input, {dryRun=true}={}) {
     const allowedColumns=new Set((await sql`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=${group.table}`).map(r=>r.column_name));
     for(let i=0;i<changes.length;i+=100)await transaction(sql,async tx=>{
       const chunk=changes.slice(i,i+100),ids=chunk.map(r=>r.targetId);
-      const current=await currentRows(tx,group.table,ids,true);
+      const current=await currentRows(tx,group.table,ids,true,pkg.sha256);
       const receipts=await tx`SELECT * FROM reference_release_rows WHERE batch_id=${pkg.sha256} AND table_name=${group.table} AND row_id=ANY(${tx.array(ids)}::uuid[])`;
       const prior=new Map(receipts.map(r=>[r.row_id,r]));const fresh=[];
       for(const row of chunk){checkRow(row,current.get(row.targetId),prior.get(row.targetId));if(prior.has(row.targetId)){report.resumed++;continue;}fresh.push(row);}
@@ -92,7 +95,8 @@ export async function undoCoreReferences(sql,input,{dryRun=true}={}) {
         const latest=(await tx`SELECT * FROM reference_release_rows WHERE batch_id=${pkg.sha256} AND table_name=${group.table} AND row_id=${receipt.row_id}`)[0];
         if(latest.undone_at){report.alreadyUndone++;continue;}
         const current=(await currentRows(tx,group.table,[receipt.row_id],!dryRun)).get(receipt.row_id);
-        if(!current||!same(current,latest.after_data)){report.needsReview++;continue;}
+        const [original]=await rowsBeforeMediaBindings(tx,pkg.sha256,group.table,current?[current]:[]);
+        if(!current||!same(original,latest.after_data)){report.needsReview++;continue;}
         let after=current;
         if(latest.operation==='insert')report.retainedInsertions++;
         else{

@@ -4,6 +4,7 @@ import postgres from 'postgres';
 import { contentHash } from './question-manifest.mjs';
 import { validateQuestionPackage } from './question-package.mjs';
 import { validateQuestionPublicationPlan } from './question-publication.mjs';
+import { rowsBeforeMediaBindings } from './content-media-bindings.mjs';
 
 const CHUNK_SIZE = 100;
 
@@ -25,6 +26,7 @@ async function scopedTransaction(sql, fn, { readOnly = false } = {}) {
   return sql.begin(readOnly ? 'ISOLATION LEVEL REPEATABLE READ READ ONLY' : '', async tx => {
     await tx`SET LOCAL lock_timeout='2s'`;
     await tx`SET LOCAL statement_timeout='30s'`;
+    await tx`SET LOCAL timezone='UTC'`;
     // A transaction lock serializes chunks without pinning a cloud connection
     // through operator pauses. The row receipts make retries idempotent.
     if (!readOnly) await tx`SELECT pg_advisory_xact_lock(20260919,33342)`;
@@ -89,7 +91,7 @@ export async function importQuestionPackage(sql, input, { dryRun = true } = {}) 
         const current = currentById.get(item.question.id);
         if (current) {
           if (!priorById.has(current.id) || !same(current,priorById.get(current.id))) throw new Error('Imported question has changed; automatic resume refused');
-          const currentPayload = (await tx`SELECT * FROM question_payloads WHERE question_id=${current.id}`)[0];
+          const [currentPayload] = await rowsBeforeMediaBindings(tx,pkg.sha256,'question_payloads',await tx`SELECT * FROM question_payloads WHERE question_id=${current.id}`);
           const oldPayload = (await tx`SELECT after_data FROM question_release_rows WHERE batch_id=${pkg.sha256} AND table_name='question_payloads' AND row_id=${item.payload.id} AND phase='import'`)[0];
           if (!oldPayload || !same(currentPayload,oldPayload.after_data)) throw new Error('Imported payload has changed; automatic resume refused');
           report.resumedQuestions++;
@@ -118,7 +120,7 @@ export async function publishImportedQuestions(sql, input, publicationInput, { d
   const checkChunk = async (tx, chunk, lock) => {
     const ids = chunk.map(item => item.id);
     const questions = await tx`SELECT * FROM questions WHERE id=ANY(${tx.array(ids)}::uuid[]) ${lock ? tx`FOR UPDATE` : tx``}`;
-    const payloads = await tx`SELECT * FROM question_payloads WHERE question_id=ANY(${tx.array(ids)}::uuid[]) ${lock ? tx`FOR UPDATE` : tx``}`;
+    const payloads = await rowsBeforeMediaBindings(tx,pkg.sha256,'question_payloads',await tx`SELECT * FROM question_payloads WHERE question_id=ANY(${tx.array(ids)}::uuid[]) ${lock ? tx`FOR UPDATE` : tx``}`);
     const payloadIds = chunk.map(row => items.get(row.id).payload.id);
     const receipts = await tx`SELECT * FROM question_release_rows WHERE batch_id=${pkg.sha256} AND row_id=ANY(${tx.array([...ids,...payloadIds])}::uuid[])`;
     const currentById = new Map(questions.map(row => [row.id,row]));
@@ -172,7 +174,7 @@ export async function archiveImportedQuestions(sql, input, { dryRun = true } = {
         if(receipts.some(row=>row.phase==='undo')){result.alreadyUndone++;continue;}
         const expected=receipts.find(row=>row.phase==='publish')??receipts.find(row=>row.phase==='import');
         const current=(await tx`SELECT * FROM questions WHERE id=${item.question.id} ${dryRun ? tx`` : tx`FOR UPDATE`}`)[0];
-        const payload=(await tx`SELECT * FROM question_payloads WHERE question_id=${item.question.id} ${dryRun ? tx`` : tx`FOR UPDATE`}`)[0];
+        const [payload]=await rowsBeforeMediaBindings(tx,pkg.sha256,'question_payloads',await tx`SELECT * FROM question_payloads WHERE question_id=${item.question.id} ${dryRun ? tx`` : tx`FOR UPDATE`}`);
         const payloadReceipt=(await tx`SELECT after_data FROM question_release_rows WHERE batch_id=${pkg.sha256} AND table_name='question_payloads' AND row_id=${item.payload.id} AND phase='import'`)[0];
         if(!current||!expected||!same(current,expected.after_data)||!payloadReceipt||!same(payload,payloadReceipt.after_data)){result.needsReview.push(item.question.id);continue;}
         if(!dryRun){const after=(await tx`UPDATE questions SET status='archived',ranked_eligible=false WHERE id=${item.question.id} RETURNING *`)[0];await journal(tx,pkg.sha256,'questions',current,after,'undo');}

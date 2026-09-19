@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { contentHash } from './question-manifest.mjs';
+import { rowsBeforeMediaBindings } from './content-media-bindings.mjs';
 
 const GROUPS = {
   squad: ['squad_spin_players','squad_spin_criteria','squad_spin_player_aliases','squad_spin_combos','squad_spin_calibrations'],
@@ -77,8 +78,9 @@ async function tableInfo(sql,table){
   if(!columns.length||!keys.length)throw new Error('Target table lacks columns or primary key');
   return {columns,keys};
 }
-async function readChunk(tx,table,info,rows,locked=false){
-  return (await tx.unsafe(`SELECT to_jsonb(t) AS row FROM public.${table} t JOIN jsonb_populate_recordset(NULL::public.${table},$1::jsonb) s ON ${info.keys.map(k=>'t.'+quote(k)+'=s.'+quote(k)).join(' AND ')}${locked?' FOR UPDATE OF t':''}`,[rows])).map(r=>r.row);
+async function readChunk(tx,table,info,rows,locked=false,batchId){
+  const current=(await tx.unsafe(`SELECT to_jsonb(t) AS row FROM public.${table} t JOIN jsonb_populate_recordset(NULL::public.${table},$1::jsonb) s ON ${info.keys.map(k=>'t.'+quote(k)+'=s.'+quote(k)).join(' AND ')}${locked?' FOR UPDATE OF t':''}`,[rows])).map(r=>r.row);
+  return table==='squad_spin_players'?rowsBeforeMediaBindings(tx,batchId,table,current):current;
 }
 function validateRows(info,rows){
   const keys=new Set();
@@ -108,7 +110,7 @@ export async function importFeatureContent(sql,directory,{targetProject,dryRun=t
         validateRows(info,chunk.rows);
         const receipt=prior.get(chunk.index);
         if(receipt){
-          const current=await readChunk(tx,group.table,info,chunk.rows);
+          const current=await readChunk(tx,group.table,info,chunk.rows,false,pkg.sha256);
           if(receipt.input_hash!==contentHash(chunk.rows)||receipt.row_count!==current.length||receipt.after_hash!==orderedHash(current))throw new Error('Previously imported content changed');
           prior.delete(chunk.index);
         }else report.planned+=chunk.rows.length;
@@ -128,14 +130,14 @@ export async function importFeatureContent(sql,directory,{targetProject,dryRun=t
       const [batch]=await tx`SELECT state FROM feature_content_release_batches WHERE id=${pkg.sha256} FOR UPDATE`;
       if(batch.state==='retained')throw new Error('Batch was undone');
       const [receipt]=await tx`SELECT * FROM feature_content_release_chunks WHERE batch_id=${pkg.sha256} AND table_name=${group.table} AND chunk_index=${chunk.index}`;
-      const current=await readChunk(tx,group.table,info,chunk.rows,true);
+      const current=await readChunk(tx,group.table,info,chunk.rows,true,pkg.sha256);
       if(receipt){if(receipt.input_hash!==contentHash(chunk.rows)||current.length!==receipt.row_count||orderedHash(current)!==receipt.after_hash)throw new Error('Imported content changed');report.resumed+=current.length;return;}
       if(current.length)throw new Error('Content appeared after preflight; overwrite refused');
       const names=Object.keys(chunk.rows[0]).sort();
       if(chunk.rows.some(r=>Object.keys(r).sort().join(',')!==names.join(',')))throw new Error('Inconsistent source columns');
       const columns=names.map(quote).join(',');
       const inserted=(await tx.unsafe(`INSERT INTO public.${group.table} AS t (${columns}) SELECT ${columns} FROM jsonb_populate_recordset(NULL::public.${group.table},$1::jsonb) RETURNING to_jsonb(t) AS row`,[chunk.rows])).map(r=>r.row);
-      await tx`INSERT INTO feature_content_release_chunks(batch_id,table_name,chunk_index,row_count,input_hash,after_hash) VALUES(${pkg.sha256},${group.table},${chunk.index},${inserted.length},${contentHash(chunk.rows)},${orderedHash(inserted)})`;
+      await tx`INSERT INTO feature_content_release_chunks(batch_id,table_name,chunk_index,row_count,input_hash,after_hash,source_row_ids) VALUES(${pkg.sha256},${group.table},${chunk.index},${inserted.length},${contentHash(chunk.rows)},${orderedHash(inserted)},${group.table==='squad_spin_players'?tx.array(chunk.rows.map(r=>r.id)):null}::uuid[])`;
       report.inserted+=inserted.length;
     });
     onProgress({table:group.table,inserted:report.inserted,resumed:report.resumed});

@@ -14,7 +14,7 @@ import type { User as DbUser } from '../db/types.js';
 import { getCachedUser } from '../modules/users/user-cache.js';
 import { rememberCurrentCountry } from './session-country.js';
 import { AppError } from '../core/errors.js';
-import { DbOverloadedError } from '../db/admission.js';
+import { DbOverloadedError } from '../db/index.js';
 
 export interface SocketAuthData {
   user: DbUser;
@@ -165,7 +165,9 @@ export async function socketAuthMiddleware(
       (overloadedError as Error & { data?: unknown }).data = {
         code: 'DB_OVERLOADED',
         retryable: true,
-        reason: error.reason,
+        reason:
+          (error as DbOverloadedError & { reason?: unknown }).reason ??
+          'overloaded',
       };
       next(overloadedError);
       return;

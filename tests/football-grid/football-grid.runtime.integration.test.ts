@@ -4,10 +4,12 @@ import postgres from 'postgres';
 import { FOOTBALL_GRID_EASY_BOT_CAPS } from '../../src/modules/football-grid/football-grid-bot.service.js';
 import '../setup.js';
 
+vi.hoisted(() => {
 process.env.FOOTBALL_GRID_COINS_ENABLED = 'true';
 process.env.FOOTBALL_GRID_POINTS_ENABLED = 'true';
 process.env.FOOTBALL_GRID_XP_ENABLED = 'true';
 process.env.FOOTBALL_GRID_RISK_HASH_SECRET = 'integration-football-grid-risk-secret-0001';
+});
 
 const DB_URL = process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test';
 const REQUIRE_DB = process.env.FOOTBALL_GRID_REQUIRE_DB === 'true';

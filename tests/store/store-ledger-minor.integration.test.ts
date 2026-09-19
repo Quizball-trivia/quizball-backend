@@ -39,6 +39,7 @@ afterAll(async () => {
 
 describe('store ledger minor-unit compatibility', () => {
   it('fills old-replica writes, preserves exact writes, and rejects disagreement', async (ctx) => {
+    if (!schemaAvailable && process.env.RELEASE_TEST_DATABASE_URL) throw new Error('Release ledger schema unavailable');
     if (!schemaAvailable) return ctx.skip();
 
     const [historicStyle] = await sql<{ coins_delta_minor: string }[]>`

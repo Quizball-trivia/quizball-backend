@@ -19051,7 +19051,7 @@
     "/api/v1/categories/{id}/dependencies": {
       "get": {
         "summary": "Get category dependencies",
-        "description": "Returns child categories, associated questions, and featured status. Requires admin role.",
+        "description": "Returns child categories, associated questions, and featured status",
         "tags": [
           "Categories"
         ],
@@ -19083,7 +19083,7 @@
             }
           },
           "401": {
-            "description": "Not authenticated",
+            "description": "Authentication required",
             "content": {
               "application/json": {
                 "schema": {
@@ -19093,7 +19093,7 @@
             }
           },
           "403": {
-            "description": "Insufficient permissions (admin role required)",
+            "description": "Admin role required",
             "content": {
               "application/json": {
                 "schema": {
@@ -24459,10 +24459,6 @@
                         "default": "live"
                       },
                       "free_entry": {
-                        "type": "boolean",
-                        "default": false
-                      },
-                      "single_game": {
                         "type": "boolean",
                         "default": false
                       },

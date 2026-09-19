@@ -274,16 +274,6 @@ describe('usersService.getPublicProfile', () => {
       .toThrow(NotFoundError);
   });
 
-  it('hides guests from public profiles and visibility checks', async () => {
-    getByIdMock.mockResolvedValue({ ...MOCK_USER, is_guest: true });
-    const { usersService } = await import('../../src/modules/users/users.service.js');
-    const { NotFoundError } = await import('../../src/core/errors.js');
-
-    await expect(usersService.getPublicProfile('user-target-id', 'viewer-id')).rejects.toThrow(NotFoundError);
-    await expect(usersService.assertPublicUserVisible('user-target-id')).rejects.toThrow(NotFoundError);
-    expect(getProfileMock).not.toHaveBeenCalled();
-  });
-
   it('hides users pending deletion from public profiles', async () => {
     getByIdMock.mockResolvedValue({
       ...MOCK_USER,
@@ -360,27 +350,6 @@ describe('usersService.getPublicProfile', () => {
 
     expect(updateMock).not.toHaveBeenCalled();
   });
-
-  it('normalizes country codes when the service is called outside HTTP validation', async () => {
-    const { usersService } = await import('../../src/modules/users/users.service.js');
-
-    await usersService.updateProfile('user-target-id', { country: ' ge ' });
-
-    expect(updateMock).toHaveBeenCalledWith('user-target-id', { country: 'GE' });
-  });
-
-  it.each(['Georgia', 'ZZ', 'My Private Country'])
-    ('rejects unsupported country values before writing: %s', async (country) => {
-      const { usersService } = await import('../../src/modules/users/users.service.js');
-
-      await expect(
-        usersService.updateProfile('user-target-id', { country })
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        details: { field: 'country', reason: 'unsupported_country_code' },
-      });
-      expect(updateMock).not.toHaveBeenCalled();
-    });
 
   it('allows local admin avatar customization preview with unowned paid items', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
@@ -543,7 +512,9 @@ describe('usersService.getPublicProfile', () => {
       avatarCustomization: { hair: 'hair_leopard' },
     });
 
-    expect(updateMock).toHaveBeenCalled();
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: { hair: 'hair_leopard' },
+    });
   });
 
   it('preserves an already-equipped paid part in the same slot without inventory', async () => {

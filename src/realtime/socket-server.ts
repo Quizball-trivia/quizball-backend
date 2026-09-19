@@ -1,3 +1,11 @@
+import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
+import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
+import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
+import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
+import { footballGridMatchmakingService } from './services/football-grid-matchmaking.service.js';
+import { footballGridRematchService } from './services/football-grid-rematch.service.js';
+import { footballGridPresenceService } from './services/football-grid-presence.service.js';
+import { handleFootballGridSocketTransition } from './football-grid-socket-transition.js';
 import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -13,7 +21,21 @@ import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
 import { registerAuctionHandlers } from './handlers/auction.handler.js';
-import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
+import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
+import { runAuctionClueRevealTimer, runAuctionClueStudyTimer } from './services/auction-clue-timer.service.js';
+import {
+  runAuctionDisconnectDebounceTimer,
+  runAuctionDisconnectGraceTimer,
+  runAuctionResumeCountdownTimer,
+} from './services/auction-disconnect.service.js';
+import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
+import { runAuctionAdvanceRetryTimer } from './services/auction-advance-retry.service.js';
+import {
+  auctionLifecycleService,
+  scheduleBootAuctionTimerRearm,
+} from './services/auction-lifecycle.service.js';
+import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
+import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 import type {
   ClientToServerEvents,
   InterServerEvents,
@@ -27,12 +49,14 @@ import { userSessionGuardService } from './services/user-session-guard.service.j
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
 import { setLobbyChallengeRealtimeServer } from './services/lobby-challenge-realtime.service.js';
-import { setSystemStatusRealtimeServer, emitSystemStatusToSocket } from './services/system-status.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
 import { acquireLock, releaseLock } from './locks.js';
-import { resolvePartyQuizRound, runPartyQuizRoundTransition } from './party-quiz-match-flow.js';
+import {
+  resolvePartyQuizRound,
+  runPartyQuizRoundTransition,
+} from './party-quiz-match-flow.js';
 import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from './possession-match-flow.js';
 import {
   startRealtimeTimerScheduler,
@@ -56,38 +80,21 @@ import {
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
-import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
-import { runAuctionClueRevealTimer, runAuctionClueStudyTimer } from './services/auction-clue-timer.service.js';
-import {
-  runAuctionDisconnectDebounceTimer,
-  runAuctionDisconnectGraceTimer,
-  runAuctionResumeCountdownTimer,
-} from './services/auction-disconnect.service.js';
 import {
   postConnectDbTaskLimiter,
   socketDbTaskLimiter,
 } from './socket-db-task-limiter.js';
-import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
-import { runAuctionAdvanceRetryTimer } from './services/auction-advance-retry.service.js';
-import {
-  auctionLifecycleService,
-  scheduleBootAuctionTimerRearm,
-} from './services/auction-lifecycle.service.js';
-import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
-import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
-import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
-import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
-import { footballGridMatchmakingService } from './services/football-grid-matchmaking.service.js';
-import { footballGridRematchService } from './services/football-grid-rematch.service.js';
-import { footballGridPresenceService } from './services/football-grid-presence.service.js';
-import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
-import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
-import { socketRuntimeTracker } from './socket-runtime-stats.js';
 import { ConnectStateBatcher } from './connect-state-batcher.js';
 import type { SessionStatePayload } from './socket.types.js';
-import { handleFootballGridSocketTransition } from './football-grid-socket-transition.js';
+import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
+import { socketRuntimeTracker } from './socket-runtime-stats.js';
 
-export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketAuthData>;
+export type QuizballSocket = Socket<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  InterServerEvents,
+  SocketAuthData
+>;
 export type QuizballServer = Server<
   ClientToServerEvents,
   ServerToClientEvents,
@@ -135,9 +142,19 @@ export const SOCKET_HEARTBEAT_CONFIG = {
 // set serverNoContextTakeover — it throws away most of the win.
 //
 // windowBits/memLevel are the memory guard, and they are required: ws holds a
-// zlib context per connection, and at the default 15-bit window that is ~318 KB
-// per socket (~1.5 GB at 5k sockets) against a container that peaks at 1.25 GB.
-// windowBits 13 + memLevel 6 costs ~0.5pt of ratio for ~45% of the memory.
+// zlib context per connection, and at the default 15-bit window that is
+// hundreds of KB per socket against a container that peaks at 1.25 GB.
+//
+// serverMaxWindowBits/clientMaxWindowBits are NOT redundant with
+// zlibDeflateOptions.windowBits. ws builds the context as
+// `createDeflateRaw({ ...zlibDeflateOptions, windowBits })` where windowBits
+// comes from the NEGOTIATED `<endpoint>_max_window_bits` and falls back to
+// zlib's 15-bit default (ws 8.18.3, permessage-deflate.js `_compress`) — so it
+// overrides the option and the bound silently does not apply. Measured
+// 2026-09-04 at 300 sockets: 793 KB/socket without the negotiated limits vs
+// 254 KB/socket with them, at the same 96% compression. A client that cannot
+// negotiate the window simply declines the extension (RFC 7692) and falls back
+// to uncompressed frames, which is safe.
 //
 // `threshold` is intentionally NOT relied on: ws only honours it when
 // no_context_takeover was negotiated (see ws/lib/sender.js `_firstFragment`
@@ -151,49 +168,26 @@ export const SOCKET_COMPRESSION_CONFIG = {
   concurrencyLimit: 10,
   zlibDeflateOptions: { level: 6, memLevel: 6, windowBits: 13 },
   zlibInflateOptions: { windowBits: 13 },
+  serverMaxWindowBits: 13,
+  clientMaxWindowBits: 13,
 } as const;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
 let lastBroadcastOnlineCount: number | null = null;
-const detachedSocketFailureCounts = new Map<string, number>();
 const connectStateBatcher = new ConnectStateBatcher(
-  (userIds) => userSessionGuardService.resolveStates(userIds),
+  (userIds) => userSessionGuardService.resolveStates(userIds)
 );
-
-/**
- * Socket.IO does not observe promises returned by event listeners. Every
- * background task launched from a connection/disconnect callback therefore
- * needs its own rejection boundary. Admission-gate rejections during a mass
- * disconnect are expected load shedding, not unhandled process corruption.
- */
-function runSocketTask(
-  operation: string,
-  userId: string,
-  task: () => Promise<unknown>
-): void {
-  void Promise.resolve()
-    .then(task)
-    .catch((error) => {
-      const failures = (detachedSocketFailureCounts.get(operation) ?? 0) + 1;
-      detachedSocketFailureCounts.set(operation, failures);
-      // Preserve evidence without producing one log line per socket in a burst.
-      if (failures % 50 === 1) {
-        logger.warn(
-          { error, operation, userId, failures },
-          'Detached socket task failed'
-        );
-      }
-    });
-}
 
 function runSocketDbTask(
   operation: string,
   userId: string,
-  task: () => Promise<unknown>,
+  task: () => Promise<unknown>
 ): void {
-  runSocketTask(operation, userId, () => socketDbTaskLimiter.run(task));
+  void socketDbTaskLimiter.run(task).catch((error) => {
+    logger.warn({ error, operation, userId }, 'Socket DB task failed');
+  });
 }
 
 type DisconnectDbTask = 'lobby_disconnect' | 'match_disconnect';
@@ -442,26 +436,32 @@ async function runPostConnectHydration(
 function runLimitedPostConnectHydration(
   io: QuizballServer,
   socket: QuizballSocket,
-  attempt = 0,
+  attempt = 0
 ): void {
-  runSocketTask(
-    'post_connect_hydration',
-    socket.data.user.id,
-    async () => {
-      // Resolve connection state before entering the per-user follow-up
-      // limiter. Keeping this lookup inside a four-task limiter prevented the
-      // 250-user batcher above from ever collecting more than four users and
-      // turned a connection wave into hundreds of tiny serialized queries.
-      const initialSnapshot = await connectStateBatcher.resolve(socket.data.user.id);
-      if (!socket.connected) return;
-      const hydrate = () => runPostConnectHydration(io, socket, initialSnapshot, attempt);
-      if (initialSnapshot.state === 'IDLE') {
-        await postConnectDbTaskLimiter.run(hydrate);
-      } else {
-        await postConnectDbTaskLimiter.runPriority(hydrate);
-      }
-    },
-  );
+  void (async () => {
+    // Resolve connection state before entering the four-task follow-up limiter.
+    // Keeping this lookup inside the limiter prevented the 250-user batcher
+    // from ever collecting more than four users during a connection wave.
+    const initialSnapshot = await connectStateBatcher.resolve(socket.data.user.id);
+    if (!socket.connected) return;
+    const hydrate = () =>
+      runPostConnectHydration(io, socket, initialSnapshot, attempt);
+    if (initialSnapshot.state === 'IDLE') {
+      await postConnectDbTaskLimiter.run(hydrate);
+    } else {
+      await postConnectDbTaskLimiter.runPriority(hydrate);
+    }
+  })().catch((error) => {
+    logger.warn(
+      {
+        error,
+        userId: socket.data.user.id,
+        socketId: socket.id,
+        attempt,
+      },
+      'Post-connect hydration task failed'
+    );
+  });
 }
 
 /**
@@ -598,12 +598,7 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     },
     match_disconnect_forfeit: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_disconnect_forfeit') return;
-      await resolveExpiredGraceWindow(
-        server,
-        payload.matchId,
-        payload.disconnectedUserId,
-        payload.disconnectMarkerMs
-      );
+      await resolveExpiredGraceWindow(server, payload.matchId, payload.disconnectedUserId);
     },
     match_resume_countdown: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_resume_countdown') return;
@@ -657,6 +652,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.on('match:ui_ready_ack', (userId, matchId, phase) => {
     acknowledgeLocalMatchUiReady(io, userId, matchId, phase);
   });
+
   io.on('grid:socket_transition', (payload) => {
     handleFootballGridSocketTransition(io, payload);
   });
@@ -669,9 +665,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // Lets the bot challenge responder (a background worker with no socket of its
   // own) deliver a decline to the challenger's room.
   setLobbyChallengeRealtimeServer(io);
-  // Lets the DB read-only breaker broadcast system:status on a state edge
-  // without importing the realtime layer (breaker fires an io-free callback).
-  setSystemStatusRealtimeServer(io);
 
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
@@ -701,6 +694,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   rankedMatchmakingService.start(io);
+  auctionMatchmakingService.start(io);
 
   if (onlineCountRefreshTimer) {
     clearInterval(onlineCountRefreshTimer);
@@ -773,7 +767,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       // (socket missing its matchId while a match is live) is diagnosable from
       // logs — observed once on staging (reconnect_smoke 2026-06-10) where a
       // mid-match disconnect produced no pause and no skip.
-      logger.debug(
+      logger.info(
         {
           userId: user.id,
           socketId: socket.id,
@@ -794,19 +788,22 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
       if (disconnectDbTasks.includes('lobby_disconnect')) {
-        runSocketDbTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
+        runSocketDbTask('lobby_disconnect', user.id, () =>
+          lobbyRealtimeService.handleLobbyDisconnect(io, socket)
+        );
       }
       if (socket.data.gridMatchId) {
-        runSocketDbTask('football_grid_disconnect', user.id, () =>
-          footballGridRealtimeService.handleSocketDisconnect(io, socket));
+        runSocketDbTask('football_grid_disconnect', user.id, () => footballGridRealtimeService.handleSocketDisconnect(io, socket));
       } else if (disconnectDbTasks.includes('match_disconnect')) {
-        runSocketDbTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
+        runSocketDbTask('match_disconnect', user.id, () =>
+          matchRealtimeService.handleMatchDisconnect(io, socket)
+        );
       }
-      runSocketTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
-      runSocketTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
-      runSocketTask('football_grid_matchmaking_disconnect', user.id, () => footballGridMatchmakingService.handleSocketDisconnect(io, socket));
-      runSocketTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
-      runSocketTask('presence_offline', user.id, () => trackUserOffline(io, user.id));
+      runSocketDbTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('football_grid_matchmaking_disconnect', user.id, () => footballGridMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
+      runSocketDbTask('presence_offline', user.id, () => trackUserOffline(io, user.id));
       scheduleOnlineCountBroadcast(io);
     });
 
@@ -819,13 +816,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       socket: socket.id,
       transport: socket.conn.transport.name,
     });
-    runSocketTask('presence_online', user.id, () => trackUserOnline(user.id));
-    runSocketTask('presence_count', user.id, () => emitOnlineCount(io, socket));
+    void trackUserOnline(user.id);
+    void emitOnlineCount(io, socket);
     scheduleOnlineCountBroadcast(io);
-    // Tell this socket the current system status immediately, so a client that
-    // connects (or reconnects) mid-outage renders the degraded UI without
-    // waiting for the next breaker state edge. No DB access — memory snapshot.
-    emitSystemStatusToSocket((payload) => socket.emit('system:status', payload));
     runLimitedPostConnectHydration(io, socket);
   });
 

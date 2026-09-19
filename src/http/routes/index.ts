@@ -8,54 +8,56 @@ import { featuredCategoriesRoutes } from './featured-categories.routes.js';
 import { statsRoutes } from './stats.routes.js';
 import { lobbiesRoutes } from './lobbies.routes.js';
 import { rankedRoutes } from './ranked.routes.js';
-import { auctionRoutes } from './auction.routes.js';
-import { footballGridRoutes } from './football-grid.routes.js';
 import { storeRoutes } from './store.routes.js';
 import { activityRoutes } from './activity.routes.js';
 import { dailyChallengesRoutes } from './daily-challenges.routes.js';
-import { freeKicksRoutes } from './free-kicks.routes.js';
-import { triviaMinesRoutes } from './trivia-mines.routes.js';
-import { squadSpinRoutes } from './squad-spin.routes.js';
-import { guestRoutes } from './guest.routes.js';
-import { roadToGoalRoutes } from './road-to-goal.routes.js';
-import { guessTheGoalRoutes } from './guess-the-goal.routes.js';
 import { objectivesRoutes } from './objectives.routes.js';
 import { notificationsRoutes } from './notifications.routes.js';
 import { weekendLeagueRoutes } from './weekend-league.routes.js';
 import { wlOpsRoutes } from './wl-ops.routes.js';
-import { adminWlRoutes } from './admin-wl.routes.js';
 import { announcementsRoutes } from './announcements.routes.js';
 import { adminDailyChallengesRoutes } from './admin-daily-challenges.routes.js';
 import { adminUsersRoutes } from './admin-users.routes.js';
 import { adminAnnouncementsRoutes } from './admin-announcements.routes.js';
 import { adminLeaderboardRoutes } from './admin-leaderboard.routes.js';
-import { adminAuctionRoutes } from './admin-auction.routes.js';
-import { adminPlayerClueCardsRoutes } from './admin-player-clue-cards.routes.js';
-import { adminAuctionPipelineRoutes } from './admin-auction-pipeline.routes.js';
 import { adminAgentsRoutes } from './admin-agents.routes.js';
-import { adminFootballGridRoutes } from './admin-football-grid.routes.js';
+import { adminWlRoutes } from './admin-wl.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { translationRoutes } from './translation.routes.js';
 import { opsRoutes } from './ops.routes.js';
-import { systemRoutes } from './system.routes.js';
 import { botGovernorRoutes } from './bot-governor.routes.js';
 import { botTuningRoutes } from './bot-tuning.routes.js';
 import { feedbackRoutes } from './feedback.routes.js';
 import { emailRoutes } from './email.routes.js';
 import { campaignQuizzesRoutes } from './campaign-quizzes.routes.js';
 import { adminCampaignQuizzesRoutes } from './admin-campaign-quizzes.routes.js';
+import { auctionRoutes } from './auction.routes.js';
+import { adminAuctionRoutes } from './admin-auction.routes.js';
+import { adminPlayerClueCardsRoutes } from './admin-player-clue-cards.routes.js';
+import { adminAuctionPipelineRoutes } from './admin-auction-pipeline.routes.js';
 import { adminRetentionRoutes } from './admin-retention.routes.js';
+import { guessTheGoalRoutes } from './guess-the-goal.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
+
+import { footballGridRoutes } from './football-grid.routes.js';
+
+import { freeKicksRoutes } from './free-kicks.routes.js';
+
+import { triviaMinesRoutes } from './trivia-mines.routes.js';
+
+import { squadSpinRoutes } from './squad-spin.routes.js';
+
+import { guestRoutes } from './guest.routes.js';
+
+import { roadToGoalRoutes } from './road-to-goal.routes.js';
+
+import { adminFootballGridRoutes } from './admin-football-grid.routes.js';
 
 const router = Router();
 
 // Health check (not versioned)
 router.use(healthRoutes);
-
-// System status — unauthenticated, DB-free breaker snapshot for the client's
-// outage UX. Declares its own full /api/v1/system/status path, so mount at root.
-router.use(systemRoutes);
 
 // API documentation (controlled by DOCS_ENABLED env var)
 if (config.DOCS_ENABLED) {
@@ -72,40 +74,47 @@ router.use('/api/v1/featured-categories', featuredCategoriesRoutes);
 router.use('/api/v1/stats', statsRoutes);
 router.use('/api/v1/lobbies', lobbiesRoutes);
 router.use('/api/v1/ranked', rankedRoutes);
-router.use('/api/v1/auction', auctionRoutes);
-router.use('/api/v1/football-grid', footballGridRoutes);
 router.use('/api/v1/store', storeRoutes);
 router.use('/api/v1/daily-challenges', dailyChallengesRoutes);
-router.use('/api/v1/free-kicks', freeKicksRoutes);
-router.use('/api/v1/trivia-mines', triviaMinesRoutes);
-router.use('/api/v1/squad-spin', squadSpinRoutes);
-router.use('/api/v1/guest', guestRoutes);
-router.use('/api/v1/road-to-goal', roadToGoalRoutes);
-router.use('/api/v1/guess-the-goal', guessTheGoalRoutes);
 router.use('/api/v1/objectives', objectivesRoutes);
 router.use('/api/v1/notifications', notificationsRoutes);
 router.use('/api/v1/weekend-league', weekendLeagueRoutes);
 router.use('/api/v1/internal/ops/wl', wlOpsRoutes);
-router.use('/api/v1/admin/wl', adminWlRoutes);
 router.use('/api/v1/announcements', announcementsRoutes);
 router.use('/api/v1/admin/activity', activityRoutes);
 router.use('/api/v1/admin/daily-challenges', adminDailyChallengesRoutes);
 router.use('/api/v1/admin/users', adminUsersRoutes);
 router.use('/api/v1/admin/announcements', adminAnnouncementsRoutes);
 router.use('/api/v1/admin/leaderboard', adminLeaderboardRoutes);
+router.use('/api/v1/admin/translation', translationRoutes);
+router.use('/api/v1/admin/agents', adminAgentsRoutes);
+router.use('/api/v1/admin/wl', adminWlRoutes);
+router.use('/api/v1/internal/ops', opsRoutes);
+router.use('/api/v1/internal/bots/governor', botGovernorRoutes);
+router.use('/api/v1/internal/bots/tuning', botTuningRoutes);
+router.use('/api/v1/auction', auctionRoutes);
 router.use('/api/v1/admin/auction', adminAuctionRoutes);
 router.use('/api/v1/admin/player-clue-cards', adminPlayerClueCardsRoutes);
 router.use('/api/v1/admin/auction-pipeline', adminAuctionPipelineRoutes);
 router.use('/api/v1/admin/retention', adminRetentionRoutes);
-router.use('/api/v1/admin/agents', adminAgentsRoutes);
-router.use('/api/v1/admin/football-grid', adminFootballGridRoutes);
-router.use('/api/v1/admin/translation', translationRoutes);
-router.use('/api/v1/internal/ops', opsRoutes);
-router.use('/api/v1/internal/bots/governor', botGovernorRoutes);
-router.use('/api/v1/internal/bots/tuning', botTuningRoutes);
 router.use('/api/v1/feedback', feedbackRoutes);
 router.use('/api/v1/email', emailRoutes);
 router.use('/api/v1/campaign-quizzes', campaignQuizzesRoutes);
 router.use('/api/v1/admin/campaign-quizzes', adminCampaignQuizzesRoutes);
+router.use('/api/v1/guess-the-goal', guessTheGoalRoutes);
+
+router.use('/api/v1/football-grid', footballGridRoutes);
+
+router.use('/api/v1/free-kicks', freeKicksRoutes);
+
+router.use('/api/v1/trivia-mines', triviaMinesRoutes);
+
+router.use('/api/v1/squad-spin', squadSpinRoutes);
+
+router.use('/api/v1/guest', guestRoutes);
+
+router.use('/api/v1/road-to-goal', roadToGoalRoutes);
+
+router.use('/api/v1/admin/football-grid', adminFootballGridRoutes);
 
 export const routes = router;

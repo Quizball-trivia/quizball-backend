@@ -39,6 +39,15 @@ describe('campaign quiz image environment isolation', () => {
     )).toThrow(/uploaded through this CMS/);
   });
 
+  it('rejects malformed absolute URLs in CMS writes', () => {
+    expect(() => normalizeCampaignQuizImageReference('http://'))
+      .toThrow(/URL is invalid/);
+  });
+
+  it('ignores malformed legacy absolute URLs when rendering', () => {
+    expect(publicCampaignQuizImageUrl('http://')).toBeNull();
+  });
+
   it('rejects protocol-relative image references when rendering', () => {
     expect(() => publicCampaignQuizImageUrl('//example.com/arsenal.webp'))
       .toThrow(/path is invalid/);

@@ -36,6 +36,14 @@ function objectPathFromPublicUrl(value: URL): string | null {
   return value.pathname.slice(markerIndex + PUBLIC_OBJECT_PREFIX.length);
 }
 
+function parseAbsoluteUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
 function validateObjectPath(value: string): string {
   const objectPath = value.replace(/^\/+/, '');
   if (
@@ -61,7 +69,8 @@ export function normalizeCampaignQuizImageReference(value: string | null): strin
     return validateObjectPath(value);
   }
 
-  const parsed = new URL(value);
+  const parsed = parseAbsoluteUrl(value);
+  if (!parsed) throw new BadRequestError('Campaign artwork URL is invalid');
   const objectPath = objectPathFromPublicUrl(parsed);
   if (!objectPath) {
     throw new BadRequestError('Campaign artwork must be uploaded through this CMS');
@@ -90,7 +99,8 @@ export function publicCampaignQuizImageUrl(value: string | null): string | null 
 
   let objectPath: string;
   if (/^https?:\/\//i.test(value)) {
-    const parsed = new URL(value);
+    const parsed = parseAbsoluteUrl(value);
+    if (!parsed) return null;
     const parsedObjectPath = objectPathFromPublicUrl(parsed);
     if (!parsedObjectPath) return value;
     objectPath = validateObjectPath(parsedObjectPath);

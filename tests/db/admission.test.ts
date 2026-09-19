@@ -61,16 +61,13 @@ describe('DbAdmissionController', () => {
     await Promise.all([first, queued]);
   });
 
-  it('times out queued acquisition instead of waiting indefinitely', async () => {
+  it('times out a queued acquisition instead of waiting indefinitely', async () => {
     vi.useFakeTimers();
     try {
       const gate = new DbAdmissionController(1, 1, 250);
       const active = deferred<void>();
       const first = gate.run(() => active.promise);
-      const queued = gate.run(async () => 'never');
-      // Attach the rejection handler before advancing fake time so Node does
-      // not report the deliberately timed-out waiter as temporarily unhandled.
-      const queuedResult = queued.catch((error) => error);
+      const queuedResult = gate.run(async () => 'never').catch((error) => error);
 
       await vi.advanceTimersByTimeAsync(250);
       await expect(queuedResult).resolves.toBeInstanceOf(DbOverloadedError);
@@ -88,7 +85,7 @@ describe('DbAdmissionController', () => {
     }
   });
 
-  it('runs a priority health probe before a full ordinary backlog', async () => {
+  it('runs a priority watchdog probe before an ordinary backlog', async () => {
     const gate = new DbAdmissionController(1, 1, 1_000);
     const active = deferred<void>();
     const priority = deferred<void>();

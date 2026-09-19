@@ -65,7 +65,8 @@ beforeAll(async () => {
 
     const ticketRefillModule = await import('../../src/modules/store/ticket-refill.service.js');
     ticketRefillService = ticketRefillModule.ticketRefillService;
-  } catch {
+  } catch (error) {
+    if (process.env.RELEASE_TEST_DATABASE_URL) throw error;
     console.warn(
       '\nSkipping ranked ticket CAS integration tests: Database not available.\n' +
         '   Run `npm run docker:start` to start the test database.\n'

@@ -35,15 +35,7 @@ interface Waiter {
   settled: boolean;
 }
 
-/**
- * Bounds concurrent requests to hosted Supabase Auth.
- *
- * Auth operations open their own database transactions outside the API's
- * postgres.js pool. Without a separate bulkhead, a distributed signup/login
- * storm can exhaust the shared Postgres connection budget even though the app
- * pool is correctly capped. Excess requests receive a retryable 429 instead of
- * turning upstream connection exhaustion into a burst of 502 responses.
- */
+/** Bounds concurrent requests to hosted Supabase Auth per app replica. */
 export class AuthAdmissionController {
   private active = 0;
   private readonly waiters: Waiter[] = [];
@@ -59,9 +51,15 @@ export class AuthAdmissionController {
     private readonly queueLimit: number,
     private readonly waitTimeoutMs: number,
   ) {
-    if (!Number.isInteger(limit) || limit < 1) throw new Error('Auth admission limit must be positive');
-    if (!Number.isInteger(queueLimit) || queueLimit < 0) throw new Error('Auth admission queue limit must be non-negative');
-    if (!Number.isFinite(waitTimeoutMs) || waitTimeoutMs < 1) throw new Error('Auth admission wait timeout must be positive');
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('Auth admission limit must be positive');
+    }
+    if (!Number.isInteger(queueLimit) || queueLimit < 0) {
+      throw new Error('Auth admission queue limit must be non-negative');
+    }
+    if (!Number.isFinite(waitTimeoutMs) || waitTimeoutMs < 1) {
+      throw new Error('Auth admission wait timeout must be positive');
+    }
   }
 
   stats(): AuthAdmissionStats {
@@ -142,15 +140,15 @@ export class AuthAdmissionController {
   }
 }
 
-// Runtime fallbacks keep unit tests with intentionally partial config mocks
-// safe; parsed staging/prod configuration always supplies these defaults.
 const authAdmission = new AuthAdmissionController(
   config.AUTH_INFLIGHT_LIMIT ?? 4,
   config.AUTH_QUEUE_LIMIT ?? 16,
   config.AUTH_ACQUIRE_TIMEOUT_MS ?? 2_000,
 );
 
-export async function withAuthAdmission<T>(operation: () => PromiseLike<T> | T): Promise<T> {
+export async function withAuthAdmission<T>(
+  operation: () => PromiseLike<T> | T
+): Promise<T> {
   try {
     return await authAdmission.run(operation);
   } catch (error) {

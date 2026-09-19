@@ -45,8 +45,8 @@ function tiedSuddenDeathState() {
 }
 
 const missedAnswers = new Map([
-  ['seat-1', { is_correct: false, time_ms: 1_000, points_earned: 0 }],
-  ['seat-2', { is_correct: false, time_ms: 1_000, points_earned: 0 }],
+  ['seat-1', { is_correct: false, time_ms: 1_000 }],
+  ['seat-2', { is_correct: false, time_ms: 1_000 }],
 ]);
 
 describe('penalty sudden-death rounds before the draw', () => {

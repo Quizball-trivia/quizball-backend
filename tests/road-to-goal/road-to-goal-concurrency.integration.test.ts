@@ -42,6 +42,7 @@ beforeAll(async () => {
         AND to_regclass('public.road_to_goal_ledger_keys') IS NOT NULL AS ready
     `;
     if (!schema?.ready) {
+      if (process.env.RELEASE_TEST_DATABASE_URL) throw new Error("Rehearsal schema is incomplete");
       console.warn(
         '\n⚠️  Skipping Road to Goal concurrency integration test: migrations not applied.\n'
       );
@@ -54,7 +55,8 @@ beforeAll(async () => {
       '../../src/modules/road-to-goal/road-to-goal.repo.js'
     )).roadToGoalRepo;
     schemaAvailable = true;
-  } catch {
+  } catch (error) {
+    if (process.env.RELEASE_TEST_DATABASE_URL) throw error;
     console.warn('\n⚠️  Skipping Road to Goal concurrency integration test: DB unavailable.\n');
   }
 });

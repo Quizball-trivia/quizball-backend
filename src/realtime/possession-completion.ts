@@ -516,10 +516,8 @@ export async function completePossessionMatch(
           )
         );
       } catch (err) {
-        // The durable match result is already committed. Redis only supports
-        // reconnect replay and analytics metadata here, so a transient Redis
-        // failure must never suppress the live terminal event and strand both
-        // players on the gameplay screen.
+        // The durable result is already committed. Redis replay bookkeeping
+        // must not suppress the live terminal event.
         logger.warn(
           { err, matchId },
           'Final-results replay bookkeeping failed — emitting live result anyway'
@@ -527,9 +525,8 @@ export async function completePossessionMatch(
       }
     }
 
-    // Emit to both the match room and durable user rooms. A player can move
-    // replicas or briefly lose match-room membership during completion; the
-    // user rooms provide a second delivery path without another database read.
+    // User rooms are a second delivery path when a socket changes replicas or
+    // briefly loses match-room membership during completion.
     const finalResultRooms = [
       `match:${matchId}`,
       ...finalPlayers.map((player) => `user:${player.user_id}`),
@@ -579,8 +576,8 @@ export async function completePossessionMatch(
     try {
       await deleteMatchCache(matchId);
     } catch (err) {
-      // Cleanup is also post-commit. The TTL will eventually remove stale
-      // cache state, and completion must still report success to its caller.
+      // TTL cleanup remains available; post-commit cache cleanup must not make
+      // a completed match appear to have failed.
       logger.warn({ err, matchId }, 'Completed match cache cleanup failed');
     }
     return {

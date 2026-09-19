@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-vi.hoisted(() => { process.env.GUEST_BOT_MATCH_DELAY_MIN_MS = '0'; process.env.GUEST_BOT_MATCH_DELAY_MAX_MS = '0'; });
+vi.hoisted(() => { process.env.AUCTION_ENABLED = 'true'; process.env.GUEST_BOT_MATCHES_ENABLED = 'true'; process.env.GUEST_BOT_MATCH_DELAY_MIN_MS = '0'; process.env.GUEST_BOT_MATCH_DELAY_MAX_MS = '0'; });
 import '../setup.js';
 
 const auctionContentServiceMock = vi.hoisted(() => ({

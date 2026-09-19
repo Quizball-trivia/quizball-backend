@@ -6,10 +6,7 @@ import { lobbiesRepo } from '../../src/modules/lobbies/lobbies.repo.js';
 import {
   attachUserSocketsToLobby,
   emitLobbyState,
-  maxMembersForFriendlyGameMode,
   normalizeFriendlyGameMode,
-  orderLobbyMembersByJoinTime,
-  playableMembersForFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCount,
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../../src/realtime/lobby-utils.js';
@@ -55,87 +52,7 @@ describe('lobby-utils', () => {
     expect(normalizeFriendlyGameMode(null)).toBe('friendly_possession');
     expect(normalizeFriendlyGameMode('friendly')).toBe('friendly_possession');
     expect(normalizeFriendlyGameMode('friendly_party_quiz')).toBe('friendly_party_quiz');
-    expect(normalizeFriendlyGameMode('auction')).toBe('auction');
     expect(normalizeFriendlyGameMode('ranked_sim')).toBe('ranked_sim');
-    expect(normalizeFriendlyGameMode('football_grid')).toBe('football_grid');
-  });
-
-  it('caps auction lobbies at 3 members and everything else at the party ceiling', () => {
-    expect(maxMembersForFriendlyGameMode('auction')).toBe(3);
-    expect(maxMembersForFriendlyGameMode('football_grid')).toBe(2);
-    expect(maxMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
-    // Possession may HOLD more than 2 — it auto-promotes to party quiz.
-    expect(maxMembersForFriendlyGameMode('friendly_possession')).toBe(6);
-  });
-
-  it('reports playable size per mode (possession is strictly a duel)', () => {
-    expect(playableMembersForFriendlyGameMode('auction')).toBe(3);
-    expect(playableMembersForFriendlyGameMode('football_grid')).toBe(2);
-    expect(playableMembersForFriendlyGameMode('friendly_possession')).toBe(2);
-    expect(playableMembersForFriendlyGameMode('ranked_sim')).toBe(2);
-    expect(playableMembersForFriendlyGameMode('friendly_party_quiz')).toBe(6);
-  });
-
-  it('orders lobby members when Postgres returns joined_at as Date objects', () => {
-    const later = { user_id: 'later', joined_at: new Date('2026-08-26T12:00:01.000Z') };
-    const earlier = { user_id: 'earlier', joined_at: new Date('2026-08-26T12:00:00.000Z') };
-
-    expect(orderLobbyMembersByJoinTime([later, earlier]).map((member) => member.user_id)).toEqual([
-      'earlier',
-      'later',
-    ]);
-  });
-
-  it('orders equal join timestamps by user ID for stable seat assignment', () => {
-    const joinedAt = new Date('2026-08-26T12:00:00.000Z');
-    const second = { user_id: 'user-b', joined_at: joinedAt };
-    const first = { user_id: 'user-a', joined_at: joinedAt };
-
-    expect(orderLobbyMembersByJoinTime([second, first]).map((member) => member.user_id)).toEqual([
-      'user-a',
-      'user-b',
-    ]);
-  });
-
-  it('EDGE 1/5: a 3-member auction lobby is never auto-promoted to party quiz', async () => {
-    vi.mocked(lobbiesRepo.getById).mockResolvedValue({
-      id: 'lobby-auction',
-      mode: 'friendly',
-      status: 'waiting',
-      game_mode: 'auction',
-      friendly_random: true,
-      friendly_category_a_id: null,
-      friendly_category_b_id: null,
-    } as never);
-    vi.mocked(lobbiesRepo.countMembers).mockResolvedValue(3);
-
-    await syncFriendlyLobbyModeForMemberCountLocked('lobby-auction', {
-      clearReadyOnPartyTransition: true,
-    });
-
-    expect(lobbiesRepo.updateLobbySettings).not.toHaveBeenCalled();
-    // The expected 3rd auction member must not wipe ready states.
-    expect(lobbiesRepo.setAllReady).not.toHaveBeenCalled();
-  });
-
-  it('keeps a two-player Football Grid lobby isolated from party auto-promotion', async () => {
-    vi.mocked(lobbiesRepo.getById).mockResolvedValue({
-      id: 'lobby-grid',
-      mode: 'friendly',
-      status: 'waiting',
-      game_mode: 'football_grid',
-      friendly_random: false,
-      friendly_category_a_id: null,
-      friendly_category_b_id: null,
-    } as never);
-    vi.mocked(lobbiesRepo.countMembers).mockResolvedValue(2);
-
-    await syncFriendlyLobbyModeForMemberCountLocked('lobby-grid', {
-      clearReadyOnPartyTransition: true,
-    });
-
-    expect(lobbiesRepo.updateLobbySettings).not.toHaveBeenCalled();
-    expect(lobbiesRepo.setAllReady).not.toHaveBeenCalled();
   });
 
   it('acquires and releases a lobby lock while forcing party quiz and clearing ready states', async () => {

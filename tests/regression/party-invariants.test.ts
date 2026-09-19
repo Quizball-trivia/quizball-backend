@@ -114,3 +114,23 @@ it('allows a forfeit winner below rank one', () => {
   const t = build([], { ...GOOD_FINAL, winnerId: 'u2', winnerDecisionMethod: 'forfeit' });
   expect(checkPartyInvariants(t).ok).toBe(true);
 });
+
+
+it('accepts one re-dispatch after the server resume countdown, before match:resume', () => {
+  const t = createTrace(() => 0);
+  t.record('server->room', 'match:question', { qIndex: 2 }, 'match:m1');
+  t.record('server->room', 'match:countdown', { reason: 'resume' }, 'match:m1');
+  t.record('server->room', 'match:question', { qIndex: 2 }, 'match:m1');
+  expect(violationsFor(t, 'oneQuestionPerQIndexParty')).toEqual([]);
+  t.record('server->room', 'match:question', { qIndex: 2 }, 'match:m1');
+  expect(violationsFor(t, 'oneQuestionPerQIndexParty')).toHaveLength(1);
+});
+
+
+it('allows settled-outcome redelivery but rejects a changed winner or points', () => {
+  const t = build([], { ...GOOD_FINAL, resultVersion: 1 });
+  t.record('server->room', 'match:final_results', { ...GOOD_FINAL, resultVersion: 1, xp: 10 }, 'match:m1');
+  expect(checkPartyInvariants(t).ok).toBe(true);
+  t.record('server->room', 'match:final_results', { ...GOOD_FINAL, resultVersion: 1, winnerId: 'u2' }, 'match:m1');
+  expect(violationsFor(t, 'finalStandingsWellFormed')).toHaveLength(1);
+});

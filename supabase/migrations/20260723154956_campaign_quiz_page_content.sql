@@ -251,3 +251,9 @@ FROM (
   GROUP BY configured.quiz_slug
 ) pool
 WHERE quiz.slug = pool.quiz_slug;
+
+-- The migration runner applies every file on one connection, so a temp
+-- table created here would still exist when the next migration runs and
+-- collide with its own CREATE TEMP TABLE. Drop them explicitly.
+DROP TABLE IF EXISTS campaign_question_candidates;
+DROP TABLE IF EXISTS campaign_quiz_sources;

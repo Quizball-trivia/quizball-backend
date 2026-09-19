@@ -60,4 +60,16 @@ describe('campaignQuizGooglebotService', () => {
       preview_url: 'http://localhost:3011/en/football-quiz/liverpool?preview=token',
     } as AdminCampaignQuizPageResponse)).rejects.toThrow(/did not return HTML/);
   });
+
+  it('reports the upstream HTTP status before inspecting the content type', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"error":"unavailable"}', {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(campaignQuizGooglebotService.inspect({
+      slug: 'liverpool',
+      preview_url: 'http://localhost:3011/en/football-quiz/liverpool?preview=token',
+    } as AdminCampaignQuizPageResponse)).rejects.toThrow(/HTTP 503/);
+  });
 });

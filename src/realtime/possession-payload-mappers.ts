@@ -21,9 +21,8 @@ const NORMAL_HALF_SEQUENCE: QuestionType[] = [
   'put_in_order',
   'clue_chain',
 ];
-const MCQ_ONLY_HALF_SEQUENCE: QuestionType[] = NORMAL_HALF_SEQUENCE.map(() => 'mcq_single');
 
-/** Season 3 (POSSESSION_MCQ_ONLY): every slot is an MCQ; the specials moved to the daily challenges. */
+const MCQ_ONLY_HALF_SEQUENCE: QuestionType[] = NORMAL_HALF_SEQUENCE.map(() => 'mcq_single');
 export function normalHalfSequence(): QuestionType[] {
   return config.POSSESSION_MCQ_ONLY ? MCQ_ONLY_HALF_SEQUENCE : NORMAL_HALF_SEQUENCE;
 }
@@ -33,7 +32,7 @@ export function getUserIdByCachedSeat(players: CachedPlayer[], seat: CachedSeat)
 }
 
 export function toCachedAnswerByUserId(
-  cache: MatchCache
+  cache: Pick<MatchCache, 'answers'>
 ): Map<string, { is_correct: boolean; time_ms: number; points_earned: number }> {
   return new Map(
     Object.entries(cache.answers).map(([userId, answer]) => [

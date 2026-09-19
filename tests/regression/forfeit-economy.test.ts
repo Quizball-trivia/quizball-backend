@@ -117,6 +117,9 @@ describeLocal('regression: ranked forfeit economy (RP + tickets)', () => {
     const roster = await matchPlayersRepo.listMatchPlayers(run.matchId!);
     const me = roster.find((p) => p.user_id === run.botUserId);
     const opp = roster.find((p) => p.user_id !== run.botUserId);
+    const myProfile = await rankedRepo.getProfile(run.botUserId);
+    const opponentProfile = await rankedRepo.getProfile(opp!.user_id);
+    const strongerOpponentBonus = opponentProfile!.rp > myProfile!.rp ? 10 : 0;
     const margin = (me?.goals ?? 0) - (opp?.goals ?? 0);
     const frozenGoals = {
       mine: me?.goals ?? 0,
@@ -142,13 +145,13 @@ describeLocal('regression: ranked forfeit economy (RP + tickets)', () => {
     expect(mine, 'opponent-forfeit settles an RP change for the winner').toBeTruthy();
     expect(mine!.delta_rp, 'winner gains RP on an opponent forfeit').toBeGreaterThan(0);
     if (margin > 0) {
-      const expected = FORFEIT_WIN_BASE + marginBonus(margin);
+      const expected = FORFEIT_WIN_BASE + marginBonus(margin) + strongerOpponentBonus;
       expect(
         mine!.delta_rp,
         `winner ahead by ${margin} should get base+margin (${expected})`,
       ).toBe(expected);
     } else {
-      expect(mine!.delta_rp, 'no lead → flat forfeit-win base').toBe(FORFEIT_WIN_BASE);
+      expect(mine!.delta_rp, 'no lead: base plus the existing stronger-opponent bonus').toBe(FORFEIT_WIN_BASE + strongerOpponentBonus);
     }
   }, 150_000);
 });

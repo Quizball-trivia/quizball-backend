@@ -336,7 +336,8 @@
                     "penalty_goals",
                     "total_points",
                     "total_points_fallback",
-                    "forfeit"
+                    "forfeit",
+                    "draw"
                   ]
                 },
                 "cancelledNoContest": {
@@ -12704,7 +12705,8 @@
                               "penalty_goals",
                               "total_points",
                               "total_points_fallback",
-                              "forfeit"
+                              "forfeit",
+                              "draw"
                             ]
                           },
                           "cancelledNoContest": {
@@ -19049,7 +19051,7 @@
     "/api/v1/categories/{id}/dependencies": {
       "get": {
         "summary": "Get category dependencies",
-        "description": "Returns child categories, associated questions, and featured status. Requires admin role.",
+        "description": "Returns child categories, associated questions, and featured status",
         "tags": [
           "Categories"
         ],
@@ -19081,7 +19083,7 @@
             }
           },
           "401": {
-            "description": "Not authenticated",
+            "description": "Authentication required",
             "content": {
               "application/json": {
                 "schema": {
@@ -19091,7 +19093,7 @@
             }
           },
           "403": {
-            "description": "Insufficient permissions (admin role required)",
+            "description": "Admin role required",
             "content": {
               "application/json": {
                 "schema": {
@@ -24460,10 +24462,6 @@
                         "type": "boolean",
                         "default": false
                       },
-                      "single_game": {
-                        "type": "boolean",
-                        "default": false
-                      },
                       "qp_target": {
                         "type": "integer",
                         "minimum": 0,
@@ -25170,6 +25168,329 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feedback/season3/claim": {
+      "post": {
+        "summary": "Season 3 survey claim (authenticated)",
+        "tags": [
+          "Feedback"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "matchId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "matchId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Survey operation completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "vote",
+                        "idea"
+                      ]
+                    },
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "saved"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired survey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feedback/season3/dismiss": {
+      "post": {
+        "summary": "Season 3 survey dismiss (authenticated)",
+        "tags": [
+          "Feedback"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "matchId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "matchId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Survey operation completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired survey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feedback/season3": {
+      "post": {
+        "summary": "Season 3 survey submit (authenticated)",
+        "tags": [
+          "Feedback"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "matchId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "locale": {
+                        "type": "string",
+                        "enum": [
+                          "en",
+                          "ka",
+                          "es",
+                          "tr"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "vote"
+                        ]
+                      },
+                      "removeOrder": {
+                        "type": "boolean"
+                      },
+                      "removeWho": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "matchId",
+                      "locale",
+                      "kind",
+                      "removeOrder",
+                      "removeWho"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "matchId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "locale": {
+                        "type": "string",
+                        "enum": [
+                          "en",
+                          "ka",
+                          "es",
+                          "tr"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "idea"
+                        ]
+                      },
+                      "idea": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "matchId",
+                      "locale",
+                      "kind",
+                      "idea"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Survey operation completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired survey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
             "content": {
               "application/json": {
                 "schema": {

@@ -65,11 +65,9 @@ async function rejectMissingActiveMatch(
   matchId: string,
   message: string
 ): Promise<void> {
-  // Cache cleanup intentionally follows the terminal broadcast. An answer
-  // packet already in flight can therefore observe a cache miss milliseconds
-  // after a successful completion. Confirm that rare miss from PostgreSQL and
-  // silently ignore completed-match packets instead of showing a false error
-  // after the client has already received final_results.
+  // Cache cleanup follows the terminal broadcast. An in-flight packet can
+  // observe a miss immediately after completion; silently ignore that packet
+  // instead of showing a false error over the final-results screen.
   const match = await matchesRepo.getMatch(matchId);
   if (match?.status === 'completed') {
     logger.debug(

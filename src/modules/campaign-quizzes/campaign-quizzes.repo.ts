@@ -163,14 +163,13 @@ async function replaceRelatedPages(
 }
 
 async function clearOwnedManualQuestions(tx: typeof sql, slug: string): Promise<void> {
-  const [ownership] = await tx<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM campaign_quiz_manual_questions
-      WHERE quiz_slug = ${slug}
-    ) AS exists
+  const ownedCategories = await tx<{ category_id: string }[]>`
+    SELECT DISTINCT question.category_id
+    FROM campaign_quiz_manual_questions managed
+    JOIN questions question ON question.id = managed.question_id
+    WHERE managed.quiz_slug = ${slug}
   `;
-  if (!ownership?.exists) return;
+  if (ownedCategories.length === 0) return;
 
   await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
 
@@ -182,6 +181,14 @@ async function clearOwnedManualQuestions(tx: typeof sql, slug: string): Promise<
       FROM campaign_quiz_manual_questions
       WHERE quiz_slug = ${slug}
     )
+  `;
+  await tx`
+    UPDATE categories category
+    SET is_active = FALSE, updated_at = NOW()
+    WHERE category.id = ANY(${sql.array(ownedCategories.map((row) => row.category_id))}::uuid[])
+      AND NOT EXISTS (
+        SELECT 1 FROM questions question WHERE question.category_id = category.id
+      )
   `;
 }
 
@@ -208,8 +215,15 @@ async function replaceManualQuestions(
     ORDER BY assignment.display_order
   `;
   const existingIds = new Set(existingRows.map((row) => row.id));
+  const idsByPrompt = new Map<string, string[]>();
+  for (const row of existingRows) {
+    const prompt = row.prompt.trim().toLocaleLowerCase('en');
+    idsByPrompt.set(prompt, [...(idsByPrompt.get(prompt) ?? []), row.id]);
+  }
   const existingIdByPrompt = new Map(
-    existingRows.map((row) => [row.prompt.trim().toLocaleLowerCase('en'), row.id]),
+    [...idsByPrompt.entries()]
+      .filter(([, ids]) => ids.length === 1)
+      .map(([prompt, ids]) => [prompt, ids[0]]),
   );
   const claimedExistingIds = new Set(
     questions.flatMap((question) => {
@@ -222,29 +236,18 @@ async function replaceManualQuestions(
 
   await tx`DELETE FROM campaign_quiz_questions WHERE quiz_slug = ${slug}`;
 
-  // campaign_only permanently bars the category from matchmaking (see
-  // MATCHMAKING_CATEGORY_EXCLUSIONS) even if it is later activated or gains
-  // ranked-eligible questions. Only the INSERT branch sets it: on a slug
-  // conflict the existing category may be a genuine ranked category that
-  // happens to share the campaign slug (premier-league, liverpool, ...) and
-  // must never be flagged.
   await tx`
     INSERT INTO categories (slug, name, is_active, campaign_only)
     VALUES (${slug}, ${sql.json({ en: internalName })}, FALSE, TRUE)
     ON CONFLICT (slug) DO UPDATE
-    SET
-      is_active = CASE
-        WHEN NOT EXISTS (
-          SELECT 1
-          FROM questions ranked_question
-          WHERE ranked_question.category_id = categories.id
-            AND ranked_question.status = 'published'
-            AND ranked_question.visibility = 'public'
-            AND ranked_question.ranked_eligible = TRUE
-        ) THEN FALSE
-        ELSE categories.is_active
-      END,
-      updated_at = NOW()
+    SET is_active = CASE
+      WHEN NOT EXISTS (
+        SELECT 1 FROM questions ranked_question
+        WHERE ranked_question.category_id = categories.id
+          AND ranked_question.status = 'published'
+          AND ranked_question.visibility = 'public'
+          AND ranked_question.ranked_eligible = TRUE
+      ) THEN FALSE ELSE categories.is_active END, updated_at = NOW()
   `;
   const [category] = await tx<{ id: string }[]>`
     SELECT id FROM categories WHERE slug = ${slug} LIMIT 1
@@ -544,6 +547,17 @@ export const campaignQuizzesRepo = {
         FROM campaign_quiz_revisions
         WHERE quiz_slug = ${slug}
       `;
+      await tx`
+        DELETE FROM campaign_quiz_revisions
+        WHERE quiz_slug = ${slug}
+          AND id NOT IN (
+            SELECT id
+            FROM campaign_quiz_revisions
+            WHERE quiz_slug = ${slug}
+            ORDER BY revision_number DESC
+            LIMIT 100
+          )
+      `;
     });
   },
 
@@ -759,10 +773,6 @@ export const campaignQuizzesRepo = {
       `;
       if (!before) return;
 
-      if (currentSlug !== input.slug) {
-        await tx`DELETE FROM campaign_quiz_routes WHERE old_slug = ${input.slug}`;
-      }
-
       await tx`
         UPDATE campaign_quizzes
         SET
@@ -817,6 +827,16 @@ export const campaignQuizzesRepo = {
           input.manual_questions,
           userId,
         );
+        if (currentSlug !== input.slug) {
+          await tx`
+            UPDATE categories category
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE category.slug = ${currentSlug}
+              AND NOT EXISTS (
+                SELECT 1 FROM questions question WHERE question.category_id = category.id
+              )
+          `;
+        }
       } else {
         await clearOwnedManualQuestions(tx, input.slug);
       }

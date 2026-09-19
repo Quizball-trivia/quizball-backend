@@ -13,6 +13,7 @@
  */
 import type { EventTrace, TraceEvent } from './adapter.mjs';
 import type { ChaosPlan } from './chaos.mjs';
+import { config } from '../../src/core/config.js';
 import { computePenaltyShootout, penaltyWinnerUserId } from './penalty-arithmetic.mjs';
 
 export interface Violation {
@@ -482,7 +483,7 @@ async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFa
   return { match: match ?? null, players, answers };
 }
 
-function penaltyShootoutArithmetic(
+export function penaltyShootoutArithmetic(
   _trace: EventTrace,
   context: LifecycleInvariantContext,
   facts: MatchLifecycleDbFacts,
@@ -490,6 +491,26 @@ function penaltyShootoutArithmetic(
   if (!facts.match) return [];
   const state = unknownRecord(facts.match.state_payload);
   const penalty = unknownRecord(state.penalty);
+  const rawAttempts = unknownRecord(penalty.attempts);
+  const rawKicks = unknownRecord(penalty.kicksTaken);
+  // Hydration initializes this exact empty structure even when a match never
+  // enters penalties. Do not mistake that initial round 0 for a played shootout.
+  // Any malformed value, attempt, score or recorded penalty phase still reaches
+  // the arithmetic checks below.
+  const penaltyPhaseRecorded = state.phase === 'PENALTY_SHOOTOUT' ||
+    state.winnerDecisionMethod === 'penalty_goals' ||
+    facts.answers.some(answer => answer.phase_kind === 'penalty') ||
+    _trace.events.some(event => {
+      const payload = unknownRecord(event.payload);
+      return payload.phase === 'PENALTY_SHOOTOUT' || payload.phaseKind === 'penalty';
+    });
+  if (!penaltyPhaseRecorded && penalty.round === 0 && penalty.suddenDeath === false &&
+      rawKicks.seat1 === 0 && rawKicks.seat2 === 0 &&
+      Array.isArray(rawAttempts.seat1) && rawAttempts.seat1.length === 0 &&
+      Array.isArray(rawAttempts.seat2) && rawAttempts.seat2.length === 0 &&
+      Number(unknownRecord(state.penaltyGoals).seat1 ?? 0) === 0 &&
+      Number(unknownRecord(state.penaltyGoals).seat2 ?? 0) === 0 &&
+      facts.players.every(player => player.penalty_goals === 0)) return [];
   // Normalize FIRST, skip only when the shootout genuinely never started
   // (no attempts AND no counters) — malformed counters with real attempts
   // must reach the checks, not silently skip them.
@@ -581,7 +602,12 @@ function penaltyShootoutArithmetic(
   const method = winnerDecisionMethodFromFacts(facts, _trace);
   if (facts.match.status === 'completed' && method !== 'forfeit') {
     const expectedWinnerId = penaltyWinnerUserId(facts.players, arithmetic.winnerSeat);
-    if (!expectedWinnerId) {
+    const validDraw = method === 'draw' && facts.match.winner_user_id === null &&
+      arithmetic.winnerSeat === null && arithmetic.errors.length === 0 &&
+      arithmetic.goals.seat1 === arithmetic.goals.seat2 && seat1RegularGoals === seat2RegularGoals &&
+      arithmetic.kicksTaken.seat1 === 5 + config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS &&
+      arithmetic.kicksTaken.seat2 === arithmetic.kicksTaken.seat1;
+    if (!expectedWinnerId && !validDraw) {
       out.push({
         invariant: 'penaltyShootoutArithmetic',
         message: 'Penalty shootout has no arithmetic winner for a non-forfeit completion.',
@@ -592,7 +618,7 @@ function penaltyShootoutArithmetic(
           goals: arithmetic.goals,
         },
       });
-    } else if (facts.match.winner_user_id !== expectedWinnerId) {
+    } else if (expectedWinnerId && facts.match.winner_user_id !== expectedWinnerId) {
       out.push({
         invariant: 'penaltyShootoutArithmetic',
         message: `Recorded winner ${facts.match.winner_user_id ?? 'null'} does not match penalty attempts winner ${expectedWinnerId}.`,
@@ -727,10 +753,14 @@ function gateStateReemittedOnReconnect(
     .filter((reconnected) => {
       const freshSocketId = payloadRecord(reconnected).freshSocketId;
       const roomTarget = `match:${context.matchId}`;
+      const startSeq = Number(payloadRecord(reconnected).reconnectStartSeq ?? reconnected.seq);
+      // The ready gate may already have advanced to countdown or a question.
+      // A recovering client must receive the current authoritative state.
       return !trace.events.some((event) =>
-        event.seq > reconnected.seq &&
-        event.event === 'match:waiting_for_ready' &&
-        (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff' &&
+        event.seq >= startSeq &&
+        (event.event === 'match:question' || event.event === 'match:countdown' ||
+          (event.event === 'match:waiting_for_ready' &&
+            (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff')) &&
         (event.target === freshSocketId || event.target === roomTarget)
       );
     })
@@ -948,16 +978,19 @@ async function duplicateEmitsIdempotent(
   return violations;
 }
 
-function halftimeBanStateNeverLost(trace: EventTrace, context: LifecycleInvariantContext): Violation[] {
+export function halftimeBanStateNeverLost(trace: EventTrace, context: LifecycleInvariantContext): Violation[] {
   if (!planHasPhase(context.chaosPlan, 'halftime')) return [];
-  let maxBanCount = 0;
+  // The second-half penalty ban is a new ban stage, independent of halftime.
+  const maxByHalf = new Map<number | undefined, number>();
   const out: Violation[] = [];
   for (const event of trace.byEvent('match:state')) {
     const payload = event.payload as {
       phase?: string;
+      half?: number;
       halftime?: { bans?: { seat1?: string | null; seat2?: string | null } };
     };
     if (payload.phase !== 'HALFTIME') continue;
+    const maxBanCount = maxByHalf.get(payload.half) ?? 0;
     const bans = payload.halftime?.bans;
     const count = Number(Boolean(bans?.seat1)) + Number(Boolean(bans?.seat2));
     if (count < maxBanCount) {
@@ -968,7 +1001,7 @@ function halftimeBanStateNeverLost(trace: EventTrace, context: LifecycleInvarian
         detail: { matchId: context.matchId, previousBanCount: maxBanCount, banCount: count, bans: bans ?? null },
       });
     }
-    maxBanCount = Math.max(maxBanCount, count);
+    maxByHalf.set(payload.half, Math.max(maxBanCount, count));
   }
   return out;
 }

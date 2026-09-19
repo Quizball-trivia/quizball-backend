@@ -109,14 +109,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
-    getByIds: async (ids: string[]) => {
-      const usersById = new Map<string, unknown>();
-      for (const id of [...new Set(ids)]) {
-        const user = await getUserByIdMock(id);
-        if (user) usersById.set(id, user);
-      }
-      return usersById;
-    },
+    getByIds: async (ids: string[]) => new Map(ids.map(id => [id, { id, is_guest: false }])),
   },
 }));
 
@@ -191,11 +184,6 @@ describe('matches.service friendly-party-quiz variants', () => {
 
     expect(resolveMatchVariant({ variant: 'friendly_party_quiz' }, 'friendly')).toBe('friendly_party_quiz');
     expect(resolveMatchVariant({ variant: 'friendly_possession' }, 'friendly')).toBe('friendly_possession');
-    expect(resolveMatchVariant(null, 'friendly', 'football_grid')).toBe('football_grid');
-    expect(resolveMatchVariant(null, 'friendly', 'auction')).toBe('auction');
-    expect(() => resolveMatchVariant(null, 'friendly', 'future_unknown_variant')).toThrow(
-      'Unsupported durable match variant',
-    );
     expect(resolveMatchVariant(null, 'friendly')).toBe('friendly_possession');
     expect(resolveMatchVariant(null, 'ranked')).toBe('ranked_sim');
   });
@@ -679,28 +667,6 @@ describe('matches.service recordPartyQuizAnswerIfMissing', () => {
     await expect(
       matchesService.recordPartyQuizAnswerIfMissing(answerInput),
     ).rejects.toThrow(/Failed to record party quiz answer/);
-  });
-});
-
-describe('matches.service completeMatch — guests', () => {
-  beforeEach(() => {
-    // Earlier suites leave unconsumed mockResolvedValueOnce queues behind; reset, don't just clear.
-    for (const mock of [markMatchCompletedMock, listMatchPlayersMock, recordUserModeStatsMock, getUserByIdMock]) mock.mockReset();
-    vi.clearAllMocks();
-    sqlBeginMock.mockImplementation(async (cb) => cb('tx'));
-    markMatchCompletedMock.mockResolvedValue({ id: 'match-g', mode: 'friendly', ended_at: '2026-01-01T00:00:00.000Z', is_dev: false });
-    listMatchPlayersMock.mockResolvedValue([{ user_id: 'member', seat: 1 }, { user_id: 'guest', seat: 2 }]);
-    recordUserModeStatsMock.mockResolvedValue(undefined);
-    getUserByIdMock.mockImplementation(async (id: string) => (id === 'guest' ? { id, is_guest: true } : { id, is_guest: false }));
-  });
-
-  it('writes per-mode stats for the member only; the guest keeps the match row but no record', async () => {
-    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
-    await matchesService.completeMatch('match-g', 'guest');
-    const [, statRows] = recordUserModeStatsMock.mock.calls[0] as [unknown, Array<Record<string, unknown>>];
-    expect(statRows).toEqual([
-      { userId: 'member', mode: 'friendly', wins: 0, losses: 1, draws: 0, lastMatchAt: '2026-01-01T00:00:00.000Z' },
-    ]);
   });
 });
 

@@ -1,12 +1,10 @@
 /**
- * Featured categories are reserved for RANKED only (commit fbd4f03). Ranked
- * draws exclusively from featured_categories; the casual/friendly pool draws
- * exclusively from NON-featured categories. We pin the split against the real
- * DB so casual players can't pre-play the ranked category pool.
+ * The production World Cup event has ended. Ranked and friendly pools both
+ * exclude the featured event categories. Preserve that production behavior
+ * while assembling the new staging features.
  *
- *   - a FEATURED category appears in listAllRankedEligibleCategories() and is
- *     ABSENT from listAllValidCategories() (casual pool).
- *   - a NON-featured category is the mirror image.
+ *   - a FEATURED category is absent from both matchmaking pools.
+ *   - a NON-featured category with sufficient content appears in both.
  *
  * Local-only: REGRESSION_DB_URL must point at the native regression DB.
  */
@@ -24,7 +22,7 @@ process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent';
 const describeLocal = isLocal ? describe : describe.skip;
 const NS = 'regression-featuredsplit';
 
-describeLocal('regression: featured categories reserved for ranked (real DB)', () => {
+describeLocal('regression: featured event categories excluded from matchmaking (real DB)', () => {
   let sql: (typeof import('../../src/db/index.js'))['sql'];
   let repo: (typeof import('../../src/modules/lobbies/lobbies.repo.js'))['lobbiesRepo'];
   let featuredId: string;
@@ -46,14 +44,18 @@ describeLocal('regression: featured categories reserved for ranked (real DB)', (
       RETURNING id`;
     [featuredId, casualId] = cats.map((r) => r.id);
 
-    // Ranked eligibility (RANKED_ELIGIBILITY_HAVING_COUNTS) needs >=4 mcq_single
+    // Ranked eligibility needs >=5 valid MCQs, including their payloads,
     // AND >=1 put_in_order AND >=1 clue_chain. Seed that full spread in both
     // categories so the split (not eligibility) is what each test measures.
     for (const cid of [featuredId, casualId]) {
-      await sql`
+      const mcqs = await sql<{ id: string }[]>`
         INSERT INTO questions (category_id, type, difficulty, status, prompt)
         SELECT ${cid}, 'mcq_single', 'easy', 'published', jsonb_build_object('en', 'q' || i)
-        FROM generate_series(1, 6) i`;
+        FROM generate_series(1, 6) i RETURNING id`;
+      const payload = { type: 'mcq_single', options: ['a', 'b', 'c', 'd'].map((id, index) => ({ id, text: { en: `Answer ${index + 1}` }, is_correct: index === 0 })) };
+      for (const question of mcqs) {
+        await sql`INSERT INTO question_payloads (question_id, payload) VALUES (${question.id}, ${sql.json(payload)})`;
+      }
       await sql`
         INSERT INTO questions (category_id, type, difficulty, status, prompt)
         VALUES
@@ -72,19 +74,19 @@ describeLocal('regression: featured categories reserved for ranked (real DB)', (
     await sql`DELETE FROM categories WHERE id IN (${featuredId}, ${casualId})`;
   });
 
-  it('a featured category is ranked-eligible and ABSENT from the casual pool', async () => {
+  it('a featured category is ABSENT from both ranked and casual pools', async () => {
     const ranked = (await repo.listAllRankedEligibleCategories()).map((c) => c.id);
     const casual = (await repo.listAllValidCategories(1)).map((c) => c.id);
 
-    expect(ranked, 'featured category must be in the ranked pool').toContain(featuredId);
+    expect(ranked, 'featured event category must NOT enter ranked').not.toContain(featuredId);
     expect(casual, 'featured category must NOT leak into the casual pool').not.toContain(featuredId);
   });
 
-  it('a non-featured category is in the casual pool and ABSENT from ranked', async () => {
+  it('a non-featured category with sufficient content is in both pools', async () => {
     const ranked = (await repo.listAllRankedEligibleCategories()).map((c) => c.id);
     const casual = (await repo.listAllValidCategories(1)).map((c) => c.id);
 
     expect(casual, 'non-featured category must be in the casual pool').toContain(casualId);
-    expect(ranked, 'non-featured category must NOT be ranked-eligible').not.toContain(casualId);
+    expect(ranked, 'non-featured category must be ranked-eligible').toContain(casualId);
   });
 });

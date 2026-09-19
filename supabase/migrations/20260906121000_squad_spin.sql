@@ -202,11 +202,7 @@ CREATE INDEX IF NOT EXISTS idx_squad_spin_events_answers
 
 -- Retried stake/payout writes lose a unique-index race instead of moving coins twice.
 -- No CONCURRENTLY: the migration runner holds a transaction (owner rule 2026-09-04).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_store_tx_squad_spin_idempotency
-  ON public.store_transaction_logs (event_type, idempotency_key)
-  WHERE idempotency_key IS NOT NULL
-    AND outcome = 'success'
-    AND event_type IN ('squad_spin_stake', 'squad_spin_payout', 'squad_spin_refund');
+-- Shared-table index builds in 20260919114317_online_uq_store_tx_squad_spin_idempotency.sql.
 
 ALTER TABLE public.squad_spin_criteria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.squad_spin_players ENABLE ROW LEVEL SECURITY;

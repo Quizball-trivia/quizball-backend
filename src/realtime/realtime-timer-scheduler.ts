@@ -1,5 +1,4 @@
 import { logger } from '../core/logger.js';
-import { config } from '../core/config.js';
 import { harnessDelayMs } from '../core/harness-timing.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { getRedisClient } from './redis.js';
@@ -14,17 +13,16 @@ const TIMER_HARNESS_POLL_INTERVAL_MS = 25;
 const TIMER_BATCH_SIZE = 100;
 // Timer handlers frequently perform several database operations. Launching an
 // entire 100-member Redis batch with Promise.all can instantly overflow the DB
-// admission queue even when every query is fast. Keep this independently
-// configurable so a replica with a measured DB budget can drain synchronized
-// gameplay kickoffs without weakening the admission bulkhead.
-const TIMER_HANDLER_CONCURRENCY = config.REALTIME_TIMER_HANDLER_CONCURRENCY;
+// admission queue even when every query is fast. Keep each replica below the
+// 12-slot DB bulkhead while still allowing independent replicas to share work.
+const TIMER_HANDLER_CONCURRENCY = 4;
 
 export type RealtimeTimerKind =
   | 'auction_advance_retry'
   | 'auction_bot_action'
-  | 'auction_clue_reveal'
   | 'auction_clue_study'
   | 'auction_disconnect_debounce'
+  | 'auction_clue_reveal'
   | 'auction_disconnect_grace'
   | 'auction_matchmaking_fill'
   | 'auction_resume_countdown'
@@ -50,14 +48,14 @@ export type RealtimeTimerKind =
   | 'wl_tick';
 
 export type RealtimeTimerPayload =
-  | { kind: 'auction_advance_retry'; matchId: string; phaseHint: 'round' | 'bidding' | 'reveal' }
   | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
-  | { kind: 'auction_clue_study'; matchId: string; roundId: string; stateVersion: number }
-  | { kind: 'auction_disconnect_debounce'; matchId: string; userId: string; seatId: string; disconnectedAt: string }
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
   | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
+  | { kind: 'auction_advance_retry'; matchId: string; phaseHint: 'round' | 'bidding' | 'reveal' }
+  | { kind: 'auction_clue_study'; matchId: string; roundId: string; stateVersion: number }
+  | { kind: 'auction_disconnect_debounce'; matchId: string; userId: string; seatId: string; disconnectedAt: string }
   | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string; nonce?: number }
   | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
@@ -126,9 +124,9 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   if (
     kind !== 'auction_advance_retry'
     && kind !== 'auction_bot_action'
-    && kind !== 'auction_clue_reveal'
     && kind !== 'auction_clue_study'
     && kind !== 'auction_disconnect_debounce'
+    && kind !== 'auction_clue_reveal'
     && kind !== 'auction_disconnect_grace'
     && kind !== 'auction_matchmaking_fill'
     && kind !== 'auction_resume_countdown'

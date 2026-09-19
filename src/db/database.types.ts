@@ -3012,6 +3012,8 @@ export type Database = {
       }
       users: {
         Row: {
+          is_guest: boolean
+          coin_fraction_minor: number
           ai_kind: string | null
           avatar_customization: Json | null
           avatar_url: string | null
@@ -3032,7 +3034,6 @@ export type Database = {
           is_banned: boolean
           is_deleted: boolean
           is_seed: boolean
-          is_guest: boolean
           nickname: string | null
           onboarding_complete: boolean
           pending_deletion_at: string | null
@@ -3046,6 +3047,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          is_guest?: boolean
+          coin_fraction_minor?: number
           ai_kind?: string | null
           avatar_customization?: Json | null
           avatar_url?: string | null
@@ -3066,7 +3069,6 @@ export type Database = {
           is_banned?: boolean
           is_deleted?: boolean
           is_seed?: boolean
-          is_guest?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null
@@ -3080,6 +3082,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          is_guest?: boolean
+          coin_fraction_minor?: number
           ai_kind?: string | null
           avatar_customization?: Json | null
           avatar_url?: string | null
@@ -3100,7 +3104,6 @@ export type Database = {
           is_banned?: boolean
           is_deleted?: boolean
           is_seed?: boolean
-          is_guest?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null

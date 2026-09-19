@@ -44,5 +44,4 @@ ALTER TABLE daily_challenge_completions
   )) NOT VALID;
 
 -- Leaderboard reads: top scores for one challenge type on one day.
-CREATE INDEX IF NOT EXISTS idx_daily_completions_type_day_score
-  ON daily_challenge_completions (challenge_type, challenge_day, score DESC);
+-- Shared-table index builds in 20260919114319_online_idx_daily_completions_type_day_score.sql.

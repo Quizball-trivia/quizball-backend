@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '../setup.js';
 
+// The release kill switch defaults OFF; these tests exercise the enabled path.
+vi.mock('../../src/core/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/config.js')>();
+  return { ...actual, config: { ...actual.config, AUCTION_ENABLED: true } };
+});
+
 const auctionRealtimeServiceMock = vi.hoisted(() => ({
   handleStartAiMatch: vi.fn(),
 }));

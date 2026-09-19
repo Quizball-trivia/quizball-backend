@@ -29,27 +29,26 @@ scripts/*
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
 !scripts/fix-storage-cache-control.ts
+# OpenAPI baseline regeneration — referenced by tests/openapi/spec-snapshot.test.ts
+# and the api:export npm script; must ship or the baseline rots unregenerable.
 !scripts/export-openapi.ts
 !scripts/import-spanish-content.ts
 !scripts/import-turkish-content.ts
-!scripts/football-grid-label-locales.ts
-!scripts/football-grid-label-locales.json
-!scripts/sync-content-from-prod.ts
-!scripts/sync-question-locales-prod-to-staging.ts
-!scripts/translate-missing-locales.ts
-!scripts/translate-goal-choreographies.ts
-!scripts/football-tic-tac-toe-dev-seed.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
 !scripts/wl-weekly-announcement-blast.ts
+!scripts/auction-beta-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
+!scripts/migration-safety.mjs
+!scripts/release/
+!scripts/release/**
+# Auction prod-promotion content tooling — code only, no secrets.
+!scripts/auction-content-package/
+!scripts/auction-content-package/**
 # Anti-cheat analysis SQL — code only, no secrets.
 !scripts/anti-cheat/
 !scripts/anti-cheat/**
-# Guess the Goal content seeds + local smoke — code only, no secrets.
-!scripts/guess-the-goal/
-!scripts/guess-the-goal/**
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**
@@ -60,7 +59,6 @@ scripts/*
 !scripts/refresh-question-stats.ts
 !scripts/bot-calibration/
 !scripts/bot-calibration/**
-!scripts/football-grid-content.ts
 # Persistent bot roster generator — code + measured patterns.json + the dry-run
 # deliverables (report/CSV/manifest) are all committed for review. The out/
 # .gitignore then narrows out/ to just those three deliverables.
@@ -92,16 +90,31 @@ scripts/bot-burnin/*.receipt.json
 
 # Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
 node_modules
-.env.harness
-.env.harness.debug
 
-# Grid content generator is source, not a build artefact
+# Preserve reviewed staging content and maintenance tooling.
+!scripts/bench/**
+!scripts/daily-content-audit/
+!scripts/daily-content-audit/**
 !scripts/football-grid-content-generator/
 !scripts/football-grid-content-generator/**
+!scripts/football-grid-content.ts
+!scripts/football-grid-label-locales.json
+!scripts/football-grid-label-locales.ts
+!scripts/football-grid-player-cdn.ts
 !scripts/football-logic-content/
-!scripts/daily-content-audit/
+!scripts/football-logic-content/**
+!scripts/football-tic-tac-toe-dev-seed.ts
+!scripts/guess-the-goal/
+!scripts/guess-the-goal/**
 !scripts/missing-xi-content/
+!scripts/missing-xi-content/**
 !scripts/pass-chain-content/
-!scripts/stat-sniper-content/
+!scripts/pass-chain-content/**
 !scripts/squad-spin-content/
-scripts/.snapshots/
+!scripts/squad-spin-content/**
+!scripts/stat-sniper-content/
+!scripts/stat-sniper-content/**
+!scripts/sync-content-from-prod.ts
+!scripts/sync-question-locales-prod-to-staging.ts
+!scripts/translate-goal-choreographies.ts
+!scripts/translate-missing-locales.ts

@@ -48,7 +48,8 @@ beforeAll(async () => {
       '../../src/modules/road-to-goal/road-to-goal.repo.js'
     )).roadToGoalRepo;
     dbAvailable = true;
-  } catch {
+  } catch (error) {
+    if (process.env.RELEASE_TEST_DATABASE_URL) throw error;
     console.warn('\n⚠️  Skipping Road to Goal repo integration tests: DB unavailable.\n');
   }
 });

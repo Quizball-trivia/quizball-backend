@@ -43,11 +43,9 @@ import {
   clearAiAnswerTimer,
   ensureHalftimeCategories,
   fireAndForget,
-  scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
   schedulePossessionAiHalftimeBan,
 } from './possession-match-flow.js';
-import { HALFTIME_POST_BAN_REVEAL_MS } from './possession-halftime.js';
 import {
   buildPlayersPayloadFromCache,
   getUserIdByCachedSeat,
@@ -199,7 +197,7 @@ export async function resolvePossessionRound(
         cache = rebuilt;
         if (abortIfLeaseLost('cache_refresh')) return;
         await setMatchCache(rebuilt);
-        logger.debug(
+        logger.info(
           { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
           'Possession round resolve refreshed cache before timeout resolution'
         );
@@ -208,7 +206,7 @@ export async function resolvePossessionRound(
     if (cache.currentQIndex > qIndex) {
       // This round is already behind us — its timers are stale; clear them.
       roundConcluded = true;
-      logger.debug(
+      logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: qIndex already advanced'
       );
@@ -245,7 +243,7 @@ export async function resolvePossessionRound(
 
     const pauseStartedAt = await redis.get(matchPauseKey(matchId));
     if (pauseStartedAt) {
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:round_result',
           matchId,
@@ -262,7 +260,7 @@ export async function resolvePossessionRound(
 
     const expectedUserIds = getExpectedUserIds(cache);
     if (!fromTimeout && answerCount(cache) < expectedUserIds.length) {
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -277,7 +275,7 @@ export async function resolvePossessionRound(
       );
       return;
     }
-    logger.debug(
+    logger.info(
       {
         matchId,
         eventName: 'match:round_result',
@@ -337,7 +335,7 @@ export async function resolvePossessionRound(
           });
         });
       }
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -393,7 +391,7 @@ export async function resolvePossessionRound(
           : (answer.foundCount ?? 0) > seat1FoundCount;
       }
 
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -448,7 +446,7 @@ export async function resolvePossessionRound(
           );
         });
       }
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -556,7 +554,7 @@ export async function resolvePossessionRound(
         state.speedStreakCandidateCount = stayedInSameSegment ? streak.nextCandidateCount : 0;
       }
 
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -622,7 +620,7 @@ export async function resolvePossessionRound(
         const scorer = cache.players.find((player) => player.userId === penaltyOutcome.goalScoredByUserId);
         goalScoredBySeat = scorer?.seat === 1 || scorer?.seat === 2 ? scorer.seat : null;
       }
-      logger.debug(
+      logger.info(
         {
           matchId,
           eventName: 'match:round_result',
@@ -723,7 +721,7 @@ export async function resolvePossessionRound(
       }
     }
 
-    logger.debug(
+    logger.info(
       {
         matchId,
         eventName: 'match:round_result',
@@ -814,7 +812,7 @@ export async function resolvePossessionRound(
     // take below.
     roundConcluded = true;
     await emitMatchState(io, matchId, state);
-    logger.debug(
+    logger.info(
       {
         matchId,
         eventName: 'match:state',
@@ -856,20 +854,14 @@ export async function resolvePossessionRound(
     }
 
     if (state.phase === 'HALFTIME') {
-      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half, purpose: state.halftime.purpose }, 'Possession match entered halftime');
-      // Host preset the second-half category → no ban window and no AI ban,
-      // just a short reveal before half 2 starts.
-      if (state.halftime.purpose === 'second_half_preset') {
-        scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
-        return;
-      }
+      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
       return;
     }
 
     if (state.phase === 'COMPLETED') {
-      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
+      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
       await completePossessionMatch(io, matchId, state, cache);
       return;
     }
@@ -895,12 +887,12 @@ export async function resolvePossessionRound(
       // it armed" is only true for answer-triggered resolves. Re-arm so the
       // unconcluded round always keeps an auto-resolve pending.
       await deferQuestionTimer(matchId, qIndex, TIMEOUT_NOOP_RETRY_MS);
-      logger.debug(
+      logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, retryInMs: TIMEOUT_NOOP_RETRY_MS },
         'Possession round resolve re-armed timeout: round not concluded'
       );
     } else {
-      logger.debug(
+      logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
         'Possession round resolve left timers armed: round not concluded'
       );

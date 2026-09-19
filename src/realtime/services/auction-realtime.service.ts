@@ -192,7 +192,7 @@ async function handleStartPracticeMatch(
     emitAuctionError(socket, { code: 'AUCTION_PRACTICE_GUEST_ONLY', message: 'Members play the auction through matchmaking' });
     return;
   }
-  if (!config.GUEST_BOT_MATCHES_ENABLED) {
+  if (!config.AUCTION_ENABLED || !config.GUEST_BOT_MATCHES_ENABLED) {
     emitAuctionError(socket, { code: ErrorCode.AUCTION_CONTENT_UNAVAILABLE, message: 'Practice auctions are temporarily unavailable' });
     return;
   }

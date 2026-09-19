@@ -168,7 +168,7 @@ describe('Error Handler Middleware', () => {
       expect(response.text).not.toContain('127.0.0.1');
     });
 
-    it('returns retryable 503 when a repository wraps a database availability error', async () => {
+    it('returns retryable 503 for wrapped database availability errors', async () => {
       const response = await request(app)
         .get('/wrapped-database-error')
         .set('X-Request-ID', 'db-wrapped-1');

@@ -3,11 +3,10 @@
  *
  * Verifies `refill_tickets_global()` against local Postgres — the exact UPDATE
  * the `refill-tickets-every-4h` pg_cron job runs: +1 ticket for every REAL user
- * under MAX (5), full users skipped, AI / deleted / pending-deletion excluded.
+ * under MAX (5), full users skipped, guests / AI / deleted / pending-deletion excluded.
  *
- * Requires the local NATIVE stack (REGRESSION_DB_URL on localhost). The function
- * DDL is created here from the same body as the migration (we skip the
- * cron.schedule line so the test doesn't need the pg_cron extension).
+ * Requires the migrated local stack (REGRESSION_DB_URL on localhost). Exercise
+ * the installed candidate function; do not replace it with an older test copy.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,38 +25,14 @@ process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent';
 
 const describeLocal = isLocal ? describe : describe.skip;
 
-// Function body mirrors supabase/migrations/20260620000000_global_ticket_refill_cron.sql
-// (without the cron.schedule / extension lines).
-const FUNCTION_DDL = `
-CREATE OR REPLACE FUNCTION public.refill_tickets_global()
-RETURNS integer
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $fn$
-DECLARE
-  refilled_count integer := 0;
-BEGIN
-  UPDATE public.users
-  SET tickets = tickets + 1, updated_at = NOW()
-  WHERE tickets < 5
-    AND is_ai = false
-    AND is_deleted = false
-    AND deleted_at IS NULL
-    AND pending_deletion_at IS NULL;
-  GET DIAGNOSTICS refilled_count = ROW_COUNT;
-  RETURN refilled_count;
-END;
-$fn$;
-`;
-
 describeLocal('regression: refill_tickets_global() cron', () => {
   let sql: (typeof import('../../src/db/index.js'))['sql'];
   const ids: Record<string, string> = {};
 
   beforeAll(async () => {
     ({ sql } = await import('../../src/db/index.js'));
-    await sql.unsafe(FUNCTION_DDL);
+    const [installed] = await sql`SELECT to_regprocedure('public.refill_tickets_global()') IS NOT NULL AS present`;
+    expect(installed.present, 'Apply candidate migrations to the isolated database before this test').toBe(true);
   });
 
   afterAll(async () => {
@@ -71,16 +46,17 @@ describeLocal('regression: refill_tickets_global() cron', () => {
     const seed = async (
       key: string,
       tickets: number,
-      flags: { is_ai?: boolean; is_deleted?: boolean; deleted_at?: boolean; pending?: boolean } = {}
+      flags: { is_ai?: boolean; is_guest?: boolean; is_deleted?: boolean; deleted_at?: boolean; pending?: boolean } = {}
     ) => {
       const [row] = await sql<{ id: string }[]>`
-        INSERT INTO public.users (email, nickname, tickets, is_ai, ai_kind, is_deleted, deleted_at, pending_deletion_at)
+        INSERT INTO public.users (email, nickname, tickets, is_ai, ai_kind, is_guest, is_deleted, deleted_at, pending_deletion_at)
         VALUES (
           ${`reg-refill-${key}@test.local`},
           ${`reg-refill-${key}`},
           ${tickets},
           ${flags.is_ai ?? false},
           ${flags.is_ai ? 'ephemeral' : null},
+          ${flags.is_guest ?? false},
           ${flags.is_deleted ?? false},
           ${flags.deleted_at ? sql`NOW()` : null},
           ${flags.pending ? sql`NOW()` : null}
@@ -94,6 +70,7 @@ describeLocal('regression: refill_tickets_global() cron', () => {
     await seed('mid', 3);
     await seed('full', 5);
     await seed('ai', 0, { is_ai: true });
+    await seed('guest', 0, { is_guest: true });
     await seed('deleted', 0, { is_deleted: true });
     await seed('deleted_at', 0, { deleted_at: true });
     await seed('pending', 0, { pending: true });
@@ -115,9 +92,10 @@ describeLocal('regression: refill_tickets_global() cron', () => {
     expect(await ticketsOf('full')).toBe(5);
   });
 
-  it('excludes AI, deleted, deleted_at, and pending-deletion users', async () => {
+  it('excludes guests, AI, deleted, deleted_at, and pending-deletion users', async () => {
     await sql`SELECT public.refill_tickets_global()`;
     expect(await ticketsOf('ai')).toBe(0);
+    expect(await ticketsOf('guest')).toBe(0);
     expect(await ticketsOf('deleted')).toBe(0);
     expect(await ticketsOf('deleted_at')).toBe(0);
     expect(await ticketsOf('pending')).toBe(0);

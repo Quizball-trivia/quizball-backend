@@ -26,11 +26,9 @@ function toIsoString(value: Date | string): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
-export function toStoreWalletResponse(
-  wallet: Pick<WalletStateRow, 'coins' | 'coin_fraction_minor' | 'tickets'>
-): StoreWalletResponse {
+export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'tickets' | 'coin_fraction_minor'>): StoreWalletResponse {
   return {
-    coins: coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
+    coins: coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor ?? 0),
     tickets: wallet.tickets,
     ticketPurchaseCooldown: {
       canBuy: true,

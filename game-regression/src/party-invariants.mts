@@ -97,7 +97,9 @@ const oneQuestionPerQIndexParty: PartyInvariant = (trace) => {
     const prevSeq = lastSeq.get(qIndex);
     if (prevSeq !== undefined) {
       // A resume legitimately re-broadcasts (party supports rejoin/resume too).
-      const resumedSince = trace.byEvent('match:resume').some((r) => r.seq > prevSeq && r.seq <= evt.seq);
+      const resumedSince = trace.byEvent('match:resume').some((r) => r.seq > prevSeq && r.seq <= evt.seq) ||
+        trace.byEvent('match:countdown').some((r) => r.seq > prevSeq && r.seq < evt.seq &&
+          (r.payload as { reason?: string }).reason === 'resume' && r.target === evt.target);
       if (!resumedSince) {
         out.push({
           invariant: 'oneQuestionPerQIndexParty',
@@ -123,11 +125,12 @@ const terminalReachedParty: PartyInvariant = (trace) => {
 };
 
 /**
- * The final results standings must be well-formed: exactly one final_results, a
+ * The final results standings must be well-formed: stable final_results deliveries, a
  * non-empty standings/players list, ranks 1..N with no gaps, and the winner/leader
  * having the max points among active players.
  */
 interface FinalPartyPayload {
+  resultVersion?: number;
   winnerId?: string | null;
   winnerDecisionMethod?: string | null;
   standings?: Array<{ userId: string; rank: number; totalPoints?: number }>;
@@ -137,10 +140,18 @@ const finalStandingsWellFormed: PartyInvariant = (trace) => {
   const out: Violation[] = [];
   const finals = trace.byEvent('match:final_results');
   if (finals.length === 0) return out;
-  if (finals.length > 1) {
-    out.push({ invariant: 'finalStandingsWellFormed', message: `final_results emitted ${finals.length} times.`, seq: finals[finals.length - 1].seq, detail: { count: finals.length } });
-  }
   const p = finals[0].payload as FinalPartyPayload;
+  // Production refreshes results after XP/objective settlement. Redelivery is
+  // legal only if the game outcome and version remain identical.
+  const outcome = (value: FinalPartyPayload) => JSON.stringify({
+    version: value.resultVersion, winner: value.winnerId, method: value.winnerDecisionMethod,
+    standings: value.standings?.map(row => ({ userId: row.userId, rank: row.rank, totalPoints: row.totalPoints })),
+  });
+  for (const event of finals.slice(1)) {
+    if (outcome(event.payload as FinalPartyPayload) !== outcome(p)) {
+      out.push({ invariant: 'finalStandingsWellFormed', message: 'Final results changed their settled outcome on redelivery.', seq: event.seq });
+    }
+  }
   const standings = p.standings ?? [];
   if (standings.length === 0) {
     out.push({ invariant: 'finalStandingsWellFormed', message: 'Final results has empty standings.', seq: finals[0].seq });

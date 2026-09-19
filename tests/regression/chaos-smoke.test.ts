@@ -44,6 +44,6 @@ describeLocal('regression: chaos fuzzer smoke', () => {
     expect(Array.isArray(outcome.violations)).toBe(true);
     expect(Array.isArray(outcome.traceViolations)).toBe(true);
     expect(Array.isArray(outcome.lifecycleViolations)).toBe(true);
-    if (!outcome.ok) expect(outcome.artifactPath).toBeTruthy();
+    expect(outcome.ok, JSON.stringify({ error: outcome.error, violations: outcome.violations, trace: outcome.traceViolations, lifecycle: outcome.lifecycleViolations, economy: outcome.economyViolations })).toBe(true);
   }, 180_000);
 });

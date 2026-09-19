@@ -137,7 +137,7 @@ export async function handlePossessionAnswer(
 
   const { matchId, qIndex, selectedIndex, timeMs } = payload;
   const userId = socket.data.user.id;
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:answer',
       matchId,
@@ -226,7 +226,7 @@ export async function handlePossessionAnswer(
       const currentAnswerCount = answerCount(cache);
       const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:answer',
           matchId,
@@ -310,7 +310,7 @@ export async function handlePossessionAnswer(
       return null;
     }
     await commitCachedAnswer(cache, answer);
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:answer',
         matchId,
@@ -401,7 +401,7 @@ export async function handlePossessionAnswer(
   });
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:answer',
         matchId,
@@ -431,7 +431,7 @@ export async function handlePossessionCountdownGuess(
 
   const { matchId, qIndex, guess } = payload;
   const userId = socket.data.user.id;
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:countdown_guess',
       matchId,
@@ -516,7 +516,7 @@ export async function handlePossessionCountdownGuess(
     );
   }
   if (!matched) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:countdown_guess',
         matchId,
@@ -543,7 +543,7 @@ export async function handlePossessionCountdownGuess(
 
   const addResult = await countdownAddFound(matchId, userId, matched.id);
   if (!addResult.added) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:countdown_guess',
         matchId,
@@ -569,7 +569,7 @@ export async function handlePossessionCountdownGuess(
     return;
   }
 
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:countdown_guess',
       matchId,
@@ -623,7 +623,7 @@ export async function handlePossessionPutInOrderAnswer(
 
   const { matchId, qIndex, orderedItemIds, timeMs } = payload;
   const userId = socket.data.user.id;
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:put_in_order_answer',
       matchId,
@@ -698,7 +698,7 @@ export async function handlePossessionPutInOrderAnswer(
     if (existingAnswer) {
       const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:put_in_order_answer',
           matchId,
@@ -758,7 +758,7 @@ export async function handlePossessionPutInOrderAnswer(
       return null;
     }
     await commitCachedAnswer(cache, answer);
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:put_in_order_answer',
         matchId,
@@ -844,7 +844,7 @@ export async function handlePossessionPutInOrderAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:put_in_order_answer',
         matchId,
@@ -888,7 +888,7 @@ export async function handlePossessionCluesAnswer(
   const userId = socket.data.user.id;
   const giveUp = payload.kind === 'giveUp';
   const guess = payload.kind === 'guess' ? payload.guess : '';
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:clues_answer',
       matchId,
@@ -973,7 +973,7 @@ export async function handlePossessionCluesAnswer(
     if (existingAnswer) {
       const answerAck = buildCachedAnswerAckPayload(cache, userId, aiOpponent);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:clues_answer',
           matchId,
@@ -1052,7 +1052,7 @@ export async function handlePossessionCluesAnswer(
       return { kind: 'noop' };
     }
     await commitCachedAnswer(cache, answer);
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:clues_answer',
         matchId,
@@ -1174,7 +1174,7 @@ export async function handlePossessionCluesAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:clues_answer',
         matchId,

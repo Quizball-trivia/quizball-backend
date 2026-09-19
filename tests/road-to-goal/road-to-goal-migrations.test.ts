@@ -5,21 +5,18 @@ function migration(name: string): string {
 }
 
 describe('Road to Goal migration contracts', () => {
-  it('routes online DDL through a dedicated migration or Supabase session URL', () => {
-    const runner = readFileSync(
-      new URL('../../scripts/run-migrations.mjs', import.meta.url),
-      'utf8'
-    );
-
-    expect(runner).toContain('MIGRATION_DATABASE_URL');
-    expect(runner).toContain("parsed.port = '5432'");
-    expect(runner).toContain("SET statement_timeout = 0");
-    expect(runner).toContain('MIGRATION_ONLINE_DDL_LOCK_TIMEOUT_MS');
-    expect(runner).toContain(': 120_000');
-    expect(runner).toContain('SELECT pg_advisory_lock');
-    expect(runner).toContain('SELECT pg_advisory_unlock');
-    expect(runner).not.toContain('pg_advisory_xact_lock');
-    expect(runner).toContain('await nonTransactionalSql.unsafe(body)');
+  it('requires a session-safe migration target and refuses unbounded timeouts', async () => {
+    const { migrationConnection, timeoutMs } = await import('../../scripts/migration-safety.mjs');
+    const application = 'postgresql://postgres.release:dummy@aws-1-eu-central-1.pooler.supabase.com:6543/postgres';
+    const session = application.replace(':6543/', ':5432/');
+    expect(migrationConnection({ DATABASE_URL: application, MIGRATION_DATABASE_URL: session })).toBe(session);
+    expect(() => migrationConnection({ DATABASE_URL: application })).toThrow(/session pooler/);
+    expect(() => migrationConnection({ DATABASE_URL: application, MIGRATION_DATABASE_URL: session.replace('postgres.release:', 'postgres.wrong:') })).toThrow(/projects differ/);
+    expect(() => timeoutMs('0', 300000, 'statement timeout')).toThrow();
+    expect(timeoutMs('15000', 300000, 'statement timeout')).toBe(15000);
+    // The full sequence and failure/retry behavior run against PostgreSQL in
+    // tests/migrations; source-string checks must not require unsafe auto-drop
+    // or unlimited statement timeouts from the previous staging runner.
   });
 
   it('uses a dedicated, private idempotency table and backfills committed history', () => {

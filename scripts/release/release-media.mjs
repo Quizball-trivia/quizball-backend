@@ -47,12 +47,11 @@ export async function preserveReleaseMedia({plan,expectedSha256,loadBytes,storag
  if(dryRun)return report;
  let index=0,failed;
  async function worker(){while(!failed&&index<plan.objects.length){const row=plan.objects[index++];try{
-  let current=await storage.read(row);
-  if(current===null){
-   const result=await storage.create(row,await local(row));
-   if(result==='created')report.uploaded++;else if(result==='exists')report.resumed++;else throw new Error('Unexpected create result');
-   current=await storage.read(row);
-  }else report.resumed++;
+  // Create-only POST handles an existing key atomically. A speculative GET
+  // before every new object adds latency without protecting against races.
+  const result=await storage.create(row,await local(row));
+  if(result==='created')report.uploaded++;else if(result==='exists')report.resumed++;else throw new Error('Unexpected create result');
+  const current=await storage.read(row);
   if(!current||current.bytes.length!==row.bytes||hash(current.bytes)!==row.sha256||current.contentType!==row.contentType)throw new Error('Destination media differs; never overwrite it');
   await onVerified({bucket:row.bucket,key:row.key,publicUrl:row.publicUrl,sha256:row.sha256,bytes:row.bytes,contentType:row.contentType,planSha256:plan.sha256,verifiedAt:new Date().toISOString()});report.verified++;
  }catch(error){failed??=error;}}}

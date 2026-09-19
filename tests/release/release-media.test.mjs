@@ -19,7 +19,7 @@ test('validates all source bytes before any write; dry run never contacts storag
 });
 test('resumes after upload response loss by comparing remote bytes; never overwrites a collision',async()=>{
  const p=build();let remote=null,writes=0,receipts=[];
- const storage={read:async()=>remote,create:async()=>{writes++;remote={bytes:data,contentType:'image/webp'};throw new Error('response lost');}};
+ const storage={read:async()=>remote,create:async()=>{if(remote)return'exists';writes++;remote={bytes:data,contentType:'image/webp'};throw new Error('response lost');}};
  const args={plan:p,expectedSha256:p.sha256,loadBytes:async()=>data,storage,dryRun:false,onVerified:async r=>receipts.push(r)};
  await assert.rejects(preserveReleaseMedia(args),/response lost/);assert.equal(writes,1);
  const retry=await preserveReleaseMedia(args);assert.equal(retry.resumed,1);assert.equal(retry.verified,1);assert.equal(writes,1);assert.equal(receipts.length,1);

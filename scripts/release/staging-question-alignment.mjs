@@ -157,6 +157,10 @@ export async function runStagingQuestionAlignment({databaseUrl,plan:input,expect
       const [batch]=await tx`SELECT * FROM question_release_batches WHERE id=${plan.sha256}`;
       if(batch.source_project!==PRODUCTION||batch.target_project!==STAGING||batch.manifest_sha256!==plan.sha256||!same(batch.preservation_map,preservation))throw new Error('Alignment batch metadata differs');
     }
+    // The reviewed plan also covers CMS-owned questions. Use the same scoped
+    // transaction permission as Quiz Pages; keep its guard enabled globally.
+    // Full draft/baseline checks and private before/after receipts still apply.
+    await tx`SELECT set_config('quizball.campaign_quiz_write','on',true)`;
     report.historySnapshotsAdded=await freezeHistory(tx,changes.map(r=>r.id));
     report.changed=await updateAndJournal(tx,plan,changes,undo?'undo':'align');
     return report;

@@ -137,7 +137,7 @@ export async function importFeatureContent(sql,directory,{targetProject,dryRun=t
       if(chunk.rows.some(r=>Object.keys(r).sort().join(',')!==names.join(',')))throw new Error('Inconsistent source columns');
       const columns=names.map(quote).join(',');
       const inserted=(await tx.unsafe(`INSERT INTO public.${group.table} AS t (${columns}) SELECT ${columns} FROM jsonb_populate_recordset(NULL::public.${group.table},$1::jsonb) RETURNING to_jsonb(t) AS row`,[chunk.rows])).map(r=>r.row);
-      await tx`INSERT INTO feature_content_release_chunks(batch_id,table_name,chunk_index,row_count,input_hash,after_hash,source_row_ids) VALUES(${pkg.sha256},${group.table},${chunk.index},${inserted.length},${contentHash(chunk.rows)},${orderedHash(inserted)},${group.table==='squad_spin_players'?tx.array(chunk.rows.map(r=>r.id)):null}::uuid[])`;
+      await tx`INSERT INTO feature_content_release_chunks(batch_id,table_name,chunk_index,row_count,input_hash,after_hash,source_row_ids) VALUES(${pkg.sha256},${group.table},${chunk.index},${inserted.length},${contentHash(chunk.rows)},${orderedHash(inserted)},${['squad_spin_players','squad_spin_combos','football_grid_content_releases'].includes(group.table)?tx.array(chunk.rows.map(r=>r.id)):null}::uuid[])`;
       report.inserted+=inserted.length;
     });
     onProgress({table:group.table,inserted:report.inserted,resumed:report.resumed});

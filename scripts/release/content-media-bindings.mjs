@@ -199,17 +199,32 @@ export async function applyMediaBindings(sql,input,{expectedSha256,dryRun=true,u
   if(batch.target_project!==plan.targetProject||!same(batch.manifest,manifest))throw new Error('Binding batch differs');
  },false);
  for(const rows of groups)for(let i=0;i<rows.length;i+=100)await transaction(sql,async tx=>{
-  for(const change of await inspect(tx,rows.slice(i,i+100),!dryRun)){
-   if(dryRun){report.changed++;continue;}
-   const {row,current,to}=change,table=row.table,column=TABLE_COLUMNS[table];
-   const [result]=await tx.unsafe(`UPDATE public.${table} t SET ${column}=s.${column} FROM jsonb_populate_record(NULL::public.${table},$1::jsonb) s WHERE t.id=$2::uuid RETURNING to_jsonb(t) AS row`,[to,row.id]);
+  const changes=await inspect(tx,rows.slice(i,i+100),!dryRun);
+  if(dryRun||!changes.length){report.changed+=changes.length;return;}
+  const table=changes[0].row.table,column=TABLE_COLUMNS[table];
+  // Keep the same bounded transaction and locked comparisons, but avoid two
+  // network round trips per row. The update and its complete journal still
+  // commit together; any unexpected result rolls back the entire chunk.
+  const results=await tx.unsafe(`UPDATE public.${table} t SET ${column}=s.${column} FROM jsonb_populate_recordset(NULL::public.${table},$1::jsonb) s WHERE t.id=s.id RETURNING to_jsonb(t) AS row`,[changes.map(c=>c.to)]);
+  if(results.length!==changes.length)throw new Error('Binding row disappeared');
+  const actualById=new Map(results.map(r=>[r.row.id,r.row]));
+  const journal=[];
+  for(const {row,current,to} of changes){
+   const result=actualById.get(row.id);
    if(!result)throw new Error('Binding row disappeared');
-   const expected=structuredClone(to),actual=structuredClone(result.row);delete expected.updated_at;delete actual.updated_at;
+   const expected=structuredClone(to),actual=structuredClone(result);delete expected.updated_at;delete actual.updated_at;
    if(!same(expected,actual))throw new Error('Binding changed fields outside the asset URL and update timestamp');
-   if(undo)await tx`UPDATE content_media_binding_rows SET undo_before_data=${tx.json(current)},undo_data=${tx.json(result.row)},undo_sequence=nextval('public.content_media_binding_rows_sequence_seq'),undone_at=now() WHERE batch_id=${plan.sha256} AND table_name=${table} AND row_id=${row.id}`;
-   else await tx`INSERT INTO content_media_binding_rows(batch_id,content_batch_id,table_name,row_id,before_data,after_data) VALUES(${plan.sha256},${row.contentBatchId},${table},${row.id},${tx.json(current)},${tx.json(result.row)})`;
-   report.changed++;
+   journal.push({row_id:row.id,content_batch_id:row.contentBatchId,before_data:current,after_data:result});
   }
+  const saved=undo
+   ? await tx`UPDATE content_media_binding_rows r SET undo_before_data=s.before_data,undo_data=s.after_data,undo_sequence=nextval('public.content_media_binding_rows_sequence_seq'),undone_at=now()
+       FROM jsonb_to_recordset(${tx.json(journal)}) AS s(row_id uuid,before_data jsonb,after_data jsonb)
+       WHERE r.batch_id=${plan.sha256} AND r.table_name=${table} AND r.row_id=s.row_id RETURNING r.row_id`
+   : await tx`INSERT INTO content_media_binding_rows(batch_id,content_batch_id,table_name,row_id,before_data,after_data)
+       SELECT ${plan.sha256},s.content_batch_id,${table},s.row_id,s.before_data,s.after_data
+       FROM jsonb_to_recordset(${tx.json(journal)}) AS s(row_id uuid,content_batch_id text,before_data jsonb,after_data jsonb) RETURNING row_id`;
+  if(saved.length!==changes.length)throw new Error('Media journal row disappeared');
+  report.changed+=changes.length;
  },dryRun);
  return report;
 }

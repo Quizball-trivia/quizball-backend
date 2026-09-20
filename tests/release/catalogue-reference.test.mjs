@@ -17,3 +17,11 @@ test('rehashed row ownership changes are rejected',()=>{
  const source=empty(),target=empty();source.football_player_name_translations=[{football_player_id:player,locale:'ka',name:'Translated'}];
  const p=buildCatalogueReferencePackage(source,target,options);p.tables[0].rows[0].disposition='preserve';const{sha256,...body}=p;p.sha256=contentHash(body);assert.throws(()=>validateCatalogueReferencePackage(p),/preservation policy/);
 });
+test('Pass Chain extension retains legacy packages and refuses different UUIDs for the same player',()=>{
+ const legacy=buildCatalogueReferencePackage(empty(),empty(),options);assert.equal(legacy.format,1);validateCatalogueReferencePackage(legacy);
+ const row={id,tm_id:123,name:{en:'Example'},image_url:'https://example.com/player.png'};
+ const source={...empty(),pass_chain_players:[row]},target={...empty(),pass_chain_players:[]};
+ const p=buildCatalogueReferencePackage(source,target,options);assert.equal(p.format,2);validateCatalogueReferencePackage(p);assert.equal(p.tables[2].rows[0].disposition,'insert');
+ target.pass_chain_players=[{...row,id:player}];assert.throws(()=>buildCatalogueReferencePackage(source,target,options),/shares an existing/);
+ target.pass_chain_players=[{...row,name:{en:'Production edit'}}];const preserved=buildCatalogueReferencePackage(source,target,options);assert.equal(preserved.tables[2].rows[0].row.name.en,'Production edit');
+});

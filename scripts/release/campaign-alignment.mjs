@@ -2,6 +2,7 @@ import postgres from 'postgres';
 import {contentHash} from './question-manifest.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
 import {buildCampaignAlignmentPlan} from './campaign-alignment-plan.mjs';
+import {hasVerifiedStagingContentRecovery} from './staging-content-recovery.mjs';
 const STAGING='nsdfiprfmhdqhbfxfwpv',PROD='lfbwhxvwubzeqkztghok';
 const RELATIONS={campaign_quiz_questions:['quiz_slug','question_id','difficulty','display_order'],campaign_quiz_manual_questions:['quiz_slug','question_id'],campaign_quiz_related_pages:['quiz_slug','related_slug','display_order']};
 const LOCAL_FIELDS=new Set(['created_at','updated_at','created_by','updated_by','preview_token']);
@@ -58,7 +59,7 @@ export async function runCampaignAlignment({databaseUrl,plan:input,expectedSha25
  checkQuestionImportTarget(databaseUrl,STAGING,{allowLocal:rehearsal});
  if(!rehearsal&&!['require','verify-full','verify-ca'].includes(url.searchParams.get('sslmode')))throw new Error('Encrypted staging connection required');
  const dryRun=action.endsWith('dry-run'),undo=action.startsWith('undo');
- if(!dryRun&&!rehearsal&&(!evidence.fullStagingRestoreVerified||!evidence.runtimeDrained||!['backupSha256','reservationSha256','rehearsalSha256'].every(k=>digest(evidence[k]))))throw new Error('Verified staging recovery, reservation and rehearsal required');
+ if(!dryRun&&!rehearsal&&(!hasVerifiedStagingContentRecovery(evidence,plan.sha256)||!evidence.runtimeDrained||!['backupSha256','reservationSha256','rehearsalSha256'].every(k=>digest(evidence[k]))))throw new Error('Verified staging recovery, reservation and rehearsal required');
  const sql=postgres(databaseUrl,{max:1,prepare:false,onnotice:()=>{}});
  try{return await sql.begin(dryRun?'ISOLATION LEVEL REPEATABLE READ READ ONLY':'',async tx=>{
   await tx`SET LOCAL timezone='UTC'`;await tx`SET LOCAL lock_timeout='2s'`;await tx`SET LOCAL statement_timeout='60s'`;

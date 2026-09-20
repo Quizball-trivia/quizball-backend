@@ -106,7 +106,11 @@ export async function importFeatureContent(sql,directory,{targetProject,dryRun=t
       const [total]=await tx.unsafe(`SELECT count(*)::text AS n FROM public.${group.table}`);
       if(Number(total.n)!==receipts.reduce((n,r)=>n+r.row_count,0))throw new Error('Target contains unowned or missing content: '+group.table);
       const prior=new Map(receipts.map(r=>[r.chunk_index,r]));
+      let lastDatabaseActivity=Date.now();
       for await(const chunk of chunks(directory,group)){
+        // Empty-target validation can scan millions of source rows without a
+        // query. Keep this read-only transaction below the cloud idle timeout.
+        if(Date.now()-lastDatabaseActivity>=1000){await tx`SELECT 1`;lastDatabaseActivity=Date.now();}
         validateRows(info,chunk.rows);
         const receipt=prior.get(chunk.index);
         if(receipt){

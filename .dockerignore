@@ -42,6 +42,7 @@ docker-compose*.yml
 # ignored. Excluding contents keeps the negation working.
 scripts/*
 !scripts/run-migrations.mjs
+!scripts/migration-safety.mjs
 
 # Docs
 *.md

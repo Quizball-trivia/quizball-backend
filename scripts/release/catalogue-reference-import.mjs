@@ -1,25 +1,27 @@
 import {contentHash} from './question-manifest.mjs';
 const PROD='lfbwhxvwubzeqkztghok',STAGE='nsdfiprfmhdqhbfxfwpv';
-const KEYS={football_player_name_translations:['football_player_id','locale'],player_season_snapshots:['id']};
+const KEYS={football_player_name_translations:['football_player_id','locale'],player_season_snapshots:['id'],pass_chain_players:['id']};
+const ORIGINAL_TABLES=['football_player_name_translations','player_season_snapshots'];
 const same=(a,b)=>a!==undefined&&b!==undefined&&contentHash(a)===contentHash(b);
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 const identity=(table,row)=>contentHash(KEYS[table].map(k=>row[k]));
 const uuid=hash=>[hash.slice(0,8),hash.slice(8,12),hash.slice(12,16),hash.slice(16,20),hash.slice(20,32)].join('-');
 const journalId=(table,row)=>row.id??uuid(identity(table,row));
-const natural=(table,row)=>table==='player_season_snapshots'?contentHash([row.football_player_id,row.season_start_year]):identity(table,row);
+const natural=(table,row)=>table==='pass_chain_players'?contentHash([row.tm_id]):table==='player_season_snapshots'?contentHash([row.football_player_id,row.season_start_year]):identity(table,row);
 // Source exporters and PostgreSQL JSON may spell equivalent UTC dates differently.
 const comparable=row=>Object.fromEntries(Object.entries(row).map(([k,v])=>[k,['created_at','updated_at','reviewed_at'].includes(k)&&v?new Date(v).toISOString():v]));
 export function buildCatalogueReferencePackage(source,target,{sourceProject=STAGE,targetProject=PROD,sourceEvidenceSha256,targetEvidenceSha256}){
  if(![PROD,STAGE].includes(sourceProject)||![PROD,STAGE].includes(targetProject)||sourceProject===targetProject||![sourceEvidenceSha256,targetEvidenceSha256].every(x=>/^[a-f0-9]{64}$/.test(x??'')))throw new Error('Pinned catalogue source, target and evidence required');
  const tables=[];
- for(const table of Object.keys(KEYS)){
+ const tableNames=Object.hasOwn(source,'pass_chain_players')?[...ORIGINAL_TABLES,'pass_chain_players']:ORIGINAL_TABLES;
+ for(const table of tableNames){
   if(!Array.isArray(source[table])||!Array.isArray(target[table]))throw new Error('Complete catalogue table inventories required');
   const originals=new Map(),naturalKeys=new Map();
   for(const row of target[table]){const key=identity(table,row),nk=natural(table,row);if(originals.has(key)||naturalKeys.has(nk))throw new Error('Duplicate target identity');originals.set(key,row);naturalKeys.set(nk,key);}
   const seen=new Set(),sourceNatural=new Set(),rows=[];
   for(const input of source[table]){
    const row=structuredClone(input),key=identity(table,row),nk=natural(table,row);
-   if(KEYS[table].some(k=>row[k]==null)||!row.football_player_id||seen.has(key)||sourceNatural.has(nk))throw new Error('Invalid or duplicate source identity');seen.add(key);sourceNatural.add(nk);
+   if(KEYS[table].some(k=>row[k]==null)||(table==='pass_chain_players'?!Number.isSafeInteger(row.tm_id):!row.football_player_id)||seen.has(key)||sourceNatural.has(nk))throw new Error('Invalid or duplicate source identity');seen.add(key);sourceNatural.add(nk);
    if(!originals.has(key)&&naturalKeys.has(nk))throw new Error('Different source UUID shares an existing catalogue identity');
    const before=originals.get(key);
    // Conflicts remain exactly as production stores them; no updates are emitted.
@@ -27,12 +29,13 @@ export function buildCatalogueReferencePackage(source,target,{sourceProject=STAG
   }
   rows.sort((a,b)=>a.key.localeCompare(b.key));tables.push({table,rows,originalRows:target[table]});
  }
- const body={format:1,sourceProject,targetProject,sourceEvidenceSha256,targetEvidenceSha256,policy:'add-only; preserve-target; retain-all-on-undo',tables};
+ const body={format:tableNames.length===3?2:1,sourceProject,targetProject,sourceEvidenceSha256,targetEvidenceSha256,policy:'add-only; preserve-target; retain-all-on-undo',tables};
  return {...body,sha256:contentHash(body)};
 }
 export function validateCatalogueReferencePackage(pkg){
  const{sha256,...body}=pkg;if(!/^[a-f0-9]{64}$/.test(sha256??'')||contentHash(body)!==sha256)throw new Error('Catalogue package checksum differs');
- if(pkg.tables.length!==Object.keys(KEYS).length||new Set(pkg.tables.map(t=>t.table)).size!==pkg.tables.length||pkg.tables.some(t=>!Object.hasOwn(KEYS,t.table)))throw new Error('Unexpected catalogue table');
+ const expected=pkg.format===1?ORIGINAL_TABLES:pkg.format===2?Object.keys(KEYS):[];
+ if(!expected.length||pkg.tables.length!==expected.length||new Set(pkg.tables.map(t=>t.table)).size!==pkg.tables.length||pkg.tables.some(t=>!expected.includes(t.table)))throw new Error('Unexpected catalogue table');
  const source=Object.fromEntries(pkg.tables.map(t=>[t.table,t.rows.map(r=>r.row)])),target=Object.fromEntries(pkg.tables.map(t=>[t.table,t.originalRows]));
  if(buildCatalogueReferencePackage(source,target,pkg).sha256!==sha256)throw new Error('Catalogue identity or preservation policy differs');return pkg;
 }

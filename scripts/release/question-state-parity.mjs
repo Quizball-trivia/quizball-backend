@@ -4,6 +4,7 @@ import {validateAlignmentInput} from './staging-question-alignment.mjs';
 import {validateQuestionPackage} from './question-package.mjs';
 import {validateQuestionPublicationPlan} from './question-publication.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
+import {hasVerifiedStagingContentRecovery} from './staging-content-recovery.mjs';
 const STAGING='nsdfiprfmhdqhbfxfwpv',PRODUCTION='lfbwhxvwubzeqkztghok';
 const FIELDS=['category_id','type','difficulty','status','prompt','explanation','ranked_eligible','visibility'];
 const pick=q=>Object.fromEntries(FIELDS.map(k=>[k,q[k]??null]));
@@ -74,7 +75,7 @@ export async function runStagingQuestionStateParity({databaseUrl,plan:input,expe
   checkQuestionImportTarget(databaseUrl,STAGING,{allowLocal:rehearsal});
  if(!rehearsal&&!['require','verify-full','verify-ca'].includes(url.searchParams.get('sslmode')))throw new Error('Encrypted staging connection required');
  const dryRun=action.endsWith('dry-run'),undo=action.startsWith('undo');
- if(!dryRun&&!rehearsal&&(!evidence.fullStagingRestoreVerified||!evidence.runtimeDrained||!['backupSha256','reservationSha256','rehearsalSha256'].every(k=>digest(evidence[k]))))throw new Error('Staging recovery and rehearsal evidence required');
+ if(!dryRun&&!rehearsal&&(!hasVerifiedStagingContentRecovery(evidence,plan.sha256)||!evidence.runtimeDrained||!['backupSha256','reservationSha256','rehearsalSha256'].every(k=>digest(evidence[k]))))throw new Error('Staging recovery and rehearsal evidence required');
  const sql=postgres(databaseUrl,{max:1,prepare:false,onnotice:()=>{}});
  try{return await sql.begin(dryRun?'ISOLATION LEVEL REPEATABLE READ READ ONLY':'',async tx=>{
   await tx`SET LOCAL timezone='UTC'`;await tx`SET LOCAL lock_timeout='2s'`;await tx`SET LOCAL statement_timeout='60s'`;

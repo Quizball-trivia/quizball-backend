@@ -2,6 +2,7 @@ import postgres from 'postgres';
 import {contentHash} from './question-manifest.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
 import {buildCoreStagingAlignmentPlan, coreAlignmentBaseline} from './core-staging-alignment-plan.mjs';
+import {hasVerifiedStagingContentRecovery} from './staging-content-recovery.mjs';
 
 const STAGING = 'nsdfiprfmhdqhbfxfwpv', PRODUCTION = 'lfbwhxvwubzeqkztghok';
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -56,7 +57,7 @@ export async function runCoreStagingAlignment({databaseUrl,plan:input,expectedSh
   checkQuestionImportTarget(databaseUrl,STAGING,{allowLocal:rehearsal});
   if (!rehearsal && !['require','verify-full','verify-ca'].includes(url.searchParams.get('sslmode'))) throw new Error('Encrypted staging connection required');
   const dryRun = action.endsWith('dry-run'), undo = action.startsWith('undo');
-  if (!dryRun && !rehearsal && (!evidence.fullStagingRestoreVerified || !evidence.runtimeDrained
+  if (!dryRun && !rehearsal && (!hasVerifiedStagingContentRecovery(evidence,plan.sha256) || !evidence.runtimeDrained
     || !['backupSha256','reservationSha256','rehearsalSha256','historyAuditSha256','mediaArchiveSha256'].every(key=>digest(evidence[key]))
     || evidence.verifiedMediaUrlsSha256 !== contentHash(plan.mediaUrls))) throw new Error('Verified recovery, history, reservation and canonical media required');
   const sql = postgres(databaseUrl,{max:1,prepare:false,onnotice:()=>{}});

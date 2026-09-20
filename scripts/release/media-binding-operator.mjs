@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import {contentHash} from './question-manifest.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
 import {applyMediaBindings,validateMediaBindingPlan,verifiedMediaUrlMap} from './content-media-bindings.mjs';
+import {hasVerifiedStagingContentRecovery} from './staging-content-recovery.mjs';
 const STAGE='nsdfiprfmhdqhbfxfwpv';
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 
@@ -27,7 +28,10 @@ export function checkMediaBindingPacket({databaseUrl,plan,expectedSha256,mediaPl
   if(!object?.contentType.startsWith('image/')||object.sha256!==metadata.sha256||object.bytes!==metadata.bytes)throw new Error('Image metadata differs from the verified destination bytes');
  }
  const dryRun=action.endsWith('dry-run');
- if(!dryRun&&!rehearsal&&(!evidence.fullRestoreVerified||!hash(evidence.backupSha256)||!hash(evidence.reservationSha256)||!hash(evidence.rehearsalSha256)))throw new Error('Verified recovery, rehearsal and content reservation evidence is required');
+ const recoveryVerified=plan.targetProject===STAGE
+  ? evidence.fullRestoreVerified===true||hasVerifiedStagingContentRecovery(evidence,plan.sha256)
+  : evidence.fullRestoreVerified===true;
+ if(!dryRun&&!rehearsal&&(!recoveryVerified||!hash(evidence.backupSha256)||!hash(evidence.reservationSha256)||!hash(evidence.rehearsalSha256)))throw new Error('Verified recovery, rehearsal and content reservation evidence is required');
  return {dryRun,undo:action.startsWith('undo'),allowStagingOriginals,expectedSha256};
 }
 export async function verifyImageDimensionCorrections(packet){

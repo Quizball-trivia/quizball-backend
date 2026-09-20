@@ -3,10 +3,13 @@ import {contentHash} from './question-manifest.mjs';
 import {validateQuestionPackage} from './question-package.mjs';
 import {checkQuestionImportTarget} from './question-import.mjs';
 import {rowsBeforeMediaBindings} from './content-media-bindings.mjs';
+import {hasVerifiedStagingContentRecovery} from './staging-content-recovery.mjs';
 
 const STAGING='nsdfiprfmhdqhbfxfwpv',PRODUCTION='lfbwhxvwubzeqkztghok';
 const FIELDS=['category_id','type','difficulty','status','prompt','explanation','ranked_eligible','visibility'];
-const ROOTS=['matches','free_kicks_rounds','trivia_mines_rounds','road_to_goal_rounds','squad_spin_rounds','guess_the_goal_sessions'];
+// Guess the Goal uses goal_choreographies and immutable goal_snapshot, never
+// questions/question_payloads. Its sessions do not depend on this alignment.
+const ROOTS=['matches','free_kicks_rounds','trivia_mines_rounds','road_to_goal_rounds','squad_spin_rounds'];
 const same=(a,b)=>a!==undefined&&b!==undefined&&contentHash(a)===contentHash(b);
 const pick=row=>Object.fromEntries(FIELDS.map(k=>[k,row[k]??null]));
 const key=(table,id)=>table+':'+id;
@@ -99,7 +102,7 @@ export async function runStagingQuestionAlignment({databaseUrl,plan:input,expect
   if(rehearsal&&(url.hostname!=='127.0.0.1'||url.port!=='55519'||!/^\/rehearsal_[a-z0-9_]+$/.test(url.pathname)))throw new Error('Isolated rehearsal connection required');
   checkQuestionImportTarget(databaseUrl,STAGING,{allowLocal:rehearsal});
   const dryRun=action.endsWith('dry-run'),undo=action.startsWith('undo');
-  if(!dryRun&&!rehearsal&&(!evidence.fullStagingRestoreVerified||!evidence.historyAuditComplete||!evidence.runtimeDrained||!evidence.oldReplicasStopped
+  if(!dryRun&&!rehearsal&&(!hasVerifiedStagingContentRecovery(evidence,plan.sha256)||!evidence.historyAuditComplete||!evidence.runtimeDrained||!evidence.oldReplicasStopped
     ||!['backupSha256','historyAuditSha256','mediaVerificationSha256','reservationSha256'].every(k=>/^[a-f0-9]{64}$/.test(evidence[k]??''))))throw new Error('Complete staging preservation and runtime reservation evidence is required');
   const sql=postgres(databaseUrl,{max:1,prepare:false,onnotice:()=>{}});
   try{return await sql.begin(dryRun?'ISOLATION LEVEL REPEATABLE READ READ ONLY':'',async tx=>{

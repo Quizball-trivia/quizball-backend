@@ -11,7 +11,10 @@ export type DailyChallengeType =
   | 'highLow'
   | 'footballLogic'
   | 'fifaCards'
-  | 'cardDetective';
+  | 'cardDetective'
+  | 'missingXi'
+  | 'passChain'
+  | 'statSniper';
 
 export type DailyChallengeIconToken =
   | 'dollarSign'

@@ -15,6 +15,25 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
+export interface DailyLeaderboardRow {
+  user_id: string;
+  score: number;
+  nickname: string;
+  avatar_customization: Json | null;
+  country: string | null;
+}
+
+export interface PassChainPlayerRow {
+  id: string;
+  tm_id: number;
+  name: Json;
+  aliases: string[];
+  normalized_aliases: string[];
+  clubs: Json;
+  managers: Json;
+  image_url: string | null;
+}
+
 export interface DailyChallengesTransactionRepo {
   getCompletionForUserOnDay(
     userId: string,
@@ -68,6 +87,72 @@ export const dailyChallengesRepo = {
       WHERE (${activeOnly}::boolean = false OR is_active = true)
       ORDER BY sort_order ASC, created_at ASC
     `;
+  },
+
+  async listPlayerImagesByTransfermarktIds(transfermarktIds: string[]): Promise<Map<string, string>> {
+    if (transfermarktIds.length === 0) return new Map();
+    const rows = await sql<Array<{ transfermarkt_id: string; image_url: string | null }>>`
+      SELECT transfermarkt_id, image_url
+      FROM football_players
+      WHERE transfermarkt_id = ANY(${transfermarktIds}::text[])
+        AND image_url IS NOT NULL
+    `;
+    return new Map(rows.map((row) => [row.transfermarkt_id, row.image_url as string]));
+  },
+
+  async listPassChainPlayersByTmIds(tmIds: number[]): Promise<PassChainPlayerRow[]> {
+    if (tmIds.length === 0) return [];
+    return sql<PassChainPlayerRow[]>`
+      SELECT id, tm_id, name, aliases, normalized_aliases, clubs, managers, image_url
+      FROM pass_chain_players
+      WHERE tm_id = ANY(${tmIds}::int[])
+    `;
+  },
+
+  async listAllPassChainPlayers(): Promise<PassChainPlayerRow[]> {
+    return sql<PassChainPlayerRow[]>`
+      SELECT id, tm_id, name, aliases, normalized_aliases, clubs, managers, image_url
+      FROM pass_chain_players
+    `;
+  },
+
+  async getQuestionPayload(questionId: string): Promise<{ id: string; type: string; difficulty: string; payload: Json } | null> {
+    const [row] = await sql<Array<{ id: string; type: string; difficulty: string; payload: Json }>>`
+      SELECT q.id, q.type, q.difficulty, qp.payload
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.id = ${questionId} AND q.status = 'published'
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async listTopCompletionsForDay(challengeType: DailyChallengeType, challengeDay: string, limit: number): Promise<DailyLeaderboardRow[]> {
+    return sql<DailyLeaderboardRow[]>`
+      SELECT c.user_id, c.score, COALESCE(u.nickname, 'Player') AS nickname, u.avatar_customization, u.country
+      FROM daily_challenge_completions c
+      JOIN users u ON u.id = c.user_id
+      WHERE c.challenge_type = ${challengeType} AND c.challenge_day = ${challengeDay}
+        AND u.is_ai = false AND u.is_banned = false AND u.is_deleted = false
+      ORDER BY c.score DESC, c.completed_at ASC
+      LIMIT ${limit}
+    `;
+  },
+
+  async getCompletionRankForDay(userId: string, challengeType: DailyChallengeType, challengeDay: string): Promise<{ rank: number; score: number; total: number } | null> {
+    const [row] = await sql<Array<{ rank: number; score: number; total: number }>>`
+      WITH ranked AS (
+        SELECT c.user_id, c.score,
+               RANK() OVER (ORDER BY c.score DESC, c.completed_at ASC) AS rank,
+               COUNT(*) OVER () AS total
+        FROM daily_challenge_completions c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.challenge_type = ${challengeType} AND c.challenge_day = ${challengeDay}
+          AND u.is_ai = false AND u.is_banned = false AND u.is_deleted = false
+      )
+      SELECT rank::int, score, total::int FROM ranked WHERE user_id = ${userId}
+    `;
+    return row ?? null;
   },
 
   async getConfig(challengeType: DailyChallengeType): Promise<DailyChallengeConfigRow | null> {
@@ -131,6 +216,34 @@ export const dailyChallengesRepo = {
       FROM daily_challenge_completions
       WHERE user_id = ${userId}
         AND challenge_day = ${challengeDay}
+    `;
+  },
+
+  /** How many DISTINCT players finished each challenge today — the "trending"
+   *  signal. Cheap: one grouped scan of a single day's completions. */
+  async countCompletionsByTypeOnDay(
+    challengeDay: string
+  ): Promise<Array<{ challenge_type: string; players: number }>> {
+    return sql<Array<{ challenge_type: string; players: number }>>`
+      SELECT challenge_type, count(DISTINCT user_id)::int AS players
+        FROM daily_challenge_completions
+       WHERE challenge_day = ${challengeDay}
+       GROUP BY challenge_type
+    `;
+  },
+
+  /** The player's own play counts over a recent window — the "you rarely play
+   *  this" signal. Uses the (user_id, challenge_day DESC) index. */
+  async countCompletionsForUserSince(
+    userId: string,
+    sinceDay: string
+  ): Promise<Array<{ challenge_type: string; plays: number }>> {
+    return sql<Array<{ challenge_type: string; plays: number }>>`
+      SELECT challenge_type, count(*)::int AS plays
+        FROM daily_challenge_completions
+       WHERE user_id = ${userId}
+         AND challenge_day >= ${sinceDay}
+       GROUP BY challenge_type
     `;
   },
 

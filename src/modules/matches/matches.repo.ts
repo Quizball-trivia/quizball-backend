@@ -389,19 +389,45 @@ export const matchesRepo = {
   /**
    * Matches stuck in 'active' with no state write for `olderThanMs`. Used by the
    * stale-match sweeper to clean up orphans whose in-process grace/forfeit timer
-   * was lost (e.g. a backend restart mid-grace). Gated on `updated_at` — which is
-   * bumped on every state write — so a genuinely live (but long) match is never
-   * returned, only ones that have gone silent for the whole window.
+   * was lost (e.g. a backend restart mid-grace). Grid uses its authoritative
+   * football_grid_matches.updated_at (persisted on every state change); other
+   * variants use matches.updated_at.
    */
   async listStaleActiveMatches(olderThanMs: number, limit: number): Promise<MatchRow[]> {
     return sql<MatchRow[]>`
-      SELECT *
-      FROM matches
-      WHERE status = 'active'
-        AND updated_at < NOW() - make_interval(secs => ${olderThanMs / 1000})
-      ORDER BY updated_at ASC
+      SELECT m.*
+      FROM matches m
+      LEFT JOIN football_grid_matches gm
+        ON gm.match_id = m.id AND m.game_variant = 'football_grid'
+      WHERE m.status = 'active'
+        AND CASE
+              WHEN m.game_variant = 'football_grid' THEN COALESCE(gm.updated_at, m.updated_at)
+              ELSE m.updated_at
+            END < NOW() - make_interval(secs => ${olderThanMs / 1000})
+      ORDER BY CASE
+                 WHEN m.game_variant = 'football_grid' THEN COALESCE(gm.updated_at, m.updated_at)
+                 ELSE m.updated_at
+               END ASC
       LIMIT ${limit}
     `;
+  },
+
+  async isActiveMatchStale(matchId: string, olderThanMs: number): Promise<boolean> {
+    const [row] = await sql<{ stale: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1
+          FROM matches m
+          LEFT JOIN football_grid_matches gm
+            ON gm.match_id = m.id AND m.game_variant = 'football_grid'
+         WHERE m.id = ${matchId}
+           AND m.status = 'active'
+           AND CASE
+                 WHEN m.game_variant = 'football_grid' THEN COALESCE(gm.updated_at, m.updated_at)
+                 ELSE m.updated_at
+               END < NOW() - make_interval(secs => ${olderThanMs / 1000})
+      ) AS stale
+    `;
+    return row?.stale ?? false;
   },
 
   /**

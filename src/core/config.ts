@@ -174,6 +174,144 @@ const configSchema = z.object({
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
 
+
+  // Free Kicks (real-coins solo mode). Ships DISABLED; the kill switch blocks
+  // only NEW rounds — resume/cashout/sweeper keep running while liabilities
+  // exist so no player pot is ever stranded.
+  // Trivia Mines (house-banked solo mini game). Flag blocks only NEW rounds.
+  TRIVIA_MINES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FREE_KICKS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Roster bots playing Free Kicks for real (real stakes/ledger/events) so the
+  // stats layer has genuine numbers before humans arrive.
+  FREE_KICKS_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** Deprecated 2026-09-06: bots now follow the shared activity model; kept so existing envs still parse. */
+  FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
+  FREE_KICKS_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Shared audience size for the mini-game bot activity model (measured prod
+  // average of daily active humans, 2026-09-06). Raise to make modes look busier.
+  SYNTHETIC_ACTIVITY_DAU: z.coerce.number().int().min(0).max(100000).default(195),
+  TRIVIA_MINES_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** 0 = derive from SYNTHETIC_ACTIVITY_DAU × mode share. */
+  TRIVIA_MINES_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Squad Spin (house-banked solo mini game). Flag blocks only NEW rounds.
+  SQUAD_SPIN_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  ROAD_TO_GOAL_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  ROAD_TO_GOAL_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Road to Goal (real-coins solo mode). New rounds ship disabled; resume,
+  // settlement, and stale-round cleanup remain available regardless.
+  ROAD_TO_GOAL_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_QUEUE_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_LOBBY_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Rolling-deploy gate: ship code/migration with v1, then flip to 2 only once
+  // every replica understands the immutable v2 policy and private audit schema.
+  FOOTBALL_GRID_BOT_MODEL_VERSION: z.coerce.number().int().min(1).max(2).default(1),
+  // 'easy' caps every grid bot (any tier, any governor adjustment) at the easy
+  // ceilings so new players can beat them; 'adaptive' restores the tier model.
+  FOOTBALL_GRID_BOT_DIFFICULTY: z.enum(["easy", "adaptive"]).default("easy"),
+  // Grid-only bot safety loop. New matches pin the current adjustment; turning
+  // this off pins zero while completed matches continue warming the EMA and
+  // reset any stored nerf toward the safe v2 baseline.
+  FOOTBALL_GRID_BOT_GOVERNOR_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  FOOTBALL_GRID_COINS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Independent rollout gate for the competitive TP ledger/leaderboard. TP
+  // intentionally remains available when coin payouts are paused or capped.
+  FOOTBALL_GRID_POINTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_RISK_HASH_SECRET: z.string().optional(),
+  // Guest friend lobbies (two flags so a rollback can DRAIN). Provisioning off:
+  // no new guest users, no new guest rooms/memberships; guests already in a
+  // room may reconnect and finish. Reconnect off: every guest token is refused
+  // (HTTP principal and socket), so provisioning is only usable with reconnect on.
+  GUEST_HTTP_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  GUEST_LOBBIES_PROVISIONING_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  GUEST_LOBBIES_RECONNECT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /**
+   * Guest "Play now" bot matches (Tic Tac Toe / Auction) from the public game
+   * pages. Kill switch only — a guest still needs provisioning + reconnect on.
+   */
+  // Season mode is switched only at a reviewed match boundary.
+  POSSESSION_MCQ_ONLY: z.enum(['true', 'false', '1', '0', '']).default('false')
+    .transform((value) => value === 'true' || value === '1'),
+  GUEST_BOT_MATCHES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** Random wait before a guest practice table is seated, so it feels like matchmaking. */
+  GUEST_BOT_MATCH_DELAY_MIN_MS: z.coerce.number().int().min(0).default(5_000),
+  GUEST_BOT_MATCH_DELAY_MAX_MS: z.coerce.number().int().min(0).default(25_000),
+  /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
+  GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
+  FOOTBALL_GRID_XP_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  FOOTBALL_GRID_PACK_PREVIEW_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+  FOOTBALL_GRID_CONTENT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FOOTBALL_GRID_BOT_FALLBACK_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+  // Each realtime replica periodically attempts to drain the shared Grid
+  // queue. The distributed matchmaking lock makes all but one attempt a cheap
+  // no-op. Set to 0 for an emergency disable without disabling queue joins.
+  FOOTBALL_GRID_MM_SWEEP_MS: z.coerce.number().int().min(0).max(60_000).default(750),
+
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
@@ -379,6 +517,17 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       'Invalid configuration: Google Search Console credentials must be configured together.',
       { configuredSearchConsoleValues },
     );
+  }
+
+  if (result.data.GUEST_BOT_MATCH_DELAY_MIN_MS > result.data.GUEST_BOT_MATCH_DELAY_MAX_MS) {
+    throw new ConfigError('Invalid configuration: GUEST_BOT_MATCH_DELAY_MIN_MS must not exceed GUEST_BOT_MATCH_DELAY_MAX_MS', {
+      fieldErrors: { GUEST_BOT_MATCH_DELAY_MAX_MS: ['must be >= GUEST_BOT_MATCH_DELAY_MIN_MS'] },
+    });
+  }
+  if (result.data.NODE_ENV !== 'local'
+      && (result.data.FOOTBALL_GRID_COINS_ENABLED || result.data.FOOTBALL_GRID_POINTS_ENABLED)
+      && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32) {
+    throw new ConfigError('Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins or points are enabled.', { nodeEnv: result.data.NODE_ENV });
   }
 
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking

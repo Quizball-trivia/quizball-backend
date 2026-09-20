@@ -134,6 +134,25 @@ export const syntheticBotsRepo = {
     return rows[0] ?? null;
   },
 
+  /**
+   * Moves a bot's match-bound reservation to the next game of the same
+   * series. Keyed by the finished match so the settlement-gated release for
+   * that match finds nothing to free, and the bot stays seated.
+   */
+  async transferReservationBetweenMatches(
+    tx: TransactionSql,
+    params: { botUserId: string; fromMatchId: string; toMatchId: string },
+  ): Promise<SyntheticBotReservationRow | null> {
+    const rows = await tx.unsafe<SyntheticBotReservationRow[]>(
+      `UPDATE synthetic_bot_reservations
+         SET match_id = $1, heartbeat_at = now()
+       WHERE bot_user_id = $2 AND match_id = $3
+       RETURNING *`,
+      [params.toMatchId, params.botUserId, params.fromMatchId],
+    );
+    return rows[0] ?? null;
+  },
+
   // NOTE: there is deliberately NO unlocked lobby-keyed release method. Every
   // lobby-phase release (match_id IS NULL, lobby possibly still pre-draft) MUST go
   // through abortRankedAiLobbyLocked below, which serializes with draft activation

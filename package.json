@@ -21,6 +21,7 @@
     "test:seed-cleanup": "vitest run tests/seed-cleanup",
     "test": "vitest run",
     "test:ci": "vitest run --config vitest.ci.config.ts",
+    "test:release-content": "node --test tests/migrations/question-*.test.mjs tests/release/*.test.mjs",
     "test:wl": "vitest run --config vitest.wl.config.ts",
     "test:watch": "vitest",
     "test:burnin": "vitest run --config vitest.burnin.config.ts",
@@ -54,7 +55,9 @@
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",
-    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts"
+    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts",
+    "test:migrations": "node --test tests/migrations/runner.test.mjs",
+    "test:release-sequence": "node --test tests/migrations/release-sequence.test.mjs"
   },
   "keywords": [],
   "author": "",

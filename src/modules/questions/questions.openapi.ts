@@ -105,6 +105,46 @@ const footballLogicPayloadOpenApiSchema = z.object({
   explanation: i18nFieldSchema.nullable().optional(),
 });
 
+const missingXiPayloadOpenApiSchema = z.object({
+  type: z.literal('missing_xi'),
+  team: i18nFieldSchema,
+  opponent: i18nFieldSchema,
+  match_label: i18nFieldSchema,
+  formation: z.string().min(1),
+  score: z.string().nullable().optional(),
+  season: z.number().int().nullable().optional(),
+  slots: z.array(z.object({
+    id: z.string().min(1),
+    position: z.string().min(1),
+    number: z.number().int().nullable(),
+    x: z.number(),
+    y: z.number(),
+    name: i18nFieldSchema,
+    accepted_answers: z.array(z.string().min(1)).min(1),
+  })).length(11),
+});
+
+const passChainPayloadOpenApiSchema = z.object({
+  type: z.literal('pass_chain'),
+  start_tm_id: z.number().int(),
+  target_tm_id: z.number().int(),
+  par: z.number().int(),
+  bridges: z.number().int().nullable().optional(),
+  solution: z.array(z.object({ tm_id: z.number().int(), kind: z.enum(['club', 'manager']).optional(), via: i18nFieldSchema })).min(1),
+});
+
+const statSniperPayloadOpenApiSchema = z.object({
+  type: z.literal('stat_sniper'),
+  kind: z.string().min(1),
+  prompt: i18nFieldSchema,
+  unit: i18nFieldSchema,
+  value: z.number(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number(),
+  source: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
 const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
   mcqPayloadOpenApiSchema,
   trueFalsePayloadOpenApiSchema,
@@ -116,6 +156,9 @@ const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
   careerPathPayloadOpenApiSchema,
   highLowPayloadOpenApiSchema,
   footballLogicPayloadOpenApiSchema,
+  missingXiPayloadOpenApiSchema,
+  passChainPayloadOpenApiSchema,
+  statSniperPayloadOpenApiSchema,
 ]).openapi('QuestionPayload');
 
 const questionResponseSchema = z

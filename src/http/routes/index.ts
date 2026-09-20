@@ -40,6 +40,20 @@ import { guessTheGoalRoutes } from './guess-the-goal.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
+import { footballGridRoutes } from './football-grid.routes.js';
+
+import { freeKicksRoutes } from './free-kicks.routes.js';
+
+import { triviaMinesRoutes } from './trivia-mines.routes.js';
+
+import { squadSpinRoutes } from './squad-spin.routes.js';
+
+import { guestRoutes } from './guest.routes.js';
+
+import { roadToGoalRoutes } from './road-to-goal.routes.js';
+
+import { adminFootballGridRoutes } from './admin-football-grid.routes.js';
+
 const router = Router();
 
 // Health check (not versioned)
@@ -88,5 +102,19 @@ router.use('/api/v1/email', emailRoutes);
 router.use('/api/v1/campaign-quizzes', campaignQuizzesRoutes);
 router.use('/api/v1/admin/campaign-quizzes', adminCampaignQuizzesRoutes);
 router.use('/api/v1/guess-the-goal', guessTheGoalRoutes);
+
+router.use('/api/v1/football-grid', footballGridRoutes);
+
+router.use('/api/v1/free-kicks', freeKicksRoutes);
+
+router.use('/api/v1/trivia-mines', triviaMinesRoutes);
+
+router.use('/api/v1/squad-spin', squadSpinRoutes);
+
+router.use('/api/v1/guest', guestRoutes);
+
+router.use('/api/v1/road-to-goal', roadToGoalRoutes);
+
+router.use('/api/v1/admin/football-grid', adminFootballGridRoutes);
 
 export const routes = router;

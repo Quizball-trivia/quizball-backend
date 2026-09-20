@@ -6,6 +6,9 @@ import { registerEndpoint } from '../../http/openapi/register-endpoint.js';
 import {
   adminDailyChallengeCategoryOptionSchema,
   completeDailyChallengeBodySchema,
+  passChainLinkBodySchema,
+  passChainLinkResponseSchema,
+  statSniperLeaderboardResponseSchema,
   completeDailyChallengeResponseSchema,
   dailyChallengeConfigResponseSchema,
   dailyComebackStateResponseSchema,
@@ -92,6 +95,32 @@ export function registerDailyChallengesOpenApi(registry: OpenAPIRegistry): void 
       200: { description: 'Reminder state updated', schema: setDailyComebackReminderResponseSchema },
       400: { description: 'Daily reminders are not enabled', schema: errorResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/daily-challenges/stat-sniper/leaderboard',
+    summary: "Today's most accurate Stat Sniper players and the caller's rank",
+    tags: ['Daily Challenges'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Leaderboard for the current challenge day', schema: statSniperLeaderboardResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/daily-challenges/pass-chain/link',
+    summary: 'Validate one typed link in a Pass Chain puzzle',
+    tags: ['Daily Challenges'],
+    security: [{ bearerAuth: [] }],
+    body: passChainLinkBodySchema,
+    responses: {
+      200: { description: 'Link verdict', schema: passChainLinkResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      404: { description: 'Puzzle not found', schema: errorResponseSchema },
     },
   });
 

@@ -32,9 +32,9 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
   clues: {
     challengeType: 'clues',
     title: {
-      en: 'Clues Challenge',
-      ka: 'მინიშნებების გამოწვევა',
-      tr: 'İpucu Görevi',
+      en: 'Who Am I?',
+      ka: 'ვინ ვარ მე?',
+      tr: 'Ben Kimim?',
     },
     description: {
       en: 'Solve each football clue chain before the later hints give it away.',
@@ -128,6 +128,48 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       tr: 'Görsel ipuçlarını kullanarak futbolcuyu, maçı veya anı çöz.',
     },
     iconToken: 'image',
+  },
+  missingXi: {
+    challengeType: 'missingXi',
+    title: {
+      en: 'Missing XI',
+      ka: 'დაკარგული XI',
+      tr: 'Eksik XI',
+    },
+    description: {
+      en: 'Three famous line-ups a day. Tap a shirt and name the player who started there.',
+      ka: 'დღეში სამი ცნობილი შემადგენლობა. დააჭირე მაისურს და დაასახელე, ვინ დაიწყო იქ.',
+      tr: 'Günde üç ünlü kadro. Bir formaya dokun ve orada başlayan oyuncuyu söyle.',
+    },
+    iconToken: 'users',
+  },
+  passChain: {
+    challengeType: 'passChain',
+    title: {
+      en: 'Pass Chain',
+      ka: 'პასების ჯაჭვი',
+      tr: 'Pas Zinciri',
+    },
+    description: {
+      en: 'Link two players through team-mates who shared a club. Fewer links score higher.',
+      ka: 'დააკავშირე ორი ფეხბურთელი საერთო კლუბის თანაგუნდელებით. ნაკლები რგოლი — მეტი ქულა.',
+      tr: 'İki oyuncuyu aynı kulüpte oynamış takım arkadaşları üzerinden bağla. Daha az halka daha yüksek puan.',
+    },
+    iconToken: 'route',
+  },
+  statSniper: {
+    challengeType: 'statSniper',
+    title: {
+      en: 'Stat Sniper',
+      ka: 'სტატ-სნაიპერი',
+      tr: 'Stat Sniper',
+    },
+    description: {
+      en: 'Ten football numbers a day. Slide to your best guess — the closer you land, the higher you score.',
+      ka: 'დღეში ათი ფეხბურთის რიცხვი. მიიტანე სლაიდერი შენს ვარაუდამდე — რაც უფრო ახლოს, მით მეტი ქულა.',
+      tr: 'Günde on futbol sayısı. En iyi tahminine kaydır — ne kadar yaklaşırsan o kadar yüksek puan.',
+    },
+    iconToken: 'trendingUp',
   },
   fifaCards: {
     challengeType: 'fifaCards',

@@ -1,3 +1,11 @@
+import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
+import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
+import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
+import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
+import { footballGridMatchmakingService } from './services/football-grid-matchmaking.service.js';
+import { footballGridRematchService } from './services/football-grid-rematch.service.js';
+import { footballGridPresenceService } from './services/football-grid-presence.service.js';
+import { handleFootballGridSocketTransition } from './football-grid-socket-transition.js';
 import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -379,6 +387,23 @@ async function runPostConnectHydration(
     }
   }
 
+  // Results only — live-match rejoin already happened above via
+  // rejoinActiveMatchOnConnect. This no-ops unless the user has a terminalized
+  // grid match whose result never reached them.
+  //
+  // Flag-gated so mature modes pay nothing for it: with Grid off this costs
+  // ranked/auction connects zero queries, and every connect is on the hot path
+  // that reconnect storms hammer.
+  // Skipped when hydration already bound this socket to a live match of any
+  // mode: an old grid result must not land on top of a ranked/auction rejoin.
+  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId) {
+    try {
+      await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to flush pending grid results on connect');
+    }
+  }
+
   if (!socket.data.matchId) {
     try {
       await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(socket);
@@ -508,6 +533,26 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       if (payload.kind !== 'draft_grace_expiry') return;
       await runDraftGraceExpiry(server, payload.lobbyId, payload.disconnectedUserId);
     },
+    football_grid_phase: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'football_grid_phase') return;
+      await footballGridRealtimeService.handlePhaseTimer(server, payload);
+    },
+    football_grid_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'football_grid_matchmaking_fallback') return;
+      await footballGridMatchmakingService.handleFallbackTimer(server, payload.searchId, payload.userId);
+    },
+    football_grid_bot_action: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'football_grid_bot_action') return;
+      await footballGridRealtimeService.handleBotActionTimer(server, payload);
+    },
+    football_grid_rematch_expiry: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'football_grid_rematch_expiry') return;
+      await footballGridRematchService.expire(server, payload.seriesId, payload.expectedSeriesVersion);
+    },
+    football_grid_presence_expiry: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'football_grid_presence_expiry') return;
+      await footballGridRealtimeService.handlePresenceExpiryTimer(server, payload);
+    },
     party_question: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'party_question') return;
       await resolvePartyQuizRound(server, payload.matchId, payload.qIndex, true);
@@ -608,6 +653,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     acknowledgeLocalMatchUiReady(io, userId, matchId, phase);
   });
 
+  io.on('grid:socket_transition', (payload) => {
+    handleFootballGridSocketTransition(io, payload);
+  });
+
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).
   setAuthRealtimeServer(io);
@@ -626,6 +675,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // work list is expired reservations, so with an empty table it is effectively
   // idle regardless.
   startReservationSweeper();
+  footballGridSettlementService.start();
+  footballGridMaintenanceService.start();
+  footballGridPresenceService.startNodeHeartbeat();
+  footballGridRematchService.startRecovery(io);
+  footballGridRealtimeService.startCommandRecovery(io);
+  footballGridMatchmakingService.startRecovery(io);
+  footballGridMatchmakingService.startSweep(io);
 
   // A deploy can land inside an in-process round-transition window (ready-ack
   // gates, inter-question delay) — re-arm timers for every active match so no
@@ -633,6 +689,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   scheduleBootMatchTimerRearm(io);
   startWlOrchestrator(io);
   scheduleBootAuctionTimerRearm(io);
+  void footballGridRealtimeService.rearmActiveMatches().catch((error) => {
+    logger.warn({ error }, 'Football Grid boot timer re-arm failed');
+  });
 
   rankedMatchmakingService.start(io);
   auctionMatchmakingService.start(io);
@@ -664,6 +723,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerMatchHandlers(io, socket);
     registerWarmupHandlers(io, socket);
     registerAuctionHandlers(io, socket);
+    registerFootballGridHandlers(io, socket);
     registerDevHandlers(io, socket);
     registerWlHandlers(io, socket);
 
@@ -732,12 +792,15 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
           lobbyRealtimeService.handleLobbyDisconnect(io, socket)
         );
       }
-      if (disconnectDbTasks.includes('match_disconnect')) {
+      if (socket.data.gridMatchId) {
+        runSocketDbTask('football_grid_disconnect', user.id, () => footballGridRealtimeService.handleSocketDisconnect(io, socket));
+      } else if (disconnectDbTasks.includes('match_disconnect')) {
         runSocketDbTask('match_disconnect', user.id, () =>
           matchRealtimeService.handleMatchDisconnect(io, socket)
         );
       }
       runSocketDbTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketDbTask('football_grid_matchmaking_disconnect', user.id, () => footballGridMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketDbTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketDbTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
       runSocketDbTask('presence_offline', user.id, () => trackUserOffline(io, user.id));

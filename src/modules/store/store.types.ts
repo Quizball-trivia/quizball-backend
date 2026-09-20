@@ -24,7 +24,17 @@ export const STORE_TX_EVENT_TYPES = [
   'admin_ticket_window_reset',
   'admin_account_ban',
   'admin_account_unban',
+  'free_kicks_stake',
+  'free_kicks_payout',
+  'road_to_goal_stake',
+  'road_to_goal_payout',
   'guess_the_goal_reward',
+  'trivia_mines_stake',
+  'trivia_mines_payout',
+  'trivia_mines_refund',
+  'squad_spin_stake',
+  'squad_spin_payout',
+  'squad_spin_refund',
 ] as const;
 
 export type StoreTxEventType = typeof STORE_TX_EVENT_TYPES[number];
@@ -91,6 +101,8 @@ export interface StoreTransactionLogRow {
   stripe_checkout_id: string | null;
   stripe_payment_intent: string | null;
   coins_delta: number;
+  /** Nullable only for historic rows written before minor-unit support. */
+  coins_delta_minor: string | null;
   tickets_delta: number;
   inventory_delta: Json;
   reason: string | null;
@@ -104,10 +116,13 @@ export interface StoreTransactionLogRow {
 
 export interface WalletRow {
   coins: number;
+  /** Present on persisted wallet rows; optional for legacy lightweight wallet DTOs. */
+  coin_fraction_minor?: number;
   tickets: number;
 }
 
 export interface WalletStateRow extends WalletRow {
+  coin_fraction_minor: number;
   tickets_refill_started_at: string | null;
 }
 

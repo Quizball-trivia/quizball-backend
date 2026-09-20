@@ -32,6 +32,11 @@ export interface CreateLobbyData {
   rankedContext?: RankedLobbyContext | null;
 }
 
+export interface CreateLobbyMemberData {
+  userId: string;
+  isReady: boolean;
+}
+
 export type FriendlyCategoryPool = 'mcq' | 'possession';
 
 function friendlyCategoryCoverageSql(minQuestions: number, pool: FriendlyCategoryPool) {
@@ -48,12 +53,18 @@ function friendlyCategoryCoverageSql(minQuestions: number, pool: FriendlyCategor
   };
 }
 
+function deriveLobbyDefaults(data: CreateLobbyData) {
+  return {
+    gameMode: data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
+    friendlyRandom: data.friendlyRandom ?? true,
+    isPublic: data.isPublic ?? false,
+    displayName: data.displayName ?? '',
+  };
+}
+
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
-    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
-    const friendlyRandom = data.friendlyRandom ?? true;
-    const isPublic = data.isPublic ?? false;
-    const displayName = data.displayName ?? '';
+    const { gameMode, friendlyRandom, isPublic, displayName } = deriveLobbyDefaults(data);
     const [row] = await sql<LobbyRow[]>`
       INSERT INTO lobbies (
         id,
@@ -84,6 +95,66 @@ export const lobbiesRepo = {
         'waiting'
       )
       RETURNING *
+    `;
+    return row;
+  },
+
+  /**
+   * Creates a lobby and its initial roster atomically in one database round
+   * trip. Ranked matchmaking used to acquire the app DB bulkhead three times
+   * per pair (lobby + two members), which becomes the dominant queue at a
+   * streamer-scale join burst even though each Postgres statement is fast.
+   */
+  async createLobbyWithMembers(
+    data: CreateLobbyData,
+    members: [CreateLobbyMemberData, CreateLobbyMemberData],
+  ): Promise<LobbyRow> {
+    const { gameMode, friendlyRandom, isPublic, displayName } = deriveLobbyDefaults(data);
+    const [row] = await sql<LobbyRow[]>`
+      WITH created_lobby AS (
+        INSERT INTO lobbies (
+          id,
+          invite_code,
+          mode,
+          game_mode,
+          friendly_random,
+          friendly_category_a_id,
+          friendly_category_b_id,
+          is_public,
+          display_name,
+          ranked_context,
+          host_user_id,
+          status
+        )
+        VALUES (
+          gen_random_uuid(),
+          ${data.inviteCode},
+          ${data.mode},
+          ${gameMode},
+          ${friendlyRandom},
+          ${data.friendlyCategoryAId ?? null},
+          ${data.friendlyCategoryBId ?? null},
+          ${isPublic},
+          ${displayName},
+          ${sql.json((data.rankedContext ?? null) as Json)},
+          ${data.hostUserId},
+          'waiting'
+        )
+        RETURNING *
+      ),
+      created_members AS (
+        INSERT INTO lobby_members (lobby_id, user_id, is_ready)
+        SELECT created_lobby.id, member.user_id::uuid, member.is_ready::boolean
+        FROM created_lobby
+        CROSS JOIN (VALUES
+          (${members[0].userId}, ${members[0].isReady}),
+          (${members[1].userId}, ${members[1].isReady})
+        ) AS member(user_id, is_ready)
+        RETURNING lobby_id
+      )
+      SELECT created_lobby.*
+      FROM created_lobby
+      CROSS JOIN (SELECT COUNT(*) FROM created_members) AS inserted_members
     `;
     return row;
   },
@@ -291,7 +362,7 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
-             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind
+             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
       FROM lobby_members lm
       JOIN users u ON u.id = lm.user_id
       WHERE lm.lobby_id = ${lobbyId}
@@ -378,6 +449,7 @@ export const lobbiesRepo = {
       HAVING (
         ${params.joinableOnly}::boolean = false
         OR COUNT(lm.user_id) < CASE
+          WHEN l.game_mode = 'football_grid' THEN 2
           WHEN l.game_mode = 'auction' THEN 3
           ELSE 6
         END

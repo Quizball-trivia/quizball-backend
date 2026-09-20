@@ -1,0 +1,2 @@
+ALTER TABLE public.campaign_quizzes VALIDATE CONSTRAINT fk_campaign_quizzes_question_set;
+ALTER TABLE public.campaign_quiz_routes VALIDATE CONSTRAINT campaign_quiz_routes_target_slug_fkey;

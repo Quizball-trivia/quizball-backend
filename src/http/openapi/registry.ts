@@ -37,6 +37,7 @@ import { registerLobbiesOpenApi } from '../../modules/lobbies/lobbies.openapi.js
 import { registerObjectivesOpenApi } from '../../modules/objectives/objectives.openapi.js';
 import { registerQuestionsOpenApi } from '../../modules/questions/questions.openapi.js';
 import { registerRankedOpenApi } from '../../modules/ranked/ranked.openapi.js';
+import { registerRoadToGoalOpenApi } from '../../modules/road-to-goal/road-to-goal.openapi.js';
 import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
 import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 import { registerUsersOpenApi } from '../../modules/users/users.openapi.js';
@@ -47,6 +48,7 @@ import { registerFeedbackOpenApi } from '../../modules/feedback/feedback.openapi
 import { registerAuctionOpenApi } from '../../modules/auction/auction.openapi.js';
 import { registerPlayerClueCardsOpenApi } from '../../modules/auction/player-clue-cards.openapi.js';
 import { registerAuctionPipelineOpenApi } from '../../modules/auction/auction-pipeline.openapi.js';
+import { registerFootballGridOpenApi } from '../../modules/football-grid/football-grid.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -61,6 +63,7 @@ registerStatsOpenApi(registry);
 registerLobbiesOpenApi(registry);
 registerRankedOpenApi(registry);
 registerStoreOpenApi(registry);
+registerRoadToGoalOpenApi(registry);
 registerUsersOpenApi(registry);
 registerFriendsOpenApi(registry);
 registerObjectivesOpenApi(registry);
@@ -75,6 +78,7 @@ registerFeedbackOpenApi(registry);
 registerAuctionOpenApi(registry);
 registerPlayerClueCardsOpenApi(registry);
 registerAuctionPipelineOpenApi(registry);
+registerFootballGridOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

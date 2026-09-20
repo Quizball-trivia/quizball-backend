@@ -11,6 +11,7 @@ import {
   userRecentCategoriesRepo,
 } from '../user-recent-categories/user-recent-categories.repo.js';
 import { buildRecentExclusionSet, type RecentCategoryEntry } from './recent-category-filter.js';
+import { lobbyCapacityForGameMode } from './lobby-capacity.js';
 import { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
 
 export { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
@@ -37,6 +38,7 @@ function toLobbyMember(
     ...(rankPointsByUserId.has(row.user_id) ? { rankPoints: rankPointsByUserId.get(row.user_id) } : {}),
     isReady: row.is_ready,
     isHost: row.user_id === hostUserId,
+    ...(row.is_guest ? { isGuest: true } : {}),
   };
 }
 
@@ -166,6 +168,31 @@ export const lobbiesService = {
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
+  },
+
+  /**
+   * Resolve specific categories to draft shape, preserving the requested order.
+   * Reads the same validated-category cache as the random selectors, so a
+   * category that no longer has enough questions simply resolves to nothing.
+   */
+  async getDraftCategoriesByIds(
+    categoryIds: string[],
+    minQuestions = MIN_QUESTIONS_PER_CATEGORY,
+    pool: FriendlyCategoryPool = 'mcq'
+  ): Promise<DraftCategory[]> {
+    if (categoryIds.length === 0) return [];
+    const allValid = await getValidCategories(minQuestions, pool);
+    const byId = new Map(allValid.map((row) => [row.id, row]));
+
+    return categoryIds
+      .map((categoryId) => byId.get(categoryId))
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        icon: row.icon ?? null,
+        imageUrl: row.image_url ?? null,
+      }));
   },
 
   async selectRandomCategoriesExcluding(
@@ -307,7 +334,7 @@ export const lobbiesService = {
       isPublic: row.is_public,
       createdAt: row.created_at,
       memberCount: row.member_count,
-      maxMembers: 6,
+      maxMembers: lobbyCapacityForGameMode(row.game_mode ?? 'friendly_possession'),
       host: {
         id: row.host_user_id,
         username: row.host_nickname ?? 'Player',

@@ -51,6 +51,19 @@ export async function getOrLoadJson<T>(
   }
 }
 
+/** Read-only lookup: a miss returns null and never writes anything. */
+export async function readJsonCache<T>(key: string): Promise<T | null> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return null;
+  try {
+    const raw = await redis.get(key);
+    return raw === null ? null : (JSON.parse(raw) as T);
+  } catch (err) {
+    logger.warn({ err, key }, 'Shared JSON cache read failed');
+    return null;
+  }
+}
+
 /**
  * Remove exact shared-cache keys after a write changes their source data.
  * Pending in-process loads are forgotten too, so a request arriving after the

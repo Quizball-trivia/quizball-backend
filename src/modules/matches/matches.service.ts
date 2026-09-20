@@ -398,8 +398,13 @@ export interface PossessionStatePayload {
      * HALFTIME ban machinery via this discriminator: 'penalty' makes finalize
      * exit into PENALTY_SHOOTOUT (with the chosen category as penaltyCategoryId)
      * instead of the second half.
+     *
+     * 'second_half_preset' means the host picked the second-half category in the
+     * lobby, so there is nothing to ban: categoryOptions holds that single
+     * category, the ban/ui_ready machinery is skipped, and finalize goes straight
+     * to half 2 after a short reveal.
      */
-    purpose: 'second_half' | 'penalty';
+    purpose: 'second_half' | 'second_half_preset' | 'penalty';
   };
   penalty: {
     round: number;
@@ -1026,7 +1031,10 @@ export const matchesService = {
       // player's draw count.
       const isRealDraw = winnerId === null && players.length >= 2;
 
-      const statRows = players.map((player) => {
+      // Guests keep the match row (results, opponent history) but no per-mode stats.
+      // Through `tx`: a pooled lookup while holding this transaction's slot can deadlock the pool.
+      const usersById = await usersRepo.getByIds(players.map((player) => player.user_id), tx);
+      const statRows = players.filter((player) => !usersById.get(player.user_id)?.is_guest).map((player) => {
         const isWinner = winnerId !== null && winnerId === player.user_id;
         return {
           userId: player.user_id,

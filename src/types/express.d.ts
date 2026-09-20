@@ -13,6 +13,8 @@ declare global {
       user?: User;
       /** Auth identity from token (set by authMiddleware) */
       identity?: AuthIdentity;
+      /** Guest identity (set by guestAuthMiddleware on public play routes) */
+      guest?: { id: string; locale: string | null; linkedUserId: string | null };
       /** Request ID for tracing */
       requestId: string;
       /** Validated request data (set by validate middleware) */

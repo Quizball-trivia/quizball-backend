@@ -54,6 +54,7 @@ export interface ListCategoriesFilter {
   isActive?: boolean;
   minQuestions?: number;
   excludeCampaignManaged?: boolean;
+  slugs?: string[];
 }
 
 export interface ListCategoriesResult {
@@ -86,7 +87,7 @@ export const categoriesRepo = {
     // per-category JSONB validation subquery (the load-test DB hot spot).
     const minQuestionsFilter =
       filter?.minQuestions !== undefined
-        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]})`
+        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]}) AND campaign_only = false`
         : sql``;
     const campaignManagedFilter = filter?.excludeCampaignManaged
       ? sql`
@@ -113,12 +114,14 @@ export const categoriesRepo = {
     // window to run the WHERE clause for ALL matching rows on every request,
     // ignoring LIMIT; splitting lets the page query stop at `limit` and the
     // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
+    const slugsFilter = filter?.slugs?.length ? sql`AND slug = ANY(${filter.slugs})` : sql``;
     const whereClause = sql`
       WHERE 1=1
         ${parentIdFilter}
         ${isActiveFilter}
         ${minQuestionsFilter}
         ${campaignManagedFilter}
+        ${slugsFilter}
     `;
 
     const pageQuery = sql<Category[]>`

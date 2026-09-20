@@ -40,6 +40,7 @@ import {
   schedulePartyQuizKickoff,
 } from '../party-quiz-match-flow.js';
 import { getRedisClient } from '../redis.js';
+import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import {
   acknowledgeMatchUiReady,
   emitMatchUiReadyGateState,
@@ -572,6 +573,10 @@ export async function rejoinActiveMatchOnConnect(
   const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
   const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   if (variant === 'auction') return;
+  if (variant === 'football_grid') {
+    await footballGridRealtimeService.handleResync(io, socket, match.id);
+    return;
+  }
   if (variant === 'friendly_party_quiz') {
     const partyState = sanitizePartyQuizState(match.state_payload, match.total_questions);
     if (isPartyQuizDropped(partyState, userId)) {

@@ -1,6 +1,10 @@
+import { hasCapability } from '../../modules/users/capabilities.js';
+import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
+import { guestCompatibleInitialMode, normalizedModeForMemberCount, validateGuestLobby } from './lobby-guest-rules.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   LobbyCreateResult,
+  LobbyGameMode,
   LobbyJoinByCodeResult,
   LobbyLeaveResult,
 } from '../socket.types.js';
@@ -28,6 +32,8 @@ import {
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
 import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
+import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.service.js';
+import { config } from '../../core/config.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
@@ -71,10 +77,14 @@ const MATCH_START_LOCK_WAIT_MS = 5000;
 export async function createLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; correlationId?: string }
+  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; gameMode?: 'football_grid' | 'auction'; correlationId?: string }
 ): Promise<LobbyCreateResult> {
   const userId = socket.data.user.id;
   const correlationId = payload.correlationId ?? 'missing';
+  // Refused before any session cleanup: a disabled mode must not evict the host from a room they are already in.
+  if (payload.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+    return { ok: false, code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable', retryable: false, correlationId };
+  }
   let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
@@ -104,6 +114,10 @@ export async function createLobby(
       }
 
       if (payload.mode === 'ranked') {
+        if (!hasCapability(socket.data.user, 'rankedEntry')) {
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'An account is required to play ranked', retryable: false, correlationId };
+          return;
+        }
         logger.info({ userId, correlationId }, 'Lobby create (ranked AI simulation) requested');
         await startRankedAiForUser(io, userId);
         result = {
@@ -115,14 +129,28 @@ export async function createLobby(
         return;
       }
 
+      const hostIsGuest = socket.data.user.is_guest === true;
+      // Drain: provisioning off closes NEW guest rooms (live rooms may finish).
+      if (hostIsGuest && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+        result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+        return;
+      }
+      if (hostIsGuest && !(await allowGuestOperation(`user:${userId}`, 'lobby_create'))) {
+        result = { ok: false, code: 'RATE_LIMITED', message: 'Too many rooms created. Please wait a while.', retryable: true, correlationId };
+        return;
+      }
       const inviteCode = generateInviteCode(6);
       const displayName = generateLobbyName();
+      // A requested mode opens the room in it (auction / grid are guest-playable); otherwise the repo
+      // default (friendly_possession), which is locked for guests, so a guest host opens in a playable mode.
+      const initialGameMode = payload.gameMode ?? (hostIsGuest ? guestCompatibleInitialMode() : undefined);
       const lobby = await lobbiesRepo.createLobby({
         mode: 'friendly',
         hostUserId: userId,
         inviteCode,
         isPublic: payload.isPublic ?? false,
         displayName,
+        ...(initialGameMode ? { gameMode: initialGameMode } : {}),
       });
 
       await lobbiesRepo.addMember(lobby.id, userId, false);
@@ -293,6 +321,25 @@ export async function joinByCode(
         const capacity = maxMembersForFriendlyGameMode(
           normalizeFriendlyGameMode(lobby.game_mode)
         );
+        // Guest rooms: check the membership AND the mode the room would normalize
+        // into after this join (an already-present guest rejoining is exempt).
+        if (!alreadyMember && socket.data.user.is_guest === true && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
+          // Drain: no new guest memberships either; a guest already in the room may rejoin.
+          socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now' });
+          result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
+          return;
+        }
+        if (!alreadyMember) {
+          const nextMembers = [...members, { user_id: userId, is_guest: socket.data.user.is_guest === true }];
+          const nextMode = normalizedModeForMemberCount(normalizeFriendlyGameMode(lobby.game_mode), nextMembers.length);
+          const violation = validateGuestLobby(nextMembers, nextMode);
+          if (violation) {
+            logger.warn({ lobbyId: lobby.id, userId, code: violation.code }, 'Lobby join refused by guest rules');
+            socket.emit('error', { code: violation.code, message: violation.message, meta: violation.meta });
+            result = { ok: false, code: violation.code, message: violation.message, retryable: false, correlationId };
+            return;
+          }
+        }
         if (!alreadyMember && members.length >= capacity) {
           logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
           socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
@@ -392,11 +439,18 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
 
   let shouldStartDraft = false;
   try {
+    // Fresh read under the lock: a settings change may have moved the mode
+    // (or the lobby may have started) since the pre-lock read above.
+    const lockedLobby = await lobbiesRepo.getById(lobbyId);
+    if (!lockedLobby || lockedLobby.status !== 'waiting') {
+      logger.debug({ lobbyId, status: lockedLobby?.status ?? 'missing' }, 'Lobby ready check skipped: lobby not waiting');
+      return;
+    }
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const memberCount = await lobbiesRepo.countMembers(lobbyId);
 
-    if (lobby.mode === 'friendly') {
-      const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
+    if (lockedLobby.mode === 'friendly') {
+      const friendlyMode = normalizeFriendlyGameMode(lockedLobby.game_mode);
       const allReady = memberCount > 0 && readyCount === memberCount;
 
       if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount)) {
@@ -409,6 +463,12 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     }
 
     if (memberCount === 2 && readyCount === 2) {
+      const readyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
+      if (readyViolation) {
+        socket.emit('error', { code: readyViolation.code, message: readyViolation.message, meta: readyViolation.meta });
+        return;
+      }
       const acquiredGuard = await tryAcquireDraftStartGuard(lobbyId);
       if (!acquiredGuard) {
         logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
@@ -436,7 +496,7 @@ export async function updateSettings(
   socket: QuizballSocket,
   payload: {
     lobbyId?: string;
-    gameMode: 'friendly_possession' | 'friendly_party_quiz' | 'football_grid' | 'auction' | 'ranked_sim';
+    gameMode: LobbyGameMode;
     friendlyRandom?: boolean;
     friendlyCategoryAId?: string | null;
     friendlyCategoryBId?: string | null;
@@ -480,7 +540,24 @@ export async function updateSettings(
   }
 
   try {
-    const memberCount = await lobbiesRepo.countMembers(lobbyId);
+    // The pre-lock read is stale by definition (host transfer, start, close can
+    // land in between): validate ownership and status again on a fresh row.
+    const lockedLobby = await lobbiesRepo.getById(lobbyId);
+    if (!lockedLobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+    if (socket.data.user.id !== lockedLobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can update settings' });
+      return;
+    }
+    if (lockedLobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
+      return;
+    }
+    const lobby = lockedLobby;
+    const lockedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const memberCount = lockedMembers.length;
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     if (memberCount > 0 && readyCount === memberCount) {
       socket.emit('error', { code: 'LOBBY_READY_LOCKED', message: 'Cannot edit settings after both players are ready' });
@@ -512,9 +589,23 @@ export async function updateSettings(
     };
 
     // Capacity is judged on the mode the host ACTUALLY asked for, before the
-    // party-quiz coercion below. Leaving auction while it holds more members
-    // than the target allows would strand members, so reject rather than kick.
+    // party-quiz coercion below — otherwise "possession with 3 members" would be
+    // silently reinterpreted as party quiz instead of reported. Leaving auction
+    // while it holds more members than the target allows would strand members,
+    // so reject rather than kick anyone.
     const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
+    if (nextSettings.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
+      socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
+      return;
+    }
+    if (nextSettings.gameMode === 'football_grid' && memberCount > requestedCapacity) {
+      socket.emit('error', {
+        code: 'LOBBY_MODE_CAPACITY',
+        message: 'Football Tic Tac Toe supports exactly two players.',
+        meta: { memberCount, maxMembers: requestedCapacity, gameMode: nextSettings.gameMode },
+      });
+      return;
+    }
     if (
       lobby.mode === 'friendly' &&
       currentSettings.gameMode === 'auction' &&
@@ -537,7 +628,13 @@ export async function updateSettings(
       }
     }
 
-    if (nextSettings.gameMode === 'auction') {
+    // Guest rooms: the FINAL normalized mode must stay playable for guests.
+    const guestViolation = validateGuestLobby(lockedMembers, nextSettings.gameMode);
+    if (guestViolation) {
+      socket.emit('error', { code: guestViolation.code, message: guestViolation.message, meta: guestViolation.meta });
+      return;
+    }
+    if (nextSettings.gameMode === 'auction' || nextSettings.gameMode === 'football_grid') {
       // Auction has no lobby categories of its own.
       nextSettings.friendlyRandom = true;
       nextSettings.friendlyCategoryAId = null;
@@ -557,7 +654,12 @@ export async function updateSettings(
         });
         return;
       }
-      nextSettings.friendlyCategoryBId = null;
+      // Optional second-half preset. It only survives alongside a first-half
+      // pick and must differ from it; clearing/changing A to match B drops B
+      // rather than starting a half against itself.
+      if (nextSettings.friendlyCategoryBId === nextSettings.friendlyCategoryAId) {
+        nextSettings.friendlyCategoryBId = null;
+      }
     }
 
     const normalizedVisibility = payload.isPublic ?? lobby.is_public;
@@ -581,7 +683,9 @@ export async function updateSettings(
 
     // Entering auction opens a third seat and changes the game entirely — clear
     // ready states so nobody is dragged into a mode they never agreed to.
-    if (nextSettings.gameMode !== currentSettings.gameMode) {
+    if (
+      nextSettings.gameMode !== currentSettings.gameMode
+    ) {
       await lobbiesRepo.setAllReady(lobbyId, false);
     }
 
@@ -691,12 +795,18 @@ export async function startFriendlyMatch(
       socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
       return;
     }
-    const currentMemberCount = await lobbiesRepo.countMembers(lobbyId);
+    const currentMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const currentMemberCount = currentMembers.length;
     const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
     const currentValidStart = isValidFriendlyStartShape(currentFriendlyMode, currentMemberCount);
     if (!currentValidStart || !currentAllReady) {
       socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
+      return;
+    }
+    const startViolation = validateGuestLobby(currentMembers, currentFriendlyMode);
+    if (startViolation) {
+      socket.emit('error', { code: startViolation.code, message: startViolation.message, meta: startViolation.meta });
       return;
     }
 
@@ -707,6 +817,21 @@ export async function startFriendlyMatch(
         lobbyId,
         hostUserId: currentLobby.host_user_id,
       });
+      return;
+    }
+    if (currentFriendlyMode === 'football_grid') {
+      try {
+        await startFootballGridMatchFromLobby(io, socket, {
+          lobbyId,
+          isPublic: currentLobby.is_public,
+          inviteCode: currentLobby.invite_code,
+        });
+      } catch (error) {
+        logger.warn({ lobbyId, error }, 'Failed to create Football Grid lobby match');
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start Football Tic Tac Toe' });
+      }
       return;
     }
 
@@ -744,8 +869,17 @@ export async function startFriendlyMatch(
         return;
       }
 
-      const categories = await categoriesRepo.listByIds([categoryA]);
-      if (categories.length !== 1) {
+      // Party quiz is a single-category mode — a second-half preset is
+      // meaningless there, so only possession carries category B forward.
+      const categoryB = currentFriendlyMode === 'friendly_possession'
+        && currentLobby.friendly_category_b_id
+        && currentLobby.friendly_category_b_id !== categoryA
+        ? currentLobby.friendly_category_b_id
+        : null;
+      const requestedCategoryIds = categoryB ? [categoryA, categoryB] : [categoryA];
+
+      const categories = await categoriesRepo.listByIds(requestedCategoryIds);
+      if (categories.length !== requestedCategoryIds.length) {
         socket.emit('error', {
           code: 'INVALID_SETTINGS',
           message: 'Selected category is invalid',
@@ -753,14 +887,16 @@ export async function startFriendlyMatch(
         return;
       }
 
+      // Category B must clear the same question-count bar as A: it plays a full
+      // half, so an under-stocked preset would starve second-half dispatch.
       const validCategoryIds = currentFriendlyMode === 'friendly_party_quiz'
-        ? await lobbiesRepo.listValidCategoryIds([categoryA], PARTY_QUIZ_TOTAL_QUESTIONS)
+        ? await lobbiesRepo.listValidCategoryIds(requestedCategoryIds, PARTY_QUIZ_TOTAL_QUESTIONS)
         : await lobbiesRepo.listValidCategoryIds(
-          [categoryA],
+          requestedCategoryIds,
           MIN_QUESTIONS_PER_CATEGORY,
           'possession'
         );
-      if (validCategoryIds.length !== 1) {
+      if (validCategoryIds.length !== requestedCategoryIds.length) {
         socket.emit('error', {
           code: 'INSUFFICIENT_CATEGORIES',
           message: 'Selected category does not have enough questions',
@@ -771,7 +907,7 @@ export async function startFriendlyMatch(
       }
 
       categoryAId = categoryA;
-      categoryBId = null;
+      categoryBId = categoryB;
     }
 
     let result;

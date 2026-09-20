@@ -41,10 +41,10 @@ describeLocal('regression: engine restart recovery chaos', () => {
     });
 
     expect(outcome.booted, outcome.error ?? outcome.violations.join('\n')).toBe(true);
-    expect(Array.isArray(outcome.lifecycleViolations)).toBe(true);
-    expect(Array.isArray(outcome.clientTruthViolations)).toBe(true);
-    expect(Array.isArray(outcome.economyViolations)).toBe(true);
-    if (!outcome.ok) expect(outcome.artifactPath).toBeTruthy();
+    expect(outcome.ok, outcome.error ?? outcome.violations.join('\n')).toBe(true);
+    expect(outcome.lifecycleViolations).toEqual([]);
+    expect(outcome.clientTruthViolations).toEqual([]);
+    expect(outcome.economyViolations).toEqual([]);
   }, 180_000);
 
   it('can restart while a disconnect-grace marker is in flight', async () => {
@@ -61,6 +61,6 @@ describeLocal('regression: engine restart recovery chaos', () => {
     const [match] = await sql<Array<{ status: string }>>`
       SELECT status FROM matches WHERE id = ${run.matchId}
     `;
-    expect(match?.status).toBeTruthy();
+    expect(['completed', 'abandoned']).toContain(match?.status);
   }, 180_000);
 });

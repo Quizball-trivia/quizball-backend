@@ -40,6 +40,9 @@ scripts/*
 !scripts/auction-beta-announcement-blast.ts
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
+!scripts/migration-safety.mjs
+!scripts/release/
+!scripts/release/**
 # Auction prod-promotion content tooling — code only, no secrets.
 !scripts/auction-content-package/
 !scripts/auction-content-package/**
@@ -87,3 +90,31 @@ scripts/bot-burnin/*.receipt.json
 
 # Symlinked installs (node_modules/ with a trailing slash does not match a symlink)
 node_modules
+
+# Preserve reviewed staging content and maintenance tooling.
+!scripts/bench/**
+!scripts/daily-content-audit/
+!scripts/daily-content-audit/**
+!scripts/football-grid-content-generator/
+!scripts/football-grid-content-generator/**
+!scripts/football-grid-content.ts
+!scripts/football-grid-label-locales.json
+!scripts/football-grid-label-locales.ts
+!scripts/football-grid-player-cdn.ts
+!scripts/football-logic-content/
+!scripts/football-logic-content/**
+!scripts/football-tic-tac-toe-dev-seed.ts
+!scripts/guess-the-goal/
+!scripts/guess-the-goal/**
+!scripts/missing-xi-content/
+!scripts/missing-xi-content/**
+!scripts/pass-chain-content/
+!scripts/pass-chain-content/**
+!scripts/squad-spin-content/
+!scripts/squad-spin-content/**
+!scripts/stat-sniper-content/
+!scripts/stat-sniper-content/**
+!scripts/sync-content-from-prod.ts
+!scripts/sync-question-locales-prod-to-staging.ts
+!scripts/translate-goal-choreographies.ts
+!scripts/translate-missing-locales.ts

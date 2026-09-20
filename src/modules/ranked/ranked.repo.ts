@@ -178,8 +178,10 @@ export const rankedRepo = {
   async getProfilesByUserIds(userIds: string[]): Promise<RankedProfileRow[]> {
     if (userIds.length === 0) return [];
     return sql<RankedProfileRow[]>`
-      SELECT * FROM ranked_profiles
-      WHERE user_id = ANY(${sql.array(userIds)}::uuid[])
+      SELECT rp.*, u.country
+      FROM ranked_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE rp.user_id = ANY(${sql.array(userIds)}::uuid[])
     `;
   },
 
@@ -582,7 +584,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rp.user_id
-            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL
@@ -605,7 +607,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rc.user_id
-            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL
@@ -631,7 +633,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rp.user_id
-            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL
@@ -679,7 +681,7 @@ export const rankedRepo = {
             ORDER BY created_at DESC LIMIT 3
           ) sub
         ) trend ON true
-        WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
+        WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
           AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
@@ -714,7 +716,7 @@ export const rankedRepo = {
           ORDER BY created_at DESC LIMIT 3
         ) sub
       ) trend ON true
-      WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
+      WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
         AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
@@ -781,7 +783,7 @@ export const rankedRepo = {
       FROM ranked_profiles_archive rp
       JOIN users u ON u.id = rp.user_id
       WHERE rp.reset_batch_id = ${batchId}
-        AND (u.is_ai = false OR u.ai_kind = 'persistent')
+        AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
         AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
@@ -806,7 +808,7 @@ export const rankedRepo = {
         FROM ranked_profiles_archive rp
         JOIN users u ON u.id = rp.user_id
         WHERE rp.reset_batch_id = ${batchId}
-          AND (u.is_ai = false OR u.ai_kind = 'persistent')
+          AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
           AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
@@ -847,7 +849,7 @@ export const rankedRepo = {
         (SELECT COUNT(*)::int + 1
          FROM ranked_profiles rp2
          JOIN users u ON u.id = rp2.user_id
-         WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
+         WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL
@@ -858,7 +860,7 @@ export const rankedRepo = {
         (SELECT COUNT(*)::int
          FROM ranked_profiles rp3
          JOIN users u ON u.id = rp3.user_id
-         WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
+         WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
            AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL

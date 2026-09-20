@@ -1,3 +1,8 @@
+import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
+import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
+import { startSquadSpinSweeper, stopSquadSpinSweeper, startSquadSpinBots, stopSquadSpinBots } from './modules/squad-spin/index.js';
+import { startTriviaMinesSweeper, stopTriviaMinesSweeper, startTriviaMinesBots, stopTriviaMinesBots } from './modules/trivia-mines/index.js';
+import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { createApp } from './app.js';
@@ -50,6 +55,15 @@ const server = httpServer.listen(config.PORT, () => {
   );
 });
 startAiFriendResponder();
+startGuestSweeper();
+startRoadToGoalSweeper();
+startRoadToGoalBots();
+startSquadSpinSweeper();
+startSquadSpinBots();
+startTriviaMinesSweeper();
+startTriviaMinesBots();
+startFreeKicksSweeper();
+startFreeKicksBots();
 // Both no-op when PERSISTENT_BOTS_ENABLED is off (checked inside each start).
 startBotChallengeResponder();
 startBotRenameWorker();
@@ -90,11 +104,20 @@ if (config.NODE_ENV !== 'local' && config.DB_WATCHDOG_ENABLED) {
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
+  stopRoadToGoalBots();
+  stopSquadSpinBots();
+  stopTriviaMinesBots();
+  stopFreeKicksBots();
   // Stop responder ticks immediately (server.close waits for open connections,
   // during which the interval could still fire) and drain the in-flight tick
   // before the DB pool closes so a mid-tick accept never hits a closing pool.
   const responderStopped = Promise.all([
     stopAiFriendResponder(),
+    stopGuestSweeper(),
+    stopRoadToGoalSweeper(),
+    stopSquadSpinSweeper(),
+    stopTriviaMinesSweeper(),
+    stopFreeKicksSweeper(),
     stopBotChallengeResponder(),
     stopBotRenameWorker(),
     stopDailyComebackReminderWorker(),

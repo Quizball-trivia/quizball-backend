@@ -1,0 +1,1152 @@
+import { createHmac } from 'node:crypto';
+import { AppError, ConflictError } from '../../core/errors.js';
+import { config } from '../../core/config.js';
+import { logger } from '../../core/logger.js';
+import {
+  trackFootballGridMatchCompleted,
+  trackFootballGridMatchStarted,
+  trackFootballGridMissingAnswerReported,
+} from '../../core/analytics/game-events.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
+import { guestKitFor, guestNameCandidates } from '../../modules/guest/guest-identity.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
+
+import { resolveTrustedClientIp } from '../../http/client-ip.js';
+import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
+import {
+  footballGridRepo,
+  footballGridService,
+  footballGridBotService,
+  footballGridSettlementService,
+  FOOTBALL_GRID_COUNTDOWN_MS,
+  type FootballGridState,
+} from '../../modules/football-grid/index.js';
+import type { FootballGridResultDeliveryRow } from '../../modules/football-grid/football-grid.repo.js';
+import {
+  cancelRealtimeTimer,
+  scheduleRealtimeTimer,
+  type RealtimeTimerPayload,
+} from '../realtime-timer-scheduler.js';
+import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import type {
+  FootballGridSubmitAnswerPayload,
+  FootballGridDrawRespondPayload,
+  FootballGridSeriesInfo,
+  FootballGridVersionedCommandPayload,
+  OpponentInfo,
+} from '../socket.types.js';
+import { footballGridPresenceService } from './football-grid-presence.service.js';
+import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
+
+const GRID_TIMER_KIND = 'football_grid_phase' as const;
+const GRID_BOT_TIMER_KIND = 'football_grid_bot_action' as const;
+let recoveryTimer: NodeJS.Timeout | null = null;
+let recoveryRunning = false;
+
+function gridRoom(matchId: string): string {
+  return `grid:${matchId}`;
+}
+
+function riskSignalHash(kind: 'device' | 'network', value: string | null): string | null {
+  const secret = config.FOOTBALL_GRID_RISK_HASH_SECRET?.trim();
+  if (!secret || !value?.trim()) return null;
+  return createHmac('sha256', secret).update(`${kind}:${value.trim()}`).digest('hex');
+}
+
+function gridError(error: unknown): { code: string; message: string; meta?: Record<string, unknown> } {
+  if (error instanceof AppError) {
+    return {
+      code: error.code,
+      message: error.message,
+      ...(error.details && typeof error.details === 'object'
+        ? { meta: error.details as Record<string, unknown> }
+        : {}),
+    };
+  }
+  return { code: 'GRID_INTERNAL_ERROR', message: 'Football Tic Tac Toe request failed' };
+}
+
+async function scheduleStateDeadline(state: FootballGridState): Promise<void> {
+  if (state.phase === 'terminal' || !state.phaseDeadlineAt) {
+    await Promise.all([
+      cancelRealtimeTimer(GRID_TIMER_KIND, state.matchId),
+      cancelRealtimeTimer(GRID_BOT_TIMER_KIND, state.matchId),
+    ]);
+    return;
+  }
+  const hasBot = state.players.some((player) => player.isBot);
+  const botRuntime = hasBot ? await footballGridRepo.getBotRuntime(state.matchId) : null;
+  if (botRuntime) {
+    await syntheticBotsRepo.heartbeatReservationFenced({
+      botUserId: botRuntime.botUserId,
+      expectedFence: botRuntime.reservationFence,
+      expiresAt: new Date(Date.now() + 5 * 60_000),
+    });
+  }
+  await scheduleRealtimeTimer(
+    GRID_TIMER_KIND,
+    state.matchId,
+    new Date(state.phaseDeadlineAt),
+    { kind: GRID_TIMER_KIND, matchId: state.matchId, expectedStateVersion: state.stateVersion },
+  );
+  const botSchedule = await footballGridBotService.getSchedule(state.matchId, state);
+  if (!botSchedule) {
+    await cancelRealtimeTimer(GRID_BOT_TIMER_KIND, state.matchId);
+    return;
+  }
+  const turnDeadlineMs = Date.parse(state.turnDeadlineAt ?? '');
+  const dueAtMs = Math.min(
+    Date.now() + botSchedule.delayMs,
+    Number.isFinite(turnDeadlineMs) ? turnDeadlineMs - 500 : Date.now() + botSchedule.delayMs,
+  );
+  const durableDueAt = await footballGridRepo.ensureBotActionDeadline({
+    matchId: state.matchId,
+    botUserId: state.currentPlayerUserId!,
+    expectedStateVersion: botSchedule.expectedStateVersion,
+    proposedDeadlineAt: new Date(Math.max(Date.now(), dueAtMs)).toISOString(),
+  });
+  if (!durableDueAt) return;
+  await scheduleRealtimeTimer(
+    GRID_BOT_TIMER_KIND,
+    state.matchId,
+    new Date(durableDueAt),
+    {
+      kind: GRID_BOT_TIMER_KIND,
+      matchId: state.matchId,
+      expectedStateVersion: botSchedule.expectedStateVersion,
+      turnNumber: botSchedule.turnNumber,
+    },
+  );
+}
+
+async function emitState(io: QuizballServer, state: FootballGridState): Promise<void> {
+  const series = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series };
+  io.to(gridRoom(state.matchId)).emit('grid:state', payload);
+  if (state.phase === 'loading' || state.phase === 'handoff') {
+    io.to(gridRoom(state.matchId)).emit('grid:loading_state', payload);
+  }
+  if (state.phase === 'countdown' && state.phaseDeadlineAt) {
+    io.to(gridRoom(state.matchId)).emit('grid:countdown', {
+      ...payload,
+      countdownEndsAt: state.phaseDeadlineAt,
+    });
+  }
+  if (state.phase === 'paused' || state.phase === 'service_interruption') {
+    io.to(gridRoom(state.matchId)).emit('grid:paused', payload);
+  }
+  if (state.phase === 'terminal') {
+    const deliveries = await footballGridRepo.claimPendingResultDeliveries({ matchId: state.matchId });
+    await processTerminalDeliveries(io, state, deliveries);
+  }
+}
+
+async function processTerminalDeliveries(
+  io: QuizballServer,
+  state: FootballGridState,
+  deliveries: FootballGridResultDeliveryRow[],
+): Promise<void> {
+  if (state.phase !== 'terminal' || deliveries.length === 0) return;
+
+  // This order is deliberate: the rematch window and settlement are durable
+  // before any participant delivery can be acknowledged. A process crash can
+  // therefore only leave retryable delivery rows, never a client-visible
+  // completion without its corresponding durable result/rematch state.
+  const series = await advanceSeries(state);
+  const rematchWindow = await footballGridRepo.openRematchWindow(state.matchId);
+  if (rematchWindow) {
+    await scheduleRealtimeTimer(
+      'football_grid_rematch_expiry',
+      rematchWindow.seriesId,
+      new Date(rematchWindow.expiresAt),
+      {
+        kind: 'football_grid_rematch_expiry',
+        seriesId: rematchWindow.seriesId,
+        expectedSeriesVersion: rematchWindow.seriesVersion,
+      },
+    );
+  }
+  const rewards = await footballGridSettlementService.settleMatch(state.matchId);
+  const humanDeliveries = deliveries.filter((delivery) =>
+    state.players.some((player) => player.userId === delivery.user_id && !player.isBot));
+  if (humanDeliveries.some((delivery) => !rewards.has(delivery.user_id))) {
+    await Promise.all(humanDeliveries.map((delivery) => footballGridRepo.deferResultDelivery({
+      matchId: delivery.match_id,
+      userId: delivery.user_id,
+      terminalStateVersion: delivery.terminal_state_version,
+      ackToken: delivery.ack_token,
+      reason: 'settlement_not_ready',
+    })));
+    return;
+  }
+
+  const [samples, rematch, analyticsFacts] = await Promise.all([
+    footballGridRepo.getCuratedResultSamples(state.matchId),
+    footballGridRepo.getRematchInfo(state.matchId),
+    footballGridRepo.getCompletionAnalyticsFacts(state.matchId),
+  ]);
+  if (analyticsFacts) {
+    for (const participant of analyticsFacts.participants.filter((candidate) => !candidate.isBot)) {
+      const opponent = analyticsFacts.participants.find((candidate) => candidate.userId !== participant.userId);
+      const reward = rewards.get(participant.userId) ?? {
+        xp: 0,
+        coins: 0,
+        tp: 0,
+        eligibilityReason: 'settlement_not_ready',
+        coinEligibilityReason: 'settlement_not_ready',
+        tpEligibilityReason: 'settlement_not_ready',
+      };
+      const result = analyticsFacts.winnerUserId === null
+        ? 'draw'
+        : analyticsFacts.winnerUserId === participant.userId
+          ? 'win'
+          : 'loss';
+      trackFootballGridMatchCompleted({
+        userId: participant.userId,
+        matchId: analyticsFacts.matchId,
+        origin: analyticsFacts.origin,
+        opponentType: opponent?.isBot ? 'bot' : 'human',
+        result,
+        completionReason: analyticsFacts.completionReason,
+        startedAt: analyticsFacts.startedAt,
+        endedAt: analyticsFacts.endedAt,
+        boardId: analyticsFacts.boardId,
+        boardVersion: analyticsFacts.boardVersion,
+        boardDifficulty: analyticsFacts.boardDifficulty,
+        turns: analyticsFacts.turns,
+        claimCount: participant.claimCount,
+        correctAnswers: participant.correctAnswers,
+        wrongAnswers: participant.wrongAnswers,
+        ambiguousAnswers: participant.ambiguousAnswers,
+        alreadyUsedAnswers: participant.alreadyUsedAnswers,
+        passes: participant.passes,
+        noActionTimeouts: participant.noActionTimeouts,
+        averageResponseMs: participant.averageResponseMs,
+        xpEarned: reward.xp,
+        coinsEarned: reward.coins,
+        tpEarned: reward.tp,
+        coinEligibilityReason: reward.coinEligibilityReason,
+        tpEligibilityReason: reward.tpEligibilityReason,
+      });
+    }
+  }
+  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series: series.info };
+  for (const delivery of humanDeliveries) {
+    try {
+      const sockets = await io.in(`user:${delivery.user_id}`).fetchSockets();
+      if (sockets.length === 0) {
+        await footballGridRepo.deferResultDelivery({
+          matchId: delivery.match_id,
+          userId: delivery.user_id,
+          terminalStateVersion: delivery.terminal_state_version,
+          ackToken: delivery.ack_token,
+          reason: 'participant_offline',
+        });
+        continue;
+      }
+      // Arm the exact delivery attempt before exposing its unpredictable ACK
+      // token. A terminal grid:state contains the state version but can never
+      // acknowledge or suppress a result payload that has not been emitted.
+      const armed = await footballGridRepo.awaitResultDeliveryAck(
+        delivery.match_id,
+        delivery.user_id,
+        delivery.terminal_state_version,
+        delivery.ack_token,
+      );
+      if (!armed) continue;
+      io.to(`user:${delivery.user_id}`).emit('grid:completed', {
+        ...payload,
+        terminalStateVersion: delivery.terminal_state_version,
+        ackToken: delivery.ack_token,
+        samples,
+        rewards: rewards.get(delivery.user_id)!,
+        rematch,
+      });
+    } catch (error) {
+      await footballGridRepo.deferResultDelivery({
+        matchId: delivery.match_id,
+        userId: delivery.user_id,
+        terminalStateVersion: delivery.terminal_state_version,
+        ackToken: delivery.ack_token,
+        reason: error instanceof Error ? error.message : 'terminal_delivery_failed',
+      }).catch(() => {});
+      logger.warn({ error, matchId: state.matchId, userId: delivery.user_id }, 'Football Grid result delivery failed');
+    }
+  }
+  if (series.nextState) announceNextSeriesGame(io, series.nextState);
+}
+
+async function recoverTerminalResultDeliveries(
+  io: QuizballServer,
+  matchId: string | null = null,
+  userId: string | null = null,
+): Promise<number> {
+  let processed = 0;
+  while (true) {
+    const deliveries = await footballGridRepo.claimPendingResultDeliveries({ matchId, userId, limit: 100 });
+    if (deliveries.length === 0) break;
+    const byMatch = new Map<string, FootballGridResultDeliveryRow[]>();
+    for (const delivery of deliveries) {
+      const current = byMatch.get(delivery.match_id) ?? [];
+      current.push(delivery);
+      byMatch.set(delivery.match_id, current);
+    }
+    for (const [claimedMatchId, claimed] of byMatch) {
+      const state = await footballGridRepo.loadState(claimedMatchId);
+      if (!state || state.phase !== 'terminal') {
+        await Promise.all(claimed.map((delivery) => footballGridRepo.deferResultDelivery({
+          matchId: delivery.match_id,
+          userId: delivery.user_id,
+          terminalStateVersion: delivery.terminal_state_version,
+          ackToken: delivery.ack_token,
+          reason: 'terminal_state_unavailable',
+        })));
+        continue;
+      }
+      await processTerminalDeliveries(io, state, claimed);
+      processed += claimed.length;
+    }
+    if (deliveries.length < 100 || matchId !== null) break;
+  }
+  return processed;
+}
+
+function emitTurnResolved(io: QuizballServer, input: {
+  state: FootballGridState;
+  actorUserId: string;
+  outcome: 'correct' | 'wrong' | 'already_used' | 'pass' | 'timeout';
+  cellIndex: number | null;
+  resolvedPlayerId: string | null;
+}): void {
+  io.to(gridRoom(input.state.matchId)).emit('grid:turn_resolved', {
+    matchId: input.state.matchId,
+    state: input.state,
+    serverNow: new Date().toISOString(),
+    actorUserId: input.actorUserId,
+    outcome: input.outcome,
+    cellIndex: input.cellIndex,
+    resolvedPlayerId: input.outcome === 'correct' ? input.resolvedPlayerId : null,
+  });
+}
+
+/**
+ * Records the finished game on its series and, when the series continues,
+ * deals the next game: same players and seats, opener alternates, a board the
+ * series has not used, and a bot opponent's reservation moved across so the
+ * finished game's settlement cannot free it. Runs before settlement for that
+ * reason. Idempotent per finished game.
+ */
+async function advanceSeries(
+  state: FootballGridState,
+): Promise<{ info: FootballGridSeriesInfo | null; nextState: FootballGridState | null }> {
+  let advance: Awaited<ReturnType<typeof footballGridRepo.advanceSeriesAfterGame>>;
+  try {
+    advance = await footballGridRepo.advanceSeriesAfterGame(state.matchId);
+  } catch (error) {
+    logger.error({ error, matchId: state.matchId }, 'Football Grid series advance failed');
+    return { info: await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null), nextState: null };
+  }
+  let nextState: FootballGridState | null = null;
+  if (advance.kind === 'continued') {
+    if (advance.nextMatchId) {
+      nextState = await footballGridRepo.loadState(advance.nextMatchId);
+    } else if (advance.pairingToken) {
+      try {
+        await footballGridRepo.createPairing({
+          pairingToken: advance.pairingToken,
+          searchAId: advance.seriesId,
+          searchBId: advance.seriesId,
+          userAId: advance.players[0].userId,
+          userBId: advance.players[1].userId,
+          opponentType: advance.players.some((player) => player.isBot) ? 'bot' : 'human',
+        });
+        const opener = advance.players.find((player) => player.seat === advance.openerSeat) ?? advance.players[0];
+        const bot = advance.players.find((player) => player.isBot);
+        const botRuntime = bot ? await footballGridRepo.getBotRuntime(state.matchId) : null;
+        nextState = (await footballGridService.createMatch({
+          pairingToken: advance.pairingToken,
+          lobbyId: advance.lobbyId,
+          origin: advance.origin,
+          theme: advance.theme,
+          players: advance.players.map((player) => ({ userId: player.userId, seat: player.seat, isBot: player.isBot })),
+          openerUserId: opener.userId,
+          seriesId: advance.seriesId,
+          rematchOfMatchId: state.matchId,
+          rematchIndex: advance.rematchIndex,
+          ...(bot && botRuntime ? {
+            botReservationFence: botRuntime.reservationFence,
+            botRp: botRuntime.botRp,
+            botTier: botRuntime.botTier,
+            botModelVersion: botRuntime.modelVersion,
+            botConfigVersion: botRuntime.configVersion,
+            botRngSeed: botRuntime.rngSeed + advance.rematchIndex,
+            afterCreateInTx: async (tx, matchId) => {
+              const moved = await syntheticBotsRepo.transferReservationBetweenMatches(tx, {
+                botUserId: bot.userId, fromMatchId: state.matchId, toMatchId: matchId,
+              });
+              if (!moved) throw new Error('GRID_BOT_RESERVATION_LOST');
+            },
+          } : {}),
+        })).state;
+      } catch (error) {
+        // Two workers can race on the same durable pairing token (the match
+        // row's pairing_token is UNIQUE): the loser adopts the winner's game.
+        const raced = await footballGridRepo.getMatchIdByPairingToken(advance.pairingToken).catch(() => null);
+        if (raced) {
+          nextState = await footballGridRepo.loadState(raced);
+        } else {
+          logger.error({ error, matchId: state.matchId, seriesId: advance.seriesId }, 'Football Grid next series game failed; closing series');
+          await footballGridRepo.markPairingFailed(advance.pairingToken, error instanceof Error ? error.message : 'series_next_game_failed').catch(() => {});
+          await footballGridRepo.closeSeriesAfterFailure(advance.seriesId, state.matchId).catch(() => {});
+        }
+      }
+    }
+  }
+  const info = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+  return { info, nextState };
+}
+
+const SERIES_NEXT_GAME_ANNOUNCE_DELAY_MS = 3_000;
+
+/**
+ * Announces the next game of a series once the finished game's result has
+ * been emitted, so every client sees the score before the new handoff. The
+ * handoff outbox redelivers the match if this best-effort emit is lost.
+ */
+function announceNextSeriesGame(io: QuizballServer, nextState: FootballGridState): void {
+  setTimeout(() => {
+    void footballGridRealtimeService.emitMatchFound(io, nextState).catch((error) => {
+      logger.warn({ error, matchId: nextState.matchId }, 'Football Grid next game handoff deferred to recovery');
+    });
+  }, SERIES_NEXT_GAME_ANNOUNCE_DELAY_MS);
+}
+
+async function applyAndBroadcast(
+  io: QuizballServer,
+  operation: () => Promise<FootballGridState>,
+): Promise<FootballGridState> {
+  const state = await operation();
+  await scheduleStateDeadline(state);
+  await emitState(io, state);
+  return state;
+}
+
+async function publishServiceInterruptionIfNeeded(io: QuizballServer, matchId: string): Promise<void> {
+  const state = await footballGridRepo.loadState(matchId);
+  if (state?.phase !== 'service_interruption') return;
+  await scheduleStateDeadline(state);
+  await emitState(io, state);
+}
+
+/**
+ * What the client learns about the other seat. A guest playing a bot ("Play now"
+ * from the public page) sees an anonymous guest-style opponent — deterministic
+ * per match so reloads agree — never the bot's roster identity or RP.
+ */
+export function opponentIdentity(input: {
+  opponent: { userId: string; isBot?: boolean };
+  opponentUser: { nickname: string | null; avatar_url: string | null; avatar_customization: unknown } | undefined;
+  matchId: string;
+  viewerIsGuest: boolean;
+  rp: number | undefined;
+}): OpponentInfo {
+  const { opponent, opponentUser, matchId, viewerIsGuest, rp } = input;
+  if (viewerIsGuest && opponent.isBot) {
+    const seed = `grid-bot:${matchId}`;
+    return {
+      id: opponent.userId,
+      username: guestNameCandidates(seed, 1)[0],
+      avatarUrl: null,
+      avatarCustomization: guestKitFor(seed),
+    };
+  }
+  return {
+    id: opponent.userId,
+    username: opponentUser?.nickname ?? 'Player',
+    avatarUrl: opponentUser?.avatar_url ?? null,
+    avatarCustomization: (opponentUser?.avatar_customization as OpponentInfo['avatarCustomization']) ?? null,
+    ...(rp !== undefined ? { rp } : {}),
+  };
+}
+
+export const footballGridRealtimeService = {
+  async recoverTerminalDeliveries(io: QuizballServer, matchId?: string): Promise<number> {
+    return recoverTerminalResultDeliveries(io, matchId ?? null);
+  },
+
+  /**
+   * Page-reload recovery (auction parity): a fresh socket has no client-side
+   * matchId to resync with, so the server looks the active match up and runs
+   * the normal resync flow — join, mark present, adjudicate an expired pause,
+   * re-emit state (or redeliver the terminal result).
+   */
+  /**
+   * Live-match rejoin is owned by rejoinActiveMatchOnConnect (it dispatches to
+   * handleResync for the football_grid variant), so this must NOT resync — a
+   * second resync on the same socket re-adjudicates the reconnect deadline and
+   * can rotate an in-flight result ACK token.
+   *
+   * The gap it does close: a match that terminalized while the user was away is
+   * no longer "active", so no rejoin path touches it, and its result sits on the
+   * recovery worker's backoff (measured ~27s late). Make those due on connect.
+   */
+  async flushPendingGridResultsOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+    if (await footballGridRepo.getActiveMatchIdForUser(userId)) return;
+    const pending = await footballGridRepo.listUndeliveredResultMatchIds(userId);
+    if (pending.length === 0) return;
+    // Scoped to this user: a match-wide claim would rotate the opponent's
+    // in-flight ack token and turn their pending ACK into COMPLETION_ACK_INVALID.
+    await Promise.all(pending.map(async (pendingMatchId) => {
+      await footballGridRepo.makeResultDeliveryDue(pendingMatchId, userId, { preserveUnexpiredAck: true });
+      await recoverTerminalResultDeliveries(io, pendingMatchId, userId);
+    }));
+  },
+
+  async publishState(io: QuizballServer, state: FootballGridState): Promise<void> {
+    await scheduleStateDeadline(state);
+    await emitState(io, state);
+  },
+
+  async rearmActiveMatches(): Promise<void> {
+    let cursor: string | null = null;
+    while (true) {
+      const matchIds = await footballGridRepo.listNonterminalMatchIds(500, cursor);
+      for (const matchId of matchIds) {
+        const state = await footballGridRepo.loadState(matchId);
+        if (state) await scheduleStateDeadline(state);
+      }
+      if (matchIds.length < 500) return;
+      cursor = matchIds[matchIds.length - 1];
+    }
+  },
+
+  startCommandRecovery(io: QuizballServer): void {
+    if (recoveryTimer) return;
+    const runRecovery = async () => {
+      if (recoveryRunning) return;
+      recoveryRunning = true;
+      try {
+        const exhaustedMatchIds = await footballGridRepo.finalizeExpiredExhaustedCommands();
+        for (const matchId of exhaustedMatchIds) {
+          await publishServiceInterruptionIfNeeded(io, matchId).catch((error) => {
+            logger.warn({ error, matchId }, 'Football Grid exhausted-command pause delivery failed');
+          });
+        }
+        const commands = await footballGridRepo.listRecoverableCommands();
+        for (const command of commands) {
+          try {
+            const result = await footballGridService.recoverPendingCommand(command);
+            await scheduleStateDeadline(result.state);
+            await emitState(io, result.state);
+          } catch (error) {
+            logger.warn({ error, commandInboxId: command.id }, 'Football Grid command recovery attempt failed');
+            await publishServiceInterruptionIfNeeded(io, command.match_id).catch(() => {});
+          }
+        }
+        // Postgres is the durable fallback for every Grid deadline. This poll
+        // continuously repairs lost Redis ZSET members, including after a
+        // Redis restart that happens long after application boot.
+        await footballGridRepo.repairInterruptionDeadlines()
+          .catch((error) => logger.warn({ error }, 'Football Grid interruption-deadline repair failed'));
+        const duePhases = await footballGridRepo.listDuePhaseDeadlines();
+        for (const due of duePhases) {
+          await footballGridRealtimeService.handlePhaseTimer(io, {
+              kind: GRID_TIMER_KIND,
+              matchId: due.matchId,
+              expectedStateVersion: due.stateVersion,
+            })
+            .catch((error) => logger.warn({ error, matchId: due.matchId }, 'Football Grid DB phase fallback failed'));
+        }
+        const dueBotActions = await footballGridRepo.listDueBotActionDeadlines();
+        for (const due of dueBotActions) {
+          await footballGridRealtimeService.handleBotActionTimer(io, {
+              kind: GRID_BOT_TIMER_KIND,
+              matchId: due.matchId,
+              expectedStateVersion: due.stateVersion,
+              turnNumber: due.turnNumber,
+            })
+            .catch((error) => logger.warn({ error, matchId: due.matchId }, 'Football Grid DB bot fallback failed'));
+        }
+        // Match creation is committed before network delivery. Redeliver every
+        // still-unacknowledged handoff so a crashed starter cannot strand it.
+        let handoffCursor: string | null = null;
+        while (true) {
+          const pendingHandoffs = await footballGridRepo.listPendingHandoffMatchIds(100, handoffCursor);
+          for (const matchId of pendingHandoffs) {
+            const state = await footballGridRepo.loadState(matchId);
+            // Only redeliver matches still genuinely awaiting handoff; a match
+            // terminalized since listing (e.g. administrative cancel) must not
+            // be resurrected onto a player who already moved on.
+            if (state && state.phase === 'handoff') {
+              await footballGridRealtimeService.emitMatchFound(io, state)
+                .catch((error) => logger.warn({ error, matchId }, 'Football Grid handoff redelivery failed'));
+            }
+          }
+          if (pendingHandoffs.length < 100) break;
+          handoffCursor = pendingHandoffs[pendingHandoffs.length - 1];
+        }
+
+        // Terminal result delivery is its own durable outbox. Claiming with
+        // SKIP LOCKED makes this safe across replicas, and repeated batches
+        // prevent an offline oldest participant from starving a burst behind
+        // it. Offline rows receive a short retry time before becoming due.
+        await recoverTerminalResultDeliveries(io).catch((error) => {
+          logger.warn({ error }, 'Football Grid terminal recovery failed');
+        });
+      } finally {
+        recoveryRunning = false;
+      }
+    };
+    recoveryTimer = setInterval(() => void runRecovery().catch(() => {}), 1_000);
+    recoveryTimer.unref?.();
+    void runRecovery().catch(() => {});
+  },
+  emitError(socket: QuizballSocket, error: unknown): void {
+    const payload = gridError(error);
+    logger.warn({ error, userId: socket.data.user.id, code: payload.code }, 'Football Grid realtime command failed');
+    socket.emit('grid:error', payload);
+  },
+
+  /**
+   * Emits grid:match_found and binds sockets. Re-reads authoritative state
+   * first; returns false (and emits nothing) when the match is gone or has
+   * terminalized, so callers can fall back to fresh matchmaking instead of
+   * stranding the player in silence.
+   */
+  async emitMatchFound(io: QuizballServer, state: FootballGridState): Promise<boolean> {
+    const current = await footballGridRepo.loadState(state.matchId);
+    if (!current || current.phase === 'terminal') return false;
+    state = current;
+    const users = await usersRepo.getByIds(state.players.map((player) => player.userId));
+    const series = await footballGridRepo.getSeriesInfoForMatch(state.matchId).catch(() => null);
+    // Ranked points feed the tier frames on the HUD and kickoff gate, same as
+    // ranked/auction; a profile miss must never block the match handoff.
+    const rpByUserId = new Map<string, number>();
+    await Promise.all(state.players.map(async (player) => {
+      try {
+        const profile = await rankedService.ensureProfile(player.userId);
+        rpByUserId.set(player.userId, profile.rp);
+      } catch (error) {
+        logger.warn({ error, userId: player.userId }, 'Football Grid opponent RP lookup failed');
+      }
+    }));
+    for (const player of state.players) {
+      const opponent = state.players.find((candidate) => candidate.userId !== player.userId)!;
+      const opponentUser = users.get(opponent.userId);
+      const playerSockets = await io.in(`user:${player.userId}`).fetchSockets();
+      const observationSocket = playerSockets[0];
+      let rewardRiskObservation: {
+        deviceHash: string | null;
+        networkHash: string | null;
+      } | null = null;
+      if (!player.isBot && observationSocket) {
+        const rawDevice = observationSocket.handshake.headers['x-client-instance-id'];
+        const deviceId = Array.isArray(rawDevice) ? rawDevice[0] : rawDevice;
+        const trustedClientIp = resolveTrustedClientIp({
+          headers: observationSocket.handshake.headers,
+          socket: { remoteAddress: observationSocket.handshake.address },
+        } as never);
+        rewardRiskObservation = {
+          deviceHash: riskSignalHash('device', typeof deviceId === 'string' ? deviceId : null),
+          networkHash: riskSignalHash('network', trustedClientIp ?? null),
+        };
+      }
+      for (const playerSocket of playerSockets) {
+        await transitionFootballGridSocket(io, {
+          socketId: playerSocket.id,
+          matchId: state.matchId,
+          clearLobby: true,
+        });
+        await footballGridPresenceService.touch(state.matchId, player.userId, playerSocket.id);
+      }
+      io.to(`user:${player.userId}`).emit('grid:match_found', {
+        matchId: state.matchId,
+        state,
+        series,
+        opponent: opponentIdentity({
+          opponent,
+          opponentUser,
+          matchId: state.matchId,
+          viewerIsGuest: users.get(player.userId)?.is_guest === true,
+          rp: rpByUserId.get(opponent.userId),
+        }),
+        capabilities: {
+          canAddFriend: !opponent.isBot,
+          canChallenge: !opponent.isBot,
+        },
+        serverNow: new Date().toISOString(),
+      });
+      if (rewardRiskObservation) {
+        void footballGridRepo.recordRewardRiskObservation({
+          matchId: state.matchId,
+          userId: player.userId,
+          ...rewardRiskObservation,
+          source: 'socket_handoff',
+        }).catch((error) => {
+          logger.warn({ error, matchId: state.matchId, userId: player.userId }, 'Football Grid risk observation deferred');
+        });
+      }
+    }
+    await scheduleStateDeadline(state);
+    return true;
+  },
+
+  async handleHandoffAck(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    // Authorize before joining the private match room. Socket.IO does not
+    // roll back a room join when the later service call rejects.
+    await footballGridService.getState(input.matchId, socket.data.user.id);
+    await socket.join(gridRoom(input.matchId));
+    socket.data.matchId = input.matchId;
+    socket.data.gridMatchId = input.matchId;
+    await footballGridPresenceService.touch(input.matchId, socket.data.user.id, socket.id);
+    await footballGridService.markReconnected(input.matchId, socket.data.user.id);
+    await applyAndBroadcast(io, () => footballGridService.acknowledgeHandoff({
+      matchId: input.matchId,
+      userId: socket.data.user.id,
+      expectedStateVersion: input.expectedStateVersion,
+    }));
+  },
+
+  async handleReady(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    const previous = await footballGridService.getState(input.matchId, socket.data.user.id);
+    await footballGridPresenceService.touch(input.matchId, socket.data.user.id, socket.id);
+    await footballGridService.markReconnected(input.matchId, socket.data.user.id);
+    const state = await applyAndBroadcast(io, () => footballGridService.markReady({
+      matchId: input.matchId,
+      userId: socket.data.user.id,
+      commandId: input.commandId,
+      expectedStateVersion: input.expectedStateVersion,
+    }));
+    if (previous.phase !== 'countdown' && state.phase === 'countdown') {
+      const countdownDeadlineMs = Date.parse(state.phaseDeadlineAt ?? '');
+      if (!Number.isFinite(countdownDeadlineMs)) {
+        logger.warn({ matchId: state.matchId }, 'Football Grid countdown is missing its durable analytics timestamp');
+        return;
+      }
+      const gameplayStartedAt = new Date(countdownDeadlineMs - FOOTBALL_GRID_COUNTDOWN_MS).toISOString();
+      for (const participant of state.players.filter((candidate) => !candidate.isBot)) {
+        const opponent = state.players.find((candidate) => candidate.userId !== participant.userId);
+        trackFootballGridMatchStarted({
+          userId: participant.userId,
+          matchId: state.matchId,
+          opponentType: opponent?.isBot ? 'bot' : 'human',
+          boardId: state.board.boardId,
+          boardVersion: state.board.boardVersion,
+          occurredAt: gameplayStartedAt,
+        });
+      }
+    }
+  },
+
+  async handleAnswer(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridSubmitAnswerPayload,
+  ): Promise<void> {
+    let result: Awaited<ReturnType<typeof footballGridService.submitAnswer>>;
+    try {
+      result = await footballGridService.submitAnswer({
+        ...input,
+        userId: socket.data.user.id,
+      });
+    } catch (error) {
+      await publishServiceInterruptionIfNeeded(io, input.matchId).catch(() => {});
+      throw error;
+    }
+    socket.emit('grid:command_result', {
+      matchId: input.matchId,
+      commandId: input.commandId,
+      outcome: result.outcome,
+      stateVersion: result.state.stateVersion,
+      resolvedPlayerId: result.resolvedPlayerId,
+      attemptId: result.attemptId,
+      duplicate: result.duplicate,
+    });
+    await scheduleStateDeadline(result.state);
+    if (!result.duplicate && result.outcome !== 'ambiguous') {
+      emitTurnResolved(io, {
+        state: result.state,
+        actorUserId: socket.data.user.id,
+        outcome: result.outcome,
+        cellIndex: input.cellIndex,
+        resolvedPlayerId: result.resolvedPlayerId,
+      });
+    }
+    await emitState(io, result.state);
+  },
+
+  async handleDrawOffer(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    const userId = socket.data.user.id;
+    const state = await applyAndBroadcast(io, () => footballGridService.offerDraw({
+      matchId: input.matchId, userId, expectedStateVersion: input.expectedStateVersion,
+    }));
+    socket.emit('grid:command_result', {
+      matchId: input.matchId, commandId: input.commandId, outcome: 'draw_offered', stateVersion: state.stateVersion,
+      resolvedPlayerId: null, attemptId: null, duplicate: false,
+    });
+    const opponent = state.players.find((player) => player.userId !== userId);
+    if (opponent?.isBot && state.drawOffer) {
+      // Bots answer after a short think. Not durable on purpose: an unanswered
+      // offer lapses with the turn, so a lost timer costs nothing.
+      const offerVersion = state.stateVersion;
+      setTimeout(() => {
+        void (async () => {
+          const latest = await footballGridRepo.loadState(state.matchId);
+          if (!latest?.drawOffer || latest.stateVersion !== offerVersion) return;
+          const accept = footballGridBotService.shouldAcceptDraw(latest, opponent.userId);
+          await applyAndBroadcast(io, () => footballGridService.respondToDraw({
+            matchId: state.matchId, userId: opponent.userId, accept, expectedStateVersion: offerVersion,
+          }));
+        })().catch((error) => {
+          logger.warn({ error, matchId: state.matchId }, 'Football Grid bot draw response failed');
+        });
+      }, 1_500 + Math.floor(Math.random() * 1_500));
+    }
+  },
+
+  async handleDrawRespond(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridDrawRespondPayload,
+  ): Promise<void> {
+    const state = await applyAndBroadcast(io, () => footballGridService.respondToDraw({
+      matchId: input.matchId,
+      userId: socket.data.user.id,
+      accept: input.accept,
+      expectedStateVersion: input.expectedStateVersion,
+    }));
+    socket.emit('grid:command_result', {
+      matchId: input.matchId,
+      commandId: input.commandId,
+      outcome: input.accept ? 'draw_accepted' : 'draw_declined',
+      stateVersion: state.stateVersion,
+      resolvedPlayerId: null, attemptId: null, duplicate: false,
+    });
+    if (state.phase === 'terminal') {
+      socket.data.gridMatchId = undefined;
+      socket.data.matchId = undefined;
+    }
+  },
+
+  async handlePass(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    let result: Awaited<ReturnType<typeof footballGridService.pass>>;
+    try {
+      result = await footballGridService.pass({ ...input, userId: socket.data.user.id });
+    } catch (error) {
+      await publishServiceInterruptionIfNeeded(io, input.matchId).catch(() => {});
+      throw error;
+    }
+    socket.emit('grid:command_result', {
+      matchId: input.matchId,
+      commandId: input.commandId,
+      outcome: result.outcome,
+      stateVersion: result.state.stateVersion,
+      resolvedPlayerId: null,
+      attemptId: result.attemptId,
+      duplicate: result.duplicate,
+    });
+    await scheduleStateDeadline(result.state);
+    if (!result.duplicate) {
+      emitTurnResolved(io, {
+        state: result.state,
+        actorUserId: socket.data.user.id,
+        outcome: 'pass',
+        cellIndex: null,
+        resolvedPlayerId: null,
+      });
+    }
+    await emitState(io, result.state);
+  },
+
+  async handleResync(io: QuizballServer, socket: QuizballSocket, matchId: string): Promise<void> {
+    const previous = await footballGridService.getState(matchId, socket.data.user.id);
+    const needsHandoff = socket.data.gridMatchId !== matchId;
+    // Replayed terminal resyncs are result delivery, not a match transition.
+    // In particular, they must not rebind a socket already playing game N+1.
+    if (previous.phase !== 'terminal') {
+      await socket.join(gridRoom(matchId));
+      await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
+    }
+    const state = previous.phase === 'terminal'
+      ? await footballGridService.markReconnected(matchId, socket.data.user.id)
+      : await applyAndBroadcast(
+          io,
+          () => footballGridService.markReconnected(matchId, socket.data.user.id),
+        );
+    if (
+      (previous.phase === 'paused' || previous.phase === 'service_interruption')
+      && state.phase !== 'paused'
+      && state.phase !== 'service_interruption'
+    ) {
+      io.to(gridRoom(matchId)).emit('grid:resumed', {
+        matchId,
+        state,
+        serverNow: new Date().toISOString(),
+      });
+    }
+    const series = await footballGridRepo.getSeriesInfoForMatch(matchId);
+    if (needsHandoff && state.phase !== 'terminal') {
+      // A fresh socket may still have another match in its client store (for
+      // example, the next BO3 game started while it was offline). Rejoin must
+      // explicitly establish this match before ordinary snapshots are applied.
+      const opponent = state.players.find((player) => player.userId !== socket.data.user.id)!;
+      const users = await usersRepo.getByIds([opponent.userId]);
+      const opponentUser = users.get(opponent.userId);
+      const profile = await rankedService.ensureProfile(opponent.userId).catch(() => null);
+      // Commit the binding only after bootstrap data is available, so a
+      // temporary lookup failure still retries this handoff on the next resync.
+      socket.data.matchId = matchId;
+      socket.data.gridMatchId = matchId;
+      socket.emit('grid:match_found', {
+        matchId, state, series, serverNow: new Date().toISOString(),
+        opponent: opponentIdentity({
+          opponent,
+          opponentUser,
+          matchId,
+          viewerIsGuest: socket.data.user.is_guest === true,
+          rp: profile?.rp,
+        }),
+        capabilities: { canAddFriend: !opponent.isBot, canChallenge: !opponent.isBot },
+      });
+    }
+    socket.emit('grid:state', { matchId, state, series, serverNow: new Date().toISOString() });
+    if (state.phase === 'terminal') {
+      // A reconnect must rebuild the complete result payload even if a prior
+      // server emit happened just before the transport disconnected. Receipt
+      // is durable only after `grid:completed_ack`.
+      await footballGridRepo.makeResultDeliveryDue(matchId, socket.data.user.id);
+      await recoverTerminalResultDeliveries(io, matchId);
+    }
+  },
+
+  async handleCompletedAck(
+    socket: QuizballSocket,
+    input: { matchId: string; terminalStateVersion: number; ackToken: string },
+  ): Promise<void> {
+    await footballGridService.getState(input.matchId, socket.data.user.id);
+    const acknowledged = await footballGridRepo.acknowledgeResultDelivery(
+      input.matchId,
+      socket.data.user.id,
+      input.terminalStateVersion,
+      input.ackToken,
+    );
+    if (!acknowledged) {
+      throw new ConflictError('Football Grid result acknowledgement is invalid', {
+        gridCode: 'COMPLETION_ACK_INVALID',
+      });
+    }
+    // Only unbind if this socket is still attached to THAT match; a stale
+    // delivery (e.g. from an administratively cancelled match) must never
+    // detach a socket that has already joined a newer match.
+    if (socket.data.gridMatchId === input.matchId) socket.data.gridMatchId = undefined;
+    if (socket.data.matchId === input.matchId) socket.data.matchId = undefined;
+    await socket.leave(gridRoom(input.matchId));
+  },
+
+  async handleForfeit(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    input: FootballGridVersionedCommandPayload,
+  ): Promise<void> {
+    const state = await applyAndBroadcast(io, () => footballGridService.forfeit({
+      matchId: input.matchId,
+      userId: socket.data.user.id,
+      expectedStateVersion: input.expectedStateVersion,
+    }));
+    if (state.phase === 'terminal') {
+      socket.data.gridMatchId = undefined;
+      socket.data.matchId = undefined;
+    }
+  },
+
+  async handleReport(socket: QuizballSocket, attemptId: string): Promise<void> {
+    const reportId = await footballGridService.reportMissingAnswer(attemptId, socket.data.user.id);
+    const analyticsFacts = await footballGridRepo.getMissingAnswerAnalyticsFacts(
+      attemptId,
+      socket.data.user.id,
+    );
+    if (analyticsFacts) {
+      trackFootballGridMissingAnswerReported({
+        userId: socket.data.user.id,
+        matchId: analyticsFacts.matchId,
+        attemptId,
+        boardId: analyticsFacts.boardId,
+        cellIndex: analyticsFacts.cellIndex,
+        attemptOutcome: analyticsFacts.outcome,
+        occurredAt: analyticsFacts.reportedAt,
+      });
+    }
+    socket.emit('grid:report_received', { reportId, attemptId });
+  },
+
+  async handlePresenceHeartbeat(socket: QuizballSocket, matchId: string): Promise<void> {
+    if (socket.data.gridMatchId !== matchId) {
+      throw new ConflictError('Socket is not bound to this Football Grid match', {
+        gridCode: 'GRID_MATCH_BINDING_MISMATCH',
+      });
+    }
+    // Steady-state heartbeats only renew the existing fenced Redis lease. The
+    // authoritative DB path is needed solely when that lease is missing (for
+    // example after Redis recovery or an actual reconnect).
+    if (await footballGridPresenceService.refresh(matchId, socket.data.user.id, socket.id)) return;
+    const previous = await footballGridService.getState(matchId, socket.data.user.id);
+    await footballGridPresenceService.touch(matchId, socket.data.user.id, socket.id);
+    const state = await footballGridService.markReconnected(matchId, socket.data.user.id);
+    await scheduleStateDeadline(state);
+    if (state.stateVersion !== previous.stateVersion) {
+      const io = socket.nsp.server as QuizballServer;
+      await emitState(io, state);
+      if (previous.phase === 'paused' && state.phase !== 'paused') {
+        io.to(gridRoom(matchId)).emit('grid:resumed', {
+          matchId,
+          state,
+          serverNow: new Date().toISOString(),
+        });
+      }
+    }
+  },
+
+  async handlePhaseTimer(io: QuizballServer, payload: RealtimeTimerPayload): Promise<void> {
+    if (payload.kind !== GRID_TIMER_KIND) return;
+    const snapshot = await footballGridRepo.loadState(payload.matchId);
+    if (!snapshot || snapshot.phase === 'terminal' || snapshot.stateVersion !== payload.expectedStateVersion) return;
+    const presenceUsers = snapshot.phase === 'turn'
+      ? snapshot.players.filter((player) => !player.isBot && player.userId === snapshot.currentPlayerUserId)
+      : snapshot.phase === 'countdown'
+        ? snapshot.players.filter((player) => !player.isBot)
+        : snapshot.phase === 'paused'
+          // Reconcile presence BEFORE the reconnect deadline is judged, so a
+          // Redis-degraded node cannot leave an actually-gone player marked
+          // present in Postgres and gift them the disconnect forfeit.
+          ? snapshot.players.filter((player) => !player.isBot)
+          : [];
+    for (const player of presenceUsers) {
+      const presence = await footballGridPresenceService.reconcile(
+        snapshot.matchId,
+        player.userId,
+        null,
+        (generation) => footballGridService.reconcileDisconnected(snapshot.matchId, player.userId, generation),
+      );
+      if (presence.status === 'indeterminate') {
+        await scheduleRealtimeTimer(GRID_TIMER_KIND, payload.matchId, new Date(Date.now() + 250), payload);
+        return;
+      }
+      if (presence.status === 'absent') {
+        if (presence.value.deferred) {
+          await scheduleRealtimeTimer(
+            'football_grid_presence_expiry',
+            `${snapshot.matchId}:${player.userId}`,
+            new Date(Date.now() + 250),
+            {
+              kind: 'football_grid_presence_expiry',
+              matchId: snapshot.matchId,
+              userId: player.userId,
+              expectedPresenceGeneration: presence.generation,
+            },
+          );
+          return;
+        }
+        await scheduleStateDeadline(presence.value.state);
+        if (snapshot.phase !== 'paused') {
+          await emitState(io, presence.value.state);
+          return;
+        }
+        // Paused matches only record absence or shorten their window here.
+        // The authoritative forfeit/cancel decision must still run through
+        // handlePhaseDeadline below, otherwise an expired reconnect deadline
+        // would be rescheduled forever without ever judging it.
+        continue;
+      }
+    }
+    const result = await footballGridService.handlePhaseDeadline(
+      payload.matchId,
+      payload.expectedStateVersion,
+      true,
+    );
+    if (result.deferred && result.state.phaseDeadlineAt) {
+      await scheduleRealtimeTimer(
+        GRID_TIMER_KIND,
+        payload.matchId,
+        new Date(Date.now() + 250),
+        payload,
+      );
+      return;
+    }
+    await scheduleStateDeadline(result.state);
+    if (result.turnResolution) {
+      emitTurnResolved(io, {
+        state: result.state,
+        actorUserId: result.turnResolution.actorUserId,
+        outcome: result.turnResolution.outcome,
+        cellIndex: null,
+        resolvedPlayerId: null,
+      });
+    }
+    await emitState(io, result.state);
+  },
+
+  async handleBotActionTimer(io: QuizballServer, payload: RealtimeTimerPayload): Promise<void> {
+    if (payload.kind !== GRID_BOT_TIMER_KIND) return;
+    const result = await footballGridBotService.performTurn(payload);
+    if (!result.changed) return;
+    await scheduleStateDeadline(result.state);
+    if (result.actorUserId && result.outcome) {
+      emitTurnResolved(io, {
+        state: result.state,
+        actorUserId: result.actorUserId,
+        outcome: result.outcome,
+        cellIndex: result.cellIndex,
+        resolvedPlayerId: result.resolvedPlayerId,
+      });
+    }
+    await emitState(io, result.state);
+  },
+
+  async handlePresenceExpiryTimer(io: QuizballServer, payload: RealtimeTimerPayload): Promise<void> {
+    if (payload.kind !== 'football_grid_presence_expiry') return;
+    const result = await footballGridPresenceService.reconcile(
+      payload.matchId,
+      payload.userId,
+      payload.expectedPresenceGeneration,
+      (generation) => footballGridService.reconcileDisconnected(payload.matchId, payload.userId, generation),
+    );
+    if (result.status !== 'absent') return;
+    if (result.value.deferred) {
+      await scheduleRealtimeTimer(
+        'football_grid_presence_expiry',
+        `${payload.matchId}:${payload.userId}`,
+        new Date(Date.now() + 250),
+        payload,
+      );
+      return;
+    }
+    const state = result.value.state;
+    await scheduleStateDeadline(state);
+    await emitState(io, state);
+    if (state.phase === 'terminal') await cancelRealtimeTimer(GRID_BOT_TIMER_KIND, state.matchId);
+  },
+
+  async handleSocketDisconnect(_io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const matchId = socket.data.gridMatchId;
+    if (!matchId) return;
+    await footballGridPresenceService.detach(matchId, socket.data.user.id, socket.id);
+  },
+};

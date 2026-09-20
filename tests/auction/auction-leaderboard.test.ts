@@ -56,6 +56,9 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({ usersRepo: usersRepoMo
 const USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 vi.mock('../../src/http/middleware/auth.js', () => ({
+  optionalAuthMiddleware: vi.fn((req, _res, next) => {
+    req.user = { id: USER_ID, role: 'user' }; next();
+  }),
   authMiddleware: vi.fn((req, _res, next) => {
     req.user = { id: USER_ID, role: 'user' };
     next();

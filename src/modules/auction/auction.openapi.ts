@@ -102,6 +102,7 @@ export function registerAuctionOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Auction leaderboard', schema: auctionLeaderboardResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 
@@ -116,6 +117,7 @@ export function registerAuctionOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Rank information, or null when unranked', schema: auctionUserRankResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 }

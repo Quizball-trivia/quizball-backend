@@ -1,3 +1,4 @@
+import { assertCapability } from '../../modules/users/capabilities.js';
 import { randomUUID } from 'crypto';
 import { trackAuctionMatchFound } from '../../core/analytics/game-events.js';
 import { ErrorCode } from '../../core/errors.js';
@@ -180,6 +181,7 @@ export const auctionMatchmakingService = {
     socket: QuizballSocket,
     input: AuctionSearchStartServiceInput
   ): Promise<void> {
+    if (socket.data.user) assertCapability(socket.data.user, 'queueEntry');
     const user = socket.data.user;
     if (!user?.id) {
       emitAuctionError(socket, {
@@ -1310,6 +1312,7 @@ function emitMatchFound(
   for (const human of humans) {
     io.to(`user:${human.userId}`).emit('auction:match_found', payload);
     trackAuctionMatchFound({
+      origin: 'queue',
       userId: human.userId,
       matchId,
       humanCount: humans.length,

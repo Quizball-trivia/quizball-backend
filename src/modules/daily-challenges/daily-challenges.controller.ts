@@ -7,6 +7,7 @@ import type {
   DailyChallengeParam,
   SetDailyComebackReminderBody,
   UpdateDailyChallengeConfigBody,
+  PassChainLinkBody,
 } from './daily-challenges.schemas.js';
 
 function getRequestLocale(req: Request): string | undefined {
@@ -27,6 +28,27 @@ export const dailyChallengesController = {
   async list(req: Request, res: Response): Promise<void> {
     const items = await dailyChallengesService.listActiveChallenges(req.user!.id, getRequestLocale(req));
     res.json({ items });
+  },
+
+  async recommendations(req: Request, res: Response): Promise<void> {
+    const query = req.validated.query as { locale?: string; justPlayed?: string; limit?: number };
+    const items = await dailyChallengesService.listRecommendations(
+      req.user!.id,
+      query.justPlayed,
+      query.limit ?? 2,
+      getRequestLocale(req)
+    );
+    res.json({ items });
+  },
+
+  async statSniperLeaderboard(req: Request, res: Response): Promise<void> {
+    res.json(await dailyChallengesService.getStatSniperLeaderboard(req.user!.id));
+  },
+
+  async passChainLink(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as PassChainLinkBody;
+    const result = await dailyChallengesService.linkPassChain(req.user!.id, body, body.locale ?? getRequestLocale(req));
+    res.json(result);
   },
 
   async createSession(req: Request, res: Response): Promise<void> {

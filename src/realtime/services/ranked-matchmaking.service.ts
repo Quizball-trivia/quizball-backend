@@ -1,3 +1,4 @@
+import { assertCapability } from '../../modules/users/capabilities.js';
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
@@ -933,6 +934,7 @@ export const rankedMatchmakingService = {
       clientRequestId?: string;
     }
   ): Promise<void> {
+    assertCapability(socket.data.user, 'rankedEntry');
     const userId = socket.data.user.id;
     const queueClientContext = {
       source: payload?.source ?? 'unknown',

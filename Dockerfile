@@ -32,13 +32,16 @@ COPY --from=builder /app/dist ./dist/
 # preDeployCommand `npm run migrate:deploy`). Not compiled by tsc, so copy
 # them into the image explicitly — otherwise the pre-deploy step fails with
 # MODULE_NOT_FOUND / no migrations to read.
-COPY scripts/run-migrations.mjs ./scripts/run-migrations.mjs
+COPY scripts/run-migrations.mjs scripts/migration-safety.mjs ./scripts/
 COPY supabase/migrations ./supabase/migrations/
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 USER nodejs
+
+# Verify the migration entry point and its dependencies without connecting to a DB.
+RUN node --input-type=module -e "await import('./scripts/run-migrations.mjs')"
 
 # Expose port
 EXPOSE 8000

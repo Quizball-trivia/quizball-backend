@@ -42,6 +42,14 @@ const auctionMatchmakingHumanSeatShare = meter.createHistogram(
   'quizball_auction_matchmaking_human_seat_share',
   { description: 'Share of human seats in each queue-origin Auction match', unit: '1' },
 );
+const rankedMatchmakingStageDuration = meter.createHistogram(
+  'quizball_ranked_matchmaking_stage_duration_ms',
+  {
+    description: 'Latency of each ranked matchmaking stage',
+    unit: 'ms',
+  }
+);
+
 const socketReconnects = meter.createCounter('quizball_socket_reconnects_total', {
   description: 'Number of active-match rejoins on connect',
 });
@@ -89,6 +97,49 @@ const persistentBotSweeperActions = meter.createCounter('quizball_persistent_bot
   description: 'Reconciliation sweeper actions tagged by action (rekey / release / skipped_live)',
 });
 
+const footballGridQueueJoins = meter.createCounter('quizball_football_grid_queue_joins_total', {
+  description: 'Football Grid queue join attempts',
+});
+const footballGridMatches = meter.createCounter('quizball_football_grid_matches_total', {
+  description: 'Football Grid matches created by opponent type and origin',
+});
+const footballGridCommands = meter.createCounter('quizball_football_grid_commands_total', {
+  description: 'Football Grid commands resolved by outcome',
+});
+const footballGridResolverDuration = meter.createHistogram('quizball_football_grid_resolver_duration_ms', {
+  description: 'Football Grid answer resolver latency', unit: 'ms',
+});
+const footballGridSettlements = meter.createCounter('quizball_football_grid_settlements_total', {
+  description: 'Football Grid reward settlements by outcome',
+});
+const footballGridQueueWaitDuration = meter.createHistogram('quizball_football_grid_queue_wait_duration_ms', {
+  description: 'Football Grid queue wait before a human or bot pairing', unit: 'ms',
+});
+const footballGridPhaseTimeouts = meter.createCounter('quizball_football_grid_phase_timeouts_total', {
+  description: 'Football Grid authoritative phase deadline expirations',
+});
+const footballGridPresenceTransitions = meter.createCounter('quizball_football_grid_presence_transitions_total', {
+  description: 'Football Grid disconnect and reconnect transitions',
+});
+const footballGridContentExhaustion = meter.createCounter('quizball_football_grid_content_exhaustion_total', {
+  description: 'Football Grid match creation attempts with no selectable published board',
+});
+const footballGridRewardEligibility = meter.createCounter('quizball_football_grid_reward_eligibility_total', {
+  description: 'Football Grid coin and TP decisions by reward type, reason, and origin',
+});
+const footballGridPairingRecovery = meter.createCounter('quizball_football_grid_pairing_recovery_total', {
+  description: 'Football Grid stale pairing reconciliation outcomes',
+});
+const footballGridBotActions = meter.createCounter('quizball_football_grid_bot_actions_total', {
+  description: 'Football Tic Tac Toe bot actions by pinned tier, policy version, outcome, and scarcity bucket',
+});
+const footballGridBotGovernorObservations = meter.createCounter('quizball_football_grid_bot_governor_observations_total', {
+  description: 'Competitive Football Tic Tac Toe bot outcomes folded into the Grid-only safety governor',
+});
+const footballGridBotGovernorProcessing = meter.createCounter('quizball_football_grid_bot_governor_processing_total', {
+  description: 'Independent Football Tic Tac Toe governor processing outcomes, including retryable failures',
+});
+
 export const appMetrics = {
   rankedQueueJoins,
   rankedQueueLeaves,
@@ -96,6 +147,7 @@ export const appMetrics = {
   rankedHumanMatches,
   auctionMatchmakingQueueWaitDuration,
   auctionMatchmakingHumanSeatShare,
+  rankedMatchmakingStageDuration,
   socketReconnects,
   matchPauses,
   cacheRebuilds,
@@ -107,4 +159,18 @@ export const appMetrics = {
   persistentBotSelections,
   persistentBotReservationReleases,
   persistentBotSweeperActions,
+  footballGridQueueJoins,
+  footballGridMatches,
+  footballGridCommands,
+  footballGridResolverDuration,
+  footballGridSettlements,
+  footballGridQueueWaitDuration,
+  footballGridPhaseTimeouts,
+  footballGridPresenceTransitions,
+  footballGridContentExhaustion,
+  footballGridRewardEligibility,
+  footballGridPairingRecovery,
+  footballGridBotActions,
+  footballGridBotGovernorObservations,
+  footballGridBotGovernorProcessing,
 };

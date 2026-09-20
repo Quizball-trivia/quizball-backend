@@ -11,6 +11,10 @@ import type {
   WalletStateRow,
 } from './store.types.js';
 import type { ListStoreTransactionsQuery } from './store.schemas.js';
+import {
+  minorToWholeCoinsTruncated,
+  wholeCoinsToMinor,
+} from './coin-amount.js';
 
 interface CreatePurchaseInput {
   userId: string;
@@ -19,7 +23,7 @@ interface CreatePurchaseInput {
   currency: string;
 }
 
-interface TransactionLogInput {
+export interface TransactionLogInput {
   eventType: StoreTxEventType;
   outcome: StoreTxOutcome;
   purchaseId?: string | null;
@@ -29,6 +33,7 @@ interface TransactionLogInput {
   stripeCheckoutId?: string | null;
   stripePaymentIntent?: string | null;
   coinsDelta?: number;
+  coinsDeltaMinor?: number;
   ticketsDelta?: number;
   inventoryDelta?: unknown;
   reason?: string | null;
@@ -54,6 +59,53 @@ interface CompareAndSetTicketsStateInput {
   observedTicketsRefillStartedAt: string | null;
   tickets: number;
   ticketsRefillStartedAt: string | null;
+}
+
+function transactionCoinDeltas(data: TransactionLogInput): {
+  coinsDelta: number;
+  coinsDeltaMinor: number;
+} {
+  const coinsDelta = data.coinsDelta
+    ?? minorToWholeCoinsTruncated(data.coinsDeltaMinor ?? 0);
+  const coinsDeltaMinor = data.coinsDeltaMinor
+    ?? wholeCoinsToMinor(coinsDelta);
+
+  return { coinsDelta, coinsDeltaMinor };
+}
+
+async function adjustWalletMinorInTx(
+  tx: TransactionSql,
+  userId: string,
+  coinsDeltaMinor: number,
+  ticketsDelta = 0
+): Promise<WalletRow | null> {
+  if (!Number.isSafeInteger(coinsDeltaMinor)) {
+    throw new RangeError('coinsDeltaMinor must be a safe integer');
+  }
+  if (!Number.isSafeInteger(ticketsDelta)) {
+    throw new RangeError('ticketsDelta must be a safe integer');
+  }
+
+  const [row] = await tx.unsafe<WalletRow[]>(
+    `
+    UPDATE users
+    SET
+      coins = (
+        (coins::bigint * 100 + coin_fraction_minor::bigint + $1::bigint) / 100
+      )::integer,
+      coin_fraction_minor = (
+        (coins::bigint * 100 + coin_fraction_minor::bigint + $1::bigint) % 100
+      )::smallint,
+      tickets = tickets + $2,
+      updated_at = NOW()
+    WHERE id = $3
+      AND coins::bigint * 100 + coin_fraction_minor::bigint + $1::bigint >= 0
+      AND tickets + $2 >= 0
+    RETURNING coins, coin_fraction_minor, tickets
+    `,
+    [coinsDeltaMinor, ticketsDelta, userId]
+  );
+  return row ?? null;
 }
 
 const baseLogsWhereClause = (
@@ -239,7 +291,7 @@ export const storeRepo = {
 
   async getWallet(userId: string): Promise<WalletStateRow | null> {
     const [row] = await sql<WalletStateRow[]>`
-      SELECT coins, tickets, tickets_refill_started_at
+      SELECT coins, coin_fraction_minor, tickets, tickets_refill_started_at
       FROM users
       WHERE id = ${userId}
       LIMIT 1
@@ -247,10 +299,22 @@ export const storeRepo = {
     return row ?? null;
   },
 
+  async getWallets(userIds: string[]): Promise<Map<string, WalletStateRow>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const rows = await sql<Array<WalletStateRow & { user_id: string }>>`
+      SELECT id AS user_id, coins, coin_fraction_minor, tickets, tickets_refill_started_at
+      FROM users
+      WHERE id = ANY(${sql.array(uniqueUserIds)}::uuid[])
+    `;
+    return new Map(rows.map(({ user_id, ...wallet }) => [user_id, wallet]));
+  },
+
   async getWalletInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
     const [row] = await tx.unsafe<WalletStateRow[]>(
       `
-      SELECT coins, tickets, tickets_refill_started_at
+      SELECT coins, coin_fraction_minor, tickets, tickets_refill_started_at
       FROM users
       WHERE id = $1
       LIMIT 1
@@ -263,7 +327,7 @@ export const storeRepo = {
   async getWalletForUpdateInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
     const [row] = await tx.unsafe<WalletStateRow[]>(
       `
-      SELECT coins, tickets, tickets_refill_started_at
+      SELECT coins, coin_fraction_minor, tickets, tickets_refill_started_at
       FROM users
       WHERE id = $1
       LIMIT 1
@@ -288,7 +352,7 @@ export const storeRepo = {
       WHERE id = $1
         AND tickets = $2
         AND tickets_refill_started_at IS NOT DISTINCT FROM $3::timestamptz
-      RETURNING coins, tickets, tickets_refill_started_at
+      RETURNING coins, coin_fraction_minor, tickets, tickets_refill_started_at
       `,
       [
         input.userId,
@@ -307,22 +371,15 @@ export const storeRepo = {
     coinsDelta: number,
     ticketsDelta: number
   ): Promise<WalletRow | null> {
-    const [row] = await tx.unsafe<WalletRow[]>(
-      `
-      UPDATE users
-      SET
-        coins = coins + $1,
-        tickets = tickets + $2,
-        updated_at = NOW()
-      WHERE id = $3
-        AND coins + $1 >= 0
-        AND tickets + $2 >= 0
-      RETURNING coins, tickets
-      `,
-      [coinsDelta, ticketsDelta, userId]
+    return adjustWalletMinorInTx(
+      tx,
+      userId,
+      wholeCoinsToMinor(coinsDelta),
+      ticketsDelta
     );
-    return row ?? null;
   },
+
+  adjustWalletMinorInTx,
 
   async addCoinsInTx(tx: TransactionSql, userId: string, amount: number): Promise<WalletRow | null> {
     return this.adjustWalletInTx(tx, userId, amount, 0);
@@ -346,7 +403,7 @@ export const storeRepo = {
         tickets_refill_started_at = $2,
         updated_at = NOW()
       WHERE id = $3
-      RETURNING coins, tickets, tickets_refill_started_at
+      RETURNING coins, coin_fraction_minor, tickets, tickets_refill_started_at
       `,
       [tickets, ticketsRefillStartedAt, userId]
     );
@@ -371,7 +428,7 @@ export const storeRepo = {
         tickets_refill_started_at = $3,
         updated_at = NOW()
       WHERE id = $4
-      RETURNING coins, tickets, tickets_refill_started_at
+      RETURNING coins, coin_fraction_minor, tickets, tickets_refill_started_at
       `,
       [wallet.coins, wallet.tickets, wallet.ticketsRefillStartedAt, userId]
     );
@@ -587,6 +644,7 @@ export const storeRepo = {
   },
 
   async insertTransactionLog(data: TransactionLogInput): Promise<StoreTransactionLogRow> {
+    const { coinsDelta, coinsDeltaMinor } = transactionCoinDeltas(data);
     const [row] = await sql<StoreTransactionLogRow[]>`
       INSERT INTO store_transaction_logs (
         event_type,
@@ -598,6 +656,7 @@ export const storeRepo = {
         stripe_checkout_id,
         stripe_payment_intent,
         coins_delta,
+        coins_delta_minor,
         tickets_delta,
         inventory_delta,
         reason,
@@ -616,7 +675,8 @@ export const storeRepo = {
         ${data.productId ?? null},
         ${data.stripeCheckoutId ?? null},
         ${data.stripePaymentIntent ?? null},
-        ${data.coinsDelta ?? 0},
+        ${coinsDelta},
+        ${coinsDeltaMinor},
         ${data.ticketsDelta ?? 0},
         ${sql.json((data.inventoryDelta ?? {}) as Json)},
         ${data.reason ?? null},
@@ -635,6 +695,7 @@ export const storeRepo = {
     tx: TransactionSql,
     data: TransactionLogInput
   ): Promise<StoreTransactionLogRow> {
+    const { coinsDelta, coinsDeltaMinor } = transactionCoinDeltas(data);
     const [row] = await tx.unsafe<StoreTransactionLogRow[]>(
       `
       INSERT INTO store_transaction_logs (
@@ -647,6 +708,7 @@ export const storeRepo = {
         stripe_checkout_id,
         stripe_payment_intent,
         coins_delta,
+        coins_delta_minor,
         tickets_delta,
         inventory_delta,
         reason,
@@ -658,7 +720,7 @@ export const storeRepo = {
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11::jsonb, $12, $13, $14, $15, $16::jsonb, $17
+        $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17::jsonb, $18
       )
       RETURNING *
       `,
@@ -671,7 +733,8 @@ export const storeRepo = {
         data.productId ?? null,
         data.stripeCheckoutId ?? null,
         data.stripePaymentIntent ?? null,
-        data.coinsDelta ?? 0,
+        coinsDelta,
+        coinsDeltaMinor,
         data.ticketsDelta ?? 0,
         JSON.stringify((data.inventoryDelta ?? {}) as Json),
         data.reason ?? null,

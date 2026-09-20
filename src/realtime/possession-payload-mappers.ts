@@ -9,6 +9,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { getCachedMultipleChoiceCorrectIndex } from './question-compat.js';
+import { config } from '../core/config.js';
 import { logger } from '../core/logger.js';
 import type { MatchAnswerAckPayload, MatchQuestionKind } from './socket.types.js';
 
@@ -20,6 +21,11 @@ const NORMAL_HALF_SEQUENCE: QuestionType[] = [
   'put_in_order',
   'clue_chain',
 ];
+
+const MCQ_ONLY_HALF_SEQUENCE: QuestionType[] = NORMAL_HALF_SEQUENCE.map(() => 'mcq_single');
+export function normalHalfSequence(): QuestionType[] {
+  return config.POSSESSION_MCQ_ONLY ? MCQ_ONLY_HALF_SEQUENCE : NORMAL_HALF_SEQUENCE;
+}
 
 export function getUserIdByCachedSeat(players: CachedPlayer[], seat: CachedSeat): string | null {
   return players.find((player) => player.seat === seat)?.userId ?? null;
@@ -246,7 +252,7 @@ export function selectedIndexForAnswerPersistence(
 export function questionTypeForState(state: PossessionStatePayload): QuestionType {
   if (state.phase === 'NORMAL_PLAY') {
     const slot = state.normalQuestionsAnsweredInHalf % POSSESSION_QUESTIONS_PER_HALF;
-    return NORMAL_HALF_SEQUENCE[slot] ?? 'mcq_single';
+    return normalHalfSequence()[slot] ?? 'mcq_single';
   }
 
   return 'mcq_single';

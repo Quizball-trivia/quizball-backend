@@ -39,6 +39,7 @@ export function registerRankedOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Ranked leaderboard', schema: rankedLeaderboardResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 
@@ -53,6 +54,7 @@ export function registerRankedOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Rank information, or null when unranked', schema: rankedUserRankResponseSchema },
       400: { description: 'Invalid query parameters', schema: errorResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
+      422: { description: 'Query validation failed', schema: errorResponseSchema },
     },
   });
 

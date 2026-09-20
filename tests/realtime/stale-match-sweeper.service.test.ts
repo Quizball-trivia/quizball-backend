@@ -9,6 +9,7 @@ const listStaleActiveMatchesMock = vi.fn();
 const getMatchMock = vi.fn();
 const abandonMatchRepoMock = vi.fn();
 const hasUpdatedAtTriggerMock = vi.fn();
+const isActiveMatchStaleMock = vi.fn();
 const abandonMatchServiceMock = vi.fn();
 const resolveMatchVariantMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
@@ -32,6 +33,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getMatch: (...a: unknown[]) => getMatchMock(...a),
     abandonMatch: (...a: unknown[]) => abandonMatchRepoMock(...a),
     hasUpdatedAtTrigger: (...a: unknown[]) => hasUpdatedAtTriggerMock(...a),
+    isActiveMatchStale: (...a: unknown[]) => isActiveMatchStaleMock(...a),
   },
 }));
 
@@ -175,6 +177,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetTriggerCache();
   hasUpdatedAtTriggerMock.mockResolvedValue(true);
+  isActiveMatchStaleMock.mockResolvedValue(true);
   acquireLockMock.mockResolvedValue({ acquired: true, token: 'tok' });
   releaseLockMock.mockResolvedValue(true);
   redisExistsMock.mockResolvedValue(0);
@@ -201,6 +204,16 @@ beforeEach(() => {
 });
 
 describe('stale-match-sweeper', () => {
+  it('leaves a match alone when activity resumed after the initial scan', async () => {
+    const stale = match();
+    listStaleActiveMatchesMock.mockResolvedValue([stale]);
+    getMatchMock.mockResolvedValue(stale);
+    isActiveMatchStaleMock.mockResolvedValue(false);
+    await runSweep(io);
+    expect(listMatchPlayersMock).not.toHaveBeenCalled();
+    expect(abandonMatchRepoMock).not.toHaveBeenCalled();
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
+  });
   it('does nothing when there are no stale matches', async () => {
     listStaleActiveMatchesMock.mockResolvedValue([]);
     await runSweep(io);

@@ -1,3 +1,14 @@
+import { assertCapability, isGuestUser } from '../../modules/users/capabilities.js';
+import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
+import { guestNameCandidates } from '../../modules/guest/guest-identity.js';
+import { randomUUID } from 'node:crypto';
+import { config } from '../../core/config.js';
+import { socketIpBucket } from '../socket-auth.js';
+import { botPlayerSummaries, emitAuctionMatchFound } from './auction-prematch.js';
+import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
+import { beginPracticeStart, claimPracticeSeating, finishPracticeStart, isPracticeStartCurrent, practiceStartDelayMs, waitForPracticeStart } from './practice-start-delay.js';
+import { userSessionGuardService } from './user-session-guard.service.js';
+import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import { logger } from '../../core/logger.js';
 import { ErrorCode } from '../../core/errors.js';
 import {
@@ -29,6 +40,7 @@ import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
+  AuctionSearchStartedPayload,
   AuctionMatchStartedPayload,
   AuctionRoundStartedPayload,
 } from '../socket.types.js';
@@ -65,6 +77,16 @@ export interface AuctionStartAiMatchServiceInput {
 export interface AuctionStartAiMatchOptions {
   context?: AuctionEngineContext;
   /**
+   * Guest "Play now": every bot seat is presented as an anonymous guest-style
+   * player (name, no avatar, no ranked identity) so the table looks like a
+   * room of guests. Bidding behaviour is untouched.
+   */
+  anonymousBots?: boolean;
+  /** Practice: checked right before bots are reserved (a cancel may have landed during the wait/admission). */
+  stillWanted?: () => boolean;
+  /** Practice: claims the non-cancellable seating step right before the table is saved; false = abandon. */
+  claimSeating?: () => boolean;
+  /**
    * Matchmaking uses this seam after every human socket has joined the match
    * room, but before any live Auction state is emitted. This guarantees the
    * ranked-style pre-match sequence (`match_found` -> showdown -> countdown)
@@ -84,6 +106,8 @@ export interface AuctionMatchHumanPlayer {
   /** Ranked identity for the pre-match showdown cards. */
   tier?: string | null;
   rp?: number | null;
+  /** Account-less friend-room guest: no ranked identity is created for the card. */
+  isGuest?: boolean;
 }
 
 export interface StartAuctionMatchForHumansInput {
@@ -104,6 +128,7 @@ export const auctionRealtimeService = {
     options: AuctionStartAiMatchOptions = {}
   ): Promise<void> {
     const user = socket.data.user;
+    if (user) assertCapability(user, 'queueEntry');
     if (!user?.id) {
       emitAuctionError(socket, {
         code: ErrorCode.AUTHENTICATION_ERROR,
@@ -142,7 +167,147 @@ export const auctionRealtimeService = {
       logger.warn({ error, userId: user.id, code: payload.code }, 'auction:start_ai_match failed');
     }
   },
+
+  /** Guest "Play now" from the public Auction page: an anonymous bot table, no AP, no leaderboard. */
+  handleStartPracticeMatch,
 };
+
+/** The guest cancelled (or left) between admission and seating: no table, no error to show. */
+class AuctionPracticeStartAbandonedError extends Error {
+  constructor() { super('auction practice start abandoned'); }
+}
+
+async function handleStartPracticeMatch(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  input: AuctionStartAiMatchServiceInput,
+  options: AuctionStartAiMatchOptions = {}
+): Promise<void> {
+  const user = socket.data.user;
+  if (!user?.id) {
+    emitAuctionError(socket, { code: ErrorCode.AUTHENTICATION_ERROR, message: 'Authentication required' });
+    return;
+  }
+  if (!isGuestUser(user)) {
+    emitAuctionError(socket, { code: 'AUCTION_PRACTICE_GUEST_ONLY', message: 'Members play the auction through matchmaking' });
+    return;
+  }
+  if (!config.AUCTION_ENABLED || !config.GUEST_BOT_MATCHES_ENABLED) {
+    emitAuctionError(socket, { code: ErrorCode.AUCTION_CONTENT_UNAVAILABLE, message: 'Practice auctions are temporarily unavailable' });
+    return;
+  }
+  // Claim the start before any async step: a newer start (second tab,
+  // reconnect retry) supersedes this one at every await below.
+  const key = `auction:${user.id}`;
+  const token = beginPracticeStart(key);
+  const current = () => isPracticeStartCurrent(key, token);
+  // A reload or second tab re-attaches to the table the guest is still seated at.
+  const rejoinLiveTable = async (): Promise<boolean> => {
+    const activeMatchId = await auctionStateStore.getActiveMatchIdForUser(user.id).catch(() => null);
+    if (!activeMatchId) return false;
+    const state = await auctionStateStore.load(activeMatchId).catch(() => null);
+    const seat = state ? findAuctionSeatByUserId(state, user.id) : null;
+    if (state && state.phase !== 'finished' && seat && !seat.isBot && !seat.forfeited) {
+      if (await rejoinAuctionMatch(io, socket, activeMatchId)) return true;
+    }
+    await auctionStateStore.clearUserMatchIndex(user.id, activeMatchId).catch(() => {});
+    return false;
+  };
+  try {
+    if (await rejoinLiveTable()) return;
+    if (!config.GUEST_LOBBIES_PROVISIONING_ENABLED || !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+      emitAuctionError(socket, { code: ErrorCode.AUCTION_CONTENT_UNAVAILABLE, message: 'New practice auctions are temporarily unavailable' });
+      return;
+    }
+    if (!current()) return;
+    // Per-IP throttle at entry (abuse); the per-guest seated budget is charged
+    // only once the wait is over, so cancelled starts do not burn it.
+    if (!await allowGuestOperation(`ip:${socketIpBucket(socket)}`, 'bot_match_ip')) {
+      emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
+      return;
+    }
+    if (!current()) return;
+    // "Searching" for a random while before the table is seated; a cancel or a
+    // newer start abandons the wait, and a guest who left gets no table. The
+    // client gets the same search_start it would from the queue (itself in the
+    // lineup, fallback = the end of the wait), then the match_found pre-match
+    // sequence once the table exists.
+    const delayMs = practiceStartDelayMs();
+    const searchStartedAt = Date.now();
+    const humans: AuctionMatchHumanPlayer[] = [{ userId: user.id, displayName: user.nickname ?? 'Player', isGuest: true }];
+    const avatarCustomization = parseStoredAvatarCustomization(user.avatar_customization);
+    socket.emit('auction:search_start', {
+      searchId: randomUUID(),
+      locale: input.locale,
+      queuedUserCount: 1,
+      seatsNeeded: 2,
+      fallbackAt: new Date(searchStartedAt + delayMs).toISOString(),
+      queuedPlayers: [{ userId: user.id, displayName: humans[0].displayName, avatarCustomization }],
+      botCount: 0,
+    } satisfies AuctionSearchStartedPayload);
+    const proceed = await waitForPracticeStart(key, token, delayMs);
+    if (!proceed || !socket.connected) return;
+    // Live auctions live in Redis (the session guard only sees Postgres): a
+    // table seated meanwhile by another replica/tab is re-attached, never doubled.
+    if (await rejoinLiveTable()) return;
+    if (!current()) return;
+    if (!await allowGuestOperation(`user:${user.id}`, 'bot_match')) {
+      emitAuctionError(socket, { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: 'Too many matches started. Please try again later.' });
+      return;
+    }
+  await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+    if (!current() || !socket.connected) return;
+    // Under the lock: a table another replica/tab seated since the wait is
+    // re-attached here, so two starts can never produce two tables.
+    if (await rejoinLiveTable()) return;
+    if (!current()) return;
+    if (!config.GUEST_LOBBIES_PROVISIONING_ENABLED || !config.GUEST_LOBBIES_RECONNECT_ENABLED) return;
+    const prepared = await userSessionGuardService.prepareForQueueJoin(io, user.id, 'auction');
+    const snapshot = prepared.snapshot;
+    if (!current()) return;
+    if (!prepared.ok || snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') {
+      userSessionGuardService.emitBlocked(socket, {
+        reason: prepared.reason ?? 'ACTIVE_MATCH',
+        message: prepared.message ?? 'You are already in an active session',
+        operation: 'auction:practice_bot_start',
+        stateSnapshot: snapshot,
+      });
+      return;
+    }
+    try {
+      const saved = await startAuctionMatchForHumans(io, {
+        humanPlayers: humans,
+        formation: input.formation,
+        locale: input.locale,
+        origin: 'practice',
+        sourceSocket: socket,
+      }, {
+        ...options,
+        anonymousBots: true,
+        beforeStartEvents: (prepared) => {
+          emitAuctionMatchFound(io, prepared.matchId, humans, botPlayerSummaries(prepared.seats), input.locale, prepared.formation, 'practice');
+        },
+        stillWanted: () => current() && socket.connected,
+        claimSeating: () => socket.connected && claimPracticeSeating(key, token),
+      });
+      logger.info(
+        { matchId: saved.matchId, userId: user.id, locale: input.locale, formation: saved.formation },
+        'Auction guest practice match started'
+      );
+    } catch (error) {
+      if (error instanceof AuctionPracticeStartAbandonedError) return;
+      const payload = toAuctionErrorPayload(error, {
+        fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+        fallbackMessage: 'Auction content unavailable',
+      });
+      emitAuctionError(socket, payload);
+      logger.warn({ error, userId: user.id, code: payload.code }, 'auction:practice_bot_start failed');
+    }
+  }, { operation: 'auction:practice_bot_start' });
+  } finally {
+    finishPracticeStart(key, token);
+  }
+}
 
 export async function startAuctionMatchForHumans(
   io: QuizballServer,
@@ -162,6 +327,9 @@ export async function startAuctionMatchForHumans(
   const context = resolveRealtimeAuctionContext(options);
   const matchId = context.createId('match');
 
+  if (options.stillWanted && !options.stillWanted()) {
+    throw new AuctionPracticeStartAbandonedError();
+  }
   // Persistent roster bots first; any seat we cannot reserve falls back to an
   // ephemeral generated profile, so a thin roster degrades seat-by-seat.
   const persistentBots = await reserveAuctionPersistentBots({
@@ -170,7 +338,9 @@ export async function startAuctionMatchForHumans(
     humanUserIds: input.humanPlayers.map((player) => player.userId),
   });
   const ephemeralBots = await generateAuctionBotProfiles(botCount - persistentBots.length);
-  const bots = [...persistentBots, ...ephemeralBots];
+  const bots = options.anonymousBots
+    ? anonymizeAuctionBots(matchId, [...persistentBots, ...ephemeralBots])
+    : [...persistentBots, ...ephemeralBots];
 
   // Everything from here to the state SAVE is compensated: once reservations are
   // held, a throw before the match state exists would strand those bots with no
@@ -209,6 +379,9 @@ export async function startAuctionMatchForHumans(
       context
     );
 
+    // Last look before the table exists (reservations are released by the
+    // compensation below); from here on a cancel can no longer undo the seating.
+    if (options.claimSeating && !options.claimSeating()) throw new AuctionPracticeStartAbandonedError();
     saved = await auctionStateStore.save(withRound, {
       now: context.now(),
     });
@@ -295,6 +468,21 @@ export async function startAuctionMatchForHumans(
 }
 
 /**
+ * Re-dress bot seats as anonymous guests for a guest-hosted practice table:
+ * distinct guest-style names derived from the match id (stable across
+ * reloads), no avatar, no tier/RP. Reservation ids and bot profiles stay.
+ */
+function anonymizeAuctionBots(matchId: string, bots: readonly AuctionBotSeatProfile[]): AuctionBotSeatProfile[] {
+  const names = guestNameCandidates(`auction-bot:${matchId}`, bots.length + 6);
+  const used = new Set<string>();
+  return bots.map((bot, index) => {
+    const displayName = names.find((name) => !used.has(name)) ?? `${names[index % names.length]} ${index + 1}`;
+    used.add(displayName);
+    return { ...bot, displayName, avatarUrl: null, tier: null, rp: null };
+  });
+}
+
+/**
  * Pick distinct AI bidder profiles for the empty seats — same name pool as
  * ranked bots, so auction opponents look like real people (e.g. "lukaberidze")
  * instead of "Bot 1"/"Bot 2". Avoids names already taken by real users and
@@ -355,7 +543,7 @@ async function resolveHumanAvatars(
         // Ranked identity dresses the showdown card (tier frame + RP). The
         // SERVICE (not repo) path also repairs tier/RP drift, so auction never
         // shows a tier ranked itself would normalize away.
-        if (resolved.tier == null || resolved.rp == null) {
+        if (!player.isGuest && (resolved.tier == null || resolved.rp == null)) {
           const profile = await rankedService.ensureProfile(player.userId);
           resolved = { ...resolved, tier: profile.tier ?? null, rp: profile.rp ?? null };
         }

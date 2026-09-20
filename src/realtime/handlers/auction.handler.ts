@@ -8,11 +8,13 @@ import {
   auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
+  auctionPracticeBotStartSchema,
   auctionUiReadySchema,
 } from '../schemas/auction.schemas.js';
 import { handleAuctionForfeit, handleAuctionRejoin } from '../services/auction-disconnect.service.js';
 import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
+import { cancelPracticeStart } from '../services/practice-start-delay.js';
 import {
   handleAuctionBid,
   handleAuctionFold,
@@ -20,6 +22,14 @@ import {
 } from '../services/auction-turn.service.js';
 import { acknowledgeAuctionUiReady } from '../services/auction-ui-ready.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
+
+/** A guest hitting a member-only entry: forward the typed code so the web opens sign-up instead of "search failed". */
+function emitCapabilityError(socket: QuizballSocket, error: unknown): boolean {
+  if (!(error instanceof AppError) || error.code !== ErrorCode.CAPABILITY_REQUIRED) return false;
+  socket.emit('auction:error', { code: error.code, message: error.message, meta: (error.details ?? {}) as Record<string, unknown> });
+  return true;
+}
 
 export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('auction:start_ai_match', async (payload) => {
@@ -41,7 +51,36 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     try {
       await auctionRealtimeService.handleStartAiMatch(io, socket, parsed.data);
     } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
       logger.error({ error, userId: socket.data.user?.id }, 'auction:start_ai_match handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_content_unavailable',
+        message: 'Failed to start auction match',
+      });
+    }
+  });
+
+  socket.on('auction:practice_bot_start', async (payload) => {
+    if (!config.AUCTION_ENABLED) {
+      socket.emit('auction:error', { code: 'AUCTION_DISABLED', message: 'Auction is temporarily unavailable' });
+      return;
+    }
+    const parsed = auctionPracticeBotStartSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:practice_bot_start payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction start payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await auctionRealtimeService.handleStartPracticeMatch(io, socket, parsed.data);
+    } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:practice_bot_start handler failed');
       socket.emit('auction:error', {
         code: 'auction_content_unavailable',
         message: 'Failed to start auction match',
@@ -167,6 +206,7 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     try {
       await auctionMatchmakingService.handleSearchStart(io, socket, parsed.data);
     } catch (error) {
+      if (emitCapabilityError(socket, error)) return;
       logger.error({ error, userId: socket.data.user?.id }, 'auction:search_start handler failed');
       socket.emit('auction:error', {
         code: 'auction_search_failed',
@@ -222,6 +262,11 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
 
   socket.on('auction:search_cancel', async () => {
     try {
+      // A guest practice table still waiting for its seats is not a queued search.
+      if (socket.data.user?.id && cancelPracticeStart(`auction:${socket.data.user.id}`) === 'cancelled') {
+        socket.emit('auction:search_cancelled', { searchId: null, reason: 'cancelled' });
+        return;
+      }
       await auctionMatchmakingService.handleSearchCancel(io, socket);
     } catch (error) {
       logger.error({ error, userId: socket.data.user?.id }, 'auction:search_cancel handler failed');

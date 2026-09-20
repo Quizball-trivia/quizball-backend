@@ -68,6 +68,7 @@ export function registerCategoriesOpenApi(registry: OpenAPIRegistry): void {
       parent_id: z.string().uuid().optional(),
       is_active: z.string().optional(),
       min_questions: z.coerce.number().int().min(1).optional(),
+      slugs: z.string().max(500).optional(),
       page: z.coerce.number().int().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
@@ -91,12 +92,15 @@ export function registerCategoriesOpenApi(registry: OpenAPIRegistry): void {
   registerEndpoint(registry, {
     method: 'get',
     path: '/api/v1/categories/{id}/dependencies',
+    security: [{ bearerAuth: [] }],
     summary: 'Get category dependencies',
     description: 'Returns child categories, associated questions, and featured status',
     tags: ['Categories'],
     pathParams: categoryIdParamSchema,
     responses: {
       200: { description: 'Category dependencies', schema: categoryDependenciesResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+      403: { description: 'Admin role required', schema: errorResponseSchema },
       404: { description: 'Category not found', schema: errorResponseSchema },
     },
   });

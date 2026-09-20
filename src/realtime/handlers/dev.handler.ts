@@ -19,6 +19,11 @@ export function registerDevHandlers(io: QuizballServer, socket: QuizballSocket):
       return;
     }
     const skipTo = parsed.data.skipTo;
+    // Dev quick match is a ranked entry; guests have no ranked capability anywhere.
+    if (socket.data.user.is_guest === true) {
+      socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'An account is required to play ranked' });
+      return;
+    }
     try {
       await devRealtimeService.handleQuickMatch(io, socket, { skipTo });
     } catch (error) {

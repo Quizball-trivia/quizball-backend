@@ -68,6 +68,7 @@ export interface ObjectiveMatchFact {
   penaltyGoalsAgainst: number;
   isDev: boolean;
   isAi: boolean;
+  isGuest: boolean;
   secondHalfGoals: number;
   correctByCategory: Record<string, { name: string; count: number }>;
   playedWithFriend: boolean;

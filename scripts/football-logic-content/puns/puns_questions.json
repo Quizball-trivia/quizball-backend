@@ -1,0 +1,4791 @@
+[
+ {
+  "family": "picture_pun",
+  "tm_id": "342229",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The French flag and a turtle, referring to his famous nickname 'Donatello' from the Ninja Turtles.",
+   "es": "La bandera francesa y una tortuga, en referencia a su famoso apodo 'Donatello' de las Tortugas Ninja.",
+   "ka": "საფრანგეთის დროშა და კუ, რაც მიანიშნებს მის ცნობილ მეტსახელზე 'დონატელო' ნინძა კუებიდან.",
+   "tr": "Fransız bayrağı ve bir kaplumbağa, Ninja Kaplumbağalar'daki ünlü 'Donatello' lakabına atıfta bulunuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F422.png",
+  "display_answer": {
+   "en": "Kylian Mbappé",
+   "es": "Kylian Mbappé",
+   "ka": "კილიან მბაპე",
+   "tr": "Kylian Mbappé"
+  },
+  "accepted_answers": [
+   "Donatello",
+   "K. Mbappe",
+   "Kilian Mbappe",
+   "Kylian",
+   "Kylian Mbappe",
+   "Kylian Mbappe Lottin",
+   "Kylian Mbappé",
+   "Kylian Mbeppe",
+   "Kyllian Mbappe",
+   "M bappe",
+   "Mbape",
+   "Mbappé Kylian",
+   "კილიან",
+   "კილიან მბაპე",
+   "მბაპე"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "turtle",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "418560",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Norwegian flag combined with a robot, a common nickname for his clinical scoring efficiency.",
+   "es": "La bandera noruega combinada con un robot, un apodo común por su eficiencia goleadora clínica.",
+   "ka": "ნორვეგიის დროშა რობოტთან ერთად, რაც მისი კლინიკური საგოლე ეფექტურობის გამო გავრცელებული მეტსახელია.",
+   "tr": "Norveç bayrağı ve bir robot, klinik golcülük verimliliği nedeniyle sıkça kullanılan lakabı."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F4.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F916.png",
+  "display_answer": {
+   "en": "Erling Haaland",
+   "es": "Erling Haaland",
+   "ka": "ერლინგ ჰოლანდი",
+   "tr": "Erling Haaland"
+  },
+  "accepted_answers": [
+   "Erling",
+   "Erling Braut Haaland",
+   "Erling Haaland",
+   "Haaland",
+   "Haaland Erling",
+   "ერლინგ",
+   "ერლინგ ბრაუტ ჰოლანდი",
+   "ერლინგ ჰოლანდ",
+   "ერლინგ ჰოლანდი",
+   "ჰოლანდ",
+   "ჰოლანდი"
+  ],
+  "facts": {
+   "a": "flag: Norway",
+   "b": "robot",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "28003",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Argentina flag and a goat, representing the 'Greatest of All Time' label widely associated with him.",
+   "es": "La bandera de Argentina y una cabra, que representa la etiqueta 'Greatest of All Time' (GOAT) ampliamente asociada con él.",
+   "ka": "არგენტინის დროშა და თხა, რაც წარმოადგენს მასთან ასოცირებულ 'ყველა დროის საუკეთესოს' (GOAT) სტატუსს.",
+   "tr": "Arjantin bayrağı ve bir keçi, kendisiyle yaygın olarak ilişkilendirilen 'Tüm Zamanların En İyisi' (GOAT) etiketini temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F410.png",
+  "display_answer": {
+   "en": "Lionel Messi",
+   "es": "Lionel Messi",
+   "ka": "ლიონელ მესი",
+   "tr": "Lionel Messi"
+  },
+  "accepted_answers": [
+   "L. Messi",
+   "LM10",
+   "Leo Messi",
+   "Leonel Messi",
+   "Lio Messi",
+   "Lionel Andres Messi",
+   "Lionel Mesi",
+   "Lionel Messi",
+   "Lionell Messi",
+   "Lionnel Messi",
+   "Mesi",
+   "Messi",
+   "Messi Lionel",
+   "Messy",
+   "Mseei",
+   "ლეო მესი",
+   "ლიონელ",
+   "ლიონელ მეს",
+   "ლიონელ მესი",
+   "მეს",
+   "მესი"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "goat",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3111",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The French flag and a bald man, representing his iconic look and the famous headbutt incident.",
+   "es": "La bandera francesa y un hombre calvo, que representa su aspecto icónico y el famoso incidente del cabezazo.",
+   "ka": "საფრანგეთის დროშა და მელოტი მამაკაცი, რაც მის იკონურ გარეგნობასა და თავით დარტყმის ცნობილ ინციდენტს გამოხატავს.",
+   "tr": "Fransız bayrağı ve kel bir adam, ikonik görünümünü ve ünlü kafa atma olayını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F468-200D-1F9B2.png",
+  "display_answer": {
+   "en": "Zinedine Zidane",
+   "es": "Zinedine Zidane",
+   "ka": "ზინედინ ზიდანი",
+   "tr": "Zinedine Zidane"
+  },
+  "accepted_answers": [
+   "Z. Zidane",
+   "Zidan",
+   "Zidane",
+   "Zidane Zinedine",
+   "Zinedin Zidan",
+   "Zinedine Zidan",
+   "Zinedine Zidance",
+   "Zinedine Zidane",
+   "Zizou",
+   "ზიდან",
+   "ზიდანი",
+   "ზინედინ",
+   "ზინედინ ზიდან",
+   "ზინედინ ზიდანი"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "man: bald",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "132098",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The England flag and a candy cane, creating a visual pun on his surname 'Kane'.",
+   "es": "La bandera de Inglaterra y un bastón de caramelo, creando un juego de palabras visual con su apellido 'Kane'.",
+   "ka": "ინგლისის დროშა და ტკბილეულის ჯოხი, რაც ქმნის ვიზუალურ სიტყვების თამაშს მის გვარზე 'Kane'.",
+   "tr": "İngiltere bayrağı ve bir şekerleme bastonu, soyadı 'Kane' üzerine görsel bir kelime oyunu oluşturuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F36C.png",
+  "display_answer": {
+   "en": "Harry Kane",
+   "es": "Harry Kane",
+   "ka": "ჰარი კეინი",
+   "tr": "Harry Kane"
+  },
+  "accepted_answers": [
+   "Garry Kane",
+   "Gary Kane",
+   "H. Kane",
+   "Harold Kane",
+   "Harry Kane",
+   "Hary Kane",
+   "Henry Kane",
+   "Herry Kane",
+   "Kane",
+   "Kane Harry",
+   "კეინ",
+   "კეინი",
+   "ჰარ",
+   "ჰარი",
+   "ჰარი კეინ",
+   "ჰარი კეინი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "candy",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "568177",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The England flag and the cold face, referring to his 'Cold Palmer' nickname and celebration.",
+   "es": "La bandera de Inglaterra y la cara de frío, en referencia a su apodo 'Cold Palmer' y su celebración.",
+   "ka": "ინგლისის დროშა და გაყინული სახე, რაც მიანიშნებს მის მეტსახელზე 'Cold Palmer' და აღნიშვნაზე.",
+   "tr": "İngiltere bayrağı ve soğuk yüz ifadesi, 'Cold Palmer' lakabına ve gol sevincine atıfta bulunuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F976.png",
+  "display_answer": {
+   "en": "Cole Palmer",
+   "es": "Cole Palmer",
+   "ka": "კოულ პალმერი",
+   "tr": "Cole Palmer"
+  },
+  "accepted_answers": [
+   "Cole Palmer",
+   "Palmer",
+   "Palmer Cole",
+   "კოულ პალმერ",
+   "კოულ პალმერი",
+   "პალმერ",
+   "პალმერი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "cold face",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3373",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Brazil flag and a huge beaming grin, his most recognizable physical trait on the pitch.",
+   "es": "La bandera de Brasil y una enorme sonrisa radiante, su rasgo físico más reconocible en el campo.",
+   "ka": "ბრაზილიის დროშა და დიდი მანათობელი ღიმილი, მისი ყველაზე ცნობადი ფიზიკური მახასიათებელი მოედანზე.",
+   "tr": "Brezilya bayrağı ve kocaman bir gülümseme, sahadaki en belirgin fiziksel özelliği."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F601.png",
+  "display_answer": {
+   "en": "Ronaldinho",
+   "es": "Ronaldinho",
+   "ka": "რონალდინიო",
+   "tr": "Ronaldinho"
+  },
+  "accepted_answers": [
+   "R10",
+   "Ronaldinho",
+   "Ronaldinho Gaúcho",
+   "Ronaldino",
+   "Ronaldo de Assis Moreira",
+   "რონალდინიო",
+   "რონალდინიო გაუჩო",
+   "რონალდო დე ასის მორეირა"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "beaming face with smiling eyes",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "148455",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Egypt flag and a crown, representing his nickname 'The Egyptian King'.",
+   "es": "La bandera de Egipto y una corona, que representa su apodo 'The Egyptian King'.",
+   "ka": "ეგვიპტის დროშა და გვირგვინი, რაც მის მეტსახელს 'ეგვიპტელი მეფე' წარმოადგენს.",
+   "tr": "Mısır bayrağı ve bir taç, 'Mısırlı Kral' lakabını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1EC.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F451.png",
+  "display_answer": {
+   "en": "Mohamed Salah",
+   "es": "Mohamed Salah",
+   "ka": "მოჰამედ სალაჰი",
+   "tr": "Mohamed Salah"
+  },
+  "accepted_answers": [
+   "Mo Salah",
+   "Mohamed Salah",
+   "Salah",
+   "Salah Mohamed",
+   "მო სალაჰი",
+   "მოჰამედ სალაჰ",
+   "მოჰამედ სალაჰი",
+   "სალაჰ",
+   "სალაჰი"
+  ],
+  "facts": {
+   "a": "flag: Egypt",
+   "b": "crown",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3140",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Brazil flag and a bald person, pointing to 'R9' who was famous for his shaved head.",
+   "es": "La bandera de Brasil y una persona calva, señalando a 'R9', famoso por su cabeza rapada.",
+   "ka": "ბრაზილიის დროშა და მელოტი ადამიანი, რაც მიანიშნებს 'R9'-ზე, რომელიც ცნობილი იყო გადაპარსული თავით.",
+   "tr": "Brezilya bayrağı ve kel bir kişi, kazınmış kafasıyla ünlü 'R9'a işaret ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9D1-200D-1F9B2.png",
+  "display_answer": {
+   "en": "Ronaldo Nazario",
+   "es": "Ronaldo Nazario",
+   "ka": "რონალდო",
+   "tr": "Ronaldo Nazario"
+  },
+  "accepted_answers": [
+   "Nazario",
+   "Nazario Ronaldo",
+   "Ronaldo Nazario",
+   "რონალდო"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "person: bald",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "4153",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Italy flag and a horse, referring to his famous nickname 'Il Divin Codino' (The Divine Ponytail).",
+   "es": "La bandera de Italia y un caballo, en referencia a su famoso apodo 'Il Divin Codino' (La Divina Coleta).",
+   "ka": "იტალიის დროშა და ცხენი, რაც მიანიშნებს მის ცნობილ მეტსახელზე 'Il Divin Codino' (ღვთაებრივი კუდი).",
+   "tr": "İtalya bayrağı ve bir at, ünlü 'Il Divin Codino' (İlahi Atkuyruğu) lakabına atıfta bulunuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EE-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F40E.png",
+  "display_answer": {
+   "en": "Roberto Baggio",
+   "es": "Roberto Baggio",
+   "ka": "რობერტო ბაჯო",
+   "tr": "Roberto Baggio"
+  },
+  "accepted_answers": [
+   "Badjo",
+   "Baggio",
+   "Baggio Roberto",
+   "Bahjio",
+   "Il Divin Codino",
+   "R. Baggio",
+   "Roberto Baggio",
+   "Roberto Bagio",
+   "Roby Baggio",
+   "ბაჯო",
+   "რობერტო ბაჯო"
+  ],
+  "facts": {
+   "a": "flag: Italy",
+   "b": "horse",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "369081",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Uruguay and a bird of prey for his famous nickname 'El Halcon' (The Falcon).",
+   "es": "La bandera de Uruguay y un ave de presa por su famoso apodo 'El Halcón'.",
+   "ka": "ურუგვაის დროშა და მტაცებელი ფრინველი მისი ცნობილი მეტსახელის 'El Halcon' (შავარდენი) გამო.",
+   "tr": "Uruguay bayrağı ve ünlü 'El Halcon' (Şahin) lakabı için bir yırtıcı kuş."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1FA-1F1FE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F985.png",
+  "display_answer": {
+   "en": "Federico Valverde",
+   "es": "Federico Valverde",
+   "ka": "ფედერიკო ვალვერდე",
+   "tr": "Federico Valverde"
+  },
+  "accepted_answers": [
+   "Federico Valverde",
+   "Valverde",
+   "Valverde Federico",
+   "ვალვერდე",
+   "ფედერიკო ვალვერდე"
+  ],
+  "facts": {
+   "a": "flag: Uruguay",
+   "b": "eagle",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "8198",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Portugal and a microphone for his famous 'Siuuu' celebration shout.",
+   "es": "La bandera de Portugal y un micrófono por su famoso grito de celebración 'Siuuu'.",
+   "ka": "პორტუგალიის დროშა და მიკროფონი მისი ცნობილი 'Siuuu' აღნიშვნის შეძახილისთვის.",
+   "tr": "Portekiz bayrağı ve ünlü 'Siuuu' kutlama haykırışı için bir mikrofon."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F5-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3A4.png",
+  "display_answer": {
+   "en": "Cristiano Ronaldo",
+   "es": "Cristiano Ronaldo",
+   "ka": "კრიშტიანუ რონალდუ",
+   "tr": "Cristiano Ronaldo"
+  },
+  "accepted_answers": [
+   "Cristiano Ronaldo",
+   "Ronaldo Cristiano",
+   "კრიშტიანუ რონალდუ"
+  ],
+  "facts": {
+   "a": "flag: Portugal",
+   "b": "microphone",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "357662",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of England and a bowl of rice representing his surname.",
+   "es": "La bandera de Inglaterra y un cuenco de arroz que representa su apellido.",
+   "ka": "ინგლისის დროშა და ბრინჯის თასი, რომელიც მის გვარს წარმოადგენს.",
+   "tr": "İngiltere bayrağı ve soyadını temsil eden bir kase pirinç."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1E6.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F35A.png",
+  "display_answer": {
+   "en": "Declan Rice",
+   "es": "Declan Rice",
+   "ka": "დეკლან რაისი",
+   "tr": "Declan Rice"
+  },
+  "accepted_answers": [
+   "Declan",
+   "Declan Rice",
+   "Rice",
+   "Rice Declan",
+   "დეკლან",
+   "დეკლან რაის",
+   "დეკლან რაისი",
+   "რაის",
+   "რაისი"
+  ],
+  "facts": {
+   "a": "flag: Bosnia & Herzegovina",
+   "b": "cooked rice",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "576024",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Argentina and a spider for his nickname 'La Araña'.",
+   "es": "La bandera de Argentina y una araña por su apodo 'La Araña'.",
+   "ka": "არგენტინის დროშა და ობობა მისი მეტსახელის 'La Araña' გამო.",
+   "tr": "Arjantin bayrağı ve 'La Araña' lakabı için bir örümcek."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F577.png",
+  "display_answer": {
+   "en": "Julián Alvarez",
+   "es": "Julián Alvarez",
+   "ka": "ხულიან ალვარესი",
+   "tr": "Julián Alvarez"
+  },
+  "accepted_answers": [
+   "Alvarez Julián",
+   "J. Alvarez",
+   "Julian Alvares",
+   "Julian Alvarez",
+   "Julián Alvarez",
+   "La Araña",
+   "ხულიან",
+   "ხულიან ალვარეს",
+   "ხულიან ალვარესი"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "spider",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "206",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and a lion for his nickname 'Der Titan' and his fierce, lion-like appearance.",
+   "es": "La bandera de Alemania y un león por su apodo 'Der Titan' y su apariencia feroz, similar a la de un león.",
+   "ka": "გერმანიის დროშა და ლომი მისი მეტსახელის 'Der Titan' და მისი მრისხანე, ლომისებრი გარეგნობის გამო.",
+   "tr": "Almanya bayrağı ve 'Der Titan' lakabı ile aslanımsı sert görünümü için bir aslan."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F981.png",
+  "display_answer": {
+   "en": "Oliver Kahn",
+   "es": "Oliver Kahn",
+   "ka": "ოლივერ კანი",
+   "tr": "Oliver Kahn"
+  },
+  "accepted_answers": [
+   "Der Titan",
+   "Kahn",
+   "Kahn Oliver",
+   "Kan",
+   "O. Kahn",
+   "Oli Kahn",
+   "Oliver Cahn",
+   "Oliver Kahn",
+   "Oliver Kan",
+   "Olver Kahn",
+   "ოლივერ კანი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "lion",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "316264",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Norway and a musical score for his surname which sounds like 'Ode'.",
+   "es": "La bandera de Noruega y una partitura musical por su apellido que suena como 'Ode'.",
+   "ka": "ნორვეგიის დროშა და მუსიკალური ნოტები მისი გვარის გამო, რომელიც ჟღერს როგორც 'Ode'.",
+   "tr": "Norveç bayrağı ve 'Ode' gibi tınlayan soyadı için bir nota kağıdı."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F4.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3BC.png",
+  "display_answer": {
+   "en": "Martin Ødegaard",
+   "es": "Martin Ødegaard",
+   "ka": "მარტინ ედეგორი",
+   "tr": "Martin Ødegaard"
+  },
+  "accepted_answers": [
+   "Martin Odegaard",
+   "Martin Ødegaard",
+   "Odegaard",
+   "Ødegaard",
+   "Ødegaard Martin",
+   "ედეგორ",
+   "ედეგორი",
+   "მარტინ",
+   "მარტინ ედეგორ",
+   "მარტინ ედეგორი",
+   "მარტინ ოდეგორი"
+  ],
+  "facts": {
+   "a": "flag: Norway",
+   "b": "musical score",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "12000",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of France and a necktie representing his iconic upturned collar style.",
+   "es": "La bandera de Francia y una corbata que representa su icónico estilo de cuello levantado.",
+   "ka": "საფრანგეთის დროშა და ჰალსტუხი, რომელიც მის იკონურ აწეული საყელოს სტილს წარმოადგენს.",
+   "tr": "Fransa bayrağı ve ikonik kalkık yaka stilini temsil eden bir kravat."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F454.png",
+  "display_answer": {
+   "en": "Eric Cantona",
+   "es": "Eric Cantona",
+   "ka": "ერიკ კანტონა",
+   "tr": "Eric Cantona"
+  },
+  "accepted_answers": [
+   "Cantona",
+   "Cantona Eric",
+   "Eric Cantona",
+   "King Eric",
+   "ერიკ კანტონა",
+   "კანტონა"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "necktie",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "406625",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Argentina and an ox for his nickname 'El Toro'.",
+   "es": "La bandera de Argentina y un buey por su apodo 'El Toro'.",
+   "ka": "არგენტინის დროშა და ხარი მისი მეტსახელის 'El Toro' გამო.",
+   "tr": "Arjantin bayrağı ve 'El Toro' lakabı için bir öküz."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F402.png",
+  "display_answer": {
+   "en": "Lautaro Martínez",
+   "es": "Lautaro Martínez",
+   "ka": "ლაუტარო მარტინესი",
+   "tr": "Lautaro Martínez"
+  },
+  "accepted_answers": [
+   "El Toro",
+   "L. Martinez",
+   "Lautaro",
+   "Lautaro Martines",
+   "Lautaro Martinez",
+   "Lautaro Martínez",
+   "Martínez Lautaro",
+   "Toro Martinez",
+   "ლაუტარო",
+   "ლაუტარო მარტინეს",
+   "ლაუტარო მარტინესი"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "ox",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3110",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of the United Kingdom and scissors representing his surname 'Shearer'.",
+   "es": "La bandera del Reino Unido y unas tijeras que representan su apellido 'Shearer'.",
+   "ka": "გაერთიანებული სამეფოს დროშა და მაკრატელი, რომელიც მის გვარს 'Shearer' წარმოადგენს.",
+   "tr": "Birleşik Krallık bayrağı ve 'Shearer' soyadını temsil eden makas."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EC-1F1E7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2702.png",
+  "display_answer": {
+   "en": "Alan Shearer",
+   "es": "Alan Shearer",
+   "ka": "ალან შირერი",
+   "tr": "Alan Shearer"
+  },
+  "accepted_answers": [
+   "Alan Shearer",
+   "Alan Sheerer",
+   "Alan Sherer",
+   "Allen Shearer",
+   "Shearer Alan",
+   "ალან შირერი"
+  ],
+  "facts": {
+   "a": "flag: United Kingdom",
+   "b": "scissors",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3207",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of France and a crown for his nickname 'King Henry'.",
+   "es": "La bandera de Francia y una corona por su apodo 'King Henry'.",
+   "ka": "საფრანგეთის დროშა და გვირგვინი მისი მეტსახელის 'King Henry' გამო.",
+   "tr": "Fransa bayrağı ve 'King Henry' lakabı için bir taç."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F451.png",
+  "display_answer": {
+   "en": "Thierry Henry",
+   "es": "Thierry Henry",
+   "ka": "ტიერი ანრი",
+   "tr": "Thierry Henry"
+  },
+  "accepted_answers": [
+   "Henry Thierry",
+   "T. Henry",
+   "Theierry Henry",
+   "Thery Henry",
+   "Thierry Henri",
+   "Thierry Henry",
+   "Thiery Henry",
+   "Titi Henry",
+   "ანრ",
+   "ანრი",
+   "ტიერ",
+   "ტიერი",
+   "ტიერი ანრ",
+   "ტიერი ანრი"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "crown",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3396",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Ireland and a candy cane for the surname Keane.",
+   "es": "La bandera de Irlanda y un bastón de caramelo por el apellido Keane.",
+   "ka": "ირლანდიის დროშა და ტკბილეულის ჯოხი გვარისთვის Keane.",
+   "tr": "İrlanda bayrağı ve Keane soyadı için bir şekerleme bastonu."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EE-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F36C.png",
+  "display_answer": {
+   "en": "Roy Keane",
+   "es": "Roy Keane",
+   "ka": "როი კინი",
+   "tr": "Roy Keane"
+  },
+  "accepted_answers": [
+   "Keane Roy",
+   "R. Keane",
+   "Roy",
+   "Roy Keane",
+   "კინ",
+   "როი",
+   "როი კინ",
+   "როი კინი"
+  ],
+  "facts": {
+   "a": "flag: Ireland",
+   "b": "candy",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "39381",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Wales and a bagel/bale visual pun for Gareth Bale.",
+   "es": "La bandera de Gales y un juego visual de bagel/bale para Gareth Bale.",
+   "ka": "უელსის დროშა და ბეიგელი/bale ვიზუალური თამაში Gareth Bale-სთვის.",
+   "tr": "Galler bayrağı ve Gareth Bale için simit/bale görsel kelime oyunu."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0077-E006C-E0073-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F96F.png",
+  "display_answer": {
+   "en": "Gareth Bale",
+   "es": "Gareth Bale",
+   "ka": "გარეთ ბეილი",
+   "tr": "Gareth Bale"
+  },
+  "accepted_answers": [
+   "Bale",
+   "Bale Gareth",
+   "G. Bale",
+   "Gareth Bale",
+   "Gareth Frank Bale",
+   "გარეთ",
+   "გარეთ ბეილ",
+   "გარეთ ბეილი"
+  ],
+  "facts": {
+   "a": "flag: Wales",
+   "b": "bagel",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "44352",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Uruguay and a tooth, referring to his infamous biting incidents.",
+   "es": "La bandera de Uruguay y un diente, en referencia a sus infames incidentes de mordiscos.",
+   "ka": "ურუგვაის დროშა და კბილი, რაც მიანიშნებს მის სამარცხვინო კბენის ინციდენტებზე.",
+   "tr": "Uruguay bayrağı ve kötü şöhretli ısırma olaylarına atıfta bulunan bir diş."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1FA-1F1FE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9B7.png",
+  "display_answer": {
+   "en": "Luis Suárez",
+   "es": "Luis Suárez",
+   "ka": "ლუის სუარესი",
+   "tr": "Luis Suárez"
+  },
+  "accepted_answers": [
+   "Luis Suárez",
+   "ლუის სუარესი"
+  ],
+  "facts": {
+   "a": "flag: Uruguay",
+   "b": "tooth",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "91845",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of South Korea and a camera, representing his famous 'shutter' celebration.",
+   "es": "La bandera de Corea del Sur y una cámara, que representa su famosa celebración de 'obturador'.",
+   "ka": "სამხრეთ კორეის დროშა და კამერა, რაც მის ცნობილ 'ობიექტივის' აღნიშვნას წარმოადგენს.",
+   "tr": "Güney Kore bayrağı ve ünlü 'deklanşör' kutlamasını temsil eden bir kamera."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F0-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4F7.png",
+  "display_answer": {
+   "en": "Heung-min Son",
+   "es": "Heung-min Son",
+   "ka": "სონ ჰინ მინი",
+   "tr": "Heung-min Son"
+  },
+  "accepted_answers": [
+   "Heung-min Son",
+   "სონ ჰინ მინი"
+  ],
+  "facts": {
+   "a": "flag: South Korea",
+   "b": "camera",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "357164",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Portugal and a lion (Leão means lion in Portuguese).",
+   "es": "La bandera de Portugal y un león (Leão significa león en portugués).",
+   "ka": "პორტუგალიის დროშა და ლომი (Leão პორტუგალიურად ლომს ნიშნავს).",
+   "tr": "Portekiz bayrağı ve bir aslan (Portekizce'de Leão aslan demektir)."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F5-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F981.png",
+  "display_answer": {
+   "en": "Rafael Leão",
+   "es": "Rafael Leão",
+   "ka": "რაფაელ ლეაუ",
+   "tr": "Rafael Leão"
+  },
+  "accepted_answers": [
+   "Leao",
+   "Leão",
+   "Leão Rafael",
+   "R. Leao",
+   "Rafael Leao",
+   "Rafael Leão",
+   "რაფაელ ლეაო",
+   "რაფაელ ლეაუ"
+  ],
+  "facts": {
+   "a": "flag: Portugal",
+   "b": "lion",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "122153",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of France and the fencing emoji representing his 'Dab' celebration pose.",
+   "es": "La bandera de Francia y el emoji de esgrima que representa su pose de celebración 'Dab'.",
+   "ka": "საფრანგეთის დროშა და ფარიკაობის ემოჯი, რომელიც მის 'Dab' აღნიშვნის პოზას წარმოადგენს.",
+   "tr": "Fransa bayrağı ve 'Dab' kutlama pozunu temsil eden eskrim emojisi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F93A.png",
+  "display_answer": {
+   "en": "Paul Pogba",
+   "es": "Paul Pogba",
+   "ka": "პოლ პოგბა",
+   "tr": "Paul Pogba"
+  },
+  "accepted_answers": [
+   "P. Pogba",
+   "Paul Pogba",
+   "Paul Pogbah",
+   "Pogba",
+   "Pogba Paul",
+   "Pogboom",
+   "Poggba",
+   "პოლ პოგბა"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "person fencing",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "159471",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and the cooking emoji for his 'stir the pot' celebration.",
+   "es": "La bandera de Alemania y el emoji de cocina por su celebración de 'remover la olla'.",
+   "ka": "გერმანიის დროშა და კულინარიის ემოჯი მისი 'ქვაბის მორევის' აღნიშვნისთვის.",
+   "tr": "Almanya bayrağı ve 'kazanı karıştırma' kutlaması için yemek pişirme emojisi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F373.png",
+  "display_answer": {
+   "en": "Serge Gnabry",
+   "es": "Serge Gnabry",
+   "ka": "სერჟ გნაბრი",
+   "tr": "Serge Gnabry"
+  },
+  "accepted_answers": [
+   "Gnabry",
+   "Gnabry Serge",
+   "Serge Gnabry",
+   "გნაბრ",
+   "გნაბრი",
+   "სერჟ",
+   "სერჟ გნაბრ",
+   "სერჟ გნაბრი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "cooking",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "38253",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Poland and a cut of meat for 'Lewan-goalski' the prolific scorer.",
+   "es": "La bandera de Polonia y un corte de carne para 'Lewan-goalski', el prolífico goleador.",
+   "ka": "პოლონეთის დროშა და ხორცის ნაჭერი 'Lewan-goalski'-სთვის, ნაყოფიერი ბომბარდირისთვის.",
+   "tr": "Polonya bayrağı ve üretken golcü 'Lewan-goalski' için bir parça et."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F5-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F969.png",
+  "display_answer": {
+   "en": "Robert Lewandowski",
+   "es": "Robert Lewandowski",
+   "ka": "რობერტ ლევანდოვსკი",
+   "tr": "Robert Lewandowski"
+  },
+  "accepted_answers": [
+   "Levandowski",
+   "Lewan",
+   "Lewandovski",
+   "Lewandowski Robert",
+   "Lewandowskki",
+   "Lewanigoal",
+   "R. Lewandowski",
+   "Robert Levandowski",
+   "Robert Lewandowski",
+   "რობერტ ლევანდოვსკი"
+  ],
+  "facts": {
+   "a": "flag: Poland",
+   "b": "cut of meat",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "363205",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Brazil flag and his signature 'call me' goal celebration.",
+   "es": "La bandera de Brasil y su característica celebración de gol 'llámame'.",
+   "ka": "ბრაზილიის დროშა და მისი საფირმო 'დამირეკე' გოლის აღნიშვნა.",
+   "tr": "Brezilya bayrağı ve imzası haline gelen 'beni ara' gol sevinci."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F919.png",
+  "display_answer": {
+   "en": "Gabriel Jesus",
+   "es": "Gabriel Jesus",
+   "ka": "გაბრიელ ჟესუსი",
+   "tr": "Gabriel Jesus"
+  },
+  "accepted_answers": [
+   "Gabriel Fernando de Jesus",
+   "Gabriel Jesus",
+   "Jesus Gabriel",
+   "გაბრიელ ჟეზუსი",
+   "გაბრიელ ჟესუს",
+   "გაბრიელ ჟესუსი",
+   "ჟესუს",
+   "ჟესუსი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "call me hand",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "5758",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Netherlands flag and the iconic protective glasses he wore throughout his career.",
+   "es": "La bandera de los Países Bajos y las icónicas gafas protectoras que usó durante toda su carrera.",
+   "ka": "ნიდერლანდების დროშა და იკონური დამცავი სათვალეები, რომლებსაც ის მთელი კარიერის განმავლობაში ატარებდა.",
+   "tr": "Hollanda bayrağı ve kariyeri boyunca taktığı ikonik koruyucu gözlükler."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F453.png",
+  "display_answer": {
+   "en": "Edgar Davids",
+   "es": "Edgar Davids",
+   "ka": "ედგარ დავიდსი",
+   "tr": "Edgar Davids"
+  },
+  "accepted_answers": [
+   "Davids",
+   "Davids Edgar",
+   "Edgar Davids",
+   "Edgar Davis",
+   "Edger Davids",
+   "დავიდს",
+   "დავიდსი",
+   "ედგარ",
+   "ედგარ დავიდს",
+   "ედგარ დავიდსი"
+  ],
+  "facts": {
+   "a": "flag: Netherlands",
+   "b": "glasses",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "258923",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "England flag and his famous celebration pointing to his temple.",
+   "es": "La bandera de Inglaterra y su famosa celebración señalando su sien.",
+   "ka": "ინგლისის დროშა და მისი ცნობილი აღნიშვნა საფეთქელზე თითის მიდებით.",
+   "tr": "İngiltere bayrağı ve şakağını işaret ettiği ünlü gol sevinci."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F449.png",
+  "display_answer": {
+   "en": "Marcus Rashford",
+   "es": "Marcus Rashford",
+   "ka": "მარკუს რაშფორდი",
+   "tr": "Marcus Rashford"
+  },
+  "accepted_answers": [
+   "M. Rashford",
+   "Marcus Rashford",
+   "Marcus Rashfurd",
+   "Rashferd",
+   "Rashford",
+   "Rashford Marcus",
+   "მარკუს რაშფორდი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "backhand index pointing right",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "475959",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Croatia flag and the protective face mask he wore during the 2022 World Cup.",
+   "es": "La bandera de Croacia y la máscara protectora que usó durante la Copa del Mundo 2022.",
+   "ka": "ხორვატიის დროშა და დამცავი ნიღაბი, რომელიც მას 2022 წლის მსოფლიო ჩემპიონატზე ეკეთა.",
+   "tr": "Hırvatistan bayrağı ve 2022 Dünya Kupası sırasında taktığı koruyucu yüz maskesi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1ED-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F978.png",
+  "display_answer": {
+   "en": "Josko Gvardiol",
+   "es": "Josko Gvardiol",
+   "ka": "იოშკო გვარდიოლი",
+   "tr": "Josko Gvardiol"
+  },
+  "accepted_answers": [
+   "Guardiol",
+   "Gvardiol",
+   "Gvardiol Josko",
+   "J. Gvardiol",
+   "Josko",
+   "Josko Guardiol",
+   "Josko Gvardiol",
+   "Joško Gvardiol",
+   "იოშკო გვარდიოლი"
+  ],
+  "facts": {
+   "a": "flag: Croatia",
+   "b": "disguised face",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "344381",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "France flag and his unique celebration of inflating a red balloon.",
+   "es": "La bandera de Francia y su celebración única de inflar un globo rojo.",
+   "ka": "საფრანგეთის დროშა და მისი უნიკალური აღნიშვნა წითელი ბუშტის გაბერვით.",
+   "tr": "Fransa bayrağı ve kırmızı bir balon şişirdiği benzersiz kutlaması."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F388.png",
+  "display_answer": {
+   "en": "Christopher Nkunku",
+   "es": "Christopher Nkunku",
+   "ka": "კრისტოფერ ნკუნკუ",
+   "tr": "Christopher Nkunku"
+  },
+  "accepted_answers": [
+   "Christopher Nkunku",
+   "Nkunku Christopher",
+   "კრისტოფერ ნკუნკუ"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "balloon",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3133",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Nigeria flag and his iconic two-fingered victory salute.",
+   "es": "La bandera de Nigeria y su icónico saludo de victoria con dos dedos.",
+   "ka": "ნიგერიის დროშა და მისი იკონური ორი თითით გამარჯვების სალამი.",
+   "tr": "Nijerya bayrağı ve ikonik iki parmaklı zafer selamı."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1EC.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/270C.png",
+  "display_answer": {
+   "en": "Nwankwo Kanu",
+   "es": "Nwankwo Kanu",
+   "ka": "ნვანკვო კანუ",
+   "tr": "Nwankwo Kanu"
+  },
+  "accepted_answers": [
+   "Kanu",
+   "Kanu Nwankwo",
+   "Nwankwo",
+   "Nwankwo Kanu",
+   "ნვანკვო კანუ"
+  ],
+  "facts": {
+   "a": "flag: Nigeria",
+   "b": "victory hand",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3830",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "United Kingdom flag and the famous image of him crying at the 1990 World Cup.",
+   "es": "La bandera del Reino Unido y la famosa imagen de él llorando en la Copa del Mundo de 1990.",
+   "ka": "გაერთიანებული სამეფოს დროშა და მისი ცნობილი კადრი, სადაც ის 1990 წლის მსოფლიო ჩემპიონატზე ტირის.",
+   "tr": "Birleşik Krallık bayrağı ve 1990 Dünya Kupası'nda ağladığı ünlü görüntü."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EC-1F1E7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F62D.png",
+  "display_answer": {
+   "en": "Paul Gascoigne",
+   "es": "Paul Gascoigne",
+   "ka": "პოლ გასკოინი",
+   "tr": "Paul Gascoigne"
+  },
+  "accepted_answers": [
+   "Gascoigne",
+   "Gascoigne Paul",
+   "Gazza",
+   "P. Gascoigne",
+   "Paul Gascogne",
+   "Paul Gascoigne",
+   "პოლ გასკოინი"
+  ],
+  "facts": {
+   "a": "flag: United Kingdom",
+   "b": "loudly crying face",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "31909",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Germany and a pen for the player known for his surgical precision and passing, nicknamed 'The Sniper'.",
+   "es": "La bandera de Alemania y una pluma para el jugador conocido por su precisión quirúrgica y pases, apodado 'El Francotirador'.",
+   "ka": "გერმანიის დროშა და კალამი მოთამაშისთვის, რომელიც ცნობილია თავისი ქირურგიული სიზუსტით და პასებით, მეტსახელად 'სნაიპერი'.",
+   "tr": "Almanya bayrağı ve cerrahi hassasiyeti ve paslarıyla tanınan, 'Keskin Nişancı' lakaplı oyuncu için bir kalem."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2712.png",
+  "display_answer": {
+   "en": "Toni Kroos",
+   "es": "Toni Kroos",
+   "ka": "ტონი კროოსი",
+   "tr": "Toni Kroos"
+  },
+  "accepted_answers": [
+   "Kroos",
+   "Kroos Toni",
+   "Kros",
+   "T. Kroos",
+   "Toni Kroos",
+   "Toni Kros",
+   "Tony Kroos",
+   "კროოს",
+   "კროოსი",
+   "ტონ",
+   "ტონი",
+   "ტონი კროოს",
+   "ტონი კროოსი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "black nib",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "26399",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Argentina and a video game controller for 'Kun' Agüero, famous for his gaming and Twitch streaming.",
+   "es": "La bandera de Argentina y un mando de videojuegos para 'Kun' Agüero, famoso por sus juegos y transmisiones en Twitch.",
+   "ka": "არგენტინის დროშა და ვიდეო თამაშების კონტროლერი 'Kun' Agüero-სთვის, რომელიც ცნობილია გეიმინგითა და Twitch სტრიმინგით.",
+   "tr": "Arjantin bayrağı ve oyunculuğu ile Twitch yayınlarıyla ünlü 'Kun' Agüero için bir oyun kumandası."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3AE.png",
+  "display_answer": {
+   "en": "Sergio Agüero",
+   "es": "Sergio Agüero",
+   "ka": "სერხიო აგუერო",
+   "tr": "Sergio Agüero"
+  },
+  "accepted_answers": [
+   "Sergio Agüero",
+   "სერხიო აგუერო"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "video game",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "58864",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Gabon and a superhero for Aubameyang, known for his Spider-Man and Black Panther mask celebrations.",
+   "es": "La bandera de Gabón y un superhéroe para Aubameyang, conocido por sus celebraciones con máscaras de Spider-Man y Black Panther.",
+   "ka": "გაბონის დროშა და სუპერგმირი Aubameyang-სთვის, რომელიც ცნობილია Spider-Man-ის და Black Panther-ის ნიღბებით აღნიშვნებით.",
+   "tr": "Gabon bayrağı ve Örümcek Adam ile Kara Panter maskeli kutlamalarıyla tanınan Aubameyang için bir süper kahraman."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EC-1F1E6.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9B8.png",
+  "display_answer": {
+   "en": "Pierre-Emerick Aubameyang",
+   "es": "Pierre-Emerick Aubameyang",
+   "ka": "პიერ-ემერიკ ობამეიანგი",
+   "tr": "Pierre-Emerick Aubameyang"
+  },
+  "accepted_answers": [
+   "Aubameyang",
+   "Aubameyang Pierre-Emerick",
+   "Pierre-Emerick",
+   "Pierre-Emerick Aubameyang",
+   "ობამეიანგ",
+   "ობამეიანგი",
+   "პიერ-ემერიკ",
+   "პიერ-ემერიკ ობამეიანგ",
+   "პიერ-ემერიკ ობამეიანგი"
+  ],
+  "facts": {
+   "a": "flag: Gabon",
+   "b": "superhero",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "108390",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Belgium and a giraffe, a common nickname for the exceptionally tall goalkeeper.",
+   "es": "La bandera de Bélgica y una jirafa, un apodo común para el portero excepcionalmente alto.",
+   "ka": "ბელგიის დროშა და ჟირაფი, გავრცელებული მეტსახელი განსაკუთრებულად მაღალი მეკარისთვის.",
+   "tr": "Belçika bayrağı ve olağanüstü uzun boylu kaleci için yaygın bir lakap olan zürafa."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F992.png",
+  "display_answer": {
+   "en": "Thibaut Courtois",
+   "es": "Thibaut Courtois",
+   "ka": "ტიბო კურტუა",
+   "tr": "Thibaut Courtois"
+  },
+  "accepted_answers": [
+   "Cortois",
+   "Courtois",
+   "Courtois Thibaut",
+   "Curtois",
+   "T. Courtois",
+   "Thibaut",
+   "Thibaut Cortois",
+   "Thibaut Courtois",
+   "Thibaut Curtois",
+   "Tibo Courtois",
+   "კურტუა",
+   "ტიბო",
+   "ტიბო კურტუა"
+  ],
+  "facts": {
+   "a": "flag: Belgium",
+   "b": "giraffe",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "325443",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Sweden and the Hannibal Lecter style mask celebration he performs after scoring.",
+   "es": "La bandera de Suecia y la celebración con máscara al estilo Hannibal Lecter que realiza después de marcar.",
+   "ka": "შვედეთის დროშა და Hannibal Lecter-ის სტილის ნიღბის აღნიშვნა, რომელსაც ის გოლის გატანის შემდეგ აკეთებს.",
+   "tr": "İsveç bayrağı ve gol attıktan sonra yaptığı Hannibal Lecter tarzı maske kutlaması."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F8-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F635.png",
+  "display_answer": {
+   "en": "Viktor Gyökeres",
+   "es": "Viktor Gyökeres",
+   "ka": "ვიქტორ დიოკერეში",
+   "tr": "Viktor Gyökeres"
+  },
+  "accepted_answers": [
+   "Gyokeres",
+   "Gyökeres",
+   "Gyökeres Viktor",
+   "Viktor Gyökeres",
+   "დიოკერეშ",
+   "დიოკერეში",
+   "ვიქტორ დიოკერეშ",
+   "ვიქტორ დიოკერეში"
+  ],
+  "facts": {
+   "a": "flag: Sweden",
+   "b": "face with crossed-out eyes",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "58358",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Germany and a clown face for the player known as the joker and prankster of the team.",
+   "es": "Bandera de Alemania y una cara de payaso para el jugador conocido como el bromista del equipo.",
+   "ka": "გერმანიის დროშა და კლოუნის სახე მოთამაშისთვის, რომელიც ცნობილია როგორც გუნდის ჯოკერი და ოხუნჯი.",
+   "tr": "Almanya bayrağı ve takımın şakacısı olarak bilinen oyuncu için bir palyaço yüzü."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F921.png",
+  "display_answer": {
+   "en": "Thomas Müller",
+   "es": "Thomas Müller",
+   "ka": "თომას მიულერი",
+   "tr": "Thomas Müller"
+  },
+  "accepted_answers": [
+   "Mueller",
+   "Müller Thomas",
+   "T. Muller",
+   "Thomas Mueller",
+   "Thomas Muler",
+   "Thomas Muller",
+   "Thomas Müller",
+   "Tomas Muller",
+   "თომას",
+   "თომას მიულერ",
+   "თომას მიულერი",
+   "მიულერ",
+   "მიულერი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "clown face",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "170527",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Germany and a person running for 'Turbo Timo', known for his extreme pace.",
+   "es": "Bandera de Alemania y una persona corriendo por 'Turbo Timo', conocido por su velocidad extrema.",
+   "ka": "გერმანიის დროშა და მორბენალი ადამიანი 'Turbo Timo'-სთვის, რომელიც ცნობილია თავისი ექსტრემალური სისწრაფით.",
+   "tr": "Almanya bayrağı ve aşırı hızıyla tanınan 'Turbo Timo' için koşan bir kişi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3C3.png",
+  "display_answer": {
+   "en": "Timo Werner",
+   "es": "Timo Werner",
+   "ka": "ტიმო ვერნერი",
+   "tr": "Timo Werner"
+  },
+  "accepted_answers": [
+   "Timo Werner",
+   "Werner",
+   "Werner Timo",
+   "ტიმო ვერნერი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "person running",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "602105",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Brazil and a cyclone for his signature 360-degree spin move on the ball.",
+   "es": "Bandera de Brasil y un ciclón por su característico giro de 360 grados sobre el balón.",
+   "ka": "ბრაზილიის დროშა და ციკლონი ბურთზე მისი საფირმო 360-გრადუსიანი ბრუნვის გამო.",
+   "tr": "Brezilya bayrağı ve top üzerindeki kendine has 360 derecelik dönüş hareketi için bir siklon."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F300.png",
+  "display_answer": {
+   "en": "Antony",
+   "es": "Antony",
+   "ka": "ანტონი",
+   "tr": "Antony"
+  },
+  "accepted_answers": [
+   "Antony",
+   "ანტონი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "cyclone",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "93720",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of France and a violin for his famous 'trumpet/violin' celebration.",
+   "es": "Bandera de Francia y un violín por su famosa celebración de 'trompeta/violín'.",
+   "ka": "საფრანგეთის დროშა და ვიოლინო მისი ცნობილი 'საყვირი/ვიოლინოს' აღნიშვნის გამო.",
+   "tr": "Fransa bayrağı ve meşhur 'trompet/keman' sevinci için bir keman."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3BB.png",
+  "display_answer": {
+   "en": "Alexandre Lacazette",
+   "es": "Alexandre Lacazette",
+   "ka": "ალექსანდრ ლაკაზეტი",
+   "tr": "Alexandre Lacazette"
+  },
+  "accepted_answers": [
+   "Alexandre Lacazette",
+   "Lacazette",
+   "Lacazette Alexandre",
+   "ალექსანდრ ლაკაზეტი"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "violin",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3366",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Brazil combined with the iconic 'folded hands' celebration of this devoutly religious legendary midfielder.",
+   "es": "La bandera de Brasil combinada con la icónica celebración de 'manos juntas' de este legendario centrocampista devoto.",
+   "ka": "ბრაზილიის დროშა შერწყმული ამ ღვთისმოსავი ლეგენდარული ნახევარმცველის ხატოვან 'დაკეცილი ხელების' აღნიშვნასთან.",
+   "tr": "Brezilya bayrağı ve bu dindar efsanevi orta saha oyuncusunun ikonik 'birleşmiş eller' sevinci."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F64F.png",
+  "display_answer": {
+   "en": "Kaká",
+   "es": "Kaká",
+   "ka": "კაკა",
+   "tr": "Kaká"
+  },
+  "accepted_answers": [
+   "Kaká",
+   "კაკა"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "folded hands",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "45320",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Argentina and an angel, representing his famous nickname 'El Fideo' and his first name Ángel.",
+   "es": "La bandera de Argentina y un ángel, representando su famoso apodo 'El Fideo' y su nombre Ángel.",
+   "ka": "არგენტინის დროშა და ანგელოზი, რომელიც წარმოადგენს მის ცნობილ მეტსახელს 'El Fideo' და მის სახელს Ángel.",
+   "tr": "Arjantin bayrağı ve ünlü lakabı 'El Fideo' ile ilk adı Ángel'i temsil eden bir melek."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F47C.png",
+  "display_answer": {
+   "en": "Ángel Di María",
+   "es": "Ángel Di María",
+   "ka": "ანხელ დი მარია",
+   "tr": "Ángel Di María"
+  },
+  "accepted_answers": [
+   "A. Di Maria",
+   "Angel De Maria",
+   "Angel Di Maria",
+   "Angel DiMaria",
+   "Di Maria",
+   "DiMaria",
+   "El Fideo",
+   "Fideo Di Maria",
+   "María",
+   "María Ángel Di",
+   "Ángel Di María",
+   "ანხელ",
+   "ანხელ დი მარია",
+   "დი მარია",
+   "მარია"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "baby angel",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "294057",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The England flag plus a bullseye, representing his famous 'darts' goal celebration.",
+   "es": "La bandera de Inglaterra más una diana, representando su famosa celebración de gol de 'dardos'.",
+   "ka": "ინგლისის დროშა პლუს სამიზნე, რაც წარმოადგენს მის ცნობილ 'დარტსის' გოლის აღნიშვნას.",
+   "tr": "İngiltere bayrağı ve meşhur 'dart' gol sevincini temsil eden bir hedef tahtası."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3AF.png",
+  "display_answer": {
+   "en": "James Maddison",
+   "es": "James Maddison",
+   "ka": "ჯეიმს მედისონი",
+   "tr": "James Maddison"
+  },
+  "accepted_answers": [
+   "James Maddison",
+   "Maddison",
+   "Maddison James",
+   "მედისონ",
+   "მედისონი",
+   "ჯეიმს",
+   "ჯეიმს მედისონ",
+   "ჯეიმს მედისონი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "bullseye",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "420243",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of the Netherlands and a piece of wood (timber) representing his surname.",
+   "es": "La bandera de los Países Bajos y un trozo de madera (timber) representando su apellido.",
+   "ka": "ნიდერლანდების დროშა და ხის ნაჭერი (timber), რომელიც მის გვარს გამოხატავს.",
+   "tr": "Hollanda bayrağı ve soyadını temsil eden bir tahta parçası (timber)."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FAB5.png",
+  "display_answer": {
+   "en": "Jurriën Timber",
+   "es": "Jurriën Timber",
+   "ka": "იურიენ ტიმბერი",
+   "tr": "Jurriën Timber"
+  },
+  "accepted_answers": [
+   "Jurriën",
+   "Jurriën Timber",
+   "Timber Jurriën",
+   "იურიენ ტიმბერი"
+  ],
+  "facts": {
+   "a": "flag: Netherlands",
+   "b": "wood",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "546543",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Uruguay and a kangaroo, representing his nickname 'La Pantera' or his explosive, bouncy style of play.",
+   "es": "La bandera de Uruguay y un canguro, representando su apodo 'La Pantera' o su estilo de juego explosivo y saltarín.",
+   "ka": "ურუგვაის დროშა და კენგურუ, რომელიც წარმოადგენს მის მეტსახელს 'La Pantera' ან მის ფეთქებად, ნახტომებით სავსე თამაშის სტილს.",
+   "tr": "Uruguay bayrağı ve 'La Pantera' lakabını veya patlayıcı, sıçrayan oyun tarzını temsil eden bir kanguru."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1FA-1F1FE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F998.png",
+  "display_answer": {
+   "en": "Darwin Núñez",
+   "es": "Darwin Núñez",
+   "ka": "დარვინ ნუნიესი",
+   "tr": "Darwin Núñez"
+  },
+  "accepted_answers": [
+   "Darwin Nunez",
+   "Darwin Núñez",
+   "Núñez Darwin",
+   "დარვინ ნუნიესი"
+  ],
+  "facts": {
+   "a": "flag: Uruguay",
+   "b": "kangaroo",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "44501",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Brazil and the icon for a man with curly hair, which is his most recognizable physical trait.",
+   "es": "La bandera de Brasil y el icono de un hombre con pelo rizado, que es su rasgo físico más reconocible.",
+   "ka": "ბრაზილიის დროშა და ხუჭუჭთმიანი მამაკაცის ხატულა, რაც მისი ყველაზე ცნობადი ფიზიკური ნიშანია.",
+   "tr": "Brezilya bayrağı ve en belirgin fiziksel özelliği olan kıvırcık saçlı adam simgesi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F468-200D-1F9B1.png",
+  "display_answer": {
+   "en": "Marcelo",
+   "es": "Marcelo",
+   "ka": "მარსელო",
+   "tr": "Marcelo"
+  },
+  "accepted_answers": [
+   "Marcelo",
+   "მარსელო"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "man: curly hair",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "59016",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Austria and a chair, referring to his famous celebration lifting a white chair after a Real Madrid comeback.",
+   "es": "La bandera de Austria y una silla, en referencia a su famosa celebración levantando una silla blanca tras una remontada del Real Madrid.",
+   "ka": "ავსტრიის დროშა და სკამი, რაც მიანიშნებს მის ცნობილ აღნიშვნაზე Real Madrid-ის ქამბექის შემდეგ თეთრი სკამის აწევით.",
+   "tr": "Avusturya bayrağı ve Real Madrid'in geri dönüşünden sonra beyaz bir sandalyeyi kaldırdığı meşhur sevincine atıfta bulunan bir sandalye."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FA91.png",
+  "display_answer": {
+   "en": "David Alaba",
+   "es": "David Alaba",
+   "ka": "დავიდ ალაბა",
+   "tr": "David Alaba"
+  },
+  "accepted_answers": [
+   "Alaba David",
+   "David Alaba",
+   "დავიდ ალაბა"
+  ],
+  "facts": {
+   "a": "flag: Austria",
+   "b": "chair",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "177907",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The England flag and a brain/head icon, referring to his famous nickname 'Slabhead'.",
+   "es": "La bandera de Inglaterra y un icono de cerebro/cabeza, en referencia a su famoso apodo 'Slabhead'.",
+   "ka": "ინგლისის დროშა და ტვინის/თავის ხატულა, რაც მიანიშნებს მის ცნობილ მეტსახელზე 'Slabhead'.",
+   "tr": "İngiltere bayrağı ve ünlü lakabı 'Slabhead'e atıfta bulunan bir beyin/kafa simgesi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9E0.png",
+  "display_answer": {
+   "en": "Harry Maguire",
+   "es": "Harry Maguire",
+   "ka": "ჰარი მაგუაიერი",
+   "tr": "Harry Maguire"
+  },
+  "accepted_answers": [
+   "Harry Macguire",
+   "Harry Maguire",
+   "Herry Maguire",
+   "Macguire",
+   "Maguire",
+   "Maguire Harry",
+   "ჰარი მაგუაიერი",
+   "ჰარი მაგუაირი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "brain",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "18922",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of France and a head bandage, representing his iconic hand bandage worn in every match.",
+   "es": "Bandera de Francia y un vendaje en la cabeza, representando su icónico vendaje en la mano que usa en cada partido.",
+   "ka": "საფრანგეთის დროშა და თავის სახვევი, რაც წარმოადგენს მის ხატოვან ხელის სახვევს, რომელსაც ყოველ მატჩში ატარებს.",
+   "tr": "Fransa bayrağı ve her maçta taktığı ikonik el bandajını temsil eden bir kafa bandajı."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F915.png",
+  "display_answer": {
+   "en": "Karim Benzema",
+   "es": "Karim Benzema",
+   "ka": "კარიმ ბენზემა",
+   "tr": "Karim Benzema"
+  },
+  "accepted_answers": [
+   "Benzema",
+   "Benzema Karim",
+   "K. Benzema",
+   "Karim Benzema",
+   "ბენზემა",
+   "კარიმ",
+   "კარიმ ბენზემა",
+   "ქარიმ ბენზემა"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "face with head-bandage",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "378710",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Brazil and a bird, representing his 'Pombo' (Pigeon) nickname and celebration.",
+   "es": "Bandera de Brasil y un pájaro, representando su apodo 'Pombo' (Paloma) y su celebración.",
+   "ka": "ბრაზილიის დროშა და ჩიტი, რომელიც წარმოადგენს მის მეტსახელს 'Pombo' (მტრედი) და აღნიშვნას.",
+   "tr": "Brezilya bayrağı ve 'Pombo' (Güvercin) lakabını ve sevincini temsil eden bir kuş."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F426.png",
+  "display_answer": {
+   "en": "Richarlison",
+   "es": "Richarlison",
+   "ka": "რიშარლისონი",
+   "tr": "Richarlison"
+  },
+  "accepted_answers": [
+   "Richarlison",
+   "Richarlison de Andrade",
+   "Richarlisson",
+   "რიშარლისონ",
+   "რიშარლისონი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "bird",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "315779",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of the United States and a superhero, referring to his nickname 'Captain America'.",
+   "es": "Bandera de Estados Unidos y un superhéroe, en referencia a su apodo 'Captain America'.",
+   "ka": "აშშ-ის დროშა და სუპერგმირი, რაც მიანიშნებს მის მეტსახელზე 'Captain America'.",
+   "tr": "Amerika Birleşik Devletleri bayrağı ve 'Captain America' lakabına atıfta bulunan bir süper kahraman."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1FA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9B8.png",
+  "display_answer": {
+   "en": "Christian Pulisic",
+   "es": "Christian Pulisic",
+   "ka": "კრისტიან პულისიჩი",
+   "tr": "Christian Pulisic"
+  },
+  "accepted_answers": [
+   "C. Pulisic",
+   "Christian Pulisic",
+   "Pulisic",
+   "Pulisic Christian",
+   "კრისტიან პულისიჩი"
+  ],
+  "facts": {
+   "a": "flag: United States",
+   "b": "superhero",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "48280",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Uruguay and a bow and arrow, representing his famous 'El Matador' archer celebration.",
+   "es": "Bandera de Uruguay y un arco con flecha, representando su famosa celebración de arquero 'El Matador'.",
+   "ka": "ურუგვაის დროშა და მშვილდ-ისარი, რაც წარმოადგენს მის ცნობილ 'El Matador'-ის მშვილდოსნის აღნიშვნას.",
+   "tr": "Uruguay bayrağı ve meşhur 'El Matador' okçu sevincini temsil eden bir yay ve ok."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1FA-1F1FE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F9.png",
+  "display_answer": {
+   "en": "Edinson Cavani",
+   "es": "Edinson Cavani",
+   "ka": "ედინსონ კავანი",
+   "tr": "Edinson Cavani"
+  },
+  "accepted_answers": [
+   "Cavani",
+   "Cavani Edinson",
+   "Cavanni",
+   "E. Cavani",
+   "Edinson",
+   "Edinson Cavani",
+   "Edison Cavani",
+   "ედინსონ",
+   "ედინსონ კავან",
+   "ედინსონ კავანი",
+   "კავან",
+   "კავანი"
+  ],
+  "facts": {
+   "a": "flag: Uruguay",
+   "b": "bow and arrow",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "156617",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Croatia and a bomb, representing the famous bomb tattoo on his neck.",
+   "es": "Bandera de Croacia y una bomba, representando el famoso tatuaje de bomba en su cuello.",
+   "ka": "ხორვატიის დროშა და ბომბი, რაც წარმოადგენს მის კისერზე არსებულ ცნობილ ბომბის ტატუს.",
+   "tr": "Hırvatistan bayrağı ve boynundaki meşhur bomba dövmesini temsil eden bir bomba."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1ED-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4A3.png",
+  "display_answer": {
+   "en": "Marcelo Brozović",
+   "es": "Marcelo Brozović",
+   "ka": "მარსელო ბროზოვიჩი",
+   "tr": "Marcelo Brozović"
+  },
+  "accepted_answers": [
+   "Brozović",
+   "Brozović Marcelo",
+   "Marcelo Brozovic",
+   "Marcelo Brozović",
+   "მარსელო ბროზოვიჩი"
+  ],
+  "facts": {
+   "a": "flag: Croatia",
+   "b": "bomb",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "533738",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Canada and a watch, representing his signature 'Iceman' goal celebration pointing at his wrist.",
+   "es": "Bandera de Canadá y un reloj, representando su característica celebración de gol 'Iceman' señalando su muñeca.",
+   "ka": "კანადის დროშა და საათი, რაც წარმოადგენს მის საფირმო 'Iceman' გოლის აღნიშვნას მაჯაზე მითითებით.",
+   "tr": "Kanada bayrağı ve bileğini işaret ettiği kendine has 'Iceman' gol sevincini temsil eden bir saat."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1E6.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/231A.png",
+  "display_answer": {
+   "en": "Jonathan David",
+   "es": "Jonathan David",
+   "ka": "ჯონათან დეივიდი",
+   "tr": "Jonathan David"
+  },
+  "accepted_answers": [
+   "David Jonathan",
+   "Jonathan David",
+   "ჯონათან დეივიდი"
+  ],
+  "facts": {
+   "a": "flag: Canada",
+   "b": "watch",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "444523",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Brazil and a dancing man, referring to his famous samba dance celebrations.",
+   "es": "Bandera de Brasil y un hombre bailando, en referencia a sus famosas celebraciones de baile samba.",
+   "ka": "ბრაზილიის დროშა და მოცეკვავე მამაკაცი, რაც მიანიშნებს მის ცნობილ სამბას ცეკვის აღნიშვნებზე.",
+   "tr": "Brezilya bayrağı ve meşhur samba dansı sevinçlerine atıfta bulunan dans eden bir adam."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F57A.png",
+  "display_answer": {
+   "en": "Lucas Paquetá",
+   "es": "Lucas Paquetá",
+   "ka": "ლუკას პაკეტა",
+   "tr": "Lucas Paquetá"
+  },
+  "accepted_answers": [
+   "Lucas Paquetá",
+   "Paquetá",
+   "Paquetá Lucas",
+   "ლუკას პაკეტა"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "man dancing",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "39152",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Colombia plus an eagle, representing his famous nickname 'El Tigre' is not available, but 'El Condor' or bird of prey fits.",
+   "es": "La bandera de Colombia más un águila; su famoso apodo 'El Tigre' no está disponible, pero 'El Cóndor' o ave de presa encaja.",
+   "ka": "კოლუმბიის დროშა პლუს არწივი; მისი ცნობილი მეტსახელი 'El Tigre' არ არის ხელმისაწვდომი, მაგრამ 'El Condor' ან მტაცებელი ფრინველი შეესაბამება.",
+   "tr": "Kolombiya bayrağı ve bir kartal; ünlü lakabı 'El Tigre' mevcut değil ancak 'El Condor' veya yırtıcı kuş uyuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1F4.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F985.png",
+  "display_answer": {
+   "en": "Radamel Falcao",
+   "es": "Radamel Falcao",
+   "ka": "რადამელ ფალკაო",
+   "tr": "Radamel Falcao"
+  },
+  "accepted_answers": [
+   "Falcao",
+   "Falcao Radamel",
+   "Radamel",
+   "Radamel Falcao",
+   "რადამელ",
+   "რადამელ ფალკაო",
+   "ფალკაო"
+  ],
+  "facts": {
+   "a": "flag: Colombia",
+   "b": "eagle",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "186590",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of England plus a rock/stone to represent his surname.",
+   "es": "La bandera de Inglaterra más una roca/piedra para representar su apellido.",
+   "ka": "ინგლისის დროშა პლუს კლდე/ქვა მისი გვარის გამოსახატავად.",
+   "tr": "İngiltere bayrağı ve soyadını temsil eden bir kaya/taş."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FAA8.png",
+  "display_answer": {
+   "en": "John Stones",
+   "es": "John Stones",
+   "ka": "ჯონ სტოუნსი",
+   "tr": "John Stones"
+  },
+  "accepted_answers": [
+   "John Stone",
+   "John Stones",
+   "Jon Stones",
+   "Stones",
+   "Stones John",
+   "ჯონ სტოუნსი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "rock",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "503482",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of South Korea plus a zombie, representing his famous nickname 'The Monster' or 'The Zombie' defender.",
+   "es": "La bandera de Corea del Sur más un zombi, representando su famoso apodo de defensor 'El Monstruo' o 'El Zombi'.",
+   "ka": "სამხრეთ კორეის დროშა პლუს ზომბი, რომელიც წარმოადგენს მის ცნობილ მეტსახელს 'The Monster' ან 'The Zombie' მცველს.",
+   "tr": "Güney Kore bayrağı ve ünlü 'Canavar' veya 'Zombi' savunmacı lakabını temsil eden bir zombi."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F0-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9DF.png",
+  "display_answer": {
+   "en": "Min-jae Kim",
+   "es": "Min-jae Kim",
+   "ka": "მინ-ჯე კიმი",
+   "tr": "Min-jae Kim"
+  },
+  "accepted_answers": [
+   "Min-jae Kim",
+   "მინ-ჯე კიმი"
+  ],
+  "facts": {
+   "a": "flag: South Korea",
+   "b": "zombie",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "335721",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of England plus a white circle to represent his surname 'White'.",
+   "es": "La bandera de Inglaterra más un círculo blanco para representar su apellido 'White'.",
+   "ka": "ინგლისის დროშა პლუს თეთრი წრე მისი გვარის 'White' გამოსახატავად.",
+   "tr": "İngiltere bayrağı ve 'White' soyadını temsil eden beyaz bir daire."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/26AA.png",
+  "display_answer": {
+   "en": "Ben White",
+   "es": "Ben White",
+   "ka": "ბენ უაიტი",
+   "tr": "Ben White"
+  },
+  "accepted_answers": [
+   "Ben White",
+   "White",
+   "White Ben",
+   "ბენ უაიტი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "white circle",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "284857",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain plus a man with curly hair, his most iconic physical trait.",
+   "es": "La bandera de España más un hombre con pelo rizado, su rasgo físico más icónico.",
+   "ka": "ესპანეთის დროშა პლუს ხუჭუჭთმიანი მამაკაცი, მისი ყველაზე ხატოვანი ფიზიკური ნიშანი.",
+   "tr": "İspanya bayrağı ve en ikonik fiziksel özelliği olan kıvırcık saçlı bir adam."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F468-200D-1F9B1.png",
+  "display_answer": {
+   "en": "Marc Cucurella",
+   "es": "Marc Cucurella",
+   "ka": "მარკ კუკურელია",
+   "tr": "Marc Cucurella"
+  },
+  "accepted_answers": [
+   "Cucurella",
+   "Cucurella Marc",
+   "Marc Cucurella",
+   "კუკურელია",
+   "მარკ კუკურელია"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "man: curly hair",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "44779",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain plus a goblin/ogre, representing his aggressive 'beast' persona on the pitch.",
+   "es": "La bandera de España más un duende/ogro, representando su agresiva personalidad de 'bestia' en el campo.",
+   "ka": "ესპანეთის დროშა პლუს გობლინი/ოგრი, რაც წარმოადგენს მის აგრესიულ 'მხეცის' პერსონაჟს მოედანზე.",
+   "tr": "İspanya bayrağı ve sahadaki agresif 'canavar' kişiliğini temsil eden bir gulyabani/dev."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F47A.png",
+  "display_answer": {
+   "en": "Diego Costa",
+   "es": "Diego Costa",
+   "ka": "დიეგო კოსტა",
+   "tr": "Diego Costa"
+  },
+  "accepted_answers": [
+   "Diego Costa",
+   "დიეგო კოსტა"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "goblin",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "27992",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Croatia and a crown represent the 'King of Croatia' and Real Madrid legend Luka Modrić.",
+   "es": "La bandera de Croacia y una corona representan al 'Rey de Croacia' y leyenda del Real Madrid Luka Modrić.",
+   "ka": "ხორვატიის დროშა და გვირგვინი წარმოადგენს 'ხორვატიის მეფეს' და Real Madrid-ის ლეგენდას Luka Modrić-ს.",
+   "tr": "Hırvatistan bayrağı ve taç, 'Hırvatistan Kralı' ve Real Madrid efsanesi Luka Modrić'i temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1ED-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F451.png",
+  "display_answer": {
+   "en": "Luka Modrić",
+   "es": "Luka Modrić",
+   "ka": "ლუკა მოდრიჩი",
+   "tr": "Luka Modrić"
+  },
+  "accepted_answers": [
+   "L. Modric",
+   "Luca Modric",
+   "Luka Modric",
+   "Luka Modrich",
+   "Luka Modrić",
+   "Modric",
+   "Modricc",
+   "Modrich",
+   "Modrić",
+   "Modrić Luka",
+   "ლუკა",
+   "ლუკა მოდრიჩ",
+   "ლუკა მოდრიჩი",
+   "მოდრიჩ",
+   "მოდრიჩი"
+  ],
+  "facts": {
+   "a": "flag: Croatia",
+   "b": "crown",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "86202",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and the laughing face represent Antonio Rüdiger, famous for his eccentric running and funny behavior.",
+   "es": "La bandera de Alemania y la cara sonriente representan a Antonio Rüdiger, famoso por su carrera excéntrica y comportamiento divertido.",
+   "ka": "გერმანიის დროშა და მომღიმარი სახე წარმოადგენს Antonio Rüdiger-ს, რომელიც ცნობილია თავისი ექსცენტრიული სირბილით და მხიარული ქცევით.",
+   "tr": "Almanya bayrağı ve gülen yüz, eksantrik koşusu ve komik davranışlarıyla ünlü Antonio Rüdiger'i temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F923.png",
+  "display_answer": {
+   "en": "Antonio Rüdiger",
+   "es": "Antonio Rüdiger",
+   "ka": "ანტონიო რუდიგერი",
+   "tr": "Antonio Rüdiger"
+  },
+  "accepted_answers": [
+   "Antonio Rudiger",
+   "Antonio Rüdiger",
+   "Rudiger",
+   "Rüdiger",
+   "Rüdiger Antonio",
+   "ანტონიო რუდიგერი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "rolling on the floor laughing",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "294808",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Ivory Coast and the saluting face represent Franck Kessié, whose signature celebration is a military salute.",
+   "es": "La bandera de Costa de Marfil y la cara saludando representan a Franck Kessié, cuya celebración característica es un saludo militar.",
+   "ka": "კოტ-დ’ივუარის დროშა და მისალმების სახე წარმოადგენს Franck Kessié-ს, რომლის საფირმო აღნიშვნა სამხედრო სალამია.",
+   "tr": "Fildişi Sahili bayrağı ve selam veren yüz, imza sevinci askeri selam olan Franck Kessié'yi temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1EE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FAE1.png",
+  "display_answer": {
+   "en": "Franck Kessié",
+   "es": "Franck Kessié",
+   "ka": "ფრანკ კესიე",
+   "tr": "Franck Kessié"
+  },
+  "accepted_answers": [
+   "Franck Kessie",
+   "Franck Kessié",
+   "Kessié",
+   "Kessié Franck",
+   "ფრანკ კესიე"
+  ],
+  "facts": {
+   "a": "flag: Côte d’Ivoire",
+   "b": "saluting face",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "353366",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of France and the collision symbol represent Pavard's famous volley goal in the 2018 World Cup.",
+   "es": "La bandera de Francia y el símbolo de colisión representan el famoso gol de volea de Pavard en la Copa del Mundo 2018.",
+   "ka": "საფრანგეთის დროშა და შეჯახების სიმბოლო წარმოადგენს Pavard-ის ცნობილ გოლს 2018 წლის მსოფლიო ჩემპიონატზე.",
+   "tr": "Fransa bayrağı ve çarpışma sembolü, Pavard'ın 2018 Dünya Kupası'ndaki meşhur vole golünü temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EB-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4A5.png",
+  "display_answer": {
+   "en": "Benjamin Pavard",
+   "es": "Benjamin Pavard",
+   "ka": "ბენჟამენ პავარი",
+   "tr": "Benjamin Pavard"
+  },
+  "accepted_answers": [
+   "Ben Pavard",
+   "Benjamin Pavar",
+   "Benjamin Pavard",
+   "Pavar",
+   "Pavard",
+   "Pavard Benjamin",
+   "ბენჟამენ პავარი"
+  ],
+  "facts": {
+   "a": "flag: France",
+   "b": "collision",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "74842",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and the trophy represent Mario Götze, who scored the winning goal in the 2014 World Cup final.",
+   "es": "La bandera de Alemania y el trofeo representan a Mario Götze, quien marcó el gol de la victoria en la final de la Copa del Mundo 2014.",
+   "ka": "გერმანიის დროშა და თასი წარმოადგენს Mario Götze-ს, რომელმაც 2014 წლის მსოფლიო ჩემპიონატის ფინალში გამარჯვების გოლი გაიტანა.",
+   "tr": "Almanya bayrağı ve kupa, 2014 Dünya Kupası finalinde galibiyet golünü atan Mario Götze'yi temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3C6.png",
+  "display_answer": {
+   "en": "Mario Götze",
+   "es": "Mario Götze",
+   "ka": "მარიო გიოტცე",
+   "tr": "Mario Götze"
+  },
+  "accepted_answers": [
+   "Goetze",
+   "Gotze",
+   "Götze",
+   "Götze Mario",
+   "M. Gotze",
+   "Mario Goetze",
+   "Mario Gotze",
+   "Mario Götze",
+   "გიოტცე",
+   "მარიო გიოტცე"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "trophy",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "811779",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Argentina and the wolf represent Alejandro Garnacho, often associated with his 'Wolf' persona and tattoos.",
+   "es": "La bandera de Argentina y el lobo representan a Alejandro Garnacho, a menudo asociado con su personaje de 'Lobo' y sus tatuajes.",
+   "ka": "არგენტინის დროშა და მგელი წარმოადგენს Alejandro Garnacho-ს, რომელიც ხშირად ასოცირდება მის 'მგლის' პერსონაჟთან და ტატუებთან.",
+   "tr": "Arjantin bayrağı ve kurt, genellikle 'Kurt' kişiliği ve dövmeleriyle ilişkilendirilen Alejandro Garnacho'yi temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F43A.png",
+  "display_answer": {
+   "en": "Alejandro Garnacho",
+   "es": "Alejandro Garnacho",
+   "ka": "ალეხანდრო გარნაჩო",
+   "tr": "Alejandro Garnacho"
+  },
+  "accepted_answers": [
+   "Alejandro Garnacho",
+   "Garnacho",
+   "Garnacho Alejandro",
+   "ალეხანდრო",
+   "ალეხანდრო გარნაჩო",
+   "გარნაჩო"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "wolf",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "105521",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Italy and a person standing still (immobile) represent Ciro Immobile.",
+   "es": "La bandera de Italia y una persona inmóvil representan a Ciro Immobile.",
+   "ka": "იტალიის დროშა და უძრავი ადამიანი წარმოადგენს Ciro Immobile-ს.",
+   "tr": "İtalya bayrağı ve hareketsiz duran bir kişi Ciro Immobile'yi temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EE-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9CD.png",
+  "display_answer": {
+   "en": "Ciro Immobile",
+   "es": "Ciro Immobile",
+   "ka": "ჩირო იმობილე",
+   "tr": "Ciro Immobile"
+  },
+  "accepted_answers": [
+   "Ciro",
+   "Ciro Immobile",
+   "Immobile",
+   "Immobile Ciro",
+   "იმობილე",
+   "ჩირო",
+   "ჩირო იმობილე"
+  ],
+  "facts": {
+   "a": "flag: Italy",
+   "b": "person standing",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "7767",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain and a castle (Torres means towers/castle in Spanish) represent Fernando Torres.",
+   "es": "La bandera de España y un castillo (Torres significa torres/castillo en español) representan a Fernando Torres.",
+   "ka": "ესპანეთის დროშა და ციხესიმაგრე (Torres ესპანურად ნიშნავს კოშკებს/ციხესიმაგრეს) წარმოადგენს Fernando Torres-ს.",
+   "tr": "İspanya bayrağı ve bir kale (Torres, İspanyolca'da kuleler/kale anlamına gelir) Fernando Torres'i temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F0.png",
+  "display_answer": {
+   "en": "Fernando Torres",
+   "es": "Fernando Torres",
+   "ka": "ფერნანდო ტორესი",
+   "tr": "Fernando Torres"
+  },
+  "accepted_answers": [
+   "El Nino",
+   "El Nino Torres",
+   "Fernando Jose Torres",
+   "Fernando Torres",
+   "Torres Fernando",
+   "ფერნანდო ტორესი"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "castle",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "191614",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Brazil and bread (Fred sounds like the German/Northern European word for bread 'Brot' or simply a short name).",
+   "es": "La bandera de Brasil y pan (Fred suena como la palabra alemana/del norte de Europa para pan 'Brot' o simplemente un nombre corto).",
+   "ka": "ბრაზილიის დროშა და პური (Fred ჟღერს როგორც გერმანული/ჩრდილოეთ ევროპული სიტყვა პურისთვის 'Brot' ან უბრალოდ მოკლე სახელი).",
+   "tr": "Brezilya bayrağı ve ekmek (Fred, Almanca/Kuzey Avrupa dillerindeki ekmek kelimesi 'Brot'a veya sadece kısa bir isme benziyor)."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F35E.png",
+  "display_answer": {
+   "en": "Fred",
+   "es": "Fred",
+   "ka": "ფრედი",
+   "tr": "Fred"
+  },
+  "accepted_answers": [
+   "Fred",
+   "Frederico Chaves Guedes",
+   "ფრედ",
+   "ფრედი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "bread",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "18944",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain and a pickaxe (Piqué sounds like 'pique' or 'pico' meaning pickaxe in Romance languages).",
+   "es": "La bandera de España y un pico (Piqué suena como 'pique' o 'pico', que significa pico en lenguas romances).",
+   "ka": "ესპანეთის დროშა და წერაქვი (Piqué ჟღერს როგორც 'pique' ან 'pico', რაც რომანულ ენებზე წერაქვის ნიშნავს).",
+   "tr": "İspanya bayrağı ve bir kazma (Piqué, Latin dillerinde kazma anlamına gelen 'pique' veya 'pico' kelimesine benziyor)."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/26CF.png",
+  "display_answer": {
+   "en": "Gerard Piqué",
+   "es": "Gerard Piqué",
+   "ka": "ჟერარ პიკე",
+   "tr": "Gerard Piqué"
+  },
+  "accepted_answers": [
+   "G. Pique",
+   "Gerard Pike",
+   "Gerard Pique",
+   "Gerard Piqué",
+   "Pique",
+   "Pique Bernabeu",
+   "Piqué",
+   "Piqué Gerard",
+   "პიკე",
+   "ჟერარ",
+   "ჟერარ პიკე"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "pick",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "461496",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Denmark and a wheel (Hjul means wheel in Danish) represent Morten Hjulmand.",
+   "es": "La bandera de Dinamarca y una rueda (Hjul significa rueda en danés) representan a Morten Hjulmand.",
+   "ka": "დანიის დროშა და ბორბალი (Hjul დანიურად ნიშნავს ბორბალს) წარმოადგენს Morten Hjulmand-ს.",
+   "tr": "Danimarka bayrağı ve bir tekerlek (Danca'da Hjul tekerlek demektir) Morten Hjulmand'ı temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1F0.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F6DE.png",
+  "display_answer": {
+   "en": "Morten Hjulmand",
+   "es": "Morten Hjulmand",
+   "ka": "მორტენ იულმანდი",
+   "tr": "Morten Hjulmand"
+  },
+  "accepted_answers": [
+   "Hjulmand",
+   "Hjulmand Morten",
+   "Morten Hjulmand",
+   "მორტენ იულმანდი"
+  ],
+  "facts": {
+   "a": "flag: Denmark",
+   "b": "wheel",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "314875",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of England and a bow (Bowen) represent Jarrod Bowen.",
+   "es": "La bandera de Inglaterra y un arco (Bowen) representan a Jarrod Bowen.",
+   "ka": "ინგლისის დროშა და მშვილდი (Bowen) წარმოადგენს Jarrod Bowen-ს.",
+   "tr": "İngiltere bayrağı ve bir yay (Bowen) Jarrod Bowen'ı temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F9.png",
+  "display_answer": {
+   "en": "Jarrod Bowen",
+   "es": "Jarrod Bowen",
+   "ka": "ჯაროდ ბოუენი",
+   "tr": "Jarrod Bowen"
+  },
+  "accepted_answers": [
+   "Bowen",
+   "Bowen Jarrod",
+   "Jarrod",
+   "Jarrod Bowen",
+   "ბოუენ",
+   "ბოუენი",
+   "ჯაროდ",
+   "ჯაროდ ბოუენ",
+   "ჯაროდ ბოუენი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "bow and arrow",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "7980",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain and a villa (house with garden) represent David Villa.",
+   "es": "La bandera de España y una villa (casa con jardín) representan a David Villa.",
+   "ka": "ესპანეთის დროშა და ვილა (სახლი ბაღით) წარმოადგენს David Villa-ს.",
+   "tr": "İspanya bayrağı ve bir villa (bahçeli ev) David Villa'yı temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3E1.png",
+  "display_answer": {
+   "en": "David Villa",
+   "es": "David Villa",
+   "ka": "დავიდ ვილია",
+   "tr": "David Villa"
+  },
+  "accepted_answers": [
+   "D. Villa",
+   "David Vila",
+   "David Villa",
+   "David Villa Sanchez",
+   "El Guaje",
+   "Vila",
+   "Villa David",
+   "დავიდ ვილია"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "house with garden",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "35518",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain and a tree (Silva means forest/wood in Latin/Galician) represent David Silva.",
+   "es": "La bandera de España y un árbol (Silva significa bosque/selva en latín/gallego) representan a David Silva.",
+   "ka": "ესპანეთის დროშა და ხე (Silva ლათინურად/გალისიურად ნიშნავს ტყეს) წარმოადგენს David Silva-ს.",
+   "tr": "İspanya bayrağı ve bir ağaç (Silva, Latince/Galiçyaca'da orman demektir) David Silva'yı temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F332.png",
+  "display_answer": {
+   "en": "David Silva",
+   "es": "David Silva",
+   "ka": "დავიდ სილვა",
+   "tr": "David Silva"
+  },
+  "accepted_answers": [
+   "David Silva",
+   "დავიდ სილვა"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "evergreen tree",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "111455",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Switzerland and a rock (Granit is a type of stone/rock) represent Granit Xhaka.",
+   "es": "La bandera de Suiza y una roca (Granit es un tipo de piedra/roca) representan a Granit Xhaka.",
+   "ka": "შვეიცარიის დროშა და კლდე (Granit არის ქვის/კლდის ტიპი) წარმოადგენს Granit Xhaka-ს.",
+   "tr": "İsviçre bayrağı ve bir kaya (Granit bir taş/kaya türüdür) Granit Xhaka'yı temsil eder."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1ED.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FAA8.png",
+  "display_answer": {
+   "en": "Granit Xhaka",
+   "es": "Granit Xhaka",
+   "ka": "გრანიტ ჯაკა",
+   "tr": "Granit Xhaka"
+  },
+  "accepted_answers": [
+   "Granit",
+   "Granit Xaka",
+   "Granit Xhaka",
+   "Xaka",
+   "Xhaka",
+   "Xhaka Granit",
+   "გრანიტ ჯაკა"
+  ],
+  "facts": {
+   "a": "flag: Switzerland",
+   "b": "rock",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "251664",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The England flag and a telephone represent Ivan Toney's famous 'calling' celebration.",
+   "es": "La bandera de Inglaterra y un teléfono representan la famosa celebración de 'llamada' de Ivan Toney.",
+   "ka": "ინგლისის დროშა და ტელეფონი წარმოადგენს Ivan Toney-ს ცნობილ „დარეკვის“ აღნიშვნას.",
+   "tr": "İngiltere bayrağı ve telefon, Ivan Toney'nin meşhur 'telefon etme' sevincini temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4DE.png",
+  "display_answer": {
+   "en": "Ivan Toney",
+   "es": "Ivan Toney",
+   "ka": "აივან ტოუნი",
+   "tr": "Ivan Toney"
+  },
+  "accepted_answers": [
+   "Ivan Toney",
+   "Toney",
+   "Toney Ivan",
+   "აივან ტოუნი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "telephone receiver",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "206040",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Mexican flag and the head-bandage represent the striker who famously wore a protective headgear after a skull injury.",
+   "es": "La bandera de México y el vendaje en la cabeza representan al delantero que famosamente usó un casco protector tras una lesión craneal.",
+   "ka": "მექსიკის დროშა და თავის ბინტი წარმოადგენს თავდამსხმელს, რომელიც თავის ქალის ტრავმის შემდეგ დამცავ თავსაბურავს ატარებდა.",
+   "tr": "Meksika bayrağı ve kafa bandajı, kafatası yaralanmasından sonra koruyucu kask takmasıyla tanınan forveti temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F2-1F1FD.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F915.png",
+  "display_answer": {
+   "en": "Raúl Jiménez",
+   "es": "Raúl Jiménez",
+   "ka": "რაულ ხიმენესი",
+   "tr": "Raúl Jiménez"
+  },
+  "accepted_answers": [
+   "Jiménez Raúl",
+   "Raúl Jiménez",
+   "რაულ ხიმენესი"
+  ],
+  "facts": {
+   "a": "flag: Mexico",
+   "b": "face with head-bandage",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "480762",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Argentina flag and the axe represent the defender's nickname 'El Carnicero' (The Butcher).",
+   "es": "La bandera de Argentina y el hacha representan el apodo del defensor 'El Carnicero'.",
+   "ka": "არგენტინის დროშა და ნაჯახი წარმოადგენს მცველის მეტსახელს „El Carnicero“ (ყასაბი).",
+   "tr": "Arjantin bayrağı ve balta, savunma oyuncusunun 'El Carnicero' (Kasap) lakabını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E6-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FA93.png",
+  "display_answer": {
+   "en": "Lisandro Martínez",
+   "es": "Lisandro Martínez",
+   "ka": "ლისანდრო მარტინესი",
+   "tr": "Lisandro Martínez"
+  },
+  "accepted_answers": [
+   "Licha",
+   "Licha Martinez",
+   "Lisandro Martines",
+   "Lisandro Martinez",
+   "Lisandro Martínez",
+   "Martínez Lisandro",
+   "ლისანდრო",
+   "ლისანდრო მარტინეს",
+   "ლისანდრო მარტინესი"
+  ],
+  "facts": {
+   "a": "flag: Argentina",
+   "b": "axe",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "80562",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Brazil flag and the flexed biceps represent the player famously known as Hulk.",
+   "es": "La bandera de Brasil y los bíceps flexionados representan al jugador famosamente conocido como Hulk.",
+   "ka": "ბრაზილიის დროშა და მოხრილი ბიცეფსი წარმოადგენს მოთამაშეს, რომელიც ცნობილია როგორც Hulk.",
+   "tr": "Brezilya bayrağı ve bükülmüş pazı, Hulk olarak bilinen oyuncuyu temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4AA.png",
+  "display_answer": {
+   "en": "Hulk",
+   "es": "Hulk",
+   "ka": "ჰალკი",
+   "tr": "Hulk"
+  },
+  "accepted_answers": [
+   "Givanildo Vieira de Sousa",
+   "Hulk",
+   "ჰალკ",
+   "ჰალკი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "flexed biceps",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3455",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Sweden flag and the lion represent Zlatan, who famously compares himself to a lion.",
+   "es": "La bandera de Suecia y el león representan a Zlatan, quien famosamente se compara con un león.",
+   "ka": "შვედეთის დროშა და ლომი წარმოადგენს Zlatan-ს, რომელიც თავს ხშირად ლომს ადარებს.",
+   "tr": "İsveç bayrağı ve aslan, kendisini aslana benzetmesiyle tanınan Zlatan'ı temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F8-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F981.png",
+  "display_answer": {
+   "en": "Zlatan Ibrahimović",
+   "es": "Zlatan Ibrahimović",
+   "ka": "ზლატან იბრაჰიმოვიჩი",
+   "tr": "Zlatan Ibrahimović"
+  },
+  "accepted_answers": [
+   "Ibrahimović Zlatan",
+   "Zlatan",
+   "Zlatan Ibrahimovic",
+   "Zlatan Ibrahimović",
+   "ზლატან",
+   "ზლატან იბრაჰიმოვიჩ",
+   "ზლატან იბრაჰიმოვიჩი",
+   "იბრაჰიმოვიჩ",
+   "იბრაჰიმოვიჩი"
+  ],
+  "facts": {
+   "a": "flag: Sweden",
+   "b": "lion",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "4380",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Netherlands flag and the parachute represent 'The Flying Dutchman' and his iconic diving header.",
+   "es": "La bandera de los Países Bajos y el paracaídas representan a 'El Holandés Volador' y su icónico cabezazo en plancha.",
+   "ka": "ნიდერლანდების დროშა და პარაშუტი წარმოადგენს „მფრინავ ჰოლანდიელს“ და მის საკულტო თავურ დარტყმას ნახტომში.",
+   "tr": "Hollanda bayrağı ve paraşüt, 'Uçan Hollandalı'yı ve onun ikonik uçan kafa vuruşunu temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FA82.png",
+  "display_answer": {
+   "en": "Robin van Persie",
+   "es": "Robin van Persie",
+   "ka": "რობინ ვან პერსი",
+   "tr": "Robin van Persie"
+  },
+  "accepted_answers": [
+   "Persie",
+   "Persie Robin van",
+   "R. van Persie",
+   "RVP",
+   "Robin van Persie",
+   "Van Persie",
+   "ვან პერს",
+   "ვან პერსი",
+   "პერს",
+   "პერსი",
+   "რობინ",
+   "რობინ ვან პერს",
+   "რობინ ვან პერსი"
+  ],
+  "facts": {
+   "a": "flag: Netherlands",
+   "b": "parachute",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "504849",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Japan flag and the notebook represent Mitoma, who famously wrote a university thesis on dribbling.",
+   "es": "La bandera de Japón y el cuaderno representan a Mitoma, quien famosamente escribió una tesis universitaria sobre el regate.",
+   "ka": "იაპონიის დროშა და რვეული წარმოადგენს Mitoma-ს, რომელმაც უნივერსიტეტში სადისერტაციო ნაშრომი დრიბლინგზე დაწერა.",
+   "tr": "Japonya bayrağı ve defter, üniversitede dripling üzerine tez yazmasıyla tanınan Mitoma'yı temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EF-1F1F5.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F4D3.png",
+  "display_answer": {
+   "en": "Kaoru Mitoma",
+   "es": "Kaoru Mitoma",
+   "ka": "კაორუ მიტომა",
+   "tr": "Kaoru Mitoma"
+  },
+  "accepted_answers": [
+   "K. Mitoma",
+   "Kaoru",
+   "Kaoru Mitoma",
+   "Mitoma",
+   "Mitoma Kaoru",
+   "კაორუ მიტომა"
+  ],
+  "facts": {
+   "a": "flag: Japan",
+   "b": "notebook",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "25557",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Spanish flag and the ox/bull represent the defender from Seville known for his strength and bullfighting passion.",
+   "es": "La bandera española y el buey/toro representan al defensa de Sevilla conocido por su fuerza y pasión por la tauromaquia.",
+   "ka": "ესპანეთის დროშა და ხარი წარმოადგენს სევილიელ მცველს, რომელიც ცნობილია თავისი სიძლიერითა და კორიდისადმი გატაცებით.",
+   "tr": "İspanya bayrağı ve öküz/boğa, gücü ve boğa güreşi tutkusuyla tanınan Sevillalı savunmacıyı temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F402.png",
+  "display_answer": {
+   "en": "Sergio Ramos",
+   "es": "Sergio Ramos",
+   "ka": "სერხიო რამოსი",
+   "tr": "Sergio Ramos"
+  },
+  "accepted_answers": [
+   "Ramos Sergio",
+   "Sergio Ramos",
+   "Sergio Ramos Garcia",
+   "Serigo Ramos",
+   "Serio Ramos",
+   "რამოს",
+   "რამოსი",
+   "სერხიო რამოს",
+   "სერხიო რამოსი"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "ox",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "35664",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Germany flag and the eyes represent the playmaker known for his vision and distinct large eyes.",
+   "es": "La bandera de Alemania y los ojos representan al creador de juego conocido por su visión y sus distintivos ojos grandes.",
+   "ka": "გერმანიის დროშა და თვალები წარმოადგენს პლეიმეიკერს, რომელიც ცნობილია თავისი ხედვითა და გამორჩეული დიდი თვალებით.",
+   "tr": "Almanya bayrağı ve gözler, oyun görüşü ve belirgin büyük gözleriyle tanınan oyun kurucuyu temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F440.png",
+  "display_answer": {
+   "en": "Mesut Özil",
+   "es": "Mesut Özil",
+   "ka": "მესუთ ოზილი",
+   "tr": "Mesut Özil"
+  },
+  "accepted_answers": [
+   "Mesut",
+   "Mesut Oezil",
+   "Mesut Ozil",
+   "Mesut Özil",
+   "Oezil",
+   "Ozil",
+   "Özil",
+   "Özil Mesut",
+   "მესუთ",
+   "მესუთ იოზილი",
+   "მესუთ ოზილ",
+   "მესუთ ოზილი",
+   "ოზილ",
+   "ოზილი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "eyes",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "234509",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Cameroon flag and the glasses represent the goalkeeper who often wears spectacles off the pitch.",
+   "es": "La bandera de Camerún y las gafas representan al portero que a menudo usa anteojos fuera del campo.",
+   "ka": "კამერუნის დროშა და სათვალე წარმოადგენს მეკარეს, რომელიც მოედნის გარეთ ხშირად ატარებს სათვალეს.",
+   "tr": "Kamerun bayrağı ve gözlük, saha dışında sık sık gözlük takan kaleciyi temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1F2.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F453.png",
+  "display_answer": {
+   "en": "André Onana",
+   "es": "André Onana",
+   "ka": "ანდრე ონანა",
+   "tr": "André Onana"
+  },
+  "accepted_answers": [
+   "André Onana",
+   "Onana André",
+   "ანდრე ონანა"
+  ],
+  "facts": {
+   "a": "flag: Cameroon",
+   "b": "glasses",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "37666",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Chile plus crossed swords for his famous nickname 'King Arturo' or 'El Guerrero'.",
+   "es": "Bandera de Chile más espadas cruzadas por su famoso apodo 'King Arturo' o 'El Guerrero'.",
+   "ka": "ჩილეს დროშა და გადაჯვარედინებული ხმლები მისი ცნობილი მეტსახელისთვის „King Arturo“ ან „El Guerrero“.",
+   "tr": "Şili bayrağı ve çapraz kılıçlar, meşhur 'King Arturo' veya 'El Guerrero' lakabını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2694.png",
+  "display_answer": {
+   "en": "Arturo Vidal",
+   "es": "Arturo Vidal",
+   "ka": "არტურო ვიდალი",
+   "tr": "Arturo Vidal"
+  },
+  "accepted_answers": [
+   "Arturo Erasmo Vidal Pardo",
+   "Arturo Vidal",
+   "Vidal Arturo",
+   "არტურო",
+   "არტურო ვიდალ",
+   "არტურო ვიდალი",
+   "ვიდალ",
+   "ვიდალი"
+  ],
+  "facts": {
+   "a": "flag: Chile",
+   "b": "crossed swords",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "26485",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Germany plus a boat for the literal meaning of his surname 'Boat-eng'.",
+   "es": "Bandera de Alemania más un barco por el significado literal de su apellido 'Boat-eng'.",
+   "ka": "გერმანიის დროშა და ნავი მისი გვარის „Boat-eng“ პირდაპირი მნიშვნელობის გამო.",
+   "tr": "Almanya bayrağı ve tekne, soyadı 'Boat-eng'in kelime anlamını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/26F5.png",
+  "display_answer": {
+   "en": "Jérôme Boateng",
+   "es": "Jérôme Boateng",
+   "ka": "ჟერომ ბოატენგი",
+   "tr": "Jérôme Boateng"
+  },
+  "accepted_answers": [
+   "Boateng Jérôme",
+   "Jérôme Boateng",
+   "ბოატენგ",
+   "ბოატენგი",
+   "ჟერომ",
+   "ჟერომ ბოატენგ",
+   "ჟერომ ბოატენგი",
+   "ჯერომ ბოატენგი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "sailboat",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "316889",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Mexico plus an ogre for his famous nickname 'Chucky' (the horror character/monster).",
+   "es": "Bandera de México más un ogro por su famoso apodo 'Chucky' (el personaje/monstruo de terror).",
+   "ka": "მექსიკის დროშა და ოგრი მისი ცნობილი მეტსახელისთვის „Chucky“ (საშინელებათა პერსონაჟი/მონსტრი).",
+   "tr": "Meksika bayrağı ve dev, meşhur 'Chucky' (korku karakteri/canavar) lakabını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F2-1F1FD.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F479.png",
+  "display_answer": {
+   "en": "Hirving Lozano",
+   "es": "Hirving Lozano",
+   "ka": "ირვინგ ლოსანო",
+   "tr": "Hirving Lozano"
+  },
+  "accepted_answers": [
+   "Chucky Lozano",
+   "Chuki Lozano",
+   "Hirving",
+   "Hirving Lozano",
+   "Lozano",
+   "Lozano Hirving",
+   "ირვინგ ლოსანო"
+  ],
+  "facts": {
+   "a": "flag: Mexico",
+   "b": "ogre",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "258889",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Nigeria (heritage) or England plus the sun for the phonetic pun on 'Sun-lanke'.",
+   "es": "Bandera de Nigeria (herencia) o Inglaterra más el sol por el juego de palabras fonético con 'Sun-lanke'.",
+   "ka": "ნიგერიის ან ინგლისის დროშა და მზე ფონეტიკური სიტყვების თამაშისთვის „Sun-lanke“.",
+   "tr": "Nijerya veya İngiltere bayrağı ve güneş, 'Sun-lanke' üzerindeki fonetik kelime oyununu temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1EC.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2600.png",
+  "display_answer": {
+   "en": "Dominic Solanke",
+   "es": "Dominic Solanke",
+   "ka": "დომინიკ სოლანკე",
+   "tr": "Dominic Solanke"
+  },
+  "accepted_answers": [
+   "Dominic Solanke",
+   "Solanke",
+   "Solanke Dominic",
+   "დომინიკ სოლანკე",
+   "სოლანკე"
+  ],
+  "facts": {
+   "a": "flag: Nigeria",
+   "b": "sun",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "656681",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Nigeria plus a cross for the literal meaning of his name 'Boniface' (Saint/Holy).",
+   "es": "Bandera de Nigeria más una cruz por el significado literal de su nombre 'Boniface' (Santo/Sagrado).",
+   "ka": "ნიგერიის დროშა და ჯვარი მისი სახელის „Boniface“ (წმინდანი) პირდაპირი მნიშვნელობის გამო.",
+   "tr": "Nijerya bayrağı ve haç, adının kelime anlamı olan 'Boniface'i (Aziz/Kutsal) temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1EC.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/271D.png",
+  "display_answer": {
+   "en": "Victor Boniface",
+   "es": "Victor Boniface",
+   "ka": "ვიქტორ ბონიფასი",
+   "tr": "Victor Boniface"
+  },
+  "accepted_answers": [
+   "Boniface",
+   "Boniface Victor",
+   "Victor Boniface",
+   "ვიქტორ ბონიფასი"
+  ],
+  "facts": {
+   "a": "flag: Nigeria",
+   "b": "latin cross",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "387626",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Jamaica plus a beer mug for his surname 'Bailey's'.",
+   "es": "Bandera de Jamaica más una jarra de cerveza por su apellido 'Bailey's'.",
+   "ka": "იამაიკის დროშა და ლუდის კათხა მისი გვარისთვის „Bailey's“.",
+   "tr": "Jamaika bayrağı ve bira bardağı, soyadı 'Bailey's'i temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EF-1F1F2.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F37A.png",
+  "display_answer": {
+   "en": "Leon Bailey",
+   "es": "Leon Bailey",
+   "ka": "ლეონ ბეილი",
+   "tr": "Leon Bailey"
+  },
+  "accepted_answers": [
+   "Bailey",
+   "Bailey Leon",
+   "Leon Bailey",
+   "ლეონ",
+   "ლეონ ბეილ",
+   "ლეონ ბეილი"
+  ],
+  "facts": {
+   "a": "flag: Jamaica",
+   "b": "beer mug",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "17259",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany combined with open hands representing the world's most famous modern goalkeeper.",
+   "es": "La bandera de Alemania combinada con manos abiertas representando al portero moderno más famoso del mundo.",
+   "ka": "გერმანიის დროშა და გაშლილი ხელები წარმოადგენს მსოფლიოს ყველაზე ცნობილ თანამედროვე მეკარეს.",
+   "tr": "Almanya bayrağı ve açık eller, dünyanın en ünlü modern kalecisini temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F450.png",
+  "display_answer": {
+   "en": "Manuel Neuer",
+   "es": "Manuel Neuer",
+   "ka": "მანუელ ნოიერი",
+   "tr": "Manuel Neuer"
+  },
+  "accepted_answers": [
+   "M. Neuer",
+   "Manu Neuer",
+   "Manuel Neuer",
+   "Manuel Neueur",
+   "Manuel Nuer",
+   "Neuer",
+   "Neuer Manuel",
+   "Nuer",
+   "მანუელ ნოიერ",
+   "მანუელ ნოიერი",
+   "ნოიერ",
+   "ნოიერი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "open hands",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "4257",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Cameroon and a lion, referring to the 'Indomitable Lions' legend.",
+   "es": "La bandera de Camerún y un león, en referencia a la leyenda de los 'Leones Indomables'.",
+   "ka": "კამერუნის დროშა და ლომი, რაც მიანიშნებს „დაუმორჩილებელი ლომების“ ლეგენდაზე.",
+   "tr": "Kamerun bayrağı ve aslan, 'Yenilmez Aslanlar' efsanesine atıfta bulunuyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1F2.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F981.png",
+  "display_answer": {
+   "en": "Samuel Eto'o",
+   "es": "Samuel Eto'o",
+   "ka": "სამუელ ეტო'ო",
+   "tr": "Samuel Eto'o"
+  },
+  "accepted_answers": [
+   "Eto",
+   "Eto'o Samuel",
+   "Samuel Eto",
+   "Samuel Eto'o",
+   "Samuel Eto'o Fils",
+   "სამუელ ეტო'ო"
+  ],
+  "facts": {
+   "a": "flag: Cameroon",
+   "b": "lion",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "183288",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of England and a silhouette (Shaw/Shadow) pun.",
+   "es": "La bandera de Inglaterra y un juego de palabras con silueta (Shaw/Shadow).",
+   "ka": "ინგლისის დროშა და სილუეტი (Shaw/Shadow) სიტყვების თამაშისთვის.",
+   "tr": "İngiltere bayrağı ve bir siluet (Shaw/Shadow) kelime oyunu."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F464.png",
+  "display_answer": {
+   "en": "Luke Shaw",
+   "es": "Luke Shaw",
+   "ka": "ლუკ შოუ",
+   "tr": "Luke Shaw"
+  },
+  "accepted_answers": [
+   "Luke Shaw",
+   "Shaw",
+   "Shaw Luke",
+   "ლუკ შოუ"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "bust in silhouette",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "102226",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Belgium and a warning sign for 'Hazard'.",
+   "es": "La bandera de Bélgica y una señal de advertencia por 'Hazard'.",
+   "ka": "ბელგიის დროშა და გამაფრთხილებელი ნიშანი „Hazard“-ისთვის (საფრთხე).",
+   "tr": "Belçika bayrağı ve 'Hazard' (Tehlike) için bir uyarı levhası."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/26A0.png",
+  "display_answer": {
+   "en": "Thorgan Hazard",
+   "es": "Thorgan Hazard",
+   "ka": "ტორგან აზარი",
+   "tr": "Thorgan Hazard"
+  },
+  "accepted_answers": [
+   "Hazard Thorgan",
+   "Thorgan",
+   "Thorgan Hazard",
+   "ტორგან აზარი"
+  ],
+  "facts": {
+   "a": "flag: Belgium",
+   "b": "warning",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "6288",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and a pizza/Italian food for the surname 'Gomez'.",
+   "es": "La bandera de Alemania y una pizza/comida italiana por el apellido 'Gomez'.",
+   "ka": "გერმანიის დროშა და პიცა/იტალიური საკვები გვარისთვის „Gomez“.",
+   "tr": "Almanya bayrağı ve pizza/İtalyan yemeği, 'Gomez' soyadını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F355.png",
+  "display_answer": {
+   "en": "Mario Gómez",
+   "es": "Mario Gómez",
+   "ka": "მარიო გომესი",
+   "tr": "Mario Gómez"
+  },
+  "accepted_answers": [
+   "Mario Gómez",
+   "მარიო გომესი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "pizza",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "283628",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Czechia and a pot of food (Souček sounds like 'soupa' or stew in many regions).",
+   "es": "La bandera de Chequia y una olla de comida (Souček suena como 'soupa' o estofado en muchas regiones).",
+   "ka": "ჩეხეთის დროშა და ქოთანი საჭმლით (Souček ბევრ რეგიონში წვნიანს ან შუშუშულს ჰგავს).",
+   "tr": "Çekya bayrağı ve bir tencere yemek (Souček, birçok bölgede çorba veya yahniyi çağrıştırır)."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1FF.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F372.png",
+  "display_answer": {
+   "en": "Tomáš Souček",
+   "es": "Tomáš Souček",
+   "ka": "ტომაშ სოუჩეკი",
+   "tr": "Tomáš Souček"
+  },
+  "accepted_answers": [
+   "Souček",
+   "Souček Tomáš",
+   "Tomáš Souček",
+   "ტომაშ სოუჩეკი"
+  ],
+  "facts": {
+   "a": "flag: Czechia",
+   "b": "pot of food",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "4360",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Netherlands plus a bald man represents the iconic Dutch winger Arjen Robben.",
+   "es": "Bandera de los Países Bajos más un hombre calvo representa al icónico extremo neerlandés Arjen Robben.",
+   "ka": "ნიდერლანდების დროშა და მელოტი მამაკაცი წარმოადგენს საკულტო ნიდერლანდელ გარემარბს Arjen Robben-ს.",
+   "tr": "Hollanda bayrağı ve kel bir adam, ikonik Hollandalı kanat oyuncusu Arjen Robben'i temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F468-200D-1F9B2.png",
+  "display_answer": {
+   "en": "Arjen Robben",
+   "es": "Arjen Robben",
+   "ka": "არიენ რობენი",
+   "tr": "Arjen Robben"
+  },
+  "accepted_answers": [
+   "A. Robben",
+   "Arjan Robben",
+   "Arjen",
+   "Arjen Robben",
+   "Arjen Robin",
+   "Robben",
+   "Robben Arjen",
+   "არიენ",
+   "არიენ რობენ",
+   "არიენ რობენი",
+   "რობენ",
+   "რობენი"
+  ],
+  "facts": {
+   "a": "flag: Netherlands",
+   "b": "man: bald",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3139",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of England plus a downward curving arrow represents 'Bend it like Beckham'.",
+   "es": "Bandera de Inglaterra más una flecha curvada hacia abajo representa 'Bend it like Beckham'.",
+   "ka": "ინგლისის დროშა და ქვემოთ დახრილი ისარი წარმოადგენს „Bend it like Beckham“-ს.",
+   "tr": "İngiltere bayrağı ve aşağı doğru kıvrılan ok, 'Bend it like Beckham'ı temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2935.png",
+  "display_answer": {
+   "en": "David Beckham",
+   "es": "David Beckham",
+   "ka": "დევიდ ბექჰემი",
+   "tr": "David Beckham"
+  },
+  "accepted_answers": [
+   "Beckam",
+   "Beckham David",
+   "Becks",
+   "D. Beckham",
+   "Dave Beckham",
+   "David Beckam",
+   "David Beckham",
+   "დავიდ ბექჰემი",
+   "დევიდ ბექჰემი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "right arrow curving down",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "179184",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Belgium plus a bat represents Michy Batshuayi, famously nicknamed 'Batsman'.",
+   "es": "Bandera de Bélgica más un murciélago representa a Michy Batshuayi, famosamente apodado 'Batsman'.",
+   "ka": "ბელგიის დროშა და ღამურა წარმოადგენს Michy Batshuayi-ს, რომლის მეტსახელია „Batsman“.",
+   "tr": "Belçika bayrağı ve yarasa, 'Batsman' lakabıyla tanınan Michy Batshuayi'yi temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F987.png",
+  "display_answer": {
+   "en": "Michy Batshuayi",
+   "es": "Michy Batshuayi",
+   "ka": "მიში ბატშუაი",
+   "tr": "Michy Batshuayi"
+  },
+  "accepted_answers": [
+   "Batshuayi",
+   "Batshuayi Michy",
+   "Michy",
+   "Michy Batshuayi",
+   "მიში ბატშუაი"
+  ],
+  "facts": {
+   "a": "flag: Belgium",
+   "b": "bat",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "204103",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Spain plus soap/oil represents Adama Traore's famous habit of oiling his arms before matches.",
+   "es": "Bandera de España más jabón/aceite representa el famoso hábito de Adama Traore de aceitarse los brazos antes de los partidos.",
+   "ka": "ესპანეთის დროშა და საპონი/ზეთი წარმოადგენს Adama Traore-ს ჩვევას, მატჩის წინ ხელებზე ზეთი წაისვას.",
+   "tr": "İspanya bayrağı ve sabun/yağ, Adama Traore'nin maçlardan önce kollarını yağlama alışkanlığını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F9FC.png",
+  "display_answer": {
+   "en": "Adama Traoré",
+   "es": "Adama Traoré",
+   "ka": "ადამა ტრაორე",
+   "tr": "Adama Traoré"
+  },
+  "accepted_answers": [
+   "Adama Traoré",
+   "ადამა ტრაორე"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "soap",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "2514",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Germany plus a pig (Schwein) represents the first part of Bastian Schweinsteiger's surname.",
+   "es": "Bandera de Alemania más un cerdo (Schwein) representa la primera parte del apellido de Bastian Schweinsteiger.",
+   "ka": "გერმანიის დროშა და ღორი (Schwein) წარმოადგენს Bastian Schweinsteiger-ის გვარის პირველ ნაწილს.",
+   "tr": "Almanya bayrağı ve domuz (Schwein), Bastian Schweinsteiger'in soyadının ilk bölümünü temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F416.png",
+  "display_answer": {
+   "en": "Bastian Schweinsteiger",
+   "es": "Bastian Schweinsteiger",
+   "ka": "ბასტიან შვაინშტაიგერი",
+   "tr": "Bastian Schweinsteiger"
+  },
+  "accepted_answers": [
+   "B. Schweinsteiger",
+   "Basti",
+   "Bastian Schweinsteiger",
+   "Bastian Schweinstieger",
+   "Schweini",
+   "Schweinsteiger",
+   "Schweinsteiger Bastian",
+   "ბასტიან",
+   "ბასტიან შვაინშტაიგერ",
+   "ბასტიან შვაინშტაიგერი",
+   "შვაინშტაიგერ",
+   "შვაინშტაიგერი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "pig",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "167727",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Italy plus a rooster represents Andrea Belotti, known as 'Il Gallo' (The Rooster).",
+   "es": "Bandera de Italia más un gallo representa a Andrea Belotti, conocido como 'Il Gallo' (El Gallo).",
+   "ka": "იტალიის დროშა და მამალი წარმოადგენს Andrea Belotti-ს, რომელიც ცნობილია როგორც „Il Gallo“ (მამალი).",
+   "tr": "İtalya bayrağı ve horoz, 'Il Gallo' (Horoz) olarak bilinen Andrea Belotti'yi temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EE-1F1F9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F413.png",
+  "display_answer": {
+   "en": "Andrea Belotti",
+   "es": "Andrea Belotti",
+   "ka": "ანდრეა ბელოტი",
+   "tr": "Andrea Belotti"
+  },
+  "accepted_answers": [
+   "Andrea Belotti",
+   "Belotti",
+   "Belotti Andrea",
+   "ანდრეა ბელოტი"
+  ],
+  "facts": {
+   "a": "flag: Italy",
+   "b": "rooster",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "427568",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of England plus a ram represents Aaron Ramsdale (Ram + Dale).",
+   "es": "Bandera de Inglaterra más un carnero representa a Aaron Ramsdale (Ram + Dale).",
+   "ka": "ინგლისის დროშა და ვერძი წარმოადგენს Aaron Ramsdale-ს (Ram + Dale).",
+   "tr": "İngiltere bayrağı ve koç, Aaron Ramsdale'i (Ram + Dale) temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3F4-E0067-E0062-E0065-E006E-E0067-E007F.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F40F.png",
+  "display_answer": {
+   "en": "Aaron Ramsdale",
+   "es": "Aaron Ramsdale",
+   "ka": "აარონ რამსდეილი",
+   "tr": "Aaron Ramsdale"
+  },
+  "accepted_answers": [
+   "Aaron Ramsdale",
+   "Ramsdale",
+   "Ramsdale Aaron",
+   "აარონ რამსდეილი"
+  ],
+  "facts": {
+   "a": "flag: England",
+   "b": "ram",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "3924",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Côte d'Ivoire combined with an elephant, the symbol of the national team he famously led.",
+   "es": "La bandera de Costa de Marfil combinada con un elefante, el símbolo de la selección nacional que él famosamente lideró.",
+   "ka": "კოტ-დ’ივუარის დროშა და სპილო, იმ ეროვნული ნაკრების სიმბოლო, რომელსაც ის ლიდერობდა.",
+   "tr": "Fildişi Sahili bayrağı ve fil, liderlik ettiği milli takımın sembolünü temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E8-1F1EE.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F418.png",
+  "display_answer": {
+   "en": "Didier Drogba",
+   "es": "Didier Drogba",
+   "ka": "დიდიე დროგბა",
+   "tr": "Didier Drogba"
+  },
+  "accepted_answers": [
+   "D. Drogba",
+   "Dider Drogba",
+   "Didier Droba",
+   "Didier Droga",
+   "Didier Drogba",
+   "Drogba",
+   "Drogba Didier",
+   "Gnegneri Didier Drogba",
+   "დიდიე",
+   "დიდიე დროგბა",
+   "დროგბა"
+  ],
+  "facts": {
+   "a": "flag: Côte d’Ivoire",
+   "b": "elephant",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "5958",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Italy and the Colosseum (classical building) representing the 'King of Rome'.",
+   "es": "La bandera de Italia y el Coliseo (edificio clásico) representando al 'Rey de Roma'.",
+   "ka": "იტალიის დროშა და კოლიზეუმი წარმოადგენს „რომის მეფეს“.",
+   "tr": "İtalya bayrağı ve Kolezyum, 'Roma'nın Kralı'nı temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EE-1F1E9.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3DF.png",
+  "display_answer": {
+   "en": "Francesco Totti",
+   "es": "Francesco Totti",
+   "ka": "ფრანჩესკო ტოტი",
+   "tr": "Francesco Totti"
+  },
+  "accepted_answers": [
+   "Francesco Totti",
+   "Totti Francesco",
+   "ფრანჩესკო ტოტი"
+  ],
+  "facts": {
+   "a": "flag: Indonesia",
+   "b": "stadium",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "119296",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and an oil drum (can) representing his surname.",
+   "es": "La bandera de Alemania y un barril de petróleo (can) representando su apellido.",
+   "ka": "გერმანიის დროშა და ნავთობის კასრი მისი გვარის აღსანიშნავად.",
+   "tr": "Almanya bayrağı ve yağ tenekesi, soyadını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F6E2.png",
+  "display_answer": {
+   "en": "Emre Can",
+   "es": "Emre Can",
+   "ka": "ემრე ჯანი",
+   "tr": "Emre Can"
+  },
+  "accepted_answers": [
+   "Can Emre",
+   "Emre Can",
+   "ემრე ჯანი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "oil drum",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "691892",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Germany and the color brown representing his surname.",
+   "es": "La bandera de Alemania y el color marrón representando su apellido.",
+   "ka": "გერმანიის დროშა და ყავისფერი ფერი მისი გვარის აღსანიშნავად.",
+   "tr": "Almanya bayrağı ve kahverengi rengi, soyadını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E9-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F7EB.png",
+  "display_answer": {
+   "en": "Nathaniel Brown",
+   "es": "Nathaniel Brown",
+   "ka": "ნათანიელ ბრაუნი",
+   "tr": "Nathaniel Brown"
+  },
+  "accepted_answers": [
+   "Brown Nathaniel",
+   "Nathaniel Brown",
+   "ნათანიელ ბრაუნი"
+  ],
+  "facts": {
+   "a": "flag: Germany",
+   "b": "brown square",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "262749",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The flag of Spain and a sun (ray) representing his surname.",
+   "es": "La bandera de España y un sol (rayo) representando su apellido.",
+   "ka": "ესპანეთის დროშა და მზე (სხივი) მისი გვარის აღსანიშნავად.",
+   "tr": "İspanya bayrağı ve güneş (ışın), soyadını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2600.png",
+  "display_answer": {
+   "en": "David Raya",
+   "es": "David Raya",
+   "ka": "დავიდ რაია",
+   "tr": "David Raya"
+  },
+  "accepted_answers": [
+   "David Raya",
+   "Raya David",
+   "დავიდ რაია"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "sun",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "38593",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Slovakia plus a man getting a haircut represents the iconic mohawk of Marek Hamsik.",
+   "es": "Bandera de Eslovaquia más un hombre cortándose el pelo representa el icónico mohicano de Marek Hamsik.",
+   "ka": "სლოვაკეთის დროშა და მამაკაცი თმის შეჭრისას წარმოადგენს Marek Hamsik-ის საკულტო მოჰავკს.",
+   "tr": "Slovakya bayrağı ve saç kestiren adam, Marek Hamsik'in ikonik mohawk saç stilini temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F8-1F1F0.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F487-200D-2642-FE0F.png",
+  "display_answer": {
+   "en": "Marek Hamsik",
+   "es": "Marek Hamsik",
+   "ka": "მარეკ ჰამშიკი",
+   "tr": "Marek Hamsik"
+  },
+  "accepted_answers": [
+   "Hamsik",
+   "Hamsik Marek",
+   "Marek",
+   "Marek Hamsik",
+   "Marek Hamšík",
+   "მარეკ",
+   "მარეკ ჰამშიკ",
+   "მარეკ ჰამშიკი",
+   "ჰამშიკ",
+   "ჰამშიკი"
+  ],
+  "facts": {
+   "a": "flag: Slovakia",
+   "b": "man getting haircut",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "904802",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of the Netherlands plus a top hat points to the surname Hato (Hat).",
+   "es": "Bandera de los Países Bajos más una chistera apunta al apellido Hato (Hat).",
+   "ka": "ნიდერლანდების დროშა და ცილინდრი მიანიშნებს გვარზე Hato (ქუდი).",
+   "tr": "Hollanda bayrağı ve silindir şapka, Hato (Şapka) soyadına işaret ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F3-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3A9.png",
+  "display_answer": {
+   "en": "Jorrel Hato",
+   "es": "Jorrel Hato",
+   "ka": "ჯორელ ჰატო",
+   "tr": "Jorrel Hato"
+  },
+  "accepted_answers": [
+   "Hato",
+   "Hato Jorrel",
+   "Jorrel",
+   "Jorrel Hato",
+   "ჯორელ ჰატო"
+  ],
+  "facts": {
+   "a": "flag: Netherlands",
+   "b": "top hat",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "327757",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Poland plus a pistol represents Piatek's famous 'Pistolero' goal celebration.",
+   "es": "Bandera de Polonia más una pistola representa la famosa celebración de gol 'Pistolero' de Piatek.",
+   "ka": "პოლონეთის დროშა და პისტოლეტი წარმოადგენს Piatek-ის ცნობილ „Pistolero“ გოლის აღნიშვნას.",
+   "tr": "Polonya bayrağı ve tabanca, Piatek'in meşhur 'Pistolero' gol sevincini temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F5-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F52B.png",
+  "display_answer": {
+   "en": "Krzysztof Piatek",
+   "es": "Krzysztof Piatek",
+   "ka": "კშიშტოფ პიონტეკი",
+   "tr": "Krzysztof Piatek"
+  },
+  "accepted_answers": [
+   "Krzysztof",
+   "Krzysztof Piatek",
+   "Piatek",
+   "Piatek Krzysztof",
+   "კშიშტოფ პიონტეკი"
+  ],
+  "facts": {
+   "a": "flag: Poland",
+   "b": "water pistol",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "85314",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Brazil plus a trophy represents the player named Oscar, sharing a name with the famous award.",
+   "es": "Bandera de Brasil más un trofeo representa al jugador llamado Oscar, que comparte nombre con el famoso premio.",
+   "ka": "ბრაზილიის დროშა და თასი წარმოადგენს მოთამაშეს სახელად Oscar, რომელსაც ცნობილი ჯილდოს სახელი ჰქვია.",
+   "tr": "Brezilya bayrağı ve kupa, ünlü ödülle aynı adı taşıyan Oscar isimli oyuncuyu temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F3C6.png",
+  "display_answer": {
+   "en": "Oscar",
+   "es": "Oscar",
+   "ka": "ოსკარი",
+   "tr": "Oscar"
+  },
+  "accepted_answers": [
+   "Oscar",
+   "ოსკარი"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "trophy",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "568157",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "Flag of Spain plus a pine tree points to the surname Pino, which means pine in Spanish.",
+   "es": "Bandera de España más un pino apunta al apellido Pino, que significa pino en español.",
+   "ka": "ესპანეთის დროშა და ფიჭვი მიანიშნებს გვარზე Pino, რაც ესპანურად ფიჭვს ნიშნავს.",
+   "tr": "İspanya bayrağı ve çam ağacı, İspanyolca'da çam anlamına gelen Pino soyadına işaret ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1EA-1F1F8.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F332.png",
+  "display_answer": {
+   "en": "Yéremy Pino",
+   "es": "Yéremy Pino",
+   "ka": "იერემი პინო",
+   "tr": "Yéremy Pino"
+  },
+  "accepted_answers": [
+   "Pino",
+   "Pino Yéremy",
+   "Yéremy",
+   "Yéremy Pino",
+   "იერემი პინო"
+  ],
+  "facts": {
+   "a": "flag: Spain",
+   "b": "evergreen tree",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "943837",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Brazilian flag combined with a rocket represents the young striker nicknamed 'Tigrinho' who signed for Barcelona as a 'Roque-t'.",
+   "es": "La bandera brasileña combinada con un cohete representa al joven delantero apodado 'Tigrinho' que fichó por el Barcelona como un 'Roque-t'.",
+   "ka": "ბრაზილიის დროშა და რაკეტა წარმოადგენს ახალგაზრდა თავდამსხმელს მეტსახელად „Tigrinho“, რომელიც ბარსელონაში გადავიდა როგორც „Roque-t“.",
+   "tr": "Brezilya bayrağı ve roket, Barcelona'ya bir 'Roque-t' (roket) gibi imza atan 'Tigrinho' lakaplı genç forveti temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F680.png",
+  "display_answer": {
+   "en": "Vitor Roque",
+   "es": "Vitor Roque",
+   "ka": "ვიტორ როკე",
+   "tr": "Vitor Roque"
+  },
+  "accepted_answers": [
+   "Roque Vitor",
+   "Vitor Roque",
+   "ვიტორ როკე"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "rocket",
+   "confidence": "medium"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "44058",
+  "difficulty": "easy",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Polish flag plus a cigarette points to the famous goalkeeper known for his smoking habit.",
+   "es": "La bandera polaca más un cigarrillo apuntan al famoso portero conocido por su hábito de fumar.",
+   "ka": "პოლონეთის დროშა და სიგარეტი მიანიშნებს ცნობილ მეკარეზე, რომელიც ცნობილია მოწევის ჩვევით.",
+   "tr": "Polonya bayrağı ve bir sigara, sigara içme alışkanlığıyla tanınan ünlü kaleciye işaret ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F5-1F1F1.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F6AC.png",
+  "display_answer": {
+   "en": "Wojciech Szczesny",
+   "es": "Wojciech Szczesny",
+   "ka": "ვოიცეხ შჩესნი",
+   "tr": "Wojciech Szczesny"
+  },
+  "accepted_answers": [
+   "Scezney",
+   "Schesny",
+   "Szczesny",
+   "Szczesny Wojciech",
+   "W. Szczesny",
+   "Wojciech Szczesny",
+   "ვოიცეხ შჩესნი"
+  ],
+  "facts": {
+   "a": "flag: Poland",
+   "b": "cigarette",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "29241",
+  "difficulty": "medium",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Brazilian flag plus a piece of wood (Silva means forest/wood in Latin) points to the legendary defender.",
+   "es": "La bandera brasileña más un trozo de madera (Silva significa bosque/madera en latín) apuntan al legendario defensa.",
+   "ka": "ბრაზილიის დროშა და ხის ნაჭერი (Silva ლათინურად ნიშნავს ტყეს/ხეს) მიანიშნებს ლეგენდარულ მცველზე.",
+   "tr": "Brezilya bayrağı ve bir tahta parçası (Latince'de Silva orman/odun demektir), efsanevi savunma oyuncusuna işaret ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1E7-1F1F7.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1FAB5.png",
+  "display_answer": {
+   "en": "Thiago Silva",
+   "es": "Thiago Silva",
+   "ka": "ტიაგო სილვა",
+   "tr": "Thiago Silva"
+  },
+  "accepted_answers": [
+   "Silva Thiago",
+   "Thiago Emiliano da Silva",
+   "Thiago Silva",
+   "ტიაგო სილვა"
+  ],
+  "facts": {
+   "a": "flag: Brazil",
+   "b": "wood",
+   "confidence": "high"
+  }
+ },
+ {
+  "family": "picture_pun",
+  "tm_id": "107010",
+  "difficulty": "hard",
+  "prompt": {
+   "en": "Two pictures, one player. Who?",
+   "es": "Dos imágenes, un jugador. ¿Quién?",
+   "ka": "ორი სურათი, ერთი ფეხბურთელი. ვინ?",
+   "tr": "İki resim, bir oyuncu. Kim?"
+  },
+  "explanation": {
+   "en": "The Montenegro flag plus crossed swords represents the aggressive, warrior-like playing style of the veteran defender.",
+   "es": "La bandera de Montenegro más espadas cruzadas representan el estilo de juego agresivo y guerrero del veterano defensa.",
+   "ka": "მონტენეგროს დროშა და გადაჯვარედინებული ხმლები წარმოადგენს ვეტერანი მცველის აგრესიულ, მეომრის მსგავს თამაშის სტილს.",
+   "tr": "Karadağ bayrağı ve çapraz kılıçlar, emektar savunma oyuncusunun agresif ve savaşçı oyun tarzını temsil ediyor."
+  },
+  "image_a_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/1F1F2-1F1EA.png",
+  "image_b_url": "{{ASSET_BASE}}/imgs/football-logic/openmoji/2694.png",
+  "display_answer": {
+   "en": "Stefan Savic",
+   "es": "Stefan Savic",
+   "ka": "სტეფან სავიჩი",
+   "tr": "Stefan Savic"
+  },
+  "accepted_answers": [
+   "Savic",
+   "Savic Stefan",
+   "Stefan Savic",
+   "სტეფან სავიჩი"
+  ],
+  "facts": {
+   "a": "flag: Montenegro",
+   "b": "crossed swords",
+   "confidence": "medium"
+  }
+ }
+]

@@ -237,10 +237,17 @@ async function replaceManualQuestions(
   await tx`DELETE FROM campaign_quiz_questions WHERE quiz_slug = ${slug}`;
 
   await tx`
-    INSERT INTO categories (slug, name, is_active)
-    VALUES (${slug}, ${sql.json({ en: internalName })}, TRUE)
+    INSERT INTO categories (slug, name, is_active, campaign_only)
+    VALUES (${slug}, ${sql.json({ en: internalName })}, FALSE, TRUE)
     ON CONFLICT (slug) DO UPDATE
-    SET is_active = TRUE, updated_at = NOW()
+    SET is_active = CASE
+      WHEN NOT EXISTS (
+        SELECT 1 FROM questions ranked_question
+        WHERE ranked_question.category_id = categories.id
+          AND ranked_question.status = 'published'
+          AND ranked_question.visibility = 'public'
+          AND ranked_question.ranked_eligible = TRUE
+      ) THEN FALSE ELSE categories.is_active END, updated_at = NOW()
   `;
   const [category] = await tx<{ id: string }[]>`
     SELECT id FROM categories WHERE slug = ${slug} LIMIT 1

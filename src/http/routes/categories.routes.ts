@@ -38,10 +38,12 @@ router.get(
 /**
  * GET /api/v1/categories/:id/dependencies
  * Get category dependencies (children, questions, featured status).
- * Public endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.get(
   '/:id/dependencies',
+  authMiddleware,
+  requireRole('admin'),
   validate({ params: uuidParamSchema }),
   categoriesController.getDependencies
 );

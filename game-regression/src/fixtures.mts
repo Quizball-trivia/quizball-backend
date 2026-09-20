@@ -148,6 +148,10 @@ export async function clearFixtures(): Promise<void> {
     matches, lobby_categories, lobby_category_bans, lobby_members,
     lobby_challenge_invitations, lobbies
     RESTART IDENTITY CASCADE`;
+  // Match deletion nulls reservation.match_id rather than deleting the bot
+  // reservation. Clear these transient locks in this disposable database too,
+  // or repeated scenarios exhaust the persistent roster and never boot.
+  await sql`TRUNCATE synthetic_bot_reservations`;
   // Regression-seeded questions/categories (payloads cascade from questions).
   await sql`DELETE FROM question_payloads WHERE question_id IN (
     SELECT q.id FROM questions q JOIN categories c ON c.id = q.category_id
@@ -196,7 +200,10 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
       // leave the ranked harness with an empty pool. Friendly/party pool is the
       // inverse (non-featured only), so friendly fixtures skip the insert.
       // clearFixtures() already deletes these rows symmetrically.
-      if (!isFriendly) {
+      // The release rehearsal follows the current production pool: World Cup
+      // featured categories are excluded. Legacy scenarios can retain their
+      // historical fixture shape until their assertions are migrated.
+      if (!isFriendly && process.env.REGRESSION_FEATURED_FIXTURES !== 'false') {
         await sql`
           INSERT INTO featured_categories (category_id)
           VALUES (${category.id})

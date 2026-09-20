@@ -30,6 +30,8 @@ import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
+import { footballGridRepo, footballGridService } from '../../modules/football-grid/index.js';
+import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
 import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 
@@ -375,6 +377,15 @@ async function isActiveLobbyLive(
     return true;
   }
 
+  if (lobby.game_mode === 'football_grid') {
+    try {
+      if (await footballGridRepo.hasOpenSeriesForLobby(lobby.id)) return true;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect Football Grid series state');
+      return true;
+    }
+  }
+
   if (lobby.game_mode === 'auction' || lobby.game_mode === 'ranked_sim') {
     const redis = getRedisClient();
     if (!redis?.isOpen) return true;
@@ -425,6 +436,14 @@ async function isWaitingLobbyAbandonedBy(
   } catch (error) {
     logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect waiting lobby socket presence');
     return false;
+  }
+  if (lobby.game_mode === 'football_grid') {
+    try {
+      if (await footballGridRepo.hasOpenSeriesForLobby(lobby.id)) return false;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect Football Grid series state');
+      return false;
+    }
   }
   return true;
 }
@@ -508,6 +527,17 @@ async function cleanupStaleOrphanActiveMatch(
   const activeMatch = context.activeMatch;
   if (!activeMatch) return;
 
+  if (activeMatch.game_variant === 'football_grid') {
+    // Grid activity updates its own row, not the generic matches timestamp.
+    // Check again under that row's lock before cancelling a reconnecting game.
+    if (!await matchesRepo.isActiveMatchStale(activeMatch.id, STALE_ACTIVE_MATCH_MS)) return;
+    const state = await footballGridService.cancelAdministratively(activeMatch.id, { olderThanMs: STALE_ACTIVE_MATCH_MS });
+    if (state.phase !== 'terminal') return;
+    await footballGridRealtimeService.publishState(io, state);
+    logger.warn({ userId, matchId: activeMatch.id }, 'Session guard cancelled stale Football Grid match');
+    return;
+  }
+
   const activityAt = activeMatch.updated_at ?? activeMatch.started_at;
   const activityAtMs = Date.parse(activityAt);
   const ageMs = Number.isNaN(activityAtMs) ? 0 : Date.now() - activityAtMs;
@@ -566,11 +596,6 @@ async function cleanupStaleOrphanActiveMatch(
     } catch (error) {
       logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
     }
-  }
-
-  if (activeMatch.game_variant === 'football_grid') {
-    // Football Grid does not ship in this release; the variant cannot occur.
-    return;
   }
 
   if (activeMatch.mode === 'ranked') {

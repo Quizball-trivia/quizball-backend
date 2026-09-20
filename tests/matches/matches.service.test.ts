@@ -109,6 +109,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
+    getByIds: async (ids: string[]) => new Map(ids.map(id => [id, { id, is_guest: false }])),
   },
 }));
 

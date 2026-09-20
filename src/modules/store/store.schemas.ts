@@ -69,7 +69,7 @@ export const storeProductsResponseSchema = z.object({
 });
 
 export const storeWalletResponseSchema = z.object({
-  coins: z.number().int().nonnegative(),
+  coins: z.number().finite().nonnegative(),
   tickets: z.number().int().nonnegative(),
   ticketPurchaseCooldown: z.object({
     canBuy: z.boolean(),
@@ -191,6 +191,8 @@ export const storeTransactionLogResponseSchema = z.object({
   stripeCheckoutId: z.string().nullable(),
   stripePaymentIntent: z.string().nullable(),
   coinsDelta: z.number().int(),
+  coinsDeltaMinor: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+  coinsDeltaExact: z.number().finite().multipleOf(0.01),
   ticketsDelta: z.number().int(),
   inventoryDelta: nullableJsonObjectSchema,
   reason: z.string().nullable(),

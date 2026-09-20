@@ -42,6 +42,8 @@ import {
 import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
 import { trackAccountCreated } from '../../core/analytics.js';
 import type { CampaignAttribution } from '../../core/campaign-attribution.js';
+import { normalizeSupportedCountryCode } from '../../core/country.js';
+import { guestKitFor, guestNameCandidates } from '../guest/guest-identity.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
@@ -184,8 +186,9 @@ async function buildIdentityBackfill(
 ): Promise<UpdateUserData> {
   const backfill: UpdateUserData = {};
   const phoneNumber = normalizeOptionalText(identity.phoneNumber);
-  if (!user.country && detectedCountry) {
-    backfill.country = detectedCountry;
+  const detectedCountryCode = normalizeSupportedCountryCode(detectedCountry);
+  if (!user.country && detectedCountryCode) {
+    backfill.country = detectedCountryCode;
   }
   if (phoneNumber) {
     if (user.phone_number !== phoneNumber) {
@@ -327,6 +330,59 @@ async function notifyProgressionChange(
  */
 export const usersService = {
   /**
+   * Guest provisioning (friend lobbies). Unlike getOrCreateFromIdentity it never
+   * emits account_created, never backfills profile fields, and inserts the row
+   * with zero balances. `created` tells socket auth whether admission was a
+   * first-time provision (gated by GUEST_LOBBIES_PROVISIONING_ENABLED) or a
+   * returning guest (gated by GUEST_LOBBIES_RECONNECT_ENABLED).
+   */
+  async getOrCreateGuest(
+    identity: AuthIdentity,
+    detectedCountry?: string | null,
+    opts?: { allowCreate?: boolean },
+  ): Promise<{ user: User; created: boolean }> {
+    const cached = await getCachedUser(identity.provider, identity.subject);
+    if (cached) {
+      assertUserAccountActive(cached);
+      return { user: cached, created: false };
+    }
+    const existingIdentity = await identitiesRepo.getByProviderSubject(identity.provider, identity.subject);
+    const existing = existingIdentity?.user ?? null;
+    if (existing) {
+      assertUserAccountActive(existing);
+      try {
+        await setCachedUser(identity.provider, identity.subject, existing);
+      } catch (err) {
+        logger.warn({ err, userId: existing.id }, 'Cache population failed (non-fatal)');
+      }
+      return { user: existing, created: false };
+    }
+    if (opts?.allowCreate === false) {
+      throw new AuthenticationError('Guest provisioning is disabled');
+    }
+    const creation = await usersRepo.createGuestWithIdentity(
+      {
+        nicknameCandidates: guestNameCandidates(identity.subject),
+        country: normalizeSupportedCountryCode(detectedCountry) ?? undefined,
+        avatarCustomization: guestKitFor(identity.subject),
+      },
+      { provider: identity.provider, subject: identity.subject },
+    );
+    if (creation.created) {
+      logger.info({ userId: creation.user.id, provider: identity.provider }, 'Created guest user');
+    } else {
+      // Lost the insert race to a concurrent handshake: same active-account rule as above.
+      assertUserAccountActive(creation.user);
+    }
+    try {
+      await setCachedUser(identity.provider, identity.subject, creation.user);
+    } catch (err) {
+      logger.warn({ err, userId: creation.user.id }, 'Cache population failed (non-fatal)');
+    }
+    return creation;
+  },
+
+  /**
    * Get or create user from auth identity.
    * This is the main entry point after JWT verification.
    *
@@ -348,13 +404,14 @@ export const usersService = {
       };
     },
   ): Promise<User> {
+    const detectedCountryCode = normalizeSupportedCountryCode(detectedCountry);
     // 1. Check cache first
     const cached = await getCachedUser(identity.provider, identity.subject);
     if (cached) {
       assertUserAccountActive(cached);
 
       // Backfill missing fields for existing users
-      const backfill = await buildIdentityBackfill(cached, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(cached, identity, detectedCountryCode);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
@@ -382,7 +439,7 @@ export const usersService = {
       assertUserAccountActive(existingUser);
 
       // Backfill missing fields for existing users
-      const backfill = await buildIdentityBackfill(existingUser, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(existingUser, identity, detectedCountryCode);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);
@@ -437,7 +494,7 @@ export const usersService = {
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
         nickname: proposedNickname,
-        country: detectedCountry ?? undefined,
+        country: detectedCountryCode ?? undefined,
       },
       {
         provider: identity.provider,
@@ -448,7 +505,7 @@ export const usersService = {
     const newUser = creation.user;
 
     logger.info(
-      { userId: newUser.id, provider: identity.provider, country: detectedCountry },
+      { userId: newUser.id, provider: identity.provider, country: detectedCountryCode },
       'Created new user and identity'
     );
 
@@ -682,7 +739,7 @@ export const usersService = {
 
   async assertPublicUserVisible(id: string): Promise<void> {
     const user = await usersRepo.getById(id);
-    if (!user || isUserAccountInactive(user)) {
+    if (!user || isUserAccountInactive(user) || user.is_guest) {
       throw new NotFoundError('User not found');
     }
   },
@@ -701,6 +758,17 @@ export const usersService = {
     const updateData: typeof data = { ...data };
     let nicknameChange: { from: string | null; to: string } | null = null;
     let currentUser: User | null = null;
+
+    if (typeof data.country === 'string') {
+      const country = normalizeSupportedCountryCode(data.country);
+      if (!country) {
+        throw new BadRequestError('Country must be a supported ISO 3166-1 alpha-2 code', {
+          field: 'country',
+          reason: 'unsupported_country_code',
+        });
+      }
+      updateData.country = country;
+    }
 
     if (typeof data.nickname === 'string') {
       const nickname = data.nickname.trim();
@@ -801,7 +869,8 @@ export const usersService = {
    */
   async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
     const user = await usersRepo.getById(targetUserId);
-    if (!user || isUserAccountInactive(user)) {
+    // Guests have no public projection (no profile, rank, history or achievements).
+    if (!user || isUserAccountInactive(user) || user.is_guest) {
       throw new NotFoundError('User not found');
     }
 

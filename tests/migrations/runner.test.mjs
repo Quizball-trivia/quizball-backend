@@ -27,6 +27,7 @@ test('connection guard rejects transaction pooling and project mismatches withou
   const app = 'postgresql://postgres.prodref:secret@aws-1-eu-central-1.pooler.supabase.com:6543/postgres';
   const session = app.replace(':6543/', ':5432/');
   assert.throws(() => migrationConnection({DATABASE_URL: app}), /session pooler/);
+  assert.throws(() => migrationConnection({DATABASE_URL: 'postgresql://postgres:secret@db.prodref.supabase.co:6543/postgres'}), /session pooler/);
   assert.equal(migrationConnection({DATABASE_URL: app, MIGRATION_DATABASE_URL: session, MIGRATION_EXPECTED_PROJECT_REF: 'prodref'}), session);
   assert.throws(() => migrationConnection({DATABASE_URL: app, MIGRATION_DATABASE_URL: session.replace('prodref', 'stage')}), /projects differ/);
   assert.throws(() => migrationConnection({DATABASE_URL: session, MIGRATION_EXPECTED_PROJECT_REF: 'stage'}), /expected project/);
@@ -81,6 +82,26 @@ test('migration execution and failure recovery on real PostgreSQL', async t => {
       assert.deepEqual((await sql`SELECT version FROM supabase_migrations.schema_migrations`).map(x => x.version), ['100']);
       await file('101', 'INSERT INTO proof VALUES(1);');
       await run(); assert.equal((await sql`SELECT * FROM proof`).length, 1);
+    }));
+    await t.test('nontransactional validation releases preceding DDL locks before a long scan', () => fixture(async ({sql,file,run}) => {
+      await file('100', 'CREATE TABLE proof(id int);'); await run();
+      await file('101', '-- migrate:no-transaction\nALTER TABLE proof ADD COLUMN IF NOT EXISTS extra int; SELECT pg_sleep(1);');
+      const running = run();
+      let scanning = false;
+      for (let n=0; n<100; n++) {
+        const [r] = await sql`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND application_name='quizball-migrations' AND query LIKE '%pg_sleep%' AND state='active') AS scanning`;
+        if (r.scanning) { scanning = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      try {
+        assert.equal(scanning, true);
+        await sql.begin(async tx => {
+          await tx.unsafe("SET LOCAL lock_timeout='150ms'");
+          await tx`INSERT INTO proof(id) VALUES(1)`;
+        });
+      } finally { await running; }
+      assert.equal((await sql`SELECT * FROM proof`).length, 1);
+      assert.equal((await run()).applied.length, 0);
     }));
     await t.test('SQL success before failed ledger insert can be safely retried', () => fixture(async ({sql,file,run}) => {
       await file('100', 'CREATE TABLE proof(id int);'); await run();

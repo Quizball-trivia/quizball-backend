@@ -48,7 +48,7 @@ export async function runMigrations({ directory = MIGRATIONS_DIR, env = process.
     const pending = migrations.filter(x => !applied.has(x.version));
     // Applied historical files remain evidence; classify only pending SQL.
     for (const migration of pending) {
-      try { migration.nonTransactional = classifyMigration(migration.body).nonTransactional; }
+      try { Object.assign(migration, classifyMigration(migration.body)); }
       catch (error) { throw new Error(`${migration.file}: ${error.message}`); }
     }
     await assertIndexes();
@@ -68,7 +68,14 @@ export async function runMigrations({ directory = MIGRATIONS_DIR, env = process.
       let transaction = false;
       try {
         if (!migration.nonTransactional) { await query('BEGIN'); transaction = true; }
-        await query(migration.body);
+        // A multi-statement simple query runs in an implicit transaction even
+        // without BEGIN. Send opted-out statements separately so validation
+        // scans do not retain locks taken by preceding schema changes.
+        if (migration.nonTransactional) {
+          for (const statement of migration.statements) await query(statement.sql);
+        } else {
+          await query(migration.body);
+        }
         await assertIndexes();
         await query('INSERT INTO supabase_migrations.schema_migrations(version,name) VALUES($1,$2)', [
           migration.version, migration.file.replace(/^\d+_/, '').replace(/\.sql$/, ''),

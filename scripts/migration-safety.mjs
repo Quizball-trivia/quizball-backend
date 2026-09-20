@@ -73,7 +73,7 @@ export function migrationConnection(env) {
   if (!selected) throw new Error('A migration database URL is required');
   const url = new URL(selected);
   if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw new Error('Expected a PostgreSQL URL');
-  if (url.hostname.endsWith('.pooler.supabase.com') && url.port === '6543') {
+  if ((url.hostname.endsWith('.pooler.supabase.com') || /^db\.[a-z0-9]+\.supabase\.co$/.test(url.hostname)) && url.port === '6543') {
     throw new Error('Migrations require the session pooler; set MIGRATION_DATABASE_URL to port 5432');
   }
   const refOf = (value) => {

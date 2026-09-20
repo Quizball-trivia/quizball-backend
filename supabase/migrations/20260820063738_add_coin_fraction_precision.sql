@@ -23,8 +23,7 @@ begin
 end
 $$;
 
-alter table public.users
-  validate constraint users_coin_fraction_minor_range;
+-- Validation runs in 20260920083121 after this schema transaction commits.
 
 -- Preserve the historic whole-coin column for compatibility while giving the
 -- immutable ledger an exact minor-unit amount for fractional game settlement.

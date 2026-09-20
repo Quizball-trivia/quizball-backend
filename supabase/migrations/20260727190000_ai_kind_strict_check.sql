@@ -32,4 +32,4 @@ BEGIN
 END;
 $$;
 
-ALTER TABLE public.users VALIDATE CONSTRAINT chk_users_ai_kind_consistency;
+-- Validation runs in 20260920083121 after the schema locks are released.

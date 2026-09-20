@@ -17,7 +17,7 @@ vi.mock('posthog-node', () => ({
 // Mock the DB. `sql\`...\`` is a tagged template: first arg is the strings
 // array, rest are interpolated values. We resolve based on the queried user id
 // and count calls so tests can assert when a lookup did/didn't happen.
-const sqlResultByUserId = new Map<string, { is_ai: boolean }[]>();
+const sqlResultByUserId = new Map<string, { is_ai: boolean; is_guest?: boolean }[]>();
 let sqlShouldThrow = false;
 const sqlCallSpy = vi.fn();
 // When set, the is_ai lookup does NOT resolve until the test calls the captured
@@ -63,7 +63,7 @@ beforeEach(async () => {
   sqlCallSpy.mockClear();
   sqlShouldThrow = false;
   sqlGate = null;
-  sqlResultByUserId.set(REAL_USER, [{ is_ai: false }]);
+  sqlResultByUserId.set(REAL_USER, [{ is_ai: false, is_guest: false }]);
   sqlResultByUserId.set(AI_USER, [{ is_ai: true }]);
   process.env.POSTHOG_API_KEY = 'test-key';
   const mod = await import('../../src/core/analytics.js');
@@ -83,6 +83,42 @@ afterEach(() => {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('analytics AI-user suppression', () => {
+  it('classifies human guest and member events using the existing cached lookup', async () => {
+    const guest = '33333333-3333-4333-8333-333333333333';
+    sqlResultByUserId.set(guest, [{ is_ai: false, is_guest: true }]);
+    trackEvent('match_started', guest);
+    trackEvent('match_completed', guest);
+    trackEvent('match_completed', REAL_USER);
+    await flush();
+    expect(captureMock.mock.calls.map(([event]) => [event.distinctId, event.properties.access_type, event.properties.event_source])).toEqual([
+      [guest, 'guest', 'server'], [guest, 'guest', 'server'], [REAL_USER, 'member', 'server'],
+    ]);
+    expect(sqlCallSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps failed identity lookups unknown instead of counting them as members', async () => {
+    sqlShouldThrow = true;
+    trackEvent('match_completed', REAL_USER);
+    await flush();
+    expect(captureMock.mock.calls[0][0].properties.access_type).toBe('unknown');
+  });
+
+  it('does not reuse an expired member label when refreshing identity fails', async () => {
+    trackEvent('match_completed', REAL_USER);
+    await flush();
+    expect(captureMock.mock.calls[0][0].properties.access_type).toBe('member');
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 6 * 60 * 1000);
+    try {
+      sqlShouldThrow = true;
+      trackEvent('match_completed', REAL_USER);
+      await flush();
+      expect(captureMock.mock.calls[1][0].properties.access_type).toBe('unknown');
+      expect(sqlCallSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it('captures events for real (is_ai=false) users', async () => {
     trackEvent('match_completed', REAL_USER, { mode: 'possession' });
     await flush();

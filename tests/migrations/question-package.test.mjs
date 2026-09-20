@@ -143,3 +143,20 @@ test('publication rejects changes to eligibility, target, verification, or packa
     assert.throws(()=>validateQuestionPublicationPlan(plan,pkg),/does not match/);
   }
 });
+
+test('explicit WL publication preserves private scope and refuses unresolved review cases',()=>{
+  const source=snapshot('stage',[{n:2,visibility:'wl_private',ranked_eligible:false},
+    {n:3,visibility:'wl_private',ranked_eligible:true},{n:4,visibility:'wl_private',ranked_eligible:false,status:'draft'},
+    {n:5,visibility:'wl_private',ranked_eligible:false,prompt:{en:'E2E fixture'}},
+    {n:6,visibility:'wl_private',ranked_eligible:false,prompt:{en:'Same content'}},{n:7}]);
+  const target=snapshot('prod',[{n:8,visibility:'wl_private',ranked_eligible:false,prompt:{en:'Same content'}}]);
+  const pkg=buildAdditiveQuestionPackage(source,target);
+  const options={verificationSha256:'a'.repeat(64),publicationScope:'wl-private'};
+  const plan=buildQuestionPublicationPlan(pkg,[uuid(2)],options);
+  assert.equal(plan.format,2);assert.equal(plan.publicationScope,'wl-private');
+  assert.deepEqual(plan.selections,[{id:uuid(2),type:'mcq_single',rankedEligible:false}]);
+  assert.deepEqual(validateQuestionPublicationPlan(plan,pkg),plan);
+  for(const id of [uuid(3),uuid(4),uuid(5),uuid(6),uuid(7)])assert.throws(()=>buildQuestionPublicationPlan(pkg,[id],options),/not eligible/);
+  const altered={...plan,publicationScope:'public'};const {sha256,...body}=altered;altered.sha256=contentHash(body);
+  assert.throws(()=>validateQuestionPublicationPlan(altered,pkg),/not eligible/);
+});

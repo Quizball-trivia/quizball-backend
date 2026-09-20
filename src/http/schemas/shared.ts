@@ -1,4 +1,19 @@
 import { z } from 'zod';
+import { SUPPORTED_ISO_COUNTRY_CODES } from '../../core/country.js';
+
+/**
+ * Canonical persisted country code. Lowercase/whitespace variants normalize at
+ * the API boundary; names, private labels, legacy aliases and unknown codes do
+ * not enter `users.country`.
+ */
+export const countryCodeSchema = z.preprocess(
+  (value) => typeof value === 'string' ? value.trim().toUpperCase() : value,
+  z.enum(SUPPORTED_ISO_COUNTRY_CODES, {
+    errorMap: () => ({ message: 'Country must be a supported ISO 3166-1 alpha-2 code' }),
+  }),
+);
+
+
 
 /**
  * i18n field schema - object with ISO 639-1 language codes as keys.

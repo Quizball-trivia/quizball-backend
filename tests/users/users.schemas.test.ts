@@ -4,8 +4,20 @@ import {
   toUserResponse,
   userIdParamSchema,
   type PublicProfileData,
+  updateProfileSchema,
 } from '../../src/modules/users/users.schemas.js';
 import { avatarCustomizationSchema } from '../../src/modules/users/avatar-customization.js';
+
+describe('country compatibility before the release constraint', () => {
+  it('normalizes supported codes before persistence and leaves unrelated updates alone', () => {
+    expect(updateProfileSchema.parse({ country: ' ge ' }).country).toBe('GE');
+    expect(updateProfileSchema.parse({ country: 'US' }).country).toBe('US');
+    expect(updateProfileSchema.parse({ nickname: 'Player' })).not.toHaveProperty('country');
+  });
+  it.each(['Georgia', 'ZZ', 'XX', 'private-country', ''])('rejects %s before a database write', country => {
+    expect(updateProfileSchema.safeParse({ country }).success).toBe(false);
+  });
+});
 
 describe('avatarCustomizationSchema', () => {
   it('accepts headgear, earrings and bounded hair colours', () => {

@@ -30,7 +30,7 @@ export function verifiedMediaUrlMap(plans,receipts){
  return {mapping,verificationSha256:contentHash({plans:plans.map(p=>p.sha256).sort(),destinations:evidence.sort((a,b)=>a.url.localeCompare(b.url))})};
 }
 
-export function bindRuntimeMedia(table,row,mapping){
+export function bindRuntimeMedia(table,row,mapping,imageMetadata={}){
  if(!Object.hasOwn(TABLE_COLUMNS,table))throw new Error('Unsupported media table');
  const result=structuredClone(row);
  function bind(value){
@@ -43,25 +43,48 @@ export function bindRuntimeMedia(table,row,mapping){
  if(table==='question_payloads'){
   if(!result.payload||typeof result.payload!=='object'||Array.isArray(result.payload))throw new Error('Expected structured question payload');
   for(const key of ['image_a_url','image_b_url'])if(result.payload[key])result.payload[key]=bind(result.payload[key]);
-  if(result.payload.image?.url)result.payload.image.url=bind(result.payload.image.url);
+  if(result.payload.image?.url){
+   const metadata=imageMetadata[result.payload.image.url];
+   if(metadata){
+    // Repair missing dimensions from the same byte-verified image. A positive
+    // editorial value is never silently replaced by this release operation.
+    for(const field of ['width','height']){
+     if(result.payload.image[field]===0)result.payload.image[field]=metadata[field];
+     else if(result.payload.image[field]!==metadata[field])throw new Error('Existing image dimension differs from decoded bytes');
+    }
+   }
+   result.payload.image.url=bind(result.payload.image.url);
+  }
  }else if(result[TABLE_COLUMNS[table]])result[TABLE_COLUMNS[table]]=bind(result[TABLE_COLUMNS[table]]);
  return result;
 }
-export function buildMediaBindingPlan(rows,{targetProject,mapping,verificationSha256}){
+export function buildMediaBindingPlan(rows,{targetProject,mapping,verificationSha256,imageMetadata={}}){
  if(![PROD,STAGE].includes(targetProject)||!isHash(verificationSha256)||!mapping||typeof mapping!=='object')throw new Error('Pinned target and asset verification required');
  for(const [source,target] of Object.entries(mapping)){
   const from=new URL(source),to=new URL(target);
   if(from.protocol!=='https:'||from.username||from.password||to.origin!==`https://${PROD}.supabase.co`||!/^\/storage\/v1\/object\/public\/(imgs|goal-clips)\/releases\/[a-f0-9]{64}\/[a-f0-9]{64}\.(webp|png|jpg|svg|mp4)$/.test(to.pathname)||to.search||to.hash)throw new Error('Media mapping escapes its production namespace');
  }
+ if(!imageMetadata||typeof imageMetadata!=='object'||Array.isArray(imageMetadata))throw new Error('Invalid image metadata');
+ for(const [source,metadata] of Object.entries(imageMetadata)){
+  if(!mapping[source]||Object.keys(metadata).sort().join(',')!=='bytes,height,sha256,width'||!isHash(metadata.sha256)
+    ||!Number.isSafeInteger(metadata.bytes)||metadata.bytes<=0||metadata.bytes>15_000_000
+    ||!Number.isSafeInteger(metadata.width)||metadata.width<=0||!Number.isSafeInteger(metadata.height)||metadata.height<=0
+    ||metadata.width*metadata.height>50_000_000)throw new Error('Pinned image bytes and valid decoded dimensions required');
+ }
  const ids=new Set(),changes=[];
  for(const entry of rows){
   if(!isHash(entry.contentBatchId)||!entry.before?.id)throw new Error('Content ownership and original row are required');
   const key=entry.table+':'+entry.before.id;if(ids.has(key))throw new Error('Duplicate media row');ids.add(key);
-  const after=bindRuntimeMedia(entry.table,entry.before,mapping);
+  const after=bindRuntimeMedia(entry.table,entry.before,mapping,imageMetadata);
   if(!same(after,entry.before))changes.push({table:entry.table,id:entry.before.id,contentBatchId:entry.contentBatchId,before:entry.before,beforeHash:contentHash(entry.before),after});
  }
  changes.sort((a,b)=>(a.table+':'+a.id).localeCompare(b.table+':'+b.id));
  const body={format:1,targetProject,verificationSha256,mapping,rows:changes,policy:'runtime-URLs-only; preserve-existing-production-rows; compare-and-swap; no-delete'};
+ if(Object.keys(imageMetadata).length){
+  const used=new Set(changes.filter(r=>r.table==='question_payloads').map(r=>r.before.payload.image?.url));
+  if(Object.keys(imageMetadata).some(url=>!used.has(url)))throw new Error('Image correction is not used by a reviewed payload');
+  Object.assign(body,{format:2,imageMetadata,policy:'runtime-URLs-and-zero-image-dimensions-only; preserve-existing-production-rows; compare-and-swap; no-delete'});
+ }
  return {...body,sha256:contentHash(body)};
 }
 export function validateMediaBindingPlan(plan,expectedSha256){

@@ -46,3 +46,16 @@ test('normalizes interleaved apply and undo in actual journal sequence order',()
  assert.deepEqual(originalBeforeMediaBindings(undoFirst,receipts),original);
  const edited={...undoFirst,name:'Later editor'};assert.deepEqual(originalBeforeMediaBindings(edited,receipts),edited);
 });
+
+test('versioned dimension repair fills only zeros and preserves answers and originals',()=>{
+ const row={id,payload:{type:'mcq_single',image:{url:old,width:0,height:0,alt:'Preserved'},answer:'Unchanged'}};
+ const metadata={[old]:{sha256:'2'.repeat(64),bytes:15,width:200,height:100}};
+ const p=buildMediaBindingPlan([{table:'question_payloads',contentBatchId:batch,before:row}],{targetProject:'lfbwhxvwubzeqkztghok',mapping:{[old]:next},verificationSha256:'4'.repeat(64),imageMetadata:metadata});
+ assert.equal(p.format,2);assert.equal(p.rows[0].before.payload.image.width,0);
+ assert.deepEqual(p.rows[0].after.payload.image,{url:next,width:200,height:100,alt:'Preserved'});
+ assert.equal(p.rows[0].after.payload.answer,'Unchanged');validateMediaBindingPlan(p,p.sha256);
+ const positive=structuredClone(row);positive.payload.image.width=999;
+ assert.throws(()=>bindRuntimeMedia('question_payloads',positive,{[old]:next},metadata),/Existing image dimension/);
+ p.rows[0].after.payload.answer='Wrong';const{sha256,...body}=p;p.sha256=contentHash(body);
+ assert.throws(()=>validateMediaBindingPlan(p,p.sha256),/outside/);
+});

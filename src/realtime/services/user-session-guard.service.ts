@@ -527,6 +527,17 @@ async function cleanupStaleOrphanActiveMatch(
   const activeMatch = context.activeMatch;
   if (!activeMatch) return;
 
+  if (activeMatch.game_variant === 'football_grid') {
+    // Grid activity updates its own row, not the generic matches timestamp.
+    // Check again under that row's lock before cancelling a reconnecting game.
+    if (!await matchesRepo.isActiveMatchStale(activeMatch.id, STALE_ACTIVE_MATCH_MS)) return;
+    const state = await footballGridService.cancelAdministratively(activeMatch.id, { olderThanMs: STALE_ACTIVE_MATCH_MS });
+    if (state.phase !== 'terminal') return;
+    await footballGridRealtimeService.publishState(io, state);
+    logger.warn({ userId, matchId: activeMatch.id }, 'Session guard cancelled stale Football Grid match');
+    return;
+  }
+
   const activityAt = activeMatch.updated_at ?? activeMatch.started_at;
   const activityAtMs = Date.parse(activityAt);
   const ageMs = Number.isNaN(activityAtMs) ? 0 : Date.now() - activityAtMs;
@@ -585,14 +596,6 @@ async function cleanupStaleOrphanActiveMatch(
     } catch (error) {
       logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
     }
-  }
-
-  if (activeMatch.game_variant === 'football_grid') {
-    if (!staleByAge) return;
-    const state = await footballGridService.cancelAdministratively(activeMatch.id);
-    await footballGridRealtimeService.publishState(io, state);
-    logger.warn({ userId, matchId: activeMatch.id }, 'Session guard cancelled stale Football Grid match');
-    return;
   }
 
   if (activeMatch.mode === 'ranked') {

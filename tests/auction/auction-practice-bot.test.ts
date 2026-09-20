@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-vi.hoisted(() => { process.env.AUCTION_ENABLED = 'true'; process.env.GUEST_BOT_MATCHES_ENABLED = 'true'; process.env.GUEST_BOT_MATCH_DELAY_MIN_MS = '0'; process.env.GUEST_BOT_MATCH_DELAY_MAX_MS = '0'; });
+vi.hoisted(() => { process.env.GUEST_LOBBIES_PROVISIONING_ENABLED = 'true'; process.env.GUEST_LOBBIES_RECONNECT_ENABLED = 'true'; process.env.AUCTION_ENABLED = 'true'; process.env.GUEST_BOT_MATCHES_ENABLED = 'true'; process.env.GUEST_BOT_MATCH_DELAY_MIN_MS = '0'; process.env.GUEST_BOT_MATCH_DELAY_MAX_MS = '0'; });
 import '../setup.js';
 
 const auctionContentServiceMock = vi.hoisted(() => ({
@@ -62,6 +62,7 @@ import {
 } from '../../src/modules/auction/index.js';
 import { auctionRealtimeService } from '../../src/realtime/services/auction-realtime.service.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
+import { config } from '../../src/core/config.js';
 
 function publishedCard(overrides: Record<string, unknown> = {}) {
   return {
@@ -137,12 +138,21 @@ const GUEST_NAME = /^[A-Z][a-z]+ [A-Z][a-z]+ \d{4}$/;
 describe('auctionRealtimeService.handleStartPracticeMatch (guest "Play now")', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    config.GUEST_LOBBIES_PROVISIONING_ENABLED = true;
     guard.blocked = false;
     limits.allow = true;
     auctionContentServiceMock.assertPublishedAuctionContentAvailable.mockResolvedValue(undefined);
     auctionContentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(publishedCard());
     auctionStateStoreMock.save.mockImplementation(async (state: unknown) => state);
     auctionStateStoreMock.getActiveMatchIdForUser.mockResolvedValue(null);
+  });
+
+  it('does not create a new practice auction while guest provisioning is draining', async () => {
+    config.GUEST_LOBBIES_PROVISIONING_ENABLED = false;
+    const { io } = createIo();
+    const socket = createSocket({ id: 'draining-guest', nickname: 'Guest', is_guest: true });
+    await auctionRealtimeService.handleStartPracticeMatch(io, socket, { locale: 'en', formation: '2-2-2' }, { context: deterministicContext });
+    expect(auctionStateStoreMock.save).not.toHaveBeenCalled();
   });
 
   it('seats the guest with anonymous guest-style bots, origin practice, no ranked identity on any seat', async () => {

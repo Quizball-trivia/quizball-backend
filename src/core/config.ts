@@ -266,6 +266,10 @@ const configSchema = z.object({
   // no new guest users, no new guest rooms/memberships; guests already in a
   // room may reconnect and finish. Reconnect off: every guest token is refused
   // (HTTP principal and socket), so provisioning is only usable with reconnect on.
+  GUEST_HTTP_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   GUEST_LOBBIES_PROVISIONING_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -283,7 +287,7 @@ const configSchema = z.object({
     .transform((value) => value === 'true' || value === '1'),
   GUEST_BOT_MATCHES_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
-    .default("true")
+    .default("false")
     .transform((val) => val === "true" || val === "1"),
   /** Random wait before a guest practice table is seated, so it feels like matchmaking. */
   GUEST_BOT_MATCH_DELAY_MIN_MS: z.coerce.number().int().min(0).default(5_000),

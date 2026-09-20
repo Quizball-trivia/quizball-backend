@@ -525,6 +525,17 @@ export const footballGridRepo = {
     return Number(rows[0].now_ms);
   },
 
+  /** Call after loadStateForUpdate, while the authoritative Grid row is locked. */
+  async isStaleInTransaction(tx: TransactionSql, matchId: string, olderThanMs: number): Promise<boolean> {
+    if (!Number.isFinite(olderThanMs) || olderThanMs <= 0) throw new Error('Positive stale age required');
+    const rows = await tx.unsafe<Array<{ stale: boolean }>>(
+      `SELECT updated_at < clock_timestamp() - make_interval(secs => $2::double precision / 1000) AS stale
+         FROM football_grid_matches WHERE match_id = $1`,
+      [matchId, olderThanMs],
+    );
+    return rows[0]?.stale ?? false;
+  },
+
   async getPendingCommandIdInTx(tx: TransactionSql, matchId: string): Promise<string | null> {
     const rows = await tx.unsafe<Array<{ pending_command_id: string | null }>>(
       `SELECT pending_command_id FROM football_grid_matches WHERE match_id = $1 FOR UPDATE`,

@@ -803,11 +803,13 @@ export const footballGridService = {
     }
   },
 
-  async cancelAdministratively(matchId: string): Promise<FootballGridState> {
+  async cancelAdministratively(matchId: string, options: { olderThanMs?: number } = {}): Promise<FootballGridState> {
     const state = await footballGridRepo.runInTransaction(async (tx) => {
       const previous = await footballGridRepo.loadStateForUpdate(tx, matchId);
       if (!previous) throw new NotFoundError('Football Grid match not found');
       if (previous.phase === 'terminal') return previous;
+      if (options.olderThanMs !== undefined
+        && !await footballGridRepo.isStaleInTransaction(tx, matchId, options.olderThanMs)) return previous;
       const next = cancelNoContest(previous, 'administrative_cancel', await footballGridRepo.databaseNowMs(tx));
       await footballGridRepo.persistStateInTx(tx, previous, next, { eventType: 'administrative_cancel' });
       return next;

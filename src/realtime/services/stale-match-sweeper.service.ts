@@ -92,7 +92,8 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
   // rather than fabricate a winner.
   const variant = resolveMatchVariant(match.state_payload, match.mode, match.game_variant);
   if (variant === 'football_grid') {
-    const state = await footballGridService.cancelAdministratively(match.id);
+    const state = await footballGridService.cancelAdministratively(match.id, { olderThanMs: STALE_AGE_MS });
+    if (state.phase !== 'terminal') return;
     await footballGridRealtimeService.publishState(io, state);
     logger.info({ matchId: match.id }, 'Stale sweeper cancelled orphaned Football Grid match');
     return;

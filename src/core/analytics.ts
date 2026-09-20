@@ -25,7 +25,7 @@ let posthogClient: PostHog | null = null;
 // NOT depend on AI ids being registered at creation time. A failed lookup fails
 // OPEN (treat as non-AI) so a flaky DB never silently drops real users' events.
 const AI_LOOKUP_TTL_MS = 5 * 60 * 1000; // 5 min — well within a match lifetime
-const aiCache = new Map<string, { isAi: boolean; expiresAt: number }>();
+const aiCache = new Map<string, { isAi: boolean; accessType: 'guest' | 'member' | 'unknown'; expiresAt: number }>();
 const aiLookupInFlight = new Map<string, Promise<boolean>>();
 
 // trackEvent/identifyUser defer the actual capture behind an async AI lookup
@@ -62,10 +62,11 @@ async function isAiUser(userId: string): Promise<boolean> {
 
   const lookup = (async () => {
     try {
-      const rows = await sql<{ is_ai: boolean }[]>`SELECT is_ai FROM users WHERE id = ${userId}`;
+      const rows = await sql<{ is_ai: boolean; is_guest: boolean }[]>`SELECT is_ai, is_guest FROM users WHERE id = ${userId}`;
       const isAi = rows[0]?.is_ai === true;
       if (aiCache.size > 5000) pruneAiCache();
-      aiCache.set(userId, { isAi, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
+      const accessType = rows[0]?.is_guest === true ? 'guest' : rows[0]?.is_guest === false ? 'member' : 'unknown';
+      aiCache.set(userId, { isAi, accessType, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
       return isAi;
     } catch (error) {
       // Fail open: never drop a real user's event because the DB hiccuped.
@@ -88,7 +89,7 @@ async function isAiUser(userId: string): Promise<boolean> {
  */
 export function registerAiUserId(userId: string): void {
   if (!userId || !isUuid(userId)) return;
-  aiCache.set(userId, { isAi: true, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
+  aiCache.set(userId, { isAi: true, accessType: 'unknown', expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
 }
 
 export function getPostHogFlagsConfig(): { apiKey: string; host: string } | null {
@@ -167,6 +168,8 @@ export function trackEvent(
         timestamp: occurredAt,
         properties: {
           ...properties,
+          access_type: aiCache.get(distinctId)?.accessType ?? 'unknown',
+          event_source: 'server',
           $timestamp: occurredAt.toISOString(),
           environment: process.env.NODE_ENV || 'development',
         },

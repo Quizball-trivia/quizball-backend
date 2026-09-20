@@ -358,22 +358,7 @@ describe('RP-gap ceiling (parity guard)', () => {
     expect(rightAnchor?.bot.user_id).toBe('near-anchor');
   });
 
-  it('excludes in-band bots already seated in this match without pairing out of band', async () => {
-    // Multi-seat auction: the only in-band bot is already seated. The next seat
-    // must go ephemeral rather than reaching for the far-away bot.
-    repo.listEligibleBots.mockResolvedValue([
-      bot('seated', { rp: 1500 }),
-      bot('far', { rp: 600 }),
-    ]);
-    const result = await syntheticBotSelectionService.selectAndReserve({
-      humanUserId: 'human',
-      humanProfile: placedHuman,
-      lobbyId: 'lobby',
-      excludeBotUserIds: ['seated'],
-    });
-    expect(result).toBeNull();
-    expect(reservation.acquire).not.toHaveBeenCalled();
-  });
+  // (auction-seat exclusion test omitted on prod: auction selection params are staging-only)
 
   it('does not resurrect an out-of-band bot by relaxing the eligibility ladder', async () => {
     // The only bot is far away AND constrained. Relaxing soft constraints must
@@ -553,22 +538,20 @@ describe('ranked recent-opponent rotation', () => {
     expect(result?.bot.user_id).toBe('fallback');
   });
 
-  it('keeps auction recent-opponent relaxation and skips the durable ranked query', async () => {
-    repo.listEligibleBots.mockResolvedValue([bot('auction-recent', { rp: 1500 })]);
-    redis.lRange.mockResolvedValue(['auction-recent']);
+  it('keeps optional-caller recent-opponent relaxation and skips the durable ranked query', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('optional-recent', { rp: 1500 })]);
+    redis.lRange.mockResolvedValue(['optional-recent']);
 
     const result = await syntheticBotSelectionService.selectAndReserve({
       humanUserId: 'human',
       humanProfile: placedHuman,
-      lobbyId: 'auction-seat',
-      mode: 'auction',
+      lobbyId: 'optional-seat',
     });
 
-    expect(result?.bot.user_id).toBe('auction-recent');
+    expect(result?.bot.user_id).toBe('optional-recent');
     expect(result?.relaxationLevel).toBe('relax_recently_faced');
     expect(repo.listRankedPersistentOpponentHistory).not.toHaveBeenCalled();
     expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({
-      mode: 'auction',
       requirePersistent: false,
     }));
   });

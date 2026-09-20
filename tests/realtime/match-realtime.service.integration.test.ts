@@ -649,7 +649,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );
@@ -929,7 +929,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       const result = await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old' });
 
       expect(result).toEqual({
-        graceMs: 20_000,
+        graceMs: 30_000,
         remainingReconnects: 3,
         finalized: false,
       });
@@ -977,7 +977,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           opponentId: 'u1',
-          graceMs: 20_000,
+          graceMs: 30_000,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1089,7 +1089,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           variant: 'friendly_party_quiz',
-          graceMs: 20000,
+          graceMs: 30000,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1159,7 +1159,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
       })
     );
   });
@@ -2642,7 +2642,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(roomEvents).toContainEqual({
       room: 'user:u1',
       event: 'match:rejoin_available',
-      payload: expect.objectContaining({ matchId: 'm1', graceMs: 20_000 }),
+      payload: expect.objectContaining({ matchId: 'm1', graceMs: 30_000 }),
     });
     expect(roomEvents).toContainEqual({
       room: 'user:u2',
@@ -2747,7 +2747,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );
@@ -2781,7 +2781,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );

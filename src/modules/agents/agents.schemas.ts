@@ -7,11 +7,9 @@ export const spawnJobBodySchema = z
   .object({
     type: z.enum(['mcq_generate', 'daily_challenge']).default('mcq_generate'),
     questionType: z
-      .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path', 'imposter_multi_select', 'high_low', 'image_mcq', 'goal_choreography'])
+      .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path', 'imposter_multi_select', 'high_low', 'image_mcq'])
       .default('mcq_single'),
-    // goal_choreography publishes to goal_choreographies, which has no
-    // category dimension — every question type still requires one.
-    categoryId: z.string().uuid().optional(),
+    categoryId: z.string().uuid(),
     topic: z.string().min(3).max(500),
     difficulty: z.enum(['easy', 'medium', 'hard']).default('medium'),
     count: z.number().int().min(1).max(500).optional(),
@@ -27,10 +25,7 @@ export const spawnJobBodySchema = z
   .refine(
     (b) => (b.difficultyMix ? Object.values(b.difficultyMix).some((v) => v > 0) : (b.count ?? 0) >= 1),
     { message: 'provide count, or a difficultyMix with at least one non-zero difficulty' }
-  )
-  .refine((b) => b.questionType === 'goal_choreography' || !!b.categoryId, {
-    message: 'categoryId is required for question types',
-  });
+  );
 export type SpawnJobBody = z.infer<typeof spawnJobBodySchema>;
 
 export const jobIdParamSchema = z.object({ jobId: z.string().uuid() });

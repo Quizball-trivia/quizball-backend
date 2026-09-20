@@ -130,6 +130,8 @@ describe('Categories API', () => {
         {
           parentId: parentId,
           isActive: undefined,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         1,
         50,
@@ -149,6 +151,8 @@ describe('Categories API', () => {
         {
           parentId: undefined,
           isActive: true,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         1,
         50,
@@ -168,6 +172,8 @@ describe('Categories API', () => {
         {
           parentId: undefined,
           isActive: undefined,
+          minQuestions: undefined,
+          excludeCampaignManaged: false,
         },
         2,
         10,

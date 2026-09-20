@@ -38,6 +38,17 @@ export interface PendingBotChallengeInvitationRow {
   lobby_invite_code: string | null;
 }
 
+/** A pending challenge aimed at a bot, for the delayed decline worker. */
+export interface PendingBotChallengeInvitationRow {
+  id: string;
+  lobby_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  created_at: string;
+  expires_at: string;
+  lobby_invite_code: string | null;
+}
+
 export const lobbyChallengeInvitationsRepo = {
   async existsForLobby(lobbyId: string): Promise<boolean> {
     const rows = await sql<Array<{ found: boolean }>>`

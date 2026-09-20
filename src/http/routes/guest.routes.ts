@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import rateLimit from 'express-rate-limit';
+import { guestHttpBudget, requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
 import { validate } from '../middleware/validate.js';
 import { resolveTrustedClientIp } from '../client-ip.js';
 import { bucketIp, ipv6Prefix64 } from '../../core/ip-bucket.js';
@@ -12,19 +12,17 @@ import { publicStandingsService } from '../../modules/public/public-standings.se
  * Public play without an account. Budgets, in order: an aggregate per-address
  * budget on every guest call (before any lookup), then authentication, then a
  * per-guest budget keyed by the VERIFIED guest id. IPv6 is bucketed by /64 so
- * one host cannot rotate through a subnet. Counters are per process
- * (express-rate-limit MemoryStore); the global API limiter still applies.
+ * one host cannot rotate through a subnet. Redis shares the counters across
+ * replicas and restarts; the global API limiter still applies.
  */
 export function ipBucket(req: Request): string {
   return bucketIp(resolveTrustedClientIp(req));
 }
 export { ipv6Prefix64 };
-const hour = 60 * 60 * 1000;
-const limiter = (limit: number, keyGenerator: (req: Request) => string) => rateLimit({ windowMs: hour, limit, standardHeaders: true, legacyHeaders: false, keyGenerator });
-const mintLimiter = limiter(30, ipBucket);
-const standingsLimiter = limiter(300, ipBucket);
-const guestIpLimiter = limiter(600, ipBucket);
-const guestTokenLimiter = limiter(240, (req) => req.guest?.id ?? ipBucket(req));
+const mintLimiter = guestHttpBudget('mint', 30, ipBucket);
+const standingsLimiter = guestHttpBudget('standings', 300, ipBucket);
+const guestIpLimiter = guestHttpBudget('ip', 600, ipBucket);
+const guestTokenLimiter = guestHttpBudget('principal', 240, (req) => req.guest?.id ?? ipBucket(req));
 
 /** Cheap shape check before any database work; malformed headers never reach a lookup. */
 function requireTokenShape(req: Request, _res: unknown, next: (error?: unknown) => void): void {
@@ -34,6 +32,7 @@ function requireTokenShape(req: Request, _res: unknown, next: (error?: unknown) 
 }
 
 const router = Router();
+router.use(requireGuestHttpEnabled);
 router.post('/session', mintLimiter, validate({ body: createGuestSessionSchema }), guestController.createSession);
 router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await publicStandingsService.get()); });
 

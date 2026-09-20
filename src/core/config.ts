@@ -13,7 +13,7 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("")
     .transform((val) => val === "true" || val === "1"),
-  CORS_ORIGINS: z.string().default("http://localhost:3000,http://localhost:3010"),
+  CORS_ORIGINS: z.string().default("http://localhost:3000"),
   DEFAULT_LOCALE: z.string().default("en"),
   PUBLIC_SITE_ORIGIN: z.preprocess(
     (value) => value === '' ? undefined : value,
@@ -50,15 +50,10 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
-  // Per-process budget. With two Railway replicas the default permits at most
-  // 24 app connections, leaving headroom below the small-tier Postgres limit
-  // for Auth, Storage, PostgREST, Realtime, observability, and administration.
+  // Per-process budget. Aggregate this across all application replicas and
+  // leave headroom for Supabase services and operational connections.
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),
   DB_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(12),
-  // Keep this finite so a database outage still sheds instead of accumulating
-  // unbounded promises. Streamer-scale bursts can safely need more than 100
-  // waiters while millisecond queries drain; the acquire deadline remains the
-  // hard time bound.
   DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1_000).default(12),
   DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
@@ -69,19 +64,17 @@ const configSchema = z.object({
   DB_WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
   DB_WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(4_000),
   DB_WATCHDOG_FAILURES: z.coerce.number().int().min(1).max(10).default(3),
-  // INC-2026-07-29: a pooled connection contaminated with
-  // default_transaction_read_only=on let reads succeed while every write failed
-  // with SQLSTATE 25006. Kill switch in case the breaker ever misfires.
-  DB_OUTAGE_BREAKER_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("true")
-    .transform((val) => val !== "false" && val !== "0"),
-  // Minimum time to stay degraded after a 25006. Recovery additionally requires
-  // a successful rollback-only write probe, so this is a floor, not a timer.
-  DB_OUTAGE_BREAKER_WINDOW_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
 
   // Redis
   REDIS_URL: z.string().url().optional(),
+  // Auction kill switch. Blocks NEW auction entry (queue searches, AI matches,
+  // friend-lobby starts) while letting in-flight matches finish — flipping it
+  // off mid-incident must never strand live players. Default OFF so a fresh
+  // deploy is dark until the operator explicitly enables the mode.
+  AUCTION_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   // Maximum durable realtime timers handled concurrently by each replica.
   // Keep the default conservative for small/local pools; large synchronized
   // gameplay starts can raise this explicitly after sizing the DB bulkhead.
@@ -107,73 +100,12 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-  RANKED_DEBUG_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
   // When false, objectives stop progressing and stop awarding coins/XP after
   // matches (paired with hiding the Objectives UI behind the frontend flag).
   OBJECTIVES_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
-  // Free Kicks (real-coins solo mode). Ships DISABLED; the kill switch blocks
-  // only NEW rounds — resume/cashout/sweeper keep running while liabilities
-  // exist so no player pot is ever stranded.
-  // Trivia Mines (house-banked solo mini game). Flag blocks only NEW rounds.
-  TRIVIA_MINES_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  FREE_KICKS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  // Guess the Goal (solo knowledge mini-game). Ships DISABLED; the flag blocks
-  // only NEW sessions — open sessions can always finish.
-  GUESS_THE_GOAL_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  // Roster bots playing Free Kicks for real (real stakes/ledger/events) so the
-  // stats layer has genuine numbers before humans arrive.
-  FREE_KICKS_BOTS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  /** Deprecated 2026-09-06: bots now follow the shared activity model; kept so existing envs still parse. */
-  FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
-  FREE_KICKS_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
-  // Shared audience size for the mini-game bot activity model (measured prod
-  // average of daily active humans, 2026-09-06). Raise to make modes look busier.
-  SYNTHETIC_ACTIVITY_DAU: z.coerce.number().int().min(0).max(100000).default(195),
-  TRIVIA_MINES_BOTS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  /** 0 = derive from SYNTHETIC_ACTIVITY_DAU × mode share. */
-  TRIVIA_MINES_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
-  // Squad Spin (house-banked solo mini game). Flag blocks only NEW rounds.
-  SQUAD_SPIN_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  SQUAD_SPIN_BOTS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  SQUAD_SPIN_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
-  ROAD_TO_GOAL_BOTS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  ROAD_TO_GOAL_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
-  // Road to Goal (real-coins solo mode). New rounds ship disabled; resume,
-  // settlement, and stale-round cleanup remain available regardless.
-  ROAD_TO_GOAL_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
   // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
   // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
   // must gate on this flag. The manual `npm run bot:refresh-question-stats`
@@ -190,6 +122,12 @@ const configSchema = z.object({
   // matchmaking never fails. Read at selection time (config reflects the
   // deployed env — flipping it is an env change, like every other flag here).
   PERSISTENT_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Guess the Goal (solo knowledge mini-game). Ships DISABLED; the flag blocks
+  // only NEW sessions — open sessions can always finish.
+  GUESS_THE_GOAL_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
@@ -235,6 +173,59 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+
+
+  // Free Kicks (real-coins solo mode). Ships DISABLED; the kill switch blocks
+  // only NEW rounds — resume/cashout/sweeper keep running while liabilities
+  // exist so no player pot is ever stranded.
+  // Trivia Mines (house-banked solo mini game). Flag blocks only NEW rounds.
+  TRIVIA_MINES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  FREE_KICKS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Roster bots playing Free Kicks for real (real stakes/ledger/events) so the
+  // stats layer has genuine numbers before humans arrive.
+  FREE_KICKS_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** Deprecated 2026-09-06: bots now follow the shared activity model; kept so existing envs still parse. */
+  FREE_KICKS_BOTS_TARGET: z.coerce.number().int().min(0).max(200).default(35),
+  FREE_KICKS_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Shared audience size for the mini-game bot activity model (measured prod
+  // average of daily active humans, 2026-09-06). Raise to make modes look busier.
+  SYNTHETIC_ACTIVITY_DAU: z.coerce.number().int().min(0).max(100000).default(195),
+  TRIVIA_MINES_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** 0 = derive from SYNTHETIC_ACTIVITY_DAU × mode share. */
+  TRIVIA_MINES_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Squad Spin (house-banked solo mini game). Flag blocks only NEW rounds.
+  SQUAD_SPIN_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SQUAD_SPIN_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  ROAD_TO_GOAL_BOTS_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  ROAD_TO_GOAL_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
+  // Road to Goal (real-coins solo mode). New rounds ship disabled; resume,
+  // settlement, and stale-round cleanup remain available regardless.
+  ROAD_TO_GOAL_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -275,6 +266,10 @@ const configSchema = z.object({
   // no new guest users, no new guest rooms/memberships; guests already in a
   // room may reconnect and finish. Reconnect off: every guest token is refused
   // (HTTP principal and socket), so provisioning is only usable with reconnect on.
+  GUEST_HTTP_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   GUEST_LOBBIES_PROVISIONING_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -287,24 +282,18 @@ const configSchema = z.object({
    * Guest "Play now" bot matches (Tic Tac Toe / Auction) from the public game
    * pages. Kill switch only — a guest still needs provisioning + reconnect on.
    */
+  // Season mode is switched only at a reviewed match boundary.
+  POSSESSION_MCQ_ONLY: z.enum(['true', 'false', '1', '0', '']).default('false')
+    .transform((value) => value === 'true' || value === '1'),
   GUEST_BOT_MATCHES_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
-    .default("true")
+    .default("false")
     .transform((val) => val === "true" || val === "1"),
   /** Random wait before a guest practice table is seated, so it feels like matchmaking. */
   GUEST_BOT_MATCH_DELAY_MIN_MS: z.coerce.number().int().min(0).default(5_000),
   GUEST_BOT_MATCH_DELAY_MAX_MS: z.coerce.number().int().min(0).default(25_000),
   /** Keys the stored guest ip/device hashes; falls back to the Supabase secret key. */
   GUEST_SIGNAL_HMAC_KEY: z.string().optional(),
-  /**
-   * Season 3: ranked / friendly possession matches serve MCQs only (Who Am I and
-   * Put in Order live in the daily challenges). Flip at the season reset; the
-   * category eligibility rules follow it.
-   */
-  POSSESSION_MCQ_ONLY: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
   FOOTBALL_GRID_XP_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")
@@ -334,9 +323,8 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-  // Per-process bulkhead for hosted Auth, whose DB connections are outside the
-  // application pool. With two replicas the default permits eight concurrent
-  // upstream Auth operations while preserving the shared 60-connection tier.
+  // Separate per-process bulkhead for hosted Auth, whose work sits outside the
+  // application's postgres.js pool.
   AUTH_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(4),
   AUTH_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1000).default(16),
   AUTH_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2000),
@@ -406,7 +394,7 @@ const configSchema = z.object({
   RETENTION_EMAIL_MAX_INACTIVE_DAYS: z.coerce.number().int().min(2).max(60).default(7),
   RETENTION_EMAIL_FREQUENCY_DAYS: z.coerce.number().int().min(1).max(90).default(7),
   RETENTION_EMAIL_MIN_LEAD_HOURS: z.coerce.number().int().min(1).max(72).default(18),
-  RETENTION_EMAIL_MAX_LEAD_HOURS: z.coerce.number().int().min(2).max(96).default(24),
+  RETENTION_EMAIL_MAX_LEAD_HOURS: z.coerce.number().int().min(2).max(168).default(24),
   RETENTION_EMAIL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
   // Hard campaign-wide assignment cap. Zero is intentionally safe: even if
   // the worker switch is enabled, nobody is assigned until a rollout cap is
@@ -517,10 +505,29 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       { fieldErrors },
     );
   }
+
+  const searchConsoleValues = [
+    result.data.GOOGLE_SEARCH_CONSOLE_SITE_URL,
+    result.data.GOOGLE_SEARCH_CONSOLE_SERVICE_ACCOUNT_EMAIL,
+    result.data.GOOGLE_SEARCH_CONSOLE_PRIVATE_KEY,
+  ];
+  const configuredSearchConsoleValues = searchConsoleValues.filter(Boolean).length;
+  if (configuredSearchConsoleValues > 0 && configuredSearchConsoleValues < searchConsoleValues.length) {
+    throw new ConfigError(
+      'Invalid configuration: Google Search Console credentials must be configured together.',
+      { configuredSearchConsoleValues },
+    );
+  }
+
   if (result.data.GUEST_BOT_MATCH_DELAY_MIN_MS > result.data.GUEST_BOT_MATCH_DELAY_MAX_MS) {
     throw new ConfigError('Invalid configuration: GUEST_BOT_MATCH_DELAY_MIN_MS must not exceed GUEST_BOT_MATCH_DELAY_MAX_MS', {
       fieldErrors: { GUEST_BOT_MATCH_DELAY_MAX_MS: ['must be >= GUEST_BOT_MATCH_DELAY_MIN_MS'] },
     });
+  }
+  if (result.data.NODE_ENV !== 'local'
+      && (result.data.FOOTBALL_GRID_COINS_ENABLED || result.data.FOOTBALL_GRID_POINTS_ENABLED)
+      && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32) {
+    throw new ConfigError('Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins or points are enabled.', { nodeEnv: result.data.NODE_ENV });
   }
 
   // REGRESSION_* harness flags pin question randomness / collapse matchmaking
@@ -535,16 +542,6 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     throw new ConfigError(
       `Invalid configuration: ${regressionFlag} may only be set in the local environment (it is a regression-harness-only flag).`,
       { nodeEnv: result.data.NODE_ENV, flag: regressionFlag },
-    );
-  }
-
-  if (result.data.REALTIME_TIMER_HANDLER_CONCURRENCY > result.data.DB_INFLIGHT_LIMIT) {
-    throw new ConfigError(
-      "Invalid configuration: REALTIME_TIMER_HANDLER_CONCURRENCY cannot exceed DB_INFLIGHT_LIMIT.",
-      {
-        realtimeTimerHandlerConcurrency: result.data.REALTIME_TIMER_HANDLER_CONCURRENCY,
-        dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
-      },
     );
   }
 
@@ -569,7 +566,10 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
-  if (result.data.NODE_ENV !== "local" && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL) {
+  if (
+    result.data.NODE_ENV !== "local"
+    && result.data.CAMPAIGN_QUIZ_ASSET_BASE_URL
+  ) {
     if (!result.data.SUPABASE_URL) {
       throw new ConfigError(
         "Invalid configuration: SUPABASE_URL is required when CAMPAIGN_QUIZ_ASSET_BASE_URL is set outside local.",
@@ -585,18 +585,6 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       );
     }
   }
-
-  if (
-    result.data.NODE_ENV !== "local"
-    && (result.data.FOOTBALL_GRID_COINS_ENABLED || result.data.FOOTBALL_GRID_POINTS_ENABLED)
-    && (result.data.FOOTBALL_GRID_RISK_HASH_SECRET?.trim().length ?? 0) < 32
-  ) {
-    throw new ConfigError(
-      "Invalid configuration: FOOTBALL_GRID_RISK_HASH_SECRET must be at least 32 characters when Football Grid coins or points are enabled.",
-      { nodeEnv: result.data.NODE_ENV },
-    );
-  }
-
   // Auto-disable docs in production unless explicitly enabled
   // Parse DOCS_ENABLED: true/1 = enabled, false/0 = disabled, undefined = auto (enabled except prod)
   const docsEnabled =

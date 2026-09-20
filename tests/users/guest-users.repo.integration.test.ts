@@ -17,7 +17,8 @@ beforeAll(async () => {
     await sql`SELECT 1`;
     dbAvailable = true;
     usersRepo = (await import('../../src/modules/users/users.repo.js')).usersRepo;
-  } catch {
+  } catch (error) {
+    if (process.env.RELEASE_TEST_DATABASE_URL) throw error;
     console.warn('\n⚠️  Skipping guest users repo integration tests: Database not available.\n');
   }
 });

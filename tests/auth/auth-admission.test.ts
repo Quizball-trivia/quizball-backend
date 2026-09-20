@@ -68,8 +68,7 @@ describe('AuthAdmissionController', () => {
       const gate = new AuthAdmissionController(1, 1, 250);
       const active = deferred<void>();
       const first = gate.run(() => active.promise);
-      const queued = gate.run(async () => 'never');
-      const queuedResult = queued.catch((error) => error);
+      const queuedResult = gate.run(async () => 'never').catch((error) => error);
 
       await vi.advanceTimersByTimeAsync(250);
       await expect(queuedResult).resolves.toBeInstanceOf(AuthOverloadedError);

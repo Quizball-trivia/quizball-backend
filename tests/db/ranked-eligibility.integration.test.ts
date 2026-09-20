@@ -7,8 +7,6 @@ vi.mock('../../src/db/index.js', async () => {
   return { sql: postgres(databaseUrl ?? 'postgresql://localhost/postgres', { max: 1 }) };
 });
 import { sql } from '../../src/db/index.js';
-import { config } from '../../src/core/config.js';
-const minimum = config.POSSESSION_MCQ_ONLY ? 7 : 5;
 import { RANKED_ELIGIBILITY_HAVING_COUNTS } from '../../src/db/sql-fragments.js';
 
 describe.skipIf(!databaseUrl)('ranked category usable MCQ depth', () => {
@@ -19,10 +17,10 @@ describe.skipIf(!databaseUrl)('ranked category usable MCQ depth', () => {
   })) };
 
   it.each([
-    { name: 'one MCQ below required depth', count: minimum - 1, invalidLast: false, seoLast: false, expected: 0 },
-    { name: 'required valid MCQ depth', count: minimum, invalidLast: false, seoLast: false, expected: 1 },
-    { name: 'malformed final MCQ does not qualify', count: minimum, invalidLast: true, seoLast: false, expected: 0 },
-    { name: 'SEO final MCQ does not qualify', count: minimum, invalidLast: false, seoLast: true, expected: 0 },
+    { name: 'four valid MCQs plus specials', count: 4, invalidLast: false, seoLast: false, expected: 0 },
+    { name: 'five valid MCQs plus specials', count: 5, invalidLast: false, seoLast: false, expected: 1 },
+    { name: 'four valid MCQs and one malformed MCQ', count: 5, invalidLast: true, seoLast: false, expected: 0 },
+    { name: 'four gameplay MCQs and one SEO MCQ', count: 5, invalidLast: false, seoLast: true, expected: 0 },
   ])('$name', async ({ count, invalidLast, seoLast, expected }) => {
     await sql.begin(async (tx) => {
       await tx`CREATE TEMP TABLE questions (id integer, category_id integer, type text, status text, visibility text, ranked_eligible boolean) ON COMMIT DROP`;
@@ -31,7 +29,7 @@ describe.skipIf(!databaseUrl)('ranked category usable MCQ depth', () => {
         await tx`INSERT INTO questions VALUES (${id}, 1, 'mcq_single', 'published', 'public', ${!(seoLast && id === count)})`;
         await tx`INSERT INTO question_payloads VALUES (${id}, ${tx.json(invalidLast && id === count ? { options: [] } : payload)})`;
       }
-      if (!config.POSSESSION_MCQ_ONLY) await tx`INSERT INTO questions VALUES (100,1,'put_in_order','published','public',true),(101,1,'clue_chain','published','public',true)`;
+      await tx`INSERT INTO questions VALUES (100,1,'put_in_order','published','public',true),(101,1,'clue_chain','published','public',true)`;
       const eligible = await tx`
         SELECT q.category_id FROM questions q
         WHERE q.status='published' AND q.visibility='public' AND q.ranked_eligible=true

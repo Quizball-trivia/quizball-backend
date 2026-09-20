@@ -15,7 +15,7 @@ import { getRequestId } from '../../core/request-context.js';
 import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
 import { disconnectUserSockets } from '../../realtime/services/auth-realtime.service.js';
 import { rankedRepo } from '../ranked/ranked.repo.js';
-import { rankedService, tierFromRp } from '../ranked/ranked.service.js';
+import { tierFromRp } from '../ranked/ranked.service.js';
 import { statsService } from '../stats/stats.service.js';
 import type {
   AdminProgressionResult,
@@ -236,7 +236,18 @@ async function assertAvatarCustomizationAllowed(
     if (item.product_type !== 'avatar') continue;
 
     const parsed = avatarMetadataSchema.safeParse(item.product_metadata);
-    if (!parsed.success || !parsed.data.avatarPartId || !parsed.data.slot) continue;
+    if (!parsed.success) {
+      logger.warn(
+        {
+          userId,
+          productId: item.product_id,
+          productSlug: item.product_slug,
+        },
+        'Ignoring malformed avatar inventory metadata'
+      );
+      continue;
+    }
+    if (!parsed.data.avatarPartId || !parsed.data.slot) continue;
 
     ownedParts.add(`${parsed.data.slot}:${parsed.data.avatarPartId}`);
   }
@@ -870,8 +881,8 @@ export const usersService = {
         viewerUserId !== targetUserId
           ? statsService.getHeadToHead(viewerUserId, targetUserId)
           : Promise.resolve(null),
-        rankedService.getUserRank(targetUserId),
-        user.country ? rankedService.getUserRank(targetUserId, user.country) : Promise.resolve(null),
+        rankedRepo.getUserRank(targetUserId),
+        user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
         // Banned accounts expose no rename history (inactive/pending-deletion
         // users already 404 above).
         isUserBanned(user) ? Promise.resolve([]) : usersRepo.getPublicNicknameHistory(targetUserId),

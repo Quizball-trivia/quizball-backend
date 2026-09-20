@@ -843,6 +843,7 @@ async function lobbySeatReconnect(run: RunLobbyResult, index: number): Promise<v
   });
   fresh.join(`user:${seat.userId}`);
   replaceLobbySocket(run, index, fresh);
+  const reconnectStartSeq = latestTraceSeq(run.trace) + 1;
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   run.trace.record('client->server', 'match:rejoin', {
     matchId: run.matchId,
@@ -1077,7 +1078,6 @@ export async function playLobbyMatch(
       for (const seat of seats) {
         const done = answeredBySeat.get(seat.userId)!;
         if (done.has(latest.qIndex)) continue;
-        done.add(latest.qIndex);
         const planned = opts.answerPlan?.({ run, question: latest, seat, seatIndex: seats.indexOf(seat) });
         const seatAnswerMode = typeof planned === 'string'
           ? planned
@@ -1085,6 +1085,15 @@ export async function playLobbyMatch(
         const seatTimeMs = typeof planned === 'object' && typeof planned.timeMs === 'number'
           ? planned.timeMs
           : 300;
+        // The server measures actual arrival time. Merely claiming 600/900ms
+        // while submitting both answers immediately cannot test a speed duel.
+        // Poll seats independently so a deliberately silent player does not
+        // block the other seat or prevent the round's real timeout from firing.
+        const answerAtMs = typeof planned === 'object' && typeof planned.answerAtMs === 'number'
+          ? planned.answerAtMs
+          : seatTimeMs;
+        if (msUntilQuestionOffset(latest, answerAtMs) > 0) continue;
+        done.add(latest.qIndex);
         try {
           if (run.variant === 'friendly_party_quiz') {
             // Party quiz is MCQ-only; route through the variant-aware entry.
@@ -1119,7 +1128,7 @@ export async function playLobbyMatch(
           const acked = ackedBySeat.get(seat.userId)!;
           if (acked.has(qIndex)) continue;
           acked.add(qIndex);
-          try { handlePartyQuizReadyForNextQuestion(seat.userId, run.matchId, qIndex); } catch { /* gate guards it */ }
+          try { await handlePartyQuizReadyForNextQuestion(run.io as never, seat.userId, run.matchId, qIndex); } catch { /* gate guards it */ }
         }
       }
     }
@@ -1191,6 +1200,7 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
   fresh.join(`user:${run.botUserId}`);
   run.botSocket = fresh;
   // Connect hydration (rejoinActiveMatchOnConnect) then explicit rejoin.
+  const reconnectStartSeq = latestTraceSeq(run.trace) + 1;
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   if (run.trace.byEvent('match:final_results').length > 0) return;
   if (run.matchId) {
@@ -1252,6 +1262,7 @@ export async function flapAtKickoffGate(
     source: 'flapAtKickoffGate',
     mode,
   }, oldSocket.id);
+  run.io.removeSocket(oldSocket);
   await handleMatchDisconnect(run.io as never, oldSocket as never);
   if (run.trace.byEvent('match:final_results').length > 0) return;
 
@@ -1266,6 +1277,7 @@ export async function flapAtKickoffGate(
   fresh.join(`user:${run.botUserId}`);
   run.botSocket = fresh;
 
+  const reconnectStartSeq = latestTraceSeq(run.trace) + 1;
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   if (run.trace.byEvent('match:final_results').length > 0) return;
   if (mode === 'recover') {
@@ -1283,11 +1295,12 @@ export async function flapAtKickoffGate(
     userId: run.botUserId,
     socketId: fresh.id,
     freshSocketId: fresh.id,
+    reconnectStartSeq,
     reconnectDelayMs,
     mode,
     withinGrace: reconnectDelayMs < 20_000,
   }, fresh.id);
-  if (mode === 'blind') run.blindKickoffAckMinSeq = latestTraceSeq(run.trace) + 1;
+  if (mode === 'blind') run.blindKickoffAckMinSeq = reconnectStartSeq;
 }
 
 async function recordQuestionPresence(run: RunMatchResult): Promise<void> {

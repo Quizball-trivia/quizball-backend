@@ -48,7 +48,10 @@ vi.mock('../../src/modules/users/user-cache.js', () => ({
 
 // getPublicProfile fans out to ranked/stats; stub them so no test touches a DB.
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
-  rankedRepo: { getProfile: vi.fn().mockResolvedValue(null) },
+  rankedRepo: {
+    getProfile: vi.fn().mockResolvedValue(null),
+    getUserRank: vi.fn().mockResolvedValue(null),
+  },
 }));
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({

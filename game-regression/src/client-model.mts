@@ -61,6 +61,7 @@ export function buildClientTruthModel(trace: EventTrace, params: { userId: strin
     lastSeq: null,
   };
 
+  let resumableStage: ClientStage = 'gate';
   for (const event of trace.events) {
     if (!clientReceivedEvent(event, params.userId, state.matchId)) continue;
     state.lastSeq = event.seq;
@@ -83,16 +84,21 @@ export function buildClientTruthModel(trace: EventTrace, params: { userId: strin
       state.matchId = payloadString(event, 'matchId') ?? state.matchId;
     } else if (event.event === 'match:state') {
       state.matchId = payloadString(event, 'matchId') ?? state.matchId;
-      state.stage = payloadString(event, 'phase') === 'HALFTIME' ? 'halftime' : state.stage;
+      const phase = payloadString(event, 'phase');
+      if (phase === 'HALFTIME') state.stage = 'halftime';
+      if (phase === 'COMPLETED') state.stage = 'result';
+      if (state.stage !== 'paused') resumableStage = state.stage;
     } else if (event.event === 'match:question') {
       state.stage = 'question';
+      resumableStage = 'question';
       state.matchId = payloadString(event, 'matchId') ?? state.matchId;
       state.qIndex = payloadNumber(event, 'qIndex') ?? state.qIndex;
     } else if (event.event === 'match:pause' || event.event === 'match:opponent_disconnected' || event.event === 'match:rejoin_available') {
+      if (state.stage !== 'paused') resumableStage = state.stage;
       state.stage = 'paused';
       state.matchId = payloadString(event, 'matchId') ?? state.matchId;
     } else if (event.event === 'match:resume') {
-      state.stage = state.qIndex === null ? 'gate' : 'question';
+      if (state.stage !== 'result') state.stage = resumableStage;
       state.matchId = payloadString(event, 'matchId') ?? state.matchId;
     } else if (event.event === 'match:final_results' || event.event === 'match:party_dropout') {
       state.stage = 'result';

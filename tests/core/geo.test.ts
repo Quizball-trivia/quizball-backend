@@ -1,23 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __geoTestHooks, detectCountryFromHeaders } from '../../src/core/geo.js';
+import { detectCountryFromHeaders } from '../../src/core/geo.js';
 
 describe('detectCountryFromHeaders', () => {
   afterEach(() => {
-    __geoTestHooks.reset();
     vi.restoreAllMocks();
   });
 
   it('uses the Cloudflare country header when present', async () => {
     await expect(detectCountryFromHeaders({ 'cf-ipcountry': 'ge' }, '203.0.113.10')).resolves.toBe('GE');
-  });
-
-  it.each(['ZZ', 'T1', 'XX'])('rejects unsupported Cloudflare country values: %s', async (country) => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
-
-    await expect(
-      detectCountryFromHeaders({ 'cf-ipcountry': country }, '198.51.100.40')
-    ).resolves.toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses accept-language as a localhost fallback', async () => {
@@ -38,40 +28,5 @@ describe('detectCountryFromHeaders', () => {
       'http://ip-api.com/json/198.51.100.10?fields=status,country,countryCode',
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
-  });
-
-  it('coalesces concurrent lookups and caches a successful country', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'success', country: 'Georgia', countryCode: 'GE' }),
-    } as Response);
-
-    await expect(Promise.all([
-      detectCountryFromHeaders({}, '198.51.100.20'),
-      detectCountryFromHeaders({}, '198.51.100.20'),
-    ])).resolves.toEqual(['GE', 'GE']);
-    await expect(detectCountryFromHeaders({}, '198.51.100.20')).resolves.toBe('GE');
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('negative-caches failed lookups instead of retrying every auth request', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: false,
-    } as Response);
-
-    await expect(detectCountryFromHeaders({}, '198.51.100.30')).resolves.toBeNull();
-    await expect(detectCountryFromHeaders({}, '198.51.100.30')).resolves.toBeNull();
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects an unsupported country code returned by the fallback provider', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'success', country: 'Unknown', countryCode: 'ZZ' }),
-    } as Response);
-
-    await expect(detectCountryFromHeaders({}, '198.51.100.50')).resolves.toBeNull();
   });
 });

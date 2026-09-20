@@ -28,7 +28,8 @@ export const categoriesController = {
         parentId: query.parent_id,
         isActive: query.is_active,
         minQuestions: query.min_questions,
-        slugs: query.slugs ? query.slugs.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 20) : undefined,
+        excludeCampaignManaged: query.min_questions !== undefined,
+        slugs: query.slugs ? query.slugs.split(',').map((slug) => slug.trim()).filter(Boolean).slice(0, 20) : undefined,
       },
       query.page,
       query.limit

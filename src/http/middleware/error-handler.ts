@@ -28,7 +28,7 @@ const TRANSIENT_DATABASE_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
-/** Network/pool failures are availability failures, not application bugs. */
+/** Network and pool failures are availability failures, not application bugs. */
 export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
   if (!error || depth > 3 || typeof error !== 'object') return false;
   const candidate = error as {
@@ -44,8 +44,6 @@ export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
     return true;
   }
   if (isTransientDatabaseError(candidate.cause, depth + 1)) return true;
-  // Repository adapters often preserve a driver/admission failure as details
-  // on a generic AppError. Keep that retryable instead of leaking a false 500.
   if (isTransientDatabaseError(candidate.details, depth + 1)) return true;
   return Array.isArray(candidate.errors)
     && candidate.errors.some((nested) => isTransientDatabaseError(nested, depth + 1));
@@ -64,8 +62,8 @@ export function errorHandler(
 ): void {
   const requestId = getRequestId();
 
-  // Availability failures must win over the generic AppError branch because
-  // repository adapters can wrap the original error under AppError.details.
+  // Repository adapters can wrap the original driver/admission failure in an
+  // AppError. Preserve its retryable 503 semantics instead of leaking a 500.
   if (isTransientDatabaseError(err)) {
     logger.warn(
       {

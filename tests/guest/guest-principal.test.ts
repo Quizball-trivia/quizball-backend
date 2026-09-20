@@ -11,7 +11,16 @@ vi.mock('../../src/core/geo.js', () => ({ detectCountryFromHeaders: vi.fn().mock
 
 const { config } = await import('../../src/core/config.js');
 const flags = config as unknown as { GUEST_LOBBIES_PROVISIONING_ENABLED: boolean; GUEST_LOBBIES_RECONNECT_ENABLED: boolean };
-const { guestController } = await import('../../src/modules/guest/guest.controller.js');
+const { guestController, createGuestSessionSchema } = await import('../../src/modules/guest/guest.controller.js');
+
+describe('guest locale validation', () => {
+  it.each(['en', 'ka', 'es', 'tr'])('accepts the supported public locale %s', locale => {
+    expect(createGuestSessionSchema.parse({ locale })).toEqual({ locale });
+  });
+  it('rejects an unsupported locale', () => {
+    expect(createGuestSessionSchema.safeParse({ locale: 'unknown' }).success).toBe(false);
+  });
+});
 
 function call() {
   const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };

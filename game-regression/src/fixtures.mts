@@ -148,6 +148,10 @@ export async function clearFixtures(): Promise<void> {
     matches, lobby_categories, lobby_category_bans, lobby_members,
     lobby_challenge_invitations, lobbies
     RESTART IDENTITY CASCADE`;
+  // Match deletion nulls reservation.match_id rather than deleting the bot
+  // reservation. Clear these transient locks in this disposable database too,
+  // or repeated scenarios exhaust the persistent roster and never boot.
+  await sql`TRUNCATE synthetic_bot_reservations`;
   // Regression-seeded questions/categories (payloads cascade from questions).
   await sql`DELETE FROM question_payloads WHERE question_id IN (
     SELECT q.id FROM questions q JOIN categories c ON c.id = q.category_id
@@ -196,7 +200,10 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
       // leave the ranked harness with an empty pool. Friendly/party pool is the
       // inverse (non-featured only), so friendly fixtures skip the insert.
       // clearFixtures() already deletes these rows symmetrically.
-      if (!isFriendly) {
+      // The release rehearsal follows the current production pool: World Cup
+      // featured categories are excluded. Legacy scenarios can retain their
+      // historical fixture shape until their assertions are migrated.
+      if (!isFriendly && process.env.REGRESSION_FEATURED_FIXTURES !== 'false') {
         await sql`
           INSERT INTO featured_categories (category_id)
           VALUES (${category.id})
@@ -314,6 +321,10 @@ async function clearAuctionFixtures(): Promise<void> {
     WHERE prompt_version = ${AUCTION_FIXTURE_PROMPT_VERSION}
   `;
   await sql`
+    DELETE FROM player_season_snapshots
+    WHERE transfermarkt_id LIKE 'regression-auction-%'
+  `;
+  await sql`
     DELETE FROM football_players
     WHERE transfermarkt_id LIKE 'regression-auction-%'
   `;
@@ -377,6 +388,28 @@ export async function seedAuctionFixtures(): Promise<SeededAuctionFixtures> {
           )
           RETURNING id
         `;
+
+        // Snapshot-lots product rule (2026-08-17): the runtime only serves
+        // players with >= 3 valued season snapshots (auction-content.repo
+        // snapshotReadyPredicate). Seed a minimal valued history per player so
+        // fixture content stays inside the live eligibility pool.
+        for (let season = 0; season < 3; season++) {
+          const startYear = 2023 + season;
+          await sql`
+            INSERT INTO player_season_snapshots (
+              id, football_player_id, transfermarkt_id, season_start_year,
+              season_label, league_name, club_name, age, apps, goals, assists,
+              minutes, value_eur, value_date, source
+            )
+            VALUES (
+              gen_random_uuid(), ${player.id}, ${transfermarktId}, ${startYear},
+              ${`${startYear}/${(startYear + 1) % 100}`}, 'Regression League',
+              ${`Regression ${position} FC`}, ${21 + season}, ${30 + season},
+              ${position === 'FWD' ? 15 : 3}, ${5}, ${2500},
+              ${value - season * 1_000_000}, ${`${startYear}-06-30`}, 'transfermarkt_live'
+            )
+          `;
+        }
 
         const [card] = await sql<{ id: string }[]>`
           INSERT INTO player_clue_cards (

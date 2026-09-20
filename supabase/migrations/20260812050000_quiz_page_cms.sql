@@ -78,7 +78,7 @@ ALTER TABLE public.campaign_quizzes
     FOREIGN KEY (question_set_slug)
     REFERENCES public.campaign_quizzes(slug)
     ON UPDATE CASCADE
-    ON DELETE RESTRICT;
+    ON DELETE NO ACTION;
 
 -- Slugs are editable in the CMS. Cascading the natural-key change keeps its
 -- reserved set and ratings attached while the route table preserves the old URL.
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS public.campaign_quiz_routes (
   old_slug TEXT PRIMARY KEY,
   status_code SMALLINT NOT NULL,
   target_slug TEXT
-    REFERENCES public.campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE RESTRICT,
+    REFERENCES public.campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE NO ACTION,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
   CONSTRAINT chk_campaign_quiz_route_slug

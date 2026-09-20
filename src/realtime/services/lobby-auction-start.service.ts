@@ -1,4 +1,5 @@
 import { ErrorCode } from '../../core/errors.js';
+import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
@@ -43,6 +44,10 @@ export async function startAuctionMatchFromLobby(
   input: StartAuctionMatchFromLobbyInput
 ): Promise<void> {
   const { lobbyId, hostUserId } = input;
+  if (!config.AUCTION_ENABLED) {
+    socket.emit('error', { code: 'AUCTION_DISABLED', message: 'Auction is temporarily unavailable' });
+    return;
+  }
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
 
   if (members.length < 1 || members.length > AUCTION_SEAT_COUNT) {

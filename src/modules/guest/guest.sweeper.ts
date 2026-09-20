@@ -21,6 +21,8 @@ const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SWEEP_BATCH = 500;
 const SWEEP_MAX_BATCHES = 200;
 let timer: NodeJS.Timeout | null = null;
+let startupTimer: NodeJS.Timeout | null = null;
+let inFlight: Promise<void> | null = null;
 
 export async function sweepIdleGuests(days = GUEST_PURGE_DAYS): Promise<{ sessions: number; tombstoned: number }> {
   let sessions = 0;
@@ -53,13 +55,22 @@ export async function sweepIdleGuests(days = GUEST_PURGE_DAYS): Promise<{ sessio
 
 export function startGuestSweeper(): void {
   if (timer) return;
-  const run = () => sweepIdleGuests().then((n) => { if (n.sessions > 0) logger.info(n, 'guest sweep retired idle sessions'); }).catch((error) => logger.error({ error }, 'guest sweep failed'));
+  const run = () => {
+    if (inFlight) return;
+    inFlight = sweepIdleGuests().then((n) => { if (n.sessions > 0) logger.info(n, 'guest sweep retired idle sessions'); })
+      .catch((error) => logger.error({ error }, 'guest sweep failed'))
+      .finally(() => { inFlight = null; });
+  };
   timer = setInterval(run, SWEEP_INTERVAL_MS);
   timer.unref();
-  setTimeout(run, 60_000).unref();
+  startupTimer = setTimeout(() => { startupTimer = null; run(); }, 60_000);
+  startupTimer.unref();
 }
 
-export function stopGuestSweeper(): void {
+export async function stopGuestSweeper(): Promise<void> {
   if (timer) clearInterval(timer);
   timer = null;
+  if (startupTimer) clearTimeout(startupTimer);
+  startupTimer = null;
+  await inFlight;
 }

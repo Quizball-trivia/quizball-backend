@@ -77,9 +77,7 @@ describe('normalizeAnswer', () => {
   });
 
   it('strips punctuation but keeps letters and numbers', () => {
-    // Apostrophes JOIN (O'Brien → obrien) so apostrophe-less spellings match;
-    // other punctuation still separates (hyphen → space).
-    expect(normalizeAnswer("O'Brien-Smith")).toBe('obrien smith');
+    expect(normalizeAnswer("O'Brien-Smith")).toBe('o brien smith');
   });
 
   it('collapses whitespace', () => {

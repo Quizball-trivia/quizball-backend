@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DbOverloadedError } from '../../src/db/admission.js';
+import { DbOverloadedError } from '../../src/db/index.js';
 
 const verifyTokenMock = vi.fn();
 
@@ -31,7 +31,9 @@ describe('socketAuthMiddleware', () => {
   });
 
   it('reports DB admission shedding as retryable overload, not an invalid token', async () => {
-    verifyTokenMock.mockRejectedValue(new DbOverloadedError('queue_full'));
+    const overloaded = new DbOverloadedError();
+    Object.assign(overloaded, { reason: 'queue_full' });
+    verifyTokenMock.mockRejectedValue(overloaded);
     const { socketAuthMiddleware } = await import('../../src/realtime/socket-auth.js');
     const next = vi.fn();
     const socket = {

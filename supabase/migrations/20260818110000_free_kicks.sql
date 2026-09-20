@@ -40,7 +40,8 @@ ALTER TABLE public.store_transaction_logs
       'admin_account_ban',
       'admin_account_unban',
       'free_kicks_stake',
-      'free_kicks_payout'
+      'free_kicks_payout',
+      'guess_the_goal_reward'
     )
   ) NOT VALID;
 -- NOT VALID: the ledger is append-only and large; a validating ADD CONSTRAINT

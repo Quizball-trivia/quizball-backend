@@ -29,18 +29,42 @@ ALTER TABLE daily_challenge_configs
 ALTER TABLE daily_challenge_configs
   ADD CONSTRAINT chk_daily_challenge_type
   CHECK (challenge_type IN (
-    'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
-    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'cardDetective', 'missingXi', 'passChain'
-  )) NOT VALID;
+      'moneyDrop',
+      'trueFalse',
+      'clues',
+      'countdown',
+      'putInOrder',
+      'imposter',
+      'careerPath',
+      'highLow',
+      'footballLogic',
+      'fifaCards',
+      'cardDetective',
+      'missingXi',
+      'passChain',
+      'statSniper'
+    )) NOT VALID;
 
 ALTER TABLE daily_challenge_completions
   DROP CONSTRAINT IF EXISTS chk_daily_completion_type;
 ALTER TABLE daily_challenge_completions
   ADD CONSTRAINT chk_daily_completion_type
   CHECK (challenge_type IN (
-    'moneyDrop', 'trueFalse', 'clues', 'countdown', 'putInOrder',
-    'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'cardDetective', 'missingXi', 'passChain'
-  )) NOT VALID;
+      'moneyDrop',
+      'trueFalse',
+      'clues',
+      'countdown',
+      'putInOrder',
+      'imposter',
+      'careerPath',
+      'highLow',
+      'footballLogic',
+      'fifaCards',
+      'cardDetective',
+      'missingXi',
+      'passChain',
+      'statSniper'
+    )) NOT VALID;
 
 -- The player universe the chain may pass through: every typed link is resolved
 -- and validated server-side against this table, so the graph never ships to clients.
@@ -58,3 +82,5 @@ CREATE TABLE IF NOT EXISTS pass_chain_players (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pass_chain_players_normalized_aliases ON pass_chain_players USING gin (normalized_aliases);
+ALTER TABLE public.pass_chain_players ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.pass_chain_players FROM PUBLIC, anon, authenticated;

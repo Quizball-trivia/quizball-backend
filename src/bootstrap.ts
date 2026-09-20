@@ -1,8 +1,6 @@
 // Last-resort process guards, registered before anything else loads. One
 // rejection is logged so realtime recovery can absorb a lost detached task, but
-// a burst means the replica's state/pool can no longer be trusted. Continuing
-// indefinitely caused one Railway replica to remain wedged during the
-// 2026-07-13 database incident until it was manually redeployed.
+// a burst means the replica's state/pool can no longer be trusted.
 const UNHANDLED_REJECTION_WINDOW_MS = 60_000;
 const UNHANDLED_REJECTION_RESTART_THRESHOLD = 3;
 const recentUnhandledRejections: number[] = [];

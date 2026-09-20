@@ -90,3 +90,9 @@ JOIN public.campaign_quiz_questions cqq
  AND cqq.quiz_slug = 'club-badges'
 WHERE qp.question_id = img.question_id
   AND qp.payload->>'type' = 'mcq_single';
+
+-- The migration runner applies every file on one connection, so a temp
+-- table created here would still exist when the next migration runs and
+-- collide with its own CREATE TEMP TABLE. Drop them explicitly.
+DROP TABLE IF EXISTS club_badge_quiz_base;
+DROP TABLE IF EXISTS club_badge_quiz_images;

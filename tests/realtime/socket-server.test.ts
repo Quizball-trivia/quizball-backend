@@ -6,9 +6,9 @@ import '../setup.js';
 import {
   __socketServerInternals,
   buildRealtimeTimerHandlers,
-  type QuizballServer,
   SOCKET_COMPRESSION_CONFIG,
   SOCKET_HEARTBEAT_CONFIG,
+  type QuizballServer,
 } from '../../src/realtime/socket-server.js';
 import { runPossessionAiAnswer } from '../../src/realtime/possession-match-flow.js';
 import { buildFinalResultsPayload, emitFinalResultsToMatchParticipants } from '../../src/realtime/services/match-final-results.service.js';
@@ -88,6 +88,11 @@ describe('socket compression config', () => {
     // sockets on this container (peak RSS 1.25 GB).
     expect(SOCKET_COMPRESSION_CONFIG.zlibDeflateOptions.windowBits).toBeLessThanOrEqual(13);
     expect(SOCKET_COMPRESSION_CONFIG.zlibDeflateOptions.memLevel).toBeLessThanOrEqual(6);
+    // ws overrides zlibDeflateOptions.windowBits with the NEGOTIATED
+    // <endpoint>_max_window_bits, defaulting to 15 when unset — without these
+    // the bound above silently does not apply (793 KB/socket vs 254 KB).
+    expect(SOCKET_COMPRESSION_CONFIG.serverMaxWindowBits).toBeLessThanOrEqual(13);
+    expect(SOCKET_COMPRESSION_CONFIG.clientMaxWindowBits).toBeLessThanOrEqual(13);
   });
 
   it('keeps permessage-deflate DISABLED on the live server (iOS incident 2026-09-04)', () => {
@@ -120,5 +125,35 @@ describe('socket disconnect DB task routing', () => {
       lobbyId: 'lobby-1',
       matchId: 'match-1',
     })).toEqual(['lobby_disconnect', 'match_disconnect']);
+  });
+});
+
+describe('realtime timer handler wiring', () => {
+  it('preserves an explicitly planned incorrect AI answer', async () => {
+    const handler = buildRealtimeTimerHandlers().possession_ai_answer;
+    const server = {} as QuizballServer;
+
+    await handler?.(server, {
+      kind: 'possession_ai_answer',
+      matchId: 'match-1',
+      qIndex: 11,
+      plannedAnswerTimeMs: 12_103,
+      plannedClueIndex: 1,
+      plannedIsCorrect: false,
+    });
+
+    expect(runPossessionAiAnswer).toHaveBeenCalledWith(
+      server,
+      'match-1',
+      11,
+      12_103,
+      1,
+      false,
+      // The promoted handler forwards the optional planned-answer context
+      // (unset in this fixture) — the implementation ignores absent values.
+      undefined,
+      undefined,
+      undefined
+    );
   });
 });

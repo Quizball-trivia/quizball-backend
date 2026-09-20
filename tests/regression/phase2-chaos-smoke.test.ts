@@ -30,7 +30,7 @@ describeLocal('regression: phase 2 chaos smoke', () => {
       mode: 'ranked',
       runTag: 'phase2-duplicate',
       artifactDir: 'game-regression/artifacts/phase2-chaos-smoke',
-      playMaxMs: 45_000,
+      playMaxMs: 90_000,
       chaosPlan: {
         seed: 717171,
         actions: [
@@ -42,7 +42,7 @@ describeLocal('regression: phase 2 chaos smoke', () => {
 
     expect(outcome.booted, outcome.error ?? outcome.violations.join('\n')).toBe(true);
     expect(Array.isArray(outcome.economyViolations)).toBe(true);
-    if (!outcome.ok) expect(outcome.artifactPath).toBeTruthy();
+    expect(outcome.ok, JSON.stringify({ error: outcome.error, violations: outcome.violations, trace: outcome.traceViolations, lifecycle: outcome.lifecycleViolations, economy: outcome.economyViolations })).toBe(true);
   }, 180_000);
 
   it('runs special-phase flap and halftime quit/rejoin targets', async () => {
@@ -52,7 +52,7 @@ describeLocal('regression: phase 2 chaos smoke', () => {
       mode: 'ranked',
       runTag: 'phase2-special',
       artifactDir: 'game-regression/artifacts/phase2-chaos-smoke',
-      playMaxMs: 60_000,
+      playMaxMs: 90_000,
       chaosPlan: {
         seed: 727272,
         actions: [
@@ -65,7 +65,7 @@ describeLocal('regression: phase 2 chaos smoke', () => {
 
     expect(outcome.booted, outcome.error ?? outcome.violations.join('\n')).toBe(true);
     expect(Array.isArray(outcome.lifecycleViolations)).toBe(true);
-    if (!outcome.ok) expect(outcome.artifactPath).toBeTruthy();
+    expect(outcome.ok, JSON.stringify({ error: outcome.error, violations: outcome.violations, trace: outcome.traceViolations, lifecycle: outcome.lifecycleViolations, economy: outcome.economyViolations })).toBe(true);
   }, 180_000);
 
   it('runs chaos against friendly possession and party modes', async () => {
@@ -75,7 +75,7 @@ describeLocal('regression: phase 2 chaos smoke', () => {
       mode: 'possession',
       runTag: 'phase2-friendly-possession',
       artifactDir: 'game-regression/artifacts/phase2-chaos-smoke',
-      playMaxMs: 45_000,
+      playMaxMs: 90_000,
       chaosPlan: {
         seed: 737373,
         actions: [
@@ -85,13 +85,14 @@ describeLocal('regression: phase 2 chaos smoke', () => {
       writeArtifactOnFailure: true,
     });
     expect(possession.booted, possession.error ?? possession.violations.join('\n')).toBe(true);
+    expect(possession.ok, JSON.stringify({ error: possession.error, violations: possession.violations, lifecycle: possession.lifecycleViolations, economy: possession.economyViolations })).toBe(true);
 
     const party = await runFuzzMatch({
       index: 4,
       mode: 'party',
       runTag: 'phase2-party',
       artifactDir: 'game-regression/artifacts/phase2-chaos-smoke',
-      playMaxMs: 45_000,
+      playMaxMs: 90_000,
       chaosPlan: {
         seed: 747474,
         actions: [
@@ -101,5 +102,6 @@ describeLocal('regression: phase 2 chaos smoke', () => {
       writeArtifactOnFailure: true,
     });
     expect(party.booted, party.error ?? party.violations.join('\n')).toBe(true);
+    expect(party.ok, JSON.stringify({ error: party.error, violations: party.violations, lifecycle: party.lifecycleViolations, economy: party.economyViolations })).toBe(true);
   }, 240_000);
 });

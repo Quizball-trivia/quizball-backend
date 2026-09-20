@@ -178,16 +178,14 @@ export function trackEvent(
 }
 
 /**
- * Convert an internal idempotency key into a namespaced UUID. PostHog event
- * retries deduplicate on uuid + event + timestamp + distinct_id, so callers
- * must also pass a stable occurredAt value when using this helper.
+ * Convert an internal idempotency key into a namespaced UUID. PostHog retries
+ * deduplicate on this UUID together with event time and distinct ID.
  */
 export function stableAnalyticsEventUuid(idempotencyKey: string): string {
   const bytes = createHash('sha256')
     .update(`quizball-analytics:${idempotencyKey}`)
     .digest()
     .subarray(0, 16);
-  // RFC 4122-compatible, deterministic v5-shaped UUID.
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');

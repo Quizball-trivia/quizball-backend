@@ -3,6 +3,9 @@
 -- validating: an earlier run of the forward migration may have installed a
 -- list that predates Card Detective, and VALIDATE would then fail on its rows.
 -- Idempotent; NOT VALID keeps the swap instant.
+-- Keep CHECK replacements atomic; release their locks before validation.
+DO $checks$
+BEGIN
 ALTER TABLE daily_challenge_configs DROP CONSTRAINT IF EXISTS chk_daily_challenge_type;
 ALTER TABLE daily_challenge_configs ADD CONSTRAINT chk_daily_challenge_type
   CHECK (challenge_type IN (
@@ -17,6 +20,8 @@ ALTER TABLE daily_challenge_completions ADD CONSTRAINT chk_daily_completion_type
     'imposter', 'careerPath', 'highLow', 'footballLogic', 'fifaCards', 'cardDetective',
     'missingXi', 'passChain', 'statSniper'
   )) NOT VALID;
+END
+$checks$;
 ALTER TABLE questions VALIDATE CONSTRAINT chk_questions_type;
 ALTER TABLE daily_challenge_configs VALIDATE CONSTRAINT chk_daily_challenge_type;
 ALTER TABLE daily_challenge_completions VALIDATE CONSTRAINT chk_daily_completion_type;

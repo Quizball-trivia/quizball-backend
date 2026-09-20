@@ -179,6 +179,20 @@ CREATE INDEX IF NOT EXISTS idx_ggt_sessions_user
 CREATE INDEX IF NOT EXISTS idx_ggt_sessions_user_goal
   ON public.guess_the_goal_sessions (user_id, goal_id);
 
+-- Shared touch-updated_at trigger fn. Defined here idempotently (CREATE OR
+-- REPLACE, identical body) because prod may not have the free-kicks migration
+-- that originally created it — same name on purpose, so whichever feature
+-- lands first wins and the other is a no-op.
+CREATE OR REPLACE FUNCTION public.free_kicks_rounds_touch_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
 DROP TRIGGER IF EXISTS trg_ggt_sessions_updated_at ON public.guess_the_goal_sessions;
 CREATE TRIGGER trg_ggt_sessions_updated_at
   BEFORE UPDATE ON public.guess_the_goal_sessions

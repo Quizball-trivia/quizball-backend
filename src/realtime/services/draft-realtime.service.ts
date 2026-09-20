@@ -826,7 +826,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
     requireUiReady: true,
     forceAtMs,
   });
-  logger.debug({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
+  logger.info({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
 }
 
 export async function runDraftAutoBan(
@@ -1339,7 +1339,7 @@ export const draftRealtimeService = {
         graceMs: DRAFT_DISCONNECT_GRACE_MS,
       });
     });
-    logger.debug(
+    logger.info(
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
       'Draft paused for disconnected player'
     );
@@ -1371,7 +1371,7 @@ export const draftRealtimeService = {
       }, harnessDelayMs(DRAFT_DISCONNECT_GRACE_MS));
       fallback.unref?.();
     });
-    logger.debug(
+    logger.info(
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
       'draft_grace_expiry_scheduled'
     );
@@ -1457,27 +1457,9 @@ export const draftRealtimeService = {
   async handleBan(
     io: QuizballServer,
     socket: QuizballSocket,
-    categoryId: string,
-    payloadLobbyId?: string
+    categoryId: string
   ): Promise<void> {
-    // A human pair may be claimed on replica B while one player's socket lives
-    // on replica A. Socket.IO can remotely join that socket to the lobby room,
-    // but mutation of `socket.data.lobbyId` is process-local. Prefer the lobbyId
-    // echoed by new clients and fall back to the DB for older clients so their
-    // first manual ban does not fail with NOT_IN_LOBBY across replicas.
-    let lobbyId = payloadLobbyId ?? socket.data.lobbyId;
-    if (!lobbyId) {
-      const openLobby = await lobbiesRepo.findOpenLobbyForUser(socket.data.user.id);
-      if (openLobby?.status === 'active') {
-        lobbyId = openLobby.id;
-        socket.data.lobbyId = lobbyId;
-        await socket.join(`lobby:${lobbyId}`);
-        logger.info(
-          { lobbyId, userId: socket.data.user.id, socketId: socket.id },
-          'Draft ban recovered missing cross-replica socket lobby binding'
-        );
-      }
-    }
+    const lobbyId = socket.data.lobbyId;
     if (!lobbyId) {
       logger.warn({ userId: socket.data.user.id }, 'Draft ban failed: no lobbyId on socket');
       socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });

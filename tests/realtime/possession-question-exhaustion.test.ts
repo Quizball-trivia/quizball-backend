@@ -6,6 +6,8 @@ import type { QuizballServer } from '../../src/realtime/socket-server.js';
 const getMatchCacheOrRebuildMock = vi.fn();
 const getMatchMock = vi.fn();
 const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const getRandomImageMcqCandidatesForMatchMock = vi.fn();
+const getImageMcqCandidateForMatchByIdMock = vi.fn();
 const getRecentlySeenQuestionIdsMock = vi.fn();
 const insertMatchQuestionIfMissingMock = vi.fn();
 const completePossessionMatchMock = vi.fn();
@@ -40,8 +42,8 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
     getRandomQuestionCandidatesForMatch: (...args: unknown[]) => getRandomQuestionCandidatesForMatchMock(...args),
     getRecentlySeenQuestionIds: (...args: unknown[]) => getRecentlySeenQuestionIdsMock(...args),
-    getRandomImageMcqCandidatesForMatch: vi.fn(async () => []),
-    getImageMcqCandidateForMatchById: vi.fn(async () => []),
+    getRandomImageMcqCandidatesForMatch: (...args: unknown[]) => getRandomImageMcqCandidatesForMatchMock(...args),
+    getImageMcqCandidateForMatchById: (...args: unknown[]) => getImageMcqCandidateForMatchByIdMock(...args),
     insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
     setQuestionTiming: vi.fn(),
   },
@@ -136,6 +138,9 @@ describe('possession question exhaustion', () => {
     finalizeNoContestMock.mockResolvedValue({ completed: true, resultVersion: 1 });
     getMatchMock.mockResolvedValue({ status: 'active' });
     getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
+    getRandomImageMcqCandidatesForMatchMock.mockResolvedValue([]);
+    getImageMcqCandidateForMatchByIdMock.mockResolvedValue([]);
+    insertMatchQuestionIfMissingMock.mockResolvedValue(null);
     completePossessionMatchMock.mockResolvedValue({
       matchId: 'match-exhausted',
       winnerId: 'user-1',
@@ -346,41 +351,53 @@ describe('possession question exhaustion', () => {
     expect(completePossessionMatchMock).not.toHaveBeenCalled();
   });
 
-  it('replaces an exhausted special slot with an MCQ instead of freezing normal play', async () => {
+  it('uses the global ranked image pool when Q4 categories have no image MCQ', async () => {
     const cache = createCache('NORMAL_PLAY');
-    cache.currentQIndex = 4;
-    cache.statePayload.normalQuestionsAnsweredInHalf = 4;
+    cache.statePayload.normalQuestionsAnsweredInHalf = 3;
+    cache.statePayload.imageMcq = { half1: null };
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
-    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { questionTypes: string[] }) => (
-      params.questionTypes[0] === 'mcq_single'
-        ? [{
-          id: 'fallback-mcq',
-          category_id: 'category-a',
-          payload: {
-            type: 'mcq_single',
-            options: [
-              { id: 'a', text: { en: 'Correct' }, is_correct: true },
-              { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
-              { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
-              { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
-            ],
-          },
-        }]
-        : []
-    ));
-
+    const globalImageQuestion = {
+      id: 'question-global-image',
+      category_id: 'category-global',
+      prompt: { en: 'Image question' },
+      difficulty: 'medium',
+      payload: {
+        type: 'mcq_single',
+        image: {
+          url: 'https://cdn.example.com/q4.webp',
+          width: 1200,
+          height: 800,
+        },
+        options: [
+          { id: 'a', text: { en: 'A' }, is_correct: true },
+          { id: 'b', text: { en: 'B' }, is_correct: false },
+          { id: 'c', text: { en: 'C' }, is_correct: false },
+          { id: 'd', text: { en: 'D' }, is_correct: false },
+        ],
+      },
+    };
+    getRandomImageMcqCandidatesForMatchMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([globalImageQuestion]);
+    getImageMcqCandidateForMatchByIdMock.mockResolvedValueOnce([globalImageQuestion]);
     const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
-    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 4)).resolves.toBeNull();
 
-    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ questionTypes: ['put_in_order'] })
-    );
-    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ questionTypes: ['mcq_single'], difficulties: ['easy', 'medium', 'hard'] })
-    );
-    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(
-      expect.objectContaining({ matchId: cache.matchId, qIndex: 4, questionId: 'fallback-mcq' })
-    );
-    expect(completePossessionMatchMock).not.toHaveBeenCalled();
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 3)).resolves.toBeNull();
+
+    expect(getRandomImageMcqCandidatesForMatchMock).toHaveBeenNthCalledWith(1, {
+      matchId: cache.matchId,
+      categoryIds: expect.any(Array),
+      limit: 50,
+    });
+    expect(getRandomImageMcqCandidatesForMatchMock).toHaveBeenNthCalledWith(2, {
+      matchId: cache.matchId,
+      limit: 50,
+    });
+    expect(insertMatchQuestionIfMissingMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: cache.matchId,
+      qIndex: 3,
+      questionId: 'question-global-image',
+      categoryId: 'category-global',
+    }));
   });
 });

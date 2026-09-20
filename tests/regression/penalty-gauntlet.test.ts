@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LobbyAnswerPlanner } from '../../game-regression/src/runner.mjs';
 
-// Penalty GAUNTLET — full-engine scenarios for the tie-break + deterministic
-// reveal-window fixes (see penalty-tiebreak.test.ts for the unit level, and
-// the prod incident they trace back to: 23% of shootouts past regulation,
-// match 2e85cbbb at 18 rounds with the first 9 kicks all missed at 0-0).
+// Penalty GAUNTLET — current production rules: equal points are saves and a
+// level regulation shootout ends in a draw (product decision 2026-09-17).
+// Keep the reveal-window and timeout checks while preserving that behavior.
 //
 // These run the REAL engine (dispatch → timers → resolution → persistence)
 // against the local regression DB + Redis, so they cover the paths the unit
@@ -58,8 +57,8 @@ async function loadPenaltyState(matchId: string): Promise<PenaltyStateShape> {
 
 /** Draw regulation (everyone wrong in normal play), then run the shootout
  *  with a FIXED per-seat answer speed — both always correct, so every duel is
- *  a same-bucket points tie and the outcome rides entirely on the time
- *  tie-break under test. */
+ *  a same-bucket points tie. Production treats that tie as a save regardless
+ *  of their differing raw answer speeds. */
 function fixedSpeedDuelPlan(speedBySeat: [number, number]): LobbyAnswerPlanner {
   return ({ question, seatIndex }) => {
     if (question.phaseKind !== 'penalty') return { mode: 'wrong', timeMs: 700 };
@@ -67,13 +66,13 @@ function fixedSpeedDuelPlan(speedBySeat: [number, number]): LobbyAnswerPlanner {
   };
 }
 
-describeLocal('regression: penalty gauntlet (tie-break + timing)', () => {
+describeLocal('regression: penalty gauntlet (production draw rules + timing)', () => {
   afterEach(async () => {
     const { teardownRun } = await import('../../game-regression/src/runner.mjs');
     await teardownRun();
   });
 
-  it('same-bucket duels resolve on answer time: the faster player sweeps in regulation', async () => {
+  it('equal-point duels stay saves despite different answer speeds and finish as a regulation draw', async () => {
     const { bootFriendlyLobbyMatch, playLobbyMatch } = await import('../../game-regression/src/runner.mjs');
     const { checkInvariants, formatViolation } = await import('../../game-regression/src/invariants.mjs');
     const { computePenaltyShootout } = await import('../../game-regression/src/penalty-arithmetic.mjs');
@@ -82,10 +81,8 @@ describeLocal('regression: penalty gauntlet (tie-break + timing)', () => {
     expect(run.matchId).toBeTruthy();
 
     // Seat 1 answers every penalty in 600ms, seat 2 in 900ms — both inside the
-    // full-points grace bucket, so every duel is 100 vs 100. Pre-fix: nine+
-    // saves and a 0-0 marathon. Post-fix: seat 1 scores when shooting AND
-    // saves when keeping → sweeps, and the mercy rule ends it inside
-    // regulation.
+    // full-points grace bucket, so every duel is 100 vs 100. Neither raw
+    // speed nor the total-points fallback may invent a winner in this draw.
     await playLobbyMatch(run, {
       maxMs: 140_000,
       answerPlan: fixedSpeedDuelPlan([600, 900]),
@@ -104,13 +101,12 @@ describeLocal('regression: penalty gauntlet (tie-break + timing)', () => {
       suddenDeath: state.penalty?.suddenDeath,
     });
     expect(arithmetic.errors).toEqual([]);
-    expect(arithmetic.winnerSeat).toBe(1);
-    expect(arithmetic.suddenDeathReached).toBe(false);
-    // Seat 1 scores every shot, seat 2 none → mercy rule fires by kick 6
-    // (3-0 with seat 2 holding 2 remaining kicks) — nowhere near the pre-fix
-    // 18-40 kick marathons.
-    expect(arithmetic.totalKicks).toBeLessThanOrEqual(6);
-    expect(arithmetic.goals.seat2).toBe(0);
+    expect(arithmetic.winnerSeat).toBeNull();
+    expect(arithmetic.totalKicks).toBe(10);
+    expect(arithmetic.goals).toEqual({seat1:0,seat2:0});
+    const { sql } = await import('../../src/db/index.js');
+    const [completed] = await sql`SELECT status,winner_user_id FROM matches WHERE id=${run.matchId!}`;
+    expect(completed).toEqual({status:'completed',winner_user_id:null});
   }, 180_000);
 
   it('every penalty round ships an identical answer window (playableAt/deadlineAt)', async () => {
@@ -217,7 +213,9 @@ describeLocal('regression: penalty ready-ack gate', () => {
       suddenDeath: state.penalty?.suddenDeath,
     });
     expect(arithmetic.errors).toEqual([]);
-    expect(arithmetic.winnerSeat).toBe(1);
+    expect(arithmetic.winnerSeat).toBeNull();
+    expect(arithmetic.totalKicks).toBe(10);
+    expect(arithmetic.goals).toEqual({seat1:0,seat2:0});
     // Every penalty question the server dispatched must carry a full timing
     // window — the ceiling fallback path builds the same shape as the ack path.
     const penaltyQuestions = run.trace

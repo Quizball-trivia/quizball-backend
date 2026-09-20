@@ -17,7 +17,10 @@ const SPANISH_SOURCE_SLUGS: Record<string, string> = {
 };
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
-let cachedMetrics: { value: AdminCampaignQuizSearchConsoleResponse; expiresAt: number } | null = null;
+const cachedMetrics = new Map<
+  number,
+  { value: AdminCampaignQuizSearchConsoleResponse; expiresAt: number }
+>();
 
 function configured(): boolean {
   return Boolean(
@@ -116,7 +119,8 @@ export const campaignQuizSearchConsoleService = {
         pages: [],
       };
     }
-    if (cachedMetrics && cachedMetrics.expiresAt > Date.now()) return cachedMetrics.value;
+    const cached = cachedMetrics.get(days);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
 
     const range = dateRange(days);
     const property = config.GOOGLE_SEARCH_CONSOLE_SITE_URL!;
@@ -199,7 +203,7 @@ export const campaignQuizSearchConsoleService = {
       end_date: range.end,
       pages: [...bySlug.values()].sort((left, right) => right.clicks - left.clicks),
     };
-    cachedMetrics = { value, expiresAt: Date.now() + 15 * 60_000 };
+    cachedMetrics.set(days, { value, expiresAt: Date.now() + 15 * 60_000 });
     return value;
   },
 };

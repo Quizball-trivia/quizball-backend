@@ -300,7 +300,7 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     );
   });
 
-  it('emits terminal results even when Redis replay bookkeeping and cache cleanup fail', async () => {
+  it('emits terminal results even when Redis replay and cache cleanup fail', async () => {
     getMatchMock.mockResolvedValue({
       id: MATCH_ID,
       mode: 'friendly',

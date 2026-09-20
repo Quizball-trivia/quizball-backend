@@ -10,7 +10,7 @@ const campaignAttributionSchema = z.object({
   campaign_conversion_id: z.string().uuid(),
   quiz_score: z.number().int().min(0).max(1000).optional(),
   quiz_total_questions: z.number().int().min(1).max(1000).optional(),
-}).superRefine((value, ctx) => {
+}).strict().superRefine((value, ctx) => {
   if (
     value.quiz_score !== undefined &&
     value.quiz_total_questions !== undefined &&

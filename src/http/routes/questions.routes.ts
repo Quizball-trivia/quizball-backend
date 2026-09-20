@@ -6,7 +6,6 @@ import { requireRole } from '../middleware/require-role.js';
 import { questionsController } from '../../modules/questions/index.js';
 import {
   listQuestionsQuerySchema,
-  checkAnswerSchema,
   createQuestionSchema,
   updateQuestionSchema,
   updateStatusSchema,
@@ -63,17 +62,6 @@ router.get(
   '/:id',
   validate({ params: uuidParamSchema }),
   questionsController.getById
-);
-
-/**
- * POST /api/v1/questions/:id/check
- * Solo-mode server-side answer verification. Player-facing payloads are
- * sanitized (no is_correct), so clients verify one option per call here.
- */
-router.post(
-  '/:id/check',
-  validate({ params: uuidParamSchema, body: checkAnswerSchema }),
-  questionsController.checkAnswer
 );
 
 /**

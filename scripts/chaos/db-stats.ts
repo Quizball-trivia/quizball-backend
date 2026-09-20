@@ -17,12 +17,8 @@ export interface ActivitySnapshot {
   active: number;
   idle: number;
   idleInTxn: number;
-  longestIdleInTxnSec?: number;
   waitingOnLock: number;
-  longestLockWaitSec: number;
   longestActiveSec: number;
-  maxConnections: number;
-  utilizationPct: number;
 }
 
 export function makeStatsClient(databaseUrl: string) {
@@ -83,53 +79,29 @@ export async function snapshotActivity(
       active: number;
       idle: number;
       idle_in_txn: number;
-      longest_idle_in_txn_sec: number;
       waiting_on_lock: number;
-      longest_lock_wait_sec: number;
       longest_active_sec: number;
-      max_connections: number;
-      utilization_pct: number;
     }[]
   >`
-    WITH limits AS (
-      SELECT setting::int AS max_connections
-      FROM pg_settings
-      WHERE name = 'max_connections'
-    )
     SELECT
       count(*)::int AS total,
       count(*) FILTER (WHERE state = 'active')::int AS active,
       count(*) FILTER (WHERE state = 'idle')::int AS idle,
       count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_txn,
-      COALESCE(round(max(extract(epoch FROM (now() - xact_start)))
-        FILTER (WHERE state = 'idle in transaction')::numeric, 3), 0)::float8
-        AS longest_idle_in_txn_sec,
       count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock,
-      COALESCE(round(max(extract(epoch FROM (now() - query_start)))
-        FILTER (WHERE wait_event_type = 'Lock'
-          AND query NOT ILIKE '%pg_stat_activity%')::numeric, 3), 0)::float8
-        AS longest_lock_wait_sec,
       COALESCE(round(max(extract(epoch FROM (now() - query_start)))
         FILTER (WHERE state = 'active'
           AND query NOT ILIKE '%pg_stat_activity%')::numeric, 1), 0)::float8
-        AS longest_active_sec,
-      limits.max_connections,
-      round(count(*)::numeric * 100 / limits.max_connections, 1)::float8 AS utilization_pct
-    FROM pg_stat_activity
-    CROSS JOIN limits
-    GROUP BY limits.max_connections`;
+        AS longest_active_sec
+    FROM pg_stat_activity`;
   const r = rows[0];
   return {
     total: r.total,
     active: r.active,
     idle: r.idle,
     idleInTxn: r.idle_in_txn,
-    longestIdleInTxnSec: r.longest_idle_in_txn_sec,
     waitingOnLock: r.waiting_on_lock,
-    longestLockWaitSec: r.longest_lock_wait_sec,
     longestActiveSec: r.longest_active_sec,
-    maxConnections: r.max_connections,
-    utilizationPct: r.utilization_pct,
   };
 }
 

@@ -96,9 +96,11 @@ const state = vi.hoisted(() => ({
   matchmakingLockHeld: false,
 }));
 
-const flags = vi.hoisted(() => ({ guestBotMatches: true, rateLimited: false, delayMs: 0 }));
+const flags = vi.hoisted(() => ({ guestBotMatches: true, provisioning: true, rateLimited: false, delayMs: 0 }));
 vi.mock('../../src/core/config.js', () => ({
   config: {
+    GUEST_LOBBIES_RECONNECT_ENABLED: true,
+    get GUEST_LOBBIES_PROVISIONING_ENABLED() { return flags.provisioning; },
     FOOTBALL_GRID_QUEUE_ENABLED: true,
     FOOTBALL_GRID_CONTENT_ENABLED: true,
     FOOTBALL_GRID_BOTS_ENABLED: true,
@@ -232,6 +234,7 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     footballGridMatchmakingService.stopSweep();
     vi.clearAllMocks();
     flags.guestBotMatches = true;
+    flags.provisioning = true;
     flags.rateLimited = false;
     flags.delayMs = 0;
     vi.useRealTimers();
@@ -271,6 +274,14 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     expect(emitted(member, 'grid:error')).toEqual([expect.objectContaining({ code: 'GRID_PRACTICE_GUEST_ONLY' })]);
   });
 
+  it('does not create a new match while guest provisioning is draining', async () => {
+    flags.provisioning = false;
+    const guest = socket('draining-guest');
+    await footballGridMatchmakingService.handlePracticeBotStart(io, guest, { locale: 'en', theme: 'european' });
+    expect(state.createMatch).not.toHaveBeenCalled();
+    expect(emitted(guest, 'grid:error')).toEqual([expect.objectContaining({ code: 'GRID_UNAVAILABLE' })]);
+  });
+
   it('is a no-op behind the kill switch and under the rate limit', async () => {
     flags.guestBotMatches = false;
     const guest = socket('guest-2');
@@ -278,6 +289,7 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     expect(emitted(guest, 'grid:error')).toEqual([expect.objectContaining({ code: 'GRID_UNAVAILABLE' })]);
 
     flags.guestBotMatches = true;
+    flags.provisioning = true;
     flags.rateLimited = true;
     const limited = socket('guest-3');
     await footballGridMatchmakingService.handlePracticeBotStart(io, limited, { locale: 'en', theme: 'european' });

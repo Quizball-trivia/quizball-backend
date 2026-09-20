@@ -12,10 +12,6 @@ const globalIndex = migration('20260826120003_football_grid_point_global_index.s
 const countryIndex = migration('20260826120004_football_grid_point_country_index.sql');
 const indexes = `${globalIndex}\n${countryIndex}`;
 const checks = migration('20260826120005_football_grid_point_checks.sql');
-const migrationRunner = readFileSync(
-  new URL('../../scripts/run-migrations.mjs', import.meta.url),
-  'utf8',
-);
 
 describe('Football Tic Tac Toe Points migration contract', () => {
   it('keeps the hot users-table expansion short and bounded', () => {
@@ -47,7 +43,8 @@ describe('Football Tic Tac Toe Points migration contract', () => {
     expect(indexes).not.toMatch(/\n\s+updated_at ASC/);
   });
 
-  it('builds global and country leaderboard indexes online', () => {
+  it('builds global and country leaderboard indexes online', async () => {
+    const { classifyMigration } = await import('../../scripts/migration-safety.mjs');
     expect(indexDrop).toContain('DROP INDEX CONCURRENTLY IF EXISTS');
     expect(globalIndex).toContain('-- migrate:no-transaction');
     expect(countryIndex).toContain('-- migrate:no-transaction');
@@ -56,10 +53,12 @@ describe('Football Tic Tac Toe Points migration contract', () => {
     expect(indexes).toContain('idx_users_tic_tac_toe_country_points_desc');
     expect(globalIndex.match(/CREATE[\s\S]*?;/g)).toHaveLength(1);
     expect(countryIndex.match(/CREATE[\s\S]*?;/g)).toHaveLength(1);
-    expect(migrationRunner).toContain('MIGRATION_ONLINE_DDL_LOCK_TIMEOUT_MS');
-    expect(migrationRunner).toContain("'lock_timeout'");
-    expect(migrationRunner).toContain('!existingIndex.indisvalid || !existingIndex.indisready');
-    expect(migrationRunner).toContain('Dropping interrupted concurrent index');
+    for (const sql of [indexDrop, globalIndex, countryIndex]) {
+      expect(classifyMigration(sql).nonTransactional).toBe(true);
+      expect(classifyMigration(sql).statements).toHaveLength(1);
+    }
+    // Real execution, lock/time limits and invalid-index recovery are covered
+    // on PostgreSQL by tests/migrations/runner.test.mjs.
   });
 
   it('adds checks without a hot-table validation in the expansion migration', () => {

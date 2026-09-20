@@ -123,11 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_trivia_mines_events_user_question ON public.trivi
 
 -- Retried stake/payout writes lose a unique-index race instead of moving coins twice.
 -- No CONCURRENTLY: the migration runner holds a transaction (owner rule 2026-09-04).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_store_tx_trivia_mines_idempotency
-  ON public.store_transaction_logs (event_type, idempotency_key)
-  WHERE idempotency_key IS NOT NULL
-    AND outcome = 'success'
-    AND event_type IN ('trivia_mines_stake', 'trivia_mines_payout', 'trivia_mines_refund');
+-- Shared-table index builds in 20260919114315_online_uq_store_tx_trivia_mines_idempotency.sql.
 
 ALTER TABLE public.trivia_mines_rounds ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.trivia_mines_events ENABLE ROW LEVEL SECURITY;

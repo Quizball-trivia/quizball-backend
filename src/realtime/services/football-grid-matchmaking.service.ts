@@ -891,6 +891,10 @@ export const footballGridMatchmakingService = {
     const current = () => isPracticeStartCurrent(key, token);
     try {
       if (await resumeActiveMatchOnStart(io, userId)) return;
+      if (!config.GUEST_LOBBIES_PROVISIONING_ENABLED || !config.GUEST_LOBBIES_RECONNECT_ENABLED) {
+        socket.emit('grid:error', { code: 'GRID_UNAVAILABLE', message: 'New practice games are temporarily unavailable' });
+        return;
+      }
       if (!current()) return;
       // Per-IP throttle at entry (abuse); the per-guest seated budget is charged
       // only once the wait is over, so cancelled starts do not burn it.
@@ -963,8 +967,8 @@ export const footballGridMatchmakingService = {
       // Outside the per-user lock: startBotPair takes it itself.
       const paired = await startBotPair(io, search, {
         requireQueued: false,
-        stillWanted: () => current() && socket.connected,
-        claimSeating: () => socket.connected && claimPracticeSeating(key, token),
+        stillWanted: () => current() && socket.connected && config.GUEST_LOBBIES_PROVISIONING_ENABLED && config.GUEST_LOBBIES_RECONNECT_ENABLED,
+        claimSeating: () => socket.connected && config.GUEST_LOBBIES_PROVISIONING_ENABLED && config.GUEST_LOBBIES_RECONNECT_ENABLED && claimPracticeSeating(key, token),
       });
       if (!paired) {
         // Cancelled while seating: the guest already got its idle state.

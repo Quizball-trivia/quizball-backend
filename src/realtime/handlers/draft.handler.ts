@@ -40,14 +40,13 @@ export function registerDraftHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await draftRealtimeService.handleBan(io, socket, parsed.data.categoryId, parsed.data.lobbyId);
+      await draftRealtimeService.handleBan(io, socket, parsed.data.categoryId);
     } catch (error) {
       logger.error(
         {
           err: error instanceof Error ? error.message : error,
           userId: socket.data.user?.id,
           categoryId: parsed.data.categoryId,
-          lobbyId: parsed.data.lobbyId,
         },
         'Error handling draft:ban'
       );

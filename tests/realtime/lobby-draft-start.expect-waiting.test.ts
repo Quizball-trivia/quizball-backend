@@ -35,7 +35,7 @@ vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
 }));
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => null }));
 vi.mock('../../src/realtime/lobby-utils.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/realtime/lobby-utils.js')>()),
+  ...await importOriginal<typeof import('../../src/realtime/lobby-utils.js')>(),
   emitLobbyState: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/realtime/services/warmup-realtime.service.js', () => ({

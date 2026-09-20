@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { config } from '../../core/config.js';
 import {
   auctionBidSchema,
   auctionFoldSchema,
@@ -32,6 +33,10 @@ function emitCapabilityError(socket: QuizballSocket, error: unknown): boolean {
 
 export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('auction:start_ai_match', async (payload) => {
+    if (!config.AUCTION_ENABLED) {
+      socket.emit('auction:error', { code: 'AUCTION_DISABLED', message: 'Auction is temporarily unavailable' });
+      return;
+    }
     const parsed = auctionStartAiMatchSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:start_ai_match payload');
@@ -56,6 +61,10 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
   });
 
   socket.on('auction:practice_bot_start', async (payload) => {
+    if (!config.AUCTION_ENABLED) {
+      socket.emit('auction:error', { code: 'AUCTION_DISABLED', message: 'Auction is temporarily unavailable' });
+      return;
+    }
     const parsed = auctionPracticeBotStartSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:practice_bot_start payload');
@@ -179,6 +188,10 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
   });
 
   socket.on('auction:search_start', async (payload) => {
+    if (!config.AUCTION_ENABLED) {
+      socket.emit('auction:error', { code: 'AUCTION_DISABLED', message: 'Auction is temporarily unavailable' });
+      return;
+    }
     const parsed = auctionSearchStartSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:search_start payload');

@@ -1,13 +1,12 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
-import { AppError, ErrorCode } from '../../core/errors.js';
 import { rankedQueueJoinSchema } from '../schemas/ranked.schemas.js';
 import { rankedMatchmakingService } from '../services/ranked-matchmaking.service.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 
 export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('ranked:queue_join', async (payload) => {
-    logger.debug({ userId: socket.data.user.id }, 'Received ranked:queue_join');
+    logger.info({ userId: socket.data.user.id }, 'Received ranked:queue_join');
     rankedDebug('queue_join_received', {
       user: rankedDebugUser(socket.data.user.id),
       socket: socket.id,
@@ -34,10 +33,6 @@ export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocke
     try {
       await rankedMatchmakingService.handleQueueJoin(io, socket, parsed.data);
     } catch (error) {
-      if (error instanceof AppError && error.code === ErrorCode.CAPABILITY_REQUIRED) {
-        socket.emit('error', { code: error.code, message: error.message });
-        return;
-      }
       logger.error({ error, userId: socket.data.user.id }, 'Error in ranked:queue_join handler');
       rankedDebug('queue_join_handler_error', {
         user: rankedDebugUser(socket.data.user.id),

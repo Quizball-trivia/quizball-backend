@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { generateCampaignQuizImage } from '../../src/modules/campaign-quizzes/campaign-quiz-image-generation.service.js';
 
-async function generatedWebp(): Promise<string> {
+async function generatedPng(): Promise<string> {
   const image = await sharp({
     create: {
       width: 1024,
@@ -10,12 +10,12 @@ async function generatedWebp(): Promise<string> {
       channels: 3,
       background: '#2155ff',
     },
-  }).webp().toBuffer();
+  }).png().toBuffer();
   return image.toString('base64');
 }
 
 describe('campaign quiz image generation', () => {
-  it('requests one square high-quality WebP and returns a preview data URL', async () => {
+  it('requests one square high-quality PNG and returns an optimised WebP preview', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body).toMatchObject({
@@ -23,11 +23,11 @@ describe('campaign quiz image generation', () => {
         n: 1,
         size: '1024x1024',
         quality: 'high',
-        output_format: 'webp',
+        output_format: 'png',
         background: 'opaque',
       });
       expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
-      return new Response(JSON.stringify({ data: [{ b64_json: await generatedWebp() }] }), {
+      return new Response(JSON.stringify({ data: [{ b64_json: await generatedPng() }] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -73,17 +73,9 @@ describe('campaign quiz image generation', () => {
     )).rejects.toThrow(/returned no artwork/);
   });
 
-  it('rejects valid image bytes when the provider does not return WebP', async () => {
-    const png = await sharp({
-      create: {
-        width: 1024,
-        height: 1024,
-        channels: 3,
-        background: '#2155ff',
-      },
-    }).png().toBuffer();
+  it('rejects malformed provider image bytes', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      data: [{ b64_json: png.toString('base64') }],
+      data: [{ b64_json: Buffer.from('not-an-image').toString('base64') }],
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

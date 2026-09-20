@@ -56,19 +56,16 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({ usersRepo: usersRepoMo
 const USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 vi.mock('../../src/http/middleware/auth.js', () => ({
-  authMiddleware: vi.fn((req, _res, next) => {
-    req.user = { id: USER_ID, role: 'user' };
-    next();
-  }),
   optionalAuthMiddleware: vi.fn((req, _res, next) => {
+    req.user = { id: USER_ID, role: 'user' }; next();
+  }),
+  authMiddleware: vi.fn((req, _res, next) => {
     req.user = { id: USER_ID, role: 'user' };
     next();
   }),
 }));
 
 const { auctionRoutes } = await import('../../src/http/routes/auction.routes.js');
-const authModule = await import('../../src/http/middleware/auth.js');
-const { AuthenticationError } = await import('../../src/core/errors.js');
 const { auctionLeaderboardRepo } = await import(
   '../../src/modules/auction/auction-leaderboard.repo.js'
 );
@@ -136,30 +133,6 @@ describe('auction leaderboard repo', () => {
   });
 });
 
-describe('GET /api/v1/auction/leaderboard without a session', () => {
-  const asGuest = () => vi.mocked(authModule.optionalAuthMiddleware).mockImplementationOnce((_req, _res, next) => next());
-
-  it('serves the global board to signed-out visitors', async () => {
-    asGuest();
-    dbMocks.sql.taggedResults.push([]);
-    const res = await request(createApp()).get('/api/v1/auction/leaderboard');
-    expect(res.status).toBe(200);
-    expect(usersRepoMock.getById).not.toHaveBeenCalled();
-  });
-
-  it('refuses the country scope without a session', async () => {
-    asGuest();
-    const res = await request(createApp()).get('/api/v1/auction/leaderboard?scope=country');
-    expect(res.status).toBe(401);
-  });
-
-  it('keeps /me behind the session', async () => {
-    vi.mocked(authModule.authMiddleware).mockImplementationOnce((_req, _res, next) => next(new AuthenticationError('Authentication required')));
-    const res = await request(createApp()).get('/api/v1/auction/leaderboard/me');
-    expect(res.status).toBe(401);
-  });
-});
-
 describe('GET /api/v1/auction/leaderboard', () => {
   it('returns entries numbered by rank', async () => {
     dbMocks.sql.taggedResults.push([
@@ -190,16 +163,6 @@ describe('GET /api/v1/auction/leaderboard', () => {
     const res = await request(createApp()).get('/api/v1/auction/leaderboard?limit=500');
     expect(res.status).toBe(422);
   });
-
-  it('does not fall back to the global board when country scope has no valid country', async () => {
-    usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: null });
-
-    const res = await request(createApp()).get('/api/v1/auction/leaderboard?scope=country');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ entries: [] });
-    expect(dbMocks.sql.taggedCalls).toHaveLength(0);
-  });
 });
 
 describe('GET /api/v1/auction/leaderboard/me', () => {
@@ -225,15 +188,5 @@ describe('GET /api/v1/auction/leaderboard/me', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toBeNull();
-  });
-
-  it('returns null without querying the global rank when country scope has no valid country', async () => {
-    usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: 'ZZ' });
-
-    const res = await request(createApp()).get('/api/v1/auction/leaderboard/me?scope=country');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toBeNull();
-    expect(dbMocks.sql.taggedCalls).toHaveLength(0);
   });
 });

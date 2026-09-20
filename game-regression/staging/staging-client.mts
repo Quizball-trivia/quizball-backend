@@ -81,94 +81,27 @@ export function connectStaging(url: string, token: string, userId: string, share
 }
 
 /**
- * Self-heal all durable session state from a crashed/killed prior run. Active
- * matches, waiting lobbies, and ranked queue searches all block a fresh queue
- * join, so a capacity run is invalid unless every test identity starts clean.
+ * Self-heal: a crashed/killed prior run can leave a staging test user in an
+ * `active` match, which blocks ranked queue + lobby create ("already in an active
+ * match"). On connect the server emits match:rejoin_available / a RANKED_QUEUE_BLOCKED
+ * error carrying the activeMatchId — forfeit+leave it so the next scenario starts clean.
  */
 export async function clearActiveMatch(client: StagingClient): Promise<string | null> {
-  // Give the server a moment to emit rejoin/state/session information. A live
-  // match is often auto-rejoined as `match:state` (not `rejoin_available`), so
-  // looking only for the latter silently reused dirty test accounts.
+  // Give the server a moment to emit rejoin_available / any blocked-state error.
   await new Promise((r) => setTimeout(r, 2_000));
   const rejoin = client.latest<{ matchId?: string }>('match:rejoin_available');
-  const matchState = client.latest<{ matchId?: string }>('match:state');
-  const sessionState = client.latest<{ activeMatchId?: string | null }>('session:state');
   const fromError = client.trace.byEvent('error')
     .map((e) => (e.payload as { meta?: { stateSnapshot?: { activeMatchId?: string } } }).meta?.stateSnapshot?.activeMatchId)
     .find(Boolean);
-  const activeMatchId = rejoin?.matchId
-    ?? matchState?.matchId
-    ?? sessionState?.activeMatchId
-    ?? fromError
-    ?? null;
+  const activeMatchId = rejoin?.matchId ?? fromError ?? null;
   if (activeMatchId) {
     client.socket.emit('match:forfeit', { matchId: activeMatchId });
     client.socket.emit('match:leave', { matchId: activeMatchId });
-    // Do not start the measured queue join while cleanup is still racing in the
-    // background. Final results or a session snapshot without the active match
-    // both prove the user is reusable; retain a bounded fallback for older
-    // staging builds that do not emit the session transition.
-    const cleared = await client.waitFor(() => {
-      const latestSession = client.latest<{
-        activeMatchId?: string | null;
-        state?: string;
-      }>('session:state');
-      const finalResultForMatch = client.trace.byEvent('match:final_results')
-        .some((event) => (event.payload as { matchId?: string }).matchId === activeMatchId);
-      return finalResultForMatch
-        || Boolean(latestSession && latestSession.activeMatchId !== activeMatchId);
-    }, 10_000);
-    if (!cleared) {
-      throw new Error(`staging cleanup could not clear active match ${activeMatchId}`);
-    }
-  }
-
-  let latestSession = client.latest<{
-    waitingLobbyId?: string | null;
-    queueSearchId?: string | null;
-  }>('session:state');
-  const waitingLobbyId = latestSession?.waitingLobbyId ?? null;
-  if (waitingLobbyId) {
-    const correlationId = `load-cleanup-${userSafeId(client.userId)}-${Date.now()}`;
-    const leaveResult = await new Promise<{ ok?: boolean; code?: string } | null>((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 10_000);
-      timeout.unref?.();
-      client.socket.emit('lobby:leave', { correlationId }, (result: { ok?: boolean; code?: string }) => {
-        clearTimeout(timeout);
-        resolve(result);
-      });
-    });
-    const cleared = await client.waitFor(() => {
-      const state = client.latest<{ waitingLobbyId?: string | null }>('session:state');
-      return Boolean(state && state.waitingLobbyId !== waitingLobbyId);
-    }, 10_000);
-    if (!cleared) {
-      throw new Error(
-        `staging cleanup could not leave waiting lobby ${waitingLobbyId}` +
-        `${leaveResult?.code ? ` (${leaveResult.code})` : ''}`
-      );
-    }
-  }
-
-  latestSession = client.latest<{ queueSearchId?: string | null }>('session:state');
-  const queueSearchId = latestSession?.queueSearchId ?? null;
-  if (queueSearchId) {
-    client.socket.emit('ranked:queue_leave');
-    const cleared = await client.waitFor(() => {
-      const state = client.latest<{ queueSearchId?: string | null }>('session:state');
-      return Boolean(state && state.queueSearchId === null);
-    }, 10_000);
-    if (!cleared) {
-      throw new Error(`staging cleanup could not leave ranked search ${queueSearchId}`);
-    }
+    await new Promise((r) => setTimeout(r, 2_500));
   }
   // Discard all setup/cleanup events so the scenario trace contains ONLY the real
   // match that follows (otherwise a self-heal forfeit's final_results would be
   // judged as part of the new match).
   client.trace.reset();
   return activeMatchId;
-}
-
-function userSafeId(userId: string): string {
-  return userId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
 }

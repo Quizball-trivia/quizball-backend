@@ -90,10 +90,8 @@ export class DbAdmissionController {
   }
 
   /**
-   * Let a liveness probe observe the real pool without waiting behind the
-   * ordinary request backlog. A single priority waiter may exceed queueLimit;
-   * otherwise a full-but-healthy bulkhead would make the watchdog kill the
-   * replica it is meant to protect.
+   * Let the watchdog observe the real pool without waiting behind an ordinary
+   * request backlog. A single priority waiter may exceed queueLimit.
    */
   async runPriority<T>(
     operation: () => PromiseLike<T> | T,
@@ -153,8 +151,7 @@ export class DbAdmissionController {
         waiter.settled = true;
         clearTimeout(waiter.timer);
         this.recordAcquisition(performance.now() - waiter.queuedAt, true);
-        // The released execution slot transfers directly to this waiter, so
-        // `active` intentionally remains unchanged.
+        // The released execution slot transfers directly to this waiter.
         waiter.resolve(this.makeRelease());
         return;
       }

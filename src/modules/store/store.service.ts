@@ -127,9 +127,7 @@ export function buildWalletResponse(
   ticketPurchaseCooldown: TicketPurchaseCooldown
 ): StoreWalletResponse {
   return {
-    coins: wallet.coin_fraction_minor == null
-      ? wallet.coins
-      : coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
+    coins: wallet.coin_fraction_minor == null ? wallet.coins : coinPartsToDisplay(wallet.coins, wallet.coin_fraction_minor),
     tickets: wallet.tickets,
     ticketPurchaseCooldown,
   };
@@ -288,12 +286,8 @@ function isPgUniqueViolation(error: unknown): error is { code: string } {
 }
 
 function toStoreTransactionLogResponse(row: StoreTransactionLogRow) {
-  const coinsDeltaMinor = row.coins_delta_minor == null
-    ? row.coins_delta * 100
-    : Number(row.coins_delta_minor);
-  if (!Number.isSafeInteger(coinsDeltaMinor)) {
-    throw new AppError('Store transaction coin delta exceeds the safe API range', 500);
-  }
+  const coinsDeltaMinor = row.coins_delta_minor == null ? row.coins_delta * 100 : Number(row.coins_delta_minor);
+  if (!Number.isSafeInteger(coinsDeltaMinor)) throw new AppError("Store transaction coin delta exceeds the safe API range", 500);
   return {
     id: row.id,
     eventType: row.event_type,
@@ -899,17 +893,6 @@ export const storeService = {
     ]);
     const cooldown = buildTicketPurchaseCooldown(purchaseWindow.ticketCount, now);
     return buildWalletResponse(wallet, cooldown);
-  },
-
-  async getRankedTicketWallets(userIds: string[]): Promise<Map<string, WalletRow>> {
-    const wallets = await storeRepo.getWallets(userIds);
-    return new Map([...wallets].map(([userId, wallet]) => {
-      const hydrated = resolveHydratedTicketState(wallet);
-      return [userId, {
-        coins: wallet.coins,
-        tickets: hydrated.tickets,
-      }];
-    }));
   },
 
   async consumeRankedTickets(

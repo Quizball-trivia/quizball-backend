@@ -13,6 +13,12 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
 import '../setup.js';
 
+// The release kill switch defaults OFF; these tests exercise the enabled path.
+vi.mock('../../src/core/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/config.js')>();
+  return { ...actual, config: { ...actual.config, AUCTION_ENABLED: true } };
+});
+
 type LobbyMode = 'friendly' | 'ranked';
 type LobbyStatus = 'waiting' | 'active' | 'closed';
 type LobbyGameMode =

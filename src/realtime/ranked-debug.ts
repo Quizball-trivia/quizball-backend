@@ -1,7 +1,7 @@
 import { config } from '../core/config.js';
 import { logger } from '../core/logger.js';
 
-const RANKED_DEBUG_ENABLED = config.NODE_ENV === 'staging' && config.RANKED_DEBUG_ENABLED;
+const RANKED_DEBUG_ENABLED = config.NODE_ENV === 'staging';
 
 type DebugValue = string | number | boolean | null | undefined;
 

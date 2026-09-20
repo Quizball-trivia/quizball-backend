@@ -25,12 +25,11 @@ import {
   fireAndForget,
   resolveAiUserIdForMatch,
   resolvePossessionRound,
-  scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
   schedulePossessionAiAnswer,
   schedulePossessionAiHalftimeBan,
 } from './possession-match-flow.js';
-import { HALFTIME_DURATION_MS, HALFTIME_POST_BAN_REVEAL_MS } from './possession-halftime.js';
+import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import {
   answerLogFields,
   cacheLogFields,
@@ -180,7 +179,7 @@ function scheduleQuestionTimeout(
 
 export async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:state',
       matchId,
@@ -206,7 +205,7 @@ async function emitPossessionAnswerSnapshotToSocket(
   );
   if (answerAck) {
     socket.emit('match:answer_ack', answerAck);
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:answer_ack',
         matchId: cache.matchId,
@@ -244,7 +243,7 @@ async function emitPossessionAnswerSnapshotToSocket(
     acceptedDisplay: latestDisplay,
     acceptedDisplays,
   });
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:countdown_guess_ack',
       matchId: cache.matchId,
@@ -262,7 +261,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   const cache = await getMatchCacheOrRebuild(matchId);
   if (cache) {
     socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:state',
         matchId,
@@ -293,7 +292,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         attackerSeat: cache.currentQuestion.attackerSeat,
       });
       await markMatchEnteredForSocket(socket, matchId, 'possession_cached_question');
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:question',
           matchId,
@@ -314,7 +313,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   if (!match) return;
   const state = parsePossessionState(match.state_payload);
   socket.emit('match:state', toMatchStatePayload(matchId, state));
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:state',
       matchId,
@@ -368,7 +367,7 @@ function pickFirstValidCandidate(
       ? parsed.data.image.url
       : null;
 
-    logger.debug(
+    logger.info(
       {
         ...logContext,
         questionType,
@@ -413,10 +412,11 @@ function isImageMcqSlot(state: PossessionStatePayload): boolean {
  * normal question) so its image URL rides every match:state of the half and
  * the client can preload it long before the image slot (Q4) starts.
  *
- * Idempotent per half: undefined = not attempted yet; null = attempted but the
- * drafted categories have no image MCQ (the slot will fall back to a normal
- * MCQ). Mutates `state` — the caller persists it via the regular cache/state
- * writes of the dispatch flow.
+ * Once selected, the reservation is stable for the half. A legacy/null
+ * reservation is retried so matches created before the global fallback was
+ * deployed can repair themselves before Q4. Drafted categories are preferred,
+ * then a global ranked image question is reserved so Q4 stays image-only.
+ * Mutates `state` — the caller persists it via the regular cache/state writes.
  */
 async function ensureImageMcqReservedForHalf(
   matchId: string,
@@ -426,43 +426,60 @@ async function ensureImageMcqReservedForHalf(
   if (state.phase !== 'NORMAL_PLAY') return;
   const halfKey = state.half === 1 ? 'half1' : 'half2';
   const reservations = state.imageMcq ?? (state.imageMcq = {});
-  if (reservations[halfKey] !== undefined) return;
+  if (reservations[halfKey]) return;
 
-  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+  const categoryRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
     matchId,
     categoryIds,
     limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
   });
-  const picked = pickFirstValidCandidate(rows, 'mcq_single', {
+  let picked = pickFirstValidCandidate(categoryRows, 'mcq_single', {
     matchId,
     imageMcqReservation: true,
     half: state.half,
     categoryIds,
   });
+  let reservationSource: 'drafted_categories' | 'global_fallback' | 'unavailable' =
+    picked ? 'drafted_categories' : 'unavailable';
+
+  if (!picked) {
+    const globalRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+      matchId,
+      limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+    });
+    picked = pickFirstValidCandidate(globalRows, 'mcq_single', {
+      matchId,
+      imageMcqReservation: true,
+      half: state.half,
+      globalFallback: true,
+    });
+    if (picked) reservationSource = 'global_fallback';
+  }
 
   reservations[halfKey] = picked?.imageUrl
     ? { questionId: picked.questionId, imageUrl: picked.imageUrl }
     : null;
-  logger.debug(
+  logger.info(
     {
       matchId,
       half: state.half,
       categoryIds,
+      reservationSource,
       reservedQuestionId: picked?.questionId ?? null,
       reservedImageUrl: picked?.imageUrl ?? null,
     },
     picked?.imageUrl
       ? 'Image MCQ reserved for half'
-      : 'No image MCQ available to reserve for half'
+      : 'No ranked image MCQ available to reserve for half'
   );
 }
 
 /**
  * For the image-MCQ slot, prefer the question reserved for this half (whose
  * image the client has been preloading); if it has become invalid/used,
- * re-pick a random published image MCQ from the drafted categories. Returns
- * null (→ caller falls back to a normal MCQ) when the pool is
- * empty/exhausted, so the match never stalls.
+ * re-pick a random published image MCQ from the drafted categories, then from
+ * the global ranked image pool. Returns null only when the entire image pool
+ * is empty/exhausted, preserving a final anti-stall fallback in the caller.
  */
 async function pickImageMcqForState(
   matchId: string,
@@ -488,15 +505,26 @@ async function pickImageMcqForState(
     );
   }
 
-  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+  const categoryRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
     matchId,
     categoryIds,
     limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
   });
-  return pickFirstValidCandidate(rows, 'mcq_single', {
+  const categoryPick = pickFirstValidCandidate(categoryRows, 'mcq_single', {
     matchId,
     imageMcqSlot: true,
     categoryIds,
+  });
+  if (categoryPick) return categoryPick;
+
+  const globalRows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+    matchId,
+    limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+  });
+  return pickFirstValidCandidate(globalRows, 'mcq_single', {
+    matchId,
+    imageMcqSlot: true,
+    globalFallback: true,
   });
 }
 
@@ -511,7 +539,7 @@ async function maybePickQuestionForState(
     if (imagePicked) return imagePicked;
     logger.warn(
       { matchId, imageMcqSlot: true, categoryIds },
-      'No image MCQ available for Q4 slot; falling back to a normal MCQ'
+      'Entire ranked image MCQ pool exhausted for Q4 slot; using anti-stall normal MCQ fallback'
     );
     // fall through to the normal mcq_single path below
   }
@@ -629,13 +657,31 @@ async function maybePickQuestionForState(
       'Special question pool exhausted; falling back to MCQ (anti-stall)'
     );
     picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+      excludeSeen,
       dropReservedExclusion: true,
     });
     if (!picked) {
       picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
         allowImageMcqs: true,
+        excludeSeen,
         dropReservedExclusion: true,
       });
+    }
+    // Preserve the normal freshness ladder: only reuse a question after both
+    // the plain and image-capable unseen pools are exhausted. If a repeat is
+    // unavoidable, choose the least-recently-seen candidate deterministically.
+    if (!picked && excludeSeen) {
+      picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+        dropReservedExclusion: true,
+        leastRecent: true,
+      });
+      if (!picked) {
+        picked = await pickValidCandidate('mcq_single', ['easy', 'medium', 'hard'], {
+          allowImageMcqs: true,
+          dropReservedExclusion: true,
+          leastRecent: true,
+        });
+      }
     }
   }
 
@@ -673,13 +719,13 @@ export async function scheduleNextPossessionQuestion(
   }
 ): Promise<void> {
   const { phase, phaseKind, resolvedQIndex, nextIndex, goalScoredBySeat } = params;
-  logger.debug(
+  logger.info(
     { matchId, phase, phaseKind, resolvedQIndex, nextIndex, goalScoredBySeat },
     'Possession next question scheduling requested'
   );
   const dispatch = (opts?: { postReadyAck?: boolean }) => {
     const fire = () => {
-      logger.debug(
+      logger.info(
         { matchId, nextIndex, postReadyAck: opts?.postReadyAck ?? false },
         'Possession next question dispatch firing'
       );
@@ -704,7 +750,7 @@ export async function scheduleNextPossessionQuestion(
       }
     }
     if (humanUserIds.length === 0) {
-      logger.debug(
+      logger.info(
         { matchId, resolvedQIndex, nextIndex, goalScoredBySeat },
         'Possession goal transition has no human ready gate waiters'
       );
@@ -712,7 +758,7 @@ export async function scheduleNextPossessionQuestion(
       return;
     }
 
-    logger.debug(
+    logger.info(
       { matchId, resolvedQIndex, nextIndex, goalScoredBySeat, waitingUserIds: humanUserIds },
       'Possession goal transition waiting for ready acks'
     );
@@ -733,7 +779,7 @@ export async function scheduleNextPossessionQuestion(
       // post-ack reveal — otherwise the silent client gets ~3s total.
       dispatchOnTimeout: () => dispatch({ postReadyAck: false }),
       onTimeout: (missing) => {
-        logger.debug({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
+        logger.info({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
       },
     });
     return;
@@ -744,7 +790,7 @@ export async function scheduleNextPossessionQuestion(
   // (~13 rounds => ~80s), so collapse it to a few ms when fast-timers are on.
   // Production is untouched (harnessDelayMs returns prodMs unless REGRESSION_FAST_TIMERS).
   const delay = harnessDelayMs(getNextQuestionDelayMs({ phase }));
-  logger.debug({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
+  logger.info({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
   setTimeout(() => dispatch(), delay);
 }
 
@@ -770,7 +816,7 @@ export async function sendPossessionMatchQuestion(
 
     const liveMatch = await matchesRepo.getMatch(matchId);
     if (!liveMatch || liveMatch.status !== 'active') {
-      logger.debug(
+      logger.info(
         { matchId, qIndex, status: liveMatch?.status ?? null, postReadyAck: preloaded?.postReadyAck ?? false },
         'Possession question dispatch skipped: match no longer active'
       );
@@ -779,7 +825,7 @@ export async function sendPossessionMatchQuestion(
 
     const pauseStartedAt = await getPauseStartedAt(matchId);
     if (pauseStartedAt) {
-      logger.debug(
+      logger.info(
         {
           eventName: 'match:question',
           matchId,
@@ -802,19 +848,13 @@ export async function sendPossessionMatchQuestion(
     });
 
     if (state.phase === 'HALFTIME') {
-      logger.debug({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
+      logger.info({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
       await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
-      // Preset second half: no ban window, so no ban deadline and no AI ban —
-      // just the short reveal before half 2.
-      if (state.halftime.purpose === 'second_half_preset') {
-        scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
-      } else {
-        if (!state.halftime.deadlineAt) {
-          state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
-        }
-        scheduleHalftimeTimeout(io, matchId);
-        schedulePossessionAiHalftimeBan(io, matchId);
+      if (!state.halftime.deadlineAt) {
+        state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
       }
+      scheduleHalftimeTimeout(io, matchId);
+      schedulePossessionAiHalftimeBan(io, matchId);
       bumpStateVersion(state);
       await setMatchCache(cache);
       fireAndForget('setMatchStatePayload(sendQuestion:halftime)', async () => {
@@ -824,7 +864,7 @@ export async function sendPossessionMatchQuestion(
       return null;
     }
     if (state.phase === 'COMPLETED') {
-      logger.debug({ matchId, qIndex }, 'Possession question dispatch skipped: match already completed');
+      logger.info({ matchId, qIndex }, 'Possession question dispatch skipped: match already completed');
       return null;
     }
 
@@ -989,7 +1029,7 @@ export async function sendPossessionMatchQuestion(
 
     await emitMatchState(io, matchId, state);
 
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:question',
         matchId,
@@ -1030,7 +1070,7 @@ export async function sendPossessionMatchQuestion(
     });
 
     scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:question_timer',
         matchId,
@@ -1083,7 +1123,7 @@ export async function resumePossessionMatchQuestion(
   }
 
   if (shouldResolveExpiredQuestionOnResume(currentQuestion.deadlineAt, pauseStartedAtMs)) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:question_timer',
         matchId,
@@ -1137,7 +1177,7 @@ export async function resumePossessionMatchQuestion(
   });
 
   await emitMatchState(io, matchId, cache.statePayload);
-  logger.debug(
+  logger.info(
     {
       eventName: 'match:question',
       matchId,
@@ -1168,7 +1208,7 @@ export async function resumePossessionMatchQuestion(
   await markMatchEnteredForRoom(io, matchId, 'possession_resumed_question');
 
   scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
-  logger.debug(
+  logger.info(
     { eventName: 'match:question_timer', matchId, qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
     'Possession resumed question timers scheduled'
   );
@@ -1199,7 +1239,7 @@ export async function ensurePossessionActiveTimers(
 
   const state = cache.statePayload;
   if (state.phase === 'HALFTIME') {
-    logger.debug({ eventName: 'match:halftime_timer', matchId, half: state.half }, 'Possession timer ensure scheduling halftime timers');
+    logger.info({ eventName: 'match:halftime_timer', matchId, half: state.half }, 'Possession timer ensure scheduling halftime timers');
     scheduleHalftimeTimeout(io, matchId);
     schedulePossessionAiHalftimeBan(io, matchId);
     return true;
@@ -1223,7 +1263,7 @@ export async function ensurePossessionActiveTimers(
 
   const nowMs = Date.now();
   if (shouldResolveQuestionTimeoutNow(currentQuestion.deadlineAt, nowMs)) {
-    logger.debug(
+    logger.info(
       {
         eventName: 'match:question_timer',
         matchId,
@@ -1245,13 +1285,13 @@ export async function ensurePossessionActiveTimers(
   const aiAnswerKey = questionTimerKey(matchId, currentQuestion.qIndex);
   const aiAlreadyScheduled = await hasPendingRealtimeTimer('possession_ai_answer', aiAnswerKey);
   if (aiAlreadyScheduled) {
-    logger.debug(
+    logger.info(
       { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
       'Possession timer ensure kept existing AI answer timer'
     );
     return true;
   }
-  logger.debug(
+  logger.info(
     { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
     'Possession timer ensure scheduling question and AI timers'
   );

@@ -13,14 +13,16 @@ const testTargetSchema = z.object({ tournament_id: z.string().uuid().optional() 
 
 export const weekendLeagueController = {
   async current(req: Request, res: Response): Promise<void> {
-    res.json(await weekendLeagueService.current(req.user?.id ?? null));
+    res.json(await weekendLeagueService.current(requireUserId(req)));
   },
 
-  async standings(_req: Request, res: Response): Promise<void> {
+  async standings(req: Request, res: Response): Promise<void> {
+    requireUserId(req);
     res.json(await weekendLeagueService.standings());
   },
 
-  async hallOfFame(_req: Request, res: Response): Promise<void> {
+  async hallOfFame(req: Request, res: Response): Promise<void> {
+    requireUserId(req);
     res.json(await weekendLeagueService.hallOfFame());
   },
 

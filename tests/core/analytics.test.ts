@@ -102,6 +102,23 @@ describe('analytics AI-user suppression', () => {
     await flush();
     expect(captureMock.mock.calls[0][0].properties.access_type).toBe('unknown');
   });
+
+  it('does not reuse an expired member label when refreshing identity fails', async () => {
+    trackEvent('match_completed', REAL_USER);
+    await flush();
+    expect(captureMock.mock.calls[0][0].properties.access_type).toBe('member');
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 6 * 60 * 1000);
+    try {
+      sqlShouldThrow = true;
+      trackEvent('match_completed', REAL_USER);
+      await flush();
+      expect(captureMock.mock.calls[1][0].properties.access_type).toBe('unknown');
+      expect(sqlCallSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it('captures events for real (is_ai=false) users', async () => {
     trackEvent('match_completed', REAL_USER, { mode: 'possession' });
     await flush();

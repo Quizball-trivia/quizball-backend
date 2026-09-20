@@ -161,6 +161,7 @@ export function trackEvent(
   runDeferred(async () => {
     try {
       if (await isAiUser(distinctId)) return;
+      const audience = aiCache.get(distinctId);
       client.capture({
         distinctId,
         event: eventName,
@@ -168,7 +169,7 @@ export function trackEvent(
         timestamp: occurredAt,
         properties: {
           ...properties,
-          access_type: aiCache.get(distinctId)?.accessType ?? 'unknown',
+          access_type: audience && audience.expiresAt > Date.now() ? audience.accessType : 'unknown',
           event_source: 'server',
           $timestamp: occurredAt.toISOString(),
           environment: process.env.NODE_ENV || 'development',

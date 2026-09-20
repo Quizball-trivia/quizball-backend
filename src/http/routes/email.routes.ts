@@ -96,6 +96,10 @@ router.get('/unsubscribe', (req: Request, res: Response) => {
     return;
   }
   res.set('Cache-Control', 'private, no-store');
+  // Helmet's no-referrer policy makes native form POSTs send Origin: null,
+  // which our CORS middleware rejects. Preserve the origin without exposing
+  // the signed query string in Referer headers.
+  res.set('Referrer-Policy', 'strict-origin');
   res.status(200).type('html').send(CONFIRM_FORM);
 });
 

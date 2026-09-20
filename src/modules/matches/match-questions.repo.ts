@@ -554,19 +554,26 @@ export const matchQuestionsRepo = {
       'quizball.match_id': matchId,
       'quizball.q_index': qIndex,
     }, async (span) => {
+      // Rollback remains compatible both before and after the nullable history
+      // expansion. Preserve captured presentation, including intentional nulls.
       const [row] = await sql<MatchQuestionWithCategory[]>`
         SELECT mq.question_id, mq.q_index, mq.category_id, mq.correct_index,
                mq.phase_kind, mq.phase_round, mq.shooter_seat, mq.attacker_seat,
-               CASE WHEN mq.content_snapshot IS NOT NULL
-                 THEN mq.content_snapshot->'prompt' ELSE q.prompt END AS prompt,
-               CASE WHEN mq.content_snapshot IS NOT NULL
-                 THEN mq.content_snapshot->>'difficulty' ELSE q.difficulty END AS difficulty,
-               CASE WHEN mq.content_snapshot IS NOT NULL
-                 THEN mq.content_snapshot->'payload' ELSE qp.payload END AS payload,
-               CASE WHEN mq.content_snapshot IS NOT NULL
-                 THEN mq.content_snapshot->'category_name' ELSE c.name END AS category_name,
-               CASE WHEN mq.content_snapshot IS NOT NULL
-                 THEN mq.content_snapshot->>'category_icon' ELSE c.icon END AS category_icon
+               CASE WHEN to_jsonb(mq)->'content_snapshot' IS NOT NULL
+                 AND to_jsonb(mq)->'content_snapshot' <> 'null'::jsonb
+                 THEN to_jsonb(mq)->'content_snapshot'->'prompt' ELSE q.prompt END AS prompt,
+               CASE WHEN to_jsonb(mq)->'content_snapshot' IS NOT NULL
+                 AND to_jsonb(mq)->'content_snapshot' <> 'null'::jsonb
+                 THEN to_jsonb(mq)->'content_snapshot'->>'difficulty' ELSE q.difficulty END AS difficulty,
+               CASE WHEN to_jsonb(mq)->'content_snapshot' IS NOT NULL
+                 AND to_jsonb(mq)->'content_snapshot' <> 'null'::jsonb
+                 THEN to_jsonb(mq)->'content_snapshot'->'payload' ELSE qp.payload END AS payload,
+               CASE WHEN to_jsonb(mq)->'content_snapshot' IS NOT NULL
+                 AND to_jsonb(mq)->'content_snapshot' <> 'null'::jsonb
+                 THEN to_jsonb(mq)->'content_snapshot'->'category_name' ELSE c.name END AS category_name,
+               CASE WHEN to_jsonb(mq)->'content_snapshot' IS NOT NULL
+                 AND to_jsonb(mq)->'content_snapshot' <> 'null'::jsonb
+                 THEN to_jsonb(mq)->'content_snapshot'->>'category_icon' ELSE c.icon END AS category_icon
         FROM match_questions mq
         JOIN questions q ON q.id = mq.question_id
         LEFT JOIN question_payloads qp ON qp.question_id = q.id

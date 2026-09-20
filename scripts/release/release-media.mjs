@@ -93,10 +93,10 @@ export function productionMediaStorage(serviceRoleKey){
   if(response.status===429)notBefore=Math.max(notBefore,Date.now()+Math.max(1000,error.retryAfterMs));
   return error;
  }
- return {
+ const storage = {
   async read(row){
    location(row);const expected=`${ORIGIN}/storage/v1/object/public/${row.bucket}/${row.key}`;if(row.publicUrl!==expected)throw new Error('Public media origin differs');
-   const response=await request(expected,{redirect:'error',headers:{'Cache-Control':'no-cache'}});
+   const response=await request(expected,{redirect:'error',headers:{'Cache-Control':'no-cache'}},row.contentType==='video/mp4'?600000:60000);
    if(response.status===404||response.status===400){
     // Storage reports a missing object as 400 with this specific error code.
     const error=await response.json().catch(()=>null);if(response.status===404||['not_found','NoSuchKey'].includes(error?.error)||error?.statusCode==='404')return null;
@@ -107,10 +107,20 @@ export function productionMediaStorage(serviceRoleKey){
   },
   async create(row,body){
    const url=location(row);if(body.length!==row.bytes||hash(body)!==row.sha256)throw new Error('Upload bytes changed');
-   const response=await request(url,{method:'POST',redirect:'error',headers:{Authorization:`Bearer ${serviceRoleKey}`,apikey:serviceRoleKey,'Content-Type':row.contentType,'Cache-Control':'public, max-age=31536000, immutable','x-upsert':'false'},body},120000);
+   // Large videos may have completed uploading before a public verification
+   // timed out. Verify that object before sending the entire video again.
+   if(row.contentType==='video/mp4'){
+    const existing=await storage.read(row);
+    if(existing){
+     if(existing.bytes.length!==row.bytes||hash(existing.bytes)!==row.sha256||existing.contentType!==row.contentType)throw new Error('Existing video differs; never overwrite it');
+     return 'exists';
+    }
+   }
+   const response=await request(url,{method:'POST',redirect:'error',headers:{Authorization:`Bearer ${serviceRoleKey}`,apikey:serviceRoleKey,'Content-Type':row.contentType,'Cache-Control':'public, max-age=31536000, immutable','x-upsert':'false'},body},row.contentType==='video/mp4'?600000:120000);
    if(response.ok){await response.arrayBuffer();return 'created';}
    const error=await response.json().catch(()=>null);if([400,409].includes(response.status)&&['Duplicate','AssetAlreadyExists','ResourceAlreadyExists'].includes(error?.error))return 'exists';
    throw httpError(response,'Create-only media upload failed');
   },
  };
+ return storage;
 }

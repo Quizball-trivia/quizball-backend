@@ -43,3 +43,31 @@ test('bounds temporary retries and refuses to shorten a long server backoff',asy
  calls=0;delays=0;args.storage.create=async()=>{calls++;throw Object.assign(new Error('HTTP 429'),{retryable:true,retryAfterMs:300000});};
  await assert.rejects(preserveReleaseMedia(args),/HTTP 429/);assert.equal(calls,1);assert.equal(delays,0);
 });
+test('video resume verifies existing public bytes without resending credentials or uploading',async t=>{
+ const row=buildReleaseMediaPlan([{...input('https://example.com/clip'),contentType:'video/mp4'}],{sourceReceiptSha256:'1'.repeat(64),releaseSha256:'2'.repeat(64)}).objects[0];
+ const timeouts=[],requests=[];
+ t.mock.method(AbortSignal,'timeout',ms=>{timeouts.push(ms);return new AbortController().signal;});
+ t.mock.method(globalThis,'fetch',async(url,options)=>{requests.push({url,options});return new Response(data,{headers:{'content-type':'video/mp4'}});});
+ const storage=productionMediaStorage('local-test-token-never-sent-123456789');
+ assert.equal(await storage.create(row,data),'exists');assert.equal(requests.length,1);
+ assert.equal(requests[0].url,row.publicUrl);assert.equal(requests[0].options.method,undefined);
+ assert.equal(requests[0].options.headers.Authorization,undefined);assert.equal(requests[0].options.headers.apikey,undefined);
+ assert.equal(requests[0].options.redirect,'error');assert.deepEqual(timeouts,[600000]);
+});
+test('missing video uses create-only upload; a same-sized corrupt existing video refuses writes',async t=>{
+ const row=buildReleaseMediaPlan([{...input('https://example.com/clip'),contentType:'video/mp4'}],{sourceReceiptSha256:'1'.repeat(64),releaseSha256:'2'.repeat(64)}).objects[0];
+ const requests=[],timeouts=[];let corrupt=false;
+ t.mock.method(AbortSignal,'timeout',ms=>{timeouts.push(ms);return new AbortController().signal;});
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  requests.push({url,options});
+  if(options.method==='POST')return new Response('{}',{status:200});
+  if(corrupt)return new Response(Buffer.alloc(data.length,1),{headers:{'content-type':'video/mp4'}});
+  return new Response('{"error":"not_found"}',{status:400});
+ });
+ const storage=productionMediaStorage('local-test-token-never-sent-123456789');
+ assert.equal(await storage.create(row,data),'created');assert.equal(requests.length,2);
+ assert.equal(requests[1].options.headers['x-upsert'],'false');assert.equal(requests[1].options.redirect,'error');
+ assert.deepEqual(timeouts,[600000,600000]);corrupt=true;
+ await assert.rejects(storage.create(row,data),/Existing video differs; never overwrite/);
+ assert.equal(requests.length,3);assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
+});

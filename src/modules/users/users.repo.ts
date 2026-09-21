@@ -1,3 +1,4 @@
+import { guestTokenHash, linkGuestInTx } from '../guest/guest-journey.repo.js';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json, User } from '../../db/types.js';
 import type { AvatarCustomization } from './avatar-customization.js';
@@ -290,7 +291,8 @@ export const usersRepo = {
    */
   async createWithIdentity(
     userData: CreateUserData,
-    identityData: CreateIdentityData
+    identityData: CreateIdentityData,
+    guestToken?: string,
   ): Promise<{ user: User; created: boolean }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(
@@ -354,6 +356,8 @@ export const usersRepo = {
       );
 
       if (identityResult.length > 0) {
+        const hash = guestTokenHash(guestToken);
+        if (hash) await linkGuestInTx(tx, hash, user.id, true);
         return { user, created: true };
       }
 

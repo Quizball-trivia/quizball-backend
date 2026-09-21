@@ -264,7 +264,7 @@ async function getOrCreateProvisionedIdentity(
     onUserCreated: () => {
       created = true;
     },
-    accountCreation: { method, utm: context?.utm ?? null },
+    accountCreation: { method, utm: context?.utm ?? null, ...(context?.guestToken ? { guestToken: context.guestToken } : {}) },
   });
 
   if (!created && emitLoginAnalytics && user?.id) {

@@ -10,7 +10,7 @@
 //
 // The registry (from `football-grid-content.ts export … --registry-out`) maps
 // every served asset key to a verified local file; keys that resolve to a
-// storage object path are uploaded to the same path (upsert, immutable
+// storage object path are uploaded to the same path (create-only, immutable
 // cache-control like the CDN publisher); slug keys (bundled with the web) and
 // fallback-file entries are skipped and reported. --verify-only only HEADs
 // the target public URLs.
@@ -52,7 +52,11 @@ function encodeObjectPath(objectPath: string): string {
   return objectPath.split('/').map(encodeURIComponent).join('/');
 }
 
-/** Supabase answers 400/404 for a public object that does not exist; anything else is not proof of absence. */
+/**
+ * Supabase answers 400/404 on the public URL of an object that does not
+ * exist. That is only a hint: the upload itself is create-only (no upsert),
+ * so an object that does exist after all answers 409 and is left untouched.
+ */
 export function objectIsMissing(status: number): boolean {
   return status === 400 || status === 404;
 }
@@ -117,12 +121,17 @@ async function main(): Promise<void> {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${serviceKey}`,
-              'x-upsert': 'true',
               'cache-control': CACHE_CONTROL,
               'content-type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
             },
             body: bytes,
           });
+          if (response.status === 409) {
+            // Existed after all (HEAD was misleading); never overwritten.
+            present += 1;
+            done += 1;
+            continue;
+          }
           if (!response.ok) throw new Error(`upload ${response.status}: ${(await response.text()).slice(0, 120)}`);
           const verify = await fetchWithRetry(publicUrl, { method: 'HEAD' });
           if (!verify.ok) throw new Error(`not readable after upload (${verify.status})`);

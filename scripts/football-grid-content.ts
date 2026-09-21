@@ -741,18 +741,22 @@ export async function buildAssetRegistry(
     const cached = path.join(options.assetCache, createHash('sha256').update(url).digest('hex').slice(0, 24) + path.extname(new URL(url).pathname));
     const hit = await existing(cached);
     if (hit || options.fetchUrls === false) return hit;
-    // A transient network error must not read as "asset missing".
+    // A transient network error must not read as "asset missing": only a
+    // definite 4xx does; exhausted retries abort the registry build.
     let response: Response | null = null;
+    let lastError: unknown = null;
     for (let attempt = 1; attempt <= 4 && !response; attempt += 1) {
       try {
         const candidate = await fetch(url);
         if (candidate.status < 500 && candidate.status !== 429) response = candidate;
-      } catch {
-        // retry below
+        else lastError = new Error(`HTTP ${candidate.status}`);
+      } catch (error) {
+        lastError = error;
       }
       if (!response) await new Promise((resolve) => setTimeout(resolve, 500 * attempt * attempt));
     }
-    if (!response?.ok) return null;
+    if (!response) throw new Error(`Could not fetch ${url} after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    if (!response.ok) return null;
     await mkdir(options.assetCache, { recursive: true });
     await writeFile(cached, Buffer.from(await response.arrayBuffer()));
     return cached;

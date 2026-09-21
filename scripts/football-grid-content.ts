@@ -127,6 +127,15 @@ export function checksum(value: unknown): string {
   return createHash('sha256').update(stable(value)).digest('hex');
 }
 
+/** Alias row order has no gameplay meaning; preserve every field and duplicate. */
+export function relabelManifestsMatch(expected: Manifest, actual: Manifest): boolean {
+  const comparison = (manifest: Manifest) => ({
+    ...manifest,
+    aliases: manifest.aliases.map(stable).sort(),
+  });
+  return checksum(comparison(expected)) === checksum(comparison(actual));
+}
+
 function toCriterionView(criterion: Manifest['criteria'][number], id: string): FootballGridCriterionView {
   return {
     id,
@@ -626,7 +635,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     reviewed_by: string; reviewed_at: string;
   }>>`SELECT football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at::text AS reviewed_at
         FROM football_grid_player_aliases WHERE release_id = ${release.id}
-       ORDER BY football_player_id, locale, alias`;
+       ORDER BY football_player_id, locale, alias, normalized_alias, alias_type`;
   const boardRows = await sql<Array<{
     id: string; version: number; row_criteria: string[]; column_criteria: string[]; difficulty: 'easy' | 'normal' | 'hard';
     familiarity_score: string; canonical_checksum: string; approved_by: string; theme: string;
@@ -1162,13 +1171,15 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
   const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
   // Require the manifest to be exactly what transform-labels produces from the
   // served source right now (same version/approval and, if recorded, the same
-  // asset-origin rewrite). This covers content, labels and metadata at once.
+  // asset-origin rewrite), allowing only alias row ordering to differ. Older
+  // exports did not break ties between family-name and nickname rows. Stored
+  // manifest/evidence checksums remain unchanged.
   const rewrite = (snapshot as { assetOriginRewrite?: AssetOriginRewrite }).assetOriginRewrite;
   const expected = relabelTeammateCriteria(sourceManifest, {
     version: manifest.release.version, approvedBy: manifest.release.approvedBy, approvedAt: manifest.release.approvedAt,
     ...(rewrite ? { assetOrigin: rewrite } : {}),
   });
-  if (expected.skipped.length > 0 || checksum(expected.manifest) !== checksum(manifest)) {
+  if (expected.skipped.length > 0 || !relabelManifestsMatch(expected.manifest, manifest)) {
     throw new Error(`Manifest is not the teammate relabel of served release ${transformedFrom}: content, labels or metadata differ from the prescribed transform`);
   }
   if (rewrite) process.stdout.write(`Asset origin rewrite verified: ${rewrite.from} -> ${rewrite.to}\n`);

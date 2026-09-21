@@ -11,6 +11,7 @@ import {
   manifestSchema,
   projectExportedBoards,
   relabelTeammateCriteria,
+  relabelManifestsMatch,
   storageObjectPathForAssetKey,
   validateManifest,
   type ExportedAnswerRow,
@@ -34,6 +35,38 @@ const VERRATTI = '00000000-0000-4000-8000-000000000007';
 const KOMPANY = '00000000-0000-4000-8000-000000000008';
 const STERLING = '00000000-0000-4000-8000-000000000009';
 const PLAYERS = [AGUERO, MESSI, DI_MARIA, SILVA, MBAPPE, NEYMAR, VERRATTI, KOMPANY, STERLING];
+
+describe('relabel comparison of legacy alias exports', () => {
+  it('accepts reordered tied alias rows without changing or removing either row', () => {
+    const source = legacyManifest();
+    const family = { ...source.aliases[0], aliasType: 'family_name' as const };
+    const nickname = { ...family, aliasType: 'nickname' as const };
+    source.aliases = [family, nickname];
+    const reordered = { ...source, aliases: [nickname, family] };
+    expect(relabelManifestsMatch(source, reordered)).toBe(true);
+    expect(source.aliases).toEqual([family, nickname]);
+    expect(relabelManifestsMatch(source, { ...source, aliases: [family] })).toBe(false);
+    expect(relabelManifestsMatch(source, { ...source, aliases: [family, family] })).toBe(false);
+  });
+
+  it('still rejects changes to alias policies, review evidence, labels and release metadata', () => {
+    const source = legacyManifest();
+    for (const patch of [
+      { acceptancePolicy: 'safe_typo' as const },
+      { reviewedBy: 'different reviewer' },
+      { reviewedAt: '2026-09-21T00:00:00.000Z' },
+      { normalizedAlias: 'different answer' },
+    ]) {
+      const changed = structuredClone(source);
+      Object.assign(changed.aliases[0], patch);
+      expect(relabelManifestsMatch(source, changed)).toBe(false);
+    }
+    const relabelled = structuredClone(source);
+    relabelled.criteria[0].labelEn = 'Any teammate';
+    expect(relabelManifestsMatch(source, relabelled)).toBe(false);
+    expect(relabelManifestsMatch(source, { ...source, release: { ...source.release, approvedBy: 'other' } })).toBe(false);
+  });
+});
 
 const reviewed = { verifiedBy: 'fixture', reviewedAt: '2026-09-20T00:00:00.000Z' };
 const evidence = {

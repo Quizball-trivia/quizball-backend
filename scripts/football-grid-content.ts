@@ -559,7 +559,19 @@ export async function exportRelease(version: number): Promise<{ manifest: Manife
   return sql.begin('isolation level repeatable read read only', (tx) => exportReleaseWithin(tx as unknown as typeof sql, version));
 }
 
+/**
+ * The db wrapper (and the role itself) cap statements at 30 s and idle-in-
+ * transaction at 15 s to protect the app. These content jobs legitimately run
+ * long statements and do local work between statements inside one
+ * transaction, so they lift both caps for their own session only.
+ */
+async function relaxTransactionTimeouts(tx: Db): Promise<void> {
+  await tx.unsafe(`SET LOCAL statement_timeout = '10min'`);
+  await tx.unsafe(`SET LOCAL idle_in_transaction_session_timeout = '15min'`);
+}
+
 async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
+  await relaxTransactionTimeouts(sql);
   const releases = await sql<ExportedRelease[]>`
     SELECT id, version, alias_version, resolver_policy_version, relationship_snapshot,
            approved_by, approved_at::text AS approved_at, manifest_checksum, status
@@ -872,6 +884,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
   if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
   await sql.begin(async (tx) => {
+    await relaxTransactionTimeouts(tx as unknown as Db);
     const releaseRows = await tx.unsafe<Array<{ id: string }>>(
       `INSERT INTO football_grid_content_releases (
          version, status, relationship_snapshot, alias_version,

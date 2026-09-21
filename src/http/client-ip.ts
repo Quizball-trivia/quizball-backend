@@ -47,6 +47,8 @@ export function authRequestContext(req: Pick<Request, 'headers' | 'socket'>): Au
   // have to ride along here — the /users/me middleware only sees an account
   // that already exists.
   const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
-  if (!clientIp && !utm) return undefined;
-  return { ...(clientIp ? { clientIp } : {}), ...(utm ? { utm } : {}) };
+  const rawGuest = req.headers['x-guest-token'];
+  const guestToken = typeof rawGuest === 'string' && /^[a-f0-9]{64}$/.test(rawGuest) ? rawGuest : undefined;
+  if (!clientIp && !utm && !guestToken) return undefined;
+  return { ...(guestToken ? { guestToken } : {}), ...(clientIp ? { clientIp } : {}), ...(utm ? { utm } : {}) };
 }

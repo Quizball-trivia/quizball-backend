@@ -86,6 +86,7 @@ export async function authMiddleware(
     const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
     const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
       accountCreation: {
+        ...(typeof req.headers['x-guest-token'] === 'string' ? { guestToken: req.headers['x-guest-token'] } : {}),
         attribution,
         utm,
       },

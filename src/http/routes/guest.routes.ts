@@ -1,4 +1,6 @@
 import { Router, type Request } from 'express';
+import { authMiddleware } from '../middleware/auth.js';
+import { guestJourneyController, journeyActivitySchema } from '../../modules/guest/guest-journey.controller.js';
 import { guestHttpBudget, requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
 import { validate } from '../middleware/validate.js';
 import { resolveTrustedClientIp } from '../client-ip.js';
@@ -38,6 +40,9 @@ router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await
 
 // Friend lobbies: the principal behind a token (rate-limited like every guest call).
 router.post('/principal', guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter, guestController.principal);
+router.post('/journey/activity', guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter, validate({ body: journeyActivitySchema }), guestJourneyController.activity);
+router.post('/journey/link', guestIpLimiter, requireTokenShape, authMiddleware, guestJourneyController.link);
+router.post('/journey/member-activity', guestIpLimiter, authMiddleware, validate({ body: journeyActivitySchema }), guestJourneyController.memberActivity);
 const daily = Router();
 daily.use(guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter);
 daily.get('/stat-sniper/leaderboard', guestController.statSniperLeaderboard);

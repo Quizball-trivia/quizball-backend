@@ -398,6 +398,7 @@ export const usersService = {
     opts?: {
       onUserCreated?: (user: User) => void;
       accountCreation?: {
+        guestToken?: string;
         utm?: import('../../core/utm-attribution.js').UtmAttribution | null;
         method?: string;
         attribution?: CampaignAttribution | null;
@@ -500,7 +501,8 @@ export const usersService = {
         provider: identity.provider,
         subject: identity.subject,
         email: identity.email,
-      }
+      },
+      ...(opts?.accountCreation?.guestToken ? [opts.accountCreation.guestToken] as [string] : [] as []),
     );
     const newUser = creation.user;
 

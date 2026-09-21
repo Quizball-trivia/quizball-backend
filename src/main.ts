@@ -1,3 +1,4 @@
+import { startGuestJourneyWorker, stopGuestJourneyWorker } from './modules/guest/guest-journey.worker.js';
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
 import { startSquadSpinSweeper, stopSquadSpinSweeper, startSquadSpinBots, stopSquadSpinBots } from './modules/squad-spin/index.js';
@@ -56,6 +57,7 @@ const server = httpServer.listen(config.PORT, () => {
 });
 startAiFriendResponder();
 startGuestSweeper();
+startGuestJourneyWorker();
 startRoadToGoalSweeper();
 startRoadToGoalBots();
 startSquadSpinSweeper();
@@ -114,6 +116,7 @@ const shutdown = async (signal: string) => {
   const responderStopped = Promise.all([
     stopAiFriendResponder(),
     stopGuestSweeper(),
+    stopGuestJourneyWorker(),
     stopRoadToGoalSweeper(),
     stopSquadSpinSweeper(),
     stopTriviaMinesSweeper(),

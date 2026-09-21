@@ -1,0 +1,29 @@
+# Asset keys allowed to take --fallback-file when exporting the served releases (2026-09-20 audit).
+# 20 legend teammate-anchor portraits that exist in no pool/bucket + 4 wildcard icons without an SVG
+# + the `players/unknown.webp` placeholder that v2026082610 assigns to 243 players (no such object in any bucket).
+# Anything else unresolved must fail the export.
+/assets/football-grid/players/1c9bb3c5-1348-4337-8ce1-8358ad5f87fd.webp
+/assets/football-grid/players/2d9a65ee-0acd-429c-831d-43bb445feae3.webp
+/assets/football-grid/players/381bcc4e-e3ea-4416-9d13-5ffefd86efde.webp
+/assets/football-grid/players/3b2cb5df-5e85-488f-91d6-d4997bd892fc.webp
+/assets/football-grid/players/492f244f-1fc1-4c2b-b2df-57c2c29d4f03.webp
+/assets/football-grid/players/4e8e1d4f-c0eb-4c5d-b435-4d34ea7add8e.webp
+/assets/football-grid/players/56740d17-5ee9-4ef2-8ad4-766dbea01ec3.webp
+/assets/football-grid/players/662e7c41-0436-4be0-a5dc-8b3fabe93ecf.webp
+/assets/football-grid/players/78ef4772-426c-4c50-916e-23d2e664f605.webp
+/assets/football-grid/players/87233e88-4d99-421b-96bb-77aad81c02b1.webp
+/assets/football-grid/players/8d922b88-81cb-433e-a5fe-51a72dddab07.webp
+/assets/football-grid/players/936e1b41-8681-4fc6-8f72-dd7f4c58fd2f.webp
+/assets/football-grid/players/9448e69e-02d9-4325-927b-d019623053b3.webp
+/assets/football-grid/players/95faf5b6-9e1c-4879-854d-6a8746bbc3b8.webp
+/assets/football-grid/players/a0a8c8fe-113a-43e1-aba1-6a7de652540a.webp
+/assets/football-grid/players/a1c506f1-8f65-4333-b320-8caf3e587708.webp
+/assets/football-grid/players/e4da368d-83e5-42c1-b1b2-4309d0299309.webp
+/assets/football-grid/players/ed20a005-af82-417c-9a6a-678bdca47f0f.webp
+/assets/football-grid/players/eee827b7-634e-46aa-b76a-65f9ee55943d.webp
+/assets/football-grid/players/fb5d0137-39c7-4f0c-bfd4-6214bddf3dd4.webp
+born-2000s
+champions-league-2plus
+played-for-rivals
+players/unknown.webp
+treble-winner

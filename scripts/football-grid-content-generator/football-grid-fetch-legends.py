@@ -5,6 +5,7 @@ awards, Transfermarkt id and portrait. Every fact keeps its Wikidata locator so
 the release evidence stays auditable (Wikidata content is CC0)."""
 import json, ssl, sys, time, urllib.parse, urllib.request
 from pathlib import Path
+from functools import lru_cache
 
 try:
     import certifi
@@ -42,6 +43,7 @@ def search(name):
             return hit["id"], f"occupation:{hit.get('description') or ''}"
     return None, None
 
+@lru_cache(maxsize=1024)
 def entity(qid):
     return get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json")["entities"][qid]
 
@@ -52,9 +54,25 @@ def year(claim, prop):
     return None
 
 def ids(claims, prop):
-    return [c["mainsnak"]["datavalue"]["value"]["id"] for c in claims.get(prop, []) if "datavalue" in c["mainsnak"]]
+    return [c["mainsnak"]["datavalue"]["value"]["id"] for c in claims.get(prop, []) if c.get('rank') != 'deprecated' and "datavalue" in c["mainsnak"]]
 
-def labels(qids):
+def playing_claim(claim):
+    """P54 also contains coaching jobs. Unknown qualified roles need review."""
+    if claim.get('rank') == 'deprecated': return False, 'deprecated_claim'
+    roles = {q.get('datavalue', {}).get('value', {}).get('id')
+             for prop in ('P413', 'P3831', 'P2868') for q in claim.get('qualifiers', {}).get(prop, [])}
+    roles.discard(None)
+    if roles and not roles.issubset(set(POSITION_GROUP) | {FOOTBALLER}):
+        return False, 'non_player_or_unresolved_role'
+    return True, None
+
+@lru_cache(maxsize=512)
+def national_class(qid, depth=0):
+    if qid == NATIONAL_TEAM: return True
+    if depth >= 6: return False
+    return any(national_class(parent, depth + 1) for parent in ids(entity(qid).get('claims', {}), 'P279'))
+
+def labels(qids, team_qids=None):
     out = {}
     qids = sorted(set(qids))
     for i in range(0, len(qids), 50):
@@ -65,7 +83,12 @@ def labels(qids):
             claims = ent.get("claims", {})
             instance = ids(claims, "P31")
             country = ids(claims, "P17")
-            out[qid] = {"label": ent.get("labels", {}).get("en", {}).get("value", qid), "national": NATIONAL_TEAM in instance, "countryQid": country[0] if country else None}
+            label = ent.get("labels", {}).get("en", {}).get("value", qid)
+            # Men's/women's teams can use a subclass, not the generic P31 value.
+            national = False
+            if qid in (team_qids or set()):
+                national = ('national' in label.lower() and 'football team' in label.lower()) or any(national_class(cls) for cls in instance)
+            out[qid] = {"label": label, "national": national, "countryQid": country[0] if country else None}
     return out
 
 def main():
@@ -82,10 +105,16 @@ def main():
         if not qid:
             failed.append({"name": name, "reason": "no footballer item"}); print(f"✗ {name}: not found"); continue
         claims = entity(qid)["claims"]
-        teams = []
+        teams, excluded = [], []
         for claim in claims.get("P54", []):
             if "datavalue" not in claim["mainsnak"]: continue
-            teams.append({"qid": claim["mainsnak"]["datavalue"]["value"]["id"], "start": year(claim, "P580"), "end": year(claim, "P582")})
+            eligible, reason = playing_claim(claim)
+            record = {"qid": claim["mainsnak"]["datavalue"]["value"]["id"], "start": year(claim, "P580"), "end": year(claim, "P582"),
+                      "claimId": claim.get('id'), "rank": claim.get('rank'), "qualifiers": claim.get('qualifiers', {}),
+                      "references": claim.get('references', []), "reviewStatus": 'requires_review'}
+            if not eligible:
+                excluded.append({**record, 'reason': reason}); continue
+            teams.append(record)
         team_qids.update(t["qid"] for t in teams)
         citizenship = ids(claims, "P27"); country_qids.update(citizenship)
         dob = next((c["mainsnak"]["datavalue"]["value"]["time"][1:11] for c in claims.get("P569", []) if "datavalue" in c["mainsnak"]), None)
@@ -95,16 +124,18 @@ def main():
         awards = ids(claims, "P166")
         legends.append({"name": name, "qid": qid, "transfermarktId": tm, "dateOfBirth": dob, "citizenshipQids": citizenship,
                         "positionQids": positions, "positionGroup": next((POSITION_GROUP[p] for p in positions if p in POSITION_GROUP), None),
-                        "teams": teams, "awardQids": awards, "image": image})
+                        "teams": teams, "excludedTeamClaims": excluded, "awardQids": awards, "image": image,
+                        "reviewStatus": 'requires_review'})
         print(f"✔ {name} {qid} tm={tm} teams={len(teams)} awards={len(awards)}")
         time.sleep(0.2)
-    team_info = labels(team_qids | country_qids | {a for l in legends for a in l["awardQids"]})
+    team_info = labels(team_qids | country_qids | {a for l in legends for a in l["awardQids"]}, team_qids)
     for legend in legends:
         for team in legend["teams"]:
             info = team_info.get(team["qid"], {}); team["label"] = info.get("label", team["qid"]); team["national"] = info.get("national", False)
         legend["citizenship"] = [team_info.get(q, {}).get("label", q) for q in legend["citizenshipQids"]]
         legend["awards"] = [team_info.get(q, {}).get("label", q) for q in legend["awardQids"]]
-    dest.write_text(json.dumps({"fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "source": "wikidata", "legends": legends, "failed": failed}, ensure_ascii=False, indent=1) + "\n")
+    with dest.open('x') as output:
+        output.write(json.dumps({"fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "source": "wikidata", "reviewStatus": "requires_review", "legends": legends, "failed": failed}, ensure_ascii=False, indent=1) + "\n")
     print(f"\n{len(legends)} legends resolved, {len(failed)} failed → {dest}")
 
 if __name__ == "__main__":

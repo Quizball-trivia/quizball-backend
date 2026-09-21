@@ -158,11 +158,24 @@ export interface FootballGridAliasRecord {
   acceptancePolicy: 'exact' | 'unique_only' | 'safe_typo';
 }
 
+/** Private audit data; never include in command responses, broadcasts or analytics. */
+export interface FootballGridResolutionDiagnostics {
+  version: 1;
+  reason: 'accepted' | 'empty_input' | 'no_matching_alias' | 'recognized_not_in_cell'
+    | 'multiple_cell_candidates' | 'multiple_typo_candidates' | 'nearest_typo_not_on_board' | 'player_already_used';
+  method: 'none' | 'exact' | 'safe_typo';
+  candidatePlayerIds: string[];
+  candidateCount: number;
+  candidatesTruncated: boolean;
+  cellCandidateCount: number;
+}
+
 export interface FootballGridResolvedAnswer {
   outcome: FootballGridResolutionOutcome;
   playerId: string | null;
   aliasId: string | null;
   normalizedInput: string;
+  diagnostics: FootballGridResolutionDiagnostics;
 }
 
 export interface FootballGridBoardCandidate {

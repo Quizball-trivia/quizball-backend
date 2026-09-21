@@ -57,6 +57,8 @@ const configSchema = z.object({
   DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1_000).default(12),
   DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
+  // Long-running content scripts raise this; the app keeps the 10 s default.
+  DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(10),
   DB_WATCHDOG_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")

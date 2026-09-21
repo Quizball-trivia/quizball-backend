@@ -3141,6 +3141,776 @@
       "en": "Treble winner",
       "es": "Ganador del triplete",
       "tr": "Üç Kupa Kazandı"
+    },
+    "teammate:ffe0f4ba-9681-4373-bf8b-672f5b3ccc00|Club teammate of Alberto Gilardino": {
+      "en": "Club teammate of Alberto Gilardino",
+      "es": "Compañero de club de Alberto Gilardino",
+      "tr": "Alberto Gilardino ile aynı kulüpte oynadı"
+    },
+    "teammate:56740d17-5ee9-4ef2-8ad4-766dbea01ec3|Club teammate of Alessandro Del Piero": {
+      "en": "Club teammate of Alessandro Del Piero",
+      "es": "Compañero de club de Alessandro Del Piero",
+      "tr": "Alessandro Del Piero ile aynı kulüpte oynadı"
+    },
+    "teammate:9448e69e-02d9-4325-927b-d019623053b3|Club teammate of Alessandro Nesta": {
+      "en": "Club teammate of Alessandro Nesta",
+      "es": "Compañero de club de Alessandro Nesta",
+      "tr": "Alessandro Nesta ile aynı kulüpte oynadı"
+    },
+    "teammate:874dcca0-cd6f-42ba-a156-899674c407f3|Club teammate of Alexis Sánchez": {
+      "en": "Club teammate of Alexis Sánchez",
+      "es": "Compañero de club de Alexis Sánchez",
+      "tr": "Alexis Sánchez ile aynı kulüpte oynadı"
+    },
+    "teammate:a7a8ac8d-3636-473f-8dd4-ff9604581b7a|Club teammate of Andrea Pirlo": {
+      "en": "Club teammate of Andrea Pirlo",
+      "es": "Compañero de club de Andrea Pirlo",
+      "tr": "Andrea Pirlo ile aynı kulüpte oynadı"
+    },
+    "teammate:a2d0edec-b0f0-4753-82fc-2063465443be|Club teammate of Andrés Iniesta": {
+      "en": "Club teammate of Andrés Iniesta",
+      "es": "Compañero de club de Andrés Iniesta",
+      "tr": "Andrés Iniesta ile aynı kulüpte oynadı"
+    },
+    "teammate:4e8e1d4f-c0eb-4c5d-b435-4d34ea7add8e|Club teammate of Andriy Shevchenko": {
+      "en": "Club teammate of Andriy Shevchenko",
+      "es": "Compañero de club de Andriy Shevchenko",
+      "tr": "Andriy Shevchenko ile aynı kulüpte oynadı"
+    },
+    "teammate:87560b0d-f5b9-4181-ac9b-040a207c3e9a|Club teammate of Ángel Di María": {
+      "en": "Club teammate of Ángel Di María",
+      "es": "Compañero de club de Ángel Di María",
+      "tr": "Ángel Di María ile aynı kulüpte oynadı"
+    },
+    "teammate:76b4b848-d3e6-4b2c-b06a-459481cc238d|Club teammate of Antoine Griezmann": {
+      "en": "Club teammate of Antoine Griezmann",
+      "es": "Compañero de club de Antoine Griezmann",
+      "tr": "Antoine Griezmann ile aynı kulüpte oynadı"
+    },
+    "teammate:b581974b-b344-4837-838c-617537fd0102|Club teammate of Arjen Robben": {
+      "en": "Club teammate of Arjen Robben",
+      "es": "Compañero de club de Arjen Robben",
+      "tr": "Arjen Robben ile aynı kulüpte oynadı"
+    },
+    "teammate:b9628126-b65b-4e12-af8c-66ca0fdcb8f8|Club teammate of Ashley Cole": {
+      "en": "Club teammate of Ashley Cole",
+      "es": "Compañero de club de Ashley Cole",
+      "tr": "Ashley Cole ile aynı kulüpte oynadı"
+    },
+    "teammate:069e3451-910d-47aa-a4d2-fd3681bf1be6|Club teammate of Bastian Schweinsteiger": {
+      "en": "Club teammate of Bastian Schweinsteiger",
+      "es": "Compañero de club de Bastian Schweinsteiger",
+      "tr": "Bastian Schweinsteiger ile aynı kulüpte oynadı"
+    },
+    "teammate:f79f5e64-6b60-46b5-b604-d1f79e4794f0|Club teammate of Bixente Lizarazu": {
+      "en": "Club teammate of Bixente Lizarazu",
+      "es": "Compañero de club de Bixente Lizarazu",
+      "tr": "Bixente Lizarazu ile aynı kulüpte oynadı"
+    },
+    "teammate:393ab52a-2257-471c-aab9-0c39944e1517|Club teammate of Cafu": {
+      "en": "Club teammate of Cafu",
+      "es": "Compañero de club de Cafu",
+      "tr": "Cafu ile aynı kulüpte oynadı"
+    },
+    "teammate:710290b5-7649-4e45-b333-ef87e2afad8b|Club teammate of Cafú": {
+      "en": "Club teammate of Cafú",
+      "es": "Compañero de club de Cafú",
+      "tr": "Cafú ile aynı kulüpte oynadı"
+    },
+    "teammate:83322574-6256-45cf-bd03-b0c3c10a2930|Club teammate of Carles Puyol": {
+      "en": "Club teammate of Carles Puyol",
+      "es": "Compañero de club de Carles Puyol",
+      "tr": "Carles Puyol ile aynı kulüpte oynadı"
+    },
+    "teammate:70b63468-1914-4c8e-ad35-199485821756|Club teammate of Carlos Tevez": {
+      "en": "Club teammate of Carlos Tevez",
+      "es": "Compañero de club de Carlos Tevez",
+      "tr": "Carlos Tevez ile aynı kulüpte oynadı"
+    },
+    "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe|Club teammate of Cesc Fàbregas": {
+      "en": "Club teammate of Cesc Fàbregas",
+      "es": "Compañero de club de Cesc Fàbregas",
+      "tr": "Cesc Fàbregas ile aynı kulüpte oynadı"
+    },
+    "teammate:a2eacacd-5578-49a7-a904-87797ea05a27|Club teammate of Christian Panucci": {
+      "en": "Club teammate of Christian Panucci",
+      "es": "Compañero de club de Christian Panucci",
+      "tr": "Christian Panucci ile aynı kulüpte oynadı"
+    },
+    "teammate:f5e93e41-8aec-43f4-98cf-84d7eead31da|Club teammate of Christian Vieri": {
+      "en": "Club teammate of Christian Vieri",
+      "es": "Compañero de club de Christian Vieri",
+      "tr": "Christian Vieri ile aynı kulüpte oynadı"
+    },
+    "teammate:11d05aba-2ecc-4161-91b8-ac594ad47d6e|Club teammate of Christian Ziege": {
+      "en": "Club teammate of Christian Ziege",
+      "es": "Compañero de club de Christian Ziege",
+      "tr": "Christian Ziege ile aynı kulüpte oynadı"
+    },
+    "teammate:8d922b88-81cb-433e-a5fe-51a72dddab07|Club teammate of Clarence Seedorf": {
+      "en": "Club teammate of Clarence Seedorf",
+      "es": "Compañero de club de Clarence Seedorf",
+      "tr": "Clarence Seedorf ile aynı kulüpte oynadı"
+    },
+    "teammate:ed20a005-af82-417c-9a6a-678bdca47f0f|Club teammate of Claude Makélélé": {
+      "en": "Club teammate of Claude Makélélé",
+      "es": "Compañero de club de Claude Makélélé",
+      "tr": "Claude Makélélé ile aynı kulüpte oynadı"
+    },
+    "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf|Club teammate of Cristiano Ronaldo": {
+      "en": "Club teammate of Cristiano Ronaldo",
+      "es": "Compañero de club de Cristiano Ronaldo",
+      "tr": "Cristiano Ronaldo ile aynı kulüpte oynadı"
+    },
+    "teammate:c665d6ed-84df-4dab-ab6c-5fc3832a84a5|Club teammate of David Beckham": {
+      "en": "Club teammate of David Beckham",
+      "es": "Compañero de club de David Beckham",
+      "tr": "David Beckham ile aynı kulüpte oynadı"
+    },
+    "teammate:6348cd86-93bb-4cfa-b0af-7325eeed9074|Club teammate of David Silva": {
+      "en": "Club teammate of David Silva",
+      "es": "Compañero de club de David Silva",
+      "tr": "David Silva ile aynı kulüpte oynadı"
+    },
+    "teammate:3946442e-9177-48d2-8481-374f9532c08c|Club teammate of David Trezeguet": {
+      "en": "Club teammate of David Trezeguet",
+      "es": "Compañero de club de David Trezeguet",
+      "tr": "David Trezeguet ile aynı kulüpte oynadı"
+    },
+    "teammate:bc6c5770-8a05-41a0-b9e7-2c3ce02b0b11|Club teammate of David Villa": {
+      "en": "Club teammate of David Villa",
+      "es": "Compañero de club de David Villa",
+      "tr": "David Villa ile aynı kulüpte oynadı"
+    },
+    "teammate:fb5d0137-39c7-4f0c-bfd4-6214bddf3dd4|Club teammate of Deco": {
+      "en": "Club teammate of Deco",
+      "es": "Compañero de club de Deco",
+      "tr": "Deco ile aynı kulüpte oynadı"
+    },
+    "teammate:3c704932-c880-4891-bc4a-d4749efd0ed9|Club teammate of Dida": {
+      "en": "Club teammate of Dida",
+      "es": "Compañero de club de Dida",
+      "tr": "Dida ile aynı kulüpte oynadı"
+    },
+    "teammate:4ef80d07-1167-4628-b028-351f0a6a20e4|Club teammate of Didier Deschamps": {
+      "en": "Club teammate of Didier Deschamps",
+      "es": "Compañero de club de Didier Deschamps",
+      "tr": "Didier Deschamps ile aynı kulüpte oynadı"
+    },
+    "teammate:79164c34-4051-436f-9cfd-ef7c051b0aec|Club teammate of Didier Drogba": {
+      "en": "Club teammate of Didier Drogba",
+      "es": "Compañero de club de Didier Drogba",
+      "tr": "Didier Drogba ile aynı kulüpte oynadı"
+    },
+    "teammate:9d538d4a-ec62-4e2b-b74d-38388cab76b6|Club teammate of Diego Forlán": {
+      "en": "Club teammate of Diego Forlán",
+      "es": "Compañero de club de Diego Forlán",
+      "tr": "Diego Forlán ile aynı kulüpte oynadı"
+    },
+    "teammate:cff06e7f-acc0-4266-aa96-f098a6f0ee80|Club teammate of Eden Hazard": {
+      "en": "Club teammate of Eden Hazard",
+      "es": "Compañero de club de Eden Hazard",
+      "tr": "Eden Hazard ile aynı kulüpte oynadı"
+    },
+    "teammate:ecb10845-29ae-4fcd-9f8d-7dcf27c138e9|Club teammate of Edwin van der Sar": {
+      "en": "Club teammate of Edwin van der Sar",
+      "es": "Compañero de club de Edwin van der Sar",
+      "tr": "Edwin van der Sar ile aynı kulüpte oynadı"
+    },
+    "teammate:32df1564-6c30-419e-95b3-865d02967233|Club teammate of Emerson Ferreira": {
+      "en": "Club teammate of Emerson Ferreira",
+      "es": "Compañero de club de Emerson Ferreira",
+      "tr": "Emerson Ferreira ile aynı kulüpte oynadı"
+    },
+    "teammate:b14d1033-723f-4776-ae31-1084179f159c|Club teammate of Emiliano Martínez": {
+      "en": "Club teammate of Emiliano Martínez",
+      "es": "Compañero de club de Emiliano Martínez",
+      "tr": "Emiliano Martínez ile aynı kulüpte oynadı"
+    },
+    "teammate:b7c75af7-95c4-48ce-89eb-375bd0420d96|Club teammate of Emmanuel Petit": {
+      "en": "Club teammate of Emmanuel Petit",
+      "es": "Compañero de club de Emmanuel Petit",
+      "tr": "Emmanuel Petit ile aynı kulüpte oynadı"
+    },
+    "teammate:1c9bb3c5-1348-4337-8ce1-8358ad5f87fd|Club teammate of Fabio Cannavaro": {
+      "en": "Club teammate of Fabio Cannavaro",
+      "es": "Compañero de club de Fabio Cannavaro",
+      "tr": "Fabio Cannavaro ile aynı kulüpte oynadı"
+    },
+    "teammate:c9692588-f93b-4035-8737-8f625d1ec829|Club teammate of Fernando Torres": {
+      "en": "Club teammate of Fernando Torres",
+      "es": "Compañero de club de Fernando Torres",
+      "tr": "Fernando Torres ile aynı kulüpte oynadı"
+    },
+    "teammate:0da7ce6e-ad1a-4e3e-b896-d6e2a10e681d|Club teammate of Filippo Inzaghi": {
+      "en": "Club teammate of Filippo Inzaghi",
+      "es": "Compañero de club de Filippo Inzaghi",
+      "tr": "Filippo Inzaghi ile aynı kulüpte oynadı"
+    },
+    "teammate:ee700bd6-f14a-4b1f-aefe-ccc7f90c3c1e|Club teammate of Francesco Toldo": {
+      "en": "Club teammate of Francesco Toldo",
+      "es": "Compañero de club de Francesco Toldo",
+      "tr": "Francesco Toldo ile aynı kulüpte oynadı"
+    },
+    "teammate:4b6d87c2-9df7-4947-92d2-40e682a5a758|Club teammate of Francesco Totti": {
+      "en": "Club teammate of Francesco Totti",
+      "es": "Compañero de club de Francesco Totti",
+      "tr": "Francesco Totti ile aynı kulüpte oynadı"
+    },
+    "teammate:f3bbdb8e-b31e-46f5-b600-ef48ef5f1ea7|Club teammate of Franck Ribéry": {
+      "en": "Club teammate of Franck Ribéry",
+      "es": "Compañero de club de Franck Ribéry",
+      "tr": "Franck Ribéry ile aynı kulüpte oynadı"
+    },
+    "teammate:ba41ef23-6f93-4269-ab41-aacdc4759e90|Club teammate of Frank Lampard": {
+      "en": "Club teammate of Frank Lampard",
+      "es": "Compañero de club de Frank Lampard",
+      "tr": "Frank Lampard ile aynı kulüpte oynadı"
+    },
+    "teammate:2d9a65ee-0acd-429c-831d-43bb445feae3|Club teammate of Frank Rijkaard": {
+      "en": "Club teammate of Frank Rijkaard",
+      "es": "Compañero de club de Frank Rijkaard",
+      "tr": "Frank Rijkaard ile aynı kulüpte oynadı"
+    },
+    "teammate:b500a5c9-3250-41d4-b8c5-6c5f9690a71c|Club teammate of Gareth Bale": {
+      "en": "Club teammate of Gareth Bale",
+      "es": "Compañero de club de Gareth Bale",
+      "tr": "Gareth Bale ile aynı kulüpte oynadı"
+    },
+    "teammate:a49b3b81-b933-4ee9-b97f-93bbe86f23e7|Club teammate of Gennaro Gattuso": {
+      "en": "Club teammate of Gennaro Gattuso",
+      "es": "Compañero de club de Gennaro Gattuso",
+      "tr": "Gennaro Gattuso ile aynı kulüpte oynadı"
+    },
+    "teammate:a0a8c8fe-113a-43e1-aba1-6a7de652540a|Club teammate of George Weah": {
+      "en": "Club teammate of George Weah",
+      "es": "Compañero de club de George Weah",
+      "tr": "George Weah ile aynı kulüpte oynadı"
+    },
+    "teammate:769e1327-0c83-4245-bd8b-1362c8dce939|Club teammate of Gerard Piqué": {
+      "en": "Club teammate of Gerard Piqué",
+      "es": "Compañero de club de Gerard Piqué",
+      "tr": "Gerard Piqué ile aynı kulüpte oynadı"
+    },
+    "teammate:d560f9f0-ac2c-4161-957a-88a95660208c|Club teammate of Gianluca Zambrotta": {
+      "en": "Club teammate of Gianluca Zambrotta",
+      "es": "Compañero de club de Gianluca Zambrotta",
+      "tr": "Gianluca Zambrotta ile aynı kulüpte oynadı"
+    },
+    "teammate:8eae3bf5-471d-4d89-aebb-34bbddb0a0f1|Club teammate of Gianluigi Buffon": {
+      "en": "Club teammate of Gianluigi Buffon",
+      "es": "Compañero de club de Gianluigi Buffon",
+      "tr": "Gianluigi Buffon ile aynı kulüpte oynadı"
+    },
+    "teammate:2f6e8c2b-8a4d-4d2b-ab99-15c84ffb15bb|Club teammate of Giovane Élber": {
+      "en": "Club teammate of Giovane Élber",
+      "es": "Compañero de club de Giovane Élber",
+      "tr": "Giovane Élber ile aynı kulüpte oynadı"
+    },
+    "teammate:bf8492a7-7d36-4731-b093-218a7564472b|Club teammate of Gonzalo Higuaín": {
+      "en": "Club teammate of Gonzalo Higuaín",
+      "es": "Compañero de club de Gonzalo Higuaín",
+      "tr": "Gonzalo Higuaín ile aynı kulüpte oynadı"
+    },
+    "teammate:413f894b-7f2c-425b-9183-9b17f46d71c8|Club teammate of Harry Kane": {
+      "en": "Club teammate of Harry Kane",
+      "es": "Compañero de club de Harry Kane",
+      "tr": "Harry Kane ile aynı kulüpte oynadı"
+    },
+    "teammate:3b2cb5df-5e85-488f-91d6-d4997bd892fc|Club teammate of Hernán Crespo": {
+      "en": "Club teammate of Hernán Crespo",
+      "es": "Compañero de club de Hernán Crespo",
+      "tr": "Hernán Crespo ile aynı kulüpte oynadı"
+    },
+    "teammate:46f4f931-c4da-4904-a559-eddd40d3aa87|Club teammate of Iker Casillas": {
+      "en": "Club teammate of Iker Casillas",
+      "es": "Compañero de club de Iker Casillas",
+      "tr": "Iker Casillas ile aynı kulüpte oynadı"
+    },
+    "teammate:7290bf29-993b-4110-a14d-ad041a698f0f|Club teammate of Jaap Stam": {
+      "en": "Club teammate of Jaap Stam",
+      "es": "Compañero de club de Jaap Stam",
+      "tr": "Jaap Stam ile aynı kulüpte oynadı"
+    },
+    "teammate:7626cd0c-987a-4049-89c8-e074a153d060|Club teammate of Javier Mascherano": {
+      "en": "Club teammate of Javier Mascherano",
+      "es": "Compañero de club de Javier Mascherano",
+      "tr": "Javier Mascherano ile aynı kulüpte oynadı"
+    },
+    "teammate:395d5f3d-5361-4175-8048-b3b5369f3614|Club teammate of Javier Zanetti": {
+      "en": "Club teammate of Javier Zanetti",
+      "es": "Compañero de club de Javier Zanetti",
+      "tr": "Javier Zanetti ile aynı kulüpte oynadı"
+    },
+    "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4|Club teammate of John Terry": {
+      "en": "Club teammate of John Terry",
+      "es": "Compañero de club de John Terry",
+      "tr": "John Terry ile aynı kulüpte oynadı"
+    },
+    "teammate:d0a233f5-36ae-4187-ba49-73fe1da1e23e|Club teammate of Juan Sebastián Verón": {
+      "en": "Club teammate of Juan Sebastián Verón",
+      "es": "Compañero de club de Juan Sebastián Verón",
+      "tr": "Juan Sebastián Verón ile aynı kulüpte oynadı"
+    },
+    "teammate:916237e7-b5be-4aad-a811-700a1a1fb1dd|Club teammate of Jude Bellingham": {
+      "en": "Club teammate of Jude Bellingham",
+      "es": "Compañero de club de Jude Bellingham",
+      "tr": "Jude Bellingham ile aynı kulüpte oynadı"
+    },
+    "teammate:a6119f25-7985-4c2a-b13c-49990efcc75f|Club teammate of Kaká": {
+      "en": "Club teammate of Kaká",
+      "es": "Compañero de club de Kaká",
+      "tr": "Kaká ile aynı kulüpte oynadı"
+    },
+    "teammate:79a18ff7-b3e4-42cd-b497-600e86dbd631|Club teammate of Karim Benzema": {
+      "en": "Club teammate of Karim Benzema",
+      "es": "Compañero de club de Karim Benzema",
+      "tr": "Karim Benzema ile aynı kulüpte oynadı"
+    },
+    "teammate:513de7ba-249f-4f2e-9877-d1ab4121cd1e|Club teammate of Kevin De Bruyne": {
+      "en": "Club teammate of Kevin De Bruyne",
+      "es": "Compañero de club de Kevin De Bruyne",
+      "tr": "Kevin De Bruyne ile aynı kulüpte oynadı"
+    },
+    "teammate:7e969cc5-120d-4af9-9fdd-f6d2db3170a8|Club teammate of Kylian Mbappé": {
+      "en": "Club teammate of Kylian Mbappé",
+      "es": "Compañero de club de Kylian Mbappé",
+      "tr": "Kylian Mbappé ile aynı kulüpte oynadı"
+    },
+    "teammate:6407948c-511a-4932-93f3-5fd72227abc8|Club teammate of Laurent Blanc": {
+      "en": "Club teammate of Laurent Blanc",
+      "es": "Compañero de club de Laurent Blanc",
+      "tr": "Laurent Blanc ile aynı kulüpte oynadı"
+    },
+    "teammate:f683502a-15b9-4276-9886-0977f5d6bc2e|Club teammate of Lautaro Martínez": {
+      "en": "Club teammate of Lautaro Martínez",
+      "es": "Compañero de club de Lautaro Martínez",
+      "tr": "Lautaro Martínez ile aynı kulüpte oynadı"
+    },
+    "teammate:a1c506f1-8f65-4333-b320-8caf3e587708|Club teammate of Lilian Thuram": {
+      "en": "Club teammate of Lilian Thuram",
+      "es": "Compañero de club de Lilian Thuram",
+      "tr": "Lilian Thuram ile aynı kulüpte oynadı"
+    },
+    "teammate:55989ce0-0b52-4553-a11d-42c03f5b9da1|Club teammate of Lionel Messi": {
+      "en": "Club teammate of Lionel Messi",
+      "es": "Compañero de club de Lionel Messi",
+      "tr": "Lionel Messi ile aynı kulüpte oynadı"
+    },
+    "teammate:fa9680f8-85b9-4997-834e-a7530a75ca96|Club teammate of Luca Toni": {
+      "en": "Club teammate of Luca Toni",
+      "es": "Compañero de club de Luca Toni",
+      "tr": "Luca Toni ile aynı kulüpte oynadı"
+    },
+    "teammate:6396e575-92e5-42be-a193-d8cf85f40aec|Club teammate of Lúcio": {
+      "en": "Club teammate of Lúcio",
+      "es": "Compañero de club de Lúcio",
+      "tr": "Lúcio ile aynı kulüpte oynadı"
+    },
+    "teammate:87233e88-4d99-421b-96bb-77aad81c02b1|Club teammate of Luís Figo": {
+      "en": "Club teammate of Luís Figo",
+      "es": "Compañero de club de Luís Figo",
+      "tr": "Luís Figo ile aynı kulüpte oynadı"
+    },
+    "teammate:05e1b3df-4194-4aef-a256-eec199cef42b|Club teammate of Luis Suárez": {
+      "en": "Club teammate of Luis Suárez",
+      "es": "Compañero de club de Luis Suárez",
+      "tr": "Luis Suárez ile aynı kulüpte oynadı"
+    },
+    "teammate:428e1f3c-fe81-4f10-9f00-9ff6ec0573d6|Club teammate of Luis Suárez": {
+      "en": "Club teammate of Luis Suárez",
+      "es": "Compañero de club de Luis Suárez",
+      "tr": "Luis Suárez ile aynı kulüpte oynadı"
+    },
+    "teammate:6e0542a2-0bbb-45ae-a7ff-2526230b870a|Club teammate of Luka Modrić": {
+      "en": "Club teammate of Luka Modrić",
+      "es": "Compañero de club de Luka Modrić",
+      "tr": "Luka Modrić ile aynı kulüpte oynadı"
+    },
+    "teammate:753e6bd5-2f36-4d7c-9f5a-d14d956928bd|Club teammate of Manuel Neuer": {
+      "en": "Club teammate of Manuel Neuer",
+      "es": "Compañero de club de Manuel Neuer",
+      "tr": "Manuel Neuer ile aynı kulüpte oynadı"
+    },
+    "teammate:f0dcf96e-9b08-4087-ab03-bf1a13f4e245|Club teammate of Marc Overmars": {
+      "en": "Club teammate of Marc Overmars",
+      "es": "Compañero de club de Marc Overmars",
+      "tr": "Marc Overmars ile aynı kulüpte oynadı"
+    },
+    "teammate:78ef4772-426c-4c50-916e-23d2e664f605|Club teammate of Marcel Desailly": {
+      "en": "Club teammate of Marcel Desailly",
+      "es": "Compañero de club de Marcel Desailly",
+      "tr": "Marcel Desailly ile aynı kulüpte oynadı"
+    },
+    "teammate:7d9d3daf-12fa-4224-9f3d-428d9611814f|Club teammate of Marco Reus": {
+      "en": "Club teammate of Marco Reus",
+      "es": "Compañero de club de Marco Reus",
+      "tr": "Marco Reus ile aynı kulüpte oynadı"
+    },
+    "teammate:de7df9c2-c81f-464d-a8ac-a4e01d2492dd|Club teammate of Mario Balotelli": {
+      "en": "Club teammate of Mario Balotelli",
+      "es": "Compañero de club de Mario Balotelli",
+      "tr": "Mario Balotelli ile aynı kulüpte oynadı"
+    },
+    "teammate:095087b4-20b3-4f73-91dd-8bce1598729f|Club teammate of Mario Götze": {
+      "en": "Club teammate of Mario Götze",
+      "es": "Compañero de club de Mario Götze",
+      "tr": "Mario Götze ile aynı kulüpte oynadı"
+    },
+    "teammate:5cc5f245-49fc-4c0a-9583-aeb622e99535|Club teammate of Mats Hummels": {
+      "en": "Club teammate of Mats Hummels",
+      "es": "Compañero de club de Mats Hummels",
+      "tr": "Mats Hummels ile aynı kulüpte oynadı"
+    },
+    "teammate:151dfbb9-27f3-4276-b45d-cb2a35432285|Club teammate of Mesut Özil": {
+      "en": "Club teammate of Mesut Özil",
+      "es": "Compañero de club de Mesut Özil",
+      "tr": "Mesut Özil ile aynı kulüpte oynadı"
+    },
+    "teammate:ddeb8efc-a7d6-40a6-a20f-82df76421c3d|Club teammate of Michael Owen": {
+      "en": "Club teammate of Michael Owen",
+      "es": "Compañero de club de Michael Owen",
+      "tr": "Michael Owen ile aynı kulüpte oynadı"
+    },
+    "teammate:d7e32780-afb5-4863-927c-8a14a929fc73|Club teammate of Míchel Salgado": {
+      "en": "Club teammate of Míchel Salgado",
+      "es": "Compañero de club de Míchel Salgado",
+      "tr": "Míchel Salgado ile aynı kulüpte oynadı"
+    },
+    "teammate:51522f00-03bc-4b79-ab38-5214f4bac740|Club teammate of Miroslav Klose": {
+      "en": "Club teammate of Miroslav Klose",
+      "es": "Compañero de club de Miroslav Klose",
+      "tr": "Miroslav Klose ile aynı kulüpte oynadı"
+    },
+    "teammate:e71ad820-cc78-4c32-8fb5-806eac3c1214|Club teammate of Mohamed Salah": {
+      "en": "Club teammate of Mohamed Salah",
+      "es": "Compañero de club de Mohamed Salah",
+      "tr": "Mohamed Salah ile aynı kulüpte oynadı"
+    },
+    "teammate:a09872bb-bd33-4cce-9613-7cf86a1010ee|Club teammate of N'Golo Kanté": {
+      "en": "Club teammate of N'Golo Kanté",
+      "es": "Compañero de club de N'Golo Kanté",
+      "tr": "N'Golo Kanté ile aynı kulüpte oynadı"
+    },
+    "teammate:10aa4f1f-9fc1-4c3b-93b5-217bdba110dd|Club teammate of Neymar": {
+      "en": "Club teammate of Neymar",
+      "es": "Compañero de club de Neymar",
+      "tr": "Neymar ile aynı kulüpte oynadı"
+    },
+    "teammate:54f941a2-12df-4694-b7ff-305922645866|Club teammate of Nicolas Anelka": {
+      "en": "Club teammate of Nicolas Anelka",
+      "es": "Compañero de club de Nicolas Anelka",
+      "tr": "Nicolas Anelka ile aynı kulüpte oynadı"
+    },
+    "teammate:936e1b41-8681-4fc6-8f72-dd7f4c58fd2f|Club teammate of Nwankwo Kanu": {
+      "en": "Club teammate of Nwankwo Kanu",
+      "es": "Compañero de club de Nwankwo Kanu",
+      "tr": "Nwankwo Kanu ile aynı kulüpte oynadı"
+    },
+    "teammate:eee827b7-634e-46aa-b76a-65f9ee55943d|Club teammate of Oliver Kahn": {
+      "en": "Club teammate of Oliver Kahn",
+      "es": "Compañero de club de Oliver Kahn",
+      "tr": "Oliver Kahn ile aynı kulüpte oynadı"
+    },
+    "teammate:34c46dcc-7ca8-49a3-947f-393558edb1c0|Club teammate of Ousmane Dembélé": {
+      "en": "Club teammate of Ousmane Dembélé",
+      "es": "Compañero de club de Ousmane Dembélé",
+      "tr": "Ousmane Dembélé ile aynı kulüpte oynadı"
+    },
+    "teammate:492f244f-1fc1-4c2b-b2df-57c2c29d4f03|Club teammate of Paolo Maldini": {
+      "en": "Club teammate of Paolo Maldini",
+      "es": "Compañero de club de Paolo Maldini",
+      "tr": "Paolo Maldini ile aynı kulüpte oynadı"
+    },
+    "teammate:62499ade-0175-4188-aef6-d1b33f82f209|Club teammate of Patrick Vieira": {
+      "en": "Club teammate of Patrick Vieira",
+      "es": "Compañero de club de Patrick Vieira",
+      "tr": "Patrick Vieira ile aynı kulüpte oynadı"
+    },
+    "teammate:94ae19d5-de36-4e4e-8a9f-3d0db0904707|Club teammate of Paul Pogba": {
+      "en": "Club teammate of Paul Pogba",
+      "es": "Compañero de club de Paul Pogba",
+      "tr": "Paul Pogba ile aynı kulüpte oynadı"
+    },
+    "teammate:7e228da6-46f8-4a0c-9acc-0f1bf27ab50c|Club teammate of Paul Scholes": {
+      "en": "Club teammate of Paul Scholes",
+      "es": "Compañero de club de Paul Scholes",
+      "tr": "Paul Scholes ile aynı kulüpte oynadı"
+    },
+    "teammate:a9dc8fb6-3e2c-4bc9-98cc-49d4231ff392|Club teammate of Pelé": {
+      "en": "Club teammate of Pelé",
+      "es": "Compañero de club de Pelé",
+      "tr": "Pelé ile aynı kulüpte oynadı"
+    },
+    "teammate:42fa50a7-a8ca-4fdd-855d-e41b88c17a6a|Club teammate of Philipp Lahm": {
+      "en": "Club teammate of Philipp Lahm",
+      "es": "Compañero de club de Philipp Lahm",
+      "tr": "Philipp Lahm ile aynı kulüpte oynadı"
+    },
+    "teammate:3be1aed0-97a2-48cb-b6b1-42da5a17cd5e|Club teammate of Philippe Coutinho": {
+      "en": "Club teammate of Philippe Coutinho",
+      "es": "Compañero de club de Philippe Coutinho",
+      "tr": "Philippe Coutinho ile aynı kulüpte oynadı"
+    },
+    "teammate:952874aa-43d3-4cb1-9f87-9eb340029f15|Club teammate of Raúl": {
+      "en": "Club teammate of Raúl",
+      "es": "Compañero de club de Raúl",
+      "tr": "Raúl ile aynı kulüpte oynadı"
+    },
+    "teammate:33316d7f-7ef0-4e59-b112-2af62492a0af|Club teammate of Ricardo Carvalho": {
+      "en": "Club teammate of Ricardo Carvalho",
+      "es": "Compañero de club de Ricardo Carvalho",
+      "tr": "Ricardo Carvalho ile aynı kulüpte oynadı"
+    },
+    "teammate:b841bcc9-7df4-438e-8e72-2f1b3a3c4a92|Club teammate of Rio Ferdinand": {
+      "en": "Club teammate of Rio Ferdinand",
+      "es": "Compañero de club de Rio Ferdinand",
+      "tr": "Rio Ferdinand ile aynı kulüpte oynadı"
+    },
+    "teammate:8eb86174-29f3-4034-99d5-7f9d39b5bdbb|Club teammate of Rivaldo": {
+      "en": "Club teammate of Rivaldo",
+      "es": "Compañero de club de Rivaldo",
+      "tr": "Rivaldo ile aynı kulüpte oynadı"
+    },
+    "teammate:05ddf5ed-a20f-4b8a-9e27-dae9eb957981|Club teammate of Robert Lewandowski": {
+      "en": "Club teammate of Robert Lewandowski",
+      "es": "Compañero de club de Robert Lewandowski",
+      "tr": "Robert Lewandowski ile aynı kulüpte oynadı"
+    },
+    "teammate:b0fc2fee-8b88-42d3-be5d-87a592e225c8|Club teammate of Roberto Ayala": {
+      "en": "Club teammate of Roberto Ayala",
+      "es": "Compañero de club de Roberto Ayala",
+      "tr": "Roberto Ayala ile aynı kulüpte oynadı"
+    },
+    "teammate:e2d22f1d-ca6d-4d89-b839-05dfdd310f6b|Club teammate of Robin van Persie": {
+      "en": "Club teammate of Robin van Persie",
+      "es": "Compañero de club de Robin van Persie",
+      "tr": "Robin van Persie ile aynı kulüpte oynadı"
+    },
+    "teammate:65532349-06d9-44bf-baee-159b35bb1688|Club teammate of Robinho": {
+      "en": "Club teammate of Robinho",
+      "es": "Compañero de club de Robinho",
+      "tr": "Robinho ile aynı kulüpte oynadı"
+    },
+    "teammate:381bcc4e-e3ea-4416-9d13-5ffefd86efde|Club teammate of Ronaldinho": {
+      "en": "Club teammate of Ronaldinho",
+      "es": "Compañero de club de Ronaldinho",
+      "tr": "Ronaldinho ile aynı kulüpte oynadı"
+    },
+    "teammate:95faf5b6-9e1c-4879-854d-6a8746bbc3b8|Club teammate of Ronaldo Nazario": {
+      "en": "Club teammate of Ronaldo Nazario",
+      "es": "Compañero de club de Ronaldo Nazario",
+      "tr": "Ronaldo Nazario ile aynı kulüpte oynadı"
+    },
+    "teammate:b218bed6-3707-4c89-8f9c-90bd27866f5f|Club teammate of Ryan Giggs": {
+      "en": "Club teammate of Ryan Giggs",
+      "es": "Compañero de club de Ryan Giggs",
+      "tr": "Ryan Giggs ile aynı kulüpte oynadı"
+    },
+    "teammate:74f7efb0-092c-485f-a8c9-a741fd840309|Club teammate of Sadio Mané": {
+      "en": "Club teammate of Sadio Mané",
+      "es": "Compañero de club de Sadio Mané",
+      "tr": "Sadio Mané ile aynı kulüpte oynadı"
+    },
+    "teammate:75fecc05-1515-4b6d-add7-0eedeb86fe60|Club teammate of Samuel Eto'o": {
+      "en": "Club teammate of Samuel Eto'o",
+      "es": "Compañero de club de Samuel Eto'o",
+      "tr": "Samuel Eto'o ile aynı kulüpte oynadı"
+    },
+    "teammate:e247be38-7dac-4d06-a238-1ce8e286d061|Club teammate of Sergio Agüero": {
+      "en": "Club teammate of Sergio Agüero",
+      "es": "Compañero de club de Sergio Agüero",
+      "tr": "Sergio Agüero ile aynı kulüpte oynadı"
+    },
+    "teammate:ff2328a1-79ce-4368-9633-a8cb4b02256f|Club teammate of Sergio Ramos": {
+      "en": "Club teammate of Sergio Ramos",
+      "es": "Compañero de club de Sergio Ramos",
+      "tr": "Sergio Ramos ile aynı kulüpte oynadı"
+    },
+    "teammate:d5b268f7-07d1-463d-a0b2-03f380aaf6e1|Club teammate of Steven Gerrard": {
+      "en": "Club teammate of Steven Gerrard",
+      "es": "Compañero de club de Steven Gerrard",
+      "tr": "Steven Gerrard ile aynı kulüpte oynadı"
+    },
+    "teammate:cdbea2ca-e4a4-409f-aa38-38e162190082|Club teammate of Teddy Sheringham": {
+      "en": "Club teammate of Teddy Sheringham",
+      "es": "Compañero de club de Teddy Sheringham",
+      "tr": "Teddy Sheringham ile aynı kulüpte oynadı"
+    },
+    "teammate:0bd15fe1-fdbc-49ca-9b50-e5c70c39e7cf|Club teammate of Thiago Silva": {
+      "en": "Club teammate of Thiago Silva",
+      "es": "Compañero de club de Thiago Silva",
+      "tr": "Thiago Silva ile aynı kulüpte oynadı"
+    },
+    "teammate:662e7c41-0436-4be0-a5dc-8b3fabe93ecf|Club teammate of Thierry Henry": {
+      "en": "Club teammate of Thierry Henry",
+      "es": "Compañero de club de Thierry Henry",
+      "tr": "Thierry Henry ile aynı kulüpte oynadı"
+    },
+    "teammate:f8d86381-21c2-4bd2-bdc4-6914e832dda7|Club teammate of Thomas Müller": {
+      "en": "Club teammate of Thomas Müller",
+      "es": "Compañero de club de Thomas Müller",
+      "tr": "Thomas Müller ile aynı kulüpte oynadı"
+    },
+    "teammate:960f7a60-bc19-48e6-a2be-0d5c77a72954|Club teammate of Toni Kroos": {
+      "en": "Club teammate of Toni Kroos",
+      "es": "Compañero de club de Toni Kroos",
+      "tr": "Toni Kroos ile aynı kulüpte oynadı"
+    },
+    "teammate:c0e27384-922f-47f5-b673-3e27754f5b9b|Club teammate of Virgil van Dijk": {
+      "en": "Club teammate of Virgil van Dijk",
+      "es": "Compañero de club de Virgil van Dijk",
+      "tr": "Virgil van Dijk ile aynı kulüpte oynadı"
+    },
+    "teammate:f7679688-9eaa-41c2-a899-28f771250dc7|Club teammate of Wayne Rooney": {
+      "en": "Club teammate of Wayne Rooney",
+      "es": "Compañero de club de Wayne Rooney",
+      "tr": "Wayne Rooney ile aynı kulüpte oynadı"
+    },
+    "teammate:bd6afa46-ac3f-400e-9a68-3432b31057f5|Club teammate of Wesley Sneijder": {
+      "en": "Club teammate of Wesley Sneijder",
+      "es": "Compañero de club de Wesley Sneijder",
+      "tr": "Wesley Sneijder ile aynı kulüpte oynadı"
+    },
+    "teammate:72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c|Club teammate of Xabi Alonso": {
+      "en": "Club teammate of Xabi Alonso",
+      "es": "Compañero de club de Xabi Alonso",
+      "tr": "Xabi Alonso ile aynı kulüpte oynadı"
+    },
+    "teammate:e6077d23-501c-4d47-9999-c4ebd2c1841b|Club teammate of Xavi": {
+      "en": "Club teammate of Xavi",
+      "es": "Compañero de club de Xavi",
+      "tr": "Xavi ile aynı kulüpte oynadı"
+    },
+    "teammate:e91f676c-c2aa-44eb-8221-baaae4b9ee1a|Club teammate of Youri Djorkaeff": {
+      "en": "Club teammate of Youri Djorkaeff",
+      "es": "Compañero de club de Youri Djorkaeff",
+      "tr": "Youri Djorkaeff ile aynı kulüpte oynadı"
+    },
+    "teammate:33b40e9a-f1f7-4277-94fb-4cd5f3da5634|Club teammate of Zé Roberto": {
+      "en": "Club teammate of Zé Roberto",
+      "es": "Compañero de club de Zé Roberto",
+      "tr": "Zé Roberto ile aynı kulüpte oynadı"
+    },
+    "teammate:e4da368d-83e5-42c1-b1b2-4309d0299309|Club teammate of Zinedine Zidane": {
+      "en": "Club teammate of Zinedine Zidane",
+      "es": "Compañero de club de Zinedine Zidane",
+      "tr": "Zinedine Zidane ile aynı kulüpte oynadı"
+    },
+    "teammate:a83cf106-cda8-4634-8fe6-3d8eda733f64|Club teammate of Zlatan Ibrahimović": {
+      "en": "Club teammate of Zlatan Ibrahimović",
+      "es": "Compañero de club de Zlatan Ibrahimović",
+      "tr": "Zlatan Ibrahimović ile aynı kulüpte oynadı"
+    },
+    "teammate:12590944-66f7-4b8b-b558-5ba71ae50ce5|Club teammate of Zvonimir Boban": {
+      "en": "Club teammate of Zvonimir Boban",
+      "es": "Compañero de club de Zvonimir Boban",
+      "tr": "Zvonimir Boban ile aynı kulüpte oynadı"
+    },
+    "teammate:8943778d-0ed2-4928-8bdf-33d17130897a|Club teammate of Alisson": {
+      "en": "Club teammate of Alisson",
+      "es": "Compañero de club de Alisson",
+      "tr": "Alisson ile aynı kulüpte oynadı"
+    },
+    "teammate:a98dad31-b705-412b-997c-d8d64b97e1ce|Club teammate of Álvaro Morata": {
+      "en": "Club teammate of Álvaro Morata",
+      "es": "Compañero de club de Álvaro Morata",
+      "tr": "Álvaro Morata ile aynı kulüpte oynadı"
+    },
+    "teammate:36eb6f42-b8ec-46d6-97d7-b60079e9a574|Club teammate of Bernardo Silva": {
+      "en": "Club teammate of Bernardo Silva",
+      "es": "Compañero de club de Bernardo Silva",
+      "tr": "Bernardo Silva ile aynı kulüpte oynadı"
+    },
+    "teammate:5ecd7d07-810b-4bc2-bcc7-36b5eee2c8c8|Club teammate of Casemiro": {
+      "en": "Club teammate of Casemiro",
+      "es": "Compañero de club de Casemiro",
+      "tr": "Casemiro ile aynı kulüpte oynadı"
+    },
+    "teammate:dc2a6a10-3024-4cf0-9fe2-54aa6d2aa7f2|Club teammate of Edinson Cavani": {
+      "en": "Club teammate of Edinson Cavani",
+      "es": "Compañero de club de Edinson Cavani",
+      "tr": "Edinson Cavani ile aynı kulüpte oynadı"
+    },
+    "teammate:ce85c5c4-3316-47c7-880c-0c17df3189f2|Club teammate of Erling Haaland": {
+      "en": "Club teammate of Erling Haaland",
+      "es": "Compañero de club de Erling Haaland",
+      "tr": "Erling Haaland ile aynı kulüpte oynadı"
+    },
+    "teammate:57cc1914-cd2c-42d4-bcd5-e32923c8f72f|Club teammate of Giorgio Chiellini": {
+      "en": "Club teammate of Giorgio Chiellini",
+      "es": "Compañero de club de Giorgio Chiellini",
+      "tr": "Giorgio Chiellini ile aynı kulüpte oynadı"
+    },
+    "teammate:1f1ec8e8-adc0-4570-aaf3-97389ef696cb|Club teammate of Hugo Lloris": {
+      "en": "Club teammate of Hugo Lloris",
+      "es": "Compañero de club de Hugo Lloris",
+      "tr": "Hugo Lloris ile aynı kulüpte oynadı"
+    },
+    "teammate:fcb1d942-af7e-47f3-a74c-f937b04a0638|Club teammate of İlkay Gündoğan": {
+      "en": "Club teammate of İlkay Gündoğan",
+      "es": "Compañero de club de İlkay Gündoğan",
+      "tr": "İlkay Gündoğan ile aynı kulüpte oynadı"
+    },
+    "teammate:9c64c119-952e-43cd-aff0-75d54146d069|Club teammate of Julián Alvarez": {
+      "en": "Club teammate of Julián Alvarez",
+      "es": "Compañero de club de Julián Alvarez",
+      "tr": "Julián Alvarez ile aynı kulüpte oynadı"
+    },
+    "teammate:a795bb2e-32ee-4c95-a77a-5fa9f272d7b3|Club teammate of Marcelo": {
+      "en": "Club teammate of Marcelo",
+      "es": "Compañero de club de Marcelo",
+      "tr": "Marcelo ile aynı kulüpte oynadı"
+    },
+    "teammate:afacf855-4426-4fca-b2fe-33afe829a562|Club teammate of Mario Mandzukic": {
+      "en": "Club teammate of Mario Mandzukic",
+      "es": "Compañero de club de Mario Mandzukic",
+      "tr": "Mario Mandzukic ile aynı kulüpte oynadı"
+    },
+    "teammate:2ee9513d-f64a-47f0-b43b-dc934bfacf6e|Club teammate of Olivier Giroud": {
+      "en": "Club teammate of Olivier Giroud",
+      "es": "Compañero de club de Olivier Giroud",
+      "tr": "Olivier Giroud ile aynı kulüpte oynadı"
+    },
+    "teammate:252ed9f2-8daa-4c7a-b3f2-5c24eece525f|Club teammate of Patrice Evra": {
+      "en": "Club teammate of Patrice Evra",
+      "es": "Compañero de club de Patrice Evra",
+      "tr": "Patrice Evra ile aynı kulüpte oynadı"
+    },
+    "teammate:1da98c87-dc4e-41f2-99db-cc8443a00e3d|Club teammate of Petr Cech": {
+      "en": "Club teammate of Petr Cech",
+      "es": "Compañero de club de Petr Cech",
+      "tr": "Petr Cech ile aynı kulüpte oynadı"
+    },
+    "teammate:7a8f230c-cadf-45a7-820e-d12948a1479c|Club teammate of Raphaël Varane": {
+      "en": "Club teammate of Raphaël Varane",
+      "es": "Compañero de club de Raphaël Varane",
+      "tr": "Raphaël Varane ile aynı kulüpte oynadı"
+    },
+    "teammate:81d69d4d-1c11-4f75-824d-e267a8e04926|Club teammate of Romelu Lukaku": {
+      "en": "Club teammate of Romelu Lukaku",
+      "es": "Compañero de club de Romelu Lukaku",
+      "tr": "Romelu Lukaku ile aynı kulüpte oynadı"
+    },
+    "teammate:87193ffc-9280-4676-8421-f65753ec1b9f|Club teammate of Sergio Busquets": {
+      "en": "Club teammate of Sergio Busquets",
+      "es": "Compañero de club de Sergio Busquets",
+      "tr": "Sergio Busquets ile aynı kulüpte oynadı"
+    },
+    "teammate:67218b50-63a8-4fc8-a92f-f9970672e758|Club teammate of Vincent Kompany": {
+      "en": "Club teammate of Vincent Kompany",
+      "es": "Compañero de club de Vincent Kompany",
+      "tr": "Vincent Kompany ile aynı kulüpte oynadı"
+    },
+    "teammate:de965f63-5812-4ab3-b35b-e914867dc6e7|Club teammate of Vinicius Junior": {
+      "en": "Club teammate of Vinicius Junior",
+      "es": "Compañero de club de Vinicius Junior",
+      "tr": "Vinicius Junior ile aynı kulüpte oynadı"
+    },
+    "teammate:243cf966-fc20-4dbe-8411-2dc4c460e133|Club teammate of Yaya Touré": {
+      "en": "Club teammate of Yaya Touré",
+      "es": "Compañero de club de Yaya Touré",
+      "tr": "Yaya Touré ile aynı kulüpte oynadı"
     }
   }
 }

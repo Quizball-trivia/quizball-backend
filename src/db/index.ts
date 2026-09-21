@@ -20,7 +20,7 @@ const admission = new DbAdmissionController(
 const rawSql = postgres(config.DATABASE_URL ?? '', {
   max: DB_POOL_MAX,
   idle_timeout: 20,
-  connect_timeout: 10,
+  connect_timeout: config.DB_CONNECT_TIMEOUT_SECONDS ?? 10,
   // Avoid synchronized two-minute reconnect churn during a traffic spike.
   // Bounded acquisition and the watchdog handle dead pools.
   max_lifetime: config.DB_MAX_LIFETIME_SECONDS ?? 1_800,

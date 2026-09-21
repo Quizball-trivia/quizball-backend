@@ -549,7 +549,7 @@ export function projectExportedBoards(
 }
 
 type Db = typeof sql;
-const EXPORT_BOARD_PAGE = 200;
+const EXPORT_BOARD_PAGE = 20;
 const ASSET_FETCH_CONCURRENCY = 12;
 
 export async function exportRelease(version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
@@ -559,13 +559,26 @@ export async function exportRelease(version: number): Promise<{ manifest: Manife
   return sql.begin('isolation level repeatable read read only', (tx) => exportReleaseWithin(tx as unknown as typeof sql, version));
 }
 
+/**
+ * The db wrapper (and the role itself) cap statements at 30 s and idle-in-
+ * transaction at 15 s to protect the app. These content jobs legitimately run
+ * long statements and do local work between statements inside one
+ * transaction, so they lift both caps for their own session only.
+ */
+async function relaxTransactionTimeouts(tx: Db): Promise<void> {
+  await tx.unsafe(`SET LOCAL statement_timeout = '10min'`);
+  await tx.unsafe(`SET LOCAL idle_in_transaction_session_timeout = '15min'`);
+}
+
 async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
+  await relaxTransactionTimeouts(sql);
   const releases = await sql<ExportedRelease[]>`
     SELECT id, version, alias_version, resolver_policy_version, relationship_snapshot,
            approved_by, approved_at::text AS approved_at, manifest_checksum, status
       FROM football_grid_content_releases WHERE version = ${version}`;
   const release = releases[0];
   if (!release) throw new Error(`Release ${version} not found`);
+  process.stdout.write(`Export ${version}: reading criteria, memberships and aliases\n`);
   const criteriaRows = await sql<Array<{
     id: string; criterion_key: string; family: Manifest['criteria'][number]['family']; subtype: string;
     label_en: string; label_ka: string; asset_key: string | null; metadata: Record<string, unknown>;
@@ -619,16 +632,18 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     familiarity_score: string; canonical_checksum: string; approved_by: string; theme: string;
   }>>`SELECT id, version, row_criteria, column_criteria, difficulty, familiarity_score, canonical_checksum, approved_by, theme
         FROM football_grid_boards WHERE release_id = ${release.id} ORDER BY canonical_checksum`;
-  // Paged per board chunk: the whole answer set (~400k rows) does not reliably
-  // finish inside the pool's 30 s statement timeout.
+  // Keep pooler response payloads small. Large pages can stall in transit even
+  // after Postgres has completed the query; the source has over 700k answers.
   const answerRows: ExportedAnswerRow[] = [];
   for (let offset = 0; offset < boardRows.length; offset += EXPORT_BOARD_PAGE) {
     const boardIds = boardRows.slice(offset, offset + EXPORT_BOARD_PAGE).map((row) => row.id);
-    answerRows.push(...await sql<ExportedAnswerRow[]>`
+    const page = await sql<ExportedAnswerRow[]>`
       SELECT board_id, cell_index, football_player_id, player_name_en, player_name_ka, image_asset_key, recognizable_rank, is_sample
         FROM football_grid_board_answers
        WHERE release_id = ${release.id} AND board_id = ANY(${boardIds}::uuid[])
-       ORDER BY board_id, cell_index, recognizable_rank NULLS LAST, football_player_id`);
+       ORDER BY board_id, cell_index, recognizable_rank NULLS LAST, football_player_id`;
+    for (const answer of page) answerRows.push(answer);
+    process.stdout.write(`Export ${version}: ${Math.min(offset + EXPORT_BOARD_PAGE, boardRows.length)}/${boardRows.length} boards, ${answerRows.length} answers\n`);
   }
   const criteria: Manifest['criteria'] = criteriaRows.map((row) => ({
     key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, labelKa: row.label_ka,
@@ -872,6 +887,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
   if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
   await sql.begin(async (tx) => {
+    await relaxTransactionTimeouts(tx as unknown as Db);
     const releaseRows = await tx.unsafe<Array<{ id: string }>>(
       `INSERT INTO football_grid_content_releases (
          version, status, relationship_snapshot, alias_version,
@@ -1028,57 +1044,97 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
       );
     }
     const playerById = new Map(manifest.players.map((player) => [player.id, player]));
-    for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
-      const board = manifest.boards[boardIndex];
-      const candidate = validation.boards[boardIndex];
-      const rows = await tx.unsafe<Array<{ id: string }>>(
+    // Boards and answers go in bulk: one round trip per 200 boards and per
+    // ~25k answer rows instead of two per board. Through the pooler each round
+    // trip costs hundreds of milliseconds, and the whole publish is one
+    // transaction, so fewer statements means a much shorter exposure window.
+    const BOARD_CHUNK = 200;
+    const ANSWER_CHUNK = 25_000;
+    const boardIdByChecksum = new Map<string, string>();
+    for (let offset = 0; offset < manifest.boards.length; offset += BOARD_CHUNK) {
+      const chunk = manifest.boards.slice(offset, offset + BOARD_CHUNK);
+      const candidates = validation.boards.slice(offset, offset + BOARD_CHUNK);
+      const inserted = await tx.unsafe<Array<{ id: string; canonical_checksum: string }>>(
         `INSERT INTO football_grid_boards (
            release_id, version, row_criteria, column_criteria, difficulty,
            familiarity_score, canonical_checksum, approved_by, published_at, theme
-         ) VALUES ($1,$2,$3::uuid[],$4::uuid[],$5,$6,$7,$8,$9,$10) RETURNING id`,
+         )
+         SELECT $1, u.version, string_to_array(u.row_criteria, ',')::uuid[], string_to_array(u.column_criteria, ',')::uuid[],
+                u.difficulty, u.familiarity_score, u.canonical_checksum, u.approved_by, $2, u.theme
+           FROM unnest($3::int[], $4::text[], $5::text[], $6::text[], $7::numeric[], $8::text[], $9::text[], $10::text[])
+             AS u(version, row_criteria, column_criteria, difficulty, familiarity_score, canonical_checksum, approved_by, theme)
+         RETURNING id, canonical_checksum`,
         [
-          releaseId, board.version, board.rowCriteria.map((key) => criterionIds.get(key)),
-          board.columnCriteria.map((key) => criterionIds.get(key)), board.difficulty,
-          board.familiarityScore, candidate.checksum, board.approvedBy, manifest.release.approvedAt,
-          board.theme ?? 'european',
+          releaseId, manifest.release.approvedAt,
+          chunk.map((board) => board.version),
+          chunk.map((board) => board.rowCriteria.map((key) => criterionIds.get(key)).join(',')),
+          chunk.map((board) => board.columnCriteria.map((key) => criterionIds.get(key)).join(',')),
+          chunk.map((board) => board.difficulty),
+          chunk.map((board) => board.familiarityScore),
+          candidates.map((candidate) => candidate.checksum),
+          chunk.map((board) => board.approvedBy),
+          chunk.map((board) => board.theme ?? 'european'),
         ],
       );
-      const answerRows = board.cells.flatMap((cell, cellIndex) => cell.playerIds.map((playerId) => {
-        const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
-        const player = playerById.get(playerId);
-        return {
-          cellIndex, playerId,
-          nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
-          imageAssetKey: player?.imageAssetKey ?? null,
-          rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
-          isSample: sampleIndex >= 0,
-        };
-      }));
+      for (const row of inserted) boardIdByChecksum.set(row.canonical_checksum, row.id);
+      process.stdout.write(`Publish ${manifest.release.version}: ${boardIdByChecksum.size}/${manifest.boards.length} boards inserted\n`);
+    }
+    type AnswerInsert = {
+      boardId: string; cellIndex: number; playerId: string; nameEn: string | null; nameKa: string | null;
+      imageAssetKey: string | null; rank: number | null; isSample: boolean;
+    };
+    let insertedAnswers = 0;
+    const flushAnswers = async (rows: AnswerInsert[]) => {
+      if (rows.length === 0) return;
       await tx.unsafe(
         `INSERT INTO football_grid_board_answers (
            board_id, release_id, cell_index, football_player_id,
            player_name_en, player_name_ka, image_asset_key,
            recognizable_rank, is_sample
          )
-         SELECT $1, $2, u.cell_index, u.player_id, u.name_en, u.name_ka,
+         SELECT u.board_id, $1, u.cell_index, u.player_id, u.name_en, u.name_ka,
                 u.image_asset_key, u.rank, u.is_sample::boolean
          FROM unnest(
-           $3::int[], $4::uuid[], $5::text[], $6::text[], $7::text[], $8::int[], $9::text[]
-         ) AS u(cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)`,
+           $2::uuid[], $3::int[], $4::uuid[], $5::text[], $6::text[], $7::text[], $8::int[], $9::text[]
+         ) AS u(board_id, cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)`,
         [
-          rows[0].id, releaseId,
-          answerRows.map((row) => row.cellIndex),
-          answerRows.map((row) => row.playerId),
-          answerRows.map((row) => row.nameEn),
-          answerRows.map((row) => row.nameKa),
-          answerRows.map((row) => row.imageAssetKey),
-          answerRows.map((row) => row.rank),
+          releaseId,
+          rows.map((row) => row.boardId),
+          rows.map((row) => row.cellIndex),
+          rows.map((row) => row.playerId),
+          rows.map((row) => row.nameEn),
+          rows.map((row) => row.nameKa),
+          rows.map((row) => row.imageAssetKey),
+          rows.map((row) => row.rank),
           // postgres.js mis-types JS boolean arrays; send text and let the
           // assignment cast handle it.
-          answerRows.map((row) => String(row.isSample)),
+          rows.map((row) => String(row.isSample)),
         ],
       );
+      insertedAnswers += rows.length;
+      process.stdout.write(`Publish ${manifest.release.version}: ${insertedAnswers} answers inserted\n`);
+    };
+    let pending: AnswerInsert[] = [];
+    for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
+      const board = manifest.boards[boardIndex];
+      const boardId = boardIdByChecksum.get(validation.boards[boardIndex].checksum);
+      if (!boardId) throw new Error(`Board ${board.key} was not inserted`);
+      for (const [cellIndex, cell] of board.cells.entries()) {
+        for (const playerId of cell.playerIds) {
+          const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
+          const player = playerById.get(playerId);
+          pending.push({
+            boardId, cellIndex, playerId,
+            nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
+            imageAssetKey: player?.imageAssetKey ?? null,
+            rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
+            isSample: sampleIndex >= 0,
+          });
+        }
+      }
+      if (pending.length >= ANSWER_CHUNK) { await flushAnswers(pending); pending = []; }
     }
+    await flushAnswers(pending);
     await tx.unsafe(
       `UPDATE football_grid_content_releases
           SET status = 'feasibility'

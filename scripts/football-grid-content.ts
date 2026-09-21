@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { z } from 'zod';
@@ -123,7 +123,7 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function checksum(value: unknown): string {
+export function checksum(value: unknown): string {
   return createHash('sha256').update(stable(value)).digest('hex');
 }
 
@@ -342,6 +342,498 @@ function playerLocaleKey(playerId: string, locale: 'en' | 'ka'): string {
   return `${playerId}:${locale}`;
 }
 
+
+// ---------------------------------------------------------------------------
+// Teammate relabel (owner report 2026-09-20: "Played with X" reads as national
+// team; the criterion is club-season overlap only). A label-only release is a
+// TRANSFORM of a pinned served release, never a regeneration: memberships,
+// evidence, aliases, boards, cells and samples must be byte-identical.
+// ---------------------------------------------------------------------------
+export const TEAMMATE_LABEL = {
+  legacyEn: /^Played with (.+)$/,
+  legacyKa: /^ითამაშა (.+)-სთან ერთად$/,
+  en: (name: string) => `Club teammate of ${name}`,
+  ka: (name: string) => `ერთ კლუბში ითამაშა ${name}-სთან`,
+  es: (name: string) => `Compañero de club de ${name}`,
+  tr: (name: string) => `${name} ile aynı kulüpte oynadı`,
+} as const;
+
+/** Everything in a manifest that must survive a label-only transform unchanged. */
+export function manifestContentDigest(manifest: Manifest): string {
+  return checksum({
+    sources: manifest.sources,
+    assetCatalog: manifest.assetCatalog,
+    players: manifest.players,
+    criteria: manifest.criteria.map(({ labelEn: _en, labelKa: _ka, ...rest }) => rest),
+    memberships: manifest.memberships,
+    aliases: manifest.aliases,
+    boards: manifest.boards,
+    aliasVersion: manifest.release.aliasVersion,
+    resolverPolicyVersion: manifest.release.resolverPolicyVersion,
+  });
+}
+
+export type AssetOriginRewrite = { from: string; to: string };
+
+/** Rewrite the storage origin of every URL asset key (portrait mirror to another project). */
+function rewriteAssetOrigin(manifest: Manifest, rewrite: AssetOriginRewrite): { manifest: Manifest; rewritten: number } {
+  const from = rewrite.from.replace(/\/+$/, '');
+  const to = rewrite.to.replace(/\/+$/, '');
+  if (!/^https:\/\/[a-z]{20}\.supabase\.co$/.test(from) || !/^https:\/\/[a-z]{20}\.supabase\.co$/.test(to) || from === to) {
+    throw new Error('Asset origin rewrite needs two different https://<ref>.supabase.co origins');
+  }
+  let rewritten = 0;
+  const swap = (key: string) => {
+    if (!key.startsWith(`${from}/`)) return key;
+    rewritten += 1;
+    return `${to}${key.slice(from.length)}`;
+  };
+  const next: Manifest = {
+    ...manifest,
+    assetCatalog: [...new Set(manifest.assetCatalog.map(swap))].sort(),
+    players: manifest.players.map((player) => ({ ...player, imageAssetKey: swap(player.imageAssetKey) })),
+    criteria: manifest.criteria.map((criterion) => (criterion.assetKey ? { ...criterion, assetKey: swap(criterion.assetKey) } : criterion)),
+  };
+  return { manifest: next, rewritten };
+}
+
+export function relabelTeammateCriteria(
+  manifest: Manifest,
+  release: { version: number; approvedBy: string; approvedAt: string; assetOrigin?: AssetOriginRewrite },
+): { manifest: Manifest; relabelled: number; skipped: string[]; rewritten: number } {
+  if (release.version <= manifest.release.version) {
+    throw new Error(`New release version ${release.version} must exceed source ${manifest.release.version}`);
+  }
+  const skipped: string[] = [];
+  let relabelled = 0;
+  const criteria = manifest.criteria.map((criterion) => {
+    if (criterion.family !== 'teammate') return criterion;
+    const en = criterion.labelEn.match(TEAMMATE_LABEL.legacyEn);
+    const ka = criterion.labelKa.match(TEAMMATE_LABEL.legacyKa);
+    if (!en || !ka) {
+      skipped.push(`${criterion.key} (${criterion.labelEn} / ${criterion.labelKa})`);
+      return criterion;
+    }
+    relabelled += 1;
+    return { ...criterion, labelEn: TEAMMATE_LABEL.en(en[1]), labelKa: TEAMMATE_LABEL.ka(ka[1]) };
+  });
+  const next: Manifest = {
+    ...manifest,
+    release: {
+      ...manifest.release,
+      version: release.version,
+      approvedBy: release.approvedBy,
+      approvedAt: release.approvedAt,
+      relationshipSnapshot: {
+        ...manifest.release.relationshipSnapshot,
+        transformedFromVersion: manifest.release.version,
+        transform: 'teammate-relabel-v1',
+      },
+    },
+    criteria,
+  };
+  if (manifestContentDigest(next) !== manifestContentDigest(manifest)) {
+    throw new Error('Label transform changed non-label content');
+  }
+  if (!release.assetOrigin) return { manifest: next, relabelled, skipped, rewritten: 0 };
+  // The origin rewrite is the only content change allowed on top of the
+  // relabel; it is recorded so the waiver can recompute it from the source.
+  const moved = rewriteAssetOrigin(next, release.assetOrigin);
+  moved.manifest.release.relationshipSnapshot = {
+    ...moved.manifest.release.relationshipSnapshot,
+    assetOriginRewrite: { from: release.assetOrigin.from.replace(/\/+$/, ''), to: release.assetOrigin.to.replace(/\/+$/, '') },
+  };
+  return { manifest: moved.manifest, relabelled, skipped, rewritten: moved.rewritten };
+}
+
+type ExportedRelease = {
+  id: string; version: number; alias_version: number; resolver_policy_version: number;
+  relationship_snapshot: Record<string, unknown>; approved_by: string; approved_at: string;
+  manifest_checksum: string; status: string;
+};
+
+/**
+ * Rebuild a manifest from a release already in the database. Board keys are
+ * not stored, so they are derived from the canonical board checksum; every
+ * other field round-trips from the tables `publish` wrote.
+ */
+type ExportedBoardRow = {
+  id: string; version: number; difficulty: 'easy' | 'normal' | 'hard'; familiarity_score: string;
+  canonical_checksum: string; approved_by: string; theme: string;
+  rowCriteria: [string, string, string]; columnCriteria: [string, string, string];
+};
+export type ExportedAnswerRow = {
+  board_id: string; cell_index: number; football_player_id: string; player_name_en: string | null;
+  player_name_ka: string | null; image_asset_key: string | null; recognizable_rank: number | null; is_sample: boolean;
+};
+
+/** The generator writes second-precision UTC timestamps; keep that form so hashes reproduce. */
+function isoSeconds(value: string): string {
+  return new Date(value).toISOString().replace(/\.000Z$/, 'Z');
+}
+
+/**
+ * Evidence exactly as `publish` will hash it. Releases were generated with
+ * second-precision timestamps, but some rows of the 2026-08 themed packs were
+ * hashed with milliseconds; the form that reproduces the stored checksum wins,
+ * and no form reproducing it is an error.
+ */
+function projectEvidence(item: {
+  sourceKey: string; source_locator: string; captured_fact: string; effective_from: string | null; effective_to: string | null;
+  rights_class: string; reviewed_by: string; reviewed_at: string; evidence_checksum: string;
+}): Manifest['memberships'][number]['evidence'][number] {
+  const base = {
+    sourceKey: item.sourceKey, sourceLocator: item.source_locator, capturedFact: item.captured_fact,
+    effectiveFrom: item.effective_from, effectiveTo: item.effective_to,
+    rightsClass: item.rights_class, reviewedBy: item.reviewed_by,
+  };
+  for (const reviewedAt of [isoSeconds(item.reviewed_at), new Date(item.reviewed_at).toISOString()]) {
+    const projected = { ...base, reviewedAt };
+    if (checksum(projected) === item.evidence_checksum) return projected;
+  }
+  throw new Error(`Evidence ${item.source_locator} does not reproduce stored checksum ${item.evidence_checksum}`);
+}
+
+/**
+ * Turn stored boards + answer rows back into manifest boards and players.
+ * The manifest holds one display record per player and contiguous sample
+ * ranks per cell, so anything the stored rows encode beyond that is rejected
+ * instead of being silently normalised away.
+ */
+export function projectExportedBoards(
+  boardRows: ExportedBoardRow[],
+  answerRows: ExportedAnswerRow[],
+): { boards: Manifest['boards']; players: Manifest['players'] } {
+  const answersByBoard = new Map<string, ExportedAnswerRow[]>();
+  const players = new Map<string, Manifest['players'][number]>();
+  for (const row of answerRows) {
+    const list: ExportedAnswerRow[] = answersByBoard.get(row.board_id) ?? [];
+    list.push(row);
+    answersByBoard.set(row.board_id, list);
+    if (row.is_sample !== (row.recognizable_rank !== null)) {
+      throw new Error(`Board ${row.board_id} cell ${row.cell_index}: sample flag and recognizable rank disagree for ${row.football_player_id}`);
+    }
+    if (!row.player_name_en || !row.player_name_ka || !row.image_asset_key) {
+      throw new Error(`Board ${row.board_id} cell ${row.cell_index}: ${row.football_player_id} has an incomplete display record`);
+    }
+    const display = { id: row.football_player_id, nameEn: row.player_name_en, nameKa: row.player_name_ka, imageAssetKey: row.image_asset_key };
+    const known = players.get(row.football_player_id);
+    if (known && (known.nameEn !== display.nameEn || known.nameKa !== display.nameKa || known.imageAssetKey !== display.imageAssetKey)) {
+      throw new Error(`Player ${row.football_player_id}: answer rows carry different display records; the manifest cannot represent that`);
+    }
+    if (!known) players.set(row.football_player_id, display);
+  }
+  const boards: Manifest['boards'] = boardRows.map((row) => {
+    const answers = answersByBoard.get(row.id) ?? [];
+    const cells = Array.from({ length: 9 }, (_, cellIndex) => {
+      const cellAnswers = answers.filter((answer) => answer.cell_index === cellIndex);
+      const samples = cellAnswers.filter((answer) => answer.is_sample)
+        .sort((a, b) => (a.recognizable_rank ?? 0) - (b.recognizable_rank ?? 0));
+      samples.forEach((sample, index) => {
+        if (sample.recognizable_rank !== index + 1) {
+          throw new Error(`Board ${row.id} cell ${cellIndex}: sample ranks are not 1..${samples.length}`);
+        }
+      });
+      return {
+        playerIds: cellAnswers.map((answer) => answer.football_player_id),
+        recognizablePlayerIds: samples.map((answer) => answer.football_player_id),
+      };
+    });
+    return {
+      key: `board:${row.canonical_checksum}`, version: row.version,
+      theme: row.theme as Manifest['boards'][number]['theme'], rowCriteria: row.rowCriteria, columnCriteria: row.columnCriteria,
+      difficulty: row.difficulty, familiarityScore: Number(row.familiarity_score), approvedBy: row.approved_by, cells,
+    };
+  });
+  return { boards, players: [...players.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+type Db = typeof sql;
+const EXPORT_BOARD_PAGE = 200;
+const ASSET_FETCH_CONCURRENCY = 12;
+
+export async function exportRelease(version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
+  // One snapshot for every read, so aliases, answers and boards cannot come
+  // from different database states.
+  // postgres.js types TransactionSql via Omit<>, which loses the tagged-template call signature.
+  return sql.begin('isolation level repeatable read read only', (tx) => exportReleaseWithin(tx as unknown as typeof sql, version));
+}
+
+async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
+  const releases = await sql<ExportedRelease[]>`
+    SELECT id, version, alias_version, resolver_policy_version, relationship_snapshot,
+           approved_by, approved_at::text AS approved_at, manifest_checksum, status
+      FROM football_grid_content_releases WHERE version = ${version}`;
+  const release = releases[0];
+  if (!release) throw new Error(`Release ${version} not found`);
+  const criteriaRows = await sql<Array<{
+    id: string; criterion_key: string; family: Manifest['criteria'][number]['family']; subtype: string;
+    label_en: string; label_ka: string; asset_key: string | null; metadata: Record<string, unknown>;
+    difficulty: 'easy' | 'normal' | 'hard'; familiarity_score: string;
+  }>>`SELECT id, criterion_key, family, subtype, label_en, label_ka, asset_key, metadata, difficulty, familiarity_score
+        FROM football_grid_criteria WHERE release_id = ${release.id} ORDER BY criterion_key`;
+  const keyById = new Map(criteriaRows.map((row) => [row.id, row.criterion_key]));
+  const sourceRows = await sql<Array<{
+    id: string; source_key: string; provider_name: string; dataset_version: string; permitted_use: string;
+    attribution_requirements: string | null; retention_requirements: string | null; approval_owner: string; approved_at: string;
+  }>>`SELECT DISTINCT s.id, s.source_key, s.provider_name, s.dataset_version, s.permitted_use,
+             s.attribution_requirements, s.retention_requirements, s.approval_owner, s.approved_at::text AS approved_at
+        FROM football_grid_data_sources s
+        JOIN football_grid_membership_evidence e ON e.source_id = s.id
+        JOIN football_grid_criterion_memberships m ON m.id = e.membership_id
+       WHERE m.release_id = ${release.id} ORDER BY s.source_key`;
+  const sourceKeyById = new Map(sourceRows.map((row) => [row.id, row.source_key]));
+  const membershipRows = await sql<Array<{
+    id: string; criterion_id: string; football_player_id: string; relationship_subtype: string;
+    effective_from: string | null; effective_to: string | null; verified_by: string; reviewed_at: string;
+  }>>`SELECT id, criterion_id, football_player_id, relationship_subtype, effective_from::text AS effective_from,
+             effective_to::text AS effective_to, verified_by, reviewed_at::text AS reviewed_at
+        FROM football_grid_criterion_memberships WHERE release_id = ${release.id}
+       ORDER BY criterion_id, football_player_id`;
+  type EvidenceRow = {
+    membership_id: string; source_id: string; source_locator: string; captured_fact: string;
+    effective_from: string | null; effective_to: string | null; rights_class: string; reviewed_by: string; reviewed_at: string;
+    evidence_checksum: string;
+  };
+  const evidenceRows = await sql<EvidenceRow[]>`
+      SELECT e.membership_id, e.source_id, e.source_locator, e.captured_fact, e.effective_from::text AS effective_from,
+             e.effective_to::text AS effective_to, e.rights_class, e.reviewed_by, e.reviewed_at::text AS reviewed_at, e.evidence_checksum
+        FROM football_grid_membership_evidence e
+        JOIN football_grid_criterion_memberships m ON m.id = e.membership_id
+       WHERE m.release_id = ${release.id} ORDER BY e.membership_id, e.source_locator`;
+  const evidenceByMembership = new Map<string, EvidenceRow[]>();
+  for (const row of evidenceRows) {
+    const list: EvidenceRow[] = evidenceByMembership.get(row.membership_id) ?? [];
+    list.push(row);
+    evidenceByMembership.set(row.membership_id, list);
+  }
+  const aliasRows = await sql<Array<{
+    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'translit';
+    alias_type: Manifest['aliases'][number]['aliasType']; acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
+    reviewed_by: string; reviewed_at: string;
+  }>>`SELECT football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at::text AS reviewed_at
+        FROM football_grid_player_aliases WHERE release_id = ${release.id}
+       ORDER BY football_player_id, locale, alias`;
+  const boardRows = await sql<Array<{
+    id: string; version: number; row_criteria: string[]; column_criteria: string[]; difficulty: 'easy' | 'normal' | 'hard';
+    familiarity_score: string; canonical_checksum: string; approved_by: string; theme: string;
+  }>>`SELECT id, version, row_criteria, column_criteria, difficulty, familiarity_score, canonical_checksum, approved_by, theme
+        FROM football_grid_boards WHERE release_id = ${release.id} ORDER BY canonical_checksum`;
+  // Paged per board chunk: the whole answer set (~400k rows) does not reliably
+  // finish inside the pool's 30 s statement timeout.
+  const answerRows: ExportedAnswerRow[] = [];
+  for (let offset = 0; offset < boardRows.length; offset += EXPORT_BOARD_PAGE) {
+    const boardIds = boardRows.slice(offset, offset + EXPORT_BOARD_PAGE).map((row) => row.id);
+    answerRows.push(...await sql<ExportedAnswerRow[]>`
+      SELECT board_id, cell_index, football_player_id, player_name_en, player_name_ka, image_asset_key, recognizable_rank, is_sample
+        FROM football_grid_board_answers
+       WHERE release_id = ${release.id} AND board_id = ANY(${boardIds}::uuid[])
+       ORDER BY board_id, cell_index, recognizable_rank NULLS LAST, football_player_id`);
+  }
+  const criteria: Manifest['criteria'] = criteriaRows.map((row) => ({
+    key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, labelKa: row.label_ka,
+    assetKey: row.asset_key, metadata: row.metadata ?? {}, difficulty: row.difficulty, familiarityScore: Number(row.familiarity_score),
+  }));
+  let evidenceTotal = 0;
+  const memberships: Manifest['memberships'] = membershipRows.map((row) => {
+    const evidence = (evidenceByMembership.get(row.id) ?? []).map((item) => {
+      evidenceTotal += 1;
+      try {
+        return projectEvidence({ ...item, sourceKey: sourceKeyById.get(item.source_id) ?? '' });
+      } catch (error) {
+        throw new Error(`Membership ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    if (evidence.length === 0) throw new Error(`Membership ${row.id} has no evidence rows`);
+    // publish re-derives evidence_checksum from the projected object; two stored
+    // rows that collapse onto one projection would violate the uniqueness key.
+    const seen = new Set<string>();
+    for (const item of evidence) {
+      const key = `${item.sourceKey}:${checksum(item)}`;
+      if (seen.has(key)) throw new Error(`Membership ${row.id}: evidence rows collapse onto one checksum after export`);
+      seen.add(key);
+    }
+    return {
+      criterionKey: keyById.get(row.criterion_id) ?? '', playerId: row.football_player_id,
+      relationshipSubtype: row.relationship_subtype, effectiveFrom: row.effective_from, effectiveTo: row.effective_to,
+      verifiedBy: row.verified_by, reviewedAt: isoSeconds(row.reviewed_at), evidence,
+    };
+  });
+  const { boards, players } = projectExportedBoards(
+    boardRows.map((row) => ({
+      ...row,
+      rowCriteria: row.row_criteria.map((id) => keyById.get(id) ?? '') as [string, string, string],
+      columnCriteria: row.column_criteria.map((id) => keyById.get(id) ?? '') as [string, string, string],
+    })),
+    answerRows,
+  );
+  const assetCatalog = [...new Set([
+    ...criteria.map((criterion) => criterion.assetKey).filter((key): key is string => Boolean(key)),
+    ...[...players.values()].map((player) => player.imageAssetKey),
+  ])].sort();
+  const manifest = manifestSchema.parse({
+    release: {
+      version: release.version, aliasVersion: release.alias_version, resolverPolicyVersion: release.resolver_policy_version,
+      relationshipSnapshot: release.relationship_snapshot ?? {}, approvedBy: release.approved_by,
+      approvedAt: isoSeconds(release.approved_at),
+    },
+    sources: sourceRows.map((row) => ({
+      key: row.source_key, providerName: row.provider_name, datasetVersion: row.dataset_version, permittedUse: row.permitted_use,
+      databaseRightsStatus: 'approved', attributionRequirements: row.attribution_requirements ?? undefined,
+      retentionRequirements: row.retention_requirements ?? undefined, approvalOwner: row.approval_owner,
+      approvedAt: isoSeconds(row.approved_at),
+    })),
+    assetCatalog,
+    players,
+    criteria, memberships,
+    aliases: aliasRows.map((row) => ({
+      playerId: row.football_player_id, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale,
+      aliasType: row.alias_type, acceptancePolicy: row.acceptance_policy, reviewedBy: row.reviewed_by,
+      reviewedAt: isoSeconds(row.reviewed_at),
+    })),
+    boards,
+  });
+  // Round-trip guards: the export must describe exactly what the database serves.
+  const counts = { criteria: criteriaRows.length, memberships: membershipRows.length, aliases: aliasRows.length, boards: boardRows.length };
+  if (manifest.criteria.length !== counts.criteria || manifest.memberships.length !== counts.memberships
+    || manifest.aliases.length !== counts.aliases || manifest.boards.length !== counts.boards) {
+    throw new Error(`Export count mismatch: ${JSON.stringify(counts)}`);
+  }
+  for (const [index, board] of manifest.boards.entries()) {
+    const expected = boardRows[index].canonical_checksum;
+    const actual = canonicalFootballGridBoardChecksum(board.rowCriteria, board.columnCriteria);
+    if (expected !== actual) throw new Error(`Board ${board.key}: canonical checksum drifted (${actual})`);
+    if (board.cells.some((cell) => cell.playerIds.length === 0)) throw new Error(`Board ${board.key}: empty cell in export`);
+  }
+  process.stdout.write(`Evidence checksums reproduced: ${evidenceTotal}/${evidenceTotal}\n`);
+  return { manifest, release };
+}
+
+/**
+ * Build the asset registry `activate` needs. Served releases carry three kinds
+ * of asset keys: full storage URLs (player portraits mirrored to the project
+ * bucket), club/league slugs (SVG crests in the web checkout) and
+ * `/assets/football-grid/players/<uuid>.webp` (teammate-anchor portraits from
+ * the launch pool). `activate` only checks that every key maps to a file on
+ * disk, so URL keys are fetched once into `assetCache` (HEAD-then-GET, reused
+ * when present) and the cached path is registered. Fails loudly on anything
+ * missing so activation can never proceed with a broken catalogue.
+ */
+export async function buildAssetRegistry(
+  manifest: Manifest,
+  options: {
+    assetRoot: string; assetCache?: string; playerPool?: string; fetchUrls?: boolean;
+    /** Grid CDN base the web resolves `/assets/football-grid/<rel>` against (…/imgs/football-grid/v1). */
+    cdnBase?: string;
+    /** Registered for keys with no source anywhere; the runtime renders these through its fallback chain today. */
+    fallbackFile?: string;
+    /** The only keys allowed to take the fallback file; any other unresolved key still fails. */
+    fallbackKeys?: Iterable<string>;
+  },
+): Promise<{ registry: Record<string, string>; fallbacks: string[] }> {
+  const registry: Record<string, string> = {};
+  const missing: string[] = [];
+  const fallbacks: string[] = [];
+  const fallbackAllowed = new Set(options.fallbackKeys ?? []);
+  const existing = async (file: string) => ((await stat(file).catch(() => null))?.isFile() ? file : null);
+  const fetchToCache = async (url: string) => {
+    if (!options.assetCache) return null;
+    const cached = path.join(options.assetCache, createHash('sha256').update(url).digest('hex').slice(0, 24) + path.extname(new URL(url).pathname));
+    const hit = await existing(cached);
+    if (hit || options.fetchUrls === false) return hit;
+    // A transient network error must not read as "asset missing": only a
+    // definite 4xx does; exhausted retries abort the registry build.
+    let response: Response | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 4 && !response; attempt += 1) {
+      try {
+        const candidate = await fetch(url);
+        if (candidate.status < 500 && candidate.status !== 429) response = candidate;
+        else lastError = new Error(`HTTP ${candidate.status}`);
+      } catch (error) {
+        lastError = error;
+      }
+      if (!response) await new Promise((resolve) => setTimeout(resolve, 500 * attempt * attempt));
+    }
+    if (!response) throw new Error(`Could not fetch ${url} after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    if (!response.ok) return null;
+    await mkdir(options.assetCache, { recursive: true });
+    await writeFile(cached, Buffer.from(await response.arrayBuffer()));
+    return cached;
+  };
+  // Slug keys (clubs, leagues, flags, competitions, managers, wildcards) map to
+  // `<assetRoot>/assets/football-grid/<folder>/<slug>[-fallback].<ext>`; the
+  // real image wins over its fallback when both exist.
+  let slugIndexPromise: Promise<Record<string, string>> | null = null;
+  const slugIndex = () => (slugIndexPromise ??= buildSlugIndex());
+  const buildSlugIndex = async () => {
+    const slugs: Record<string, string> = {};
+    const base = path.join(options.assetRoot, 'assets', 'football-grid');
+    for (const entry of await readdir(base, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory()) continue;
+      for (const file of (await readdir(path.join(base, entry.name))).sort()) {
+        const stem = path.parse(file).name;
+        const isFallback = stem.endsWith('-fallback');
+        const slug = isFallback ? stem.slice(0, -'-fallback'.length) : stem;
+        const current = slugs[slug];
+        if (!current || (path.parse(current).name.endsWith('-fallback') && !isFallback)) slugs[slug] = path.join(base, entry.name, file);
+      }
+    }
+    return slugs;
+  };
+  const resolve = async (key: string) => {
+    let found: string | null = null;
+    if (/^https?:\/\//.test(key)) {
+      if (!options.assetCache) { missing.push(`${key} (URL key; pass --asset-cache)`); return; }
+      found = await fetchToCache(key);
+    } else if (key.startsWith('/') || key.includes('/')) {
+      // `/assets/football-grid/<rel>` and bucket-relative `<rel>` (e.g.
+      // `players/unknown.webp`) both resolve to `<cdn-base>/<rel>` at runtime.
+      const relative = key.startsWith('/assets/football-grid/') ? key.slice('/assets/football-grid/'.length) : key.startsWith('/') ? null : key;
+      const candidates = [key.startsWith('/') ? path.join(options.assetRoot, key) : path.join(options.assetRoot, 'assets', 'football-grid', key)];
+      if (options.playerPool) candidates.push(path.join(options.playerPool, path.basename(key)));
+      for (const candidate of candidates) { found = await existing(candidate); if (found) break; }
+      if (!found && relative && options.cdnBase) found = await fetchToCache(`${options.cdnBase.replace(/\/$/, '')}/${relative}`);
+    } else {
+      found = (await slugIndex())[key] ?? null;
+    }
+    if (!found && options.fallbackFile && fallbackAllowed.has(key)) { found = options.fallbackFile; fallbacks.push(key); }
+    if (found) registry[key] = found; else missing.push(key);
+  };
+  // URL keys are fetched with bounded parallelism; local keys are cheap.
+  const queue = [...manifest.assetCatalog];
+  await Promise.all(Array.from({ length: ASSET_FETCH_CONCURRENCY }, async () => {
+    for (let key = queue.shift(); key !== undefined; key = queue.shift()) await resolve(key);
+  }));
+  if (missing.length > 0) {
+    missing.sort();
+    throw new Error(`Asset registry incomplete: ${missing.length} of ${manifest.assetCatalog.length} keys unresolved\n${missing.slice(0, 20).join('\n')}`);
+  }
+  fallbacks.sort();
+  return { registry, fallbacks };
+}
+
+/**
+ * Storage object path (bucket `imgs`) a served asset key resolves to at
+ * runtime, or null for keys bundled with the web (slugs) and fallbacks.
+ */
+export function storageObjectPathForAssetKey(key: string): string | null {
+  if (/^https?:\/\//.test(key)) {
+    // Object name comes from the pathname only; query/fragment are not part of it.
+    const parsed = new URL(key);
+    const inBucket = /^[a-z]{20}\.supabase\.co$/.test(parsed.hostname) && parsed.pathname.match(/^\/storage\/v1\/object\/public\/imgs\/(.+)$/);
+    return inBucket ? decodeURIComponent(inBucket[1]) : null;
+  }
+  if (key.startsWith('/assets/football-grid/')) return `football-grid/v1/${key.slice('/assets/football-grid/'.length)}`;
+  if (!key.startsWith('/') && key.includes('/')) return `football-grid/v1/${key}`;
+  return null;
+}
+
+async function readFallbackKeys(file: string | undefined): Promise<string[]> {
+  if (!file) return [];
+  return (await readFile(file, 'utf8')).split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+}
+
 async function loadManifest(file: string): Promise<Manifest> {
   return manifestSchema.parse(JSON.parse(await readFile(file, 'utf8')));
 }
@@ -370,12 +862,14 @@ async function loadAndVerifyAssetRegistry(
   return registry;
 }
 
-async function publish(manifest: Manifest): Promise<void> {
+async function publish(manifest: Manifest, transformedFrom: number | null = null): Promise<void> {
   // Publishing is a staging operation. Feasibility content is intentionally
   // invisible to runtime board selection until an independent launch-grade
   // validation and explicit activation succeeds.
   const validation = validateManifest(manifest, false);
-  if (validation.errors.length > 0) throw new Error(`Content validation failed:\n${validation.errors.join('\n')}`);
+  let errors = validation.errors;
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false);
+  if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
   await sql.begin(async (tx) => {
     const releaseRows = await tx.unsafe<Array<{ id: string }>>(
@@ -595,9 +1089,50 @@ async function publish(manifest: Manifest): Promise<void> {
   process.stdout.write(`Staged Football Grid release ${manifest.release.version} (${manifest.boards.length} boards, ${manifestChecksum})\n`);
 }
 
-async function activate(manifest: Manifest, assetRegistryPath: string, allowFallbackAssets = false): Promise<void> {
+/**
+ * A label-only transform of served content may carry validator findings its
+ * source already has (the 2026-08 themed packs predate the board-distribution
+ * rule). Prove the manifest is byte-for-byte the content the source release
+ * serves right now, then drop exactly the findings the source produces under
+ * the same validator mode. Everything else still blocks.
+ */
+async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean): Promise<string[]> {
+  const snapshot = manifest.release.relationshipSnapshot as { transformedFromVersion?: number; transform?: string };
+  if (snapshot.transformedFromVersion !== transformedFrom || snapshot.transform !== 'teammate-relabel-v1') {
+    throw new Error(`Manifest is not a teammate-relabel transform of release ${transformedFrom}`);
+  }
+  const source = await exportRelease(transformedFrom);
+  if (source.release.status !== 'published') throw new Error(`Source release ${transformedFrom} is ${source.release.status}, not published`);
+  const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
+  // Require the manifest to be exactly what transform-labels produces from the
+  // served source right now (same version/approval and, if recorded, the same
+  // asset-origin rewrite). This covers content, labels and metadata at once.
+  const rewrite = (snapshot as { assetOriginRewrite?: AssetOriginRewrite }).assetOriginRewrite;
+  const expected = relabelTeammateCriteria(sourceManifest, {
+    version: manifest.release.version, approvedBy: manifest.release.approvedBy, approvedAt: manifest.release.approvedAt,
+    ...(rewrite ? { assetOrigin: rewrite } : {}),
+  });
+  if (expected.skipped.length > 0 || checksum(expected.manifest) !== checksum(manifest)) {
+    throw new Error(`Manifest is not the teammate relabel of served release ${transformedFrom}: content, labels or metadata differ from the prescribed transform`);
+  }
+  if (rewrite) process.stdout.write(`Asset origin rewrite verified: ${rewrite.from} -> ${rewrite.to}\n`);
+  const inherited = new Set(validateManifest(sourceManifest, launch).errors);
+  const waived = errors.filter((error) => inherited.has(error));
+  if (waived.length > 0) {
+    process.stdout.write(`WARNING: waived ${waived.length} findings already present in served release ${transformedFrom} (--transformed-from)\n`);
+  }
+  return errors.filter((error) => !inherited.has(error));
+}
+
+async function activate(
+  manifest: Manifest,
+  assetRegistryPath: string,
+  allowFallbackAssets = false,
+  transformedFrom: number | null = null,
+): Promise<void> {
   const validation = validateManifest(manifest, true);
   let errors = validation.errors;
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true);
   if (allowFallbackAssets) {
     // Incremental releases add criteria/players whose art intentionally rides
     // the runtime fallback chain (monogram crests, silhouette portraits).
@@ -623,6 +1158,78 @@ async function activate(manifest: Manifest, assetRegistryPath: string, allowFall
   `;
   if (!rows[0]) throw new Error('Matching staged release was not found or is not activatable');
   process.stdout.write(`Activated Football Grid release ${manifest.release.version}\n`);
+}
+
+/**
+ * Retire a published release whose original manifest file is no longer at
+ * hand (the served 2026-08/09 releases). All three identifiers must match the
+ * stored row, so a typo cannot retire the wrong release.
+ */
+async function retireRelease(version: number, releaseId: string, manifestChecksum: string): Promise<void> {
+  const rows = await sql<Array<{ id: string }>>`
+    UPDATE football_grid_content_releases
+       SET status = 'retired'
+     WHERE version = ${version}
+       AND id = ${releaseId}
+       AND manifest_checksum = ${manifestChecksum}
+       AND status = 'published'
+    RETURNING id
+  `;
+  if (!rows[0]) throw new Error('No published release matches that version, id and manifest checksum');
+  process.stdout.write(`Retired Football Grid release ${version} (${releaseId})\n`);
+}
+
+/**
+ * A transformed release gets new board ids, so the board-level quarantine
+ * state of the source release (e.g. the 494 superseded European boards of
+ * v2026082610) must be carried across by canonical checksum or those boards
+ * would serve again. Only the *effective* state is copied, using the runtime's
+ * own precedence (a disable counts unless a newer enable for the same board
+ * exists, and expired rows are ignored); release-level rows are the cutover
+ * mechanism and are deliberately not carried. Idempotent: a target board that
+ * is already effectively disabled is skipped.
+ */
+async function transferQuarantines(fromVersion: number, toVersion: number): Promise<void> {
+  const rows = await sql<Array<{ id: string }>>`
+    WITH effective AS (
+      SELECT q.board_id, q.action, q.reason, q.actor, q.expires_at
+        FROM football_grid_content_quarantines q
+        JOIN football_grid_content_releases sr ON sr.id = q.release_id AND sr.version = ${fromVersion}
+       WHERE q.board_id IS NOT NULL
+         AND q.action = 'disable'
+         AND (q.expires_at IS NULL OR q.expires_at > now())
+         AND NOT EXISTS (
+           SELECT 1 FROM football_grid_content_quarantines newer
+            WHERE newer.release_id = q.release_id
+              AND newer.board_id = q.board_id
+              AND newer.action = 'enable'
+              AND (newer.created_at, newer.id) > (q.created_at, q.id)
+         )
+    )
+    INSERT INTO football_grid_content_quarantines (release_id, board_id, action, reason, actor, expires_at)
+    SELECT target.release_id, target.id, 'disable',
+           effective.reason || ' (carried from release ' || ${fromVersion}::text || ')', effective.actor, effective.expires_at
+      FROM effective
+      JOIN football_grid_boards source ON source.id = effective.board_id
+      JOIN football_grid_content_releases tr ON tr.version = ${toVersion}
+      JOIN football_grid_boards target ON target.release_id = tr.id AND target.canonical_checksum = source.canonical_checksum
+     WHERE NOT EXISTS (
+       SELECT 1 FROM football_grid_content_quarantines existing
+        WHERE existing.release_id = target.release_id
+          AND existing.board_id = target.id
+          AND existing.action = 'disable'
+          AND (existing.expires_at IS NULL OR existing.expires_at > now())
+          AND NOT EXISTS (
+            SELECT 1 FROM football_grid_content_quarantines newer
+             WHERE newer.release_id = existing.release_id
+               AND newer.board_id = existing.board_id
+               AND newer.action = 'enable'
+               AND (newer.created_at, newer.id) > (existing.created_at, existing.id)
+          )
+     )
+    RETURNING id
+  `;
+  process.stdout.write(`Carried ${rows.length} effective board-level disables from ${fromVersion} to ${toVersion}\n`);
 }
 
 async function retire(manifest: Manifest): Promise<void> {
@@ -720,8 +1327,103 @@ export function optionValue(args: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const [command, manifestPath, ...args] = process.argv.slice(2);
-  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (command === 'transfer-quarantines') {
+    // Usage: transfer-quarantines <from-version> --to <version>
+    const fromVersion = Number(manifestPath);
+    const toVersion = Number(optionValue(args, '--to'));
+    if (!Number.isInteger(fromVersion) || !Number.isInteger(toVersion) || fromVersion <= 0 || toVersion <= fromVersion) {
+      throw new Error('transfer-quarantines requires <from-version> --to <newer version>');
+    }
+    await transferQuarantines(fromVersion, toVersion);
+    return;
+  }
+  if (command === 'retire-release') {
+    // Usage: retire-release <version> --release-id <uuid> --manifest-checksum <hex>
+    const version = Number(manifestPath);
+    if (!Number.isInteger(version) || version <= 0) throw new Error('retire-release requires a positive release version');
+    const releaseId = optionValue(args, '--release-id');
+    const manifestChecksum = optionValue(args, '--manifest-checksum');
+    if (!releaseId || !manifestChecksum) throw new Error('retire-release requires --release-id and --manifest-checksum');
+    await retireRelease(version, releaseId, manifestChecksum);
+    return;
+  }
+  if (command === 'export') {
+    // Usage: export <version> --out manifest.json [--asset-root <web public dir> --asset-cache <dir> --player-pool <dir>
+    //          --cdn-base <…/imgs/football-grid/v1> --fallback-file <svg> --fallback-keys <one key per line> --registry-out asset-registry.json]
+    const version = Number(manifestPath);
+    if (!Number.isInteger(version) || version <= 0) throw new Error('export requires a positive release version');
+    const outputPath = optionValue(args, '--out') ?? `football-grid-release-${version}.json`;
+    const { manifest, release } = await exportRelease(version);
+    await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    // Digest of the file as later commands will read it (JSON drops undefined fields).
+    const digest = manifestContentDigest(await loadManifest(outputPath));
+    process.stdout.write(`Exported release ${version} (${release.status}, ${manifest.criteria.length} criteria, ${manifest.memberships.length} memberships, ${manifest.boards.length} boards, content digest ${digest}) to ${outputPath}\n`);
+    const assetRoot = optionValue(args, '--asset-root');
+    if (!assetRoot && optionValue(args, '--registry-out')) throw new Error('--registry-out requires --asset-root');
+    if (assetRoot) {
+      const { registry, fallbacks } = await buildAssetRegistry(manifest, {
+        assetRoot,
+        assetCache: optionValue(args, '--asset-cache'),
+        playerPool: optionValue(args, '--player-pool'),
+        cdnBase: optionValue(args, '--cdn-base'),
+        fallbackFile: optionValue(args, '--fallback-file'),
+        fallbackKeys: await readFallbackKeys(optionValue(args, '--fallback-keys')),
+        fetchUrls: !args.includes('--no-fetch'),
+      });
+      const registryPath = optionValue(args, '--registry-out') ?? `football-grid-release-${version}-assets.json`;
+      await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+      process.stdout.write(`Asset registry with ${Object.keys(registry).length} entries at ${registryPath}\n`);
+      if (fallbacks.length > 0) {
+        process.stdout.write(`WARNING: ${fallbacks.length} allow-listed keys have no source anywhere and were registered to the fallback file:\n${fallbacks.join('\n')}\n`);
+      }
+    }
+    return;
+  }
   const manifest = await loadManifest(manifestPath);
+  if (command === 'build-registry') {
+    // Usage: build-registry <manifest.json> --asset-root DIR [--asset-cache DIR --player-pool DIR --cdn-base URL --fallback-file F --fallback-keys F] --registry-out F
+    const assetRoot = optionValue(args, '--asset-root');
+    const registryPath = optionValue(args, '--registry-out');
+    if (!assetRoot || !registryPath) throw new Error('build-registry requires --asset-root and --registry-out');
+    const { registry, fallbacks } = await buildAssetRegistry(manifest, {
+      assetRoot,
+      assetCache: optionValue(args, '--asset-cache'),
+      playerPool: optionValue(args, '--player-pool'),
+      cdnBase: optionValue(args, '--cdn-base'),
+      fallbackFile: optionValue(args, '--fallback-file'),
+      fallbackKeys: await readFallbackKeys(optionValue(args, '--fallback-keys')),
+      fetchUrls: !args.includes('--no-fetch'),
+    });
+    await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    process.stdout.write(`Asset registry with ${Object.keys(registry).length} entries at ${registryPath}\n`);
+    if (fallbacks.length > 0) {
+      process.stdout.write(`WARNING: ${fallbacks.length} allow-listed keys have no source anywhere and were registered to the fallback file:\n${fallbacks.join('\n')}\n`);
+    }
+    return;
+  }
+  if (command === 'transform-labels') {
+    const version = Number(optionValue(args, '--version'));
+    if (!Number.isInteger(version) || version <= 0) throw new Error('transform-labels requires --version <new release version>');
+    const approvedBy = optionValue(args, '--approved-by');
+    if (!approvedBy) throw new Error('transform-labels requires --approved-by <reviewer>');
+    const outputPath = optionValue(args, '--out') ?? `football-grid-release-${version}.json`;
+    const originFrom = optionValue(args, '--asset-origin-from');
+    const originTo = optionValue(args, '--asset-origin-to');
+    if (Boolean(originFrom) !== Boolean(originTo)) throw new Error('--asset-origin-from and --asset-origin-to go together');
+    const result = relabelTeammateCriteria(manifest, {
+      version, approvedBy, approvedAt: new Date().toISOString(),
+      ...(originFrom && originTo ? { assetOrigin: { from: originFrom, to: originTo } } : {}),
+    });
+    if (result.skipped.length > 0) {
+      throw new Error(`Refusing: ${result.skipped.length} teammate criteria do not match the legacy label pattern:\n${result.skipped.join('\n')}`);
+    }
+    await writeFile(outputPath, `${JSON.stringify(result.manifest, null, 2)}\n`);
+    process.stdout.write(result.rewritten > 0
+      ? `Relabelled ${result.relabelled} teammate criteria and rewrote ${result.rewritten} asset keys to ${result.manifest.release.relationshipSnapshot.assetOriginRewrite && (result.manifest.release.relationshipSnapshot.assetOriginRewrite as AssetOriginRewrite).to}; content digest ${manifestContentDigest(result.manifest)} (source ${manifestContentDigest(manifest)}); wrote ${outputPath}\n`
+      : `Relabelled ${result.relabelled} teammate criteria; content digest ${manifestContentDigest(result.manifest)} unchanged from source; wrote ${outputPath}\n`);
+    return;
+  }
   if (command === 'generate') {
     const limitIndex = args.indexOf('--limit');
     const limit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 1_000;
@@ -750,7 +1452,8 @@ async function main(): Promise<void> {
     if (args.includes('--feasibility')) {
       throw new Error('The publish command is always non-playable staging; remove --feasibility');
     }
-    await publish(manifest);
+    const transformedFrom = optionValue(args, '--transformed-from');
+    await publish(manifest, transformedFrom ? Number(transformedFrom) : null);
     return;
   }
   if (command === 'activate') {
@@ -758,7 +1461,8 @@ async function main(): Promise<void> {
     if (!assetRegistry) {
       throw new Error('activate requires --asset-registry PATH so every launch asset is verified on disk');
     }
-    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'));
+    const transformedFrom = optionValue(args, '--transformed-from');
+    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'), transformedFrom ? Number(transformedFrom) : null);
     return;
   }
   if (command === 'retire') {

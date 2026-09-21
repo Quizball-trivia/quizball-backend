@@ -760,7 +760,9 @@ def build_criteria(
         local_portrait = Path("__PLAYER_CACHE__") / f"{target.uuid}.webp"
         add_criterion(
             criteria, key=f"teammate:{target.uuid}", family="teammate", subtype="same-club-season",
-            label_en=f"Played with {target.name_en}", label_ka=f"ითამაშა {target.name_ka}-სთან ერთად",
+            # Club-season overlap only: say so in every locale (owner report
+            # 2026-09-20 — "Played with X" was read as national-team teammates).
+            label_en=f"Club teammate of {target.name_en}", label_ka=f"ერთ კლუბში ითამაშა {target.name_ka}-სთან",
             asset_key=teammate_asset_key, local_asset=local_portrait, members=members,
             familiarity=min(94.0, 50.0 + target.question_count * 4.0 + target.peak_value / 20_000_000),
         )

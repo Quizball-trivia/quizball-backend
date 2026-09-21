@@ -4,9 +4,14 @@
 //   npx tsx scripts/football-grid-label-locales.ts --build          # fixture from DB + OpenRouter (cached)
 //   npx tsx scripts/football-grid-label-locales.ts --apply           # write label_es/label_tr from the fixture
 //   --target=production --confirm-production=lfbwhxvwubzeqkztghok    # for prod
-// Clubs and managers keep their English label; "Played with X" follows a fixed
-// pattern; countries, leagues, trophies and wildcards are machine-translated once
-// into scripts/football-grid-label-locales.json (committed) and reviewed there.
+// Clubs and managers keep their English label; teammate labels follow a fixed
+// pattern ("Club teammate of X" since release 2026-09; the legacy "Played with X"
+// is still recognised for older releases); countries, leagues, trophies and
+// wildcards are machine-translated once into
+// scripts/football-grid-label-locales.json (committed) and reviewed there.
+//   --release=<version>   scope --build/--apply to one release (recommended:
+//                         the fixture is keyed by criterion_key, and two releases
+//                         may carry the same key with different English labels).
 
 import fs from 'node:fs/promises';
 import https from 'node:https';
@@ -17,13 +22,22 @@ import postgres from 'postgres';
 
 type Locale = 'es' | 'tr';
 type Family = 'club' | 'country' | 'league' | 'manager' | 'teammate' | 'trophy_award' | 'wildcard';
-type Row = { id: string; criterion_key: string; family: Family; label_en: string };
+type Row = { id: string; criterion_key: string; family: Family; label_en: string; release_version: number };
 type Fixture = { version: 1; model: string; labels: Record<string, { en: string; es: string; tr: string }> };
+
+// Entries are keyed by criterion_key. When two releases carry the same key with
+// different English labels (the 2026-09 teammate relabel), the second label
+// lives under "<key>|<label_en>" so both releases stay applicable.
+function fixtureSlot(fixture: Fixture, criterionKey: string, labelEn: string): string {
+  const primary = fixture.labels[criterionKey];
+  return !primary || primary.en === labelEn ? criterionKey : `${criterionKey}|${labelEn}`;
+}
 
 const FIXTURE_PATH = path.resolve('scripts/football-grid-label-locales.json');
 const PROJECT_REFS = { staging: 'nsdfiprfmhdqhbfxfwpv', production: 'lfbwhxvwubzeqkztghok' } as const;
 const MODEL = process.env.GRID_LABEL_TRANSLATION_MODEL ?? 'google/gemini-2.5-flash-lite';
-const TEAMMATE = /^Played with (.+)$/;
+const TEAMMATE_LEGACY = /^Played with (.+)$/;
+const TEAMMATE_CLUB = /^Club teammate of (.+)$/;
 
 function argValue(name: string): string | undefined {
   const prefix = `--${name}=`;
@@ -35,9 +49,11 @@ function hasArg(name: string): boolean {
 
 function ruleBased(row: Row): { es: string; tr: string } | null {
   if (row.family === 'club' || row.family === 'manager') return { es: row.label_en, tr: row.label_en };
-  const teammate = row.label_en.match(TEAMMATE);
-  if (row.family === 'teammate' && teammate) {
-    return { es: `Jugó con ${teammate[1]}`, tr: `${teammate[1]} ile oynadı` };
+  if (row.family === 'teammate') {
+    const club = row.label_en.match(TEAMMATE_CLUB);
+    if (club) return { es: `Compañero de club de ${club[1]}`, tr: `${club[1]} ile aynı kulüpte oynadı` };
+    const legacy = row.label_en.match(TEAMMATE_LEGACY);
+    if (legacy) return { es: `Jugó con ${legacy[1]}`, tr: `${legacy[1]} ile oynadı` };
   }
   return null;
 }
@@ -102,31 +118,53 @@ async function translateBatch(items: Array<{ key: string; family: Family; en: st
   return out;
 }
 
+function releaseScope(): number | null {
+  const raw = argValue('release');
+  if (raw === undefined) return null;
+  const version = Number(raw);
+  if (!Number.isInteger(version) || version <= 0) throw new Error('--release must be a positive release version');
+  return version;
+}
+
+async function selectCriteria(sql: postgres.Sql): Promise<Row[]> {
+  const version = releaseScope();
+  const rows = version === null
+    ? await sql<Row[]>`SELECT c.id, c.criterion_key, c.family, c.label_en, r.version AS release_version
+                          FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
+                         ORDER BY c.family, c.label_en`
+    : await sql<Row[]>`SELECT c.id, c.criterion_key, c.family, c.label_en, r.version AS release_version
+                          FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
+                         WHERE r.version = ${version}
+                         ORDER BY c.family, c.label_en`;
+  if (version !== null && rows.length === 0) throw new Error(`Release ${version} has no criteria on this database`);
+  return rows;
+}
+
 async function build(sql: postgres.Sql) {
+  // Only needed once a label falls outside the rule-based families.
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error('OPENROUTER_API_KEY is required for --build');
   let fixture: Fixture = { version: 1, model: MODEL, labels: {} };
   try {
     fixture = JSON.parse(await fs.readFile(FIXTURE_PATH, 'utf8')) as Fixture;
   } catch {
     // first run
   }
-  const rows = await sql<Row[]>`SELECT id, criterion_key, family, label_en FROM football_grid_criteria ORDER BY family, label_en`;
+  const rows = await selectCriteria(sql);
   const pending: Array<{ key: string; family: Family; en: string }> = [];
   for (const row of rows) {
-    const existing = fixture.labels[row.criterion_key];
+    const slot = fixtureSlot(fixture, row.criterion_key, row.label_en);
+    const existing = fixture.labels[slot];
     if (existing && existing.en === row.label_en && existing.es && existing.tr) continue;
-    // An English label that changed invalidates both cached translations.
-    if (existing && existing.en !== row.label_en) delete fixture.labels[row.criterion_key];
     const rule = ruleBased(row);
     if (rule) {
-      fixture.labels[row.criterion_key] = { en: row.label_en, ...rule };
+      fixture.labels[slot] = { en: row.label_en, ...rule };
     } else {
-      pending.push({ key: row.criterion_key, family: row.family, en: row.label_en });
+      pending.push({ key: slot, family: row.family, en: row.label_en });
     }
   }
   console.log(`criteria ${rows.length}, rule-based/cached ${rows.length - pending.length}, to translate ${pending.length}`);
   await fs.writeFile(FIXTURE_PATH, `${JSON.stringify(fixture, null, 2)}\n`);
+  if (pending.length > 0 && !apiKey) throw new Error(`OPENROUTER_API_KEY is required to translate ${pending.length} labels`);
   for (const locale of ['es', 'tr'] as const) {
     const todo = pending.filter((item) => !fixture.labels[item.key]?.[locale]);
     for (let offset = 0; offset < todo.length; offset += 20) {
@@ -134,7 +172,7 @@ async function build(sql: postgres.Sql) {
       let translated = new Map<string, string>();
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
-          translated = await translateBatch(batch, locale, apiKey);
+          translated = await translateBatch(batch, locale, apiKey!);
           break;
         } catch (error) {
           if (attempt === 3) throw error;
@@ -157,12 +195,12 @@ async function build(sql: postgres.Sql) {
 
 async function apply(sql: postgres.Sql, dryRun: boolean) {
   const fixture = JSON.parse(await fs.readFile(FIXTURE_PATH, 'utf8')) as Fixture;
-  const rows = await sql<Row[]>`SELECT id, criterion_key, family, label_en FROM football_grid_criteria`;
+  const rows = await selectCriteria(sql);
   const updates: Array<{ id: string; es: string; tr: string }> = [];
   let stale = 0;
   let missing = 0;
   for (const row of rows) {
-    const entry = fixture.labels[row.criterion_key];
+    const entry = fixture.labels[fixtureSlot(fixture, row.criterion_key, row.label_en)];
     if (!entry) { missing += 1; continue; }
     if (entry.en !== row.label_en) { stale += 1; continue; }
     updates.push({ id: row.id, es: entry.es, tr: entry.tr });

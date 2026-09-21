@@ -1041,57 +1041,93 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
       );
     }
     const playerById = new Map(manifest.players.map((player) => [player.id, player]));
-    for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
-      const board = manifest.boards[boardIndex];
-      const candidate = validation.boards[boardIndex];
-      const rows = await tx.unsafe<Array<{ id: string }>>(
+    // Boards and answers go in bulk: one round trip per 200 boards and per
+    // ~25k answer rows instead of two per board. Through the pooler each round
+    // trip costs hundreds of milliseconds, and the whole publish is one
+    // transaction, so fewer statements means a much shorter exposure window.
+    const BOARD_CHUNK = 200;
+    const ANSWER_CHUNK = 25_000;
+    const boardIdByChecksum = new Map<string, string>();
+    for (let offset = 0; offset < manifest.boards.length; offset += BOARD_CHUNK) {
+      const chunk = manifest.boards.slice(offset, offset + BOARD_CHUNK);
+      const candidates = validation.boards.slice(offset, offset + BOARD_CHUNK);
+      const inserted = await tx.unsafe<Array<{ id: string; canonical_checksum: string }>>(
         `INSERT INTO football_grid_boards (
            release_id, version, row_criteria, column_criteria, difficulty,
            familiarity_score, canonical_checksum, approved_by, published_at, theme
-         ) VALUES ($1,$2,$3::uuid[],$4::uuid[],$5,$6,$7,$8,$9,$10) RETURNING id`,
+         )
+         SELECT $1, u.version, string_to_array(u.row_criteria, ',')::uuid[], string_to_array(u.column_criteria, ',')::uuid[],
+                u.difficulty, u.familiarity_score, u.canonical_checksum, u.approved_by, $2, u.theme
+           FROM unnest($3::int[], $4::text[], $5::text[], $6::text[], $7::numeric[], $8::text[], $9::text[], $10::text[])
+             AS u(version, row_criteria, column_criteria, difficulty, familiarity_score, canonical_checksum, approved_by, theme)
+         RETURNING id, canonical_checksum`,
         [
-          releaseId, board.version, board.rowCriteria.map((key) => criterionIds.get(key)),
-          board.columnCriteria.map((key) => criterionIds.get(key)), board.difficulty,
-          board.familiarityScore, candidate.checksum, board.approvedBy, manifest.release.approvedAt,
-          board.theme ?? 'european',
+          releaseId, manifest.release.approvedAt,
+          chunk.map((board) => board.version),
+          chunk.map((board) => board.rowCriteria.map((key) => criterionIds.get(key)).join(',')),
+          chunk.map((board) => board.columnCriteria.map((key) => criterionIds.get(key)).join(',')),
+          chunk.map((board) => board.difficulty),
+          chunk.map((board) => board.familiarityScore),
+          candidates.map((candidate) => candidate.checksum),
+          chunk.map((board) => board.approvedBy),
+          chunk.map((board) => board.theme ?? 'european'),
         ],
       );
-      const answerRows = board.cells.flatMap((cell, cellIndex) => cell.playerIds.map((playerId) => {
-        const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
-        const player = playerById.get(playerId);
-        return {
-          cellIndex, playerId,
-          nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
-          imageAssetKey: player?.imageAssetKey ?? null,
-          rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
-          isSample: sampleIndex >= 0,
-        };
-      }));
+      for (const row of inserted) boardIdByChecksum.set(row.canonical_checksum, row.id);
+    }
+    type AnswerInsert = {
+      boardId: string; cellIndex: number; playerId: string; nameEn: string | null; nameKa: string | null;
+      imageAssetKey: string | null; rank: number | null; isSample: boolean;
+    };
+    const flushAnswers = async (rows: AnswerInsert[]) => {
+      if (rows.length === 0) return;
       await tx.unsafe(
         `INSERT INTO football_grid_board_answers (
            board_id, release_id, cell_index, football_player_id,
            player_name_en, player_name_ka, image_asset_key,
            recognizable_rank, is_sample
          )
-         SELECT $1, $2, u.cell_index, u.player_id, u.name_en, u.name_ka,
+         SELECT u.board_id, $1, u.cell_index, u.player_id, u.name_en, u.name_ka,
                 u.image_asset_key, u.rank, u.is_sample::boolean
          FROM unnest(
-           $3::int[], $4::uuid[], $5::text[], $6::text[], $7::text[], $8::int[], $9::text[]
-         ) AS u(cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)`,
+           $2::uuid[], $3::int[], $4::uuid[], $5::text[], $6::text[], $7::text[], $8::int[], $9::text[]
+         ) AS u(board_id, cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)`,
         [
-          rows[0].id, releaseId,
-          answerRows.map((row) => row.cellIndex),
-          answerRows.map((row) => row.playerId),
-          answerRows.map((row) => row.nameEn),
-          answerRows.map((row) => row.nameKa),
-          answerRows.map((row) => row.imageAssetKey),
-          answerRows.map((row) => row.rank),
+          releaseId,
+          rows.map((row) => row.boardId),
+          rows.map((row) => row.cellIndex),
+          rows.map((row) => row.playerId),
+          rows.map((row) => row.nameEn),
+          rows.map((row) => row.nameKa),
+          rows.map((row) => row.imageAssetKey),
+          rows.map((row) => row.rank),
           // postgres.js mis-types JS boolean arrays; send text and let the
           // assignment cast handle it.
-          answerRows.map((row) => String(row.isSample)),
+          rows.map((row) => String(row.isSample)),
         ],
       );
+    };
+    let pending: AnswerInsert[] = [];
+    for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
+      const board = manifest.boards[boardIndex];
+      const boardId = boardIdByChecksum.get(validation.boards[boardIndex].checksum);
+      if (!boardId) throw new Error(`Board ${board.key} was not inserted`);
+      for (const [cellIndex, cell] of board.cells.entries()) {
+        for (const playerId of cell.playerIds) {
+          const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
+          const player = playerById.get(playerId);
+          pending.push({
+            boardId, cellIndex, playerId,
+            nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
+            imageAssetKey: player?.imageAssetKey ?? null,
+            rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
+            isSample: sampleIndex >= 0,
+          });
+        }
+      }
+      if (pending.length >= ANSWER_CHUNK) { await flushAnswers(pending); pending = []; }
     }
+    await flushAnswers(pending);
     await tx.unsafe(
       `UPDATE football_grid_content_releases
           SET status = 'feasibility'

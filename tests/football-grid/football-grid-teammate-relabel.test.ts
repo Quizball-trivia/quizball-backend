@@ -11,10 +11,12 @@ import {
   manifestSchema,
   projectExportedBoards,
   relabelTeammateCriteria,
+  storageObjectPathForAssetKey,
   validateManifest,
   type ExportedAnswerRow,
   type Manifest,
 } from '../../scripts/football-grid-content.js';
+import { objectIsMissing, planMirror } from '../../scripts/football-grid-mirror-assets.js';
 
 // Owner report 2026-09-20: "played with Agüero" × Ligue 1 rejected Messi and
 // Di María. The criterion means club-season overlap; the label did not say so.
@@ -263,5 +265,64 @@ describe('asset registry for served releases', () => {
     expect(failure).toMatch(/2 of 2 keys unresolved/);
     expect(failure).toContain('\nnowhere');
     expect(failure).toContain(`${url} (URL key; pass --asset-cache)`);
+  });
+});
+
+describe('asset origin rewrite (portrait mirror to another project)', () => {
+  const STAGING = 'https://nsdfiprfmhdqhbfxfwpv.supabase.co';
+  const PROD = 'https://lfbwhxvwubzeqkztghok.supabase.co';
+
+  it('rewrites only URL keys of the given origin, records the rewrite, and stays recomputable', () => {
+    const source = legacyManifest();
+    const url = `${STAGING}/storage/v1/object/public/imgs/football-grid/v1/players/${MESSI}.webp`;
+    const withUrls = manifestSchema.parse({
+      ...source,
+      assetCatalog: [url, 'ligue-1', `/assets/football-grid/players/${AGUERO}.webp`],
+      players: source.players.map((player) => (player.id === MESSI ? { ...player, imageAssetKey: url } : player)),
+    });
+    const options = { version: 2026092101, approvedBy: 'owner', approvedAt: '2026-09-21T00:00:00.000Z', assetOrigin: { from: STAGING, to: PROD } };
+    const { manifest, rewritten, relabelled } = relabelTeammateCriteria(withUrls, options);
+    expect(relabelled).toBe(1);
+    expect(rewritten).toBe(2); // catalog entry + Messi's portrait
+    expect(manifest.assetCatalog).toContain(url.replace(STAGING, PROD));
+    expect(manifest.assetCatalog).toContain('ligue-1');
+    expect(manifest.players.find((p) => p.id === MESSI)!.imageAssetKey).toBe(url.replace(STAGING, PROD));
+    expect(manifest.release.relationshipSnapshot).toMatchObject({ assetOriginRewrite: { from: STAGING, to: PROD } });
+    // Deterministic: the waiver recomputes the same manifest from the same source + options.
+    expect(relabelTeammateCriteria(withUrls, options).manifest).toEqual(manifest);
+    // Without the rewrite the content digest is untouched; with it, the catalog changed on purpose.
+    expect(manifestContentDigest(relabelTeammateCriteria(withUrls, { ...options, assetOrigin: undefined }).manifest)).toBe(manifestContentDigest(withUrls));
+    expect(manifestContentDigest(manifest)).not.toBe(manifestContentDigest(withUrls));
+  });
+
+  it('refuses malformed or identical origins', () => {
+    const source = legacyManifest();
+    const base = { version: 2026092101, approvedBy: 'owner', approvedAt: '2026-09-21T00:00:00.000Z' };
+    expect(() => relabelTeammateCriteria(source, { ...base, assetOrigin: { from: STAGING, to: STAGING } })).toThrow(/two different/);
+    expect(() => relabelTeammateCriteria(source, { ...base, assetOrigin: { from: 'https://evil.example', to: PROD } })).toThrow(/two different/);
+  });
+
+  it('maps served asset keys to storage object paths', () => {
+    expect(storageObjectPathForAssetKey(`${STAGING}/storage/v1/object/public/imgs/football-grid/v1/players/${MESSI}.webp`)).toBe(`football-grid/v1/players/${MESSI}.webp`);
+    expect(storageObjectPathForAssetKey(`${STAGING}/storage/v1/object/public/imgs/player-images/${MESSI}`)).toBe(`player-images/${MESSI}`);
+    expect(storageObjectPathForAssetKey(`/assets/football-grid/players/${AGUERO}.webp`)).toBe(`football-grid/v1/players/${AGUERO}.webp`);
+    expect(storageObjectPathForAssetKey('players/unknown.webp')).toBe('football-grid/v1/players/unknown.webp');
+    expect(storageObjectPathForAssetKey(`${STAGING}/storage/v1/object/public/imgs/football-grid/v1/players/${MESSI}.webp?v=2#x`)).toBe(`football-grid/v1/players/${MESSI}.webp`);
+    expect(storageObjectPathForAssetKey('ligue-1')).toBeNull();
+    expect(storageObjectPathForAssetKey('https://evil.example/storage/v1/object/public/imgs/x.webp')).toBeNull();
+  });
+
+  it('plans a mirror from a registry: uploads storage-backed keys once per object, skips bundled and fallback entries', () => {
+    const registry = {
+      [`${STAGING}/storage/v1/object/public/imgs/football-grid/v1/players/${MESSI}.webp`]: '/cache/aa.webp',
+      [`/assets/football-grid/players/${AGUERO}.webp`]: '/pool/ag.webp',
+      'players/unknown.webp': '/web/assets/football-grid/managers/_launch-fallback.svg',
+      'ligue-1': '/web/assets/football-grid/leagues/ligue-1-fallback.svg',
+    };
+    expect([400, 404].every(objectIsMissing)).toBe(true);
+    expect([200, 429, 500, 503].some(objectIsMissing)).toBe(false);
+    const { uploads, skipped } = planMirror(registry);
+    expect(uploads.map((u) => u.objectPath).sort()).toEqual([`football-grid/v1/players/${AGUERO}.webp`, `football-grid/v1/players/${MESSI}.webp`].sort());
+    expect(skipped.sort()).toEqual(['ligue-1', 'players/unknown.webp']);
   });
 });

@@ -69,8 +69,26 @@ For the themed pair add `--allow-fallback-assets` to `activate` as well (the 253
 Then, on staging: verify the carried quarantines (`select count(*) from football_grid_content_quarantines q join football_grid_content_releases r on r.id=q.release_id where r.version=2026092102 and q.board_id is not null` = 494), quarantine the two old releases (admin `POST /api/v1/admin/football-grid/content/quarantines` with `{ releaseId, action: "disable", reason: "superseded-by-2026092101" }`, **no expiresAt**), play ≥ 20 boards as guest and member incl. teammate squares in ka/en/es/tr, run the two-replica Grid rehearsal, check `turn_wrong` rate on teammate boards ≤ current 55 %.
 
 ## 4. Production (after Codex + CodeRabbit on the PR and owner OK)
-Same commands with `DATABASE_URL=<prod>` (`--target=production --confirm-production=lfbwhxvwubzeqkztghok` on the locale script). The export in step 1 is run against **prod** again (the manifest must round-trip from the database it will be published to; the digest must equal the staging one), the cache dir is reused. Order:
-1. For both pairs: `publish` → `label-locales --apply --release=<new>` → `transfer-quarantines` → `activate` (verify `selectBoardIdForUsers` returns v20260921xx boards: play one guest match).
+Same commands with `DATABASE_URL=<prod>` (`--target=production --confirm-production=lfbwhxvwubzeqkztghok` on the locale script). The export in step 1 is run against **prod** again (the manifest must round-trip from the database it will be published to; the digest must equal the staging one), the cache dir is reused.
+
+**Portrait origin (owner decision 2026-09-21, both fixes):** the served content points portraits at the *staging* bucket. Interim fix already live: `NEXT_PUBLIC_FOOTBALL_GRID_CDN_BASE_URL` on Vercel production = staging CDN base (redeployed 2026-09-21 00:50 GE). The prod content release moves the keys to the prod bucket:
+```
+# a) mirror every served portrait into the prod bucket (HEAD first; only missing objects are uploaded; slugs/fallbacks skipped)
+SUPABASE_SERVICE_ROLE_KEY=<prod> npx tsx scripts/football-grid-mirror-assets.ts --registry /tmp/grid/assets-2026090403.json \
+  --target-url https://lfbwhxvwubzeqkztghok.supabase.co --confirm-project lfbwhxvwubzeqkztghok   # and assets-2026082610.json
+# b) transform with the origin rewrite (recorded in relationshipSnapshot; publish/activate recompute and verify it)
+npx tsx scripts/football-grid-content.ts transform-labels /tmp/grid/src-prod-2026090403.json --version 2026092101 --approved-by "<owner>" \
+  --asset-origin-from https://nsdfiprfmhdqhbfxfwpv.supabase.co --asset-origin-to https://lfbwhxvwubzeqkztghok.supabase.co --out /tmp/grid/rel-prod-2026092101.json
+# c) registry for the rewritten keys — fetching them from the prod bucket is the proof the mirror is complete
+npx tsx scripts/football-grid-content.ts build-registry /tmp/grid/rel-prod-2026092101.json --asset-root $WEB --player-pool <pool> \
+  --asset-cache /tmp/grid/cache-prod --cdn-base https://lfbwhxvwubzeqkztghok.supabase.co/storage/v1/object/public/imgs/football-grid/v1 \
+  --fallback-file $WEB/assets/football-grid/managers/_launch-fallback.svg --fallback-keys docs/football-grid-relabel-fallback-keys.txt \
+  --registry-out /tmp/grid/assets-prod-2026092101.json
+```
+The 133 teammate-anchor portraits (`/assets/football-grid/players/<uuid>.webp`) are part of the mirror above (they map to `football-grid/v1/players/<uuid>.webp`). The web's own launch assets (crests, flags, managers, wildcards) go in with the web repo's publisher from a clean `main` checkout — `SUPABASE_URL=<prod> FOOTBALL_GRID_EXPECTED_PROJECT_REF=lfbwhxvwubzeqkztghok FOOTBALL_GRID_CDN_RELEASE=v1 SUPABASE_SERVICE_ROLE_KEY=<prod> node scripts/publish-football-grid-assets.mjs`; it rewrites `src/data/football-grid/launch-assets/cdn-manifest.json`, discard that; a handful of `409 Duplicate`/timeout failures under concurrency are normal, re-run until `failureCount` is 0 (2026-09-21: 1,042 assets, done in two runs). Only once portraits, anchors and launch assets are all present may the Vercel variable be switched from the staging to the prod CDN base. **2026-09-21 state:** mirror complete (4,878/4,878 and 1,008/1,008 portrait objects present on prod; 1,042/1,042 launch assets), and `build-registry` against the prod CDN base resolved 5,217/5,217 (v2026092101, 24 allow-listed fallbacks) and 1,192/1,192 (v2026092102, 1 fallback) keys.
+
+Order:
+1. For both pairs: `publish --transformed-from <old>` → `label-locales --apply --release=<new>` → `transfer-quarantines` → `activate --transformed-from <old> --asset-registry <prod registry>` (verify `selectBoardIdForUsers` returns v20260921xx boards: play one guest match).
 2. Quarantine v2026090403 and v2026082610 (`action: disable`, no expiry).
 3. Observe 3 days: wrong-answer share on teammate boards **by release**, bot outcomes per tier, forfeits, `[ERROR]` logs.
 4. Retire both old releases off-peak after the window:

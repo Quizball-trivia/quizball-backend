@@ -101,6 +101,7 @@ node_modules
 !scripts/football-grid-label-locales.json
 !scripts/football-grid-label-locales.ts
 !scripts/football-grid-player-cdn.ts
+!scripts/football-grid-mirror-assets.ts
 !scripts/football-logic-content/
 !scripts/football-logic-content/**
 !scripts/football-tic-tac-toe-dev-seed.ts

@@ -373,10 +373,34 @@ export function manifestContentDigest(manifest: Manifest): string {
   });
 }
 
+export type AssetOriginRewrite = { from: string; to: string };
+
+/** Rewrite the storage origin of every URL asset key (portrait mirror to another project). */
+function rewriteAssetOrigin(manifest: Manifest, rewrite: AssetOriginRewrite): { manifest: Manifest; rewritten: number } {
+  const from = rewrite.from.replace(/\/+$/, '');
+  const to = rewrite.to.replace(/\/+$/, '');
+  if (!/^https:\/\/[a-z]{20}\.supabase\.co$/.test(from) || !/^https:\/\/[a-z]{20}\.supabase\.co$/.test(to) || from === to) {
+    throw new Error('Asset origin rewrite needs two different https://<ref>.supabase.co origins');
+  }
+  let rewritten = 0;
+  const swap = (key: string) => {
+    if (!key.startsWith(`${from}/`)) return key;
+    rewritten += 1;
+    return `${to}${key.slice(from.length)}`;
+  };
+  const next: Manifest = {
+    ...manifest,
+    assetCatalog: [...new Set(manifest.assetCatalog.map(swap))].sort(),
+    players: manifest.players.map((player) => ({ ...player, imageAssetKey: swap(player.imageAssetKey) })),
+    criteria: manifest.criteria.map((criterion) => (criterion.assetKey ? { ...criterion, assetKey: swap(criterion.assetKey) } : criterion)),
+  };
+  return { manifest: next, rewritten };
+}
+
 export function relabelTeammateCriteria(
   manifest: Manifest,
-  release: { version: number; approvedBy: string; approvedAt: string },
-): { manifest: Manifest; relabelled: number; skipped: string[] } {
+  release: { version: number; approvedBy: string; approvedAt: string; assetOrigin?: AssetOriginRewrite },
+): { manifest: Manifest; relabelled: number; skipped: string[]; rewritten: number } {
   if (release.version <= manifest.release.version) {
     throw new Error(`New release version ${release.version} must exceed source ${manifest.release.version}`);
   }
@@ -411,7 +435,15 @@ export function relabelTeammateCriteria(
   if (manifestContentDigest(next) !== manifestContentDigest(manifest)) {
     throw new Error('Label transform changed non-label content');
   }
-  return { manifest: next, relabelled, skipped };
+  if (!release.assetOrigin) return { manifest: next, relabelled, skipped, rewritten: 0 };
+  // The origin rewrite is the only content change allowed on top of the
+  // relabel; it is recorded so the waiver can recompute it from the source.
+  const moved = rewriteAssetOrigin(next, release.assetOrigin);
+  moved.manifest.release.relationshipSnapshot = {
+    ...moved.manifest.release.relationshipSnapshot,
+    assetOriginRewrite: { from: release.assetOrigin.from.replace(/\/+$/, ''), to: release.assetOrigin.to.replace(/\/+$/, '') },
+  };
+  return { manifest: moved.manifest, relabelled, skipped, rewritten: moved.rewritten };
 }
 
 type ExportedRelease = {
@@ -709,8 +741,18 @@ export async function buildAssetRegistry(
     const cached = path.join(options.assetCache, createHash('sha256').update(url).digest('hex').slice(0, 24) + path.extname(new URL(url).pathname));
     const hit = await existing(cached);
     if (hit || options.fetchUrls === false) return hit;
-    const response = await fetch(url);
-    if (!response.ok) return null;
+    // A transient network error must not read as "asset missing".
+    let response: Response | null = null;
+    for (let attempt = 1; attempt <= 4 && !response; attempt += 1) {
+      try {
+        const candidate = await fetch(url);
+        if (candidate.status < 500 && candidate.status !== 429) response = candidate;
+      } catch {
+        // retry below
+      }
+      if (!response) await new Promise((resolve) => setTimeout(resolve, 500 * attempt * attempt));
+    }
+    if (!response?.ok) return null;
     await mkdir(options.assetCache, { recursive: true });
     await writeFile(cached, Buffer.from(await response.arrayBuffer()));
     return cached;
@@ -765,6 +807,22 @@ export async function buildAssetRegistry(
   }
   fallbacks.sort();
   return { registry, fallbacks };
+}
+
+/**
+ * Storage object path (bucket `imgs`) a served asset key resolves to at
+ * runtime, or null for keys bundled with the web (slugs) and fallbacks.
+ */
+export function storageObjectPathForAssetKey(key: string): string | null {
+  if (/^https?:\/\//.test(key)) {
+    // Object name comes from the pathname only; query/fragment are not part of it.
+    const parsed = new URL(key);
+    const inBucket = /^[a-z]{20}\.supabase\.co$/.test(parsed.hostname) && parsed.pathname.match(/^\/storage\/v1\/object\/public\/imgs\/(.+)$/);
+    return inBucket ? decodeURIComponent(inBucket[1]) : null;
+  }
+  if (key.startsWith('/assets/football-grid/')) return `football-grid/v1/${key.slice('/assets/football-grid/'.length)}`;
+  if (!key.startsWith('/') && key.includes('/')) return `football-grid/v1/${key}`;
+  return null;
 }
 
 async function readFallbackKeys(file: string | undefined): Promise<string[]> {
@@ -1042,18 +1100,18 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
   const source = await exportRelease(transformedFrom);
   if (source.release.status !== 'published') throw new Error(`Source release ${transformedFrom} is ${source.release.status}, not published`);
   const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
-  const sourceDigest = manifestContentDigest(sourceManifest);
-  if (sourceDigest !== manifestContentDigest(manifest)) {
-    throw new Error(`Content digest differs from the served release ${transformedFrom} (${sourceDigest}); re-export and transform again`);
-  }
-  // The digest ignores labels, so also require the manifest to be exactly what
-  // transform-labels produces from the served source (same version/approval).
+  // Require the manifest to be exactly what transform-labels produces from the
+  // served source right now (same version/approval and, if recorded, the same
+  // asset-origin rewrite). This covers content, labels and metadata at once.
+  const rewrite = (snapshot as { assetOriginRewrite?: AssetOriginRewrite }).assetOriginRewrite;
   const expected = relabelTeammateCriteria(sourceManifest, {
     version: manifest.release.version, approvedBy: manifest.release.approvedBy, approvedAt: manifest.release.approvedAt,
+    ...(rewrite ? { assetOrigin: rewrite } : {}),
   });
   if (expected.skipped.length > 0 || checksum(expected.manifest) !== checksum(manifest)) {
-    throw new Error(`Manifest is not the teammate relabel of served release ${transformedFrom}: labels or metadata differ from the prescribed transform`);
+    throw new Error(`Manifest is not the teammate relabel of served release ${transformedFrom}: content, labels or metadata differ from the prescribed transform`);
   }
+  if (rewrite) process.stdout.write(`Asset origin rewrite verified: ${rewrite.from} -> ${rewrite.to}\n`);
   const inherited = new Set(validateManifest(sourceManifest, launch).errors);
   const waived = errors.filter((error) => inherited.has(error));
   if (waived.length > 0) {
@@ -1265,7 +1323,7 @@ export function optionValue(args: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const [command, manifestPath, ...args] = process.argv.slice(2);
-  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
   if (command === 'transfer-quarantines') {
     // Usage: transfer-quarantines <from-version> --to <version>
     const fromVersion = Number(manifestPath);
@@ -1319,18 +1377,47 @@ async function main(): Promise<void> {
     return;
   }
   const manifest = await loadManifest(manifestPath);
+  if (command === 'build-registry') {
+    // Usage: build-registry <manifest.json> --asset-root DIR [--asset-cache DIR --player-pool DIR --cdn-base URL --fallback-file F --fallback-keys F] --registry-out F
+    const assetRoot = optionValue(args, '--asset-root');
+    const registryPath = optionValue(args, '--registry-out');
+    if (!assetRoot || !registryPath) throw new Error('build-registry requires --asset-root and --registry-out');
+    const { registry, fallbacks } = await buildAssetRegistry(manifest, {
+      assetRoot,
+      assetCache: optionValue(args, '--asset-cache'),
+      playerPool: optionValue(args, '--player-pool'),
+      cdnBase: optionValue(args, '--cdn-base'),
+      fallbackFile: optionValue(args, '--fallback-file'),
+      fallbackKeys: await readFallbackKeys(optionValue(args, '--fallback-keys')),
+      fetchUrls: !args.includes('--no-fetch'),
+    });
+    await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    process.stdout.write(`Asset registry with ${Object.keys(registry).length} entries at ${registryPath}\n`);
+    if (fallbacks.length > 0) {
+      process.stdout.write(`WARNING: ${fallbacks.length} allow-listed keys have no source anywhere and were registered to the fallback file:\n${fallbacks.join('\n')}\n`);
+    }
+    return;
+  }
   if (command === 'transform-labels') {
     const version = Number(optionValue(args, '--version'));
     if (!Number.isInteger(version) || version <= 0) throw new Error('transform-labels requires --version <new release version>');
     const approvedBy = optionValue(args, '--approved-by');
     if (!approvedBy) throw new Error('transform-labels requires --approved-by <reviewer>');
     const outputPath = optionValue(args, '--out') ?? `football-grid-release-${version}.json`;
-    const result = relabelTeammateCriteria(manifest, { version, approvedBy, approvedAt: new Date().toISOString() });
+    const originFrom = optionValue(args, '--asset-origin-from');
+    const originTo = optionValue(args, '--asset-origin-to');
+    if (Boolean(originFrom) !== Boolean(originTo)) throw new Error('--asset-origin-from and --asset-origin-to go together');
+    const result = relabelTeammateCriteria(manifest, {
+      version, approvedBy, approvedAt: new Date().toISOString(),
+      ...(originFrom && originTo ? { assetOrigin: { from: originFrom, to: originTo } } : {}),
+    });
     if (result.skipped.length > 0) {
       throw new Error(`Refusing: ${result.skipped.length} teammate criteria do not match the legacy label pattern:\n${result.skipped.join('\n')}`);
     }
     await writeFile(outputPath, `${JSON.stringify(result.manifest, null, 2)}\n`);
-    process.stdout.write(`Relabelled ${result.relabelled} teammate criteria; content digest ${manifestContentDigest(result.manifest)} unchanged from source; wrote ${outputPath}\n`);
+    process.stdout.write(result.rewritten > 0
+      ? `Relabelled ${result.relabelled} teammate criteria and rewrote ${result.rewritten} asset keys to ${result.manifest.release.relationshipSnapshot.assetOriginRewrite && (result.manifest.release.relationshipSnapshot.assetOriginRewrite as AssetOriginRewrite).to}; content digest ${manifestContentDigest(result.manifest)} (source ${manifestContentDigest(manifest)}); wrote ${outputPath}\n`
+      : `Relabelled ${result.relabelled} teammate criteria; content digest ${manifestContentDigest(result.manifest)} unchanged from source; wrote ${outputPath}\n`);
     return;
   }
   if (command === 'generate') {

@@ -1,6 +1,7 @@
 import type {
   FootballGridAliasRecord,
   FootballGridResolvedAnswer,
+  FootballGridResolutionDiagnostics,
 } from './football-grid.types.js';
 
 export function normalizeFootballGridAnswer(input: string): string {
@@ -44,11 +45,25 @@ export function boundedLevenshtein(left: string, right: string, limit: number): 
   return previous[right.length];
 }
 
+function diagnostics(
+  reason: FootballGridResolutionDiagnostics['reason'],
+  method: FootballGridResolutionDiagnostics['method'],
+  candidates: FootballGridAliasRecord[] = [],
+  cellCandidateCount = 0,
+): FootballGridResolutionDiagnostics {
+  const ids = [...new Set(candidates.map((candidate) => candidate.playerId))].sort();
+  return {
+    version: 1, reason, method, candidatePlayerIds: ids.slice(0, 20),
+    candidateCount: ids.length, candidatesTruncated: ids.length > 20, cellCandidateCount,
+  };
+}
+
 function classifyCandidates(input: {
   candidates: FootballGridAliasRecord[];
   validPlayerIds: Set<string>;
   usedPlayerIds: Set<string>;
   normalizedInput: string;
+  method: 'exact' | 'safe_typo';
 }): FootballGridResolvedAnswer {
   const cellCandidates = [...new Map(
     input.candidates
@@ -57,10 +72,12 @@ function classifyCandidates(input: {
   ).values()];
 
   if (cellCandidates.length === 0) {
-    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput: input.normalizedInput };
+    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput: input.normalizedInput,
+      diagnostics: diagnostics('recognized_not_in_cell', input.method, input.candidates) };
   }
   if (cellCandidates.length > 1) {
-    return { outcome: 'ambiguous', playerId: null, aliasId: null, normalizedInput: input.normalizedInput };
+    return { outcome: 'ambiguous', playerId: null, aliasId: null, normalizedInput: input.normalizedInput,
+      diagnostics: diagnostics('multiple_cell_candidates', input.method, input.candidates, cellCandidates.length) };
   }
   const candidate = cellCandidates[0];
   if (input.usedPlayerIds.has(candidate.playerId)) {
@@ -69,6 +86,7 @@ function classifyCandidates(input: {
       playerId: candidate.playerId,
       aliasId: candidate.id,
       normalizedInput: input.normalizedInput,
+      diagnostics: diagnostics('player_already_used', input.method, input.candidates, 1),
     };
   }
   return {
@@ -76,6 +94,7 @@ function classifyCandidates(input: {
     playerId: candidate.playerId,
     aliasId: candidate.id,
     normalizedInput: input.normalizedInput,
+    diagnostics: diagnostics('accepted', input.method, input.candidates, 1),
   };
 }
 
@@ -88,19 +107,21 @@ export function resolveFootballGridAnswer(input: {
 }): FootballGridResolvedAnswer {
   const normalizedInput = normalizeFootballGridAnswer(input.submittedText);
   if (!normalizedInput) {
-    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput };
+    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput,
+      diagnostics: diagnostics('empty_input', 'none') };
   }
   const validPlayerIds = new Set(input.validPlayerIds);
   const boardPlayerIds = new Set(input.boardPlayerIds);
   const usedPlayerIds = new Set(input.usedPlayerIds);
   const exact = input.aliases.filter((alias) => alias.normalizedAlias === normalizedInput);
   if (exact.length > 0) {
-    return classifyCandidates({ candidates: exact, validPlayerIds, usedPlayerIds, normalizedInput });
+    return classifyCandidates({ candidates: exact, validPlayerIds, usedPlayerIds, normalizedInput, method: 'exact' });
   }
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);
   if (limit === 0) {
-    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput };
+    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput,
+      diagnostics: diagnostics('no_matching_alias', 'none') };
   }
   const fuzzy = input.aliases
     // Exact aliases are deliberately exact-only. Only aliases that were
@@ -109,7 +130,8 @@ export function resolveFootballGridAnswer(input: {
     .map((alias) => ({ alias, distance: boundedLevenshtein(normalizedInput, alias.normalizedAlias, limit) }))
     .filter((candidate) => candidate.distance <= limit);
   if (fuzzy.length === 0) {
-    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput };
+    return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput,
+      diagnostics: diagnostics('no_matching_alias', 'none') };
   }
   const minimumDistance = Math.min(...fuzzy.map((candidate) => candidate.distance));
   const nearestOnBoard = fuzzy
@@ -118,12 +140,16 @@ export function resolveFootballGridAnswer(input: {
     .filter((alias) => boardPlayerIds.has(alias.playerId));
   const uniqueBoardPlayers = new Set(nearestOnBoard.map((alias) => alias.playerId));
   if (uniqueBoardPlayers.size !== 1) {
-    return { outcome: 'ambiguous', playerId: null, aliasId: null, normalizedInput };
+    return { outcome: 'ambiguous', playerId: null, aliasId: null, normalizedInput,
+      diagnostics: diagnostics(uniqueBoardPlayers.size === 0 ? 'nearest_typo_not_on_board' : 'multiple_typo_candidates',
+        'safe_typo', fuzzy.filter((candidate) => candidate.distance === minimumDistance).map((candidate) => candidate.alias),
+        new Set(nearestOnBoard.filter((alias) => validPlayerIds.has(alias.playerId)).map((alias) => alias.playerId)).size) };
   }
   return classifyCandidates({
     candidates: nearestOnBoard,
     validPlayerIds,
     usedPlayerIds,
     normalizedInput,
+    method: 'safe_typo',
   });
 }

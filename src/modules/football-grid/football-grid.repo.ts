@@ -11,6 +11,7 @@ import type {
   FootballGridCriterionView,
   FootballGridOrigin,
   FootballGridState,
+  FootballGridResolutionDiagnostics,
 } from './football-grid.types.js';
 import {
   FOOTBALL_GRID_HANDOFF_MS,
@@ -2660,6 +2661,7 @@ export const footballGridRepo = {
     normalizedText?: string | null;
     resolvedPlayerId?: string | null;
     aliasId?: string | null;
+    resolutionDiagnostics?: FootballGridResolutionDiagnostics | null;
     eventType: string;
   }): Promise<string> {
     const attempts = await input.tx.unsafe<Array<{ id: string }>>(
@@ -2672,8 +2674,8 @@ export const footballGridRepo = {
        )
        INSERT INTO football_grid_attempts (
          inbox_id, match_id, actor_user_id, turn_number, cell_index, locale,
-         submitted_text, normalized_text, outcome, resolved_player_id, admitted_at
-       ) SELECT $1,$5,$6,$7,$8,$9,$10,$11,$3,$12,$13
+         submitted_text, normalized_text, outcome, resolved_player_id, admitted_at, resolution_diagnostics
+       ) SELECT $1,$5,$6,$7,$8,$9,$10,$11,$3,$12,$13,$14::jsonb
            FROM completed
        RETURNING id`,
       [
@@ -2693,6 +2695,7 @@ export const footballGridRepo = {
         input.normalizedText ?? null,
         input.resolvedPlayerId ?? null,
         input.inbox.admitted_at,
+        input.resolutionDiagnostics ? sql.json({ ...input.resolutionDiagnostics }) : null,
       ],
     );
     if (!attempts[0]) throw new Error('COMMAND_LEASE_LOST');

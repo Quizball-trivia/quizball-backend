@@ -10,6 +10,7 @@ import {
 } from '../src/modules/football-grid/football-grid.content-validator.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridBoardCandidate, FootballGridCriterionView } from '../src/modules/football-grid/football-grid.types.js';
+import { approveAnswerCorrections, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
 
 const difficulty = z.enum(['easy', 'normal', 'hard']);
 const criterionFamily = z.enum(['club', 'country', 'league', 'manager', 'teammate', 'trophy_award', 'wildcard']);
@@ -1154,21 +1155,51 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
   process.stdout.write(`Staged Football Grid release ${manifest.release.version} (${manifest.boards.length} boards, ${manifestChecksum})\n`);
 }
 
+export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Manifest, candidate: Manifest): boolean {
+  const preparedAt = candidate.release.relationshipSnapshot.correctionPreparedAt;
+  if (typeof preparedAt !== 'string') return false;
+  const expected = approveAnswerCorrections(
+    prepareAnswerCorrections(source, catalog, candidate.release.version, preparedAt),
+    candidate.release.approvedBy, candidate.release.approvedAt,
+  );
+  return relabelManifestsMatch(expected, candidate);
+}
+
 /**
- * A label-only transform of served content may carry validator findings its
+ * A prescribed transform of served content may carry validator findings its
  * source already has (the 2026-08 themed packs predate the board-distribution
  * rule). Prove the manifest is byte-for-byte the content the source release
- * serves right now, then drop exactly the findings the source produces under
+ * serves right now plus exactly the prescribed changes, then drop findings the source produces under
  * the same validator mode. Everything else still blocks.
  */
 async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean): Promise<string[]> {
   const snapshot = manifest.release.relationshipSnapshot as { transformedFromVersion?: number; transform?: string };
-  if (snapshot.transformedFromVersion !== transformedFrom || snapshot.transform !== 'teammate-relabel-v1') {
-    throw new Error(`Manifest is not a teammate-relabel transform of release ${transformedFrom}`);
+  if (snapshot.transformedFromVersion !== transformedFrom
+    || !['teammate-relabel-v1', 'answer-coverage-correction-v1'].includes(snapshot.transform ?? '')) {
+    throw new Error(`Manifest is not a supported verified transform of release ${transformedFrom}`);
   }
   const source = await exportRelease(transformedFrom);
   if (source.release.status !== 'published') throw new Error(`Source release ${transformedFrom} is ${source.release.status}, not published`);
   const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
+  if (snapshot.transform === 'answer-coverage-correction-v1') {
+    const metadata = manifest.release.relationshipSnapshot;
+    const catalogVersion = metadata.correctionPlayerCatalogVersion;
+    if (!Number.isSafeInteger(catalogVersion) || typeof metadata.correctionPreparedAt !== 'string') {
+      throw new Error('Answer correction requires its source player catalog and preparation timestamp');
+    }
+    const catalog = catalogVersion === transformedFrom ? source : await exportRelease(catalogVersion as number);
+    if (catalog.release.status !== 'published') throw new Error('Answer correction catalog must be published');
+    const catalogManifest = manifestSchema.parse(JSON.parse(JSON.stringify(catalog.manifest)));
+    if (!matchesPrescribedAnswerCorrection(sourceManifest, catalogManifest, manifest)) {
+      throw new Error('Answer correction differs from the prescribed transform of the live source and catalog');
+    }
+    const inherited = new Set(validateManifest(sourceManifest, launch).errors);
+    const waived = errors.filter(error => inherited.has(error));
+    if (waived.length) {
+      process.stdout.write(`WARNING: waived ${waived.length} inherited findings after exact answer-correction verification of release ${transformedFrom}\n`);
+    }
+    return errors.filter(error => !inherited.has(error));
+  }
   // Require the manifest to be exactly what transform-labels produces from the
   // served source right now (same version/approval and, if recorded, the same
   // asset-origin rewrite), allowing only alias row ordering to differ. Older
@@ -1394,7 +1425,16 @@ export function optionValue(args: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const [command, manifestPath, ...args] = process.argv.slice(2);
-  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|approve-answer-corrections|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (command === 'approve-answer-corrections') {
+    const reviewer = optionValue(args, '--approved-by');
+    const output = optionValue(args, '--out');
+    if (!reviewer || !output) throw new Error('approve-answer-corrections requires --approved-by and --out');
+    const draft = JSON.parse(await readFile(manifestPath, 'utf8')) as CorrectionDraft;
+    const manifest = manifestSchema.parse(approveAnswerCorrections(draft, reviewer, new Date().toISOString()));
+    await writeFile(output, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+    return;
+  }
   if (command === 'transfer-quarantines') {
     // Usage: transfer-quarantines <from-version> --to <version>
     const fromVersion = Number(manifestPath);

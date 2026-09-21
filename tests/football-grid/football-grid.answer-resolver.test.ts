@@ -25,7 +25,7 @@ describe('football grid answer resolver', () => {
     expect(normalizeFootballGridAnswer('  ÁNGEL  Di-María! ')).toBe('angel di maria');
   });
 
-  it('returns correct, ambiguous, and already-used without exposing candidates', () => {
+  it('returns correct, ambiguous, and already-used with no ambiguous player selection', () => {
     const aliases = [alias('a1', 'p1', 'ronaldo'), alias('a2', 'p2', 'ronaldo')];
     expect(resolveFootballGridAnswer({
       submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [],
@@ -74,5 +74,31 @@ describe('football grid answer resolver', () => {
 
   it('bounds edit distance work', () => {
     expect(boundedLevenshtein('abc', 'abcdefgh', 2)).toBe(3);
+  });
+
+  it('records why a name failed without treating missing facts as proof of invalidity', () => {
+    const resolve = (text: string, aliases: FootballGridAliasRecord[], valid: string[] = []) => resolveFootballGridAnswer({
+      submittedText: text, aliases, validPlayerIds: valid, boardPlayerIds: valid, usedPlayerIds: [],
+    });
+    expect(resolve('', []).diagnostics.reason).toBe('empty_input');
+    expect(resolve('Unknown player', []).diagnostics.reason).toBe('no_matching_alias');
+    expect(resolve('Henry', [alias('h', 'henry', 'henry')]).diagnostics).toMatchObject({
+      reason: 'recognized_not_in_cell', method: 'exact', candidatePlayerIds: ['henry'], cellCandidateCount: 0,
+    });
+    expect(resolve('Muller', [alias('t', 'thomas', 'muller'), alias('g', 'gerd', 'muller')], ['thomas', 'gerd']).diagnostics)
+      .toMatchObject({ reason: 'multiple_cell_candidates', candidateCount: 2, cellCandidateCount: 2 });
+    expect(resolve('ronldo', [alias('r', 'ronaldo', 'ronaldo', 'safe_typo')]).diagnostics)
+      .toMatchObject({ reason: 'nearest_typo_not_on_board', candidatePlayerIds: ['ronaldo'] });
+  });
+
+  it('deduplicates and bounds private diagnostics for high-collision aliases', () => {
+    const aliases = Array.from({ length: 30 }, (_, i) => alias(String(i), String(i), 'silva'));
+    aliases.push(alias('duplicate', '0', 'silva'));
+    const result = resolveFootballGridAnswer({ submittedText: 'silva', aliases,
+      validPlayerIds: ['0'], boardPlayerIds: ['0'], usedPlayerIds: ['0'] });
+    expect(result.outcome).toBe('already_used');
+    expect(result.diagnostics).toMatchObject({ reason: 'player_already_used', candidateCount: 30,
+      candidatesTruncated: true, cellCandidateCount: 1 });
+    expect(result.diagnostics.candidatePlayerIds).toHaveLength(20);
   });
 });

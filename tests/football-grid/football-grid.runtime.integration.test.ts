@@ -425,6 +425,10 @@ async function playWinningLine(
       locale: index === 1 ? 'ka' : 'en',
     });
     expect(answer.outcome).toBe('correct');
+    expect(answer).not.toHaveProperty('diagnostics');
+    expect(answer).not.toHaveProperty('resolutionDiagnostics');
+    const [acceptedAudit] = await db`SELECT resolution_diagnostics FROM football_grid_attempts WHERE id=${answer.attemptId!}`;
+    expect(acceptedAudit.resolution_diagnostics).toMatchObject({ version: 1, reason: 'accepted', method: 'exact' });
     version = answer.state.stateVersion;
     if (index === 0) {
       const duplicate = await footballGridService.submitAnswer({
@@ -452,6 +456,9 @@ async function playWinningLine(
       expect(wrong.outcome).toBe('wrong');
       version = wrong.state.stateVersion;
       expect(wrong.attemptId).toBeTruthy();
+      expect(wrong).not.toHaveProperty('diagnostics');
+      const [rejectedAudit] = await db`SELECT resolution_diagnostics FROM football_grid_attempts WHERE id=${wrong.attemptId!}`;
+      expect(rejectedAudit.resolution_diagnostics).toMatchObject({ reason: 'no_matching_alias', candidateCount: 0 });
       if (index === 0) {
         const reportId = await footballGridService.reportMissingAnswer(wrong.attemptId!, runtime.playerB);
         expect(reportId).toMatch(/^[0-9a-f-]{36}$/);

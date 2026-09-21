@@ -549,7 +549,7 @@ export function projectExportedBoards(
 }
 
 type Db = typeof sql;
-const EXPORT_BOARD_PAGE = 200;
+const EXPORT_BOARD_PAGE = 20;
 const ASSET_FETCH_CONCURRENCY = 12;
 
 export async function exportRelease(version: number): Promise<{ manifest: Manifest; release: ExportedRelease }> {
@@ -578,6 +578,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
       FROM football_grid_content_releases WHERE version = ${version}`;
   const release = releases[0];
   if (!release) throw new Error(`Release ${version} not found`);
+  process.stdout.write(`Export ${version}: reading criteria, memberships and aliases\n`);
   const criteriaRows = await sql<Array<{
     id: string; criterion_key: string; family: Manifest['criteria'][number]['family']; subtype: string;
     label_en: string; label_ka: string; asset_key: string | null; metadata: Record<string, unknown>;
@@ -631,16 +632,18 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     familiarity_score: string; canonical_checksum: string; approved_by: string; theme: string;
   }>>`SELECT id, version, row_criteria, column_criteria, difficulty, familiarity_score, canonical_checksum, approved_by, theme
         FROM football_grid_boards WHERE release_id = ${release.id} ORDER BY canonical_checksum`;
-  // Paged per board chunk: the whole answer set (~400k rows) does not reliably
-  // finish inside the pool's 30 s statement timeout.
+  // Keep pooler response payloads small. Large pages can stall in transit even
+  // after Postgres has completed the query; the source has over 700k answers.
   const answerRows: ExportedAnswerRow[] = [];
   for (let offset = 0; offset < boardRows.length; offset += EXPORT_BOARD_PAGE) {
     const boardIds = boardRows.slice(offset, offset + EXPORT_BOARD_PAGE).map((row) => row.id);
-    answerRows.push(...await sql<ExportedAnswerRow[]>`
+    const page = await sql<ExportedAnswerRow[]>`
       SELECT board_id, cell_index, football_player_id, player_name_en, player_name_ka, image_asset_key, recognizable_rank, is_sample
         FROM football_grid_board_answers
        WHERE release_id = ${release.id} AND board_id = ANY(${boardIds}::uuid[])
-       ORDER BY board_id, cell_index, recognizable_rank NULLS LAST, football_player_id`);
+       ORDER BY board_id, cell_index, recognizable_rank NULLS LAST, football_player_id`;
+    for (const answer of page) answerRows.push(answer);
+    process.stdout.write(`Export ${version}: ${Math.min(offset + EXPORT_BOARD_PAGE, boardRows.length)}/${boardRows.length} boards, ${answerRows.length} answers\n`);
   }
   const criteria: Manifest['criteria'] = criteriaRows.map((row) => ({
     key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, labelKa: row.label_ka,
@@ -1074,11 +1077,13 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
         ],
       );
       for (const row of inserted) boardIdByChecksum.set(row.canonical_checksum, row.id);
+      process.stdout.write(`Publish ${manifest.release.version}: ${boardIdByChecksum.size}/${manifest.boards.length} boards inserted\n`);
     }
     type AnswerInsert = {
       boardId: string; cellIndex: number; playerId: string; nameEn: string | null; nameKa: string | null;
       imageAssetKey: string | null; rank: number | null; isSample: boolean;
     };
+    let insertedAnswers = 0;
     const flushAnswers = async (rows: AnswerInsert[]) => {
       if (rows.length === 0) return;
       await tx.unsafe(
@@ -1106,6 +1111,8 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
           rows.map((row) => String(row.isSample)),
         ],
       );
+      insertedAnswers += rows.length;
+      process.stdout.write(`Publish ${manifest.release.version}: ${insertedAnswers} answers inserted\n`);
     };
     let pending: AnswerInsert[] = [];
     for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {

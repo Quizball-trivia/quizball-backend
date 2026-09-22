@@ -4,6 +4,11 @@ Status: **incomplete; research and preparation only**. On 22 September the owner
 
 ## What is established
 
+Follow-up: the owner requested a cutoff of **31 August 2026**, then agreed to use
+currently available records and address missing periods afterward. The new
+[available-data expansion](football-grid-available-data-expansion.md) measures actual
+source cutoffs separately and prepares tested historical answer additions.
+
 The pinned appearance source starts in July 2012. The existing legends list is explicitly focused on 1990–2012. Historical supplements add some clubs, country and teammate facts; they do not establish complete league, manager or trophy histories. Main release exports contain no display records for the pilot's Di Stéfano, Puskás, Gento or Kubala identities.
 
 The appearance snapshot also stops on 28 June 2026. Matches and transfers after that date need an updated source and review; the backfill is not exclusively a pre-2012 problem. The intended horizon is 1950 through the present, with the actual observed cutoff always shown separately.

@@ -4,6 +4,11 @@ The owner prioritised this era on 22 September 2026, ahead of 1950–1989. This 
 the first source acquisition and audit, **not a completed content release**.
 Nothing here changes playable answers, player records or live matches.
 
+The follow-up [available-data expansion](football-grid-available-data-expansion.md)
+extends the inventory toward the requested August 2026 horizon, derives witnessed
+historical manager/teammate facts, and tests additive answer drafts. It also records
+the owner's decision to use currently available data before sourcing missing periods.
+
 ## What was acquired and measured
 
 1. [salimt/football-datasets](https://github.com/salimt/football-datasets), pinned

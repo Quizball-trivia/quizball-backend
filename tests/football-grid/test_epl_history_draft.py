@@ -79,6 +79,20 @@ class EPLHistoryDraftTests(unittest.TestCase):
         self.assertEqual(result['unresolvedFacts'][0]['reason'], 'missing_bilingual_display_identity')
         self.assertEqual(result['summary'].get('addedFacts', 0), 0)
 
+    def test_importing_display_identity_preserves_existing_alias_review(self):
+        manifest, report = self.fixture()
+        english = {'playerId': 'p', 'normalizedAlias': 'player', 'alias': 'Player', 'locale': 'en',
+                   'aliasType': 'full_name', 'acceptancePolicy': 'exact', 'reviewedBy': 'existing'}
+        georgian = {**english, 'normalizedAlias': 'მოთამაშე', 'alias': 'მოთამაშე', 'locale': 'ka',
+                    'aliasType': 'georgian'}
+        donor = {'players': copy.deepcopy(manifest['players']),
+                 'aliases': [{**english, 'reviewedBy': 'donor'}, georgian]}
+        manifest['players'] = []
+        manifest['aliases'] = [english]
+        result = draft.prepare(manifest, [donor], report, '2026-09-22T08:00:00Z')
+        self.assertEqual(result['candidate']['aliases'], [english, georgian])
+        self.assertEqual(result['summary']['addedAliases'], 1)
+
     def test_wrong_player_and_different_criterion_family_are_rejected(self):
         for field, value, message in [('name', 'Another person', 'identity differs'),
                                      ('family', 'country', 'incompatible historical criterion')]:

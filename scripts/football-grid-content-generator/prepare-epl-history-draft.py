@@ -38,6 +38,8 @@ def prepare(manifest, catalogs, report, timestamp):
                if p.get('imageAssetKey', '').startswith('http')}
     members = {(m['criterionKey'], m['playerId']) for m in candidate['memberships']}
     assets = set(candidate.get('assetCatalog', []))
+    alias_key = lambda a: (a['playerId'], a['normalizedAlias'], a['locale'], a['aliasType'])
+    alias_keys = {alias_key(a) for a in candidate.get('aliases', [])}
     summary = Counter()
     unresolved = []
     source_definitions = [('pssguy-epldata-history', report['source'], 'MIT declared by upstream'),
@@ -77,8 +79,13 @@ def prepare(manifest, catalogs, report, timestamp):
                 unresolved.append({'criterionKey': key, 'playerId': pid, 'reason': 'missing_portrait_reference'})
                 continue
             candidate['players'].append(copy.deepcopy(donor)); players[pid] = donor
-            candidate['aliases'].extend(copy.deepcopy(aliases)); assets.add(image)
-            summary['addedPlayers'] += 1; summary['addedAliases'] += len(aliases)
+            added_aliases = []
+            for alias in aliases:
+                key_alias = alias_key(alias)
+                if key_alias not in alias_keys:
+                    added_aliases.append(copy.deepcopy(alias)); alias_keys.add(key_alias)
+            candidate['aliases'].extend(added_aliases); assets.add(image)
+            summary['addedPlayers'] += 1; summary['addedAliases'] += len(added_aliases)
         accepted_names = {history.name_key(players[pid]['nameEn'])}
         accepted_names.update(history.name_key(a['alias']) for a in candidate['aliases']
                               if a['playerId'] == pid and a['locale'] == 'en' and a['acceptancePolicy'] == 'exact')

@@ -98,6 +98,19 @@ describe('production rejected-answer corrections', () => {
     expect(() => prepareAnswerCorrections(source, catalog, 11, date)).toThrow('origin');
   });
 
+  it('keeps aliases already stored for a player absent from the board display catalog', () => {
+    const catalog = fixture();
+    const source = fixture();
+    source.players = source.players.filter(p => p.id !== dele.playerId);
+    const previous = source.aliases.filter(a => a.playerId === dele.playerId);
+    catalog.aliases.filter(a => a.playerId === dele.playerId).forEach(a => { a.reviewedBy = 'donor'; });
+    const candidate = prepareAnswerCorrections(source, catalog, 11, date).candidate;
+    for (const alias of previous) {
+      expect(candidate.aliases.filter(a => a.playerId === alias.playerId && a.normalizedAlias === alias.normalizedAlias
+        && a.locale === alias.locale && a.aliasType === alias.aliasType)).toEqual([alias]);
+    }
+  });
+
   it('preserves the source and existing answers, rebuilding affected intersections in a new draft', () => {
     const source = fixture();
     source.boards = [{ key: 'fixture', version: 1, theme: 'european', difficulty: 'easy', familiarityScore: 90,

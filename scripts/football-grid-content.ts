@@ -239,7 +239,11 @@ export function validateManifest(manifest: Manifest, launch: boolean): { boards:
   });
   const exactEnglish = new Set(manifest.aliases.filter((alias) => alias.locale === 'en' && alias.acceptancePolicy === 'exact').map((alias) => alias.playerId));
   const exactGeorgian = new Set(manifest.aliases.filter((alias) => alias.locale === 'ka' && alias.acceptancePolicy === 'exact').map((alias) => alias.playerId));
+  const aliasKeys = new Set<string>();
   for (const alias of manifest.aliases) {
+    const aliasKey = JSON.stringify([alias.playerId, alias.normalizedAlias, alias.locale, alias.aliasType]);
+    if (aliasKeys.has(aliasKey)) errors.push(`Duplicate alias ${alias.normalizedAlias}/${alias.playerId}/${alias.locale}/${alias.aliasType}`);
+    aliasKeys.add(aliasKey);
     if (normalizeFootballGridAnswer(alias.alias) !== alias.normalizedAlias) {
       errors.push(`Alias ${alias.alias}/${alias.playerId} has a non-canonical normalized value`);
     }

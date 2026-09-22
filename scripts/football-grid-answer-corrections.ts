@@ -123,8 +123,11 @@ export function prepareAnswerCorrections(
       }
       manifest.players.push(structuredClone(donor));
       players.set(donor.id, donor);
-      manifest.aliases.push(...structuredClone(exact));
-      changes.addedAliases += exact.length;
+      const added = exact.filter(alias => !manifest.aliases.some(existing =>
+        existing.playerId === alias.playerId && existing.normalizedAlias === alias.normalizedAlias
+        && existing.locale === alias.locale && existing.aliasType === alias.aliasType));
+      manifest.aliases.push(...structuredClone(added));
+      changes.addedAliases += added.length;
       if (!manifest.assetCatalog.includes(donor.imageAssetKey)) manifest.assetCatalog.push(donor.imageAssetKey);
       changes.addedPlayers.push(donor.id);
     }

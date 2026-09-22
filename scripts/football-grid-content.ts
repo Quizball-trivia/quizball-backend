@@ -12,6 +12,7 @@ import { normalizeFootballGridAnswer } from '../src/modules/football-grid/footba
 import type { FootballGridBoardCandidate, FootballGridCriterionView } from '../src/modules/football-grid/football-grid.types.js';
 import { approveAnswerCorrections, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
 import { auditGridLocaleCoverage } from './football-grid-locale-coverage.js';
+import { assertStagingResearchTarget, assertAdditiveStagingResearch, STAGING_RESEARCH_TRANSFORM } from './football-grid-staging-research.js';
 
 const difficulty = z.enum(['easy', 'normal', 'hard']);
 const criterionFamily = z.enum(['club', 'country', 'league', 'manager', 'teammate', 'trophy_award', 'wildcard']);
@@ -113,7 +114,17 @@ export const manifestSchema = z.object({
   boards: z.array(boardSchema).default([]),
 });
 
-export type Manifest = z.infer<typeof manifestSchema>;
+export const stagingResearchManifestSchema = manifestSchema.extend({
+  sources: z.array(sourceSchema.extend({ databaseRightsStatus: z.enum(['approved', 'pending_review']) })).min(1),
+});
+export type Manifest = z.infer<typeof stagingResearchManifestSchema>;
+
+export function assertResearchMode(manifest: Manifest, enabled: boolean): void {
+  const research = manifest.release.relationshipSnapshot.stagingResearchOnly === true;
+  if (enabled !== research) throw new Error('Staging research requires its explicit flag and manifest marker');
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  else manifestSchema.parse(manifest);
+}
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -603,8 +614,9 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
   const sourceRows = await sql<Array<{
     id: string; source_key: string; provider_name: string; dataset_version: string; permitted_use: string;
     attribution_requirements: string | null; retention_requirements: string | null; approval_owner: string; approved_at: string;
+    database_rights_status: 'approved' | 'pending' | 'rejected';
   }>>`SELECT DISTINCT s.id, s.source_key, s.provider_name, s.dataset_version, s.permitted_use,
-             s.attribution_requirements, s.retention_requirements, s.approval_owner, s.approved_at::text AS approved_at
+             s.attribution_requirements, s.retention_requirements, s.approval_owner, s.approved_at::text AS approved_at, s.database_rights_status
         FROM football_grid_data_sources s
         JOIN football_grid_membership_evidence e ON e.source_id = s.id
         JOIN football_grid_criterion_memberships m ON m.id = e.membership_id
@@ -700,7 +712,9 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     ...criteria.map((criterion) => criterion.assetKey).filter((key): key is string => Boolean(key)),
     ...[...players.values()].map((player) => player.imageAssetKey),
   ])].sort();
-  const manifest = manifestSchema.parse({
+  const research = release.relationship_snapshot?.stagingResearchOnly === true;
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  const manifest = (research ? stagingResearchManifestSchema : manifestSchema).parse({
     release: {
       version: release.version, aliasVersion: release.alias_version, resolverPolicyVersion: release.resolver_policy_version,
       relationshipSnapshot: release.relationship_snapshot ?? {}, approvedBy: release.approved_by,
@@ -708,7 +722,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     },
     sources: sourceRows.map((row) => ({
       key: row.source_key, providerName: row.provider_name, datasetVersion: row.dataset_version, permittedUse: row.permitted_use,
-      databaseRightsStatus: 'approved', attributionRequirements: row.attribution_requirements ?? undefined,
+      databaseRightsStatus: row.database_rights_status === 'pending' ? 'pending_review' : row.database_rights_status, attributionRequirements: row.attribution_requirements ?? undefined,
       retentionRequirements: row.retention_requirements ?? undefined, approvalOwner: row.approval_owner,
       approvedAt: isoSeconds(row.approved_at),
     })),
@@ -863,8 +877,11 @@ async function readFallbackKeys(file: string | undefined): Promise<string[]> {
   return (await readFile(file, 'utf8')).split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
 }
 
-async function loadManifest(file: string): Promise<Manifest> {
-  return manifestSchema.parse(JSON.parse(await readFile(file, 'utf8')));
+async function loadManifest(file: string, research = false): Promise<Manifest> {
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  const manifest = (research ? stagingResearchManifestSchema : manifestSchema).parse(JSON.parse(await readFile(file, 'utf8')));
+  assertResearchMode(manifest, research);
+  return manifest;
 }
 
 async function loadAndVerifyAssetRegistry(
@@ -891,13 +908,15 @@ async function loadAndVerifyAssetRegistry(
   return registry;
 }
 
-async function publish(manifest: Manifest, transformedFrom: number | null = null): Promise<void> {
+async function publish(manifest: Manifest, transformedFrom: number | null = null, research = false, stagingSourceFile?: string): Promise<void> {
+  assertResearchMode(manifest, research);
+  if (research && transformedFrom === null) throw new Error('Research publication requires its fresh source release');
   // Publishing is a staging operation. Feasibility content is intentionally
   // invisible to runtime board selection until an independent launch-grade
   // validation and explicit activation succeeds.
   const validation = validateManifest(manifest, false);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false, stagingSourceFile);
   if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
   await sql.begin(async (tx) => {
@@ -926,13 +945,13 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
            source_key, provider_name, dataset_version, permitted_use,
            database_rights_status, attribution_requirements,
            retention_requirements, approval_owner, approved_at
-         ) VALUES ($1,$2,$3,$4,'approved',$5,$6,$7,$8)
+         ) VALUES ($1,$2,$3,$4,$9,$5,$6,$7,$8)
          ON CONFLICT (source_key, dataset_version) DO NOTHING
          RETURNING id`,
         [
           source.key, source.providerName, source.datasetVersion, source.permittedUse,
           source.attributionRequirements ?? null, source.retentionRequirements ?? null,
-          source.approvalOwner, source.approvedAt,
+          source.approvalOwner, source.approvedAt, source.databaseRightsStatus === 'pending_review' ? 'pending' : 'approved',
         ],
       );
       const sourceId = rows[0]?.id ?? (await tx.unsafe<Array<{ id: string }>>(
@@ -940,7 +959,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
           WHERE source_key = $1 AND dataset_version = $2
             AND provider_name IS NOT DISTINCT FROM $3
             AND permitted_use IS NOT DISTINCT FROM $4
-            AND database_rights_status = 'approved'
+            AND database_rights_status = $9
             AND attribution_requirements IS NOT DISTINCT FROM $5
             AND retention_requirements IS NOT DISTINCT FROM $6
             AND approval_owner IS NOT DISTINCT FROM $7
@@ -948,7 +967,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
         [
           source.key, source.datasetVersion, source.providerName, source.permittedUse,
           source.attributionRequirements ?? null, source.retentionRequirements ?? null,
-          source.approvalOwner, source.approvedAt,
+          source.approvalOwner, source.approvedAt, source.databaseRightsStatus === 'pending_review' ? 'pending' : 'approved',
         ],
       ))[0]?.id;
       if (!sourceId) {
@@ -1176,8 +1195,26 @@ export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Man
  * serves right now plus exactly the prescribed changes, then drop findings the source produces under
  * the same validator mode. Everything else still blocks.
  */
-async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean): Promise<string[]> {
+async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean, stagingSourceFile?: string): Promise<string[]> {
   const snapshot = manifest.release.relationshipSnapshot as { transformedFromVersion?: number; transform?: string };
+  if (snapshot.transform === STAGING_RESEARCH_TRANSFORM) {
+    assertResearchMode(manifest, true);
+    if (snapshot.transformedFromVersion !== transformedFrom) throw new Error('Research source version mismatch');
+    if (!stagingSourceFile) throw new Error('Research requires its freshly exported source file');
+    const source = await loadManifest(stagingSourceFile);
+    const metadata = manifest.release.relationshipSnapshot;
+    if (typeof metadata.stagingSourceReleaseId !== 'string' || typeof metadata.stagingSourceStoredChecksum !== 'string') {
+      throw new Error('Research requires its immutable source release identity');
+    }
+    // Published content rows are immutable; bind the fresh export to the still-published release.
+    const rows = await sql<Array<{id:string}>>`SELECT id FROM football_grid_content_releases
+      WHERE id = ${metadata.stagingSourceReleaseId} AND version = ${transformedFrom}
+      AND manifest_checksum = ${metadata.stagingSourceStoredChecksum} AND status = 'published'`;
+    if (rows.length !== 1) throw new Error('Research source release changed or is no longer published');
+    assertAdditiveStagingResearch(source, manifest);
+    const inherited = new Set(validateManifest(source, launch).errors);
+    return errors.filter(error => !inherited.has(error));
+  }
   if (snapshot.transformedFromVersion !== transformedFrom
     || !['teammate-relabel-v1', 'answer-coverage-correction-v1'].includes(snapshot.transform ?? '')) {
     throw new Error(`Manifest is not a supported verified transform of release ${transformedFrom}`);
@@ -1231,10 +1268,14 @@ async function activate(
   assetRegistryPath: string,
   allowFallbackAssets = false,
   transformedFrom: number | null = null,
+  research = false,
+  stagingSourceFile?: string,
 ): Promise<void> {
+  assertResearchMode(manifest, research);
+  if (research && transformedFrom === null) throw new Error('Research activation requires its fresh source release');
   const validation = validateManifest(manifest, true);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true, stagingSourceFile);
   if (allowFallbackAssets) {
     // Incremental releases add criteria/players whose art intentionally rides
     // the runtime fallback chain (monogram crests, silhouette portraits).
@@ -1468,7 +1509,7 @@ async function main(): Promise<void> {
     const { manifest, release } = await exportRelease(version);
     await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
     // Digest of the file as later commands will read it (JSON drops undefined fields).
-    const digest = manifestContentDigest(await loadManifest(outputPath));
+    const digest = manifestContentDigest(await loadManifest(outputPath, args.includes('--staging-research')));
     process.stdout.write(`Exported release ${version} (${release.status}, ${manifest.criteria.length} criteria, ${manifest.memberships.length} memberships, ${manifest.boards.length} boards, content digest ${digest}) to ${outputPath}\n`);
     const assetRoot = optionValue(args, '--asset-root');
     if (!assetRoot && optionValue(args, '--registry-out')) throw new Error('--registry-out requires --asset-root');
@@ -1491,7 +1532,11 @@ async function main(): Promise<void> {
     }
     return;
   }
-  const manifest = await loadManifest(manifestPath);
+  const research = args.includes('--staging-research');
+  const manifest = await loadManifest(manifestPath, research);
+  if (research && !['build-registry','validate','review','publish','activate','retire'].includes(command)) {
+    throw new Error('Unsupported staging research operation');
+  }
   if (command === 'build-registry') {
     // Usage: build-registry <manifest.json> --asset-root DIR [--asset-cache DIR --player-pool DIR --cdn-base URL --fallback-file F --fallback-keys F] --registry-out F
     const assetRoot = optionValue(args, '--asset-root');
@@ -1564,7 +1609,7 @@ async function main(): Promise<void> {
       throw new Error('The publish command is always non-playable staging; remove --feasibility');
     }
     const transformedFrom = optionValue(args, '--transformed-from');
-    await publish(manifest, transformedFrom ? Number(transformedFrom) : null);
+    await publish(manifest, transformedFrom ? Number(transformedFrom) : null, research, optionValue(args, '--staging-source'));
     return;
   }
   if (command === 'activate') {
@@ -1573,7 +1618,7 @@ async function main(): Promise<void> {
       throw new Error('activate requires --asset-registry PATH so every launch asset is verified on disk');
     }
     const transformedFrom = optionValue(args, '--transformed-from');
-    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'), transformedFrom ? Number(transformedFrom) : null);
+    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'), transformedFrom ? Number(transformedFrom) : null, research, optionValue(args, '--staging-source'));
     return;
   }
   if (command === 'retire') {

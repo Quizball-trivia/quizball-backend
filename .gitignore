@@ -101,6 +101,7 @@ node_modules
 !scripts/football-grid-content.ts
 !scripts/football-grid-catalog-coverage.ts
 !scripts/football-grid-answer-corrections.ts
+!scripts/football-grid-staging-research.ts
 !scripts/football-grid-label-locales.json
 !scripts/football-grid-label-locales.ts
 !scripts/football-grid-player-cdn.ts

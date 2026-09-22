@@ -1,0 +1,162 @@
+{
+  "purpose": "Identity corroboration only; no career facts or production approval",
+  "retrievedAt": "2026-09-22",
+  "rawSnapshotSha256": "4a35aaee42fd626c2b945b6aaab8d5c468e72f8c7d97313073437d3cf39de546",
+  "source": "https://www.wikidata.org",
+  "license": "CC0 structured data",
+  "profiles": [
+    {
+      "player_id": "3410",
+      "date_of_birth": "1975-07-05",
+      "evidence_name": "Hernán Crespo",
+      "source": "wikidata",
+      "entity": "Q160206",
+      "revision": 2544272779,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2544272779"
+    },
+    {
+      "player_id": "5940",
+      "date_of_birth": "1973-04-12",
+      "evidence_name": "Christian Panucci",
+      "source": "wikidata",
+      "entity": "Q168287",
+      "revision": 2544379636,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2544379636"
+    },
+    {
+      "player_id": "3465",
+      "date_of_birth": "1963-11-18",
+      "evidence_name": "Peter Schmeichel",
+      "source": "wikidata",
+      "entity": "Q182314",
+      "revision": 2533930606,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2533930606"
+    },
+    {
+      "player_id": "3113",
+      "date_of_birth": "1965-11-19",
+      "evidence_name": "Laurent Blanc",
+      "source": "wikidata",
+      "entity": "Q1839",
+      "revision": 2540235448,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2540235448"
+    },
+    {
+      "player_id": "4182",
+      "date_of_birth": "1973-02-18",
+      "evidence_name": "Claude Makelélé",
+      "source": "wikidata",
+      "entity": "Q184362",
+      "revision": 2538161958,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2538161958"
+    },
+    {
+      "player_id": "5758",
+      "date_of_birth": "1973-03-13",
+      "evidence_name": "Edgar Davids",
+      "source": "wikidata",
+      "entity": "Q185115",
+      "revision": 2526769891,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2526769891"
+    },
+    {
+      "player_id": "3154",
+      "date_of_birth": "1968-09-07",
+      "evidence_name": "Marcel Desailly",
+      "source": "wikidata",
+      "entity": "Q193625",
+      "revision": 2540262094,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2540262094"
+    },
+    {
+      "player_id": "3198",
+      "date_of_birth": "1974-09-18",
+      "evidence_name": "Sol Campbell",
+      "source": "wikidata",
+      "entity": "Q214734",
+      "revision": 2529727701,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2529727701"
+    },
+    {
+      "player_id": "3557",
+      "date_of_birth": "1972-07-17",
+      "evidence_name": "Jaap Stam",
+      "source": "wikidata",
+      "entity": "Q216917",
+      "revision": 2543020897,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2543020897"
+    },
+    {
+      "player_id": "4",
+      "date_of_birth": "1968-03-09",
+      "evidence_name": "Youri Djorkaeff",
+      "source": "wikidata",
+      "entity": "Q217482",
+      "revision": 2545727715,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2545727715"
+    },
+    {
+      "player_id": "3408",
+      "date_of_birth": "1979-05-19",
+      "evidence_name": "Diego Forlán",
+      "source": "wikidata",
+      "entity": "Q261534",
+      "revision": 2546317142,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2546317142"
+    },
+    {
+      "player_id": "7531",
+      "date_of_birth": "1976-04-05",
+      "evidence_name": "Fernando Morientes",
+      "source": "wikidata",
+      "entity": "Q45567",
+      "revision": 2530044004,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2530044004"
+    },
+    {
+      "player_id": "3407",
+      "date_of_birth": "1976-07-01",
+      "evidence_name": "Ruud van Nistelrooy",
+      "source": "wikidata",
+      "entity": "Q45626",
+      "revision": 2539171453,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2539171453"
+    },
+    {
+      "player_id": "3207",
+      "date_of_birth": "1977-08-17",
+      "evidence_name": "Thierry Henry",
+      "source": "wikidata",
+      "entity": "Q45901",
+      "revision": 2539224849,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2539224849"
+    },
+    {
+      "player_id": "3516",
+      "date_of_birth": "1970-10-29",
+      "evidence_name": "Edwin van der Sar",
+      "source": "wikidata",
+      "entity": "Q482955",
+      "revision": 2545726372,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2545726372"
+    },
+    {
+      "player_id": "122",
+      "date_of_birth": "1969-11-10",
+      "evidence_name": "Jens Lehmann",
+      "source": "wikidata",
+      "entity": "Q57114",
+      "revision": 2541362287,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2541362287"
+    },
+    {
+      "player_id": "8564",
+      "date_of_birth": "1977-08-27",
+      "evidence_name": "Deco",
+      "source": "wikidata",
+      "entity": "Q659634",
+      "revision": 2543541797,
+      "url": "https://www.wikidata.org/w/index.php?oldid=2543541797"
+    }
+  ]
+}

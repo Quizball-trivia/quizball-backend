@@ -1,0 +1,569 @@
+[
+  {
+    "playerId": "9c90e944-d94b-4c0c-99bc-40401f3cb3fe",
+    "nameEn": "Cesc Fàbregas",
+    "criteria": [
+      "club:arsenal"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301892_LU.pdf",
+    "fact": "UEFA lists Fabregas, Gallas and Adebayor as Arsenal starters under Wenger on 20 February 2008."
+  },
+  {
+    "playerId": "9c90e944-d94b-4c0c-99bc-40401f3cb3fe",
+    "nameEn": "Cesc Fàbregas",
+    "criteria": [
+      "manager:arsene-wenger"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301892_LU.pdf",
+    "fact": "UEFA lists Fabregas, Gallas and Adebayor as Arsenal starters under Wenger on 20 February 2008."
+  },
+  {
+    "playerId": "2fd070a7-f06c-4680-8d61-92e4cc13f2b1",
+    "nameEn": "Emmanuel Adebayor",
+    "criteria": [
+      "manager:arsene-wenger"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301892_LU.pdf",
+    "fact": "UEFA lists Fabregas, Gallas and Adebayor as Arsenal starters under Wenger on 20 February 2008."
+  },
+  {
+    "playerId": "2fd070a7-f06c-4680-8d61-92e4cc13f2b1",
+    "nameEn": "Emmanuel Adebayor",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301892_LU.pdf",
+    "fact": "UEFA lists Fabregas, Gallas and Adebayor as Arsenal starters under Wenger on 20 February 2008."
+  },
+  {
+    "playerId": "700581f9-eac4-41c9-97e5-b66f18ad35d2",
+    "nameEn": "William Gallas",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301892_LU.pdf",
+    "fact": "UEFA lists Fabregas, Gallas and Adebayor as Arsenal starters under Wenger on 20 February 2008."
+  },
+  {
+    "playerId": "c9692588-f93b-4035-8737-8f625d1ec829",
+    "nameEn": "Fernando Torres",
+    "criteria": [
+      "club:liverpool"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c",
+    "nameEn": "Xabi Alonso",
+    "criteria": [
+      "club:liverpool"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "7626cd0c-987a-4049-89c8-e074a153d060",
+    "nameEn": "Javier Mascherano",
+    "criteria": [
+      "club:liverpool"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "d5b268f7-07d1-463d-a0b2-03f380aaf6e1",
+    "nameEn": "Steven Gerrard",
+    "criteria": [
+      "manager:rafael-benitez"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c",
+    "nameEn": "Xabi Alonso",
+    "criteria": [
+      "manager:rafael-benitez"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "75b88da4-69a7-4093-8363-ea6a18479147",
+    "nameEn": "Dirk Kuyt",
+    "criteria": [
+      "manager:rafael-benitez"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c",
+    "nameEn": "Xabi Alonso",
+    "criteria": [
+      "teammate:7626cd0c-987a-4049-89c8-e074a153d060"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "7626cd0c-987a-4049-89c8-e074a153d060",
+    "nameEn": "Javier Mascherano",
+    "criteria": [
+      "teammate:72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302794_LU.pdf",
+    "fact": "UEFA lists Gerrard, Torres, Alonso, Kuyt and Mascherano as Liverpool starters under Benitez on 10 March 2009."
+  },
+  {
+    "playerId": "b9628126-b65b-4e12-af8c-66ca0fdcb8f8",
+    "nameEn": "Ashley Cole",
+    "criteria": [
+      "club:arsenal"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2005/1108503_FR.pdf",
+    "fact": "UEFA records Ashley Cole, Campbell and Fabregas starting for Arsenal under Wenger in the 17 May 2006 final."
+  },
+  {
+    "playerId": "b9628126-b65b-4e12-af8c-66ca0fdcb8f8",
+    "nameEn": "Ashley Cole",
+    "criteria": [
+      "manager:arsene-wenger"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2005/1108503_FR.pdf",
+    "fact": "UEFA records Ashley Cole, Campbell and Fabregas starting for Arsenal under Wenger in the 17 May 2006 final."
+  },
+  {
+    "playerId": "69321e4f-8140-45df-bb19-4082b00dd984",
+    "nameEn": "Sol Campbell",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2005/1108503_FR.pdf",
+    "fact": "UEFA records Ashley Cole, Campbell and Fabregas starting for Arsenal under Wenger in the 17 May 2006 final."
+  },
+  {
+    "playerId": "36e4671d-c14e-4143-902e-0d95ed3d0ee8",
+    "nameEn": "Theo Walcott",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c6-0e6ea86e1585-aa2135ad6365-1000--seven-for-arsenal-in-record-victory/",
+    "fact": "UEFA records Fabregas and Walcott scoring and Rosicky playing in Arsenal versus Slavia on 23 October 2007."
+  },
+  {
+    "playerId": "404e5346-7cdc-4d56-a4a7-5f07bb236fc3",
+    "nameEn": "Tomas Rosicky",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c6-0e6ea86e1585-aa2135ad6365-1000--seven-for-arsenal-in-record-victory/",
+    "fact": "UEFA records Fabregas and Walcott scoring and Rosicky playing in Arsenal versus Slavia on 23 October 2007."
+  },
+  {
+    "playerId": "e2d22f1d-ca6d-4d89-b839-05dfdd310f6b",
+    "nameEn": "Robin van Persie",
+    "criteria": [
+      "club:arsenal"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302807_FR.pdf",
+    "fact": "UEFA records Van Persie and Fabregas starting for Arsenal under Wenger on 15 April 2009; Van Persie scored before being substituted at 77 minutes."
+  },
+  {
+    "playerId": "e2d22f1d-ca6d-4d89-b839-05dfdd310f6b",
+    "nameEn": "Robin van Persie",
+    "criteria": [
+      "manager:arsene-wenger"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302807_FR.pdf",
+    "fact": "UEFA records Van Persie and Fabregas starting for Arsenal under Wenger on 15 April 2009; Van Persie scored before being substituted at 77 minutes."
+  },
+  {
+    "playerId": "e2d22f1d-ca6d-4d89-b839-05dfdd310f6b",
+    "nameEn": "Robin van Persie",
+    "criteria": [
+      "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2009/302807_FR.pdf",
+    "fact": "UEFA records Van Persie and Fabregas starting for Arsenal under Wenger on 15 April 2009; Van Persie scored before being substituted at 77 minutes."
+  },
+  {
+    "playerId": "ee3905e1-3134-4026-b1c6-f6fc0e63d5cf",
+    "nameEn": "Cristiano Ronaldo",
+    "criteria": [
+      "teammate:b841bcc9-7df4-438e-8e72-2f1b3a3c4a92"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301201_LU.pdf",
+    "fact": "UEFA lists Ronaldo, Ferdinand and Vidic starting together for Manchester United in Kyiv on 23 October 2007."
+  },
+  {
+    "playerId": "b841bcc9-7df4-438e-8e72-2f1b3a3c4a92",
+    "nameEn": "Rio Ferdinand",
+    "criteria": [
+      "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301201_LU.pdf",
+    "fact": "UEFA lists Ronaldo, Ferdinand and Vidic starting together for Manchester United in Kyiv on 23 October 2007."
+  },
+  {
+    "playerId": "abd0e4b9-8f33-4866-a90e-61c207e94379",
+    "nameEn": "Nemanja Vidic‎",
+    "criteria": [
+      "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2008/301201_LU.pdf",
+    "fact": "UEFA lists Ronaldo, Ferdinand and Vidic starting together for Manchester United in Kyiv on 23 October 2007."
+  },
+  {
+    "playerId": "c51f91a6-ca1e-429d-9a6c-d1888773d692",
+    "nameEn": "James Milner",
+    "criteria": [
+      "club:aston-villa"
+    ],
+    "url": "https://www.premierleague.com/en/news/4562466",
+    "fact": "The Premier League records Milner making 100 league appearances for Aston Villa across two spells."
+  },
+  {
+    "playerId": "766bb736-fd4d-4bb9-b873-9795f1759357",
+    "nameEn": "Gareth Barry",
+    "criteria": [
+      "club:aston-villa"
+    ],
+    "url": "https://www.premierleague.com/en/news/4324342",
+    "fact": "The Premier League records Barry playing for Aston Villa before Manchester City, Everton and West Brom."
+  },
+  {
+    "playerId": "3f7b4083-c08f-469c-bc5d-ca61231cadb4",
+    "nameEn": "John Terry",
+    "criteria": [
+      "manager:claudio-ranieri"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/019c-0e6ad8578cc2-8e0ee151cbda-1000/",
+    "fact": "UEFA reports Terry playing and Crespo scoring for Chelsea under Ranieri against Monaco on 20 April 2004."
+  },
+  {
+    "playerId": "3b2cb5df-5e85-488f-91d6-d4997bd892fc",
+    "nameEn": "Hernán Crespo",
+    "criteria": [
+      "manager:claudio-ranieri"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/019c-0e6ad8578cc2-8e0ee151cbda-1000/",
+    "fact": "UEFA reports Terry playing and Crespo scoring for Chelsea under Ranieri against Monaco on 20 April 2004."
+  },
+  {
+    "playerId": "700581f9-eac4-41c9-97e5-b66f18ad35d2",
+    "nameEn": "William Gallas",
+    "criteria": [
+      "manager:claudio-ranieri"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/019d-0e6ade23dc21-3e936e323194-1000--morientes-has-the-final-say/",
+    "fact": "UEFA reports Gallas returning to Chelsea's starting side under Ranieri against Monaco on 5 May 2004."
+  },
+  {
+    "playerId": "3b2cb5df-5e85-488f-91d6-d4997bd892fc",
+    "nameEn": "Hernán Crespo",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/703811",
+    "fact": "The Premier League records Crespo appearing in 19 league matches for Chelsea in 2003/04 and 30 in 2005/06."
+  },
+  {
+    "playerId": "6e0542a2-0bbb-45ae-a7ff-2526230b870a",
+    "nameEn": "Luka Modrić",
+    "criteria": [
+      "club:tottenham-hotspur"
+    ],
+    "url": "https://www.tottenhamhotspur.com/news/1047906/ultimate-team-midfielders-part-5",
+    "fact": "Tottenham records Modric playing 160 matches and starting in the 2009/10 league run including wins over Arsenal, Chelsea and Manchester City."
+  },
+  {
+    "playerId": "6e0542a2-0bbb-45ae-a7ff-2526230b870a",
+    "nameEn": "Luka Modrić",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.tottenhamhotspur.com/news/1047906/ultimate-team-midfielders-part-5",
+    "fact": "Tottenham records Modric playing 160 matches and starting in the 2009/10 league run including wins over Arsenal, Chelsea and Manchester City."
+  },
+  {
+    "playerId": "d722bddb-fb68-440c-b3cb-b81de5c7284c",
+    "nameEn": "Stewart Downing",
+    "criteria": [
+      "club:liverpool"
+    ],
+    "url": "https://www.liverpoolfc.com/info/stewart-downing",
+    "fact": "Liverpool records Downing making 91 appearances between 2011 and 2013."
+  },
+  {
+    "playerId": "d722bddb-fb68-440c-b3cb-b81de5c7284c",
+    "nameEn": "Stewart Downing",
+    "criteria": [
+      "club:aston-villa"
+    ],
+    "url": "https://www.liverpoolfc.com/news/first-team/98256-stewart-downing-in-10-facts",
+    "fact": "Liverpool records Downing making 75 appearances for Aston Villa, including scoring against Liverpool in May 2011."
+  },
+  {
+    "playerId": "f1eac2b3-1d52-4be0-aecf-118e1dbe7c12",
+    "nameEn": "Glen Johnson",
+    "criteria": [
+      "club:chelsea"
+    ],
+    "url": "https://www.liverpoolfc.com/news/first-team/119134-lfc-v-chelsea-pre-match-stats",
+    "fact": "Liverpool records Glen Johnson making 72 competitive appearances for Chelsea from 2003 to 2007."
+  },
+  {
+    "playerId": "769e1327-0c83-4245-bd8b-1362c8dce939",
+    "nameEn": "Gerard Piqué",
+    "criteria": [
+      "club:manchester-united"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c7-0e6eb67442a1-1adb11d54a37-1000--slick-united-ease-through-to-last-16/",
+    "fact": "UEFA reports Pique, Tevez, Ronaldo, Nani and Van der Sar playing for Manchester United against Dynamo Kyiv on 7 November 2007."
+  },
+  {
+    "playerId": "769e1327-0c83-4245-bd8b-1362c8dce939",
+    "nameEn": "Gerard Piqué",
+    "criteria": [
+      "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c7-0e6eb67442a1-1adb11d54a37-1000--slick-united-ease-through-to-last-16/",
+    "fact": "UEFA reports Pique, Tevez, Ronaldo, Nani and Van der Sar playing for Manchester United against Dynamo Kyiv on 7 November 2007."
+  },
+  {
+    "playerId": "70b63468-1914-4c8e-ad35-199485821756",
+    "nameEn": "Carlos Tevez",
+    "criteria": [
+      "teammate:769e1327-0c83-4245-bd8b-1362c8dce939"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c7-0e6eb67442a1-1adb11d54a37-1000--slick-united-ease-through-to-last-16/",
+    "fact": "UEFA reports Pique, Tevez, Ronaldo, Nani and Van der Sar playing for Manchester United against Dynamo Kyiv on 7 November 2007."
+  },
+  {
+    "playerId": "631893f6-319e-4453-88b6-8201a96fc42f",
+    "nameEn": "Nani",
+    "criteria": [
+      "teammate:769e1327-0c83-4245-bd8b-1362c8dce939"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c7-0e6eb67442a1-1adb11d54a37-1000--slick-united-ease-through-to-last-16/",
+    "fact": "UEFA reports Pique, Tevez, Ronaldo, Nani and Van der Sar playing for Manchester United against Dynamo Kyiv on 7 November 2007."
+  },
+  {
+    "playerId": "ecb10845-29ae-4fcd-9f8d-7dcf27c138e9",
+    "nameEn": "Edwin van der Sar",
+    "criteria": [
+      "teammate:769e1327-0c83-4245-bd8b-1362c8dce939"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c7-0e6eb67442a1-1adb11d54a37-1000--slick-united-ease-through-to-last-16/",
+    "fact": "UEFA reports Pique, Tevez, Ronaldo, Nani and Van der Sar playing for Manchester United against Dynamo Kyiv on 7 November 2007."
+  },
+  {
+    "playerId": "d12516a0-67b1-4685-911e-c283fc5bc2ec",
+    "nameEn": "Joe Cole",
+    "criteria": [
+      "club:chelsea"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2006/300136_LU.pdf",
+    "fact": "UEFA lists Joe Cole, Ashley Cole, Terry, Cech and Carvalho as Chelsea starters, and Riise starting for Liverpool under Benitez, on 25 April 2007."
+  },
+  {
+    "playerId": "d12516a0-67b1-4685-911e-c283fc5bc2ec",
+    "nameEn": "Joe Cole",
+    "criteria": [
+      "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2006/300136_LU.pdf",
+    "fact": "UEFA lists Joe Cole, Ashley Cole, Terry, Cech and Carvalho as Chelsea starters, and Riise starting for Liverpool under Benitez, on 25 April 2007."
+  },
+  {
+    "playerId": "d12516a0-67b1-4685-911e-c283fc5bc2ec",
+    "nameEn": "Joe Cole",
+    "criteria": [
+      "teammate:b9628126-b65b-4e12-af8c-66ca0fdcb8f8"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2006/300136_LU.pdf",
+    "fact": "UEFA lists Joe Cole, Ashley Cole, Terry, Cech and Carvalho as Chelsea starters, and Riise starting for Liverpool under Benitez, on 25 April 2007."
+  },
+  {
+    "playerId": "1da98c87-dc4e-41f2-99db-cc8443a00e3d",
+    "nameEn": "Petr Cech",
+    "criteria": [
+      "teammate:33316d7f-7ef0-4e59-b112-2af62492a0af"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2006/300136_LU.pdf",
+    "fact": "UEFA lists Joe Cole, Ashley Cole, Terry, Cech and Carvalho as Chelsea starters, and Riise starting for Liverpool under Benitez, on 25 April 2007."
+  },
+  {
+    "playerId": "346d0795-8de1-4794-b3b5-a3da784541ea",
+    "nameEn": "John Arne Riise",
+    "criteria": [
+      "manager:rafael-benitez"
+    ],
+    "url": "https://www.uefa.com/newsfiles/UCL/2006/300136_LU.pdf",
+    "fact": "UEFA lists Joe Cole, Ashley Cole, Terry, Cech and Carvalho as Chelsea starters, and Riise starting for Liverpool under Benitez, on 25 April 2007."
+  },
+  {
+    "playerId": "b581974b-b344-4837-838c-617537fd0102",
+    "nameEn": "Arjen Robben",
+    "criteria": [
+      "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c0-0e6e443b7ebe-6c083f62e7a5-1000--anfield-braced-for-chelsea-challenge/",
+    "fact": "UEFA records Robben replacing Joe Cole for Chelsea alongside Terry, and Cisse replacing Baros for Liverpool under Benitez, in the 3 May 2005 semifinal."
+  },
+  {
+    "playerId": "3f7b4083-c08f-469c-bc5d-ca61231cadb4",
+    "nameEn": "John Terry",
+    "criteria": [
+      "teammate:b581974b-b344-4837-838c-617537fd0102"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c0-0e6e443b7ebe-6c083f62e7a5-1000--anfield-braced-for-chelsea-challenge/",
+    "fact": "UEFA records Robben replacing Joe Cole for Chelsea alongside Terry, and Cisse replacing Baros for Liverpool under Benitez, in the 3 May 2005 semifinal."
+  },
+  {
+    "playerId": "04d5b66c-4a82-4a47-94ba-25349adba7a9",
+    "nameEn": "Djibril Cissé",
+    "criteria": [
+      "manager:rafael-benitez"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01c0-0e6e443b7ebe-6c083f62e7a5-1000--anfield-braced-for-chelsea-challenge/",
+    "fact": "UEFA records Robben replacing Joe Cole for Chelsea alongside Terry, and Cisse replacing Baros for Liverpool under Benitez, in the 3 May 2005 semifinal."
+  },
+  {
+    "playerId": "b581974b-b344-4837-838c-617537fd0102",
+    "nameEn": "Arjen Robben",
+    "criteria": [
+      "club:chelsea"
+    ],
+    "url": "https://www.chelseafc.com/en/news/article/chelsea-champion-arjen-robben-retires-from-football",
+    "fact": "Chelsea records Robben playing 18 league matches in 2004/05 and 28 in 2005/06."
+  },
+  {
+    "playerId": "b581974b-b344-4837-838c-617537fd0102",
+    "nameEn": "Arjen Robben",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.chelseafc.com/en/news/article/chelsea-champion-arjen-robben-retires-from-football",
+    "fact": "Chelsea records Robben playing 18 league matches in 2004/05 and 28 in 2005/06."
+  },
+  {
+    "playerId": "72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c",
+    "nameEn": "Xabi Alonso",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/346112",
+    "fact": "The Premier League records Alonso making 143 league appearances for Liverpool after signing in 2004."
+  },
+  {
+    "playerId": "9d538d4a-ec62-4e2b-b74d-38388cab76b6",
+    "nameEn": "Diego Forlán",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/4214335",
+    "fact": "The Premier League records Forlan scoring twice in Manchester United's December 2002 league win at Liverpool, and Van der Sar playing in Liverpool's March 2011 league win."
+  },
+  {
+    "playerId": "ecb10845-29ae-4fcd-9f8d-7dcf27c138e9",
+    "nameEn": "Edwin van der Sar",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/4214335",
+    "fact": "The Premier League records Forlan scoring twice in Manchester United's December 2002 league win at Liverpool, and Van der Sar playing in Liverpool's March 2011 league win."
+  },
+  {
+    "playerId": "b841bcc9-7df4-438e-8e72-2f1b3a3c4a92",
+    "nameEn": "Rio Ferdinand",
+    "criteria": [
+      "club:west-ham-united"
+    ],
+    "url": "https://www.premierleague.com/en/news/3250314",
+    "fact": "The Premier League records Ferdinand making 60 appearances for West Ham as a teenager and scoring against Blackburn in 1997."
+  },
+  {
+    "playerId": "c665d6ed-84df-4dab-ab6c-5fc3832a84a5",
+    "nameEn": "David Beckham",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/1653189",
+    "fact": "The Premier League records Beckham making 265 appearances in the competition."
+  },
+  {
+    "playerId": "a7894350-aff3-4b9c-8402-20ed8c39ad96",
+    "nameEn": "Ruud van Nistelrooy",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.premierleague.com/en/news/2509986",
+    "fact": "The Premier League records Van Nistelrooy making 150 appearances in the competition."
+  },
+  {
+    "playerId": "3f7b4083-c08f-469c-bc5d-ca61231cadb4",
+    "nameEn": "John Terry",
+    "criteria": [
+      "manager:carlo-ancelotti"
+    ],
+    "url": "https://www.chelseafc.com/en/news/article/rank-chelsea-s-premier-league-titles",
+    "fact": "Chelsea records Cech and Terry playing in the side managed by Ancelotti during the 2009/10 championship season."
+  },
+  {
+    "playerId": "1da98c87-dc4e-41f2-99db-cc8443a00e3d",
+    "nameEn": "Petr Cech",
+    "criteria": [
+      "manager:carlo-ancelotti"
+    ],
+    "url": "https://www.chelseafc.com/en/news/article/rank-chelsea-s-premier-league-titles",
+    "fact": "Chelsea records Cech and Terry playing in the side managed by Ancelotti during the 2009/10 championship season."
+  },
+  {
+    "playerId": "66c49c1e-1879-4527-9ce0-fb7d47c4d5ae",
+    "nameEn": "Dimitar Berbatov",
+    "criteria": [
+      "teammate:ddeb8efc-a7d6-40a6-a20f-82df76421c3d"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01dd-0e72d21f1157-b90159c122a9-1000--old-head-scholes-seals-united-win/",
+    "fact": "UEFA records Berbatov and Michael Owen entering the same Manchester United match against Besiktas on 15 September 2009."
+  },
+  {
+    "playerId": "8c9e3526-5028-44de-bfce-604cc00b7dc6",
+    "nameEn": "Darren Bent",
+    "criteria": [
+      "club:sunderland"
+    ],
+    "url": "https://www.premierleague.com/en/news/694912",
+    "fact": "The Premier League records Bent scoring on his Sunderland debut and making 20 league appearances in the first half of 2010/11."
+  },
+  {
+    "playerId": "766bb736-fd4d-4bb9-b873-9795f1759357",
+    "nameEn": "Gareth Barry",
+    "criteria": [
+      "teammate:65532349-06d9-44bf-baee-159b35bb1688"
+    ],
+    "url": "https://www.mancity.com/news/first-team/match-report/2009/august/blackburn-rovers-v-city-august-15th",
+    "fact": "Manchester City records Barry making his club league debut and Robinho playing in its 15 August 2009 league win at Blackburn."
+  },
+  {
+    "playerId": "ef506abb-a559-48a0-9062-44d35d99c76c",
+    "nameEn": "Claudio Pizarro",
+    "criteria": [
+      "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/01cc-0e6f47b2eb50-72420e969030-1000--chelsea-striving-for-change-of-fortune/",
+    "fact": "UEFA records Pizarro entering for Kalou at halftime alongside Terry for Chelsea against Liverpool on 19 August 2007."
+  },
+  {
+    "playerId": "769e1327-0c83-4245-bd8b-1362c8dce939",
+    "nameEn": "Gerard Piqué",
+    "criteria": [
+      "league:premier-league"
+    ],
+    "url": "https://www.uefa.com/uefachampionsleague/news/0250-0e99949fba23-58c72ae3a189-1000--barcelona-v-manchester-united-background/",
+    "fact": "UEFA records Pique making 12 Premier League appearances for Manchester United between 2004 and 2008."
+  }
+]

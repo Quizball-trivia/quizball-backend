@@ -1,0 +1,234 @@
+{
+  "coverageComplete": false,
+  "contentPublished": false,
+  "databaseWrites": false,
+  "requestedThroughDate": "2026-08-31",
+  "effectiveAppearanceCutoff": "2026-06-28",
+  "scope": {
+    "criterionCounts": {
+      "club": 334,
+      "country": 50,
+      "league": 10,
+      "manager": 43,
+      "teammate": 154,
+      "trophy_award": 12,
+      "wildcard": 14
+    },
+    "clubsWithExistingSourceMapping": 90,
+    "distinctMappedClubIds": 90,
+    "unresolvedClubClues": 244
+  },
+  "aggregateSummary": {
+    "players": 24555,
+    "clubs": 458,
+    "records": 220800,
+    "rejected": {
+      "no_positive_appearances": 33408,
+      "conflicting_player_club_seasons": 0
+    }
+  },
+  "eras": [
+    {
+      "fromSeasonStart": 1990,
+      "throughSeasonStart": 2012,
+      "players": 12089,
+      "clubs": 392,
+      "records": 103455,
+      "status": "observed_incomplete"
+    },
+    {
+      "fromSeasonStart": 1950,
+      "throughSeasonStart": 1989,
+      "players": 239,
+      "clubs": 146,
+      "records": 872,
+      "status": "observed_incomplete"
+    },
+    {
+      "fromSeasonStart": 2013,
+      "throughSeasonStart": 2026,
+      "players": 16913,
+      "clubs": 322,
+      "records": 116473,
+      "status": "observed_incomplete"
+    }
+  ],
+  "historicalFacts": {
+    "summary": {
+      "eligibleMappedIdentities": 285,
+      "corroboratedAppearances": 33449,
+      "excludedAppearances": {
+        "identity_not_reconciled": 171192,
+        "player_club_season_not_corroborated": 664
+      }
+    },
+    "uniqueCriterionPlayerPairs": 1301,
+    "releases": [
+      {
+        "releaseVersion": 2026092201,
+        "proposedFactCount": 969,
+        "proposedByFamily": {
+          "club": 209,
+          "league": 85,
+          "manager": 123,
+          "teammate": 552
+        },
+        "heldManagerAppearances": {
+          "no_unique_strict_date_manager": 18
+        }
+      },
+      {
+        "releaseVersion": 2026092202,
+        "proposedFactCount": 991,
+        "proposedByFamily": {
+          "club": 227,
+          "league": 199,
+          "manager": 118,
+          "teammate": 447
+        },
+        "heldManagerAppearances": {
+          "no_unique_strict_date_manager": 18
+        }
+      }
+    ],
+    "officialManagerEvidence": {
+      "intervals": [
+        {
+          "managerId": "WengerA",
+          "archiveStintId": 3,
+          "club": "Arsenal",
+          "fromExclusive": "1996-10-01",
+          "throughExclusive": "2013-10-01",
+          "sourceUrl": "https://www.arsenal.com/news/features/behind-the-numbers-wenger-s-17-years",
+          "fact": "Arsenal describes Wenger's continuous 17 years in charge, beginning officially on 1 October 1996, with season-by-season managerial records. Boundary dates are excluded from generated witnesses.",
+          "reviewedBy": "Codex source audit",
+          "reviewedOn": "2026-09-22"
+        }
+      ],
+      "sha256": "e320dda86b845f02534f8f01e860404991ffb4f25d9367ff6183a85fc6ef1342"
+    }
+  },
+  "drafts": {
+    "european": {
+      "summary": {
+        "addedFacts": 969,
+        "added_club": 209,
+        "added_league": 85,
+        "added_manager": 123,
+        "added_teammate": 552,
+        "changedCells": 3248,
+        "addedPlayerCellAnswers": 15720,
+        "changedBoards": 1165
+      },
+      "removedAnswers": 0,
+      "unresolvedFacts": []
+    },
+    "themed": {
+      "summary": {
+        "addedPlayers": 173,
+        "addedAliases": 775,
+        "addedFacts": 991,
+        "added_club": 227,
+        "added_league": 199,
+        "added_manager": 118,
+        "added_teammate": 447,
+        "changedCells": 1146,
+        "addedPlayerCellAnswers": 4758,
+        "changedBoards": 380
+      },
+      "removedAnswers": 0,
+      "unresolvedFacts": []
+    }
+  },
+  "verification": {
+    "validation": [
+      {
+        "name": "european",
+        "boards": 2000,
+        "removedAnswers": 0,
+        "newErrors": [],
+        "baselineErrors": [],
+        "candidateErrors": [],
+        "publisherRejects": true,
+        "unrelatedApprovalRejected": true
+      },
+      {
+        "name": "themed",
+        "boards": 949,
+        "removedAnswers": 0,
+        "newErrors": [],
+        "baselineErrors": [
+          "easy board distribution is 25.10%, expected 40% +/- 2%",
+          "normal board distribution is 60.12%, expected 45% +/- 2%"
+        ],
+        "candidateErrors": [
+          "easy board distribution is 25.10%, expected 40% +/- 2%",
+          "normal board distribution is 60.12%, expected 45% +/- 2%"
+        ],
+        "publisherRejects": true,
+        "unrelatedApprovalRejected": true
+      }
+    ],
+    "replayed": 6218,
+    "transitions": {
+      "correct -> correct": 3353,
+      "wrong -> wrong": 2679,
+      "already_used -> already_used": 64,
+      "ambiguous -> ambiguous": 49,
+      "wrong -> correct": 69,
+      "wrong -> ambiguous": 2,
+      "wrong -> already_used": 2
+    },
+    "historicalTransitions": {
+      "correct -> correct": 3416,
+      "wrong -> wrong": 2679,
+      "already_used -> already_used": 66,
+      "ambiguous -> ambiguous": 51,
+      "wrong -> correct": 6
+    },
+    "previouslyCorrectChanged": 0
+  },
+  "sha256": {
+    "available-coverage.json": "9fa7dbf07d58804c078088e07dd863165ae8133ef0ad67ab5668d893a38b7a1c",
+    "epl-fact-proposals-v3.json": "7e8e8988f95c3bf3660f79c2a7d9e65ae6024298212b42d6864639373ac7050e",
+    "european-historical-draft-v2.json": "e02b68a1836313118964f1680da1372c2d91f0101a35249c58a2d641dd18de62",
+    "themed-historical-draft-v2.json": "e77a73d75ad2d1a6e0fd5a3c916bbcda6bef8f85d972254cdbd25d18b5c2adcc",
+    "verification-v2.json": "0d3e12f2da9401e6a75874440cc392939d4bbc708ec08f073123e387fcd69a02",
+    "added-name-verification.json": "b24a2b7713beb1c8c766307eddd867087664fa4a7e1b0b417a94bfb3ac8a1288"
+  },
+  "addedNameVerification": {
+    "scope": "Canonical English and Georgian names for every added player/cell; resolver is language-independent; does not certify translated UI/protocol deployment",
+    "results": [
+      {
+        "release": "european",
+        "addedPlayerCellAnswers": 15720,
+        "en": {
+          "correct": 15720,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "ka": {
+          "correct": 15720,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "failures": []
+      },
+      {
+        "release": "themed",
+        "addedPlayerCellAnswers": 4758,
+        "en": {
+          "correct": 4758,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "ka": {
+          "correct": 4758,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "failures": []
+      }
+    ]
+  }
+}

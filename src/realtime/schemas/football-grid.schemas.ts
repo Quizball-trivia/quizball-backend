@@ -12,7 +12,7 @@ export type FootballGridTheme = (typeof FOOTBALL_GRID_THEMES)[number];
 
 export const footballGridSearchStartSchema = z
   .object({
-    locale: z.enum(['en', 'ka']).optional(),
+    locale: z.enum(['en', 'ka', 'es', 'tr']).optional(),
     theme: z.enum(FOOTBALL_GRID_THEMES).optional(),
   })
   .optional()
@@ -34,7 +34,7 @@ export const footballGridVersionedCommandSchema = z.object({
 export const footballGridSubmitAnswerSchema = footballGridVersionedCommandSchema.extend({
   cellIndex: z.number().int().min(0).max(8),
   text: z.string().trim().min(1).max(160),
-  locale: z.enum(['en', 'ka']),
+  locale: z.enum(['en', 'ka', 'es', 'tr']),
 });
 
 export const footballGridDrawRespondSchema = footballGridVersionedCommandSchema.extend({

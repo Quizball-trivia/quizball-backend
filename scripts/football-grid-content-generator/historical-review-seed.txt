@@ -1,0 +1,7 @@
+# Discovery-only pilot for the requested 1950-onward coverage, NOT a complete list.
+# Do not upsert or publish these records without identity, rule and source review.
+# Official sources and coverage requirements: docs/football-grid-historical-coverage.md
+Alfredo Di Stéfano
+Ferenc Puskás
+Francisco Gento
+Ladislao Kubala

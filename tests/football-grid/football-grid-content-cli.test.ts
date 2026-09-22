@@ -94,6 +94,28 @@ function sourceManifest() {
 }
 
 describe('Football Grid content CLI contracts', () => {
+  it('rejects repeated database alias identities even when review metadata differs', () => {
+    const manifest = sourceManifest();
+    manifest.aliases.push({ ...manifest.aliases[0], reviewedBy: 'another-reviewer' });
+    expect(validateManifest(manifest, false).errors.some(error => error.startsWith('Duplicate alias '))).toBe(true);
+  });
+  it('rejects duplicate evidence before opening a publish transaction', () => {
+    const manifest = sourceManifest();
+    manifest.memberships[0].evidence.push({ ...manifest.memberships[0].evidence[0] });
+    expect(validateManifest(manifest, false).errors).toContain(
+      `Membership ${manifest.memberships[0].criterionKey}/${manifest.memberships[0].playerId} has duplicate evidence`,
+    );
+  });
+  it.each(['es', 'tr'] as const)('imports reviewed %s aliases without removing EN/KA fallback names', (locale) => {
+    const manifest = sourceManifest();
+    const existingCount = manifest.aliases.length;
+    manifest.aliases.push({ ...manifest.aliases[0], locale });
+    const parsed = manifestSchema.parse(manifest);
+    expect(parsed.aliases).toHaveLength(existingCount + 1);
+    expect(parsed.aliases.at(-1)?.locale).toBe(locale);
+    expect(validateManifest(parsed).errors.some((error) => /alias/i.test(error))).toBe(false);
+  });
+
   it('rejects flags whose required path value is missing', () => {
     expect(() => optionValue(['--out'], '--out')).toThrow('--out requires a value');
     expect(() => optionValue(['--asset-registry', '--feasibility'], '--asset-registry')).toThrow(

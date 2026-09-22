@@ -289,7 +289,8 @@ async function processInbox(
       if (resolution.outcome === 'correct' && resolution.playerId) {
         const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
         if (usedPlayerIds.includes(resolution.playerId)) {
-          resolution = { ...resolution, outcome: 'already_used' };
+          resolution = { ...resolution, outcome: 'already_used',
+            diagnostics: { ...resolution.diagnostics, reason: 'player_already_used' } };
         }
       }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
@@ -330,6 +331,7 @@ async function processInbox(
         normalizedText: resolution?.normalizedInput ?? null,
         resolvedPlayerId: resolution?.playerId ?? null,
         aliasId: resolution?.aliasId ?? null,
+        resolutionDiagnostics: resolution?.diagnostics ?? null,
         eventType: outcome === 'correct' ? 'cell_claimed' : `turn_${outcome}`,
       });
       // The engine only knows the footballer id; the broadcast must carry the
@@ -503,7 +505,7 @@ export const footballGridService = {
     expectedStateVersion: number;
     cellIndex: number;
     text: string;
-    locale: 'en' | 'ka';
+    locale: 'en' | 'ka' | 'es' | 'tr';
   }): Promise<FootballGridCommandResult> {
     try {
       const processingFence = randomUUID();

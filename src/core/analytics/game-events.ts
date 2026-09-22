@@ -410,7 +410,7 @@ export function trackPartyQuizStarted(params: {
 export function trackFootballGridQueueJoined(params: {
   userId: string;
   searchId: string;
-  locale: 'en' | 'ka';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   queuedAt: string | Date;
 }): void {
   trackEvent('football_grid_queue_joined', params.userId, {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import postgres from 'postgres';
+import { normalizeFootballGridAnswer } from '../../src/modules/football-grid/football-grid.answer-resolver.js';
 import { FOOTBALL_GRID_EASY_BOT_CAPS } from '../../src/modules/football-grid/football-grid-bot.service.js';
 import '../setup.js';
 
@@ -28,6 +29,13 @@ const PLAYER_IDS = Array.from(
   { length: 9 },
   (_, index) => `00000000-0000-4000-8000-${String(992001 + index).padStart(12, '0')}`,
 );
+
+const LOCALE_ANSWERS = [
+  { locale: 'en', name: 'Grid Player 1', input: 'GRID PLAYER 1' },
+  { locale: 'ka', name: 'გრიდ მოთამაშე 1', input: 'გრიდ მოთამაშე 1'.toUpperCase() },
+  { locale: 'es', name: 'Jugador Álvarez', input: 'Jugador Alvarez' },
+  { locale: 'tr', name: 'Oyuncu Yılmaz', input: 'Oyuncu Yilmaz' },
+] as const;
 
 let db: postgres.Sql;
 let dbAvailable = false;
@@ -187,6 +195,16 @@ async function seedImmutableContent(): Promise<void> {
         ) ON CONFLICT DO NOTHING
       `;
     }
+  }
+  for (const { locale, name } of LOCALE_ANSWERS) {
+    await db`
+      INSERT INTO football_grid_player_aliases (
+        release_id, football_player_id, alias, normalized_alias, locale,
+        alias_type, acceptance_policy, reviewed_by, reviewed_at
+      ) VALUES (${RELEASE_ID}, ${PLAYER_IDS[0]}, ${name}, ${normalizeFootballGridAnswer(name)},
+        ${locale}, 'full_name', 'exact', 'integration-test', now())
+      ON CONFLICT DO NOTHING
+    `;
   }
 }
 
@@ -425,6 +443,10 @@ async function playWinningLine(
       locale: index === 1 ? 'ka' : 'en',
     });
     expect(answer.outcome).toBe('correct');
+    expect(answer).not.toHaveProperty('diagnostics');
+    expect(answer).not.toHaveProperty('resolutionDiagnostics');
+    const [acceptedAudit] = await db`SELECT resolution_diagnostics FROM football_grid_attempts WHERE id=${answer.attemptId!}`;
+    expect(acceptedAudit.resolution_diagnostics).toMatchObject({ version: 1, reason: 'accepted', method: 'exact' });
     version = answer.state.stateVersion;
     if (index === 0) {
       const duplicate = await footballGridService.submitAnswer({
@@ -452,6 +474,9 @@ async function playWinningLine(
       expect(wrong.outcome).toBe('wrong');
       version = wrong.state.stateVersion;
       expect(wrong.attemptId).toBeTruthy();
+      expect(wrong).not.toHaveProperty('diagnostics');
+      const [rejectedAudit] = await db`SELECT resolution_diagnostics FROM football_grid_attempts WHERE id=${wrong.attemptId!}`;
+      expect(rejectedAudit.resolution_diagnostics).toMatchObject({ reason: 'no_matching_alias', candidateCount: 0 });
       if (index === 0) {
         const reportId = await footballGridService.reportMissingAnswer(wrong.attemptId!, runtime.playerB);
         expect(reportId).toMatch(/^[0-9a-f-]{36}$/);
@@ -555,6 +580,52 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
+  it('rejects activation when a verified source is retired before activation commits', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { activateWithPinnedSources } = await import('../../scripts/football-grid-content.js');
+    const version = 800_000_000 + Math.floor(Math.random() * 100_000_000);
+    const rows = await db<Array<{id: string; version: number; manifest_checksum: string}>>`
+      INSERT INTO football_grid_content_releases (version, status, relationship_snapshot, alias_version,
+        resolver_policy_version, manifest_checksum, approved_by, approved_at, published_at)
+      VALUES (${version}, 'published', '{}', 1, 1, ${randomUUID().replaceAll('-', '').repeat(2)}, 'integration-test', now(), now()),
+             (${version + 1}, 'feasibility', '{}', 1, 1, ${randomUUID().replaceAll('-', '').repeat(2)}, 'integration-test', now(), null)
+      RETURNING id, version, manifest_checksum`;
+    const source = rows.find(r => r.version === version)!;
+    const candidate = rows.find(r => r.version === version + 1)!;
+    await db`UPDATE football_grid_content_releases SET status = 'retired' WHERE id = ${source.id}`;
+    await expect(activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [source])).rejects.toThrow('Verified source changed');
+    const [unchanged] = await db`SELECT status FROM football_grid_content_releases WHERE id = ${candidate.id}`;
+    expect(unchanged.status).toBe('feasibility');
+    const [liveSource] = await db<Array<{id: string; version: number; manifest_checksum: string}>>`
+      SELECT id, version, manifest_checksum FROM football_grid_content_releases WHERE id = ${RELEASE_ID}`;
+    await expect(activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [{ ...liveSource, manifest_checksum: 'wrong' }])).rejects.toThrow('Verified source changed');
+    await activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [liveSource]);
+    const [activated] = await db`SELECT status FROM football_grid_content_releases WHERE id = ${candidate.id}`;
+    expect(activated.status).toBe('published');
+  });
+
+  for (const { locale: uiLocale } of LOCALE_ANSWERS) {
+    for (const { locale: aliasLocale, input: text } of LOCALE_ANSWERS) {
+      it(`accepts ${aliasLocale} aliases in the ${uiLocale} interface and persists that locale`, async (context) => {
+        if (!hasRuntimeDb(context)) return;
+        const runtime = await createReadyTurn('random');
+        const answer = await footballGridService.submitAnswer({
+          matchId: runtime.matchId, userId: runtime.playerA, commandId: randomUUID(),
+          expectedStateVersion: runtime.stateVersion, cellIndex: 0, text, locale: uiLocale,
+        });
+        expect(answer).toMatchObject({ outcome: 'correct', resolvedPlayerId: PLAYER_IDS[0] });
+        const [saved] = await db`
+          SELECT i.locale AS inbox_locale, a.locale AS attempt_locale, c.submitted_locale
+          FROM football_grid_attempts a
+          JOIN football_grid_command_inbox i ON i.id = a.inbox_id
+          JOIN football_grid_claims c ON c.match_id = a.match_id AND c.cell_index = a.cell_index
+          WHERE a.id = ${answer.attemptId!}
+        `;
+        expect(saved).toEqual({ inbox_locale: uiLocale, attempt_locale: uiLocale, submitted_locale: uiLocale });
+      });
+    }
+  }
+
   it('pins v2 strength transactionally and records private action policy provenance', async (context) => {
     if (!hasRuntimeDb(context)) return;
     await seedBotGovernorTier({ tier: 'World-Class', adjustment: -0.075 });
@@ -2056,7 +2127,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(afterCommit.state.turnRemainingMs).toBeGreaterThan(remainingBeforePause - 2_500);
   });
 
-  it('does not extend an expired rematch and reopens its friend lobby', async (context) => {
+  it('closes an expired friend lobby without reopening it on result redelivery', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const players = await createUsers();
     const lobby = await lobbiesRepo.createLobbyWithMembers({
@@ -2090,8 +2161,107 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     const expired = await footballGridRepo.expireRematch(seriesId, window!.seriesVersion);
     expect(expired?.lobbyId).toBe(lobby.id);
     const lobbyState = await lobbiesRepo.getById(lobby.id);
-    expect(lobbyState?.status).toBe('waiting');
-    expect(await lobbiesRepo.countReadyMembers(lobby.id)).toBe(0);
+    expect(lobbyState?.status).toBe('closed');
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2); // history retained
+    expect(await lobbiesRepo.findOpenLobbyForUser(players[0])).toBeNull();
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await footballGridRepo.expireRematch(seriesId, window!.seriesVersion)).toBeNull();
+    await expect(footballGridRepo.createSeries({ origin: 'private', lobbyId: lobby.id })).rejects.toThrow('GRID_LOBBY_START_STALE');
+  });
+
+  async function finishedFriendLobby() {
+    const players = await createUsers();
+    const lobby = await lobbiesRepo.createLobbyWithMembers({
+      mode: 'friendly', hostUserId: players[0], gameMode: 'football_grid', isPublic: false,
+      inviteCode: `G${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
+    }, players.map(userId => ({ userId, isReady: true })));
+    runtimeLobbyIds.push(lobby.id);
+    await lobbiesRepo.setLobbyStatus(lobby.id, 'active');
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: lobby.id, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId, players, lobby.id);
+    await footballGridRepo.advanceSeriesAfterGame(match.matchId);
+    const window = (await footballGridRepo.openRematchWindow(match.matchId))!;
+    expect(window).not.toBeNull();
+    return { players, lobby, seriesId, match, window };
+  }
+
+  it('keeps a friend room reserved during the rematch window, then closes on decline', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.expireRematch(seriesId, window.seriesVersion)).toBeNull();
+    await footballGridRepo.declineRematch({ matchId: match.matchId, userId: players[0], expectedSeriesVersion: window.seriesVersion });
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2);
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await footballGridRepo.loadState(match.matchId)).toMatchObject({ phase: 'terminal' });
+  });
+
+  it('closes the room when an accepted rematch fails, without letting stale failures close a newer offer', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const accepted = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, randomUUID())).toBeNull();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, accepted.pairingToken)).toBeTypeOf('number');
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+  });
+
+  it('keeps the room and history intact when both players accept a rematch', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const a = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    const b = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[1], commandId: randomUUID(), expectedSeriesVersion: a.seriesVersion, proposedPairingToken: randomUUID() });
+    await footballGridRepo.createPairing({ pairingToken: b.pairingToken, searchAId: seriesId, searchBId: seriesId, userAId: players[0], userBId: players[1], opponentType: 'human' });
+    const next = (await footballGridService.createMatch({ pairingToken: b.pairingToken, lobbyId: lobby.id, origin: 'private', players: b.players, openerUserId: b.players.find(p => p.seat === b.openerSeat)!.userId, seriesId, rematchOfMatchId: match.matchId, rematchIndex: b.rematchIndex })).state;
+    runtimeMatchIds.push(next.matchId);
+    expect(await footballGridRepo.expireRematch(seriesId, window.seriesVersion)).toBeNull();
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, b.pairingToken)).toBeNull();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+  });
+
+  it('keeps a friend lobby active between BO3 games and closes only if continuation fails', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match } = await finishedFriendLobby();
+    // Reproduce a finished first game awaiting its next board, not a decided series.
+    await db`UPDATE football_grid_series SET format = 'bo3', status = 'active', closed_at = null,
+      closed_reason = null, seat1_wins = 0, seat2_wins = 0, game_index = 1,
+      last_advanced_match_id = null, rematch_expires_at = null WHERE id = ${seriesId}`;
+    const advance = await footballGridRepo.advanceSeriesAfterGame(match.matchId);
+    expect(advance.kind).toBe('continued');
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    await footballGridRepo.closeSeriesAfterFailure(seriesId, match.matchId);
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await lobbiesRepo.findOpenLobbyForUser(players[0])).toBeNull();
+  });
+
+  it('serializes expired rematch creation against cleanup without leaving an active match in a closed room', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const a = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    const b = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[1], commandId: randomUUID(), expectedSeriesVersion: a.seriesVersion, proposedPairingToken: randomUUID() });
+    await footballGridRepo.createPairing({ pairingToken: b.pairingToken, searchAId: seriesId, searchBId: seriesId, userAId: players[0], userBId: players[1], opponentType: 'human' });
+    await db`UPDATE football_grid_series SET rematch_expires_at = now() - interval '1 second' WHERE id = ${seriesId}`;
+    const [creation] = await Promise.allSettled([
+      footballGridService.createMatch({ pairingToken: b.pairingToken, lobbyId: lobby.id, origin: 'private', players: b.players, openerUserId: b.players.find(p => p.seat === b.openerSeat)!.userId, seriesId, rematchOfMatchId: match.matchId, rematchIndex: b.rematchIndex }),
+      footballGridRepo.expireRematch(seriesId, b.seriesVersion),
+    ]);
+    if (creation.status === 'fulfilled') {
+      runtimeMatchIds.push(creation.value.state.matchId);
+      expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+      expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    } else {
+      expect(creation.reason.message).toBe('SERIES_CLOSED');
+      expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+      expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(false);
+    }
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2);
   });
 
   it('commits lobby activation with match creation and rejects a stale second start', async (context) => {

@@ -679,7 +679,7 @@ export interface AuctionStartAiMatchPayload {
 }
 
 export interface FootballGridSearchStartPayload {
-  locale?: 'en' | 'ka';
+  locale?: 'en' | 'ka' | 'es' | 'tr';
 }
 
 export interface FootballGridVersionedCommandPayload {
@@ -691,7 +691,7 @@ export interface FootballGridVersionedCommandPayload {
 export interface FootballGridSubmitAnswerPayload extends FootballGridVersionedCommandPayload {
   cellIndex: number;
   text: string;
-  locale: 'en' | 'ka';
+  locale: 'en' | 'ka' | 'es' | 'tr';
 }
 
 export interface FootballGridSearchStatePayload {

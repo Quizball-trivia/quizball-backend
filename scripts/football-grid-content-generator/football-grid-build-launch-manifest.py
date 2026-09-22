@@ -458,6 +458,10 @@ def load_legends(path: Path, players: dict[int, Player]) -> list[Legend]:
     dataset. Only legends that resolved to an eligible player (Georgian name +
     first-party portrait) are used; the rest are reported."""
     data = json.loads(path.read_text())
+    if (data.get('reviewStatus') != 'approved'
+            or not str(data.get('reviewedBy') or '').strip()
+            or any(item.get('reviewStatus') != 'approved' for item in data['legends'])):
+        raise RuntimeError('Historical discovery requires explicit identity and career review before generation')
     by_tm = {player.dataset_id: player for player in players.values()}
     legends: list[Legend] = []
     skipped: list[str] = []
@@ -470,7 +474,7 @@ def load_legends(path: Path, players: dict[int, Player]) -> list[Legend]:
         clubs, nationals = [], []
         for team in row["teams"]:
             label = team.get("label") or team["qid"]
-            if SENIOR_NATIONAL.search(label):
+            if team.get('national') is True or SENIOR_NATIONAL.search(label):
                 if not NOT_SENIOR.search(label):
                     nationals.append(label)
                 continue
@@ -1189,7 +1193,10 @@ def build_aliases(players: list[Player], reviewed_at: str) -> list[dict[str, Any
             if not normalized:
                 continue
             exact_required = value in {player.name_en, player.name_ka}
-            if not exact_required and len(candidate_owners[normalized]) != 1:
+            # A shared surname is still useful: the resolver disambiguates it
+            # against the selected cell, returning ambiguous if several fit.
+            # Keep the stricter global rule for optional given names/nicknames.
+            if not exact_required and alias_type != "family_name" and len(candidate_owners[normalized]) != 1:
                 continue
             key = (player.uuid, normalized, locale, alias_type)
             if key in seen:

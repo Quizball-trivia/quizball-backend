@@ -10,6 +10,9 @@ import {
 } from '../src/modules/football-grid/football-grid.content-validator.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridBoardCandidate, FootballGridCriterionView } from '../src/modules/football-grid/football-grid.types.js';
+import { approveAnswerCorrections, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
+import { auditGridLocaleCoverage } from './football-grid-locale-coverage.js';
+import { assertStagingResearchTarget, assertAdditiveStagingResearch, STAGING_RESEARCH_TRANSFORM } from './football-grid-staging-research.js';
 
 const difficulty = z.enum(['easy', 'normal', 'hard']);
 const criterionFamily = z.enum(['club', 'country', 'league', 'manager', 'teammate', 'trophy_award', 'wildcard']);
@@ -59,7 +62,7 @@ const aliasSchema = z.object({
   playerId: z.string().uuid(),
   alias: z.string().min(1).max(160),
   normalizedAlias: z.string().min(1).max(160),
-  locale: z.enum(['en', 'ka', 'translit']),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'translit']),
   aliasType: z.enum([
     'full_name', 'given_name', 'family_name', 'reordered', 'compound_surname',
     'mononym', 'nickname', 'accentless', 'georgian', 'transliteration', 'reviewed_misspelling',
@@ -111,7 +114,17 @@ export const manifestSchema = z.object({
   boards: z.array(boardSchema).default([]),
 });
 
-export type Manifest = z.infer<typeof manifestSchema>;
+export const stagingResearchManifestSchema = manifestSchema.extend({
+  sources: z.array(sourceSchema.extend({ databaseRightsStatus: z.enum(['approved', 'pending_review']) })).min(1),
+});
+export type Manifest = z.infer<typeof stagingResearchManifestSchema>;
+
+export function assertResearchMode(manifest: Manifest, enabled: boolean): void {
+  const research = manifest.release.relationshipSnapshot.stagingResearchOnly === true;
+  if (enabled !== research) throw new Error('Staging research requires its explicit flag and manifest marker');
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  else manifestSchema.parse(manifest);
+}
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -175,7 +188,11 @@ export function validateManifest(manifest: Manifest, launch: boolean): { boards:
   const membership = new Map<string, Set<string>>();
   for (const row of manifest.memberships) {
     if (!criteria.has(row.criterionKey)) errors.push(`Membership references missing criterion ${row.criterionKey}`);
+    const evidenceKeys = new Set<string>();
     for (const evidence of row.evidence) {
+      const evidenceKey = `${evidence.sourceKey}:${checksum(evidence)}`;
+      if (evidenceKeys.has(evidenceKey)) errors.push(`Membership ${row.criterionKey}/${row.playerId} has duplicate evidence`);
+      evidenceKeys.add(evidenceKey);
       if (!sourceKeys.has(evidence.sourceKey)) {
         errors.push(`Membership ${row.criterionKey}/${row.playerId} references missing source ${evidence.sourceKey}`);
       }
@@ -222,10 +239,17 @@ export function validateManifest(manifest: Manifest, launch: boolean): { boards:
   });
   const exactEnglish = new Set(manifest.aliases.filter((alias) => alias.locale === 'en' && alias.acceptancePolicy === 'exact').map((alias) => alias.playerId));
   const exactGeorgian = new Set(manifest.aliases.filter((alias) => alias.locale === 'ka' && alias.acceptancePolicy === 'exact').map((alias) => alias.playerId));
+  const aliasKeys = new Set<string>();
   for (const alias of manifest.aliases) {
+    const aliasKey = JSON.stringify([alias.playerId, alias.normalizedAlias, alias.locale, alias.aliasType]);
+    if (aliasKeys.has(aliasKey)) errors.push(`Duplicate alias ${alias.normalizedAlias}/${alias.playerId}/${alias.locale}/${alias.aliasType}`);
+    aliasKeys.add(aliasKey);
     if (normalizeFootballGridAnswer(alias.alias) !== alias.normalizedAlias) {
       errors.push(`Alias ${alias.alias}/${alias.playerId} has a non-canonical normalized value`);
     }
+  }
+  for (const failure of auditGridLocaleCoverage(manifest).failures) {
+    errors.push(`Player ${failure.playerId} has an unresolvable ${failure.form} display name`);
   }
   errors.push(...validateFootballGridRelease({ boards, exactEnglishPlayerIds: exactEnglish, exactGeorgianPlayerIds: exactGeorgian }).errors);
   if (launch && boards.length < 500) errors.push(`Launch release has ${boards.length} boards; at least 500 are required`);
@@ -598,8 +622,9 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
   const sourceRows = await sql<Array<{
     id: string; source_key: string; provider_name: string; dataset_version: string; permitted_use: string;
     attribution_requirements: string | null; retention_requirements: string | null; approval_owner: string; approved_at: string;
+    database_rights_status: 'approved' | 'pending' | 'rejected';
   }>>`SELECT DISTINCT s.id, s.source_key, s.provider_name, s.dataset_version, s.permitted_use,
-             s.attribution_requirements, s.retention_requirements, s.approval_owner, s.approved_at::text AS approved_at
+             s.attribution_requirements, s.retention_requirements, s.approval_owner, s.approved_at::text AS approved_at, s.database_rights_status
         FROM football_grid_data_sources s
         JOIN football_grid_membership_evidence e ON e.source_id = s.id
         JOIN football_grid_criterion_memberships m ON m.id = e.membership_id
@@ -630,7 +655,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     evidenceByMembership.set(row.membership_id, list);
   }
   const aliasRows = await sql<Array<{
-    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'translit';
+    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
     alias_type: Manifest['aliases'][number]['aliasType']; acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     reviewed_by: string; reviewed_at: string;
   }>>`SELECT football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at::text AS reviewed_at
@@ -695,7 +720,9 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     ...criteria.map((criterion) => criterion.assetKey).filter((key): key is string => Boolean(key)),
     ...[...players.values()].map((player) => player.imageAssetKey),
   ])].sort();
-  const manifest = manifestSchema.parse({
+  const research = release.relationship_snapshot?.stagingResearchOnly === true;
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  const manifest = (research ? stagingResearchManifestSchema : manifestSchema).parse({
     release: {
       version: release.version, aliasVersion: release.alias_version, resolverPolicyVersion: release.resolver_policy_version,
       relationshipSnapshot: release.relationship_snapshot ?? {}, approvedBy: release.approved_by,
@@ -703,7 +730,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     },
     sources: sourceRows.map((row) => ({
       key: row.source_key, providerName: row.provider_name, datasetVersion: row.dataset_version, permittedUse: row.permitted_use,
-      databaseRightsStatus: 'approved', attributionRequirements: row.attribution_requirements ?? undefined,
+      databaseRightsStatus: row.database_rights_status === 'pending' ? 'pending_review' : row.database_rights_status, attributionRequirements: row.attribution_requirements ?? undefined,
       retentionRequirements: row.retention_requirements ?? undefined, approvalOwner: row.approval_owner,
       approvedAt: isoSeconds(row.approved_at),
     })),
@@ -858,8 +885,11 @@ async function readFallbackKeys(file: string | undefined): Promise<string[]> {
   return (await readFile(file, 'utf8')).split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
 }
 
-async function loadManifest(file: string): Promise<Manifest> {
-  return manifestSchema.parse(JSON.parse(await readFile(file, 'utf8')));
+async function loadManifest(file: string, research = false): Promise<Manifest> {
+  if (research) assertStagingResearchTarget(process.env.DATABASE_URL);
+  const manifest = (research ? stagingResearchManifestSchema : manifestSchema).parse(JSON.parse(await readFile(file, 'utf8')));
+  assertResearchMode(manifest, research);
+  return manifest;
 }
 
 async function loadAndVerifyAssetRegistry(
@@ -886,13 +916,15 @@ async function loadAndVerifyAssetRegistry(
   return registry;
 }
 
-async function publish(manifest: Manifest, transformedFrom: number | null = null): Promise<void> {
+async function publish(manifest: Manifest, transformedFrom: number | null = null, research = false, stagingSourceFile?: string): Promise<void> {
+  assertResearchMode(manifest, research);
+  if (research && transformedFrom === null) throw new Error('Research publication requires its fresh source release');
   // Publishing is a staging operation. Feasibility content is intentionally
   // invisible to runtime board selection until an independent launch-grade
   // validation and explicit activation succeeds.
   const validation = validateManifest(manifest, false);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false, stagingSourceFile);
   if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
   await sql.begin(async (tx) => {
@@ -921,13 +953,13 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
            source_key, provider_name, dataset_version, permitted_use,
            database_rights_status, attribution_requirements,
            retention_requirements, approval_owner, approved_at
-         ) VALUES ($1,$2,$3,$4,'approved',$5,$6,$7,$8)
+         ) VALUES ($1,$2,$3,$4,$9,$5,$6,$7,$8)
          ON CONFLICT (source_key, dataset_version) DO NOTHING
          RETURNING id`,
         [
           source.key, source.providerName, source.datasetVersion, source.permittedUse,
           source.attributionRequirements ?? null, source.retentionRequirements ?? null,
-          source.approvalOwner, source.approvedAt,
+          source.approvalOwner, source.approvedAt, source.databaseRightsStatus === 'pending_review' ? 'pending' : 'approved',
         ],
       );
       const sourceId = rows[0]?.id ?? (await tx.unsafe<Array<{ id: string }>>(
@@ -935,7 +967,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
           WHERE source_key = $1 AND dataset_version = $2
             AND provider_name IS NOT DISTINCT FROM $3
             AND permitted_use IS NOT DISTINCT FROM $4
-            AND database_rights_status = 'approved'
+            AND database_rights_status = $9
             AND attribution_requirements IS NOT DISTINCT FROM $5
             AND retention_requirements IS NOT DISTINCT FROM $6
             AND approval_owner IS NOT DISTINCT FROM $7
@@ -943,7 +975,7 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
         [
           source.key, source.datasetVersion, source.providerName, source.permittedUse,
           source.attributionRequirements ?? null, source.retentionRequirements ?? null,
-          source.approvalOwner, source.approvedAt,
+          source.approvalOwner, source.approvedAt, source.databaseRightsStatus === 'pending_review' ? 'pending' : 'approved',
         ],
       ))[0]?.id;
       if (!sourceId) {
@@ -952,20 +984,27 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
       sourceIds.set(source.key, sourceId);
     }
     const criterionIds = new Map<string, string>();
-    for (const criterion of manifest.criteria) {
-      const rows = await tx.unsafe<Array<{ id: string }>>(
+    for (let offset = 0; offset < manifest.criteria.length; offset += 200) {
+      const chunk = manifest.criteria.slice(offset, offset + 200);
+      const rows = await tx.unsafe<Array<{ id: string; criterion_key: string }>>(
         `INSERT INTO football_grid_criteria (
            release_id, criterion_key, family, subtype, label_en, label_ka,
            asset_key, metadata, difficulty, familiarity_score
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10) RETURNING id`,
-        [
-          releaseId, criterion.key, criterion.family, criterion.subtype,
-          criterion.labelEn, criterion.labelKa, criterion.assetKey ?? null,
-          sql.json(criterion.metadata), criterion.difficulty, criterion.familiarityScore,
-        ],
+         ) SELECT $1, u.criterion_key, u.family, u.subtype, u.label_en, u.label_ka,
+                  u.asset_key, u.metadata::jsonb, u.difficulty, u.familiarity_score
+           FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                       $7::text[], $8::text[], $9::text[], $10::numeric[])
+             AS u(criterion_key, family, subtype, label_en, label_ka,
+                  asset_key, metadata, difficulty, familiarity_score)
+         RETURNING id, criterion_key`,
+        [releaseId, chunk.map(c => c.key), chunk.map(c => c.family), chunk.map(c => c.subtype),
+          chunk.map(c => c.labelEn), chunk.map(c => c.labelKa), chunk.map(c => c.assetKey ?? null),
+          chunk.map(c => JSON.stringify(c.metadata)), chunk.map(c => c.difficulty), chunk.map(c => c.familiarityScore)],
       );
-      criterionIds.set(criterion.key, rows[0].id);
+      for (const row of rows) criterionIds.set(row.criterion_key, row.id);
     }
+    if (criterionIds.size !== manifest.criteria.length) throw new Error('Criterion insert count mismatch');
+    process.stdout.write(`Publish ${manifest.release.version}: ${criterionIds.size} criteria inserted\n`);
     // Batched: publishing row-by-row over the pooler took hours for ~120k
     // rows; unnest batches land the same content in seconds. Evidence rows
     // are joined back to memberships via the (criterion, player) natural key
@@ -1154,21 +1193,69 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
   process.stdout.write(`Staged Football Grid release ${manifest.release.version} (${manifest.boards.length} boards, ${manifestChecksum})\n`);
 }
 
+export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Manifest, candidate: Manifest): boolean {
+  const preparedAt = candidate.release.relationshipSnapshot.correctionPreparedAt;
+  if (typeof preparedAt !== 'string') return false;
+  const expected = approveAnswerCorrections(
+    prepareAnswerCorrections(source, catalog, candidate.release.version, preparedAt),
+    candidate.release.approvedBy, candidate.release.approvedAt,
+  );
+  return relabelManifestsMatch(expected, candidate);
+}
+
 /**
- * A label-only transform of served content may carry validator findings its
+ * A prescribed transform of served content may carry validator findings its
  * source already has (the 2026-08 themed packs predate the board-distribution
  * rule). Prove the manifest is byte-for-byte the content the source release
- * serves right now, then drop exactly the findings the source produces under
+ * serves right now plus exactly the prescribed changes, then drop findings the source produces under
  * the same validator mode. Everything else still blocks.
  */
-async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean): Promise<string[]> {
+async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean, stagingSourceFile?: string): Promise<string[]> {
   const snapshot = manifest.release.relationshipSnapshot as { transformedFromVersion?: number; transform?: string };
-  if (snapshot.transformedFromVersion !== transformedFrom || snapshot.transform !== 'teammate-relabel-v1') {
-    throw new Error(`Manifest is not a teammate-relabel transform of release ${transformedFrom}`);
+  if (snapshot.transform === STAGING_RESEARCH_TRANSFORM) {
+    assertResearchMode(manifest, true);
+    if (snapshot.transformedFromVersion !== transformedFrom) throw new Error('Research source version mismatch');
+    if (!stagingSourceFile) throw new Error('Research requires its freshly exported source file');
+    const source = await loadManifest(stagingSourceFile);
+    const metadata = manifest.release.relationshipSnapshot;
+    if (typeof metadata.stagingSourceReleaseId !== 'string' || typeof metadata.stagingSourceStoredChecksum !== 'string') {
+      throw new Error('Research requires its immutable source release identity');
+    }
+    // Published content rows are immutable; bind the fresh export to the still-published release.
+    const rows = await sql<Array<{id:string}>>`SELECT id FROM football_grid_content_releases
+      WHERE id = ${metadata.stagingSourceReleaseId} AND version = ${transformedFrom}
+      AND manifest_checksum = ${metadata.stagingSourceStoredChecksum} AND status = 'published'`;
+    if (rows.length !== 1) throw new Error('Research source release changed or is no longer published');
+    assertAdditiveStagingResearch(source, manifest);
+    const inherited = new Set(validateManifest(source, launch).errors);
+    return errors.filter(error => !inherited.has(error));
+  }
+  if (snapshot.transformedFromVersion !== transformedFrom
+    || !['teammate-relabel-v1', 'answer-coverage-correction-v1'].includes(snapshot.transform ?? '')) {
+    throw new Error(`Manifest is not a supported verified transform of release ${transformedFrom}`);
   }
   const source = await exportRelease(transformedFrom);
   if (source.release.status !== 'published') throw new Error(`Source release ${transformedFrom} is ${source.release.status}, not published`);
   const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
+  if (snapshot.transform === 'answer-coverage-correction-v1') {
+    const metadata = manifest.release.relationshipSnapshot;
+    const catalogVersion = metadata.correctionPlayerCatalogVersion;
+    if (!Number.isSafeInteger(catalogVersion) || typeof metadata.correctionPreparedAt !== 'string') {
+      throw new Error('Answer correction requires its source player catalog and preparation timestamp');
+    }
+    const catalog = catalogVersion === transformedFrom ? source : await exportRelease(catalogVersion as number);
+    if (catalog.release.status !== 'published') throw new Error('Answer correction catalog must be published');
+    const catalogManifest = manifestSchema.parse(JSON.parse(JSON.stringify(catalog.manifest)));
+    if (!matchesPrescribedAnswerCorrection(sourceManifest, catalogManifest, manifest)) {
+      throw new Error('Answer correction differs from the prescribed transform of the live source and catalog');
+    }
+    const inherited = new Set(validateManifest(sourceManifest, launch).errors);
+    const waived = errors.filter(error => inherited.has(error));
+    if (waived.length) {
+      process.stdout.write(`WARNING: waived ${waived.length} inherited findings after exact answer-correction verification of release ${transformedFrom}\n`);
+    }
+    return errors.filter(error => !inherited.has(error));
+  }
   // Require the manifest to be exactly what transform-labels produces from the
   // served source right now (same version/approval and, if recorded, the same
   // asset-origin rewrite), allowing only alias row ordering to differ. Older
@@ -1191,15 +1278,57 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
   return errors.filter((error) => !inherited.has(error));
 }
 
+export type ActivationSourcePin = { id: string; version: number; manifest_checksum: string };
+
+/** Keep verified sources published until activation commits, even if retirement races it. */
+export async function activateWithPinnedSources(
+  version: number,
+  manifestChecksum: string,
+  sources: ActivationSourcePin[],
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx.unsafe(`SET LOCAL lock_timeout = '2s'`);
+    await tx.unsafe(`SET LOCAL statement_timeout = '15s'`);
+    for (const source of [...sources].sort((a, b) => a.id.localeCompare(b.id))) {
+      const rows = await tx.unsafe<Array<{ id: string }>>(
+        `SELECT id FROM football_grid_content_releases
+          WHERE id = $1 AND version = $2 AND manifest_checksum = $3 AND status = 'published'
+          FOR SHARE`, [source.id, source.version, source.manifest_checksum],
+      );
+      if (rows.length !== 1) throw new Error('Verified source changed or is no longer published');
+    }
+    const rows = await tx.unsafe<Array<{ id: string }>>(
+      `UPDATE football_grid_content_releases SET status = 'published', published_at = now()
+        WHERE version = $1 AND manifest_checksum = $2 AND status = 'feasibility'
+        RETURNING id`, [version, manifestChecksum],
+    );
+    if (!rows[0]) throw new Error('Matching staged release was not found or is not activatable');
+  });
+}
+
 async function activate(
   manifest: Manifest,
   assetRegistryPath: string,
   allowFallbackAssets = false,
   transformedFrom: number | null = null,
+  research = false,
+  stagingSourceFile?: string,
 ): Promise<void> {
+  assertResearchMode(manifest, research);
+  if (research && transformedFrom === null) throw new Error('Research activation requires its fresh source release');
+  const sourceVersions = transformedFrom === null ? [] : [...new Set([
+    transformedFrom,
+    ...(manifest.release.relationshipSnapshot.transform === 'answer-coverage-correction-v1'
+      ? [Number(manifest.release.relationshipSnapshot.correctionPlayerCatalogVersion)] : []),
+  ])];
+  const sources = sourceVersions.length ? await sql.unsafe<ActivationSourcePin[]>(
+    `SELECT id, version, manifest_checksum FROM football_grid_content_releases
+      WHERE version = ANY($1::integer[]) AND status = 'published'`, [sourceVersions],
+  ) : [];
+  if (sources.length !== sourceVersions.length) throw new Error('Activation source or catalog is not published');
   const validation = validateManifest(manifest, true);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true, stagingSourceFile);
   if (allowFallbackAssets) {
     // Incremental releases add criteria/players whose art intentionally rides
     // the runtime fallback chain (monogram crests, silhouette portraits).
@@ -1215,15 +1344,7 @@ async function activate(
   if (errors.length > 0) throw new Error(`Content activation failed:\n${errors.join('\n')}`);
   await loadAndVerifyAssetRegistry(manifest, assetRegistryPath);
   const manifestChecksum = checksum(manifest);
-  const rows = await sql<Array<{ id: string }>>`
-    UPDATE football_grid_content_releases
-       SET status = 'published', published_at = now()
-     WHERE version = ${manifest.release.version}
-       AND manifest_checksum = ${manifestChecksum}
-       AND status = 'feasibility'
-    RETURNING id
-  `;
-  if (!rows[0]) throw new Error('Matching staged release was not found or is not activatable');
+  await activateWithPinnedSources(manifest.release.version, manifestChecksum, sources);
   process.stdout.write(`Activated Football Grid release ${manifest.release.version}\n`);
 }
 
@@ -1394,7 +1515,16 @@ export function optionValue(args: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const [command, manifestPath, ...args] = process.argv.slice(2);
-  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (!command || !manifestPath) throw new Error('Usage: football-grid-content <generate|validate|review|approve-answer-corrections|publish|activate|retire|retire-release|transfer-quarantines|export|transform-labels|build-registry> <manifest.json> [--limit N|--feasibility|--out PATH|--asset-registry PATH]');
+  if (command === 'approve-answer-corrections') {
+    const reviewer = optionValue(args, '--approved-by');
+    const output = optionValue(args, '--out');
+    if (!reviewer || !output) throw new Error('approve-answer-corrections requires --approved-by and --out');
+    const draft = JSON.parse(await readFile(manifestPath, 'utf8')) as CorrectionDraft;
+    const manifest = manifestSchema.parse(approveAnswerCorrections(draft, reviewer, new Date().toISOString()));
+    await writeFile(output, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+    return;
+  }
   if (command === 'transfer-quarantines') {
     // Usage: transfer-quarantines <from-version> --to <version>
     const fromVersion = Number(manifestPath);
@@ -1424,7 +1554,7 @@ async function main(): Promise<void> {
     const { manifest, release } = await exportRelease(version);
     await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
     // Digest of the file as later commands will read it (JSON drops undefined fields).
-    const digest = manifestContentDigest(await loadManifest(outputPath));
+    const digest = manifestContentDigest(await loadManifest(outputPath, args.includes('--staging-research')));
     process.stdout.write(`Exported release ${version} (${release.status}, ${manifest.criteria.length} criteria, ${manifest.memberships.length} memberships, ${manifest.boards.length} boards, content digest ${digest}) to ${outputPath}\n`);
     const assetRoot = optionValue(args, '--asset-root');
     if (!assetRoot && optionValue(args, '--registry-out')) throw new Error('--registry-out requires --asset-root');
@@ -1447,7 +1577,11 @@ async function main(): Promise<void> {
     }
     return;
   }
-  const manifest = await loadManifest(manifestPath);
+  const research = args.includes('--staging-research');
+  const manifest = await loadManifest(manifestPath, research);
+  if (research && !['build-registry','validate','review','publish','activate','retire'].includes(command)) {
+    throw new Error('Unsupported staging research operation');
+  }
   if (command === 'build-registry') {
     // Usage: build-registry <manifest.json> --asset-root DIR [--asset-cache DIR --player-pool DIR --cdn-base URL --fallback-file F --fallback-keys F] --registry-out F
     const assetRoot = optionValue(args, '--asset-root');
@@ -1520,7 +1654,7 @@ async function main(): Promise<void> {
       throw new Error('The publish command is always non-playable staging; remove --feasibility');
     }
     const transformedFrom = optionValue(args, '--transformed-from');
-    await publish(manifest, transformedFrom ? Number(transformedFrom) : null);
+    await publish(manifest, transformedFrom ? Number(transformedFrom) : null, research, optionValue(args, '--staging-source'));
     return;
   }
   if (command === 'activate') {
@@ -1529,7 +1663,7 @@ async function main(): Promise<void> {
       throw new Error('activate requires --asset-registry PATH so every launch asset is verified on disk');
     }
     const transformedFrom = optionValue(args, '--transformed-from');
-    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'), transformedFrom ? Number(transformedFrom) : null);
+    await activate(manifest, assetRegistry, args.includes('--allow-fallback-assets'), transformedFrom ? Number(transformedFrom) : null, research, optionValue(args, '--staging-source'));
     return;
   }
   if (command === 'retire') {

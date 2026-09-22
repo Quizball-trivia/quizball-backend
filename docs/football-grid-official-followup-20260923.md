@@ -27,6 +27,14 @@ Preparation remains offline and outputs a pending review package. Publishing
 re-exports the live source and catalog and recomputes the exact selected batch;
 modified facts, identities, aliases or source content fail that comparison.
 
+The fact fixture intentionally preserves exact existing catalog names, including
+the trailing U+200E in Nemanja Vidic's name. Fresh staging and production exports
+both contain that character for UUID `abd0e4b9-8f33-4866-a90e-61c207e94379`.
+Removing it only from this fixture would break the strict identity guard. This
+is not a display-name cleanup. Existing clean `Nemanja Vidic` and `Vidić`
+aliases remain available for ordinary submissions; normalization itself does
+not remove U+200E.
+
 ## Production-snapshot verification
 
 Against releases 2026092221 and 2026092222:

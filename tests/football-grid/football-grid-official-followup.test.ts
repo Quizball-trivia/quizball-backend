@@ -29,6 +29,20 @@ function source(): Manifest {
 }
 
 describe('official follow-up correction batch', () => {
+  it('preserves the exact catalog identity and its existing clean answer alias', () => {
+    const vidic = facts.find(f => f.playerId === 'abd0e4b9-8f33-4866-a90e-61c207e94379')!;
+    expect(vidic.nameEn).toBe('Nemanja Vidic\u200e');
+    const original = source();
+    original.aliases.push({ playerId: vidic.playerId, alias: 'Nemanja Vidic', normalizedAlias: 'nemanja vidic',
+      locale: 'en', aliasType: 'full_name', acceptancePolicy: 'unique_only', reviewedBy: 'fixture', reviewedAt: at });
+    const candidate = prepareAnswerCorrections(original, original, 101, at, OFFICIAL_FOLLOWUP_BATCH).candidate;
+    expect(candidate.players.find(p => p.id === vidic.playerId)?.nameEn).toBe(vidic.nameEn);
+    const resolved = resolveFootballGridAnswer({ submittedText: 'Nemanja Vidic',
+      aliases: candidate.aliases.map((a, i) => ({ ...a, id: String(i) })),
+      validPlayerIds: [vidic.playerId], boardPlayerIds: [vidic.playerId], usedPlayerIds: [] });
+    expect(resolved).toMatchObject({ outcome: 'correct', playerId: vidic.playerId });
+  });
+
   it('adds the 63 cited relationships after the previous correction without mutating the source', () => {
     const original = source();
     const before = JSON.stringify(original);

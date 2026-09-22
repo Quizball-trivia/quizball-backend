@@ -505,7 +505,7 @@ export const footballGridService = {
     expectedStateVersion: number;
     cellIndex: number;
     text: string;
-    locale: 'en' | 'ka';
+    locale: 'en' | 'ka' | 'es' | 'tr';
   }): Promise<FootballGridCommandResult> {
     try {
       const processingFence = randomUUID();

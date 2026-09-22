@@ -231,9 +231,9 @@ describe('footballGridMatchmakingService session fencing', () => {
     state.emitSessionState.mockResolvedValue(undefined);
   });
 
-  it('starts a human match immediately when the second search joins', async () => {
-    await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale: 'en' });
-    await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en' });
+  it.each(['en', 'ka', 'es', 'tr'] as const)('recovers a %s search and pairs across interface languages', async (locale) => {
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale, theme: 'european' });
+    await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en', theme: 'european' });
 
     expect(state.withUserSessionLocks).toHaveBeenCalledWith(
       expect.arrayContaining(['user-a', 'user-b']),

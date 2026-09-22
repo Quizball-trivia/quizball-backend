@@ -11,6 +11,7 @@ import {
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridBoardCandidate, FootballGridCriterionView } from '../src/modules/football-grid/football-grid.types.js';
 import { approveAnswerCorrections, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
+import { auditGridLocaleCoverage } from './football-grid-locale-coverage.js';
 
 const difficulty = z.enum(['easy', 'normal', 'hard']);
 const criterionFamily = z.enum(['club', 'country', 'league', 'manager', 'teammate', 'trophy_award', 'wildcard']);
@@ -60,7 +61,7 @@ const aliasSchema = z.object({
   playerId: z.string().uuid(),
   alias: z.string().min(1).max(160),
   normalizedAlias: z.string().min(1).max(160),
-  locale: z.enum(['en', 'ka', 'translit']),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'translit']),
   aliasType: z.enum([
     'full_name', 'given_name', 'family_name', 'reordered', 'compound_surname',
     'mononym', 'nickname', 'accentless', 'georgian', 'transliteration', 'reviewed_misspelling',
@@ -227,6 +228,9 @@ export function validateManifest(manifest: Manifest, launch: boolean): { boards:
     if (normalizeFootballGridAnswer(alias.alias) !== alias.normalizedAlias) {
       errors.push(`Alias ${alias.alias}/${alias.playerId} has a non-canonical normalized value`);
     }
+  }
+  for (const failure of auditGridLocaleCoverage(manifest).failures) {
+    errors.push(`Player ${failure.playerId} has an unresolvable ${failure.form} display name`);
   }
   errors.push(...validateFootballGridRelease({ boards, exactEnglishPlayerIds: exactEnglish, exactGeorgianPlayerIds: exactGeorgian }).errors);
   if (launch && boards.length < 500) errors.push(`Launch release has ${boards.length} boards; at least 500 are required`);
@@ -631,7 +635,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     evidenceByMembership.set(row.membership_id, list);
   }
   const aliasRows = await sql<Array<{
-    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'translit';
+    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
     alias_type: Manifest['aliases'][number]['aliasType']; acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     reviewed_by: string; reviewed_at: string;
   }>>`SELECT football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at::text AS reviewed_at

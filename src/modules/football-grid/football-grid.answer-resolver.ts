@@ -23,6 +23,11 @@ export function footballGridTypoDistanceLimit(normalizedInput: string): number {
   return 2;
 }
 
+/** Keyboard/case equivalence, separate from immutable stored alias keys. */
+export function footballGridOrthographicKey(normalized: string): string {
+  return normalized.replace(/ı/g, 'i').replace(/ß/g, 'ss');
+}
+
 export function boundedLevenshtein(left: string, right: string, limit: number): number {
   if (Math.abs(left.length - right.length) > limit) return limit + 1;
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -63,7 +68,7 @@ function classifyCandidates(input: {
   validPlayerIds: Set<string>;
   usedPlayerIds: Set<string>;
   normalizedInput: string;
-  method: 'exact' | 'safe_typo';
+  method: 'exact' | 'orthographic' | 'safe_typo';
 }): FootballGridResolvedAnswer {
   const cellCandidates = [...new Map(
     input.candidates
@@ -116,6 +121,15 @@ export function resolveFootballGridAnswer(input: {
   const exact = input.aliases.filter((alias) => alias.normalizedAlias === normalizedInput);
   if (exact.length > 0) {
     return classifyCandidates({ candidates: exact, validPlayerIds, usedPlayerIds, normalizedInput, method: 'exact' });
+  }
+
+  // Keep exact identity matches authoritative. Then allow Turkish dotted / dotless
+  // i keyboard variants and ß/SS case variants against ALL alias owners.
+  // Never rewrite published aliases or guess between multiple qualifying players.
+  const keyboardKey = footballGridOrthographicKey(normalizedInput);
+  const orthographic = input.aliases.filter((alias) => footballGridOrthographicKey(alias.normalizedAlias) === keyboardKey);
+  if (orthographic.length > 0) {
+    return classifyCandidates({ candidates: orthographic, validPlayerIds, usedPlayerIds, normalizedInput, method: 'orthographic' });
   }
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);

@@ -69,7 +69,7 @@ interface QueuedGridSearch {
   searchId: string;
   userId: string;
   displayName: string;
-  locale: 'en' | 'ka';
+  locale: 'en' | 'ka' | 'es' | 'tr';
   theme: FootballGridTheme;
   queuedAt: number;
   fallbackAt: number;
@@ -211,7 +211,7 @@ function parseSearchSnapshot(value: Record<string, unknown> | null): QueuedGridS
     || typeof value.searchId !== 'string'
     || typeof value.userId !== 'string'
     || typeof value.displayName !== 'string'
-    || (value.locale !== 'en' && value.locale !== 'ka')
+    || (value.locale !== 'en' && value.locale !== 'ka' && value.locale !== 'es' && value.locale !== 'tr')
     || typeof value.queuedAt !== 'number'
     || typeof value.fallbackAt !== 'number'
   ) return null;
@@ -868,7 +868,7 @@ export const footballGridMatchmakingService = {
    * (settlement rule) and see the bot under an anonymous guest-style name
    * (football-grid-realtime emitMatchFound).
    */
-  async handlePracticeBotStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
+  async handlePracticeBotStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka' | 'es' | 'tr'; theme: FootballGridTheme }): Promise<void> {
     const user = socket.data.user;
     if (!isGuestUser(user)) {
       socket.emit('grid:error', { code: 'GRID_PRACTICE_GUEST_ONLY', message: 'Members play Football Tic Tac Toe through matchmaking' });
@@ -987,7 +987,7 @@ export const footballGridMatchmakingService = {
     }
   },
 
-  async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka'; theme: FootballGridTheme }): Promise<void> {
+  async handleSearchStart(io: QuizballServer, socket: QuizballSocket, input: { locale: 'en' | 'ka' | 'es' | 'tr'; theme: FootballGridTheme }): Promise<void> {
     assertCapability(socket.data.user, 'queueEntry');
     const userId = socket.data.user.id;
     appMetrics.footballGridQueueJoins.add(1);

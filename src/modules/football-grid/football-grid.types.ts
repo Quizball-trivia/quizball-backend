@@ -1,4 +1,4 @@
-export type FootballGridLocale = 'en' | 'ka';
+export type FootballGridLocale = 'en' | 'ka' | 'es' | 'tr';
 export type FootballGridDifficulty = 'easy' | 'normal' | 'hard';
 export type FootballGridOrigin = 'random' | 'challenge' | 'private' | 'public' | 'code';
 
@@ -154,7 +154,7 @@ export interface FootballGridAliasRecord {
   playerId: string;
   alias: string;
   normalizedAlias: string;
-  locale: 'en' | 'ka' | 'translit';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
   acceptancePolicy: 'exact' | 'unique_only' | 'safe_typo';
 }
 
@@ -163,7 +163,7 @@ export interface FootballGridResolutionDiagnostics {
   version: 1;
   reason: 'accepted' | 'empty_input' | 'no_matching_alias' | 'recognized_not_in_cell'
     | 'multiple_cell_candidates' | 'multiple_typo_candidates' | 'nearest_typo_not_on_board' | 'player_already_used';
-  method: 'none' | 'exact' | 'safe_typo';
+  method: 'none' | 'exact' | 'orthographic' | 'safe_typo';
   candidatePlayerIds: string[];
   candidateCount: number;
   candidatesTruncated: boolean;

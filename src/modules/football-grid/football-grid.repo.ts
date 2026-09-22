@@ -106,7 +106,7 @@ export interface FootballGridCommandInboxRow {
   turn_number: number;
   command_type: 'answer' | 'pass' | 'forfeit';
   cell_index: number | null;
-  locale: 'en' | 'ka' | null;
+  locale: 'en' | 'ka' | 'es' | 'tr' | null;
   submitted_text: string | null;
   payload_hash: string;
   admitted_at: string;
@@ -2149,7 +2149,7 @@ export const footballGridRepo = {
         claimantUserId: string;
         turnNumber: number;
         aliasId: string | null;
-        locale: 'en' | 'ka';
+        locale: 'en' | 'ka' | 'es' | 'tr';
       };
       pendingCommandId?: string;
     },
@@ -2332,7 +2332,7 @@ export const footballGridRepo = {
     expectedStateVersion: number;
     commandType: 'answer' | 'pass' | 'forfeit';
     cellIndex?: number | null;
-    locale?: 'en' | 'ka' | null;
+    locale?: 'en' | 'ka' | 'es' | 'tr' | null;
     submittedText?: string | null;
     payloadHash: string;
     processingFence?: string;
@@ -2633,7 +2633,7 @@ export const footballGridRepo = {
       football_player_id: string;
       alias: string;
       normalized_alias: string;
-      locale: 'en' | 'ka' | 'translit';
+      locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
       SELECT id, football_player_id, alias, normalized_alias,

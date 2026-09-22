@@ -100,8 +100,12 @@ python scripts/football-grid-content-generator/audit-epl-history.py \
   --raw RAW/epldata --comparison HISTORICAL.json --out EPL.json
 python scripts/football-grid-content-generator/crosscheck-epl-history.py \
   --raw RAW --epl EPL.json --historical HISTORICAL.json --out CROSSCHECK.json
+python -m pip install -r scripts/football-grid-content-generator/requirements-test.txt
 python -m unittest discover -s tests/football-grid -p 'test_*.py'
 ```
+
+The offline Python tests also run in the `football-data-audits` CI job on every
+PR. CI uses synthetic fixtures and has no database credentials or source downloads.
 
 Both reports are deliberately unpublishable (`publishable: false`,
 `coverageComplete: false`). They have no database connection or approval command.

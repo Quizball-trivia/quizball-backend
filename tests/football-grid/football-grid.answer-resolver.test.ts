@@ -21,6 +21,37 @@ const alias = (
 });
 
 describe('football grid answer resolver', () => {
+  it.each([
+    ['en', 'Kylian Mbappé', 'KYLIAN MBAPPE'],
+    ['ka', 'კილიან მბაპე', 'კილიან მბაპე'.toUpperCase()],
+    ['es', 'Ángel Di María', 'ANGEL DI MARIA'],
+    ['tr', 'İlkay Gündoğan', 'ılkay gundogan'],
+    ['tr', 'Nuri Şahin', 'NURİ SAHİN'],
+    ['tr', 'Rıdvan Yılmaz', 'Ridvan Yilmaz'],
+    ['en', 'Stefan Kießling', 'STEFAN KIESSLING'],
+    ['es', 'Kevin Großkreutz', 'KEVIN GROSSKREUTZ'],
+    ['tr', 'Pascal Groß', 'PASCAL GROSS'],
+  ] as const)('accepts a reviewed %s name with keyboard/case variants', (locale, name, submittedText) => {
+    const reviewed = { ...alias('a', 'p', normalizeFootballGridAnswer(name)), alias: name, locale };
+    expect(resolveFootballGridAnswer({ submittedText, aliases: [reviewed], validPlayerIds: ['p'],
+      boardPlayerIds: ['p'], usedPlayerIds: [] })).toMatchObject({ outcome: 'correct', playerId: 'p' });
+    expect(resolveFootballGridAnswer({ submittedText, aliases: [reviewed], validPlayerIds: [],
+      boardPlayerIds: ['p'], usedPlayerIds: [] }).outcome).toBe('wrong');
+    expect(resolveFootballGridAnswer({ submittedText, aliases: [reviewed], validPlayerIds: ['p'],
+      boardPlayerIds: ['p'], usedPlayerIds: ['p'] }).outcome).toBe('already_used');
+  });
+
+  it('preserves exact identity precedence and ambiguity for keyboard-equivalent aliases', () => {
+    const resolve = (submittedText: string, aliases: FootballGridAliasRecord[], validPlayerIds: string[]) =>
+      resolveFootballGridAnswer({ submittedText, aliases, validPlayerIds, boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [] });
+    expect(resolve('isik', [alias('a', 'p1', 'isik'), alias('b', 'p2', 'ısık')], ['p2']).outcome).toBe('wrong');
+    expect(resolve('isık', [alias('a', 'p1', 'isik'), alias('b', 'p2', 'ısik')], ['p1', 'p2']))
+      .toMatchObject({ outcome: 'ambiguous', diagnostics: { method: 'orthographic', candidateCount: 2 } });
+    // Published keys remain byte-for-byte compatible with the existing content generator.
+    expect(normalizeFootballGridAnswer('Rıdvan')).toBe('rıdvan');
+    expect(normalizeFootballGridAnswer('Groß')).toBe('groß');
+  });
+
   it('normalizes punctuation, accents, case, and whitespace', () => {
     expect(normalizeFootballGridAnswer('  ÁNGEL  Di-María! ')).toBe('angel di maria');
   });

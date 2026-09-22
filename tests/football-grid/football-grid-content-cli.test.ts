@@ -94,6 +94,16 @@ function sourceManifest() {
 }
 
 describe('Football Grid content CLI contracts', () => {
+  it.each(['es', 'tr'] as const)('imports reviewed %s aliases without removing EN/KA fallback names', (locale) => {
+    const manifest = sourceManifest();
+    const existingCount = manifest.aliases.length;
+    manifest.aliases.push({ ...manifest.aliases[0], locale });
+    const parsed = manifestSchema.parse(manifest);
+    expect(parsed.aliases).toHaveLength(existingCount + 1);
+    expect(parsed.aliases.at(-1)?.locale).toBe(locale);
+    expect(validateManifest(parsed).errors.some((error) => /alias/i.test(error))).toBe(false);
+  });
+
   it('rejects flags whose required path value is missing', () => {
     expect(() => optionValue(['--out'], '--out')).toThrow('--out requires a value');
     expect(() => optionValue(['--asset-registry', '--feasibility'], '--asset-registry')).toThrow(

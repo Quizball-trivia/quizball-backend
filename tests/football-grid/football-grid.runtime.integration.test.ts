@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import postgres from 'postgres';
+import { normalizeFootballGridAnswer } from '../../src/modules/football-grid/football-grid.answer-resolver.js';
 import { FOOTBALL_GRID_EASY_BOT_CAPS } from '../../src/modules/football-grid/football-grid-bot.service.js';
 import '../setup.js';
 
@@ -28,6 +29,13 @@ const PLAYER_IDS = Array.from(
   { length: 9 },
   (_, index) => `00000000-0000-4000-8000-${String(992001 + index).padStart(12, '0')}`,
 );
+
+const LOCALE_ANSWERS = [
+  { locale: 'en', name: 'Grid Player 1', input: 'GRID PLAYER 1' },
+  { locale: 'ka', name: 'გრიდ მოთამაშე 1', input: 'გრიდ მოთამაშე 1'.toUpperCase() },
+  { locale: 'es', name: 'Jugador Álvarez', input: 'Jugador Alvarez' },
+  { locale: 'tr', name: 'Oyuncu Yılmaz', input: 'Oyuncu Yilmaz' },
+] as const;
 
 let db: postgres.Sql;
 let dbAvailable = false;
@@ -187,6 +195,16 @@ async function seedImmutableContent(): Promise<void> {
         ) ON CONFLICT DO NOTHING
       `;
     }
+  }
+  for (const { locale, name } of LOCALE_ANSWERS) {
+    await db`
+      INSERT INTO football_grid_player_aliases (
+        release_id, football_player_id, alias, normalized_alias, locale,
+        alias_type, acceptance_policy, reviewed_by, reviewed_at
+      ) VALUES (${RELEASE_ID}, ${PLAYER_IDS[0]}, ${name}, ${normalizeFootballGridAnswer(name)},
+        ${locale}, 'full_name', 'exact', 'integration-test', now())
+      ON CONFLICT DO NOTHING
+    `;
   }
 }
 
@@ -562,6 +580,28 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
+  for (const { locale: uiLocale } of LOCALE_ANSWERS) {
+    for (const { locale: aliasLocale, input: text } of LOCALE_ANSWERS) {
+      it(`accepts ${aliasLocale} aliases in the ${uiLocale} interface and persists that locale`, async (context) => {
+        if (!hasRuntimeDb(context)) return;
+        const runtime = await createReadyTurn('random');
+        const answer = await footballGridService.submitAnswer({
+          matchId: runtime.matchId, userId: runtime.playerA, commandId: randomUUID(),
+          expectedStateVersion: runtime.stateVersion, cellIndex: 0, text, locale: uiLocale,
+        });
+        expect(answer).toMatchObject({ outcome: 'correct', resolvedPlayerId: PLAYER_IDS[0] });
+        const [saved] = await db`
+          SELECT i.locale AS inbox_locale, a.locale AS attempt_locale, c.submitted_locale
+          FROM football_grid_attempts a
+          JOIN football_grid_command_inbox i ON i.id = a.inbox_id
+          JOIN football_grid_claims c ON c.match_id = a.match_id AND c.cell_index = a.cell_index
+          WHERE a.id = ${answer.attemptId!}
+        `;
+        expect(saved).toEqual({ inbox_locale: uiLocale, attempt_locale: uiLocale, submitted_locale: uiLocale });
+      });
+    }
+  }
+
   it('pins v2 strength transactionally and records private action policy provenance', async (context) => {
     if (!hasRuntimeDb(context)) return;
     await seedBotGovernorTier({ tier: 'World-Class', adjustment: -0.075 });

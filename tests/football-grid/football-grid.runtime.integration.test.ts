@@ -580,25 +580,27 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
-  it.each(LOCALE_ANSWERS.flatMap(({ locale }) => LOCALE_ANSWERS.map((answer) => ({
-    uiLocale: locale, aliasLocale: answer.locale, text: answer.input,
-  }))))('accepts $aliasLocale aliases in the $uiLocale interface and persists that locale', async ({ uiLocale, text }, context) => {
-    if (!hasRuntimeDb(context)) return;
-    const runtime = await createReadyTurn('random');
-    const answer = await footballGridService.submitAnswer({
-      matchId: runtime.matchId, userId: runtime.playerA, commandId: randomUUID(),
-      expectedStateVersion: runtime.stateVersion, cellIndex: 0, text, locale: uiLocale,
-    });
-    expect(answer).toMatchObject({ outcome: 'correct', resolvedPlayerId: PLAYER_IDS[0] });
-    const [saved] = await db`
-      SELECT i.locale AS inbox_locale, a.locale AS attempt_locale, c.submitted_locale
-      FROM football_grid_attempts a
-      JOIN football_grid_command_inbox i ON i.id = a.inbox_id
-      JOIN football_grid_claims c ON c.match_id = a.match_id AND c.cell_index = a.cell_index
-      WHERE a.id = ${answer.attemptId!}
-    `;
-    expect(saved).toEqual({ inbox_locale: uiLocale, attempt_locale: uiLocale, submitted_locale: uiLocale });
-  });
+  for (const { locale: uiLocale } of LOCALE_ANSWERS) {
+    for (const { locale: aliasLocale, input: text } of LOCALE_ANSWERS) {
+      it(`accepts ${aliasLocale} aliases in the ${uiLocale} interface and persists that locale`, async (context) => {
+        if (!hasRuntimeDb(context)) return;
+        const runtime = await createReadyTurn('random');
+        const answer = await footballGridService.submitAnswer({
+          matchId: runtime.matchId, userId: runtime.playerA, commandId: randomUUID(),
+          expectedStateVersion: runtime.stateVersion, cellIndex: 0, text, locale: uiLocale,
+        });
+        expect(answer).toMatchObject({ outcome: 'correct', resolvedPlayerId: PLAYER_IDS[0] });
+        const [saved] = await db`
+          SELECT i.locale AS inbox_locale, a.locale AS attempt_locale, c.submitted_locale
+          FROM football_grid_attempts a
+          JOIN football_grid_command_inbox i ON i.id = a.inbox_id
+          JOIN football_grid_claims c ON c.match_id = a.match_id AND c.cell_index = a.cell_index
+          WHERE a.id = ${answer.attemptId!}
+        `;
+        expect(saved).toEqual({ inbox_locale: uiLocale, attempt_locale: uiLocale, submitted_locale: uiLocale });
+      });
+    }
+  }
 
   it('pins v2 strength transactionally and records private action policy provenance', async (context) => {
     if (!hasRuntimeDb(context)) return;

@@ -5,8 +5,8 @@ import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from '../../sr
 import type { Manifest } from '../../scripts/football-grid-content.js';
 
 const date = '2026-09-21T19:00:00.000Z';
-const [henry, ronaldo, coutinho, dele] = CONFIRMED_FACTS;
-const ka = ['ტიერი ანრი', 'კრიშტიანუ რონალდუ', 'ფილიპე კოუტინიო', 'დელი ალი'];
+const [henry, ronaldo, coutinho, dele, neymar] = CONFIRMED_FACTS;
+const ka = ['ტიერი ანრი', 'კრიშტიანუ რონალდუ', 'ფილიპე კოუტინიო', 'დელი ალი', 'ნეიმარი'];
 function aliases(id: string, en: string, ge: string): Manifest['aliases'] {
   return ([['en', en], ['ka', ge]] as const).map(([locale, alias]) => ({
     playerId: id, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale,
@@ -39,6 +39,22 @@ function answer(candidate: Pick<Manifest, 'aliases' | 'memberships'>, text: stri
 }
 
 describe('production rejected-answer corrections', () => {
+  it('accepts Neymar as a forward without removing his existing midfield role', () => {
+    const source = fixture();
+    for (const key of ['country:br', 'wildcard:position-mid']) {
+      source.criteria.push({ key, family: 'wildcard', subtype: 'fixture', labelEn: key, labelKa: key,
+        metadata: {}, difficulty: 'easy', familiarityScore: 90 });
+      source.memberships.push({ criterionKey: key, playerId: neymar.playerId, relationshipSubtype: 'fixture',
+        verifiedBy: 'fixture', reviewedAt: date, evidence: [] });
+    }
+    const candidate = prepareAnswerCorrections(source, source, 11, date).candidate;
+    for (const name of ['Neymar', 'NEYMAR', 'ნეიმარი']) {
+      expect(answer(source, name, 'country:br', 'wildcard:position-fwd').outcome).toBe('wrong');
+      expect(answer(candidate, name, 'country:br', 'wildcard:position-fwd')).toMatchObject({ outcome: 'correct', playerId: neymar.playerId });
+      expect(answer(candidate, name, 'country:br', 'wildcard:position-mid').outcome).toBe('correct');
+      expect(answer(candidate, name, 'country:br', 'wildcard:position-def').outcome).toBe('wrong');
+    }
+  });
   it('permits only the exact reviewed correction, rejecting unrelated data and source changes', () => {
     const source = fixture();
     const draft = prepareAnswerCorrections(source, source, 11, date);

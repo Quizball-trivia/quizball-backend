@@ -31,6 +31,12 @@ export const CONFIRMED_FACTS = [
     url: 'https://www.tottenhamhotspur.com/news/1008497/i-love-you-all-deles-message-to-spurs-fans-on-his-n17-return',
     fact: 'Dele Alli made 269 Tottenham appearances and represented England 37 times.',
   },
+  {
+    playerId: '10aa4f1f-9fc1-4c3b-93b5-217bdba110dd', nameEn: 'Neymar',
+    criteria: ['wildcard:position-fwd'],
+    url: 'https://www.fcbarcelona.com/en/football/first-team/news/1140621/from-romario-to-neymar-the-brazilian-tradition-upfront-at-the-camp-nou',
+    fact: 'FC Barcelona identifies Neymar as a Brazilian forward. His recorded midfield role does not exclude this evidenced forward role.',
+  },
 ] as const;
 
 type Source = Manifest['sources'][number];

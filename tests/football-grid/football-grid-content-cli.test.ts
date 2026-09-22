@@ -94,6 +94,11 @@ function sourceManifest() {
 }
 
 describe('Football Grid content CLI contracts', () => {
+  it('rejects repeated database alias identities even when review metadata differs', () => {
+    const manifest = sourceManifest();
+    manifest.aliases.push({ ...manifest.aliases[0], reviewedBy: 'another-reviewer' });
+    expect(validateManifest(manifest, false).errors.some(error => error.startsWith('Duplicate alias '))).toBe(true);
+  });
   it('rejects duplicate evidence before opening a publish transaction', () => {
     const manifest = sourceManifest();
     manifest.memberships[0].evidence.push({ ...manifest.memberships[0].evidence[0] });

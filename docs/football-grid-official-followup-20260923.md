@@ -18,6 +18,11 @@ npx tsx scripts/football-grid-answer-corrections.ts SOURCE.json SAME_ENVIRONMENT
 Omitting the argument retains the original September 21 correction. Unknown
 batches fail. The new batch may follow the original correction, but cannot be
 applied twice. It cannot approve an unrelated pending historical source.
+When the source predates the original correction, the batch also unions those
+five already reviewed player corrections and the same surname repair. Existing
+memberships are skipped, so production's current baseline remains unchanged;
+staging can reach the same corrected answer sets directly from its original
+non-research sources without publishing intermediate releases.
 Preparation remains offline and outputs a pending review package. Publishing
 re-exports the live source and catalog and recomputes the exact selected batch;
 modified facts, identities, aliases or source content fail that comparison.

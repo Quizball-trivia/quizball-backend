@@ -55,6 +55,13 @@ class IdentityWitnessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'same club match'):
             self.run_review()
 
+    def test_teammate_criterion_requires_prefix_and_target(self):
+        for criterion_key in ['uuid-b', 'club:uuid-b', 'teammate:']:
+            with self.subTest(criterion_key=criterion_key):
+                self.report['releases'][0]['proposedFacts'][0]['criterionKey'] = criterion_key
+                with self.assertRaisesRegex(ValueError, 'Teammate criterion'):
+                    self.run_review()
+
     def test_changed_witness_fails_instead_of_becoming_a_new_fact(self):
         self.report['releases'][0]['proposedFacts'][0]['witnesses'][0]['date'] = '2001-09-02'
         with self.assertRaisesRegex(ValueError, 'pinned appearance'):

@@ -506,23 +506,36 @@ function isoSeconds(value: string): string {
 }
 
 /**
- * Evidence exactly as `publish` will hash it. Releases were generated with
- * second-precision timestamps, but some rows of the 2026-08 themed packs were
- * hashed with milliseconds; the form that reproduces the stored checksum wins,
- * and no form reproducing it is an error.
+ * SQL NULL loses the distinction between omitted and explicitly null optional
+ * dates. Timestamptz also normalizes fractional precision. Recover only a JSON
+ * representation of those same stored values that matches the original hash;
+ * never change a date, truncate microseconds or replace a stored checksum.
  */
-function projectEvidence(item: {
+export function projectEvidence(item: {
   sourceKey: string; source_locator: string; captured_fact: string; effective_from: string | null; effective_to: string | null;
   rights_class: string; reviewed_by: string; reviewed_at: string; evidence_checksum: string;
 }): Manifest['memberships'][number]['evidence'][number] {
   const base = {
     sourceKey: item.sourceKey, sourceLocator: item.source_locator, capturedFact: item.captured_fact,
-    effectiveFrom: item.effective_from, effectiveTo: item.effective_to,
     rightsClass: item.rights_class, reviewedBy: item.reviewed_by,
   };
-  for (const reviewedAt of [isoSeconds(item.reviewed_at), new Date(item.reviewed_at).toISOString()]) {
-    const projected = { ...base, reviewedAt };
-    if (checksum(projected) === item.evidence_checksum) return projected;
+  const timestamp = /:\d{2}(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.exec(item.reviewed_at);
+  if (!timestamp) throw new Error(`Unsupported evidence timestamp ${item.reviewed_at}`);
+  const fraction = timestamp[1] ?? '';
+  const minimumPrecision = fraction.replace(/0+$/, '').length;
+  const utcSeconds = new Date(item.reviewed_at).toISOString().slice(0, 19);
+  for (const precision of [0, 3, 6, 1, 2, 4, 5]) {
+    if (precision < minimumPrecision) continue;
+    const reviewedAt = `${utcSeconds}${precision ? `.${fraction.padEnd(precision, '0').slice(0, precision)}` : ''}Z`;
+    for (const effectiveFrom of item.effective_from === null ? [null, undefined] : [item.effective_from]) {
+      for (const effectiveTo of item.effective_to === null ? [null, undefined] : [item.effective_to]) {
+        const projected = { ...base, reviewedAt,
+          ...(effectiveFrom !== undefined ? { effectiveFrom } : {}),
+          ...(effectiveTo !== undefined ? { effectiveTo } : {}),
+        };
+        if (checksum(projected) === item.evidence_checksum) return projected;
+      }
+    }
   }
   throw new Error(`Evidence ${item.source_locator} does not reproduce stored checksum ${item.evidence_checksum}`);
 }
@@ -654,6 +667,32 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     list.push(row);
     evidenceByMembership.set(row.membership_id, list);
   }
+  // Fail on provenance drift before fetching hundreds of thousands of answers.
+  let evidenceTotal = 0;
+  const memberships: Manifest['memberships'] = membershipRows.map((row) => {
+    const evidence = (evidenceByMembership.get(row.id) ?? []).map((item) => {
+      evidenceTotal += 1;
+      try {
+        return projectEvidence({ ...item, sourceKey: sourceKeyById.get(item.source_id) ?? '' });
+      } catch (error) {
+        throw new Error(`Membership ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    if (evidence.length === 0) throw new Error(`Membership ${row.id} has no evidence rows`);
+    // publish re-derives evidence_checksum from the projected object; two stored
+    // rows that collapse onto one projection would violate the uniqueness key.
+    const seen = new Set<string>();
+    for (const item of evidence) {
+      const key = `${item.sourceKey}:${checksum(item)}`;
+      if (seen.has(key)) throw new Error(`Membership ${row.id}: evidence rows collapse onto one checksum after export`);
+      seen.add(key);
+    }
+    return {
+      criterionKey: keyById.get(row.criterion_id) ?? '', playerId: row.football_player_id,
+      relationshipSubtype: row.relationship_subtype, effectiveFrom: row.effective_from, effectiveTo: row.effective_to,
+      verifiedBy: row.verified_by, reviewedAt: isoSeconds(row.reviewed_at), evidence,
+    };
+  });
   const aliasRows = await sql<Array<{
     football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
     alias_type: Manifest['aliases'][number]['aliasType']; acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
@@ -683,31 +722,6 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, labelKa: row.label_ka,
     assetKey: row.asset_key, metadata: row.metadata ?? {}, difficulty: row.difficulty, familiarityScore: Number(row.familiarity_score),
   }));
-  let evidenceTotal = 0;
-  const memberships: Manifest['memberships'] = membershipRows.map((row) => {
-    const evidence = (evidenceByMembership.get(row.id) ?? []).map((item) => {
-      evidenceTotal += 1;
-      try {
-        return projectEvidence({ ...item, sourceKey: sourceKeyById.get(item.source_id) ?? '' });
-      } catch (error) {
-        throw new Error(`Membership ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    });
-    if (evidence.length === 0) throw new Error(`Membership ${row.id} has no evidence rows`);
-    // publish re-derives evidence_checksum from the projected object; two stored
-    // rows that collapse onto one projection would violate the uniqueness key.
-    const seen = new Set<string>();
-    for (const item of evidence) {
-      const key = `${item.sourceKey}:${checksum(item)}`;
-      if (seen.has(key)) throw new Error(`Membership ${row.id}: evidence rows collapse onto one checksum after export`);
-      seen.add(key);
-    }
-    return {
-      criterionKey: keyById.get(row.criterion_id) ?? '', playerId: row.football_player_id,
-      relationshipSubtype: row.relationship_subtype, effectiveFrom: row.effective_from, effectiveTo: row.effective_to,
-      verifiedBy: row.verified_by, reviewedAt: isoSeconds(row.reviewed_at), evidence,
-    };
-  });
   const { boards, players } = projectExportedBoards(
     boardRows.map((row) => ({
       ...row,

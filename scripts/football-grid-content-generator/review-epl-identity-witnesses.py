@@ -121,7 +121,11 @@ def review(report, archive, crosscheck, profiles, manifests):
                 if reason:
                     failures.append(reason)
                 if fact['family'] == 'teammate':
+                    if not fact['criterionKey'].startswith('teammate:'):
+                        raise ValueError('Teammate criterion must use the teammate: prefix')
                     target = fact['criterionKey'].removeprefix('teammate:')
+                    if not target:
+                        raise ValueError('Teammate criterion must name a target player')
                     teammate = appearances.get(witness['teammateSourcePlayerGameId'])
                     if (target == fact['playerId'] or witness['teammatePlayerId'] != target
                             or teammate is None or any(teammate[k] != appearance[k] for k in ['gameId', 'date', 'team'])):

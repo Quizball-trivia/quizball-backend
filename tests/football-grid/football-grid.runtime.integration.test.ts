@@ -580,6 +580,30 @@ afterAll(async () => {
 });
 
 describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }, () => {
+  it('rejects activation when a verified source is retired before activation commits', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { activateWithPinnedSources } = await import('../../scripts/football-grid-content.js');
+    const version = 800_000_000 + Math.floor(Math.random() * 100_000_000);
+    const rows = await db<Array<{id: string; version: number; manifest_checksum: string}>>`
+      INSERT INTO football_grid_content_releases (version, status, relationship_snapshot, alias_version,
+        resolver_policy_version, manifest_checksum, approved_by, approved_at, published_at)
+      VALUES (${version}, 'published', '{}', 1, 1, ${randomUUID().replaceAll('-', '').repeat(2)}, 'integration-test', now(), now()),
+             (${version + 1}, 'feasibility', '{}', 1, 1, ${randomUUID().replaceAll('-', '').repeat(2)}, 'integration-test', now(), null)
+      RETURNING id, version, manifest_checksum`;
+    const source = rows.find(r => r.version === version)!;
+    const candidate = rows.find(r => r.version === version + 1)!;
+    await db`UPDATE football_grid_content_releases SET status = 'retired' WHERE id = ${source.id}`;
+    await expect(activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [source])).rejects.toThrow('Verified source changed');
+    const [unchanged] = await db`SELECT status FROM football_grid_content_releases WHERE id = ${candidate.id}`;
+    expect(unchanged.status).toBe('feasibility');
+    const [liveSource] = await db<Array<{id: string; version: number; manifest_checksum: string}>>`
+      SELECT id, version, manifest_checksum FROM football_grid_content_releases WHERE id = ${RELEASE_ID}`;
+    await expect(activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [{ ...liveSource, manifest_checksum: 'wrong' }])).rejects.toThrow('Verified source changed');
+    await activateWithPinnedSources(candidate.version, candidate.manifest_checksum, [liveSource]);
+    const [activated] = await db`SELECT status FROM football_grid_content_releases WHERE id = ${candidate.id}`;
+    expect(activated.status).toBe('published');
+  });
+
   for (const { locale: uiLocale } of LOCALE_ANSWERS) {
     for (const { locale: aliasLocale, input: text } of LOCALE_ANSWERS) {
       it(`accepts ${aliasLocale} aliases in the ${uiLocale} interface and persists that locale`, async (context) => {

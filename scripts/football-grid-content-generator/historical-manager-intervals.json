@@ -1,0 +1,16 @@
+{
+  "description": "Observed service intervals supported by official club sources; throughExclusive is an evidence horizon, not a manager departure date.",
+  "intervals": [
+    {
+      "managerId": "WengerA",
+      "archiveStintId": 3,
+      "club": "Arsenal",
+      "fromExclusive": "1996-10-01",
+      "throughExclusive": "2013-10-01",
+      "sourceUrl": "https://www.arsenal.com/news/features/behind-the-numbers-wenger-s-17-years",
+      "fact": "Arsenal describes Wenger's continuous 17 years in charge, beginning officially on 1 October 1996, with season-by-season managerial records. Boundary dates are excluded from generated witnesses.",
+      "reviewedBy": "Codex source audit",
+      "reviewedOn": "2026-09-22"
+    }
+  ]
+}

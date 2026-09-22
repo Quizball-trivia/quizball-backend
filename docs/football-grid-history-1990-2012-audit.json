@@ -1,0 +1,2366 @@
+{
+  "status": "requires_review",
+  "publishable": false,
+  "coverageComplete": false,
+  "priority": "1990–2012 before 1950–1989",
+  "aggregateSource": {
+    "provider": "salimt/football-datasets",
+    "commit": "4701b2bb96b4c26817c35d41d4e1ba940fb04832",
+    "sha256": {
+      "player_performances.csv": "21eda6556654478fe986de8972d3b94aea6551ebcd74d5eb153b65edb53d132b",
+      "player_profiles.csv": "7ef9afbacf97577d099f21a0ef0ea0d46381bd4806a119f095b9562762a20096"
+    },
+    "reuseStatus": "not_established",
+    "url": "https://github.com/salimt/football-datasets"
+  },
+  "aggregateSummary": {
+    "historicalPlayers": 10949,
+    "mappedHistoricalPlayers": 1330,
+    "unmappedHistoricalPlayers": 9619,
+    "positiveAppearanceRows": 50120,
+    "rejected": {
+      "noPositiveAppearanceCount": 5239,
+      "conflictingSeasonRows": 0
+    }
+  },
+  "proposals": [
+    {
+      "releaseVersion": 2026092201,
+      "facts": 1478
+    },
+    {
+      "releaseVersion": 2026092202,
+      "facts": 2355
+    }
+  ],
+  "seasonMatrix": [
+    {
+      "competition": "premier-league",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "not_applicable"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "not_applicable"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "not_applicable"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 102,
+      "teamCount": 22,
+      "positiveAppearanceRows": 104,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 103,
+      "teamCount": 22,
+      "positiveAppearanceRows": 109,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 130,
+      "teamCount": 22,
+      "positiveAppearanceRows": 140,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 157,
+      "teamCount": 20,
+      "positiveAppearanceRows": 160,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 182,
+      "teamCount": 20,
+      "positiveAppearanceRows": 184,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 224,
+      "teamCount": 20,
+      "positiveAppearanceRows": 229,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 277,
+      "teamCount": 20,
+      "positiveAppearanceRows": 287,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 296,
+      "teamCount": 20,
+      "positiveAppearanceRows": 299,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 337,
+      "teamCount": 20,
+      "positiveAppearanceRows": 347,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 357,
+      "teamCount": 20,
+      "positiveAppearanceRows": 363,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 351,
+      "teamCount": 20,
+      "positiveAppearanceRows": 354,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 369,
+      "teamCount": 20,
+      "positiveAppearanceRows": 381,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 392,
+      "teamCount": 20,
+      "positiveAppearanceRows": 407,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 429,
+      "teamCount": 20,
+      "positiveAppearanceRows": 442,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 447,
+      "teamCount": 20,
+      "positiveAppearanceRows": 462,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 452,
+      "teamCount": 20,
+      "positiveAppearanceRows": 472,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 457,
+      "teamCount": 20,
+      "positiveAppearanceRows": 486,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 488,
+      "teamCount": 20,
+      "positiveAppearanceRows": 507,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 493,
+      "teamCount": 20,
+      "positiveAppearanceRows": 512,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 503,
+      "teamCount": 20,
+      "positiveAppearanceRows": 522,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "premier-league",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 480,
+      "teamCount": 20,
+      "positiveAppearanceRows": 494,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 11,
+      "teamCount": 6,
+      "positiveAppearanceRows": 11,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 14,
+      "teamCount": 9,
+      "positiveAppearanceRows": 14,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 27,
+      "teamCount": 10,
+      "positiveAppearanceRows": 27,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 34,
+      "teamCount": 16,
+      "positiveAppearanceRows": 34,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 54,
+      "teamCount": 19,
+      "positiveAppearanceRows": 54,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 72,
+      "teamCount": 20,
+      "positiveAppearanceRows": 72,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 112,
+      "teamCount": 22,
+      "positiveAppearanceRows": 114,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 144,
+      "teamCount": 22,
+      "positiveAppearanceRows": 145,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 162,
+      "teamCount": 20,
+      "positiveAppearanceRows": 164,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 183,
+      "teamCount": 20,
+      "positiveAppearanceRows": 184,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 210,
+      "teamCount": 20,
+      "positiveAppearanceRows": 212,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 259,
+      "teamCount": 20,
+      "positiveAppearanceRows": 259,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 292,
+      "teamCount": 20,
+      "positiveAppearanceRows": 293,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 311,
+      "teamCount": 20,
+      "positiveAppearanceRows": 313,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 365,
+      "teamCount": 20,
+      "positiveAppearanceRows": 367,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 394,
+      "teamCount": 20,
+      "positiveAppearanceRows": 395,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 400,
+      "teamCount": 20,
+      "positiveAppearanceRows": 405,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 406,
+      "teamCount": 20,
+      "positiveAppearanceRows": 409,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 452,
+      "teamCount": 20,
+      "positiveAppearanceRows": 454,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 447,
+      "teamCount": 20,
+      "positiveAppearanceRows": 447,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 478,
+      "teamCount": 20,
+      "positiveAppearanceRows": 482,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 476,
+      "teamCount": 20,
+      "positiveAppearanceRows": 482,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 476,
+      "teamCount": 20,
+      "positiveAppearanceRows": 485,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "la-liga",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 485,
+      "teamCount": 20,
+      "positiveAppearanceRows": 493,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 32,
+      "teamCount": 14,
+      "positiveAppearanceRows": 32,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 40,
+      "teamCount": 17,
+      "positiveAppearanceRows": 40,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 48,
+      "teamCount": 17,
+      "positiveAppearanceRows": 48,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 71,
+      "teamCount": 18,
+      "positiveAppearanceRows": 72,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 83,
+      "teamCount": 18,
+      "positiveAppearanceRows": 86,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 113,
+      "teamCount": 18,
+      "positiveAppearanceRows": 115,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 125,
+      "teamCount": 18,
+      "positiveAppearanceRows": 127,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 174,
+      "teamCount": 18,
+      "positiveAppearanceRows": 179,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 169,
+      "teamCount": 18,
+      "positiveAppearanceRows": 178,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 213,
+      "teamCount": 18,
+      "positiveAppearanceRows": 221,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 231,
+      "teamCount": 18,
+      "positiveAppearanceRows": 240,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 262,
+      "teamCount": 18,
+      "positiveAppearanceRows": 269,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 278,
+      "teamCount": 18,
+      "positiveAppearanceRows": 289,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 287,
+      "teamCount": 18,
+      "positiveAppearanceRows": 300,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 306,
+      "teamCount": 18,
+      "positiveAppearanceRows": 313,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 346,
+      "teamCount": 20,
+      "positiveAppearanceRows": 357,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 357,
+      "teamCount": 20,
+      "positiveAppearanceRows": 373,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 354,
+      "teamCount": 20,
+      "positiveAppearanceRows": 369,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 394,
+      "teamCount": 20,
+      "positiveAppearanceRows": 406,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 429,
+      "teamCount": 20,
+      "positiveAppearanceRows": 443,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 450,
+      "teamCount": 20,
+      "positiveAppearanceRows": 469,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 449,
+      "teamCount": 20,
+      "positiveAppearanceRows": 479,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 461,
+      "teamCount": 20,
+      "positiveAppearanceRows": 485,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "serie-a",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 481,
+      "teamCount": 20,
+      "positiveAppearanceRows": 515,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 12,
+      "teamCount": 10,
+      "positiveAppearanceRows": 12,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 24,
+      "teamCount": 12,
+      "positiveAppearanceRows": 24,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 28,
+      "teamCount": 16,
+      "positiveAppearanceRows": 28,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 45,
+      "teamCount": 17,
+      "positiveAppearanceRows": 45,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 65,
+      "teamCount": 18,
+      "positiveAppearanceRows": 66,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 76,
+      "teamCount": 18,
+      "positiveAppearanceRows": 76,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 102,
+      "teamCount": 18,
+      "positiveAppearanceRows": 103,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 105,
+      "teamCount": 18,
+      "positiveAppearanceRows": 106,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 137,
+      "teamCount": 18,
+      "positiveAppearanceRows": 139,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 148,
+      "teamCount": 18,
+      "positiveAppearanceRows": 150,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 168,
+      "teamCount": 18,
+      "positiveAppearanceRows": 174,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 231,
+      "teamCount": 18,
+      "positiveAppearanceRows": 233,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 257,
+      "teamCount": 18,
+      "positiveAppearanceRows": 259,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 267,
+      "teamCount": 18,
+      "positiveAppearanceRows": 270,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 270,
+      "teamCount": 18,
+      "positiveAppearanceRows": 273,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 271,
+      "teamCount": 18,
+      "positiveAppearanceRows": 273,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 310,
+      "teamCount": 18,
+      "positiveAppearanceRows": 312,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 314,
+      "teamCount": 18,
+      "positiveAppearanceRows": 318,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 321,
+      "teamCount": 18,
+      "positiveAppearanceRows": 329,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 357,
+      "teamCount": 18,
+      "positiveAppearanceRows": 365,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 372,
+      "teamCount": 18,
+      "positiveAppearanceRows": 381,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 385,
+      "teamCount": 18,
+      "positiveAppearanceRows": 391,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 395,
+      "teamCount": 18,
+      "positiveAppearanceRows": 408,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "bundesliga",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 383,
+      "teamCount": 18,
+      "positiveAppearanceRows": 388,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 18,
+      "teamCount": 14,
+      "positiveAppearanceRows": 18,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 23,
+      "teamCount": 14,
+      "positiveAppearanceRows": 23,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 40,
+      "teamCount": 18,
+      "positiveAppearanceRows": 40,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 57,
+      "teamCount": 20,
+      "positiveAppearanceRows": 57,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 75,
+      "teamCount": 20,
+      "positiveAppearanceRows": 75,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 81,
+      "teamCount": 20,
+      "positiveAppearanceRows": 81,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 104,
+      "teamCount": 20,
+      "positiveAppearanceRows": 104,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 134,
+      "teamCount": 20,
+      "positiveAppearanceRows": 135,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 138,
+      "teamCount": 18,
+      "positiveAppearanceRows": 140,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 164,
+      "teamCount": 18,
+      "positiveAppearanceRows": 168,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 172,
+      "teamCount": 18,
+      "positiveAppearanceRows": 174,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 193,
+      "teamCount": 18,
+      "positiveAppearanceRows": 197,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 232,
+      "teamCount": 18,
+      "positiveAppearanceRows": 243,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 261,
+      "teamCount": 20,
+      "positiveAppearanceRows": 268,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 263,
+      "teamCount": 20,
+      "positiveAppearanceRows": 273,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 269,
+      "teamCount": 20,
+      "positiveAppearanceRows": 272,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 318,
+      "teamCount": 20,
+      "positiveAppearanceRows": 325,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 312,
+      "teamCount": 20,
+      "positiveAppearanceRows": 321,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 322,
+      "teamCount": 20,
+      "positiveAppearanceRows": 329,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 339,
+      "teamCount": 20,
+      "positiveAppearanceRows": 344,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 329,
+      "teamCount": 20,
+      "positiveAppearanceRows": 332,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 368,
+      "teamCount": 20,
+      "positiveAppearanceRows": 379,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 385,
+      "teamCount": 20,
+      "positiveAppearanceRows": 395,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "ligue-1",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 430,
+      "teamCount": 20,
+      "positiveAppearanceRows": 440,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 19,
+      "teamCount": 12,
+      "positiveAppearanceRows": 19,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 24,
+      "teamCount": 14,
+      "positiveAppearanceRows": 24,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 29,
+      "teamCount": 14,
+      "positiveAppearanceRows": 29,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 40,
+      "teamCount": 15,
+      "positiveAppearanceRows": 42,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 52,
+      "teamCount": 17,
+      "positiveAppearanceRows": 52,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 77,
+      "teamCount": 17,
+      "positiveAppearanceRows": 78,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 94,
+      "teamCount": 18,
+      "positiveAppearanceRows": 97,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 95,
+      "teamCount": 18,
+      "positiveAppearanceRows": 97,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 115,
+      "teamCount": 18,
+      "positiveAppearanceRows": 117,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 130,
+      "teamCount": 18,
+      "positiveAppearanceRows": 134,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 123,
+      "teamCount": 18,
+      "positiveAppearanceRows": 127,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 150,
+      "teamCount": 18,
+      "positiveAppearanceRows": 153,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 172,
+      "teamCount": 18,
+      "positiveAppearanceRows": 176,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 204,
+      "teamCount": 18,
+      "positiveAppearanceRows": 210,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 226,
+      "teamCount": 18,
+      "positiveAppearanceRows": 230,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 255,
+      "teamCount": 18,
+      "positiveAppearanceRows": 262,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 270,
+      "teamCount": 18,
+      "positiveAppearanceRows": 281,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 270,
+      "teamCount": 18,
+      "positiveAppearanceRows": 285,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 288,
+      "teamCount": 18,
+      "positiveAppearanceRows": 300,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 286,
+      "teamCount": 18,
+      "positiveAppearanceRows": 297,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 312,
+      "teamCount": 18,
+      "positiveAppearanceRows": 317,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 333,
+      "teamCount": 18,
+      "positiveAppearanceRows": 344,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 332,
+      "teamCount": 18,
+      "positiveAppearanceRows": 345,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "eredivisie",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 345,
+      "teamCount": 18,
+      "positiveAppearanceRows": 353,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 7,
+      "teamCount": 6,
+      "positiveAppearanceRows": 7,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 2,
+      "teamCount": 1,
+      "positiveAppearanceRows": 2,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 3,
+      "teamCount": 1,
+      "positiveAppearanceRows": 3,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 15,
+      "teamCount": 8,
+      "positiveAppearanceRows": 15,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 10,
+      "teamCount": 5,
+      "positiveAppearanceRows": 10,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 37,
+      "teamCount": 16,
+      "positiveAppearanceRows": 37,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 61,
+      "teamCount": 18,
+      "positiveAppearanceRows": 61,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 79,
+      "teamCount": 16,
+      "positiveAppearanceRows": 80,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 89,
+      "teamCount": 18,
+      "positiveAppearanceRows": 92,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 121,
+      "teamCount": 18,
+      "positiveAppearanceRows": 124,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 121,
+      "teamCount": 18,
+      "positiveAppearanceRows": 122,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 173,
+      "teamCount": 18,
+      "positiveAppearanceRows": 175,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 201,
+      "teamCount": 18,
+      "positiveAppearanceRows": 208,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 219,
+      "teamCount": 18,
+      "positiveAppearanceRows": 225,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 227,
+      "teamCount": 18,
+      "positiveAppearanceRows": 236,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 262,
+      "teamCount": 18,
+      "positiveAppearanceRows": 275,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 210,
+      "teamCount": 16,
+      "positiveAppearanceRows": 214,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 230,
+      "teamCount": 16,
+      "positiveAppearanceRows": 234,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 255,
+      "teamCount": 16,
+      "positiveAppearanceRows": 259,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 264,
+      "teamCount": 16,
+      "positiveAppearanceRows": 272,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 265,
+      "teamCount": 16,
+      "positiveAppearanceRows": 271,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 312,
+      "teamCount": 16,
+      "positiveAppearanceRows": 319,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "primeira-liga",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 317,
+      "teamCount": 16,
+      "positiveAppearanceRows": 321,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 0,
+      "teamCount": 0,
+      "positiveAppearanceRows": 0,
+      "status": "missing"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 79,
+      "teamCount": 10,
+      "positiveAppearanceRows": 79,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 111,
+      "teamCount": 10,
+      "positiveAppearanceRows": 117,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 150,
+      "teamCount": 10,
+      "positiveAppearanceRows": 152,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 190,
+      "teamCount": 12,
+      "positiveAppearanceRows": 192,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 184,
+      "teamCount": 12,
+      "positiveAppearanceRows": 185,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 193,
+      "teamCount": 12,
+      "positiveAppearanceRows": 202,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 216,
+      "teamCount": 12,
+      "positiveAppearanceRows": 222,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 190,
+      "teamCount": 12,
+      "positiveAppearanceRows": 194,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 209,
+      "teamCount": 12,
+      "positiveAppearanceRows": 214,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 204,
+      "teamCount": 12,
+      "positiveAppearanceRows": 213,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 218,
+      "teamCount": 12,
+      "positiveAppearanceRows": 224,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 214,
+      "teamCount": 12,
+      "positiveAppearanceRows": 217,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 254,
+      "teamCount": 12,
+      "positiveAppearanceRows": 255,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 252,
+      "teamCount": 12,
+      "positiveAppearanceRows": 260,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 242,
+      "teamCount": 12,
+      "positiveAppearanceRows": 245,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "scottish-premiership",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 230,
+      "teamCount": 12,
+      "positiveAppearanceRows": 232,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 7,
+      "teamCount": 6,
+      "positiveAppearanceRows": 7,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 12,
+      "teamCount": 8,
+      "positiveAppearanceRows": 12,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 16,
+      "teamCount": 11,
+      "positiveAppearanceRows": 16,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 20,
+      "teamCount": 13,
+      "positiveAppearanceRows": 20,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 34,
+      "teamCount": 14,
+      "positiveAppearanceRows": 34,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 53,
+      "teamCount": 17,
+      "positiveAppearanceRows": 53,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 75,
+      "teamCount": 18,
+      "positiveAppearanceRows": 75,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 85,
+      "teamCount": 18,
+      "positiveAppearanceRows": 87,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 133,
+      "teamCount": 18,
+      "positiveAppearanceRows": 139,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 141,
+      "teamCount": 18,
+      "positiveAppearanceRows": 149,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 172,
+      "teamCount": 18,
+      "positiveAppearanceRows": 180,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 208,
+      "teamCount": 18,
+      "positiveAppearanceRows": 218,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 225,
+      "teamCount": 18,
+      "positiveAppearanceRows": 239,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 250,
+      "teamCount": 18,
+      "positiveAppearanceRows": 258,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 250,
+      "teamCount": 18,
+      "positiveAppearanceRows": 272,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 276,
+      "teamCount": 18,
+      "positiveAppearanceRows": 297,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 289,
+      "teamCount": 18,
+      "positiveAppearanceRows": 318,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 277,
+      "teamCount": 18,
+      "positiveAppearanceRows": 295,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 291,
+      "teamCount": 18,
+      "positiveAppearanceRows": 308,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 302,
+      "teamCount": 18,
+      "positiveAppearanceRows": 316,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 331,
+      "teamCount": 18,
+      "positiveAppearanceRows": 360,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 351,
+      "teamCount": 18,
+      "positiveAppearanceRows": 366,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 344,
+      "teamCount": 18,
+      "positiveAppearanceRows": 367,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "super-lig",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 360,
+      "teamCount": 18,
+      "positiveAppearanceRows": 377,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1989,
+      "boundarySeason": true,
+      "playerCount": 18,
+      "teamCount": 13,
+      "positiveAppearanceRows": 18,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1990,
+      "boundarySeason": false,
+      "playerCount": 27,
+      "teamCount": 16,
+      "positiveAppearanceRows": 27,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1991,
+      "boundarySeason": false,
+      "playerCount": 29,
+      "teamCount": 14,
+      "positiveAppearanceRows": 29,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1992,
+      "boundarySeason": false,
+      "playerCount": 32,
+      "teamCount": 16,
+      "positiveAppearanceRows": 32,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1993,
+      "boundarySeason": false,
+      "playerCount": 45,
+      "teamCount": 17,
+      "positiveAppearanceRows": 47,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1994,
+      "boundarySeason": false,
+      "playerCount": 50,
+      "teamCount": 17,
+      "positiveAppearanceRows": 50,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1995,
+      "boundarySeason": false,
+      "playerCount": 70,
+      "teamCount": 18,
+      "positiveAppearanceRows": 71,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1996,
+      "boundarySeason": false,
+      "playerCount": 96,
+      "teamCount": 18,
+      "positiveAppearanceRows": 96,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1997,
+      "boundarySeason": false,
+      "playerCount": 112,
+      "teamCount": 18,
+      "positiveAppearanceRows": 114,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1998,
+      "boundarySeason": false,
+      "playerCount": 128,
+      "teamCount": 18,
+      "positiveAppearanceRows": 129,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 1999,
+      "boundarySeason": false,
+      "playerCount": 160,
+      "teamCount": 18,
+      "positiveAppearanceRows": 162,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2000,
+      "boundarySeason": false,
+      "playerCount": 187,
+      "teamCount": 18,
+      "positiveAppearanceRows": 188,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2001,
+      "boundarySeason": false,
+      "playerCount": 190,
+      "teamCount": 18,
+      "positiveAppearanceRows": 192,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2002,
+      "boundarySeason": false,
+      "playerCount": 205,
+      "teamCount": 18,
+      "positiveAppearanceRows": 211,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2003,
+      "boundarySeason": false,
+      "playerCount": 218,
+      "teamCount": 18,
+      "positiveAppearanceRows": 221,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2004,
+      "boundarySeason": false,
+      "playerCount": 230,
+      "teamCount": 18,
+      "positiveAppearanceRows": 238,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2005,
+      "boundarySeason": false,
+      "playerCount": 241,
+      "teamCount": 18,
+      "positiveAppearanceRows": 245,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2006,
+      "boundarySeason": false,
+      "playerCount": 275,
+      "teamCount": 18,
+      "positiveAppearanceRows": 285,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2007,
+      "boundarySeason": false,
+      "playerCount": 253,
+      "teamCount": 18,
+      "positiveAppearanceRows": 266,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2008,
+      "boundarySeason": false,
+      "playerCount": 272,
+      "teamCount": 18,
+      "positiveAppearanceRows": 287,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2009,
+      "boundarySeason": false,
+      "playerCount": 243,
+      "teamCount": 16,
+      "positiveAppearanceRows": 259,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2010,
+      "boundarySeason": false,
+      "playerCount": 250,
+      "teamCount": 16,
+      "positiveAppearanceRows": 260,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2011,
+      "boundarySeason": false,
+      "playerCount": 260,
+      "teamCount": 16,
+      "positiveAppearanceRows": 271,
+      "status": "observed_incomplete"
+    },
+    {
+      "competition": "belgian-pro-league",
+      "seasonStart": 2012,
+      "boundarySeason": true,
+      "playerCount": 271,
+      "teamCount": 16,
+      "positiveAppearanceRows": 288,
+      "status": "observed_incomplete"
+    }
+  ],
+  "eplSource": {
+    "provider": "pssguy/epldata",
+    "commit": "c61f77af99b6cc814e698909557e059768270dee",
+    "url": "https://github.com/pssguy/epldata",
+    "declaredLicense": "MIT",
+    "sha256": {
+      "managers.rds": "f3153b6d0f8ef1d09e49150fbb8d8e7c20dea0ade414088324f071cfcd559e99",
+      "player_game.rds": "ff397fa8a10de6fb7d2790a7b9669e9ac93fadcdebbb5121a891098b5c07bc0f",
+      "player_team.rds": "4d17a3253b91c50393804bbf0082007caab754dbda5c2a01d4ded73daa9484df",
+      "game_team.rds": "06252f18be3f0540eacf81216829ab9746531b006348c41124b1640b78ed64de",
+      "manager_team.rds": "f9fc7b68b605d2d439f3d003381b6daf99801e18d563683f00d72786a3015535",
+      "players.rds": "3bb1fa39487a7cb7ca63d6bf1377322ae0bdd0603467040ac45539f0f5b83d8f",
+      "games.rds": "dfb29a3044a2edb62eca66a6187f0330f096f50cc78feaedbfc0d6d00f738661"
+    }
+  },
+  "eplSummary": {
+    "games": 7847,
+    "players": 3118,
+    "acceptedAppearanceRecords": 205305,
+    "quarantinedRecords": 79,
+    "quarantinedGames": 1
+  },
+  "eplSeasonComparison": [
+    {
+      "seasonStart": 1992,
+      "matchArchivePlayers": 544,
+      "aggregateSourcePlayers": 102
+    },
+    {
+      "seasonStart": 1993,
+      "matchArchivePlayers": 540,
+      "aggregateSourcePlayers": 103
+    },
+    {
+      "seasonStart": 1994,
+      "matchArchivePlayers": 526,
+      "aggregateSourcePlayers": 130
+    },
+    {
+      "seasonStart": 1995,
+      "matchArchivePlayers": 502,
+      "aggregateSourcePlayers": 157
+    },
+    {
+      "seasonStart": 1996,
+      "matchArchivePlayers": 517,
+      "aggregateSourcePlayers": 182
+    },
+    {
+      "seasonStart": 1997,
+      "matchArchivePlayers": 536,
+      "aggregateSourcePlayers": 224
+    },
+    {
+      "seasonStart": 1998,
+      "matchArchivePlayers": 539,
+      "aggregateSourcePlayers": 277
+    },
+    {
+      "seasonStart": 1999,
+      "matchArchivePlayers": 541,
+      "aggregateSourcePlayers": 296
+    },
+    {
+      "seasonStart": 2000,
+      "matchArchivePlayers": 544,
+      "aggregateSourcePlayers": 337
+    },
+    {
+      "seasonStart": 2001,
+      "matchArchivePlayers": 528,
+      "aggregateSourcePlayers": 357
+    },
+    {
+      "seasonStart": 2002,
+      "matchArchivePlayers": 529,
+      "aggregateSourcePlayers": 351
+    },
+    {
+      "seasonStart": 2003,
+      "matchArchivePlayers": 517,
+      "aggregateSourcePlayers": 369
+    },
+    {
+      "seasonStart": 2004,
+      "matchArchivePlayers": 515,
+      "aggregateSourcePlayers": 392
+    },
+    {
+      "seasonStart": 2005,
+      "matchArchivePlayers": 536,
+      "aggregateSourcePlayers": 429
+    },
+    {
+      "seasonStart": 2006,
+      "matchArchivePlayers": 535,
+      "aggregateSourcePlayers": 447
+    },
+    {
+      "seasonStart": 2007,
+      "matchArchivePlayers": 532,
+      "aggregateSourcePlayers": 452
+    },
+    {
+      "seasonStart": 2008,
+      "matchArchivePlayers": 532,
+      "aggregateSourcePlayers": 457
+    },
+    {
+      "seasonStart": 2009,
+      "matchArchivePlayers": 546,
+      "aggregateSourcePlayers": 488
+    },
+    {
+      "seasonStart": 2010,
+      "matchArchivePlayers": 545,
+      "aggregateSourcePlayers": 493
+    },
+    {
+      "seasonStart": 2011,
+      "matchArchivePlayers": 540,
+      "aggregateSourcePlayers": 503
+    }
+  ],
+  "eplQuarantinedGames": [
+    {
+      "gameId": 2910,
+      "reason": "invalid_home_away_sides"
+    }
+  ],
+  "limits": [
+    "Observed rows are not an exhaustive roster.",
+    "Manager, teammate, trophy and country facts are not inferred.",
+    "Season boundaries are not exact career/appearance dates.",
+    "Unmapped identities and conflicting names cannot be imported.",
+    "Independent source verification and reuse review remain required.",
+    "Independent player/club identity mapping is still required.",
+    "Matching fixture counts do not certify every player appearance.",
+    "Manager, teammate, trophy and nationality facts are not produced.",
+    "1990/91 and 1991/92 were not Premier League seasons."
+  ],
+  "crosscheck": {
+    "summary": {
+      "archivePlayers": 3118,
+      "uniqueIdentityCandidates": 1382,
+      "unresolvedIdentities": 1736,
+      "comparedPlayerClubSeasons": 5518,
+      "byComparison": {
+        "counts_agree": 5314,
+        "counts_differ": 192,
+        "aggregate_missing": 12
+      }
+    },
+    "releases": [
+      {
+        "releaseVersion": 2026092201,
+        "corroboratedFactCount": 294
+      },
+      {
+        "releaseVersion": 2026092202,
+        "corroboratedFactCount": 426
+      }
+    ],
+    "artifactSha256": "62b73cde2e975e40222678f052c7ca830e66168cff867b7da1e5505e9b9e7bcb",
+    "publishable": false,
+    "noMappingsApplied": true,
+    "coverageComplete": false
+  }
+}

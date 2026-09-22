@@ -1,14 +1,19 @@
 # Football knowledge coverage from 1950 onward
 
-Status: **incomplete; local preparation only**. The user's target means players active from 1950, not players born after 1950. Until scope is confirmed, start with the clubs and competitions referenced by existing Tic Tac Toe clues; worldwide league coverage is not assumed complete.
+Status: **incomplete; research and preparation only**. On 22 September the owner prioritised **1990–2012 first, then 1950–1989**. Years refer to when players played, not when they were born. Start with the clubs and competitions referenced by existing Tic Tac Toe clues; worldwide league coverage is not assumed complete. The measured first acquisition and its unresolved gaps are documented in [1990–2012 source audit](football-grid-history-1990-2012.md).
 
 ## What is established
+
+Follow-up: the owner requested a cutoff of **31 August 2026**, then agreed to use
+currently available records and address missing periods afterward. The new
+[available-data expansion](football-grid-available-data-expansion.md) measures actual
+source cutoffs separately and prepares tested historical answer additions.
 
 The pinned appearance source starts in July 2012. The existing legends list is explicitly focused on 1990–2012. Historical supplements add some clubs, country and teammate facts; they do not establish complete league, manager or trophy histories. Main release exports contain no display records for the pilot's Di Stéfano, Puskás, Gento or Kubala identities.
 
 The appearance snapshot also stops on 28 June 2026. Matches and transfers after that date need an updated source and review; the backfill is not exclusively a pre-2012 problem. The intended horizon is 1950 through the present, with the actual observed cutoff always shown separately.
 
-An offline four-player discovery pilot now exists. It is an ingestion test, not an exhaustive list or approved football data. New discovery packages carry `requires_review`, source claim IDs, qualifiers and references. The importer and generator reject these packages until an explicit reviewer approves them. Existing legacy packages remain readable for reproducibility; they must be re-audited before reuse, not treated as newly verified.
+An offline four-player discovery pilot now exists. It is an ingestion test, not an exhaustive list or approved football data. New discovery packages carry `requires_review`, source claim IDs, qualifiers and references. The importer and generator reject these packages until an explicit reviewer approves them. Legacy packages with missing review status are also rejected: re-audit them and record approval before generation or import. Original files can still be inspected offline, but omission is never approval.
 
 The pilot exposed two importer defects now covered by tests:
 

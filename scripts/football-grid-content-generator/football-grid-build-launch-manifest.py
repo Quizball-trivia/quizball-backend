@@ -458,8 +458,9 @@ def load_legends(path: Path, players: dict[int, Player]) -> list[Legend]:
     dataset. Only legends that resolved to an eligible player (Georgian name +
     first-party portrait) are used; the rest are reported."""
     data = json.loads(path.read_text())
-    if data.get('reviewStatus') is not None and (data['reviewStatus'] != 'approved'
-            or not data.get('reviewedBy') or any(item.get('reviewStatus') != 'approved' for item in data['legends'])):
+    if (data.get('reviewStatus') != 'approved'
+            or not str(data.get('reviewedBy') or '').strip()
+            or any(item.get('reviewStatus') != 'approved' for item in data['legends'])):
         raise RuntimeError('Historical discovery requires explicit identity and career review before generation')
     by_tm = {player.dataset_id: player for player in players.values()}
     legends: list[Legend] = []
@@ -473,7 +474,7 @@ def load_legends(path: Path, players: dict[int, Player]) -> list[Legend]:
         clubs, nationals = [], []
         for team in row["teams"]:
             label = team.get("label") or team["qid"]
-            if SENIOR_NATIONAL.search(label):
+            if team.get('national') is True or SENIOR_NATIONAL.search(label):
                 if not NOT_SENIOR.search(label):
                     nationals.append(label)
                 continue

@@ -10,8 +10,9 @@ db = os.environ.get("DATABASE_URL", "")
 if "nsdfiprfmhdqhbfxfwpv" not in db and "localhost" not in db and "127.0.0.1" not in db:
     raise SystemExit("Refusing to run outside staging/local")
 data = json.load(open(sys.argv[1]))
-if data.get('reviewStatus') is not None and (data['reviewStatus'] != 'approved'
-        or not data.get('reviewedBy') or any(item.get('reviewStatus') != 'approved' for item in data['legends'])):
+if (data.get('reviewStatus') != 'approved'
+        or not str(data.get('reviewedBy') or '').strip()
+        or any(item.get('reviewStatus') != 'approved' for item in data['legends'])):
     raise SystemExit('Historical discovery requires explicit identity and career review before import')
 apply = "--apply" in sys.argv
 updated = inserted = skipped = 0

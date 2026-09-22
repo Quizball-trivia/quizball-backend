@@ -104,6 +104,9 @@ def prepare(manifest, catalogs, report, timestamp):
                     'effectiveFrom': witness['date'], 'effectiveTo': witness['date'],
                     'rightsClass': 'facts-with-attribution', 'reviewedBy': official['reviewedBy'],
                     'reviewedAt': timestamp})
+        # Multiple appearance witnesses can cite the same season-count record.
+        # Retain each distinct fact once, matching the database evidence key.
+        evidence = list({json.dumps(row, sort_keys=True): row for row in evidence}.values())
         candidate['memberships'].append({'criterionKey': key, 'playerId': pid,
             'relationshipSubtype': criterion['subtype'], 'effectiveFrom': None, 'effectiveTo': None,
             'verifiedBy': 'UNREVIEWED', 'reviewedAt': timestamp, 'evidence': evidence})

@@ -23,6 +23,22 @@ import { parseFootballGridBotStrengthAdjustment } from './football-grid-bot-gove
 
 type SqlExecutor = Pick<typeof sql, 'unsafe'> | Pick<TransactionSql, 'unsafe'>;
 
+/** The series row is locked by the caller; creation uses the same series → lobby order. */
+async function closeFinishedGridLobby(tx: TransactionSql, lobbyId: string | null): Promise<void> {
+  if (!lobbyId) return;
+  await tx.unsafe(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [lobbyId]);
+  // Keep the room and member rows as history. They stop reserving users once
+  // closed. Never close a room belonging to a newer series or an active game.
+  await tx.unsafe(
+    `UPDATE lobbies l SET status = 'closed', updated_at = now()
+      WHERE l.id = $1 AND l.game_mode = 'football_grid' AND l.status IN ('waiting', 'active')
+        AND NOT EXISTS (SELECT 1 FROM football_grid_series s
+                         WHERE s.lobby_id = l.id AND s.status <> 'closed')
+        AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active')`,
+    [lobbyId],
+  );
+}
+
 interface GridMatchRow {
   match_id: string;
   board_id: string;
@@ -846,12 +862,20 @@ export const footballGridRepo = {
     format?: FootballGridSeriesFormat;
     theme?: string | null;
   }): Promise<string> {
-    const rows = await sql<Array<{ id: string }>>`
-      INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
-      VALUES (${input.origin}, ${input.lobbyId}, 1, ${input.format ?? 'bo3'}, ${input.theme ?? null})
-      RETURNING id
-    `;
-    return rows[0].id;
+    return this.runInTransaction(async (tx) => {
+      if (input.lobbyId) {
+        const [lobby] = await tx.unsafe<Array<{ status: string }>>(
+          `SELECT status FROM lobbies WHERE id = $1 FOR UPDATE`, [input.lobbyId],
+        );
+        if (!lobby || lobby.status === 'closed') throw new Error('GRID_LOBBY_START_STALE');
+      }
+      const rows = await tx.unsafe<Array<{ id: string }>>(
+        `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
+         VALUES ($1, $2, 1, $3, $4) RETURNING id`,
+        [input.origin, input.lobbyId, input.format ?? 'bo3', input.theme ?? null],
+      );
+      return rows[0].id;
+    });
   },
 
   /** Series progress as the clients see it, keyed by the given match. */
@@ -1049,18 +1073,24 @@ export const footballGridRepo = {
 
   /** The next game could not be dealt: end the series on the finished game's score. */
   async closeSeriesAfterFailure(seriesId: string, lastMatchId: string): Promise<void> {
-    await sql`
-      UPDATE football_grid_series
-         SET status = 'closed', closed_reason = 'next_game_failed', closed_at = now(),
-             next_pairing_token = null, current_match_id = ${lastMatchId},
-             winner_user_id = CASE WHEN seat1_wins > seat2_wins THEN (
-                 SELECT user_id FROM football_grid_participants p WHERE p.match_id = ${lastMatchId} AND p.seat = 1)
-               WHEN seat2_wins > seat1_wins THEN (
-                 SELECT user_id FROM football_grid_participants p WHERE p.match_id = ${lastMatchId} AND p.seat = 2)
-               ELSE NULL END,
-             state_version = state_version + 1, updated_at = now()
-       WHERE id = ${seriesId} AND status <> 'closed'
-    `;
+    await this.runInTransaction(async (tx) => {
+      const closed = await tx.unsafe<Array<{ lobby_id: string | null }>>(
+        `
+        UPDATE football_grid_series
+           SET status = 'closed', closed_reason = 'next_game_failed', closed_at = now(),
+               next_pairing_token = null, current_match_id = $2,
+               winner_user_id = CASE WHEN seat1_wins > seat2_wins THEN (
+                   SELECT user_id FROM football_grid_participants p WHERE p.match_id = $2 AND p.seat = 1)
+                 WHEN seat2_wins > seat1_wins THEN (
+                   SELECT user_id FROM football_grid_participants p WHERE p.match_id = $2 AND p.seat = 2)
+                 ELSE NULL END,
+               state_version = state_version + 1, updated_at = now()
+         WHERE id = $1 AND status <> 'closed'
+         RETURNING lobby_id
+        `, [seriesId, lastMatchId],
+      );
+      if (closed[0]) await closeFinishedGridLobby(tx, closed[0].lobby_id);
+    });
   },
 
   /** Boards already dealt in a series, so the next game never repeats one. */
@@ -1241,19 +1271,12 @@ export const footballGridRepo = {
       );
       if (!member[0]?.found) throw new Error('NOT_PARTICIPANT');
       const closed = await tx.unsafe<Array<{ updated_at: string }>>(
-        `UPDATE football_grid_series SET status = 'closed', rematch_expires_at = null,
+        `UPDATE football_grid_series SET status = 'closed',
                 next_pairing_token = null, state_version = state_version + 1, updated_at = now()
           WHERE id = $1 RETURNING updated_at`,
         [series.id],
       );
-      if (series.lobby_id) {
-        await tx.unsafe(
-          `UPDATE lobbies SET status = 'waiting', updated_at = now()
-            WHERE id = $1 AND status = 'active'`,
-          [series.lobby_id],
-        );
-        await tx.unsafe(`UPDATE lobby_members SET is_ready = false WHERE lobby_id = $1`, [series.lobby_id]);
-      }
+      await closeFinishedGridLobby(tx, series.lobby_id);
       const participants = await tx.unsafe<Array<{ user_id: string }>>(
         `SELECT user_id FROM football_grid_participants WHERE match_id = $1 ORDER BY user_id`,
         [input.matchId],
@@ -1290,19 +1313,12 @@ export const footballGridRepo = {
       if (!series) return null;
       await tx.unsafe(
         `UPDATE football_grid_series
-            SET status = 'closed', rematch_expires_at = null, next_pairing_token = null,
+            SET status = 'closed', next_pairing_token = null,
                 state_version = state_version + 1, updated_at = now()
           WHERE id = $1`,
         [seriesId],
       );
-      if (series.lobby_id) {
-        await tx.unsafe(
-          `UPDATE lobbies SET status = 'waiting', updated_at = now()
-            WHERE id = $1 AND status = 'active'`,
-          [series.lobby_id],
-        );
-        await tx.unsafe(`UPDATE lobby_members SET is_ready = false WHERE lobby_id = $1`, [series.lobby_id]);
-      }
+      await closeFinishedGridLobby(tx, series.lobby_id);
       const participants = series.current_match_id
         ? await tx.unsafe<Array<{ user_id: string }>>(
             `SELECT user_id FROM football_grid_participants WHERE match_id = $1 ORDER BY user_id`,
@@ -1321,7 +1337,7 @@ export const footballGridRepo = {
     return this.runInTransaction(async (tx) => {
       const rows = await tx.unsafe<Array<{ lobby_id: string | null; state_version: number }>>(
         `UPDATE football_grid_series
-            SET status = 'closed', rematch_expires_at = null,
+            SET status = 'closed',
                 next_pairing_token = null, state_version = state_version + 1,
                 updated_at = now()
           WHERE id = $1 AND next_pairing_token = $2
@@ -1331,14 +1347,7 @@ export const footballGridRepo = {
       );
       const closed = rows[0];
       if (!closed) return null;
-      if (closed.lobby_id) {
-        await tx.unsafe(
-          `UPDATE lobbies SET status = 'waiting', updated_at = now()
-            WHERE id = $1 AND status = 'active'`,
-          [closed.lobby_id],
-        );
-        await tx.unsafe(`UPDATE lobby_members SET is_ready = false WHERE lobby_id = $1`, [closed.lobby_id]);
-      }
+      await closeFinishedGridLobby(tx, closed.lobby_id);
       return closed.state_version;
     });
   },
@@ -1462,6 +1471,7 @@ export const footballGridRepo = {
            JOIN football_grid_matches gm ON gm.series_id = s.id
           WHERE gm.match_id = $1 AND s.current_match_id = $1
             AND gm.phase = 'terminal' AND s.origin <> 'random'
+            AND NOT EXISTS (SELECT 1 FROM lobbies l WHERE l.id = s.lobby_id AND l.status = 'closed')
             AND NOT EXISTS (
               SELECT 1 FROM football_grid_matches next_game
                WHERE next_game.rematch_of_match_id = gm.match_id
@@ -1477,6 +1487,9 @@ export const footballGridRepo = {
       // Any finished series can be replayed except one the server failed to
       // continue; the replay creates a fresh series with its own score.
       if (series.status === 'closed' && (!series.closed_reason || series.closed_reason === 'next_game_failed')) return null;
+      // Preserve the previous deadline on decline/expiry/failure. Result
+      // redelivery must not create a fresh offer after players left the room.
+      if (series.status === 'closed' && series.rematch_expires_at) return null;
       if (series.status === 'rematch_pending' && series.rematch_expires_at) {
         return {
           seriesId: series.id,
@@ -1847,6 +1860,12 @@ export const footballGridRepo = {
         }
       }
       if (!seriesId) {
+        if (input.lobbyId) {
+          const [lobby] = await tx.unsafe<Array<{ status: string }>>(
+            `SELECT status FROM lobbies WHERE id = $1 FOR UPDATE`, [input.lobbyId],
+          );
+          if (!lobby || lobby.status === 'closed') throw new Error('GRID_LOBBY_START_STALE');
+        }
         const created = await tx.unsafe<Array<{ id: string }>>(
           `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
            VALUES ($1, $2, 1, $4, $3) RETURNING id`,

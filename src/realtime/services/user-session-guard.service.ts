@@ -359,8 +359,8 @@ async function hasLiveDraftPhaseState(lobbyId: string): Promise<boolean> {
  * Ranked-sim drafts keep sockets attached to the lobby through normal pick/ban turns, while
  * lobby auctions clear `socket.data.lobbyId` at match start and rely on auction phase state.
  * Football Grid lobbies are live while their series is open (active, or rematch window not
- * yet expired) — series close resets the lobby to waiting, so a long-idle active grid lobby
- * means the close path was lost. Cleanup requires those signals to be absent and more than
+ * yet expired). Once rematch eligibility ends, the room closes; a long-idle active grid
+ * lobby can mean that final cleanup was lost. Cleanup requires those signals to be absent and more than
  * 30 minutes of DB inactivity.
  */
 async function isActiveLobbyLive(

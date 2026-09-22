@@ -2103,7 +2103,7 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(afterCommit.state.turnRemainingMs).toBeGreaterThan(remainingBeforePause - 2_500);
   });
 
-  it('does not extend an expired rematch and reopens its friend lobby', async (context) => {
+  it('closes an expired friend lobby without reopening it on result redelivery', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const players = await createUsers();
     const lobby = await lobbiesRepo.createLobbyWithMembers({
@@ -2137,8 +2137,107 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     const expired = await footballGridRepo.expireRematch(seriesId, window!.seriesVersion);
     expect(expired?.lobbyId).toBe(lobby.id);
     const lobbyState = await lobbiesRepo.getById(lobby.id);
-    expect(lobbyState?.status).toBe('waiting');
-    expect(await lobbiesRepo.countReadyMembers(lobby.id)).toBe(0);
+    expect(lobbyState?.status).toBe('closed');
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2); // history retained
+    expect(await lobbiesRepo.findOpenLobbyForUser(players[0])).toBeNull();
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await footballGridRepo.expireRematch(seriesId, window!.seriesVersion)).toBeNull();
+    await expect(footballGridRepo.createSeries({ origin: 'private', lobbyId: lobby.id })).rejects.toThrow('GRID_LOBBY_START_STALE');
+  });
+
+  async function finishedFriendLobby() {
+    const players = await createUsers();
+    const lobby = await lobbiesRepo.createLobbyWithMembers({
+      mode: 'friendly', hostUserId: players[0], gameMode: 'football_grid', isPublic: false,
+      inviteCode: `G${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
+    }, players.map(userId => ({ userId, isReady: true })));
+    runtimeLobbyIds.push(lobby.id);
+    await lobbiesRepo.setLobbyStatus(lobby.id, 'active');
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: lobby.id, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId, players, lobby.id);
+    await footballGridRepo.advanceSeriesAfterGame(match.matchId);
+    const window = (await footballGridRepo.openRematchWindow(match.matchId))!;
+    expect(window).not.toBeNull();
+    return { players, lobby, seriesId, match, window };
+  }
+
+  it('keeps a friend room reserved during the rematch window, then closes on decline', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.expireRematch(seriesId, window.seriesVersion)).toBeNull();
+    await footballGridRepo.declineRematch({ matchId: match.matchId, userId: players[0], expectedSeriesVersion: window.seriesVersion });
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2);
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await footballGridRepo.loadState(match.matchId)).toMatchObject({ phase: 'terminal' });
+  });
+
+  it('closes the room when an accepted rematch fails, without letting stale failures close a newer offer', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const accepted = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, randomUUID())).toBeNull();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, accepted.pairingToken)).toBeTypeOf('number');
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+  });
+
+  it('keeps the room and history intact when both players accept a rematch', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const a = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    const b = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[1], commandId: randomUUID(), expectedSeriesVersion: a.seriesVersion, proposedPairingToken: randomUUID() });
+    await footballGridRepo.createPairing({ pairingToken: b.pairingToken, searchAId: seriesId, searchBId: seriesId, userAId: players[0], userBId: players[1], opponentType: 'human' });
+    const next = (await footballGridService.createMatch({ pairingToken: b.pairingToken, lobbyId: lobby.id, origin: 'private', players: b.players, openerUserId: b.players.find(p => p.seat === b.openerSeat)!.userId, seriesId, rematchOfMatchId: match.matchId, rematchIndex: b.rematchIndex })).state;
+    runtimeMatchIds.push(next.matchId);
+    expect(await footballGridRepo.expireRematch(seriesId, window.seriesVersion)).toBeNull();
+    expect(await footballGridRepo.closeRematchAfterFailure(seriesId, b.pairingToken)).toBeNull();
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+  });
+
+  it('keeps a friend lobby active between BO3 games and closes only if continuation fails', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match } = await finishedFriendLobby();
+    // Reproduce a finished first game awaiting its next board, not a decided series.
+    await db`UPDATE football_grid_series SET format = 'bo3', status = 'active', closed_at = null,
+      closed_reason = null, seat1_wins = 0, seat2_wins = 0, game_index = 1,
+      last_advanced_match_id = null, rematch_expires_at = null WHERE id = ${seriesId}`;
+    const advance = await footballGridRepo.advanceSeriesAfterGame(match.matchId);
+    expect(advance.kind).toBe('continued');
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+    expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    await footballGridRepo.closeSeriesAfterFailure(seriesId, match.matchId);
+    expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+    expect(await footballGridRepo.openRematchWindow(match.matchId)).toBeNull();
+    expect(await lobbiesRepo.findOpenLobbyForUser(players[0])).toBeNull();
+  });
+
+  it('serializes expired rematch creation against cleanup without leaving an active match in a closed room', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const { players, lobby, seriesId, match, window } = await finishedFriendLobby();
+    const a = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[0], commandId: randomUUID(), expectedSeriesVersion: window.seriesVersion, proposedPairingToken: randomUUID() });
+    const b = await footballGridRepo.offerRematch({ matchId: match.matchId, userId: players[1], commandId: randomUUID(), expectedSeriesVersion: a.seriesVersion, proposedPairingToken: randomUUID() });
+    await footballGridRepo.createPairing({ pairingToken: b.pairingToken, searchAId: seriesId, searchBId: seriesId, userAId: players[0], userBId: players[1], opponentType: 'human' });
+    await db`UPDATE football_grid_series SET rematch_expires_at = now() - interval '1 second' WHERE id = ${seriesId}`;
+    const [creation] = await Promise.allSettled([
+      footballGridService.createMatch({ pairingToken: b.pairingToken, lobbyId: lobby.id, origin: 'private', players: b.players, openerUserId: b.players.find(p => p.seat === b.openerSeat)!.userId, seriesId, rematchOfMatchId: match.matchId, rematchIndex: b.rematchIndex }),
+      footballGridRepo.expireRematch(seriesId, b.seriesVersion),
+    ]);
+    if (creation.status === 'fulfilled') {
+      runtimeMatchIds.push(creation.value.state.matchId);
+      expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('active');
+      expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(true);
+    } else {
+      expect(creation.reason.message).toBe('SERIES_CLOSED');
+      expect((await lobbiesRepo.getById(lobby.id))?.status).toBe('closed');
+      expect(await footballGridRepo.hasOpenSeriesForLobby(lobby.id)).toBe(false);
+    }
+    expect(await lobbiesRepo.countMembers(lobby.id)).toBe(2);
   });
 
   it('commits lobby activation with match creation and rejects a stale second start', async (context) => {

@@ -2,7 +2,7 @@
   "status": "requires_review",
   "publishable": false,
   "coverageComplete": false,
-  "priority": "1990\u20132012 before 1950\u20131989",
+  "priority": "1990–2012 before 1950–1989",
   "aggregateSource": {
     "provider": "salimt/football-datasets",
     "commit": "4701b2bb96b4c26817c35d41d4e1ba940fb04832",
@@ -2335,5 +2335,32 @@
     "Matching fixture counts do not certify every player appearance.",
     "Manager, teammate, trophy and nationality facts are not produced.",
     "1990/91 and 1991/92 were not Premier League seasons."
-  ]
+  ],
+  "crosscheck": {
+    "summary": {
+      "archivePlayers": 3118,
+      "uniqueIdentityCandidates": 1382,
+      "unresolvedIdentities": 1736,
+      "comparedPlayerClubSeasons": 5518,
+      "byComparison": {
+        "counts_agree": 5314,
+        "counts_differ": 192,
+        "aggregate_missing": 12
+      }
+    },
+    "releases": [
+      {
+        "releaseVersion": 2026092201,
+        "corroboratedFactCount": 294
+      },
+      {
+        "releaseVersion": 2026092202,
+        "corroboratedFactCount": 426
+      }
+    ],
+    "artifactSha256": "62b73cde2e975e40222678f052c7ca830e66168cff867b7da1e5505e9b9e7bcb",
+    "publishable": false,
+    "noMappingsApplied": true,
+    "coverageComplete": false
+  }
 }

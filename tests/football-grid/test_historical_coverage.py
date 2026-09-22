@@ -17,6 +17,7 @@ def load(name):
 history = load('audit-historical-coverage')
 epl = load('audit-epl-history')
 fetcher = load('fetch-historical-sources')
+crosscheck = load('crosscheck-epl-history')
 
 
 class HistoricalCoverageTests(unittest.TestCase):
@@ -105,6 +106,47 @@ class HistoricalCoverageTests(unittest.TestCase):
         result = epl.audit(tables)
         self.assertEqual(result['summary']['acceptedAppearanceRecords'], 0)
         self.assertEqual(result['summary']['quarantinedGames'], 1)
+
+    def test_crosscheck_does_not_merge_names_without_a_unique_birth_date_identity(self):
+        profiles = [
+            {'player_id': '1', 'player_name': 'Common Name (1)', 'date_of_birth': '1970-01-01'},
+            {'player_id': '2', 'player_name': 'Common Name (2)', 'date_of_birth': '1971-01-01'},
+        ]
+        appearance = {'sourcePlayerId': 'COMMON', 'name': 'Common Name', 'birthDate': '1970-01-01',
+                      'team': 'Arsenal', 'seasonStart': 1993, 'gameId': 100}
+        result = crosscheck.crosscheck(profiles, [appearance], [], [])
+        self.assertEqual(result['identityCandidates'][0]['sourcePlayerId'], '1')
+        self.assertTrue(result['noMappingsApplied'])
+        self.assertFalse(result['publishable'])
+        for birthday in ['', 'None', '1970-01-32', '1970']:
+            with self.subTest(birthday=birthday):
+                result = crosscheck.crosscheck(profiles, [{**appearance, 'birthDate': birthday}], [], [])
+                self.assertEqual(result['summary']['uniqueIdentityCandidates'], 0)
+        duplicate = {**profiles[0], 'player_id': '3'}
+        duplicate['player_name'] = 'Common Name (3)'
+        result = crosscheck.crosscheck(profiles + [duplicate], [appearance], [], [])
+        self.assertEqual(result['summary']['uniqueIdentityCandidates'], 0)
+        result = crosscheck.crosscheck(profiles, [appearance, {**appearance, 'sourcePlayerId': 'OTHER_ID'}], [], [])
+        self.assertEqual(result['summary']['uniqueIdentityCandidates'], 0)
+
+    def test_crosscheck_keeps_disagreeing_counts_out_of_corroborated_facts(self):
+        profile = {'player_id': '1', 'player_name': 'Player (1)', 'date_of_birth': '1970-01-01'}
+        appearance = {'sourcePlayerId': 'PLAYER', 'name': 'Player', 'birthDate': '1970-01-01',
+                      'team': 'Arsenal', 'seasonStart': 1993, 'gameId': 100}
+        aggregate = {'player_id': '1', 'team_id': '11', 'competition_id': 'GB1', 'season_name': '93/94', 'nb_on_pitch': '2'}
+        releases = [{'releaseVersion': 1, 'proposedFacts': [
+            {'criterionKey': 'league:premier-league', 'playerId': 'uuid', 'sourcePlayerId': '1', 'name': 'Player',
+             'witnesses': [{'competitionId': 'GB1', 'teamId': '11', 'season': '93/94'}]}]}]
+        result = crosscheck.crosscheck([profile], [appearance], [aggregate], releases)
+        self.assertEqual(result['summary']['byComparison'], {'counts_differ': 1})
+        self.assertEqual(result['releases'][0]['corroboratedFactCount'], 0)
+        result = crosscheck.crosscheck([profile], [appearance, {**appearance, 'gameId': 101}], [aggregate], releases)
+        self.assertEqual(result['summary']['byComparison'], {'counts_agree': 1})
+        self.assertEqual(result['releases'][0]['corroboratedFactCount'], 1)
+        conflict = {**aggregate, 'nb_on_pitch': '3'}
+        result = crosscheck.crosscheck([profile], [appearance], [aggregate, conflict], releases)
+        self.assertEqual(result['summary']['byComparison'], {'aggregate_conflict': 1})
+        self.assertEqual(result['releases'][0]['corroboratedFactCount'], 0)
 
 
 if __name__ == '__main__':

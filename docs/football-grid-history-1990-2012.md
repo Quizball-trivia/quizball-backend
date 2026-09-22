@@ -51,6 +51,18 @@ against the aggregate provider's profiles; 1,736 remain unresolved. These are
 review candidates, not applied identity links. Numerical IDs from the two providers
 are unrelated. No surname-only or fuzzy-name identity merges are permitted.
 
+The independent cross-check compares **5,518 player/club/seasons** for those
+identity candidates. Appearance counts agree in **5,314**, differ in **192**, and
+are absent from the aggregate source in **12**. Both directions of an identity
+match must be unique; invalid or missing birth dates cannot create a candidate.
+An explicit club crosswalk keeps the original Wimbledon distinct from successor
+clubs. Disagreements stay visible instead of choosing the larger count.
+
+This corroborates at least one witness for **294 European and 426 themed
+club/league proposals** above. These counts overlap between releases and are not
+newly accepted answers: the proposals still require review and release generation.
+Matching two sources supports a fact; it does not certify every season as complete.
+
 ## Source validation and boundaries
 
 - Official [Premier League history](https://www.premierleague.com/en/history)
@@ -86,6 +98,8 @@ python scripts/football-grid-content-generator/audit-historical-coverage.py \
 # RDS decoding needs pyreadr==0.5.3; no R runtime or repository execution is used.
 python scripts/football-grid-content-generator/audit-epl-history.py \
   --raw RAW/epldata --comparison HISTORICAL.json --out EPL.json
+python scripts/football-grid-content-generator/crosscheck-epl-history.py \
+  --raw RAW --epl EPL.json --historical HISTORICAL.json --out CROSSCHECK.json
 python -m unittest discover -s tests/football-grid -p 'test_*.py'
 ```
 

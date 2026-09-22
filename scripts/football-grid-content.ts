@@ -1278,6 +1278,34 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
   return errors.filter((error) => !inherited.has(error));
 }
 
+export type ActivationSourcePin = { id: string; version: number; manifest_checksum: string };
+
+/** Keep verified sources published until activation commits, even if retirement races it. */
+export async function activateWithPinnedSources(
+  version: number,
+  manifestChecksum: string,
+  sources: ActivationSourcePin[],
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx.unsafe(`SET LOCAL lock_timeout = '2s'`);
+    await tx.unsafe(`SET LOCAL statement_timeout = '15s'`);
+    for (const source of [...sources].sort((a, b) => a.id.localeCompare(b.id))) {
+      const rows = await tx.unsafe<Array<{ id: string }>>(
+        `SELECT id FROM football_grid_content_releases
+          WHERE id = $1 AND version = $2 AND manifest_checksum = $3 AND status = 'published'
+          FOR SHARE`, [source.id, source.version, source.manifest_checksum],
+      );
+      if (rows.length !== 1) throw new Error('Verified source changed or is no longer published');
+    }
+    const rows = await tx.unsafe<Array<{ id: string }>>(
+      `UPDATE football_grid_content_releases SET status = 'published', published_at = now()
+        WHERE version = $1 AND manifest_checksum = $2 AND status = 'feasibility'
+        RETURNING id`, [version, manifestChecksum],
+    );
+    if (!rows[0]) throw new Error('Matching staged release was not found or is not activatable');
+  });
+}
+
 async function activate(
   manifest: Manifest,
   assetRegistryPath: string,
@@ -1288,6 +1316,16 @@ async function activate(
 ): Promise<void> {
   assertResearchMode(manifest, research);
   if (research && transformedFrom === null) throw new Error('Research activation requires its fresh source release');
+  const sourceVersions = transformedFrom === null ? [] : [...new Set([
+    transformedFrom,
+    ...(manifest.release.relationshipSnapshot.transform === 'answer-coverage-correction-v1'
+      ? [Number(manifest.release.relationshipSnapshot.correctionPlayerCatalogVersion)] : []),
+  ])];
+  const sources = sourceVersions.length ? await sql.unsafe<ActivationSourcePin[]>(
+    `SELECT id, version, manifest_checksum FROM football_grid_content_releases
+      WHERE version = ANY($1::integer[]) AND status = 'published'`, [sourceVersions],
+  ) : [];
+  if (sources.length !== sourceVersions.length) throw new Error('Activation source or catalog is not published');
   const validation = validateManifest(manifest, true);
   let errors = validation.errors;
   if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true, stagingSourceFile);
@@ -1306,15 +1344,7 @@ async function activate(
   if (errors.length > 0) throw new Error(`Content activation failed:\n${errors.join('\n')}`);
   await loadAndVerifyAssetRegistry(manifest, assetRegistryPath);
   const manifestChecksum = checksum(manifest);
-  const rows = await sql<Array<{ id: string }>>`
-    UPDATE football_grid_content_releases
-       SET status = 'published', published_at = now()
-     WHERE version = ${manifest.release.version}
-       AND manifest_checksum = ${manifestChecksum}
-       AND status = 'feasibility'
-    RETURNING id
-  `;
-  if (!rows[0]) throw new Error('Matching staged release was not found or is not activatable');
+  await activateWithPinnedSources(manifest.release.version, manifestChecksum, sources);
   process.stdout.write(`Activated Football Grid release ${manifest.release.version}\n`);
 }
 

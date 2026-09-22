@@ -1214,7 +1214,8 @@ export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Man
   const preparedAt = candidate.release.relationshipSnapshot.correctionPreparedAt;
   if (typeof preparedAt !== 'string') return false;
   const expected = approveAnswerCorrections(
-    prepareAnswerCorrections(source, catalog, candidate.release.version, preparedAt),
+    prepareAnswerCorrections(source, catalog, candidate.release.version, preparedAt,
+      candidate.release.relationshipSnapshot.correctionBatch),
     candidate.release.approvedBy, candidate.release.approvedAt,
   );
   return relabelManifestsMatch(expected, candidate);

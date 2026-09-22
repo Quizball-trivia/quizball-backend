@@ -91,4 +91,19 @@ describe('Release export evidence round-trip', () => {
     await expect(exportRelease(1)).rejects.toThrow('does not reproduce stored checksum');
     expect(db.queries.some(q => q.includes('FROM football_grid_board_answers'))).toBe(false);
   });
+
+  it('rejects missing evidence before fetching any board answers', async () => {
+    db.tables.set('football_grid_membership_evidence', []);
+    await expect(exportRelease(1)).rejects.toThrow('has no evidence rows');
+    expect(db.queries.some(q => q.includes('FROM football_grid_board_answers'))).toBe(false);
+  });
+
+  it('rejects source rows that project to duplicate evidence before fetching answers', async () => {
+    const sources = db.tables.get('football_grid_data_sources')!;
+    sources.push({ ...(sources[0] as object), id: 'source-id-v2', dataset_version: '2' });
+    const evidence = db.tables.get('football_grid_membership_evidence')!;
+    evidence.push({ ...(evidence[0] as object), source_id: 'source-id-v2' });
+    await expect(exportRelease(1)).rejects.toThrow('collapse onto one checksum after export');
+    expect(db.queries.some(q => q.includes('FROM football_grid_board_answers'))).toBe(false);
+  });
 });

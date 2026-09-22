@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import facts from '../../scripts/football-grid-content-generator/official-answer-followup-20260923.json' with { type: 'json' };
+import { approveAnswerCorrections, CORRECTION_SOURCE, OFFICIAL_FOLLOWUP_BATCH, OFFICIAL_FOLLOWUP_SOURCE, prepareAnswerCorrections } from '../../scripts/football-grid-answer-corrections.js';
+import { matchesPrescribedAnswerCorrection, type Manifest } from '../../scripts/football-grid-content.js';
+import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from '../../src/modules/football-grid/football-grid.answer-resolver.js';
+
+const at = '2026-09-23T01:00:00.000Z';
+function source(): Manifest {
+  const players = [...new Map(facts.map(f => [f.playerId, f])).values()].map(f => ({
+    id: f.playerId, nameEn: f.nameEn, nameKa: `მოთამაშე ${f.playerId}`, imageAssetKey: `/players/${f.playerId}.webp`,
+  }));
+  return {
+    release: { version: 100, aliasVersion: 2, resolverPolicyVersion: 1, approvedBy: 'previous-review', approvedAt: at,
+      relationshipSnapshot: { transform: 'answer-coverage-correction-v1', correctionReviewStatus: 'approved' } },
+    sources: [{ key: CORRECTION_SOURCE, providerName: 'Previous official corrections', datasetVersion: 'previous',
+      permittedUse: 'Individually cited facts', databaseRightsStatus: 'approved', approvalOwner: 'previous-review',
+      approvedAt: at, retentionRequirements: 'Keep evidence' }],
+    players, assetCatalog: players.map(p => p.imageAssetKey),
+    aliases: players.map(p => ({ playerId: p.id, alias: p.nameEn, normalizedAlias: normalizeFootballGridAnswer(p.nameEn),
+      locale: 'en', aliasType: 'full_name', acceptancePolicy: 'exact', reviewedBy: 'fixture', reviewedAt: at })),
+    criteria: [...new Set(facts.flatMap(f => f.criteria))].map(key => ({ key, family: 'club', subtype: 'fixture',
+      labelEn: key, labelKa: key, metadata: {}, difficulty: 'normal', familiarityScore: 50 })),
+    memberships: [], boards: [],
+  };
+}
+
+describe('official follow-up correction batch', () => {
+  it('adds the 63 cited relationships after the previous correction without mutating the source', () => {
+    const original = source();
+    const before = JSON.stringify(original);
+    const draft = prepareAnswerCorrections(original, original, 101, at, OFFICIAL_FOLLOWUP_BATCH);
+    expect(JSON.stringify(original)).toBe(before);
+    expect(new Set(facts.map(f => `${f.playerId}:${f.criteria[0]}`)).size).toBe(63);
+    expect(draft.changes.addedMemberships).toHaveLength(63);
+    expect(draft.candidate.sources[0]).toEqual(original.sources[0]);
+    expect(draft.candidate.sources.at(-1)).toMatchObject({ key: OFFICIAL_FOLLOWUP_SOURCE, databaseRightsStatus: 'pending_review' });
+    const approved = approveAnswerCorrections(draft, 'reviewer', at);
+    expect(matchesPrescribedAnswerCorrection(original, original, approved)).toBe(true);
+    expect(() => prepareAnswerCorrections(approved, approved, 102, at, OFFICIAL_FOLLOWUP_BATCH)).toThrow('already contains');
+    expect(() => prepareAnswerCorrections(original, original, 101, at)).toThrow('already contains');
+  });
+
+  it('rejects invented batches and cannot approve bulk historical sources through this batch', () => {
+    const original = source();
+    expect(() => prepareAnswerCorrections(original, original, 101, at, 'invented')).toThrow('Unknown');
+    const draft = prepareAnswerCorrections(original, original, 101, at, OFFICIAL_FOLLOWUP_BATCH);
+    draft.candidate.sources.push({ ...draft.candidate.sources.at(-1)!, key: 'unreviewed-bulk-archive' });
+    expect(() => approveAnswerCorrections(draft, 'reviewer', at)).toThrow('Unexpected unreviewed source');
+  });
+
+  it('keeps the publisher bound to the exact cited facts, identities and source bytes', () => {
+    const original = source();
+    const approved = approveAnswerCorrections(prepareAnswerCorrections(original, original, 101, at, OFFICIAL_FOLLOWUP_BATCH), 'reviewer', at);
+    const modified = structuredClone(approved);
+    modified.memberships[0].evidence[0].capturedFact = 'Different claim';
+    expect(matchesPrescribedAnswerCorrection(original, original, modified)).toBe(false);
+    const changedIdentity = source();
+    changedIdentity.players[0].nameEn = 'Different player';
+    expect(() => prepareAnswerCorrections(changedIdentity, changedIdentity, 101, at, OFFICIAL_FOLLOWUP_BATCH)).toThrow('identity mismatch');
+  });
+
+  it('accepts Pique in the Premier League while leaving an unrelated Arsenal answer wrong', () => {
+    const original = source();
+    const candidate = prepareAnswerCorrections(original, original, 101, at, OFFICIAL_FOLLOWUP_BATCH).candidate;
+    const resolve = (criterion: string, submittedText: string) => resolveFootballGridAnswer({
+      submittedText, aliases: candidate.aliases.map((a, i) => ({ ...a, id: String(i) })),
+      validPlayerIds: candidate.memberships.filter(m => m.criterionKey === criterion).map(m => m.playerId),
+      boardPlayerIds: candidate.players.map(p => p.id), usedPlayerIds: [],
+    });
+    expect(resolve('league:premier-league', 'Piqué')).toMatchObject({ outcome: 'correct', playerId: '769e1327-0c83-4245-bd8b-1362c8dce939' });
+    expect(resolve('club:arsenal', 'Piqué').outcome).toBe('wrong');
+  });
+});

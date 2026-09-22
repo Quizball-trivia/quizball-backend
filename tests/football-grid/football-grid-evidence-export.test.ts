@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
-import { checksum, projectEvidence } from '../../scripts/football-grid-content.js';
+import { checksum, manifestSchema, projectEvidence } from '../../scripts/football-grid-content.js';
 
 const evidence = {
   sourceKey: 'official-source', sourceLocator: 'https://example.org/match', capturedFact: 'Player appeared for the club',
@@ -20,6 +20,12 @@ function stored(
 }
 
 describe('Evidence export preserves its stored checksum', () => {
+  const schema = manifestSchema.shape.memberships.element.shape.evidence.element;
+  it.each(['2026-09-22T13:22Z', '2026-09-22T13:22:22.1234567Z'])(
+    'rejects timestamps PostgreSQL cannot preserve before publication: %s', (reviewedAt) => {
+      expect(schema.safeParse({ ...evidence, reviewedAt }).success).toBe(false);
+    },
+  );
   it('round-trips omitted optional dates, as used by the production corrections', () => {
     expect(projectEvidence(stored(evidence))).toEqual(evidence);
   });
@@ -41,6 +47,7 @@ describe('Evidence export preserves its stored checksum', () => {
     '2026-09-22T13:22:22.123456Z', '2026-09-22T13:22:22.753000Z',
   ])('retains exact timestamp precision: %s', (reviewedAt) => {
     const original = { ...evidence, effectiveFrom: null, effectiveTo: null, reviewedAt };
+    expect(schema.parse(original)).toEqual(original);
     const databaseText = reviewedAt.replace('T', ' ').replace('Z', '+00').replace(/\.0+(?=\+)/, '');
     expect(projectEvidence(stored(original, databaseText))).toEqual(original);
   });

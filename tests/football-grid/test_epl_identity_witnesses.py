@@ -76,5 +76,47 @@ class IdentityWitnessTests(unittest.TestCase):
             self.run_review()
 
 
+class RetiredProfileTests(unittest.TestCase):
+    def setUp(self):
+        def statement(value, rank='normal'):
+            return {'rank': rank, 'mainsnak': {'snaktype': 'value', 'datavalue': {'value': value}}}
+        self.statement = statement
+        self.birth = {'time': '+1977-08-17T00:00:00Z', 'precision': 11, 'before': 0, 'after': 0,
+                      'calendarmodel': 'http://www.wikidata.org/entity/Q1985727'}
+        self.entity = {'id': 'Q45901', 'lastrevid': 123, 'labels': {'en': {'value': 'Thierry Henry'}},
+                       'claims': {'P31': [statement({'id': 'Q5'})], 'P2446': [statement('3207')],
+                                  'P569': [statement(self.birth)]}}
+
+    def read(self):
+        return module.retired_profiles({'entities': {'Q45901': self.entity}})
+
+    def test_profile_retains_source_revision_and_does_not_supply_career_facts(self):
+        profiles, held = self.read()
+        self.assertEqual(held, [])
+        self.assertEqual(profiles[0]['date_of_birth'], '1977-08-17')
+        self.assertEqual(profiles[0]['player_id'], '3207')
+        self.assertEqual(profiles[0]['revision'], 123)
+        self.assertNotIn('memberships', profiles[0])
+
+    def test_year_precision_never_becomes_a_january_first_birth_date(self):
+        self.birth.update(time='+1977-01-01T00:00:00Z', precision=9)
+        self.assertEqual(self.read(), ([], ['Q45901']))
+
+    def test_deprecated_or_conflicting_id_is_not_a_link(self):
+        self.entity['claims']['P2446'][0]['rank'] = 'deprecated'
+        self.assertEqual(self.read(), ([], ['Q45901']))
+        self.entity['claims']['P2446'] = [self.statement('3207'), self.statement('999')]
+        self.assertEqual(self.read(), ([], ['Q45901']))
+
+    def test_conflicting_precise_birth_dates_are_held(self):
+        self.entity['claims']['P569'].append(self.statement(dict(self.birth, time='+1977-08-18T00:00:00Z')))
+        self.assertEqual(self.read(), ([], ['Q45901']))
+
+    def test_preferred_precise_date_supersedes_an_imprecise_normal_statement(self):
+        self.entity['claims']['P569'][0]['rank'] = 'preferred'
+        self.entity['claims']['P569'].append(self.statement(dict(self.birth, time='+1977-01-01T00:00:00Z', precision=9)))
+        self.assertEqual(self.read()[0][0]['date_of_birth'], '1977-08-17')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -14,7 +14,7 @@ creates players, changes content approval, publishes data or connects to a datab
 The extra profile snapshot is corroboration, not a claim of independent primary
 football research or proof of exhaustive coverage.
 
-## Result for the existing historical proposal
+## Initial result using the modern profile snapshot alone
 
 | Result | Distinct criterion/player facts |
 | --- | ---: |
@@ -29,6 +29,27 @@ relationship is false. Overlapping European/themed proposals are counted once.
 This checkpoint adds no playable answers. Source-use review, remaining identities,
 manager evidence and a fresh four-locale release replay still precede activation.
 
+## Retired identities resolved with separately pinned records
+
+The 169 held facts involve 17 retired players absent from the modern profile
+snapshot. A dated Wikidata entity snapshot now corroborates each existing provider
+ID, exact name and full birth date. This brings the same proposal to **1,301
+identity-confirmed facts and zero identity holds**, without adding or changing a
+membership. The entity IDs, revisions and extracted identity fields are recorded in
+[`retired-identity-provenance.json`](../scripts/football-grid-content-generator/retired-identity-provenance.json).
+
+The optional `--retired-entities` input must match the pinned raw snapshot hash.
+The audit accepts a unique provider ID and an exact Gregorian birth date from a
+human entity; it respects preferred/deprecated statements and never turns a
+year-only date into January 1. For example, Schmeichel's less precise 1963 statement
+does not override his preferred 18 November 1963 birth date. The supplement cannot
+replace an existing modern profile. Conflicting dates/IDs remain held.
+
+Wikidata structured data is [CC0](https://www.wikidata.org/wiki/Wikidata:Licensing).
+This supports corroborating identities; it does not approve the separate historical
+appearance sources or fill missing football history. The dated snapshots and
+original witness checks remain required. All 46 historical-data tests pass.
+
 The modern appearance snapshot runs from **3 July 2012 through 28 June 2026**.
 July and August 2026 are not covered by those observations. There is no complete
 1950–1989 corpus: the scoped aggregate inventory only starts in 1972, with sparse
@@ -41,6 +62,7 @@ gaps; a source player's presence is not equivalent to a complete career.
 python scripts/football-grid-content-generator/review-epl-identity-witnesses.py \
   --fact-report FACTS.json --archive EPL_AUDIT.json --crosscheck CROSSCHECK.json \
   --profiles players.csv.gz --out IDENTITY_REVIEW.json
+# Include --retired-entities RETIRED_WIKIDATA_ENTITIES.json to check the 17 retirees.
 python -m unittest discover -s tests/football-grid -p 'test_*.py'
 ```
 

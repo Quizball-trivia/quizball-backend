@@ -980,20 +980,27 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
       sourceIds.set(source.key, sourceId);
     }
     const criterionIds = new Map<string, string>();
-    for (const criterion of manifest.criteria) {
-      const rows = await tx.unsafe<Array<{ id: string }>>(
+    for (let offset = 0; offset < manifest.criteria.length; offset += 200) {
+      const chunk = manifest.criteria.slice(offset, offset + 200);
+      const rows = await tx.unsafe<Array<{ id: string; criterion_key: string }>>(
         `INSERT INTO football_grid_criteria (
            release_id, criterion_key, family, subtype, label_en, label_ka,
            asset_key, metadata, difficulty, familiarity_score
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10) RETURNING id`,
-        [
-          releaseId, criterion.key, criterion.family, criterion.subtype,
-          criterion.labelEn, criterion.labelKa, criterion.assetKey ?? null,
-          sql.json(criterion.metadata), criterion.difficulty, criterion.familiarityScore,
-        ],
+         ) SELECT $1, u.criterion_key, u.family, u.subtype, u.label_en, u.label_ka,
+                  u.asset_key, u.metadata::jsonb, u.difficulty, u.familiarity_score
+           FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                       $7::text[], $8::text[], $9::text[], $10::numeric[])
+             AS u(criterion_key, family, subtype, label_en, label_ka,
+                  asset_key, metadata, difficulty, familiarity_score)
+         RETURNING id, criterion_key`,
+        [releaseId, chunk.map(c => c.key), chunk.map(c => c.family), chunk.map(c => c.subtype),
+          chunk.map(c => c.labelEn), chunk.map(c => c.labelKa), chunk.map(c => c.assetKey ?? null),
+          chunk.map(c => JSON.stringify(c.metadata)), chunk.map(c => c.difficulty), chunk.map(c => c.familiarityScore)],
       );
-      criterionIds.set(criterion.key, rows[0].id);
+      for (const row of rows) criterionIds.set(row.criterion_key, row.id);
     }
+    if (criterionIds.size !== manifest.criteria.length) throw new Error('Criterion insert count mismatch');
+    process.stdout.write(`Publish ${manifest.release.version}: ${criterionIds.size} criteria inserted\n`);
     // Batched: publishing row-by-row over the pooler took hours for ~120k
     // rows; unnest batches land the same content in seconds. Evidence rows
     // are joined back to memberships via the (criterion, player) natural key

@@ -46,7 +46,10 @@ const evidenceSchema = z.object({
   effectiveTo: z.string().date().nullable().optional(),
   rightsClass: z.string().min(1),
   reviewedBy: z.string().min(1),
-  reviewedAt: z.string().datetime(),
+  reviewedAt: z.string().datetime().regex(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/,
+    'Evidence reviewedAt must include seconds and use at most six fractional digits',
+  ),
 });
 const membershipSchema = z.object({
   criterionKey: z.string().min(1),

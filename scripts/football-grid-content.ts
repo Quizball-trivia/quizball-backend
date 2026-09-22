@@ -188,7 +188,11 @@ export function validateManifest(manifest: Manifest, launch: boolean): { boards:
   const membership = new Map<string, Set<string>>();
   for (const row of manifest.memberships) {
     if (!criteria.has(row.criterionKey)) errors.push(`Membership references missing criterion ${row.criterionKey}`);
+    const evidenceKeys = new Set<string>();
     for (const evidence of row.evidence) {
+      const evidenceKey = `${evidence.sourceKey}:${checksum(evidence)}`;
+      if (evidenceKeys.has(evidenceKey)) errors.push(`Membership ${row.criterionKey}/${row.playerId} has duplicate evidence`);
+      evidenceKeys.add(evidenceKey);
       if (!sourceKeys.has(evidence.sourceKey)) {
         errors.push(`Membership ${row.criterionKey}/${row.playerId} references missing source ${evidence.sourceKey}`);
       }

@@ -94,6 +94,13 @@ function sourceManifest() {
 }
 
 describe('Football Grid content CLI contracts', () => {
+  it('rejects duplicate evidence before opening a publish transaction', () => {
+    const manifest = sourceManifest();
+    manifest.memberships[0].evidence.push({ ...manifest.memberships[0].evidence[0] });
+    expect(validateManifest(manifest, false).errors).toContain(
+      `Membership ${manifest.memberships[0].criterionKey}/${manifest.memberships[0].playerId} has duplicate evidence`,
+    );
+  });
   it.each(['es', 'tr'] as const)('imports reviewed %s aliases without removing EN/KA fallback names', (locale) => {
     const manifest = sourceManifest();
     const existingCount = manifest.aliases.length;

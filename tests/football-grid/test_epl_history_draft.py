@@ -60,6 +60,18 @@ class EPLHistoryDraftTests(unittest.TestCase):
         self.assertEqual(member['evidence'][-1]['sourceLocator'], official['sourceUrl'])
         self.assertEqual(result['candidate']['sources'][-1]['datasetVersion'], 'evidence-pin')
 
+    def test_repeated_season_corroboration_keeps_distinct_appearances_without_duplicate_evidence(self):
+        manifest, report = self.fixture()
+        witnesses = report['releases'][0]['proposedFacts'][0]['witnesses']
+        second = copy.deepcopy(witnesses[0])
+        second.update(sourceLocator='player_game.rds:player_game_id=2', date='2000-01-08')
+        witnesses.append(second)
+        result = draft.prepare(manifest, [], report, '2026-09-22T08:00:00Z')
+        evidence = result['candidate']['memberships'][-1]['evidence']
+        self.assertEqual(len(evidence), 3)
+        self.assertEqual(sum(e['sourceKey'] == 'pssguy-epldata-history' for e in evidence), 2)
+        self.assertEqual(sum(e['sourceKey'] == 'salimt-football-datasets-history' for e in evidence), 1)
+
     def test_missing_bilingual_identity_is_reported_and_not_added(self):
         manifest, report = self.fixture()
         manifest['players'] = []

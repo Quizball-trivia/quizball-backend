@@ -193,6 +193,42 @@
     "epl-fact-proposals-v3.json": "7e8e8988f95c3bf3660f79c2a7d9e65ae6024298212b42d6864639373ac7050e",
     "european-historical-draft-v2.json": "e02b68a1836313118964f1680da1372c2d91f0101a35249c58a2d641dd18de62",
     "themed-historical-draft-v2.json": "e77a73d75ad2d1a6e0fd5a3c916bbcda6bef8f85d972254cdbd25d18b5c2adcc",
-    "verification-v2.json": "0d3e12f2da9401e6a75874440cc392939d4bbc708ec08f073123e387fcd69a02"
+    "verification-v2.json": "0d3e12f2da9401e6a75874440cc392939d4bbc708ec08f073123e387fcd69a02",
+    "added-name-verification.json": "b24a2b7713beb1c8c766307eddd867087664fa4a7e1b0b417a94bfb3ac8a1288"
+  },
+  "addedNameVerification": {
+    "scope": "Canonical English and Georgian names for every added player/cell; resolver is language-independent; does not certify translated UI/protocol deployment",
+    "results": [
+      {
+        "release": "european",
+        "addedPlayerCellAnswers": 15720,
+        "en": {
+          "correct": 15720,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "ka": {
+          "correct": 15720,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "failures": []
+      },
+      {
+        "release": "themed",
+        "addedPlayerCellAnswers": 4758,
+        "en": {
+          "correct": 4758,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "ka": {
+          "correct": 4758,
+          "ambiguous": 0,
+          "missing": 0
+        },
+        "failures": []
+      }
+    ]
   }
 }

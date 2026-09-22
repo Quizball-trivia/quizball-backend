@@ -91,6 +91,10 @@ portrait reference from the same environment; unknown identities are held out.
   1,146 cells and 380 boards.
 - Both drafts preserve every original answer. Their complete-intersection rebuild
   also fills any existing membership/intersection omissions in the input.
+- Every added player/cell answer resolves correctly using both its canonical
+  English and Georgian name: 40,956 checks, with no missing or ambiguous results.
+  This verifies the language-independent answer resolver; it does not certify
+  deployment of the separate Spanish/Turkish UI and request-protocol changes.
 - Structural validation adds no errors. The themed release retains its two
   pre-existing difficulty-distribution findings; difficulty has not been recalibrated.
 - Replaying all 6,218 retained non-pass submissions keeps all 3,353 originally

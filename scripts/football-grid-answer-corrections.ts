@@ -50,7 +50,10 @@ function correctionBatch(batch: unknown) {
     providerName: 'Premier League, Manchester United, Liverpool and Tottenham official sources',
   };
   if (batch === OFFICIAL_FOLLOWUP_BATCH) return {
-    sourceKey: OFFICIAL_FOLLOWUP_SOURCE, facts: officialFollowup,
+    // Staging may still be based on the pre-correction release. Reapply the
+    // already reviewed baseline facts as a union; current production skips
+    // these memberships, while both environments reach the same answers.
+    sourceKey: OFFICIAL_FOLLOWUP_SOURCE, facts: [...CONFIRMED_FACTS, ...officialFollowup],
     reviewer: 'official-football-fact-audit-20260923', datasetVersion: 'answer-audit-2026-09-23',
     providerName: 'UEFA, Premier League and official club match reports',
   };

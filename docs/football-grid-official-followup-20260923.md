@@ -18,9 +18,22 @@ npx tsx scripts/football-grid-answer-corrections.ts SOURCE.json SAME_ENVIRONMENT
 Omitting the argument retains the original September 21 correction. Unknown
 batches fail. The new batch may follow the original correction, but cannot be
 applied twice. It cannot approve an unrelated pending historical source.
+When the source predates the original correction, the batch also unions those
+five already reviewed player corrections and the same surname repair. Existing
+memberships are skipped, so production's current baseline remains unchanged;
+staging can reach the same corrected answer sets directly from its original
+non-research sources without publishing intermediate releases.
 Preparation remains offline and outputs a pending review package. Publishing
 re-exports the live source and catalog and recomputes the exact selected batch;
 modified facts, identities, aliases or source content fail that comparison.
+
+The fact fixture intentionally preserves exact existing catalog names, including
+the trailing U+200E in Nemanja Vidic's name. Fresh staging and production exports
+both contain that character for UUID `abd0e4b9-8f33-4866-a90e-61c207e94379`.
+Removing it only from this fixture would break the strict identity guard. This
+is not a display-name cleanup. Existing clean `Nemanja Vidic` and `Vidić`
+aliases remain available for ordinary submissions; normalization itself does
+not remove U+200E.
 
 ## Production-snapshot verification
 
@@ -29,11 +42,12 @@ Against releases 2026092221 and 2026092222:
 | Pack | Added relationships | Added display records | Added answer entries | Removed answers |
 | --- | ---: | ---: | ---: | ---: |
 | European | 58 | 0 | 1,991 | 0 |
-| Themed | 50 | 6 | 879 | 0 |
+| Themed | 50 | 7 | 879 | 0 |
 
 Relationships shared across packs account for the 108 entries from 63 unique
-facts. The six display records and 18 aliases come from the same environment's
-existing European catalog; no new player UUID is invented. Existing aliases,
+facts. The seven display records (six newly exposed players and Henry's retained
+baseline display) and 18 aliases come from the same environment's existing
+European catalog; no new player UUID is invented. Existing aliases,
 answers, board keys, recognizable samples and difficulty labels are preserved.
 
 Replaying the snapshot captured 22 September at 20:21 UTC covered 10,719

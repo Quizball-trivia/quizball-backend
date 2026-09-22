@@ -42,11 +42,12 @@ Against releases 2026092221 and 2026092222:
 | Pack | Added relationships | Added display records | Added answer entries | Removed answers |
 | --- | ---: | ---: | ---: | ---: |
 | European | 58 | 0 | 1,991 | 0 |
-| Themed | 50 | 6 | 879 | 0 |
+| Themed | 50 | 7 | 879 | 0 |
 
 Relationships shared across packs account for the 108 entries from 63 unique
-facts. The six display records and 18 aliases come from the same environment's
-existing European catalog; no new player UUID is invented. Existing aliases,
+facts. The seven display records (six newly exposed players and Henry's retained
+baseline display) and 18 aliases come from the same environment's existing
+European catalog; no new player UUID is invented. Existing aliases,
 answers, board keys, recognizable samples and difficulty labels are preserved.
 
 Replaying the snapshot captured 22 September at 20:21 UTC covered 10,719

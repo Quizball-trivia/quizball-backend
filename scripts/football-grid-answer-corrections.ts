@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import type { Manifest } from './football-grid-content.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
+import officialFollowup from './football-grid-content-generator/official-answer-followup-20260923.json' with { type: 'json' };
 
 export const CORRECTION_SOURCE = 'official-football-answer-review-20260921';
 export const CONFIRMED_FACTS = [
@@ -38,6 +39,23 @@ export const CONFIRMED_FACTS = [
     fact: 'FC Barcelona identifies Neymar as a Brazilian forward. His recorded midfield role does not exclude this evidenced forward role.',
   },
 ] as const;
+
+export const OFFICIAL_FOLLOWUP_BATCH = 'official-rejections-20260923';
+export const OFFICIAL_FOLLOWUP_SOURCE = 'official-football-answer-review-20260923';
+
+function correctionBatch(batch: unknown) {
+  if (batch === undefined) return {
+    sourceKey: CORRECTION_SOURCE, facts: CONFIRMED_FACTS,
+    reviewer: 'official-football-fact-audit-20260921', datasetVersion: 'answer-audit-2026-09-21',
+    providerName: 'Premier League, Manchester United, Liverpool and Tottenham official sources',
+  };
+  if (batch === OFFICIAL_FOLLOWUP_BATCH) return {
+    sourceKey: OFFICIAL_FOLLOWUP_SOURCE, facts: officialFollowup,
+    reviewer: 'official-football-fact-audit-20260923', datasetVersion: 'answer-audit-2026-09-23',
+    providerName: 'UEFA, Premier League and official club match reports',
+  };
+  throw new Error('Unknown answer correction batch');
+}
 
 type Source = Manifest['sources'][number];
 export type CorrectionDraft = {
@@ -89,12 +107,14 @@ export function prepareAnswerCorrections(
   playerCatalog: Manifest,
   version: number,
   reviewedAt: string,
+  batch?: unknown,
 ): CorrectionDraft {
+  const selected = correctionBatch(batch);
   if (!Number.isSafeInteger(version) || version <= source.release.version) {
     throw new Error('Candidate must have a new, higher release version');
   }
   if (!Number.isFinite(Date.parse(reviewedAt))) throw new Error('Invalid review timestamp');
-  if (source.sources.some(s => s.key === CORRECTION_SOURCE)) throw new Error('Source already contains this correction');
+  if (source.sources.some(s => s.key === selected.sourceKey)) throw new Error('Source already contains this correction');
   const original = JSON.stringify(source);
   const manifest = structuredClone(source);
   const changes: CorrectionDraft['changes'] = {
@@ -107,7 +127,7 @@ export function prepareAnswerCorrections(
     if (!memberships.has(m.criterionKey)) memberships.set(m.criterionKey, new Set());
     memberships.get(m.criterionKey)!.add(m.playerId);
   }
-  for (const correction of CONFIRMED_FACTS) {
+  for (const correction of selected.facts) {
     const relevant = correction.criteria.filter(key => criteria.has(key));
     if (!relevant.length) continue;
     const existing = players.get(correction.playerId);
@@ -144,10 +164,10 @@ export function prepareAnswerCorrections(
       memberships.set(criterionKey, members);
       manifest.memberships.push({ criterionKey, playerId: correction.playerId,
         relationshipSubtype: criteria.get(criterionKey)!.subtype,
-        verifiedBy: 'official-football-fact-audit-20260921', reviewedAt,
-        evidence: [{ sourceKey: CORRECTION_SOURCE, sourceLocator: correction.url,
+        verifiedBy: selected.reviewer, reviewedAt,
+        evidence: [{ sourceKey: selected.sourceKey, sourceLocator: correction.url,
           capturedFact: correction.fact, rightsClass: 'official-public-factual-reference-review-pending',
-          reviewedBy: 'official-football-fact-audit-20260921', reviewedAt }],
+          reviewedBy: selected.reviewer, reviewedAt }],
       });
       changes.addedMemberships.push({ criterionKey, playerId: correction.playerId });
     }
@@ -188,6 +208,7 @@ export function prepareAnswerCorrections(
       transformedFromVersion: source.release.version, transform: 'answer-coverage-correction-v1',
       correctionPlayerCatalogVersion: playerCatalog.release.version,
       correctionPreparedAt: reviewedAt,
+      ...(batch === undefined ? {} : { correctionBatch: batch }),
       exposedPlayers: new Set(manifest.boards.flatMap(b => b.cells.flatMap(c => c.playerIds))).size,
       correctionReviewStatus: 'pending', reviewScope: 'confirmed facts and exact surname recognition' },
   };
@@ -195,8 +216,8 @@ export function prepareAnswerCorrections(
     status: 'requires_review', sourceVersion: source.release.version,
     sourceSha256: createHash('sha256').update(original).digest('hex'), changes,
     candidate: { ...manifest, sources: [...manifest.sources, {
-      key: CORRECTION_SOURCE, providerName: 'Premier League, Manchester United, Liverpool and Tottenham official sources',
-      datasetVersion: 'answer-audit-2026-09-21', permittedUse: 'Individually cited football facts for Quizball gameplay.',
+      key: selected.sourceKey, providerName: selected.providerName,
+      datasetVersion: selected.datasetVersion, permittedUse: 'Individually cited football facts for Quizball gameplay.',
       databaseRightsStatus: 'pending_review', approvalOwner: 'UNREVIEWED', approvedAt: reviewedAt,
       retentionRequirements: 'Retain citations for the lifetime of pinned matches.',
     }] },
@@ -208,6 +229,7 @@ export function approveAnswerCorrections(draft: CorrectionDraft, reviewer: strin
   if (draft.status !== 'requires_review' || !reviewer.trim() || reviewer.trim().toUpperCase() === 'UNREVIEWED'
     || !Number.isFinite(Date.parse(approvedAt))) throw new Error('Explicit reviewer and approval timestamp required');
   const candidate = structuredClone(draft.candidate);
+  const selected = correctionBatch(candidate.release.relationshipSnapshot.correctionBatch);
   if (candidate.release.relationshipSnapshot.transform !== 'answer-coverage-correction-v1'
     || candidate.release.relationshipSnapshot.transformedFromVersion !== draft.sourceVersion
     || candidate.release.relationshipSnapshot.correctionReviewStatus !== 'pending') {
@@ -215,7 +237,7 @@ export function approveAnswerCorrections(draft: CorrectionDraft, reviewer: strin
   }
   const sources: Manifest['sources'] = candidate.sources.map(source => {
     if (source.databaseRightsStatus === 'approved') return { ...source, databaseRightsStatus: 'approved' };
-    if (source.key !== CORRECTION_SOURCE) throw new Error('Unexpected unreviewed source');
+    if (source.key !== selected.sourceKey) throw new Error('Unexpected unreviewed source');
     return { ...source, databaseRightsStatus: 'approved', approvalOwner: reviewer.trim(), approvedAt };
   });
   for (const board of candidate.boards) {
@@ -228,12 +250,12 @@ export function approveAnswerCorrections(draft: CorrectionDraft, reviewer: strin
 }
 
 async function main() {
-  const [sourceFile, catalogFile, outputFile, version] = process.argv.slice(2);
+  const [sourceFile, catalogFile, outputFile, version, batch] = process.argv.slice(2);
   if (!sourceFile || !catalogFile || !outputFile || !version) {
-    throw new Error('Usage: tsx scripts/football-grid-answer-corrections.ts SOURCE_JSON PLAYER_CATALOG_JSON OUTPUT_DRAFT_JSON NEW_VERSION');
+    throw new Error('Usage: tsx scripts/football-grid-answer-corrections.ts SOURCE_JSON PLAYER_CATALOG_JSON OUTPUT_DRAFT_JSON NEW_VERSION [BATCH]');
   }
   const draft = prepareAnswerCorrections(JSON.parse(await readFile(sourceFile, 'utf8')),
-    JSON.parse(await readFile(catalogFile, 'utf8')), Number(version), new Date().toISOString());
+    JSON.parse(await readFile(catalogFile, 'utf8')), Number(version), new Date().toISOString(), batch);
   // Exclusive creation protects source files and earlier review packages.
   await writeFile(outputFile, JSON.stringify(draft), { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify({ status: draft.status, sourceVersion: draft.sourceVersion, changes: draft.changes }));

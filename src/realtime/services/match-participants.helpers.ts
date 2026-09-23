@@ -190,15 +190,14 @@ export async function buildParticipantPayloads(
 }>> {
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   // Safety net: re-register AI ids so analytics still skips them after a server
-  // restart clears the in-memory set built at AI-user creation time. Real users
-  // are identified so their server-side events carry a name/email and merge with
-  // the web-SDK person (same Supabase id as distinctId) instead of showing as a
-  // bare anonymous UUID.
+  // restart clears the in-memory set built at AI-user creation time. Members
+  // are identified so their server-side events carry a name/email and merge
+  // with the web-SDK person. Guests keep anonymous gameplay events.
   for (const user of usersById.values()) {
     if (!user) continue;
     if (user.is_ai) {
       registerAiUserId(user.id);
-    } else {
+    } else if (!user.is_guest) {
       identifyUser(user.id, {
         email: user.email ?? undefined,
         nickname: user.nickname ?? undefined,

@@ -93,6 +93,9 @@ describe('analytics AI-user suppression', () => {
     expect(captureMock.mock.calls.map(([event]) => [event.distinctId, event.properties.access_type, event.properties.event_source])).toEqual([
       [guest, 'guest', 'server'], [guest, 'guest', 'server'], [REAL_USER, 'member', 'server'],
     ]);
+    expect(captureMock.mock.calls.map(([event]) => event.properties.$process_person_profile)).toEqual([
+      false, false, undefined,
+    ]);
     expect(sqlCallSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -101,6 +104,7 @@ describe('analytics AI-user suppression', () => {
     trackEvent('match_completed', REAL_USER);
     await flush();
     expect(captureMock.mock.calls[0][0].properties.access_type).toBe('unknown');
+    expect(captureMock.mock.calls[0][0].properties.$process_person_profile).toBe(false);
   });
 
   it('does not reuse an expired member label when refreshing identity fails', async () => {
@@ -138,6 +142,19 @@ describe('analytics AI-user suppression', () => {
     await flush();
     expect(identifyMock).toHaveBeenCalledTimes(1);
     expect(identifyMock.mock.calls[0][0].distinctId).toBe(REAL_USER);
+  });
+
+  it('never identifies guests or unknown users as PostHog people', async () => {
+    const guest = '33333333-3333-4333-8333-333333333333';
+    sqlResultByUserId.set(guest, [{ is_ai: false, is_guest: true }]);
+    identifyUser(guest, { nickname: 'Guest' });
+    await flush();
+    expect(identifyMock).not.toHaveBeenCalled();
+
+    sqlShouldThrow = true;
+    identifyUser('44444444-4444-4444-8444-444444444444', { nickname: 'Unknown' });
+    await flush();
+    expect(identifyMock).not.toHaveBeenCalled();
   });
 
   it('identifies user profiles with PostHog display properties', async () => {

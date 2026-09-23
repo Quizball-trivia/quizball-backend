@@ -1632,7 +1632,10 @@ async function main(): Promise<void> {
     const output = optionValue(args, '--out');
     if (!reviewer || !output) throw new Error('approve-answer-corrections requires --approved-by and --out');
     const draft = JSON.parse(await readFile(manifestPath, 'utf8')) as CorrectionDraft;
-    const manifest = manifestSchema.parse(approveAnswerCorrections(draft, reviewer, new Date().toISOString()));
+    // Packs in the same correction batch share one provenance row. Let the
+    // reviewer pin its approval time so their source definitions agree.
+    const approvedAt = optionValue(args, '--approved-at') ?? new Date().toISOString();
+    const manifest = manifestSchema.parse(approveAnswerCorrections(draft, reviewer, approvedAt));
     await writeFile(output, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
     return;
   }

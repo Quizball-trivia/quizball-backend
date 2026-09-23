@@ -1,0 +1,14 @@
+# Reviewed Football Grid reports: first coverage batch
+
+This is a small, reviewable correction of two confirmed player reports. It is not a claim of complete historical coverage, and the code change alone does not alter live answers. The offline draft remains `requires_review` until its evidence, portraits and fresh environment export pass the content release process.
+
+| Report | Evidence | Correction |
+| --- | --- | --- |
+| `პაჩო` for PSG × defender | [PSG identifies Willian Pacho as its first-team defender](https://www.psg.fr/en/players/willian-pacho); [UEFA lists him in a PSG starting XI](https://www.uefa.com/uefachampionsleague/news/02a5-20b60cd56a21-50353358258b-1000--champions-league-final-starting-line-ups/). | Add the reviewed Georgian surname alias to the existing European player. Bring the same player, existing environment portrait and verified PSG/defender memberships into the themed pack, where he was absent. |
+| Giorgi Loria for Georgia × Dinamo Tbilisi | [UEFA's Dinamo–Steaua 30 July 2013 match record](https://www.uefa.com/news-media/mediaservices/informationkits/competitions/uefachampionsleague/2014/match/2011712/) names Loria in Dinamo's starting XI. The existing themed catalog already records his Georgia membership. | Add the Dinamo Tbilisi senior appearance membership in the themed pack. |
+
+The fixed `reviewed-player-reports-20260923` batch reuses the previous correction transform. It imports only a player already present in the same environment's European catalog, checks English identity and image origin, rejects collisions with other players for the Georgian alias, preserves every existing accepted answer, and recomputes cell intersections. The publisher recomputes the batch from the pinned source and catalog instead of trusting a hand-edited candidate. The fact fixture contains the source references and stays versioned in the repository.
+
+Against the 23 September production exports, the offline European draft adds one alias and no cell answers. The themed draft adds one display record, three memberships, four aliases and eight player/cell answers across eight cells. No old answer is removed. The two reported names resolve in the relevant cells; Loria remains wrong in an unrelated PSG/defender cell. These numbers must be recalculated from fresh staging exports before publishing.
+
+The 1951–52 Barcelona pilot is a separate historical identity backlog. [Barcelona's archive](https://players.fcbarcelona.com/en/chronology/1951) lists its season and [a 1952 league match](https://players.fcbarcelona.com/en/match/3668-barcelona-sporting-gijon) with Kubala and Ramallets. Neither player is in the current European catalog. Adding them requires reviewed Quizball identities, usable portraits, four-locale name handling and a fresh source-rights check. This batch does not silently create those identities or infer every teammate, manager, title or league fact from a season roster.

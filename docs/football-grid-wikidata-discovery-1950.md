@@ -1,8 +1,9 @@
 # Football Grid historical club discovery from 1950
 
 Status on 23 September 2026: **source inventory, not playable answers**. The raw
-snapshot is kept outside Git at
-`/Users/user/dev/quizball-release-artifacts/grid-history-discovery-1950-20260923/`.
+snapshot stays outside Git in the private directory selected with `--out`.
+Reviewers with access to the source release exports can reproduce the scan with
+the command below and inspect its `summary.json` and per-club raw claim files.
 The script is repeatable and resumes by club after a network failure. It makes
 no database writes and produces no release manifest.
 

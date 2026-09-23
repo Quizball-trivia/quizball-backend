@@ -1,9 +1,11 @@
 """Keep historical discovery separate from answer acceptance."""
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).parents[2] / 'scripts/football-grid-content-generator/fetch-wikidata-club-history.py'
 spec = importlib.util.spec_from_file_location('wikidata_club_history', SCRIPT)
@@ -16,6 +18,15 @@ def binding(value):
 
 
 class WikidataClubHistoryTest(unittest.TestCase):
+    def test_unexpected_query_response_retries(self):
+        with mock.patch.object(module.urllib.request, 'urlopen', side_effect=[
+            io.BytesIO(b'{"results": {"bindings": {}}}'),
+            io.BytesIO(b'{"results": {"bindings": []}}'),
+        ]) as open_query, mock.patch.object(module.time, 'sleep') as pause:
+            self.assertEqual(module.request('SELECT * WHERE {}'), [])
+        self.assertEqual(open_query.call_count, 2)
+        pause.assert_called_once()
+
     def test_exact_club_ids_are_required(self):
         clubs = {
             'club:arsenal': {'label': 'Arsenal', 'transfermarktIds': {'11'}, 'wikidataQids': {'Q9617'}},

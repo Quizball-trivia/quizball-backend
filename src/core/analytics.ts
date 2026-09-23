@@ -162,6 +162,7 @@ export function trackEvent(
     try {
       if (await isAiUser(distinctId)) return;
       const audience = aiCache.get(distinctId);
+      const accessType = audience && audience.expiresAt > Date.now() ? audience.accessType : 'unknown';
       client.capture({
         distinctId,
         event: eventName,
@@ -169,7 +170,10 @@ export function trackEvent(
         timestamp: occurredAt,
         properties: {
           ...properties,
-          access_type: audience && audience.expiresAt > Date.now() ? audience.accessType : 'unknown',
+          access_type: accessType,
+          // Server SDK captures identified events by default. Guest/unknown
+          // gameplay must remain measurable without creating a PostHog person.
+          ...(accessType === 'member' ? {} : { $process_person_profile: false }),
           event_source: 'server',
           $timestamp: occurredAt.toISOString(),
           environment: process.env.NODE_ENV || 'development',
@@ -207,6 +211,10 @@ export function identifyUser(
   runDeferred(async () => {
     try {
       if (await isAiUser(userId)) return;
+      const audience = aiCache.get(userId);
+      // A match participant may be a guest. Only confirmed members should
+      // create or update a PostHog person; a failed lookup can retry later.
+      if (!audience || audience.expiresAt <= Date.now() || audience.accessType !== 'member') return;
       client.identify({
         distinctId: userId,
         properties: {

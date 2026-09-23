@@ -15,6 +15,10 @@ The appearance snapshot also stops on 28 June 2026. Matches and transfers after 
 
 An offline four-player discovery pilot now exists. It is an ingestion test, not an exhaustive list or approved football data. New discovery packages carry `requires_review`, source claim IDs, qualifiers and references. The importer and generator reject these packages until an explicit reviewer approves them. Legacy packages with missing review status are also rejected: re-audit them and record approval before generation or import. Original files can still be inspected offline, but omission is never approval.
 
+The [1950+ club discovery scan](football-grid-wikidata-discovery-1950.md)
+now inventories Wikidata career and manager claims for identifiable Grid clubs.
+Its output is still review-only and does not change the coverage claims below.
+
 The pilot exposed two importer defects now covered by tests:
 
 - Wikidata P54 can contain coaching roles: Kubala's raw output included 13 coaching stints. Qualified coaching/unknown roles and deprecated claims are now held outside playing careers, with the excluded claims retained for review.

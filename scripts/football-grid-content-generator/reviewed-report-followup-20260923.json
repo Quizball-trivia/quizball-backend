@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "playerId": "4e9bd3d2-728a-4f4b-bf6f-873540e7a5f8",
+      "nameEn": "Willian Pacho",
+      "criteria": ["club:paris-saint-germain", "wildcard:position-def"],
+      "url": "https://www.psg.fr/en/players/willian-pacho",
+      "fact": "Paris Saint-Germain identifies Willian Pacho as a defender who joined the club in summer 2024 and has been a key first-team player."
+    },
+    {
+      "playerId": "12cdc422-74c5-4391-8520-dc2044b1a1ec",
+      "nameEn": "Giorgi Loria",
+      "criteria": ["club-dinamo-tbilisi"],
+      "url": "https://www.uefa.com/news-media/mediaservices/informationkits/competitions/uefachampionsleague/2014/match/2011712/",
+      "fact": "UEFA lists Giorgi Loria in Dinamo Tbilisi's starting XI for the 30 July 2013 Champions League qualifier against Steaua București."
+    }
+  ],
+  "aliases": [
+    {
+      "playerId": "4e9bd3d2-728a-4f4b-bf6f-873540e7a5f8",
+      "nameEn": "Willian Pacho",
+      "alias": "პაჩო",
+      "locale": "ka",
+      "url": "https://www.psg.fr/en/players/willian-pacho",
+      "fact": "Paris Saint-Germain identifies its defender Willian Joel Pacho Tenorio by the surname Pacho."
+    }
+  ]
+}

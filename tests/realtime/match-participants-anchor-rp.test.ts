@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
+import { identifyUser } from '../../src/core/analytics.js';
 
 const getByIdsMock = vi.fn();
 const ensureProfileMock = vi.fn();
@@ -81,5 +82,22 @@ describe('buildParticipantPayloads — rankPoints anchor vs real profile', () =>
     // The ephemeral bot's profile is skipped (only the human's is ensured).
     expect(ensureProfileMock).toHaveBeenCalledWith('human-1');
     expect(ensureProfileMock).not.toHaveBeenCalledWith('ephemeral-1');
+  });
+
+  it('identifies members but leaves guest match participants anonymous', async () => {
+    getByIdsMock.mockResolvedValue(new Map([
+      ['member-1', { id: 'member-1', is_ai: false, is_guest: false, nickname: 'Member' }],
+      ['guest-1', { id: 'guest-1', is_ai: false, is_guest: true, nickname: 'Guest' }],
+    ]));
+
+    const { buildParticipantPayloads } = await import('../../src/realtime/services/match-participants.helpers.js');
+    const payloads = await buildParticipantPayloads(
+      [{ user_id: 'member-1', seat: 1 }, { user_id: 'guest-1', seat: 2 }],
+      'friendly',
+    );
+
+    expect(payloads).toHaveLength(2);
+    expect(identifyUser).toHaveBeenCalledTimes(1);
+    expect(identifyUser).toHaveBeenCalledWith('member-1', expect.any(Object));
   });
 });

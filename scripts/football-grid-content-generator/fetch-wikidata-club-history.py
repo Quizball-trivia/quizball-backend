@@ -40,8 +40,13 @@ def request(query):
                 'User-Agent': USER_AGENT, 'Accept': 'application/sparql-results+json',
             })
             with urllib.request.urlopen(req, timeout=75, context=CONTEXT) as response:
-                return json.load(response)['results']['bindings']
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+                payload = json.load(response)
+                if (not isinstance(payload, dict)
+                        or not isinstance(payload.get('results'), dict)
+                        or not isinstance(payload['results'].get('bindings'), list)):
+                    raise ValueError('Unexpected SPARQL response shape')
+                return payload['results']['bindings']
+        except (urllib.error.URLError, TimeoutError, ValueError):
             if attempt == 3:
                 raise
             time.sleep(4 * (attempt + 1))

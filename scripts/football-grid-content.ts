@@ -941,10 +941,22 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
   // validation and explicit activation succeeds.
   const validation = validateManifest(manifest, false);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, false, stagingSourceFile);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(
+    manifest, errors, transformedFrom, false, stagingSourceFile,
+    process.env.GRID_RELEASE_CATALOG_EXPORT, process.env.GRID_RELEASE_SOURCE_PINS,
+  );
   if (errors.length > 0) throw new Error(`Content validation failed:\n${errors.join('\n')}`);
   const manifestChecksum = checksum(manifest);
-  await sql.begin(async (tx) => {
+  // A published release is never modified. A matching draft is safe to resume:
+  // metadata/boards commit atomically, then answer batches commit independently.
+  const prior = await sql.unsafe<Array<{ id: string; manifest_checksum: string; status: string }>>(
+    `SELECT id, manifest_checksum, status FROM football_grid_content_releases WHERE version = $1`,
+    [manifest.release.version],
+  );
+  if (prior[0] && (prior[0].manifest_checksum !== manifestChecksum || !['draft', 'feasibility'].includes(prior[0].status))) {
+    throw new Error(`Release ${manifest.release.version} exists with different content or status`);
+  }
+  if (!prior[0]) await sql.begin(async (tx) => {
     await relaxTransactionTimeouts(tx as unknown as Db);
     const releaseRows = await tx.unsafe<Array<{ id: string }>>(
       `INSERT INTO football_grid_content_releases (
@@ -1108,13 +1120,9 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
         ],
       );
     }
-    const playerById = new Map(manifest.players.map((player) => [player.id, player]));
-    // Boards and answers go in bulk: one round trip per 200 boards and per
-    // ~25k answer rows instead of two per board. Through the pooler each round
-    // trip costs hundreds of milliseconds, and the whole publish is one
-    // transaction, so fewer statements means a much shorter exposure window.
+    // Keep metadata and boards atomic. Answer rows are inserted in smaller
+    // committed batches below, while the release remains invisible to play.
     const BOARD_CHUNK = 200;
-    const ANSWER_CHUNK = 25_000;
     const boardIdByChecksum = new Map<string, string>();
     for (let offset = 0; offset < manifest.boards.length; offset += BOARD_CHUNK) {
       const chunk = manifest.boards.slice(offset, offset + BOARD_CHUNK);
@@ -1144,13 +1152,50 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
       for (const row of inserted) boardIdByChecksum.set(row.canonical_checksum, row.id);
       process.stdout.write(`Publish ${manifest.release.version}: ${boardIdByChecksum.size}/${manifest.boards.length} boards inserted\n`);
     }
-    type AnswerInsert = {
-      boardId: string; cellIndex: number; playerId: string; nameEn: string | null; nameKa: string | null;
-      imageAssetKey: string | null; rank: number | null; isSample: boolean;
-    };
-    let insertedAnswers = 0;
-    const flushAnswers = async (rows: AnswerInsert[]) => {
-      if (rows.length === 0) return;
+  });
+  const release = (await sql.unsafe<Array<{ id: string; manifest_checksum: string; status: string }>>(
+    `SELECT id, manifest_checksum, status FROM football_grid_content_releases WHERE version = $1`,
+    [manifest.release.version],
+  ))[0];
+  if (!release || release.manifest_checksum !== manifestChecksum || !['draft', 'feasibility'].includes(release.status)) {
+    throw new Error('Resumable release identity changed');
+  }
+  const storedBoards = await sql.unsafe<Array<{ id: string; canonical_checksum: string }>>(
+    `SELECT id, canonical_checksum FROM football_grid_boards WHERE release_id = $1`,
+    [release.id],
+  );
+  const boardIdByChecksum = new Map(storedBoards.map((board) => [board.canonical_checksum, board.id]));
+  if (storedBoards.length !== manifest.boards.length ||
+      validation.boards.some((board) => !boardIdByChecksum.has(board.checksum))) {
+    throw new Error('Resumable release board set differs from reviewed manifest');
+  }
+  const existingAnswers = await sql.unsafe<Array<{ board_id: string; count: number }>>(
+    `SELECT board_id, count(*)::int AS count FROM football_grid_board_answers
+      WHERE board_id = ANY($1::uuid[]) GROUP BY board_id`,
+    [[...boardIdByChecksum.values()]],
+  );
+  const existingCountByBoard = new Map(existingAnswers.map((row) => [row.board_id, row.count]));
+  if (release.status === 'feasibility') {
+    const expectedCount = manifest.boards.reduce((total, board) =>
+      total + board.cells.reduce((boardTotal, cell) => boardTotal + cell.playerIds.length, 0), 0);
+    const actualCount = existingAnswers.reduce((total, board) => total + board.count, 0);
+    if (actualCount !== expectedCount) {
+      throw new Error(`Finalized release ${manifest.release.version} has ${actualCount} of ${expectedCount} answers`);
+    }
+  }
+  type AnswerInsert = {
+    boardId: string; cellIndex: number; playerId: string; nameEn: string | null; nameKa: string | null;
+    imageAssetKey: string | null; rank: number | null; isSample: boolean;
+  };
+  const playerById = new Map(manifest.players.map((player) => [player.id, player]));
+  let insertedAnswers = [...existingCountByBoard.values()].reduce((sum, count) => sum + count, 0);
+  const ANSWER_CHUNK = 5_000;
+  const pauseMs = Number(process.env.GRID_CONTENT_BATCH_PAUSE_MS ?? 0);
+  if (!Number.isInteger(pauseMs) || pauseMs < 0 || pauseMs > 2_000) throw new Error('Invalid Grid content batch pause');
+  const flushAnswers = async (rows: AnswerInsert[]) => {
+    if (rows.length === 0) return;
+    await sql.begin(async (tx) => {
+      await relaxTransactionTimeouts(tx as unknown as Db);
       await tx.unsafe(
         `INSERT INTO football_grid_board_answers (
            board_id, release_id, cell_index, football_player_id,
@@ -1161,9 +1206,10 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
                 u.image_asset_key, u.rank, u.is_sample::boolean
          FROM unnest(
            $2::uuid[], $3::int[], $4::uuid[], $5::text[], $6::text[], $7::text[], $8::int[], $9::text[]
-         ) AS u(board_id, cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)`,
+         ) AS u(board_id, cell_index, player_id, name_en, name_ka, image_asset_key, rank, is_sample)
+         ON CONFLICT (board_id, cell_index, football_player_id) DO NOTHING`,
         [
-          releaseId,
+          release.id,
           rows.map((row) => row.boardId),
           rows.map((row) => row.cellIndex),
           rows.map((row) => row.playerId),
@@ -1171,42 +1217,53 @@ async function publish(manifest: Manifest, transformedFrom: number | null = null
           rows.map((row) => row.nameKa),
           rows.map((row) => row.imageAssetKey),
           rows.map((row) => row.rank),
-          // postgres.js mis-types JS boolean arrays; send text and let the
-          // assignment cast handle it.
           rows.map((row) => String(row.isSample)),
         ],
       );
-      insertedAnswers += rows.length;
-      process.stdout.write(`Publish ${manifest.release.version}: ${insertedAnswers} answers inserted\n`);
-    };
-    let pending: AnswerInsert[] = [];
-    for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
-      const board = manifest.boards[boardIndex];
-      const boardId = boardIdByChecksum.get(validation.boards[boardIndex].checksum);
-      if (!boardId) throw new Error(`Board ${board.key} was not inserted`);
-      for (const [cellIndex, cell] of board.cells.entries()) {
-        for (const playerId of cell.playerIds) {
-          const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
-          const player = playerById.get(playerId);
-          pending.push({
-            boardId, cellIndex, playerId,
-            nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
-            imageAssetKey: player?.imageAssetKey ?? null,
-            rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
-            isSample: sampleIndex >= 0,
-          });
-        }
+    });
+    insertedAnswers += rows.length;
+    process.stdout.write(`Publish ${manifest.release.version}: approximately ${insertedAnswers} answers present\n`);
+    if (pauseMs) await new Promise((resolve) => setTimeout(resolve, pauseMs));
+  };
+  let pending: AnswerInsert[] = [];
+  let expectedAnswers = 0;
+  for (let boardIndex = 0; boardIndex < manifest.boards.length; boardIndex += 1) {
+    const board = manifest.boards[boardIndex];
+    const boardId = boardIdByChecksum.get(validation.boards[boardIndex].checksum);
+    if (!boardId) throw new Error(`Board ${board.key} was not inserted`);
+    const expectedForBoard = board.cells.reduce((sum, cell) => sum + cell.playerIds.length, 0);
+    expectedAnswers += expectedForBoard;
+    const alreadyPresent = existingCountByBoard.get(boardId) ?? 0;
+    if (alreadyPresent > expectedForBoard) throw new Error(`Board ${board.key} has excess answers`);
+    if (alreadyPresent === expectedForBoard) continue;
+    for (const [cellIndex, cell] of board.cells.entries()) {
+      for (const playerId of cell.playerIds) {
+        const sampleIndex = cell.recognizablePlayerIds.indexOf(playerId);
+        const player = playerById.get(playerId);
+        pending.push({
+          boardId, cellIndex, playerId,
+          nameEn: player?.nameEn ?? null, nameKa: player?.nameKa ?? null,
+          imageAssetKey: player?.imageAssetKey ?? null,
+          rank: sampleIndex >= 0 ? sampleIndex + 1 : null,
+          isSample: sampleIndex >= 0,
+        });
       }
-      if (pending.length >= ANSWER_CHUNK) { await flushAnswers(pending); pending = []; }
     }
-    await flushAnswers(pending);
-    await tx.unsafe(
-      `UPDATE football_grid_content_releases
-          SET status = 'feasibility'
-        WHERE id = $1 AND status = 'draft'`,
-      [releaseId],
-    );
-  });
+    if (pending.length >= ANSWER_CHUNK) { await flushAnswers(pending); pending = []; }
+  }
+  await flushAnswers(pending);
+  const finalCount = (await sql.unsafe<Array<{ count: number }>>(
+    `SELECT count(*)::int AS count FROM football_grid_board_answers WHERE release_id = $1`,
+    [release.id],
+  ))[0]?.count;
+  if (finalCount !== expectedAnswers) {
+    throw new Error(`Answer count mismatch: expected ${expectedAnswers}, found ${finalCount}`);
+  }
+  if (release.status === 'draft') await sql.unsafe(
+    `UPDATE football_grid_content_releases SET status = 'feasibility'
+      WHERE id = $1 AND manifest_checksum = $2 AND status = 'draft'`,
+    [release.id, manifestChecksum],
+  );
   process.stdout.write(`Staged Football Grid release ${manifest.release.version} (${manifest.boards.length} boards, ${manifestChecksum})\n`);
 }
 
@@ -1221,6 +1278,32 @@ export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Man
   return relabelManifestsMatch(expected, candidate);
 }
 
+/** Use a prior immutable export only when its bytes and live release pin still match. */
+async function loadPinnedSourceExport(file: string, version: number, pinsFile?: string): Promise<{manifest: Manifest; release: {status: 'published'}}> {
+  if (!pinsFile) throw new Error('Cached source export requires its release pins');
+  const pins = JSON.parse(await readFile(pinsFile, 'utf8')) as {
+    target: string;
+    releases: Array<{version: number; id: string; manifestChecksum: string; boards: number; fileSha256: string}>;
+  };
+  if (pins.target !== process.env.GRID_RELEASE_TARGET) throw new Error('Cached source target mismatch');
+  const pin = pins.releases.find((row) => row.version === version);
+  if (!pin) throw new Error(`Cached source release ${version} is not pinned`);
+  const bytes = await readFile(file);
+  if (createHash('sha256').update(bytes).digest('hex') !== pin.fileSha256) throw new Error('Cached source export bytes changed');
+  const manifest = manifestSchema.parse(JSON.parse(bytes.toString('utf8')));
+  if (manifest.release.version !== version || manifest.boards.length !== pin.boards) throw new Error('Cached source export identity mismatch');
+  const current = await sql.unsafe<Array<{id: string; manifest_checksum: string; status: string; boards: number}>>(
+    `SELECT r.id, r.manifest_checksum, r.status,
+            (SELECT count(*)::int FROM football_grid_boards b WHERE b.release_id = r.id) AS boards
+       FROM football_grid_content_releases r WHERE r.version = $1`, [version],
+  );
+  if (current.length !== 1 || current[0].id !== pin.id || current[0].manifest_checksum !== pin.manifestChecksum ||
+      current[0].status !== 'published' || current[0].boards !== pin.boards) {
+    throw new Error(`Cached source release ${version} no longer matches live database`);
+  }
+  return {manifest, release: {status: 'published'}};
+}
+
 /**
  * A prescribed transform of served content may carry validator findings its
  * source already has (the 2026-08 themed packs predate the board-distribution
@@ -1228,7 +1311,10 @@ export function matchesPrescribedAnswerCorrection(source: Manifest, catalog: Man
  * serves right now plus exactly the prescribed changes, then drop findings the source produces under
  * the same validator mode. Everything else still blocks.
  */
-async function withoutInheritedFindings(manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean, stagingSourceFile?: string): Promise<string[]> {
+async function withoutInheritedFindings(
+  manifest: Manifest, errors: string[], transformedFrom: number, launch: boolean,
+  stagingSourceFile?: string, catalogSourceFile?: string, sourcePinsFile?: string,
+): Promise<string[]> {
   const snapshot = manifest.release.relationshipSnapshot as { transformedFromVersion?: number; transform?: string };
   if (snapshot.transform === STAGING_RESEARCH_TRANSFORM) {
     assertResearchMode(manifest, true);
@@ -1252,7 +1338,9 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
     || !['teammate-relabel-v1', 'answer-coverage-correction-v1'].includes(snapshot.transform ?? '')) {
     throw new Error(`Manifest is not a supported verified transform of release ${transformedFrom}`);
   }
-  const source = await exportRelease(transformedFrom);
+  const source = stagingSourceFile
+    ? await loadPinnedSourceExport(stagingSourceFile, transformedFrom, sourcePinsFile)
+    : await exportRelease(transformedFrom);
   if (source.release.status !== 'published') throw new Error(`Source release ${transformedFrom} is ${source.release.status}, not published`);
   const sourceManifest = manifestSchema.parse(JSON.parse(JSON.stringify(source.manifest)));
   if (snapshot.transform === 'answer-coverage-correction-v1') {
@@ -1261,7 +1349,9 @@ async function withoutInheritedFindings(manifest: Manifest, errors: string[], tr
     if (!Number.isSafeInteger(catalogVersion) || typeof metadata.correctionPreparedAt !== 'string') {
       throw new Error('Answer correction requires its source player catalog and preparation timestamp');
     }
-    const catalog = catalogVersion === transformedFrom ? source : await exportRelease(catalogVersion as number);
+    const catalog = catalogVersion === transformedFrom ? source : catalogSourceFile
+      ? await loadPinnedSourceExport(catalogSourceFile, catalogVersion as number, sourcePinsFile)
+      : await exportRelease(catalogVersion as number);
     if (catalog.release.status !== 'published') throw new Error('Answer correction catalog must be published');
     const catalogManifest = manifestSchema.parse(JSON.parse(JSON.stringify(catalog.manifest)));
     if (!matchesPrescribedAnswerCorrection(sourceManifest, catalogManifest, manifest)) {
@@ -1346,7 +1436,10 @@ async function activate(
   if (sources.length !== sourceVersions.length) throw new Error('Activation source or catalog is not published');
   const validation = validateManifest(manifest, true);
   let errors = validation.errors;
-  if (transformedFrom !== null) errors = await withoutInheritedFindings(manifest, errors, transformedFrom, true, stagingSourceFile);
+  if (transformedFrom !== null) errors = await withoutInheritedFindings(
+    manifest, errors, transformedFrom, true, stagingSourceFile,
+    process.env.GRID_RELEASE_CATALOG_EXPORT, process.env.GRID_RELEASE_SOURCE_PINS,
+  );
   if (allowFallbackAssets) {
     // Incremental releases add criteria/players whose art intentionally rides
     // the runtime fallback chain (monogram crests, silhouette portraits).

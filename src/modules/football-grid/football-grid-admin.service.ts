@@ -405,12 +405,14 @@ export const footballGridAdminService = {
     playerName: string;
     rowMember: boolean;
     columnMember: boolean;
+    boardAnswer: boolean;
     submittedNameRecognized: boolean;
     otherAliasOwners: number;
   }> {
     const rows = await sql.unsafe<Array<{
       player_id: string; player_name: string; row_member: boolean;
-      column_member: boolean; submitted_name_recognized: boolean; other_alias_owners: number;
+      column_member: boolean; board_answer: boolean;
+      submitted_name_recognized: boolean; other_alias_owners: number;
     }>>(
       `SELECT p.id AS player_id, p.name AS player_name,
               EXISTS (SELECT 1 FROM football_grid_criterion_memberships membership
@@ -419,6 +421,10 @@ export const footballGridAdminService = {
               EXISTS (SELECT 1 FROM football_grid_criterion_memberships membership
                        WHERE membership.criterion_id = board.column_criteria[(attempt.cell_index % 3) + 1]
                          AND membership.football_player_id = p.id) AS column_member,
+              EXISTS (SELECT 1 FROM football_grid_board_answers answer
+                       WHERE answer.board_id = board.id
+                         AND answer.cell_index = attempt.cell_index
+                         AND answer.football_player_id = p.id) AS board_answer,
               EXISTS (SELECT 1 FROM football_grid_player_aliases alias
                        WHERE alias.release_id = grid_match.alias_release_id
                          AND alias.football_player_id = p.id
@@ -441,6 +447,7 @@ export const footballGridAdminService = {
     return {
       playerId: row.player_id, playerName: row.player_name,
       rowMember: row.row_member, columnMember: row.column_member,
+      boardAnswer: row.board_answer,
       submittedNameRecognized: row.submitted_name_recognized,
       otherAliasOwners: row.other_alias_owners,
     };
@@ -452,8 +459,9 @@ export const footballGridAdminService = {
     proposal: FootballGridAdminReportProposal;
   }): Promise<unknown> {
     const check = await footballGridAdminService.checkProposedPlayer(input.reportId, input.proposal.playerId);
-    if ((!check.rowMember || !check.columnMember) && (!input.proposal.evidenceUrl || !input.proposal.evidenceNote)) {
-      throw new BadRequestError('Missing football facts require a source URL and an explanation');
+    if ((!check.rowMember || !check.columnMember || !check.boardAnswer)
+      && (!input.proposal.evidenceUrl || !input.proposal.evidenceNote)) {
+      throw new BadRequestError('Missing football facts or board answers require a source URL and an explanation');
     }
     const aliases = input.proposal.aliases.map((alias) => ({
       ...alias,
@@ -508,33 +516,51 @@ export const footballGridAdminService = {
               AND candidate.status = 'published'
               AND candidate.version > pinned.version
               AND attempt.normalized_text IS NOT NULL
-              AND 1 = (
-                SELECT count(DISTINCT alias.football_player_id)
-                  FROM football_grid_player_aliases alias
-                  JOIN football_grid_criteria new_row
-                    ON new_row.release_id = candidate.id
-                   AND new_row.criterion_key = old_row.criterion_key
-                  JOIN football_grid_criterion_memberships row_membership
-                    ON row_membership.release_id = candidate.id
-                   AND row_membership.criterion_id = new_row.id
-                   AND row_membership.football_player_id = alias.football_player_id
-                  JOIN football_grid_criteria new_column
-                    ON new_column.release_id = candidate.id
-                   AND new_column.criterion_key = old_column.criterion_key
-                  JOIN football_grid_criterion_memberships column_membership
-                    ON column_membership.release_id = candidate.id
-                   AND column_membership.criterion_id = new_column.id
-                   AND column_membership.football_player_id = alias.football_player_id
-                 WHERE alias.release_id = candidate.id
-                   AND alias.normalized_alias = attempt.normalized_text
-                   AND alias.acceptance_policy IN ('exact', 'unique_only', 'safe_typo')
+              AND EXISTS (
+                SELECT 1 FROM (
+                  SELECT count(DISTINCT alias.football_player_id) AS accepted_players
+                    FROM football_grid_boards new_board
+                    CROSS JOIN LATERAL generate_subscripts(new_board.row_criteria, 1) row_position(index)
+                    CROSS JOIN LATERAL generate_subscripts(new_board.column_criteria, 1) column_position(index)
+                    JOIN football_grid_criteria new_row
+                      ON new_row.id = new_board.row_criteria[row_position.index]
+                     AND new_row.criterion_key = old_row.criterion_key
+                    JOIN football_grid_criteria new_column
+                      ON new_column.id = new_board.column_criteria[column_position.index]
+                     AND new_column.criterion_key = old_column.criterion_key
+                    LEFT JOIN football_grid_board_answers answer
+                      ON answer.board_id = new_board.id
+                     AND answer.cell_index = (row_position.index - 1) * 3 + column_position.index - 1
+                    LEFT JOIN football_grid_player_aliases alias
+                      ON alias.release_id = candidate.id
+                     AND alias.football_player_id = answer.football_player_id
+                     AND alias.normalized_alias = attempt.normalized_text
+                   WHERE new_board.release_id = candidate.id
+                     AND new_board.theme = old_board.theme
+                     AND NOT EXISTS (
+                       SELECT 1 FROM football_grid_content_quarantines quarantine
+                        WHERE quarantine.release_id = new_board.release_id
+                          AND (quarantine.board_id IS NULL OR quarantine.board_id = new_board.id)
+                          AND quarantine.action = 'disable'
+                          AND (quarantine.expires_at IS NULL OR quarantine.expires_at > now())
+                          AND NOT EXISTS (
+                            SELECT 1 FROM football_grid_content_quarantines newer
+                             WHERE newer.release_id = quarantine.release_id
+                               AND newer.board_id IS NOT DISTINCT FROM quarantine.board_id
+                               AND newer.action = 'enable'
+                               AND (newer.created_at, newer.id) > (quarantine.created_at, quarantine.id)
+                          )
+                     )
+                   GROUP BY new_board.id, row_position.index, column_position.index
+                ) matching_cells
+                HAVING count(*) > 0 AND bool_and(matching_cells.accepted_players = 1)
               )
             FOR UPDATE OF report, candidate`,
           [input.reportId, input.decisionReleaseId!],
         );
         if (!corrections[0]) {
           throw new BadRequestError(
-            'Accepted reports require a newer published release that resolves this answer for both cell criteria',
+            'Accepted reports require a newer published release whose matching board cells accept the submitted answer',
           );
         }
       }

@@ -354,10 +354,18 @@ export const footballGridAdminService = {
       `SELECT r.*, a.match_id, a.turn_number, a.cell_index, a.locale,
               a.submitted_text, a.normalized_text, a.outcome, a.resolved_player_id,
               gm.board_id, gm.content_release_id, gm.alias_release_id,
-              gm.resolver_policy_version, gm.board_checksum
+              gm.resolver_policy_version, gm.board_checksum,
+              board.theme AS board_theme,
+              row_criterion.criterion_key AS row_criterion_key,
+              column_criterion.criterion_key AS column_criterion_key
          FROM football_grid_missing_answer_reports r
          JOIN football_grid_attempts a ON a.id = r.attempt_id
          JOIN football_grid_matches gm ON gm.match_id = a.match_id
+         JOIN football_grid_boards board ON board.id = gm.board_id
+         JOIN football_grid_criteria row_criterion
+           ON row_criterion.id = board.row_criteria[(a.cell_index / 3) + 1]
+         JOIN football_grid_criteria column_criterion
+           ON column_criterion.id = board.column_criteria[(a.cell_index % 3) + 1]
         WHERE ($1::text IS NULL OR r.status = $1)
         ORDER BY r.created_at
         LIMIT $2`,

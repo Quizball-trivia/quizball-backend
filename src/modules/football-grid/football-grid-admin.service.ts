@@ -4,6 +4,7 @@ import { normalizeFootballGridAnswer } from './football-grid.answer-resolver.js'
 import { resetFootballGridAliasCache } from './football-grid.service.js';
 import { resetFootballGridTypeaheadCache } from './football-grid-typeahead.controller.js';
 import type { Json } from '../../db/types.js';
+import type { FootballGridAdminReportProposal } from './football-grid-admin.schemas.js';
 
 // Must match COIN_DAILY_CAP in football-grid-settlement.service.ts.
 const FOOTBALL_GRID_COIN_DAILY_CAP = 3_500;
@@ -355,22 +356,127 @@ export const footballGridAdminService = {
               a.submitted_text, a.normalized_text, a.outcome, a.resolved_player_id,
               gm.board_id, gm.content_release_id, gm.alias_release_id,
               gm.resolver_policy_version, gm.board_checksum,
-              board.theme AS board_theme,
+              board.theme AS board_theme, release.version AS content_release_version,
               row_criterion.criterion_key AS row_criterion_key,
-              column_criterion.criterion_key AS column_criterion_key
+              row_criterion.label_en AS row_label_en, row_criterion.label_ka AS row_label_ka,
+              row_criterion.label_es AS row_label_es, row_criterion.label_tr AS row_label_tr,
+              column_criterion.criterion_key AS column_criterion_key,
+              column_criterion.label_en AS column_label_en, column_criterion.label_ka AS column_label_ka,
+              column_criterion.label_es AS column_label_es, column_criterion.label_tr AS column_label_tr
          FROM football_grid_missing_answer_reports r
          JOIN football_grid_attempts a ON a.id = r.attempt_id
          JOIN football_grid_matches gm ON gm.match_id = a.match_id
          JOIN football_grid_boards board ON board.id = gm.board_id
+         JOIN football_grid_content_releases release ON release.id = gm.content_release_id
          JOIN football_grid_criteria row_criterion
            ON row_criterion.id = board.row_criteria[(a.cell_index / 3) + 1]
          JOIN football_grid_criteria column_criterion
            ON column_criterion.id = board.column_criteria[(a.cell_index % 3) + 1]
         WHERE ($1::text IS NULL OR r.status = $1)
-        ORDER BY r.created_at
+        ORDER BY r.created_at DESC
         LIMIT $2`,
       [status ?? null, limit],
     );
+  },
+
+  async searchPlayers(query: string): Promise<unknown[]> {
+    // Escape ILIKE metacharacters: a reviewer searches for literal player names.
+    const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+    return sql.unsafe(
+      `SELECT p.id, p.name, p.display_name,
+              EXISTS (SELECT 1 FROM football_grid_player_aliases alias
+                       WHERE alias.football_player_id = p.id) AS in_grid_catalog
+         FROM football_players p
+        WHERE p.name ILIKE $1 ESCAPE '\\'
+           OR p.display_name->>'en' ILIKE $1 ESCAPE '\\'
+           OR p.display_name->>'ka' ILIKE $1 ESCAPE '\\'
+           OR p.display_name->>'es' ILIKE $1 ESCAPE '\\'
+           OR p.display_name->>'tr' ILIKE $1 ESCAPE '\\'
+           OR EXISTS (SELECT 1 FROM football_grid_player_aliases alias
+                       WHERE alias.football_player_id = p.id AND alias.alias ILIKE $1 ESCAPE '\\')
+        ORDER BY CASE WHEN lower(p.name) = lower($2) THEN 0 ELSE 1 END, p.name
+        LIMIT 20`,
+      [pattern, query],
+    );
+  },
+
+  async checkProposedPlayer(reportId: string, playerId: string): Promise<{
+    playerId: string;
+    playerName: string;
+    rowMember: boolean;
+    columnMember: boolean;
+    submittedNameRecognized: boolean;
+    otherAliasOwners: number;
+  }> {
+    const rows = await sql.unsafe<Array<{
+      player_id: string; player_name: string; row_member: boolean;
+      column_member: boolean; submitted_name_recognized: boolean; other_alias_owners: number;
+    }>>(
+      `SELECT p.id AS player_id, p.name AS player_name,
+              EXISTS (SELECT 1 FROM football_grid_criterion_memberships membership
+                       WHERE membership.criterion_id = board.row_criteria[(attempt.cell_index / 3) + 1]
+                         AND membership.football_player_id = p.id) AS row_member,
+              EXISTS (SELECT 1 FROM football_grid_criterion_memberships membership
+                       WHERE membership.criterion_id = board.column_criteria[(attempt.cell_index % 3) + 1]
+                         AND membership.football_player_id = p.id) AS column_member,
+              EXISTS (SELECT 1 FROM football_grid_player_aliases alias
+                       WHERE alias.release_id = grid_match.alias_release_id
+                         AND alias.football_player_id = p.id
+                         AND alias.normalized_alias = attempt.normalized_text) AS submitted_name_recognized,
+              (SELECT count(DISTINCT alias.football_player_id)::int
+                 FROM football_grid_player_aliases alias
+                WHERE alias.release_id = grid_match.alias_release_id
+                  AND alias.normalized_alias = attempt.normalized_text
+                  AND alias.football_player_id <> p.id) AS other_alias_owners
+         FROM football_grid_missing_answer_reports report
+         JOIN football_grid_attempts attempt ON attempt.id = report.attempt_id
+         JOIN football_grid_matches grid_match ON grid_match.match_id = attempt.match_id
+         JOIN football_grid_boards board ON board.id = grid_match.board_id
+         CROSS JOIN football_players p
+        WHERE report.id = $1 AND p.id = $2`,
+      [reportId, playerId],
+    );
+    const row = rows[0];
+    if (!row) throw new NotFoundError('Football Grid report or player not found');
+    return {
+      playerId: row.player_id, playerName: row.player_name,
+      rowMember: row.row_member, columnMember: row.column_member,
+      submittedNameRecognized: row.submitted_name_recognized,
+      otherAliasOwners: row.other_alias_owners,
+    };
+  },
+
+  async saveReportProposal(input: {
+    reportId: string;
+    actorUserId: string;
+    proposal: FootballGridAdminReportProposal;
+  }): Promise<unknown> {
+    const check = await footballGridAdminService.checkProposedPlayer(input.reportId, input.proposal.playerId);
+    if ((!check.rowMember || !check.columnMember) && (!input.proposal.evidenceUrl || !input.proposal.evidenceNote)) {
+      throw new BadRequestError('Missing football facts require a source URL and an explanation');
+    }
+    const aliases = input.proposal.aliases.map((alias) => ({
+      ...alias,
+      normalizedValue: normalizeFootballGridAnswer(alias.value),
+    }));
+    if (aliases.some((alias) => !alias.normalizedValue)) throw new BadRequestError('Empty normalized alias');
+    const proposal = { version: 1, ...input.proposal, aliases, check };
+    return sql.begin(async (tx) => {
+      const rows = await tx.unsafe<Array<{ id: string; correction_proposal: Json; proposed_at: string }>>(
+        `UPDATE football_grid_missing_answer_reports
+            SET correction_proposal = $2::jsonb, proposed_by = $3, proposed_at = now()
+          WHERE id = $1 AND status = 'open'
+          RETURNING id, correction_proposal, proposed_at`,
+        [input.reportId, JSON.stringify(proposal), input.actorUserId],
+      );
+      if (!rows[0]) throw new NotFoundError('Open Football Grid report not found');
+      await tx.unsafe(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, 'football_grid_report_proposal_saved', 'football_grid_missing_answer_report', $2, $3::jsonb)`,
+        [input.actorUserId, input.reportId, JSON.stringify({ playerId: input.proposal.playerId, check })],
+      );
+      return rows[0];
+    });
   },
 
   async decideReport(input: {

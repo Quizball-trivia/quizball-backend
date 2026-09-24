@@ -13,6 +13,3 @@ ALTER TABLE public.football_grid_missing_answer_reports
 
 COMMENT ON COLUMN public.football_grid_missing_answer_reports.correction_proposal IS
   'Admin-reviewed candidate only. Never read by the live answer resolver or treated as an accepted answer.';
-
-CREATE INDEX football_grid_reports_review_queue_idx
-  ON public.football_grid_missing_answer_reports (status, created_at DESC);

@@ -77,6 +77,14 @@ function correctionBatch(batch: unknown) {
   throw new Error('Unknown answer correction batch');
 }
 
+/** A correction release names its own provenance in relationshipSnapshot. */
+export function correctionSourceIdentity(batch: unknown): { sourceKey: string; datasetVersion: string } | null {
+  if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH &&
+      batch !== REPORT_FOLLOWUP_BATCH && batch !== CURRENT_FACTS_BATCH) return null;
+  const selected = correctionBatch(batch);
+  return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
+}
+
 type Source = Manifest['sources'][number];
 export type CorrectionDraft = {
   status: 'requires_review';

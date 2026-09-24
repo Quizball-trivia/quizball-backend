@@ -46,10 +46,19 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
       (SELECT string_agg(id::text, ',' ORDER BY id) FROM published)
         || ':' || coalesce((SELECT max(created_at)::text FROM football_grid_player_name_edits), '0') AS release_key,
       names.football_player_id AS id,
-      players.name AS name_en,
-      names.name_ka
+      coalesce(edits.name_en, players.name) AS name_en,
+      coalesce(edits.name_ka, names.name_ka) AS name_ka
     FROM names
     JOIN football_players players ON players.id = names.football_player_id
+    LEFT JOIN LATERAL (
+      SELECT
+        (SELECT name_en FROM football_grid_player_name_edits
+          WHERE football_player_id = names.football_player_id AND name_en IS NOT NULL
+          ORDER BY created_at DESC, id DESC LIMIT 1) AS name_en,
+        (SELECT name_ka FROM football_grid_player_name_edits
+          WHERE football_player_id = names.football_player_id AND name_ka IS NOT NULL
+          ORDER BY created_at DESC, id DESC LIMIT 1) AS name_ka
+    ) edits ON true
   `;
   if (rows.length === 0) return null;
   return {

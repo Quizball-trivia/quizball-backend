@@ -34,13 +34,24 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
     WITH published AS MATERIALIZED (
       SELECT id, version FROM football_grid_content_releases
       WHERE status = 'published'
-    ), names AS (
+    ), georgian_names AS MATERIALIZED (
       SELECT DISTINCT ON (a.football_player_id)
         a.football_player_id, a.alias AS name_ka
       FROM football_grid_player_aliases a
       JOIN published r ON r.id = a.release_id
       WHERE a.locale = 'ka' AND a.alias_type = 'georgian' AND a.acceptance_policy = 'exact'
       ORDER BY a.football_player_id, r.version DESC, a.reviewed_at DESC, a.alias
+    ), fallback_names AS (
+      SELECT DISTINCT ON (a.football_player_id)
+        a.football_player_id, a.alias AS name_ka
+      FROM football_grid_player_aliases a
+      JOIN published r ON r.id = a.release_id
+      WHERE a.locale = 'ka' AND a.acceptance_policy = 'exact'
+        AND a.alias_type <> 'georgian'
+        AND NOT EXISTS (SELECT 1 FROM georgian_names g WHERE g.football_player_id = a.football_player_id)
+      ORDER BY a.football_player_id, r.version DESC, a.reviewed_at DESC, a.alias
+    ), names AS (
+      SELECT * FROM georgian_names UNION ALL SELECT * FROM fallback_names
     )
     SELECT (SELECT id FROM published ORDER BY version DESC LIMIT 1) AS release_id,
       (SELECT string_agg(id::text, ',' ORDER BY id) FROM published)

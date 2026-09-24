@@ -516,7 +516,8 @@ export async function storedImageProblem(url: string | undefined | null): Promis
   if (!url) return 'no image url';
   if (!isOurStorageUrl(url)) return 'photo is not hosted in our storage';
   try {
-    const res = await fetch(url, { method: 'HEAD' });
+    // Bounded: publish transactions call this while holding the shared allocation lock.
+    const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return `stored photo returned HTTP ${res.status}`;
     const type = res.headers.get('content-type') ?? '';
     if (!type.startsWith('image/')) return `stored object is ${type || 'not an image'}`;

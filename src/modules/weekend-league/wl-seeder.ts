@@ -137,13 +137,13 @@ export async function drawSources(
                  AND qp.payload->'image' IS NOT NULL
                  AND qp.payload->>'image' <> 'null') DESC,
                (q.visibility = 'wl_private') DESC,
+               (${preferText}
+                 AND (qp.payload->'image' IS NULL OR qp.payload->>'image' = 'null')) DESC,
                -- Editor content (CMS batch or script-ingested, created_by NULL)
                -- outranks anything the agent pipeline left in the pool.
                (q.created_by IS NULL OR EXISTS (
                  SELECT 1 FROM wl_content_batch_rows b WHERE b.question_id = q.id
                )) DESC,
-               (${preferText}
-                 AND (qp.payload->'image' IS NULL OR qp.payload->>'image' = 'null')) DESC,
                ${order}
       LIMIT ${pageSize} OFFSET ${offset}
     `;

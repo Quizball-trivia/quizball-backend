@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { footballGridAdminService } from './football-grid-admin.service.js';
+import type { FootballGridAdminReportProposal } from './football-grid-admin.schemas.js';
 
 export const footballGridAdminController = {
   async inspectRewards(req: Request, res: Response): Promise<void> {
@@ -33,6 +34,22 @@ export const footballGridAdminController = {
   async listReports(req: Request, res: Response): Promise<void> {
     const { status, limit } = req.validated.query as { status?: string; limit: number };
     res.json({ reports: await footballGridAdminService.listReports(status, limit) });
+  },
+  async searchPlayers(req: Request, res: Response): Promise<void> {
+    const { q } = req.validated.query as { q: string };
+    res.json({ players: await footballGridAdminService.searchPlayers(q) });
+  },
+  async checkProposedPlayer(req: Request, res: Response): Promise<void> {
+    const { reportId } = req.validated.params as { reportId: string };
+    const { playerId } = req.validated.query as { playerId: string };
+    res.json(await footballGridAdminService.checkProposedPlayer(reportId, playerId));
+  },
+  async saveReportProposal(req: Request, res: Response): Promise<void> {
+    const { reportId } = req.validated.params as { reportId: string };
+    const proposal = req.validated.body as FootballGridAdminReportProposal;
+    res.json(await footballGridAdminService.saveReportProposal({
+      reportId, proposal, actorUserId: req.user!.id,
+    }));
   },
   async decideReport(req: Request, res: Response): Promise<void> {
     const { reportId } = req.validated.params as { reportId: string };

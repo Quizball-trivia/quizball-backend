@@ -8,6 +8,41 @@ export const footballGridAdminReportsQuerySchema = z.object({
   status: z.enum(['open', 'accepted', 'rejected', 'duplicate', 'closed']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+export const footballGridAdminPlayerSearchSchema = z.object({
+  q: z.string().trim().min(2).max(80),
+});
+export const footballGridAdminProposalCheckQuerySchema = z.object({
+  playerId: z.string().uuid(),
+});
+const proposedNamesSchema = z.object({
+  en: z.string().trim().min(2).max(160),
+  ka: z.string().trim().min(2).max(160),
+  es: z.string().trim().min(2).max(160),
+  tr: z.string().trim().min(2).max(160),
+});
+export const footballGridAdminReportProposalSchema = z.object({
+  playerId: z.string().uuid(),
+  names: proposedNamesSchema,
+  aliases: z.array(z.object({
+    locale: z.enum(['en', 'ka', 'es', 'tr']),
+    value: z.string().trim().min(2).max(160),
+    acceptancePolicy: z.enum(['exact', 'unique_only', 'safe_typo']),
+  })).min(4).max(40),
+  evidenceUrl: z.string().url().max(1000).optional(),
+  evidenceNote: z.string().trim().max(2000).optional(),
+  reviewerNote: z.string().trim().max(2000).optional(),
+}).superRefine((proposal, context) => {
+  for (const locale of ['en', 'ka', 'es', 'tr']) {
+    if (!proposal.aliases.some((alias) => alias.locale === locale)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['aliases'],
+        message: `Add at least one reviewed ${locale} spelling`,
+      });
+    }
+  }
+});
+export type FootballGridAdminReportProposal = z.infer<typeof footballGridAdminReportProposalSchema>;
 export const footballGridAdminReportDecisionSchema = z.object({
   status: z.enum(['accepted', 'rejected', 'duplicate', 'closed']),
   notes: z.string().trim().min(1).max(2_000),

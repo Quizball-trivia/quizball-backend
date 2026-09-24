@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import type { Manifest } from './football-grid-content.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import officialFollowup from './football-grid-content-generator/official-answer-followup-20260923.json' with { type: 'json' };
+import reportFollowup from './football-grid-content-generator/reviewed-report-followup-20260923.json' with { type: 'json' };
+import currentFacts from './football-grid-content-generator/current-facts-20260924.json' with { type: 'json' };
 
 export const CORRECTION_SOURCE = 'official-football-answer-review-20260921';
 export const CONFIRMED_FACTS = [
@@ -42,6 +44,10 @@ export const CONFIRMED_FACTS = [
 
 export const OFFICIAL_FOLLOWUP_BATCH = 'official-rejections-20260923';
 export const OFFICIAL_FOLLOWUP_SOURCE = 'official-football-answer-review-20260923';
+export const REPORT_FOLLOWUP_BATCH = 'reviewed-player-reports-20260923';
+export const REPORT_FOLLOWUP_SOURCE = 'reviewed-football-player-reports-20260923';
+export const CURRENT_FACTS_BATCH = 'current-football-facts-20260924';
+export const CURRENT_FACTS_SOURCE = 'official-football-facts-through-20260831';
 
 function correctionBatch(batch: unknown) {
   if (batch === undefined) return {
@@ -57,7 +63,26 @@ function correctionBatch(batch: unknown) {
     reviewer: 'official-football-fact-audit-20260923', datasetVersion: 'answer-audit-2026-09-23',
     providerName: 'UEFA, Premier League and official club match reports',
   };
+  if (batch === REPORT_FOLLOWUP_BATCH) return {
+    sourceKey: REPORT_FOLLOWUP_SOURCE, facts: reportFollowup.facts,
+    aliases: reportFollowup.aliases,
+    reviewer: 'official-player-report-review-20260923', datasetVersion: 'player-reports-2026-09-23',
+    providerName: 'UEFA match records and Paris Saint-Germain player profile',
+  };
+  if (batch === CURRENT_FACTS_BATCH) return {
+    sourceKey: CURRENT_FACTS_SOURCE, facts: currentFacts.facts,
+    reviewer: 'official-football-fact-audit-20260924', datasetVersion: 'match-facts-through-2026-08-31',
+    providerName: 'UEFA, Premier League, LaLiga and official club match records',
+  };
   throw new Error('Unknown answer correction batch');
+}
+
+/** A correction release names its own provenance in relationshipSnapshot. */
+export function correctionSourceIdentity(batch: unknown): { sourceKey: string; datasetVersion: string } | null {
+  if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH &&
+      batch !== REPORT_FOLLOWUP_BATCH && batch !== CURRENT_FACTS_BATCH) return null;
+  const selected = correctionBatch(batch);
+  return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
 }
 
 type Source = Manifest['sources'][number];
@@ -173,6 +198,25 @@ export function prepareAnswerCorrections(
           reviewedBy: selected.reviewer, reviewedAt }],
       });
       changes.addedMemberships.push({ criterionKey, playerId: correction.playerId });
+    }
+  }
+  if ('aliases' in selected) {
+    for (const reviewed of selected.aliases) {
+      const player = players.get(reviewed.playerId);
+      if (!player || player.nameEn !== reviewed.nameEn) {
+        throw new Error(`Reviewed alias player identity mismatch: ${reviewed.playerId}`);
+      }
+      const normalizedAlias = normalizeFootballGridAnswer(reviewed.alias);
+      if (!normalizedAlias) throw new Error('Reviewed alias is empty');
+      const conflicting = manifest.aliases.find(alias => alias.normalizedAlias === normalizedAlias
+        && alias.playerId !== reviewed.playerId);
+      if (conflicting) throw new Error(`Reviewed alias conflicts with another player: ${reviewed.alias}`);
+      if (manifest.aliases.some(alias => alias.playerId === reviewed.playerId
+        && alias.normalizedAlias === normalizedAlias)) continue;
+      manifest.aliases.push({ playerId: reviewed.playerId, alias: reviewed.alias, normalizedAlias,
+        locale: reviewed.locale, aliasType: 'family_name', acceptancePolicy: 'unique_only',
+        reviewedBy: selected.reviewer, reviewedAt });
+      changes.addedAliases += 1;
     }
   }
   changes.addedAliases += addFamilyAliases(manifest, reviewedAt);

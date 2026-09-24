@@ -16,10 +16,17 @@ const DB_URL = process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:543
 const REQUIRE_DB = process.env.FOOTBALL_GRID_REQUIRE_DB === 'true';
 const RELEASE_ID = '00000000-0000-4000-8000-000000990001';
 const CORRECTION_RELEASE_ID = '00000000-0000-4000-8000-000000990003';
+const CORRECTION_BOARD_ID = '00000000-0000-4000-8000-000000993003';
 const BOARD_ID = '00000000-0000-4000-8000-000000993001';
 const ENGLAND_BOARD_ID = '00000000-0000-4000-8000-000000993002';
 const CORRECTION_ROW_CRITERION_ID = '00000000-0000-4000-8000-000000991201';
 const CORRECTION_COLUMN_CRITERION_ID = '00000000-0000-4000-8000-000000991202';
+const CORRECTION_OTHER_CRITERION_IDS = [
+  '00000000-0000-4000-8000-000000991203',
+  '00000000-0000-4000-8000-000000991204',
+  '00000000-0000-4000-8000-000000991205',
+  '00000000-0000-4000-8000-000000991206',
+];
 const OUT_OF_BOARD_PLAYER_ID = '00000000-0000-4000-8000-000000992999';
 const CRITERION_IDS = Array.from(
   { length: 6 },
@@ -127,6 +134,19 @@ async function seedImmutableContent(): Promise<void> {
       )
     ON CONFLICT (id) DO NOTHING
   `;
+  for (let index = 0; index < CORRECTION_OTHER_CRITERION_IDS.length; index += 1) {
+    await db`
+      INSERT INTO football_grid_criteria (
+        id, release_id, criterion_key, family, subtype, label_en,
+        label_ka, difficulty, familiarity_score
+      ) VALUES (
+        ${CORRECTION_OTHER_CRITERION_IDS[index]}, ${CORRECTION_RELEASE_ID},
+        ${`integration-${[1, 2, 4, 5][index]}`}, ${index < 2 ? 'club' : 'country'},
+        'integration-correction', ${`Other criterion ${index}`},
+        ${`სხვა კრიტერიუმი ${index}`}, 'easy', 100
+      ) ON CONFLICT (id) DO NOTHING
+    `;
+  }
   await db`
     INSERT INTO football_grid_criterion_memberships (
       release_id, criterion_id, football_player_id, relationship_subtype,
@@ -1525,6 +1545,13 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
        WHERE reporting_user_id = ${match.playerB} AND status = 'open'
        ORDER BY created_at LIMIT 1
     `;
+    const originalCheck = await footballGridAdminService.checkProposedPlayer(
+      reports[0].id, OUT_OF_BOARD_PLAYER_ID,
+    );
+    expect(originalCheck).toMatchObject({
+      rowMember: false, columnMember: false, boardAnswer: false,
+      submittedNameRecognized: false,
+    });
     await expect(footballGridAdminService.decideReport({
       reportId: reports[0].id,
       status: 'accepted',
@@ -1532,6 +1559,43 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       decisionReleaseId: RELEASE_ID,
       actorUserId: match.playerA,
     })).rejects.toThrow('newer published release');
+    await db`DELETE FROM football_grid_board_answers WHERE board_id = ${CORRECTION_BOARD_ID}`;
+    await db`DELETE FROM football_grid_boards WHERE id = ${CORRECTION_BOARD_ID}`;
+    await expect(footballGridAdminService.decideReport({
+      reportId: reports[0].id,
+      status: 'accepted',
+      notes: 'alias and memberships without a board do not fix gameplay',
+      decisionReleaseId: CORRECTION_RELEASE_ID,
+      actorUserId: match.playerA,
+    })).rejects.toThrow('matching board cells accept');
+    await db`
+      INSERT INTO football_grid_boards (
+        id, release_id, version, row_criteria, column_criteria,
+        difficulty, familiarity_score, canonical_checksum, approved_by, published_at
+      ) VALUES (
+        ${CORRECTION_BOARD_ID}, ${CORRECTION_RELEASE_ID}, 1,
+        ${[...CORRECTION_OTHER_CRITERION_IDS.slice(0, 2), CORRECTION_ROW_CRITERION_ID]},
+        ${[...CORRECTION_OTHER_CRITERION_IDS.slice(2), CORRECTION_COLUMN_CRITERION_ID]},
+        'easy', 100,
+        '9999999999999999999999999999999999999999999999999999999999993003',
+        'integration-test', now()
+      )
+    `;
+    await expect(footballGridAdminService.decideReport({
+      reportId: reports[0].id,
+      status: 'accepted',
+      notes: 'a matching board without a cell answer does not fix gameplay',
+      decisionReleaseId: CORRECTION_RELEASE_ID,
+      actorUserId: match.playerA,
+    })).rejects.toThrow('matching board cells accept');
+    await db`
+      INSERT INTO football_grid_board_answers (
+        board_id, release_id, cell_index, football_player_id, recognizable_rank, is_sample
+      ) VALUES (
+        ${CORRECTION_BOARD_ID}, ${CORRECTION_RELEASE_ID}, 8,
+        ${OUT_OF_BOARD_PLAYER_ID}, 1, true
+      )
+    `;
     await footballGridAdminService.decideReport({
       reportId: reports[0].id,
       status: 'accepted',

@@ -28,7 +28,7 @@ export const WL_RESERVES_PER_KIND = 2;
 export const WL_REPEAT_AVOID_DAYS = 35;
 export const WL_GAME_COUNT = 4; // 3 qualifier games + the Sunday final
 
-const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
+export const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
   true_false: 'true_false',
   higher_lower: 'high_low',
   mcq: 'mcq_single',
@@ -40,7 +40,7 @@ const KIND_TO_SOURCE: Record<WlRoundKind, string> = {
   put_in_order: 'put_in_order',
 };
 
-interface SourceRow {
+export interface SourceRow {
   id: string;
   prompt: Record<string, unknown>;
   payload: Record<string, unknown>;
@@ -54,7 +54,7 @@ function hasBothLocales(value: unknown): boolean {
 }
 
 /** Every i18n-looking object in the payload must carry en + ka. */
-function payloadFullyBilingual(prompt: unknown, payload: unknown): boolean {
+export function payloadFullyBilingual(prompt: unknown, payload: unknown): boolean {
   if (!hasBothLocales(prompt)) return false;
   const walk = (node: unknown): boolean => {
     if (node == null || typeof node !== 'object') return true;
@@ -75,13 +75,15 @@ export function wlSourceNeedPerKind(kind: WlRoundKind): number {
   return WL_GAME_COUNT * (perGame + WL_RESERVES_PER_KIND);
 }
 
-async function drawSources(
+export async function drawSources(
   kind: WlRoundKind,
   need: number,
   allowPublicBank: boolean,
   deterministic: boolean,
   pagingSeed: string,
-  excludeIds?: ReadonlySet<string>
+  excludeIds?: ReadonlySet<string>,
+  reseedOf?: string,
+  priorityIds: readonly string[] = []
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
   // Owner's product call (2026-08-07): the mcq round is the VISUAL round —
@@ -121,6 +123,7 @@ async function drawSources(
           SELECT 1 FROM wl_questions w
           JOIN wl_tournaments wt ON wt.id = w.tournament_id
           WHERE w.source_question_id = q.id
+            AND wt.id <> ${reseedOf ?? '00000000-0000-0000-0000-000000000000'}::uuid
             AND wt.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})
             -- Test events must not burn the weekly pool: on staging the
             -- harness runs many compressed tournaments a day, and with a
@@ -128,10 +131,17 @@ async function drawSources(
             -- starve within a single afternoon of testing.
             AND wt.is_test = false
         )
-      ORDER BY (${preferImages}
+      -- Questions the editor asked for (CMS "Use in next weekend") come first of all.
+      ORDER BY (q.id = ANY(${sql.array([...priorityIds])}::uuid[])) DESC,
+               (${preferImages}
                  AND qp.payload->'image' IS NOT NULL
                  AND qp.payload->>'image' <> 'null') DESC,
                (q.visibility = 'wl_private') DESC,
+               -- Editor content (CMS batch or script-ingested, created_by NULL)
+               -- outranks anything the agent pipeline left in the pool.
+               (q.created_by IS NULL OR EXISTS (
+                 SELECT 1 FROM wl_content_batch_rows b WHERE b.question_id = q.id
+               )) DESC,
                (${preferText}
                  AND (qp.payload->'image' IS NULL OR qp.payload->>'image' = 'null')) DESC,
                ${order}
@@ -148,7 +158,7 @@ async function drawSources(
   return picked;
 }
 
-interface SlotInsert {
+export interface SlotInsert {
   gameIndex: number;
   roundIndex: number | null;
   questionIndex: number | null;
@@ -160,7 +170,7 @@ interface SlotInsert {
 }
 
 /** Split a source row into WL payload (display) + evaluation (answers). */
-function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number): {
+export function splitSource(kind: WlRoundKind, source: SourceRow, matchupIndex?: number): {
   payload: Record<string, unknown>;
   evaluation: Record<string, unknown>;
 } {
@@ -257,6 +267,53 @@ export interface WlSeedResult {
   shortages?: Partial<Record<WlRoundKind, { need: number; have: number }>>;
 }
 
+export interface WlSeedPlan {
+  ok: boolean;
+  slots: SlotInsert[];
+  shortages?: WlSeedResult['shortages'];
+}
+
+/**
+ * Every writer that picks pool questions for an event (automatic seeding, CMS
+ * re-draw, CMS lineup save) takes this transaction-scoped lock around its
+ * write, so two of them can never both hand out the same pool question. It
+ * is released at commit, which also makes it safe behind the transaction pooler.
+ */
+export async function wlLockContentAllocation(tx: typeof sql): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(hashtext('wl_content_allocation'))`;
+}
+
+/**
+ * Under the allocation lock: planned sources another weekend took meanwhile
+ * (a plan is drawn before the lock). A non-empty result means re-plan.
+ */
+export async function wlSourcesTakenElsewhere(tx: typeof sql, tournamentId: string, sourceIds: readonly string[]): Promise<string[]> {
+  if (!sourceIds.length) return [];
+  const rows = await tx<{ id: string }[]>`
+    SELECT DISTINCT w.source_question_id AS id FROM wl_questions w JOIN wl_tournaments t ON t.id = w.tournament_id
+    WHERE w.source_question_id = ANY(${tx.array([...sourceIds])}::uuid[]) AND t.id <> ${tournamentId} AND t.is_test = false
+      AND t.created_at > NOW() - make_interval(days => ${WL_REPEAT_AVOID_DAYS})`;
+  return rows.map((r) => r.id);
+}
+
+/** Insert planned slots (exported so a reseed can do it inside its own transaction). */
+export async function wlInsertTournamentSlots(tx: typeof sql, tournamentId: string, slots: readonly SlotInsert[]): Promise<void> {
+  for (const slot of slots) {
+    await tx`
+      INSERT INTO wl_questions (
+        tournament_id, game_index, round_index, question_index,
+        reserve_ordinal, kind, payload, evaluation, source_question_id
+      )
+      VALUES (
+        ${tournamentId}, ${slot.gameIndex}, ${slot.roundIndex},
+        ${slot.questionIndex}, ${slot.reserveOrdinal}, ${slot.kind},
+        ${sql.json(slot.payload as never)}, ${sql.json(slot.evaluation as never)},
+        ${slot.sourceQuestionId}
+      )
+    `;
+  }
+}
+
 export async function wlSeedTournamentContent(input: {
   tournamentId: string;
   allowPublicBank: boolean;
@@ -266,6 +323,47 @@ export async function wlSeedTournamentContent(input: {
     SELECT COUNT(*)::int AS n FROM wl_questions WHERE tournament_id = ${input.tournamentId}
   `;
   if ((already[0]?.n ?? 0) > 0) return { ok: true, inserted: 0 };
+  const plan = await wlPlanTournamentContent(input);
+  if (!plan.ok) return { ok: false, inserted: 0, shortages: plan.shortages };
+  const inserted = await sql.begin(async (tx) => {
+    const x = tx as unknown as typeof sql;
+    // Lock order everywhere: tournament row, then the allocation lock.
+    await x`SELECT id FROM wl_tournaments WHERE id = ${input.tournamentId} FOR UPDATE`;
+    await wlLockContentAllocation(x);
+    // A CMS lineup save may have filled the event while this draw was planned.
+    const [{ n }] = await x<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM wl_questions WHERE tournament_id = ${input.tournamentId}`;
+    if (n > 0) return 0;
+    const taken = input.deterministic ? [] : await wlSourcesTakenElsewhere(x, input.tournamentId, plan.slots.map((sl) => sl.sourceQuestionId));
+    if (taken.length) return -1;
+    await wlInsertTournamentSlots(x, input.tournamentId, plan.slots);
+    return plan.slots.length;
+  });
+  if (inserted === -1) {
+    logger.warn({ tournamentId: input.tournamentId }, 'WL content draw raced another weekend for the same questions — will re-draw on the next tick');
+    return { ok: false, inserted: 0 };
+  }
+  if (!inserted) {
+    logger.info({ tournamentId: input.tournamentId }, 'WL content already present when the draw committed — kept');
+    return { ok: true, inserted: 0 };
+  }
+  logger.info({ tournamentId: input.tournamentId, inserted }, 'WL content seeded');
+  return { ok: true, inserted };
+}
+
+/**
+ * Draw a full tournament's worth of slots WITHOUT inserting — the seeder
+ * inserts them; a CMS reseed inserts them inside its own transaction after
+ * deleting the previous draw, so the event is never left empty.
+ * `reseedOf` lets that tournament's own frozen rows stay eligible.
+ */
+export async function wlPlanTournamentContent(input: {
+  tournamentId: string;
+  allowPublicBank: boolean;
+  deterministic?: boolean;
+  reseedOf?: string;
+  /** Drawn before anything else, so they fill the earliest main slots (Game 1 onward) before reserves. */
+  priorityIds?: readonly string[];
+}): Promise<WlSeedPlan> {
 
   // Draw everything first; only insert when EVERY kind is satisfiable.
   // Kinds sharing a source bank (mcq + money_drop are both mcq_single) are
@@ -278,7 +376,7 @@ export async function wlSeedTournamentContent(input: {
     const need = wlSourceNeedPerKind(kind);
     const rows = await drawSources(
       kind, need, input.allowPublicBank, input.deterministic ?? false,
-      input.tournamentId, usedSourceIds
+      input.tournamentId, usedSourceIds, input.reseedOf, input.priorityIds
     );
     if (rows.length < need) {
       shortages[kind] = { need, have: rows.length };
@@ -288,7 +386,7 @@ export async function wlSeedTournamentContent(input: {
   }
   if (Object.keys(shortages).length > 0) {
     logger.error({ tournamentId: input.tournamentId, shortages }, 'WL content seeding short on stock');
-    return { ok: false, inserted: 0, shortages };
+    return { ok: false, slots: [], shortages };
   }
 
   const slots: SlotInsert[] = [];
@@ -316,7 +414,10 @@ export async function wlSeedTournamentContent(input: {
         }
       }
     }
-    // Reserves per (game, kind).
+  }
+  // Reserves per (game, kind) only after EVERY game's main slots: the pools are
+  // ordered by preference (editor-requested first), so best content plays first.
+  for (let game = 0; game < WL_GAME_COUNT; game += 1) {
     for (const kind of WL_ROUND_ORDER) {
       const pool = drawn.get(kind)!;
       for (let r = 1; r <= WL_RESERVES_PER_KIND; r += 1) {
@@ -330,23 +431,5 @@ export async function wlSeedTournamentContent(input: {
     }
   }
 
-  await sql.begin(async (tx) => {
-    const txSql = tx as unknown as typeof sql;
-    for (const slot of slots) {
-      await txSql`
-        INSERT INTO wl_questions (
-          tournament_id, game_index, round_index, question_index,
-          reserve_ordinal, kind, payload, evaluation, source_question_id
-        )
-        VALUES (
-          ${input.tournamentId}, ${slot.gameIndex}, ${slot.roundIndex},
-          ${slot.questionIndex}, ${slot.reserveOrdinal}, ${slot.kind},
-          ${sql.json(slot.payload as never)}, ${sql.json(slot.evaluation as never)},
-          ${slot.sourceQuestionId}
-        )
-      `;
-    }
-  });
-  logger.info({ tournamentId: input.tournamentId, inserted: slots.length }, 'WL content seeded');
-  return { ok: true, inserted: slots.length };
+  return { ok: true, slots };
 }

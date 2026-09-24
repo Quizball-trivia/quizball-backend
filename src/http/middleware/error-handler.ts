@@ -85,6 +85,13 @@ export function errorHandler(
     return;
   }
 
+  // The question_payloads trigger refusing a Weekend League import photo on another question.
+  const pg = err as { code?: unknown; message?: unknown };
+  if (pg.code === '23514' && typeof pg.message === 'string' && pg.message.startsWith('This photo belongs to a Weekend League import')) {
+    res.status(400).json({ code: ErrorCode.BAD_REQUEST, message: pg.message, details: null, request_id: requestId } satisfies ErrorResponse);
+    return;
+  }
+
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
     if (err.code === ErrorCode.RATE_LIMIT_EXCEEDED) {

@@ -99,12 +99,26 @@ export const stagingSyncService = {
       let insertedQuestions = 0;
       let insertedPayloads = 0;
 
+      // Question + its payload commit together: a failure between the two
+      // used to leave a payload-less question that every retry then skipped.
+      const payloadByQuestion = new Map(payloads.map((payload) => [payload.question_id, payload]));
       for (const question of questionsToInsert) {
-        insertedQuestions += await stagingSyncRepo.insertTargetQuestion(target, question);
+        const payload = payloadByQuestion.get(question.id);
+        await target.begin(async (tx) => {
+          const txTarget = tx as unknown as typeof target;
+          insertedQuestions += await stagingSyncRepo.insertTargetQuestion(txTarget, question);
+          if (payload) insertedPayloads += await stagingSyncRepo.insertTargetPayload(txTarget, payload);
+        });
       }
 
-      for (const payload of payloads) {
-        insertedPayloads += await stagingSyncRepo.insertTargetPayload(target, payload);
+      // A source question deleted while we copied it (e.g. a WL batch undo) must not
+      // survive on staging: that undo has already cleaned staging and may delete its photo.
+      const copiedIds = questionsToInsert.map((question) => question.id);
+      const stillThere = new Set((await stagingSyncRepo.getSourceQuestionsByIds(copiedIds)).map((question) => question.id));
+      const vanished = copiedIds.filter((id) => !stillThere.has(id));
+      if (vanished.length) {
+        await target`DELETE FROM questions WHERE id = ANY(${target.array(vanished)}::uuid[])`;
+        logger.warn({ vanished }, 'Staging sync: source questions deleted during the copy were removed from staging again');
       }
 
       const response = {

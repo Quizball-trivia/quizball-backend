@@ -63,6 +63,15 @@ function validateObjectPath(value: string): string {
  * back the preview URL it received from the API.
  */
 export function normalizeCampaignQuizImageReference(value: string | null): string | null {
+  const objectPath = normalizeReference(value);
+  // Weekend League import photos are deleted with their batch; artwork must be its own upload.
+  if (objectPath?.startsWith('question-images/wl-import/')) {
+    throw new BadRequestError('Campaign artwork must be uploaded through this CMS');
+  }
+  return objectPath;
+}
+
+function normalizeReference(value: string | null): string | null {
   if (!value) return null;
 
   if (!/^https?:\/\//i.test(value)) {

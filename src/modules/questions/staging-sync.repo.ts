@@ -10,6 +10,8 @@ export interface StagingSyncQuestionRow {
   type: string;
   difficulty: string;
   status: string;
+  visibility: 'public' | 'wl_private';
+  ranked_eligible: boolean;
   prompt: Json;
   explanation: Json | null;
   created_at: string;
@@ -44,7 +46,8 @@ export const stagingSyncRepo = {
 
   async getSourceQuestionsByIds(questionIds: string[]): Promise<StagingSyncQuestionRow[]> {
     return sql<StagingSyncQuestionRow[]>`
-      SELECT id, category_id, type, difficulty, status, prompt, explanation, created_at, updated_at
+      SELECT id, category_id, type, difficulty, status, visibility, ranked_eligible,
+             prompt, explanation, created_at, updated_at
       FROM questions
       WHERE id = ANY(${sql.array(questionIds)}::uuid[])
     `;
@@ -89,6 +92,8 @@ export const stagingSyncRepo = {
         type,
         difficulty,
         status,
+        visibility,
+        ranked_eligible,
         prompt,
         explanation,
         created_at,
@@ -101,6 +106,8 @@ export const stagingSyncRepo = {
         ${question.type},
         ${question.difficulty},
         ${question.status},
+        ${question.visibility},
+        ${question.ranked_eligible},
         ${target.json(question.prompt)},
         ${question.explanation === null ? null : target.json(question.explanation)},
         ${question.created_at},

@@ -6,6 +6,7 @@ import type { Manifest } from './football-grid-content.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import officialFollowup from './football-grid-content-generator/official-answer-followup-20260923.json' with { type: 'json' };
 import reportFollowup from './football-grid-content-generator/reviewed-report-followup-20260923.json' with { type: 'json' };
+import currentFacts from './football-grid-content-generator/current-facts-20260924.json' with { type: 'json' };
 
 export const CORRECTION_SOURCE = 'official-football-answer-review-20260921';
 export const CONFIRMED_FACTS = [
@@ -45,6 +46,8 @@ export const OFFICIAL_FOLLOWUP_BATCH = 'official-rejections-20260923';
 export const OFFICIAL_FOLLOWUP_SOURCE = 'official-football-answer-review-20260923';
 export const REPORT_FOLLOWUP_BATCH = 'reviewed-player-reports-20260923';
 export const REPORT_FOLLOWUP_SOURCE = 'reviewed-football-player-reports-20260923';
+export const CURRENT_FACTS_BATCH = 'current-football-facts-20260924';
+export const CURRENT_FACTS_SOURCE = 'official-football-facts-through-20260831';
 
 function correctionBatch(batch: unknown) {
   if (batch === undefined) return {
@@ -65,6 +68,11 @@ function correctionBatch(batch: unknown) {
     aliases: reportFollowup.aliases,
     reviewer: 'official-player-report-review-20260923', datasetVersion: 'player-reports-2026-09-23',
     providerName: 'UEFA match records and Paris Saint-Germain player profile',
+  };
+  if (batch === CURRENT_FACTS_BATCH) return {
+    sourceKey: CURRENT_FACTS_SOURCE, facts: currentFacts.facts,
+    reviewer: 'official-football-fact-audit-20260924', datasetVersion: 'match-facts-through-2026-08-31',
+    providerName: 'UEFA, Premier League, LaLiga and official club match records',
   };
   throw new Error('Unknown answer correction batch');
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approveAnswerCorrections, REPORT_FOLLOWUP_BATCH, REPORT_FOLLOWUP_SOURCE, prepareAnswerCorrections } from '../../scripts/football-grid-answer-corrections.js';
+import { approveAnswerCorrections, correctionSourceIdentity, REPORT_FOLLOWUP_BATCH, REPORT_FOLLOWUP_SOURCE, prepareAnswerCorrections } from '../../scripts/football-grid-answer-corrections.js';
 import { matchesPrescribedAnswerCorrection, type Manifest } from '../../scripts/football-grid-content.js';
 import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from '../../src/modules/football-grid/football-grid.answer-resolver.js';
 
@@ -43,6 +43,12 @@ function fixture(): { source: Manifest; catalog: Manifest } {
 }
 
 describe('reviewed player-report correction', () => {
+  it('retains provenance for an alias-only correction', () => {
+    expect(correctionSourceIdentity(REPORT_FOLLOWUP_BATCH)).toEqual({
+      sourceKey: REPORT_FOLLOWUP_SOURCE, datasetVersion: 'player-reports-2026-09-23',
+    });
+  });
+
   it('adds the cited fact and Georgian name, then resolves both reported cells', () => {
     const { source, catalog } = fixture();
     const draft = prepareAnswerCorrections(source, catalog, 101, at, REPORT_FOLLOWUP_BATCH);

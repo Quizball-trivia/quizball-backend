@@ -10,7 +10,7 @@ import {
 } from '../src/modules/football-grid/football-grid.content-validator.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridBoardCandidate, FootballGridCriterionView } from '../src/modules/football-grid/football-grid.types.js';
-import { approveAnswerCorrections, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
+import { approveAnswerCorrections, correctionSourceIdentity, prepareAnswerCorrections, type CorrectionDraft } from './football-grid-answer-corrections.js';
 import { auditGridLocaleCoverage } from './football-grid-locale-coverage.js';
 import { assertStagingResearchTarget, assertAdditiveStagingResearch, STAGING_RESEARCH_TRANSFORM } from './football-grid-staging-research.js';
 
@@ -645,6 +645,22 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
         JOIN football_grid_membership_evidence e ON e.source_id = s.id
         JOIN football_grid_criterion_memberships m ON m.id = e.membership_id
        WHERE m.release_id = ${release.id} ORDER BY s.source_key`;
+  // An alias-only correction has no new membership evidence. Its reviewed
+  // source is still part of the release and must survive an export/reimport.
+  if (release.relationship_snapshot?.transform === 'answer-coverage-correction-v1') {
+    const identity = correctionSourceIdentity(release.relationship_snapshot.correctionBatch);
+    if (!identity) throw new Error(`Unknown correction source for release ${version}`);
+    if (!sourceRows.some(row => row.source_key === identity.sourceKey && row.dataset_version === identity.datasetVersion)) {
+      const rows = await sql<typeof sourceRows>`SELECT id, source_key, provider_name, dataset_version, permitted_use,
+        attribution_requirements, retention_requirements, approval_owner,
+        approved_at::text AS approved_at, database_rights_status
+        FROM football_grid_data_sources WHERE source_key = ${identity.sourceKey}
+        AND dataset_version = ${identity.datasetVersion}`;
+      if (rows.length !== 1) throw new Error(`Correction source missing for release ${version}`);
+      sourceRows.push(rows[0]);
+      sourceRows.sort((a, b) => a.source_key.localeCompare(b.source_key));
+    }
+  }
   const sourceKeyById = new Map(sourceRows.map((row) => [row.id, row.source_key]));
   const membershipRows = await sql<Array<{
     id: string; criterion_id: string; football_player_id: string; relationship_subtype: string;

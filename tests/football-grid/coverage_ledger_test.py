@@ -54,6 +54,7 @@ class CoverageLedgerTest(unittest.TestCase):
             self.assertEqual(summary["combined"]["criteriaUsedInStoredBoards"], 3)
             self.assertEqual(summary["combined"]["clubSeasonRowsForReview"], 154)
             self.assertEqual(summary["discovery"]["matchedHeldClubKeys"], 1)
+            self.assertEqual(summary["discovery"]["unmatchedHeldKeys"], [])
             self.assertEqual(summary["discovery"]["heldClubKeysUsedInStoredBoards"], 1)
             self.assertEqual(summary["discovery"]["topHeldClubsByCellPlacements"][0]["cell_placements"], 9)
             self.assertEqual(len((root / "out" / "pairs.csv").read_text().splitlines()), 4)
@@ -92,8 +93,8 @@ class CoverageLedgerTest(unittest.TestCase):
             ]}), encoding="utf-8")
             out = Path(directory) / "out"
             ledger.run([f"european={path}"], None, reports, out)
-            self.assertEqual(json.loads((out / "alias-proposals.json").read_text())[0]["playerId"], "one")
-            self.assertEqual(json.loads((out / "fact-review-candidates.json").read_text())[0]["playerId"], "two")
+            self.assertEqual(json.loads((out / "alias-proposals.json").read_text(encoding="utf-8"))[0]["playerId"], "one")
+            self.assertEqual(json.loads((out / "fact-review-candidates.json").read_text(encoding="utf-8"))[0]["playerId"], "two")
 
     def test_detects_different_answers_even_when_repeated_cells_have_the_same_count(self):
         with tempfile.TemporaryDirectory() as directory:

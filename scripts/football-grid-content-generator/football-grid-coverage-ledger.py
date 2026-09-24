@@ -233,6 +233,7 @@ def run(manifest_args: list[str], discovery_path: Path | None, reports_path: Pat
     used_keys = {item["criterion_key"] for item in criterion_rows if item["cell_placements"] > 0}
     used_clubs = {item["criterion_key"] for item in criterion_rows if item["family"] == "club" and item["cell_placements"] > 0}
     used_held_clubs = {item["criterion_key"] for item in held_priority if item["cell_placements"] > 0}
+    normalized_criteria_keys = {key.replace(":", "-", 1) for key in all_criteria}
     club_year_rows = [
         {"criterion_key": key, "season_start_year": year, "applicability": "unchecked",
          "source_status": "not_assessed", "verified_players": "", "evidence_reference": ""}
@@ -257,7 +258,10 @@ def run(manifest_args: list[str], discovery_path: Path | None, reports_path: Pat
                      "unsupportedCellAnswers": sum(content["unsupported_cell_answers"] for content in packs.values())},
         "discovery": {"heldClubKeys": len(held_keys), "matchedHeldClubKeys": len({item["criterion_key"] for item in held_priority}),
                       "heldClubKeysUsedInStoredBoards": len(used_held_clubs),
-                      "unmatchedHeldKeys": sorted(key for key in held_keys if key not in all_criteria and key.replace(":", "-", 1) not in all_criteria),
+                      "unmatchedHeldKeys": sorted(
+                          key for key in held_keys
+                          if key.replace(":", "-", 1) not in normalized_criteria_keys
+                      ),
                       "topHeldClubsByCellPlacements": [item for item in held_priority if item["cell_placements"] > 0][:20]},
     }
     if reports_path:

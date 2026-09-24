@@ -1,0 +1,81 @@
+{
+  "facts": [
+    {
+      "playerId": "fae90c7f-4f88-477e-892c-d277792ea964",
+      "nameEn": "Khvicha Kvaratskhelia",
+      "criteria": ["club-dinamo-batumi"],
+      "url": "https://erovnuliliga.ge/ge/news/6510-kvaratskhelias-debiuti-batumshi-tbilisuri-derbi-da-otkhi-dadzabuli-matchi",
+      "fact": "The Georgian Erovnuli Liga reports Kvaratskhelia making his Dinamo Batumi debut against Telavi on 2 April 2022."
+    },
+    {
+      "playerId": "b7f52ec2-3d5d-44ae-8cc2-2b16313da48d",
+      "nameEn": "Radamel Falcao",
+      "criteria": ["trophy:uefa-europa-league"],
+      "url": "https://www.uefa.com/uefaeuropaleague/news/0250-0c50fb7a9e5f-dc5a349f670c-1000/",
+      "fact": "Falcao scored twice for Atletico de Madrid in the 2012 Europa League final and won the competition; UEFA also records his 2011 win with Porto."
+    },
+    {
+      "playerId": "192d9332-9c57-44a4-91a3-dd10f86005c0",
+      "nameEn": "Maghnes Akliouche",
+      "criteria": ["club:paris-saint-germain"],
+      "url": "https://www.psg.fr/en/content/debut-for-maghnes-akliouche-with-paris-saint-germain-aston-villa-fc-european-super-cup-20262027",
+      "fact": "Akliouche started for Paris Saint-Germain against Aston Villa in the UEFA Super Cup on 12 August 2026."
+    },
+    {
+      "playerId": "64ae5465-0d1c-4263-9d1f-33329eaf5d89",
+      "nameEn": "Mika Godts",
+      "criteria": ["club:paris-saint-germain", "league:ligue-1"],
+      "url": "https://www.psg.fr/en/content/debuts-for-mika-godts-and-ferran-psg-ligue-1-rennes-players-2026-2027",
+      "fact": "Godts came on for Paris Saint-Germain in the 46th minute of its Ligue 1 opener against Rennes on 23 August 2026."
+    },
+    {
+      "playerId": "82faca74-318b-4e63-a4e4-74a0aa918f2d",
+      "nameEn": "Ferran Torres",
+      "criteria": ["club:paris-saint-germain", "league:ligue-1"],
+      "url": "https://www.psg.fr/en/content/debuts-for-mika-godts-and-ferran-psg-ligue-1-rennes-players-2026-2027",
+      "fact": "Ferran Torres came on for Paris Saint-Germain in the 46th minute of its Ligue 1 opener against Rennes on 23 August 2026 and scored twice."
+    },
+    {
+      "playerId": "060dc264-64b8-4893-bbb6-9ff03f3ea069",
+      "nameEn": "Christos Tzolis",
+      "criteria": ["club:arsenal"],
+      "url": "https://www.premierleague.com/en/news/4698358/should-you-triple-up-on-arsenal-and-who-are-their-best-three-picks",
+      "fact": "The Premier League records Tzolis playing for Arsenal against Coventry City in Matchweek 1 of the 2026/27 Premier League season."
+    },
+    {
+      "playerId": "190d3da0-86b5-4702-ac34-047904b5a5de",
+      "nameEn": "Bruno Guimarães",
+      "criteria": ["club:arsenal"],
+      "url": "https://www.laliga.com/en-NG/match/temporada-2026-2027-premier-league-a-villa-arsenal-2",
+      "fact": "LaLiga's match record lists Guimaraes coming on for Arsenal against Aston Villa in the Premier League on 31 August 2026."
+    },
+    {
+      "playerId": "9e050a3d-c942-4b67-9a1f-842a620732be",
+      "nameEn": "Ezri Konsa",
+      "criteria": ["club:arsenal"],
+      "url": "https://www.laliga.com/en-NG/match/temporada-2026-2027-premier-league-a-villa-arsenal-2",
+      "fact": "LaLiga's match record lists Konsa coming on for Arsenal against Aston Villa in the Premier League on 31 August 2026."
+    },
+    {
+      "playerId": "c56f9c35-9cef-4733-b80e-faad28b3c3b8",
+      "nameEn": "Youri Tielemans",
+      "criteria": ["club:manchester-united"],
+      "url": "https://www.premierleague.com/en/news/4713141",
+      "fact": "The Premier League records Tielemans playing for Manchester United against Hull City in August 2026."
+    },
+    {
+      "playerId": "c56f9c35-9cef-4733-b80e-faad28b3c3b8",
+      "nameEn": "Youri Tielemans",
+      "criteria": ["trophy:uefa-europa-league"],
+      "url": "https://www.premierleague.com/en/news/4679515/tielemans-completes-man-utd-move",
+      "fact": "Aston Villa's announcement records Tielemans as a 2026 UEFA Europa League winner who scored in the final against Freiburg."
+    },
+    {
+      "playerId": "204eec3b-58d7-4e7c-af18-498a8a52f96f",
+      "nameEn": "Andrey Santos",
+      "criteria": ["club:manchester-united"],
+      "url": "https://www.premierleague.com/en/news/4678902",
+      "fact": "The Premier League records Andrey Santos in Manchester United's starting lineup against Hull City in August 2026."
+    }
+  ]
+}

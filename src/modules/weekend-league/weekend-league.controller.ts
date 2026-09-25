@@ -21,8 +21,9 @@ export const weekendLeagueController = {
     res.json(await weekendLeagueService.standings());
   },
 
-  async hallOfFame(req: Request, res: Response): Promise<void> {
-    requireUserId(req);
+  // Public: same cached leaderboard for everyone, and the service takes no
+  // caller. The old requireUserId() gated public data behind a 401.
+  async hallOfFame(_req: Request, res: Response): Promise<void> {
     res.json(await weekendLeagueService.hallOfFame());
   },
 

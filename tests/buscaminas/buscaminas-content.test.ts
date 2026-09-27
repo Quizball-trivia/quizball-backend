@@ -103,13 +103,15 @@ describe('buscaminas sealed content', () => {
     expect(await check()).toEqual({ ok: false, reason: expect.stringMatching(reason) });
   });
 
-  it('start/tap/bank/next answer 503 while the content cannot be decrypted', async () => {
+  it('every endpoint (start/tap/bank/next/current/leaderboard) answers 503 while the content cannot be decrypted', async () => {
     const key = testKey();
     const secret = 's'.repeat(64);
     const { load } = loader(sealContent(DAYS, key), testKey());
-    const repo = {} as Parameters<typeof createBuscaminasService>[0]['repo'];
+    // A user with no run: /current must still check the content instead of answering { run: null }.
+    const repo = { getRun: async () => null } as unknown as Parameters<typeof createBuscaminasService>[0]['repo'];
     const svc = createBuscaminasService({
-      repo, ledger: memoryRunLedger(), starts: memoryStartCounter(), liveStartsPerDay: () => 8, content: load, secret: () => secret, now: () => new Date('2026-09-27T15:00:00Z'),
+      repo, ledger: memoryRunLedger(), starts: memoryStartCounter(), guestsPlayLive: () => false, liveStartsPerDay: () => 8,
+      content: load, secret: () => secret, now: () => new Date('2026-09-27T15:00:00Z'),
     });
     const iat = Math.floor(Date.parse('2026-09-27T15:00:00Z') / 1000);
     const token = signToken(newPayload('rid', '2026-09-27', 12, null), secret, { iat, exp: iat + 60 });
@@ -117,5 +119,8 @@ describe('buscaminas sealed content', () => {
     await expect(svc.tap(token, 'r0c0', null)).rejects.toMatchObject(disabled);
     await expect(svc.bank(token, null)).rejects.toMatchObject(disabled);
     await expect(svc.next(token, null)).rejects.toMatchObject(disabled);
+    await expect(svc.current('user-a', undefined)).rejects.toMatchObject(disabled);
+    await expect(svc.current('user-a', '2026-09-27')).rejects.toMatchObject(disabled);
+    await expect(svc.leaderboard(undefined, null)).rejects.toMatchObject(disabled);
   });
 });

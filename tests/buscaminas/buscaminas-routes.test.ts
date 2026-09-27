@@ -1,3 +1,4 @@
+import 'express-async-errors';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -50,6 +51,14 @@ describe('buscaminas routes', () => {
     const bad = await request(app).post('/api/v1/buscaminas/start').set('authorization', 'Bearer expired').send({ day: '2026-09-27' });
     expect(bad.status).toBe(401);
     expect(service.start).toHaveBeenCalledTimes(2);
+  });
+
+  it('start: a guest refused the live day gets 403 with code sign_in_for_today', async () => {
+    const { signInForToday } = await import('../../src/modules/buscaminas/buscaminas.errors.js');
+    service.start.mockRejectedValueOnce(signInForToday());
+    const res = await request(app).post('/api/v1/buscaminas/start').send({ day: '2026-09-27' });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'sign_in_for_today', details: { reason: 'sign_in_for_today' } });
   });
 
   it('start passes the caller\'s address bucket for the live-day run cap', async () => {

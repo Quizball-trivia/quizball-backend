@@ -72,22 +72,26 @@ const noRedis: RunLedger & StartCounter = {
   hit: async () => { throw new Error('ranked path touched the start counter'); },
 };
 
-function setup(opts: { now?: Date; days?: string[]; ledger?: RunLedger; starts?: StartCounter; limit?: number } = {}) {
+/** `guestsPlayLive` defaults to the production default (off) and can be flipped mid-test via `flags`. */
+function setup(opts: { now?: Date; days?: string[]; ledger?: RunLedger; starts?: StartCounter; limit?: number; guestsPlayLive?: boolean } = {}) {
   const days = opts.days ?? ['2026-09-27', TODAY, '2026-09-29'];
   let content: ContentIndex = indexContent(days.map((d) => makeDay(d)));
   const clock = { now: opts.now ?? NOW };
+  const flags = { guestsPlayLive: opts.guestsPlayLive ?? false };
   const mem = memoryRepo(() => clock.now);
   const starts = memoryStartCounter();
+  const ledger = memoryRunLedger();
   const svc = createBuscaminasService({
     repo: mem.repo,
-    ledger: opts.ledger ?? memoryRunLedger(),
+    ledger: opts.ledger ?? ledger,
     starts: opts.starts ?? starts,
+    guestsPlayLive: () => flags.guestsPlayLive,
     liveStartsPerDay: () => opts.limit ?? 8,
     content: async () => content,
     secret: () => SECRET,
     now: () => clock.now,
   });
-  return { svc, clock, starts, ...mem, bumpContent: () => { content = indexContent(days.map((d) => makeDay(d, 2))); } };
+  return { svc, clock, flags, starts, ledger, ...mem, bumpContent: () => { content = indexContent(days.map((d) => makeDay(d, 2))); } };
 }
 
 /** Round r: tap `hits` correct cards then bank (or a perfect when hits = 12). */
@@ -102,8 +106,8 @@ const conflict = (code: string) => ({ statusCode: 409, code });
 const seconds = (d: Date) => Math.floor(d.getTime() / 1000);
 
 describe('buscaminas service', () => {
-  it('guests get an unranked stateless run with an expiring token; future and unknown days are 404', async () => {
-    const { svc, rows } = setup();
+  it('guests allowed on the live day get an unranked stateless run with an expiring token; future and unknown days are 404', async () => {
+    const { svc, rows } = setup({ guestsPlayLive: true });
     const run = await svc.start(TODAY, null);
     expect(run.state).toMatchObject({ day: TODAY, round: 0, ranked: false, score: 0, done: false });
     const { payload, claims } = verifyToken(run.token, SECRET);
@@ -123,8 +127,59 @@ describe('buscaminas service', () => {
     expect(rows.size).toBe(0);
   });
 
+  it('by default guests cannot start the live ranked day (403 sign_in_for_today); signed-in users get the ranked run; no per-address cap', async () => {
+    const { svc, rows } = setup({ starts: noRedis, limit: 1 });
+    const refused = { statusCode: 403, code: 'sign_in_for_today' };
+    await expect(svc.start(TODAY, null)).rejects.toMatchObject(refused);
+    // The policy answers before a stale page's content check; unknown and future days stay 404.
+    await expect(svc.start(TODAY, null, 7)).rejects.toMatchObject(refused);
+    await expect(svc.start('2026-09-29', null)).rejects.toMatchObject({ statusCode: 404 });
+    const ranked = await svc.start(TODAY, 'user-a');
+    expect(ranked.state).toMatchObject({ day: TODAY, ranked: true });
+    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ state_version: 0 });
+    expect((await svc.tap(ranked.token, 'r0c0', 'user-a')).ok).toBe(true);
+  });
+
+  it('by default guests play past days, uncapped, with the full reveal', async () => {
+    const { svc, rows } = setup({ starts: noRedis, limit: 1 });
+    const runs = await Promise.all([1, 2, 3].map(() => svc.start('2026-09-27', null, undefined, '203.0.113.7')));
+    expect(runs.map((r) => r.state.ranked)).toEqual([false, false, false]);
+    const hit = await svc.tap(runs[0].token, 'r0c0', null);
+    expect(hit.ok).toBe(true);
+    const mine = await svc.tap(hit.token, 'r0c12', null);
+    expect(mine.state.settled).toMatchObject({ outcome: 'mine', found: 1, reveal: { ok: okCards(0), mines: mineCards(0) } });
+    expect(rows.size).toBe(0);
+  });
+
+  it('with guests allowed live they start the live day unranked; turning it off refuses their live-day tokens', async () => {
+    const { svc, flags } = setup({ guestsPlayLive: true });
+    const live = await svc.start(TODAY, null);
+    expect(live.state).toMatchObject({ day: TODAY, ranked: false });
+    const tapped = await svc.tap(live.token, 'r0c0', null);
+    const past = await svc.start('2026-09-27', null);
+    flags.guestsPlayLive = false;
+    await expect(svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
+    await expect(svc.bank(tapped.token, null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
+    expect((await svc.tap(past.token, 'r0c0', null)).ok).toBe(true);
+  });
+
+  it('Redis state loss: a live-day unranked token past its first action is stale; a past-day token fails open', async () => {
+    const { svc, ledger } = setup({ guestsPlayLive: true });
+    const tapped = await svc.tap((await svc.start(TODAY, null)).token, 'r0c0', null);
+    const past = await svc.tap((await svc.start('2026-09-27', null)).token, 'r0c0', null);
+    ledger.runs.clear();
+    await expect(svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject(conflict('stale_state'));
+    await expect(svc.bank(tapped.token, null)).rejects.toMatchObject(conflict('stale_state'));
+    // An invalid move on a lost run is stale too, not a 400 implying the token is still usable.
+    await expect(svc.tap(tapped.token, 'r0c0', null)).rejects.toMatchObject(conflict('stale_state'));
+    expect((await svc.tap(past.token, 'r0c1', null)).ok).toBe(true);
+    // A run started after the loss records its first action and plays on normally.
+    const first = await svc.tap((await svc.start(TODAY, null)).token, 'r0c0', null);
+    expect((await svc.tap(first.token, 'r0c1', null)).ok).toBe(true);
+  });
+
   it('rejects tokens minted against superseded content with content_changed', async () => {
-    const { svc, bumpContent } = setup();
+    const { svc, bumpContent } = setup({ guestsPlayLive: true });
     const run = await svc.start(TODAY, null);
     bumpContent();
     await expect(svc.tap(run.token, 'r0c0', null)).rejects.toMatchObject(conflict('content_changed'));
@@ -133,7 +188,7 @@ describe('buscaminas service', () => {
   });
 
   it('start rejects a page built from other content; tap rejects a card the round lacks', async () => {
-    const { svc } = setup();
+    const { svc } = setup({ guestsPlayLive: true });
     await expect(svc.start(TODAY, null, 7)).rejects.toMatchObject(conflict('content_changed'));
     const run = await svc.start(TODAY, null, 1);
     await expect(svc.tap(run.token, 'not-a-card', null)).rejects.toMatchObject(conflict('content_changed'));
@@ -142,7 +197,7 @@ describe('buscaminas service', () => {
   it('accepts content-hash versions up to 2^32', async () => {
     const hash = 2 ** 32;
     const svc = createBuscaminasService({
-      repo: memoryRepo(() => NOW).repo, ledger: memoryRunLedger(), starts: memoryStartCounter(), liveStartsPerDay: () => 8,
+      repo: memoryRepo(() => NOW).repo, ledger: memoryRunLedger(), starts: memoryStartCounter(), guestsPlayLive: () => false, liveStartsPerDay: () => 8,
       content: async () => indexContent([makeDay(TODAY, hash)]), secret: () => SECRET, now: () => NOW,
     });
     const run = await svc.start(TODAY, 'user-a', hash);
@@ -151,7 +206,7 @@ describe('buscaminas service', () => {
   });
 
   it('unranked tokens are single-use: the same action replays its response, anything else is stale', async () => {
-    const { svc, clock } = setup();
+    const { svc, clock } = setup({ guestsPlayLive: true });
     const run = await svc.start(TODAY, null);
     const first = await svc.tap(run.token, 'r0c0', null);
     clock.now = new Date(NOW.getTime() + 5_000);
@@ -165,14 +220,14 @@ describe('buscaminas service', () => {
   });
 
   it('an invalid move does not consume the token', async () => {
-    const { svc } = setup();
+    const { svc } = setup({ guestsPlayLive: true });
     const run = await svc.start(TODAY, null);
     await expect(svc.bank(run.token, null)).rejects.toMatchObject({ statusCode: 400 });
     expect((await svc.tap(run.token, 'r0c0', null)).ok).toBe(true);
   });
 
   it('an expired unranked token is stale even when the ledger has forgotten the run', async () => {
-    const { svc, clock } = setup();
+    const { svc, clock } = setup({ guestsPlayLive: true });
     const run = await svc.start(TODAY, null);
     const tapped = await svc.tap(run.token, 'r0c0', null);
     const { claims } = verifyToken(tapped.token, SECRET);
@@ -180,7 +235,7 @@ describe('buscaminas service', () => {
     expect((await svc.tap(tapped.token, 'r0c1', null)).ok).toBe(true);
 
     // A fresh ledger stands in for a Redis flush/eviction: only the expiry still guards old tokens.
-    const flushed = setup({ ledger: memoryRunLedger() });
+    const flushed = setup({ guestsPlayLive: true });
     const old = await flushed.svc.start(TODAY, null);
     flushed.clock.now = new Date((verifyToken(old.token, SECRET).claims!.exp) * 1000);
     await expect(flushed.svc.tap(old.token, 'r0c0', null)).rejects.toMatchObject(conflict('stale_state'));
@@ -191,7 +246,7 @@ describe('buscaminas service', () => {
   });
 
   it('never reveals a live day, ranked or not; archive days reveal the answers', async () => {
-    const { svc } = setup();
+    const { svc } = setup({ guestsPlayLive: true });
     const live = await svc.start(TODAY, null);
     const mine = await svc.tap(live.token, 'r0c12', null);
     expect(mine.ok).toBe(false);
@@ -300,8 +355,8 @@ describe('buscaminas service', () => {
     expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ done: false, state_version: 1 });
   });
 
-  it('caps fresh unranked runs of a live day per address per Buenos Aires day', async () => {
-    const { svc, clock, starts } = setup({ limit: 3 });
+  it('when guests may play live, caps fresh unranked runs of a live day per address per Buenos Aires day', async () => {
+    const { svc, clock, starts } = setup({ limit: 3, guestsPlayLive: true });
     for (let i = 0; i < 3; i += 1) await svc.start(TODAY, null, undefined, '203.0.113.7');
     await expect(svc.start(TODAY, null, undefined, '203.0.113.7')).rejects.toMatchObject({ statusCode: 429, code: 'too_many_runs' });
     expect((await svc.start(TODAY, null, undefined, '198.51.100.1')).state.ranked).toBe(false);
@@ -322,7 +377,7 @@ describe('buscaminas service', () => {
       hit: async () => { throw unavailable(); },
     };
     const outage = { statusCode: 503, code: 'buscaminas_unavailable' };
-    const { svc } = setup({ ledger: down, starts: down });
+    const { svc } = setup({ ledger: down, starts: down, guestsPlayLive: true });
     await expect(svc.start(TODAY, null)).rejects.toMatchObject(outage);
     const iat = seconds(NOW);
     const token = signToken(newPayload('rid-y', TODAY, 1, null), SECRET, { iat, exp: iat + 60 });
@@ -347,14 +402,32 @@ describe('buscaminas service', () => {
     expect((await svc.tap(restarted.token, 'r0c0', 'user-a')).ok).toBe(true);
   });
 
-  it('before launch the launch puzzle is an unranked preview; after the last day nothing is ranked', async () => {
-    const pre = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26'] });
+  it('before launch the launch puzzle is an unranked, unrevealed preview for everyone; after the last day nothing is ranked', async () => {
+    const PRE_NOW = new Date('2026-09-25T15:00:00Z');
+    // Guests off the live day (default): there is no ranked day yet, so the preview stays open to guests, uncapped.
+    const pre = setup({ now: PRE_NOW, days: ['2026-09-26'], starts: noRedis, limit: 1 });
     const preview = await pre.svc.start('2026-09-26', 'user-a');
     expect(preview.state.ranked).toBe(false);
     expect(pre.rows.size).toBe(0);
-    expect(pre.starts.counts.get('2026-09-25:unknown')).toBe(1);
     expect((await pre.svc.tap(preview.token, 'r0c12', 'user-a')).state.settled?.reveal).toBeNull();
+    const guest = await pre.svc.start('2026-09-26', null);
+    await pre.svc.start('2026-09-26', null);
+    expect(guest.state.ranked).toBe(false);
+    const tapped = await pre.svc.tap(guest.token, 'r0c0', null);
+    expect(tapped.ok).toBe(true);
+    // It is still a secret day: its ledger fails closed on a lost entry.
+    pre.ledger.runs.clear();
+    await expect(pre.svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject(conflict('stale_state'));
     expect(await pre.svc.current('user-a', undefined)).toEqual({ run: null });
+    // At launch midnight the preview day becomes the ranked day: a carried-over guest token is refused.
+    const carried = await pre.svc.start('2026-09-26', null);
+    pre.clock.now = new Date('2026-09-26T15:00:00Z');
+    await expect(pre.svc.tap(carried.token, 'r0c0', null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
+
+    // Guests allowed on the live day: the preview counts against the per-address cap, as a live start.
+    const capped = setup({ now: PRE_NOW, days: ['2026-09-26'], guestsPlayLive: true });
+    expect((await capped.svc.start('2026-09-26', 'user-a')).state.ranked).toBe(false);
+    expect(capped.starts.counts.get('2026-09-25:unknown')).toBe(1);
 
     const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-24'] });
     expect((await post.svc.start('2026-12-24', 'user-a')).state.ranked).toBe(false);

@@ -12,6 +12,9 @@ export const dayOver = (): AppError =>
 export const tooManyRuns = (): AppError =>
   new AppError('too_many_runs', 429, ErrorCode.BUSCAMINAS_TOO_MANY_RUNS, { reason: 'too_many_runs' });
 
+export const signInForToday = (): AppError =>
+  new AppError('sign_in_for_today', 403, ErrorCode.BUSCAMINAS_SIGN_IN_FOR_TODAY, { reason: 'sign_in_for_today' });
+
 export const disabled = (): AppError => new AppError('Buscaminas is currently disabled', 503, ErrorCode.BUSCAMINAS_DISABLED);
 
 /** Redis (run ledger / start counter) failed or stalled: retryable, and never reported as a database error. */

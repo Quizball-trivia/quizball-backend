@@ -28,6 +28,8 @@ export const ErrorCode = {
   BUSCAMINAS_DAY_OVER: 'day_over',
   /** Buscaminas: this address started too many unranked runs of a day that is still live. */
   BUSCAMINAS_TOO_MANY_RUNS: 'too_many_runs',
+  /** Buscaminas: guests cannot play the live ranked day; the client asks them to sign in (or plays a past day). */
+  BUSCAMINAS_SIGN_IN_FOR_TODAY: 'sign_in_for_today',
   /** Buscaminas: disabled or misconfigured (missing/invalid secret or content). */
   BUSCAMINAS_DISABLED: 'buscaminas_disabled',
   /** Buscaminas: its Redis state is unreachable; retry shortly. */

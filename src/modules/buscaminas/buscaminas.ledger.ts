@@ -12,14 +12,19 @@ import { unavailable } from './buscaminas.errors.js';
  * any other use of a consumed token is stale. Without this a stateless token
  * could be replayed to probe every card of a round. Tokens expire with their
  * ledger entry, so an evicted entry cannot revive a token past its lifetime.
+ *
+ * `strict` (live-day runs) fails closed on Redis state loss: past the first
+ * action (sv > 0) the run must already be in the ledger, so a missing entry is
+ * stale rather than fresh. Past-day runs stay fail-open: their answers are
+ * public once the day is over, so a revived token cannot help anyone rank.
  */
 export type LedgerVerdict = { kind: 'fresh' } | { kind: 'stale' } | { kind: 'replay'; iat: number };
 
 export interface RunLedger {
   /** Atomically consume `sv` of run `rid` for this action; a lost race reports the winner's verdict. */
-  claim(rid: string, sv: number, fingerprint: string, iat: number): Promise<LedgerVerdict>;
+  claim(rid: string, sv: number, fingerprint: string, iat: number, strict: boolean): Promise<LedgerVerdict>;
   /** Read-only: has `sv` of run `rid` already been consumed? Consulted only when a move is invalid, so a stale token reports stale. */
-  consumed(rid: string, sv: number): Promise<boolean>;
+  consumed(rid: string, sv: number, strict: boolean): Promise<boolean>;
 }
 
 /** Shared (all replicas) counter of live-day unranked starts, keyed by Buenos Aires day and address bucket. */
@@ -36,6 +41,8 @@ if cur[1] then
   local s = tonumber(cur[1])
   if s == sv and cur[2] == ARGV[2] and cur[3] then return {'replay', cur[3]} end
   if s >= sv then return {'stale'} end
+elseif ARGV[5] == '1' and sv > 0 then
+  return {'stale'}
 end
 redis.call('HSET', KEYS[1], 'sv', ARGV[1], 'fp', ARGV[2], 'iat', ARGV[3])
 redis.call('EXPIRE', KEYS[1], ARGV[4])
@@ -76,13 +83,13 @@ const verdict = (raw: unknown): LedgerVerdict => {
 const runKey = (rid: string) => `buscaminas:run:${rid}`;
 
 export const redisRunLedger: RunLedger = {
-  claim: (rid, sv, fingerprint, iat) => withRedis(async (redis) => verdict(await redis.eval(CLAIM, {
+  claim: (rid, sv, fingerprint, iat, strict) => withRedis(async (redis) => verdict(await redis.eval(CLAIM, {
     keys: [runKey(rid)],
-    arguments: [String(sv), fingerprint, String(iat), String(RUN_TOKEN_TTL_SECONDS)],
+    arguments: [String(sv), fingerprint, String(iat), String(RUN_TOKEN_TTL_SECONDS), strict ? '1' : '0'],
   }))),
-  consumed: (rid, sv) => withRedis(async (redis) => {
+  consumed: (rid, sv, strict) => withRedis(async (redis) => {
     const last = await redis.hGet(runKey(rid), 'sv');
-    if (last === undefined || last === null) return false;
+    if (last === undefined || last === null) return strict && sv > 0;
     if (!Number.isSafeInteger(Number(last))) throw new Error('Unexpected run ledger reply');
     return Number(last) >= sv;
   }),
@@ -96,20 +103,22 @@ export const redisStartCounter: StartCounter = {
   }),
 };
 
-/** Same semantics in process memory, for tests. */
-export function memoryRunLedger(): RunLedger {
+/** Same semantics in process memory, for tests; clearing `runs` stands in for Redis state loss. */
+export function memoryRunLedger(): RunLedger & { runs: Map<string, { sv: number; fp: string; iat: number }> } {
   const runs = new Map<string, { sv: number; fp: string; iat: number }>();
   return {
-    async claim(rid, sv, fp, iat) {
+    runs,
+    async claim(rid, sv, fp, iat, strict) {
       const cur = runs.get(rid);
       if (cur && cur.sv === sv && cur.fp === fp) return { kind: 'replay', iat: cur.iat };
       if (cur && cur.sv >= sv) return { kind: 'stale' };
+      if (!cur && strict && sv > 0) return { kind: 'stale' };
       runs.set(rid, { sv, fp, iat });
       return { kind: 'fresh' };
     },
-    async consumed(rid, sv) {
+    async consumed(rid, sv, strict) {
       const cur = runs.get(rid);
-      return cur !== undefined && cur.sv >= sv;
+      return cur === undefined ? strict && sv > 0 : cur.sv >= sv;
     },
   };
 }

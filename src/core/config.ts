@@ -233,7 +233,12 @@ const configSchema = z.object({
     (value) => value === '' ? undefined : value,
     z.string().optional(),
   ),
-  // Fresh unranked runs of a still-live day per address (IPv6 /64) per Buenos Aires day.
+  // Off (default): guests play past days only, so no unranked run can probe the live ranked day's mines.
+  BUSCAMINAS_GUESTS_PLAY_LIVE: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  // Fresh unranked runs of a still-live day per address (IPv6 /64) per Buenos Aires day; only used when BUSCAMINAS_GUESTS_PLAY_LIVE is on.
   BUSCAMINAS_GUEST_LIVE_STARTS_PER_DAY: z.coerce.number().int().min(1).max(10000).default(8),
   ROAD_TO_GOAL_BOTS_ENABLED: z
     .enum(["true", "false", "1", "0", ""])

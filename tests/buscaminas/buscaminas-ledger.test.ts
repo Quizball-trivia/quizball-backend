@@ -6,7 +6,7 @@ const { redis } = vi.hoisted(() => ({ redis: { current: null as unknown } }));
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => redis.current }));
 
 import { RUN_TOKEN_TTL_SECONDS } from '../../src/modules/buscaminas/buscaminas.constants.js';
-import { redisRunLedger, redisStartCounter } from '../../src/modules/buscaminas/buscaminas.ledger.js';
+import { memoryRunLedger, redisRunLedger, redisStartCounter } from '../../src/modules/buscaminas/buscaminas.ledger.js';
 import { errorHandler } from '../../src/http/middleware/error-handler.js';
 
 const outage = { statusCode: 503, code: 'buscaminas_unavailable' };
@@ -21,28 +21,42 @@ describe('buscaminas Redis ledger and start counter', () => {
   beforeEach(() => { redis.current = null; });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('claims with the token lifetime as TTL and parses fresh / replay / stale', async () => {
+  it('claims with the token lifetime as TTL and the strict flag, and parses fresh / replay / stale', async () => {
     const fake = client(async () => ['fresh']);
-    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700)).toEqual({ kind: 'fresh' });
+    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700, false)).toEqual({ kind: 'fresh' });
     expect(fake.eval).toHaveBeenCalledWith(expect.stringContaining("'iat'"), {
-      keys: ['buscaminas:run:rid-1'], arguments: ['3', 'tap:r0c1', '1700', String(RUN_TOKEN_TTL_SECONDS)],
+      keys: ['buscaminas:run:rid-1'], arguments: ['3', 'tap:r0c1', '1700', String(RUN_TOKEN_TTL_SECONDS), '0'],
+    });
+    await redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700, true);
+    expect(fake.eval).toHaveBeenLastCalledWith(expect.stringContaining("ARGV[5] == '1' and sv > 0"), {
+      keys: ['buscaminas:run:rid-1'], arguments: ['3', 'tap:r0c1', '1700', String(RUN_TOKEN_TTL_SECONDS), '1'],
     });
     fake.eval.mockResolvedValueOnce(['replay', '1650']);
-    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700)).toEqual({ kind: 'replay', iat: 1650 });
+    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700, false)).toEqual({ kind: 'replay', iat: 1650 });
     fake.eval.mockResolvedValueOnce(['stale']);
-    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c2', 1_700)).toEqual({ kind: 'stale' });
+    expect(await redisRunLedger.claim('rid-1', 3, 'tap:r0c2', 1_700, false)).toEqual({ kind: 'stale' });
     fake.eval.mockResolvedValueOnce(['replay']);
-    await expect(redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700)).rejects.toMatchObject(outage);
+    await expect(redisRunLedger.claim('rid-1', 3, 'tap:r0c1', 1_700, false)).rejects.toMatchObject(outage);
   });
 
-  it('consumed reads the last consumed version only', async () => {
+  it('consumed reads the last consumed version; a missing entry past the first action is consumed only when strict', async () => {
     const fake = client(async () => ['fresh']);
-    expect(await redisRunLedger.consumed('rid-1', 2)).toBe(false);
+    expect(await redisRunLedger.consumed('rid-1', 2, false)).toBe(false);
+    expect(await redisRunLedger.consumed('rid-1', 2, true)).toBe(true);
+    expect(await redisRunLedger.consumed('rid-1', 0, true)).toBe(false);
     fake.hGet.mockResolvedValueOnce('2' as never);
-    expect(await redisRunLedger.consumed('rid-1', 2)).toBe(true);
+    expect(await redisRunLedger.consumed('rid-1', 2, false)).toBe(true);
     fake.hGet.mockResolvedValueOnce('1' as never);
-    expect(await redisRunLedger.consumed('rid-1', 2)).toBe(false);
+    expect(await redisRunLedger.consumed('rid-1', 2, true)).toBe(false);
     expect(fake.hGet).toHaveBeenCalledWith('buscaminas:run:rid-1', 'sv');
+  });
+
+  it('the in-memory ledger mirrors the strict semantics', async () => {
+    const ledger = memoryRunLedger();
+    expect(await ledger.claim('rid-1', 3, 'tap:a', 1, true)).toEqual({ kind: 'stale' });
+    expect(await ledger.claim('rid-1', 0, 'tap:a', 1, true)).toEqual({ kind: 'fresh' });
+    expect(await ledger.claim('rid-1', 1, 'tap:b', 2, true)).toEqual({ kind: 'fresh' });
+    expect(await ledger.claim('rid-2', 3, 'tap:a', 1, false)).toEqual({ kind: 'fresh' });
   });
 
   it('counts live starts under a day+address key that expires', async () => {
@@ -65,15 +79,15 @@ describe('buscaminas Redis ledger and start counter', () => {
     ['a malformed reply', () => { client(async () => 'nope', { hGet: vi.fn(async () => 'nope') }); }],
   ])('any Redis failure is a 503 buscaminas_unavailable: %s', async (_name, arrange) => {
     arrange();
-    await expect(redisRunLedger.claim('rid-1', 0, 'bank:', 1)).rejects.toMatchObject(outage);
-    await expect(redisRunLedger.consumed('rid-1', 0)).rejects.toMatchObject(outage);
+    await expect(redisRunLedger.claim('rid-1', 0, 'bank:', 1, false)).rejects.toMatchObject(outage);
+    await expect(redisRunLedger.consumed('rid-1', 0, false)).rejects.toMatchObject(outage);
     await expect(redisStartCounter.hit('k')).rejects.toMatchObject(outage);
   });
 
   it('a stalled command times out as a 503 instead of hanging the request', async () => {
     vi.useFakeTimers();
     client(() => new Promise(() => undefined));
-    const pending = redisRunLedger.claim('rid-1', 0, 'bank:', 1);
+    const pending = redisRunLedger.claim('rid-1', 0, 'bank:', 1, false);
     const settled = expect(pending).rejects.toMatchObject(outage);
     await vi.advanceTimersByTimeAsync(2_000);
     await settled;
@@ -84,7 +98,7 @@ describe('buscaminas Redis ledger and start counter', () => {
     const app = express();
     app.post('/claim', async (_req, _res, next) => {
       try {
-        await redisRunLedger.claim('rid-1', 0, 'bank:', 1);
+        await redisRunLedger.claim('rid-1', 0, 'bank:', 1, false);
       } catch (error) {
         next(error);
       }

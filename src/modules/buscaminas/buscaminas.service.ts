@@ -5,7 +5,7 @@ import { logger } from '../../core/logger.js';
 import { LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, RUN_TOKEN_TTL_SECONDS } from './buscaminas.constants.js';
 import { createContentLoader, type ContentIndex, type IndexedDay } from './buscaminas.content.js';
 import { boardDay, dayEndsAt, isArchiveDay, isPlayableDay, rankedDay, releaseDay } from './buscaminas.days.js';
-import { contentChanged, dayOver, disabled, staleState, tooManyRuns } from './buscaminas.errors.js';
+import { contentChanged, dayOver, disabled, signInForToday, staleState, tooManyRuns } from './buscaminas.errors.js';
 import { redisRunLedger, redisStartCounter, type RunLedger, type StartCounter } from './buscaminas.ledger.js';
 import { checkBuscaminasReadiness, usableTokenSecret } from './buscaminas.readiness.js';
 import { buscaminasRepo, type BuscaminasRepo } from './buscaminas.repo.js';
@@ -32,6 +32,8 @@ export interface BuscaminasDeps {
   /** Unranked runs only; the ranked path never touches Redis. */
   ledger: RunLedger;
   starts: StartCounter;
+  /** Whether guests may play the live ranked day (then capped per address by `liveStartsPerDay`). */
+  guestsPlayLive: () => boolean;
   liveStartsPerDay: () => number;
   content: () => Promise<ContentIndex>;
   secret: () => string;
@@ -71,11 +73,16 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     if (count > deps.liveStartsPerDay()) throw tooManyRuns();
   }
 
+  /** Unless guests may play live, no unranked run of the live ranked day exists: it would probe the mines for a ranked run. */
+  const unrankedLiveBlocked = (dayId: string): boolean => !deps.guestsPlayLive() && dayId === rankedDay(deps.now());
+
   async function start(dayId: string, userId: string | null, clientContentVersion?: number, client = 'unknown'): Promise<RunResponse> {
     const day = await playableDay(dayId);
+    const unranked = !userId || dayId !== rankedDay(deps.now());
+    if (unranked && unrankedLiveBlocked(dayId)) throw signInForToday();
     if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw contentChanged();
-    if (!userId || dayId !== rankedDay(deps.now())) {
-      if (!isArchiveDay(dayId, deps.now())) await admitLiveStart(client);
+    if (unranked) {
+      if (deps.guestsPlayLive() && !isArchiveDay(dayId, deps.now())) await admitLiveStart(client);
       return issue(rules.newPayload(randomUUID(), dayId, day.contentVersion, null), day, { ranked: false }, nowSeconds());
     }
     return deps.repo.withTx(async (tx) => {
@@ -102,19 +109,23 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     const { payload, claims } = verifyToken(token, deps.secret());
     if (payload.u === null && !(claims && claims.exp > nowSeconds())) throw staleState();
     const day = (await deps.content()).get(payload.d);
+    // Also a token issued while guests could play live, or a pre-launch preview carried past launch midnight.
+    if (payload.u === null && unrankedLiveBlocked(payload.d)) throw signInForToday();
     if (!day || day.contentVersion !== payload.cv) throw contentChanged();
 
     if (payload.u === null) {
+      // A live day's ledger fails closed if Redis lost the run; a past day's fails open, its answers being public already.
+      const strict = !isArchiveDay(payload.d, deps.now());
       let out: ReturnType<Step>;
       try {
         out = step(payload, day);
       } catch (error) {
-        if (await deps.ledger.consumed(payload.rid, payload.sv)) throw staleState();
+        if (await deps.ledger.consumed(payload.rid, payload.sv, strict)) throw staleState();
         throw error;
       }
       const next = { ...out.payload, sv: payload.sv + 1 };
       const issuedAt = nowSeconds();
-      const claimed = await deps.ledger.claim(payload.rid, payload.sv, `${action}:${input}`, issuedAt);
+      const claimed = await deps.ledger.claim(payload.rid, payload.sv, `${action}:${input}`, issuedAt, strict);
       if (claimed.kind === 'stale') throw staleState();
       // A retry of the consumed action rebuilds the same response (same state, same token) from the first issue time.
       return { ...issue(next, day, { ranked: false }, claimed.kind === 'replay' ? claimed.iat : issuedAt), ...out.extra };
@@ -166,13 +177,15 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     },
 
     async current(userId: string, dayId: string | undefined): Promise<RunResponse | { run: null }> {
+      // Content first, so unusable content is a 503 here like on every other endpoint, even with no run to report.
+      const content = await deps.content();
       const ranked = rankedDay(deps.now());
       const target = dayId ?? ranked;
       if (!target) return { run: null };
       if (target !== ranked) throw dayOver();
       const row = await deps.repo.getRun(userId, target);
       if (!row) return { run: null };
-      const day = (await deps.content()).get(target) ?? null;
+      const day = content.get(target) ?? null;
       // An unfinished run on other content is restarted by /start; report none so the client calls it.
       if (!row.done && row.content_version !== day?.contentVersion) return { run: null };
       return responseForRow(row, day);
@@ -203,6 +216,7 @@ export const buscaminasService = createBuscaminasService({
   repo: buscaminasRepo,
   ledger: redisRunLedger,
   starts: redisStartCounter,
+  guestsPlayLive: () => config.BUSCAMINAS_GUESTS_PLAY_LIVE,
   liveStartsPerDay: () => config.BUSCAMINAS_GUEST_LIVE_STARTS_PER_DAY,
   content: () => buscaminasContent.load(),
   secret: () => {

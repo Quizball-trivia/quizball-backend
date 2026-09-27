@@ -12,8 +12,8 @@ const enabled: RequestHandler = (_req, _res, next) => {
   next(config.BUSCAMINAS_ENABLED && usableTokenSecret(config.BUSCAMINAS_TOKEN_SECRET) ? undefined : buscaminasDisabled());
 };
 
-// Per-process burst limits (the codebase has no shared express-rate-limit store); the per-address
-// cap on fresh live-day runs that matters for the answer oracle is Redis-backed in the service.
+// Per-process burst limits (the codebase has no shared express-rate-limit store). Guests cannot open the
+// live day by default; when BUSCAMINAS_GUESTS_PLAY_LIVE allows it, their per-address cap is Redis-backed in the service.
 const limiter = (max: number): RequestHandler => rateLimit({
   windowMs: 60_000,
   max,

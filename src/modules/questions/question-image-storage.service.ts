@@ -11,6 +11,12 @@ const DOWNLOAD_TIMEOUT_MS = 20_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const BUCKET = 'imgs';
 const IMAGE_PREFIX = 'question-images';
+/**
+ * Objects the WL content importer owns (one per imported row). Its Undo deletes
+ * them, so no other question may point at one: saving such a URL on any other
+ * question stores a copy instead (see ensureQuestionImageStored).
+ */
+export const WL_IMPORT_PHOTO_DIR = 'wl-import';
 const USER_AGENT = 'QuizballQuestionImageIngest/1.0';
 
 export const DEFAULT_QUESTION_IMAGE_WIDTH = 1440;
@@ -48,6 +54,11 @@ function publicObjectBaseUrl(target: QuestionImageStorageTarget): string {
 
 function isStoredInTarget(url: string, target: QuestionImageStorageTarget): boolean {
   return url.startsWith(publicObjectBaseUrl(target));
+}
+
+/** True for a URL of an importer-owned object — in any environment's storage (staging rows carry prod URLs). */
+export function isWlImportOwnedImageUrl(url: string | null | undefined): boolean {
+  return Boolean(url && url.includes(`/storage/v1/object/public/${BUCKET}/${IMAGE_PREFIX}/${WL_IMPORT_PHOTO_DIR}/`));
 }
 
 function validateHttpUrl(url: string): void {
@@ -104,6 +115,41 @@ export async function deleteQuestionImageByUrl(url: string | null | undefined): 
   }
 }
 
+/** Every object path under `question-images/<folder>/` (one level: files only). Throws when storage refuses. */
+export async function listStoredQuestionImages(folder: string): Promise<string[]> {
+  const target = getPrimaryStorageTarget();
+  const prefix = `${IMAGE_PREFIX}/${folder.replace(/^\/+|\/+$/g, '')}/`;
+  const paths: string[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const response = await fetch(`${normalizeSupabaseUrl(target.supabaseUrl)}/storage/v1/object/list/${BUCKET}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${target.serviceRoleKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix, limit: 1000, offset }),
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new ExternalServiceError(`Question image list failed: ${response.status}`);
+    const page = (await response.json()) as Array<{ name: string; id: string | null }>;
+    for (const o of page) if (o.id) paths.push(`${prefix}${o.name}`); // id null = sub-folder
+    if (page.length < 1000) return paths;
+  }
+}
+
+/** Remove objects from our bucket. Idempotent (already-missing objects are fine); throws when storage refuses. */
+export async function removeStoredQuestionImages(paths: string[]): Promise<void> {
+  if (!paths.length) return;
+  const target = getPrimaryStorageTarget();
+  const response = await fetch(`${normalizeSupabaseUrl(target.supabaseUrl)}/storage/v1/object/${BUCKET}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${target.serviceRoleKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefixes: paths }),
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new ExternalServiceError(`Question image delete failed: ${response.status} ${detail.slice(0, 200)}`);
+  }
+}
+
 function getPrimaryStorageTarget(): QuestionImageStorageTarget {
   if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) {
     throw new ExternalServiceError('Supabase storage is not configured');
@@ -116,7 +162,7 @@ function getPrimaryStorageTarget(): QuestionImageStorageTarget {
   };
 }
 
-async function normalizeImageToTransparentPng(input: Buffer, width: number, height: number): Promise<Buffer> {
+export async function normalizeImageToTransparentPng(input: Buffer, width: number, height: number): Promise<Buffer> {
   try {
     const source = sharp(input, { failOn: 'none' }).rotate().ensureAlpha();
     const metadata = await source.metadata();
@@ -219,11 +265,15 @@ export async function uploadQuestionImageBuffer(
     width: number;
     height: number;
     target?: QuestionImageStorageTarget;
+    /** Store as an importer-owned object `question-images/wl-import/<ownedPrefix>-<hash>.png` instead of the shared content-addressed path. */
+    ownedPrefix?: string;
   }
 ): Promise<Pick<McqImage, 'url' | 'width' | 'height' | 'aspect_ratio'>> {
   const target = options.target ?? getPrimaryStorageTarget();
   const hash = createHash('sha256').update(png).digest('hex').slice(0, 24);
-  const objectPath = `${IMAGE_PREFIX}/${slugify(options.categorySlug)}/${hash}.png`;
+  const objectPath = options.ownedPrefix
+    ? `${IMAGE_PREFIX}/${WL_IMPORT_PHOTO_DIR}/${options.ownedPrefix}-${hash}.png`
+    : `${IMAGE_PREFIX}/${slugify(options.categorySlug)}/${hash}.png`;
   const uploadUrl = `${normalizeSupabaseUrl(target.supabaseUrl)}/storage/v1/object/${BUCKET}/${objectPath}`;
 
   const response = await fetch(uploadUrl, {
@@ -350,9 +400,14 @@ export async function ensureQuestionImageStored(
     categorySlug: string;
     target?: QuestionImageStorageTarget;
     cache?: QuestionImageIngestCache;
+    /** The question's current image URL: keeping it unchanged is not a copy. */
+    keepUrl?: string | null;
   }
 ): Promise<McqImage> {
   const target = options.target ?? getPrimaryStorageTarget();
+  if (isWlImportOwnedImageUrl(image.url) && image.url !== options.keepUrl) {
+    return copyOwnedImage(image, options.categorySlug, target);
+  }
   if (isStoredInTarget(image.url, target)) {
     return image;
   }
@@ -370,12 +425,30 @@ export async function ensureQuestionImageStored(
   return stored;
 }
 
+/** A private copy of an importer-owned photo, never a reference to it (and never an external fallback to it). */
+async function copyOwnedImage(image: McqImage, categorySlug: string, target: QuestionImageStorageTarget): Promise<McqImage> {
+  const width = image.width || DEFAULT_QUESTION_IMAGE_WIDTH;
+  const height = image.height || DEFAULT_QUESTION_IMAGE_HEIGHT;
+  const png = await normalizeImageToTransparentPng(await downloadImage(image.url), width, height);
+  const stored = await uploadQuestionImageBuffer(png, { categorySlug, width, height, target });
+  return {
+    ...image,
+    ...stored,
+    source_url: image.source_url && !isWlImportOwnedImageUrl(image.source_url) ? image.source_url : null,
+    storage_status: 'stored',
+    storage_error: null,
+    storage_attempted_at: new Date().toISOString(),
+    provider: 'cms_copy',
+  };
+}
+
 export async function storeQuestionPayloadImages(
   payload: Json | undefined,
   options: {
     categorySlug: string;
     target?: QuestionImageStorageTarget;
     cache?: QuestionImageIngestCache;
+    keepUrl?: string | null;
   }
 ): Promise<Json | undefined> {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {

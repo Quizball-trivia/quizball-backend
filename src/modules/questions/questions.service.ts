@@ -29,7 +29,7 @@ import postgres from 'postgres';
 import { storeQuestionPayloadImages, type QuestionImageIngestCache } from './question-image-storage.service.js';
 import { validateQuestionContent, blockingIssues, formatIssues } from './question-content-validation.js';
 
-const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
+export const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
   const normalized = normalizeQuestionPayloadCandidate(payload);
 
@@ -43,7 +43,7 @@ const normalizePayload = (payload: Json | undefined, context: string): Json | un
   return normalized as Json;
 };
 
-function assertPublishableContent(input: {
+export function assertPublishableContent(input: {
   id?: string;
   type: string;
   prompt: unknown;
@@ -204,6 +204,7 @@ export const questionsService = {
       }
       normalizedPayload = await storeQuestionPayloadImages(rawNormalizedPayload, {
         categorySlug: category.slug,
+        keepUrl: (existing.payload as { image?: { url?: string } } | null)?.image?.url ?? null,
       });
     }
 

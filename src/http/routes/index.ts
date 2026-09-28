@@ -46,6 +46,8 @@ import { freeKicksRoutes } from './free-kicks.routes.js';
 
 import { triviaMinesRoutes } from './trivia-mines.routes.js';
 
+import { buscaminasRoutes } from './buscaminas.routes.js';
+
 import { squadSpinRoutes } from './squad-spin.routes.js';
 
 import { guestRoutes } from './guest.routes.js';
@@ -108,6 +110,8 @@ router.use('/api/v1/football-grid', footballGridRoutes);
 router.use('/api/v1/free-kicks', freeKicksRoutes);
 
 router.use('/api/v1/trivia-mines', triviaMinesRoutes);
+
+router.use('/api/v1/buscaminas', buscaminasRoutes);
 
 router.use('/api/v1/squad-spin', squadSpinRoutes);
 

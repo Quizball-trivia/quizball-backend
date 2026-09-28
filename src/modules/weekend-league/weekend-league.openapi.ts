@@ -10,6 +10,22 @@ import {
   wlQpResponseSchema,
 } from './weekend-league.schemas.js';
 import { wlCreateTestSchema } from './wl-ops.service.js';
+import {
+  wlContentBatchDetailSchema,
+  wlContentBatchSchema,
+  wlContentCheckResponseSchema,
+  wlContentCheckSchema,
+  wlContentImportResponseSchema,
+  wlContentImportSchema,
+  wlContentReseedResponseSchema,
+  wlContentScheduleResponseSchema,
+  wlLineupEventSchema,
+  wlLineupPreviewResponseSchema,
+  wlLineupPreviewSchema,
+  wlLineupSaveResponseSchema,
+  wlLineupSaveSchema,
+  wlContentRunwaySchema,
+} from './wl-content.schemas.js';
 
 export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
   const currentResponse = wlCurrentResponseSchema.openapi('WlCurrentResponse');
@@ -180,6 +196,157 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
       401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });
+  // ── Editor content import (CMS) ─────────────────────────────────────────
+  const contentCheckResponse = wlContentCheckResponseSchema.openapi('WlContentCheckResponse');
+  const contentImportResponse = wlContentImportResponseSchema.openapi('WlContentImportResponse');
+  const contentBatch = wlContentBatchSchema.openapi('WlContentBatch');
+  const contentBatchDetail = wlContentBatchDetailSchema.openapi('WlContentBatchDetail');
+  const contentRunway = wlContentRunwaySchema.openapi('WlContentRunway');
+  const contentReseed = wlContentReseedResponseSchema.openapi('WlContentReseedResponse');
+  const contentSchedule = wlContentScheduleResponseSchema.openapi('WlContentScheduleResponse');
+  registry.register('WlContentCheckResponse', contentCheckResponse);
+  registry.register('WlContentImportResponse', contentImportResponse);
+  registry.register('WlContentBatch', contentBatch);
+  registry.register('WlContentBatchDetail', contentBatchDetail);
+  registry.register('WlContentRunway', contentRunway);
+  registry.register('WlContentReseedResponse', contentReseed);
+  registry.register('WlContentScheduleResponse', contentSchedule);
+  const adminErrors = {
+    401: { description: 'Not authenticated', schema: errorResponseSchema },
+    403: { description: 'Not an admin', schema: errorResponseSchema },
+  } as const;
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/check',
+    summary: 'Validate + dedupe uploaded WL questions against the pool and every past event (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    body: wlContentCheckSchema,
+    responses: { 200: { description: 'Per-row report', schema: contentCheckResponse }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/import',
+    summary: 'Publish uploaded WL questions into the protected pool as a batch (admin, async)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    body: wlContentImportSchema,
+    responses: {
+      202: { description: 'Batch accepted; poll the batch for progress', schema: contentImportResponse },
+      400: { description: 'Rows blocked (errors / unforced duplicates)', schema: errorResponseSchema },
+      ...adminErrors,
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/content/batches',
+    summary: 'Recent WL content import batches (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Batches', schema: z.object({ batches: z.array(contentBatch) }).openapi('WlContentBatchesResponse') }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/content/batches/{id}',
+    summary: 'One WL content batch with per-row state (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: { 200: { description: 'Batch detail', schema: contentBatchDetail }, 404: { description: 'Not found', schema: errorResponseSchema }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'delete',
+    path: '/api/v1/admin/wl/content/batches/{id}',
+    summary: 'Undo a WL content batch: delete its questions that were never dealt (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: {
+      200: {
+        description: 'Undo outcome',
+        schema: z.object({
+          deleted: z.number().int(), kept: z.number().int(), kept_ids: z.array(z.string().uuid()), staging_deleted: z.number().int().nullable(),
+          photos: z.object({ deleted: z.number().int(), shared: z.number().int(), error: z.string().nullable() }).nullable()
+            .describe('Stored photos removed by this undo; null while the cleanup waits behind a running import'),
+        }).openapi('WlContentUndoResponse'),
+      },
+      409: { description: 'Batch still processing', schema: errorResponseSchema },
+      ...adminErrors,
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/batches/{id}/schedule',
+    summary: 'Re-draw the coming WL event with this batch\'s questions first (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    body: z.object({ tournament_id: z.string().uuid().optional().describe('Event to re-draw; defaults to the coming one') }),
+    responses: {
+      200: { description: 'Schedule outcome', schema: contentSchedule },
+      404: { description: 'Batch not found', schema: errorResponseSchema },
+      409: { description: 'Batch not published, no coming event, or play has started', schema: errorResponseSchema },
+      ...adminErrors,
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/content/runway',
+    summary: 'Fresh editor inventory vs. drawable WL stock per round kind (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Runway', schema: contentRunway }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/content/next-event',
+    summary: 'Frozen content of the coming WL event, per game and round (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    query: z.object({ tournament_id: z.string().uuid().optional().describe('Event to show; defaults to the coming one') }),
+    responses: { 200: { description: 'Next event content', schema: z.object({}).passthrough().openapi('WlContentNextEventResponse') }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/wl/content/lineup/events',
+    summary: 'Weekends a lineup can be uploaded for, with lock reasons (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Events', schema: z.object({ events: z.array(wlLineupEventSchema) }).openapi('WlLineupEventsResponse') }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/lineup/preview',
+    summary: 'Validate a lineup upload and preview its exact placements; returns a preview id when it can be saved (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    body: wlLineupPreviewSchema,
+    responses: { 200: { description: 'Preview', schema: wlLineupPreviewResponseSchema.openapi('WlLineupPreviewResponse') }, 404: { description: 'Weekend not found', schema: errorResponseSchema }, ...adminErrors },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/lineup/save',
+    summary: 'Save a previewed lineup: publishes its questions and places them exactly as previewed, or nothing (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    body: wlLineupSaveSchema,
+    responses: {
+      202: { description: 'Saving started (poll the batch)', schema: wlLineupSaveResponseSchema.openapi('WlLineupSaveResponse') },
+      404: { description: 'Preview not found', schema: errorResponseSchema },
+      409: { description: 'Preview expired, weekend changed or locked', schema: errorResponseSchema },
+      ...adminErrors,
+    },
+  });
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/admin/wl/content/tournaments/{id}/reseed',
+    summary: 'Re-draw a not-yet-played tournament\'s content from the current pool (admin)',
+    tags: ['WeekendLeagueAdmin'],
+    security: [{ bearerAuth: [] }],
+    pathParams: z.object({ id: z.string().uuid() }),
+    responses: { 200: { description: 'Reseed outcome', schema: contentReseed }, 409: { description: 'Play started or wrong status', schema: errorResponseSchema }, ...adminErrors },
+  });
+
   registerEndpoint(registry, {
     method: 'delete',
     path: '/api/v1/admin/wl/tournaments/{id}',

@@ -11243,6 +11243,1363 @@
         "required": [
           "ticked"
         ]
+      },
+      "WlContentCheckResponse": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "warning",
+                    "duplicate",
+                    "played",
+                    "error"
+                  ]
+                },
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "error",
+                          "warning"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message",
+                      "severity"
+                    ]
+                  }
+                },
+                "duplicate_of": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "question_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    },
+                    "where": {
+                      "type": "string",
+                      "enum": [
+                        "pool",
+                        "public",
+                        "history",
+                        "batch"
+                      ]
+                    },
+                    "played": {
+                      "type": "boolean"
+                    },
+                    "week_key": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "question_id",
+                    "where",
+                    "played",
+                    "week_key",
+                    "status"
+                  ]
+                },
+                "similar_to": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "question_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    },
+                    "where": {
+                      "type": "string",
+                      "enum": [
+                        "pool",
+                        "public",
+                        "history",
+                        "batch"
+                      ]
+                    },
+                    "week_key": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "question_id",
+                    "where",
+                    "week_key"
+                  ]
+                },
+                "crests": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "club": {
+                        "type": "string"
+                      },
+                      "club_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "logo_url": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    },
+                    "required": [
+                      "club",
+                      "club_id",
+                      "logo_url"
+                    ]
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "width": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "height": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "bytes": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "content_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "reason": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "url",
+                    "width",
+                    "height",
+                    "bytes",
+                    "content_type",
+                    "reason"
+                  ]
+                }
+              },
+              "required": [
+                "index",
+                "type",
+                "status",
+                "issues",
+                "duplicate_of",
+                "similar_to",
+                "crests",
+                "image"
+              ]
+            }
+          },
+          "staging_configured": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "ready": {
+                "type": "number"
+              },
+              "warning": {
+                "type": "number"
+              },
+              "duplicate": {
+                "type": "number"
+              },
+              "played": {
+                "type": "number"
+              },
+              "error": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "ready",
+              "warning",
+              "duplicate",
+              "played",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "rows",
+          "staging_configured",
+          "summary"
+        ]
+      },
+      "WlContentImportResponse": {
+        "type": "object",
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accepted": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "accepted"
+        ]
+      },
+      "WlContentBatch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "created_by_email": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "processing",
+              "done",
+              "failed",
+              "undoing",
+              "undone"
+            ]
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "sync_to_staging": {
+            "type": "boolean"
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "undone_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "number"
+              },
+              "created": {
+                "type": "number"
+              },
+              "translated": {
+                "type": "number"
+              },
+              "published": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "deleted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "pending",
+              "created",
+              "translated",
+              "published",
+              "failed",
+              "deleted"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "created_by",
+          "created_by_email",
+          "kind",
+          "note",
+          "status",
+          "row_count",
+          "sync_to_staging",
+          "result",
+          "error",
+          "undone_at",
+          "counts"
+        ]
+      },
+      "WlContentBatchDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "created_by_email": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "processing",
+              "done",
+              "failed",
+              "undoing",
+              "undone"
+            ]
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "sync_to_staging": {
+            "type": "boolean"
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "undone_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "number"
+              },
+              "created": {
+                "type": "number"
+              },
+              "translated": {
+                "type": "number"
+              },
+              "published": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "deleted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "pending",
+              "created",
+              "translated",
+              "published",
+              "failed",
+              "deleted"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row_index": {
+                  "type": "integer"
+                },
+                "question_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "created",
+                    "translated",
+                    "published",
+                    "failed",
+                    "deleted"
+                  ]
+                },
+                "error": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "placements": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "week_key": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "game_index": {
+                        "type": "integer"
+                      },
+                      "round_index": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "question_index": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "reserve_ordinal": {
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "week_key",
+                      "status",
+                      "game_index",
+                      "round_index",
+                      "question_index",
+                      "reserve_ordinal",
+                      "kind"
+                    ]
+                  }
+                },
+                "in_backup": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "row_index",
+                "question_id",
+                "state",
+                "error",
+                "summary",
+                "placements",
+                "in_backup"
+              ]
+            }
+          },
+          "lineup": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "tournament_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "week_key": {
+                "type": "string"
+              },
+              "games": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "at": {
+                "type": "string"
+              },
+              "slots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "game_index": {
+                      "type": "integer"
+                    },
+                    "round_index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "question_index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "reserve_ordinal": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "origin": {
+                      "type": "string",
+                      "enum": [
+                        "upload",
+                        "pool"
+                      ]
+                    },
+                    "source_question_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "game_index",
+                    "round_index",
+                    "question_index",
+                    "reserve_ordinal",
+                    "kind",
+                    "origin",
+                    "source_question_id",
+                    "summary",
+                    "current"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "tournament_id",
+              "week_key",
+              "games",
+              "at",
+              "slots"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "created_by",
+          "created_by_email",
+          "kind",
+          "note",
+          "status",
+          "row_count",
+          "sync_to_staging",
+          "result",
+          "error",
+          "undone_at",
+          "counts",
+          "rows",
+          "lineup"
+        ]
+      },
+      "WlContentRunway": {
+        "type": "object",
+        "properties": {
+          "need_per_event": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "inventory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "difficulty": {
+                  "type": "string"
+                },
+                "photo": {
+                  "type": "boolean"
+                },
+                "fresh": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "difficulty",
+                "photo",
+                "fresh"
+              ]
+            }
+          },
+          "drawable": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "drawable": {
+                  "type": "number"
+                },
+                "need": {
+                  "type": "number"
+                },
+                "events_left": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "kind",
+                "drawable",
+                "need",
+                "events_left"
+              ]
+            }
+          },
+          "fresh_events_left": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "need_per_event",
+          "inventory",
+          "drawable",
+          "fresh_events_left"
+        ]
+      },
+      "WlContentReseedResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "inserted": {
+            "type": "number"
+          },
+          "previous_rows": {
+            "type": "number"
+          },
+          "shortages": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "need": {
+                  "type": "number"
+                },
+                "have": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "need",
+                "have"
+              ]
+            }
+          },
+          "reseed_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "ok",
+          "inserted",
+          "previous_rows",
+          "reseed_id"
+        ]
+      },
+      "WlContentScheduleResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "inserted": {
+            "type": "number"
+          },
+          "previous_rows": {
+            "type": "number"
+          },
+          "shortages": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "need": {
+                  "type": "number"
+                },
+                "have": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "need",
+                "have"
+              ]
+            }
+          },
+          "reseed_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "week_key": {
+            "type": "string"
+          },
+          "placed_main": {
+            "type": "integer"
+          },
+          "placed_reserve": {
+            "type": "integer"
+          },
+          "not_placed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "inserted",
+          "previous_rows",
+          "reseed_id",
+          "week_key",
+          "placed_main",
+          "placed_reserve",
+          "not_placed"
+        ]
+      },
+      "WlContentBatchesResponse": {
+        "type": "object",
+        "properties": {
+          "batches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WlContentBatch"
+            }
+          }
+        },
+        "required": [
+          "batches"
+        ]
+      },
+      "WlContentUndoResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "integer"
+          },
+          "kept": {
+            "type": "integer"
+          },
+          "kept_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "staging_deleted": {
+            "type": "integer",
+            "nullable": true
+          },
+          "photos": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "deleted": {
+                "type": "integer"
+              },
+              "shared": {
+                "type": "integer"
+              },
+              "error": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "deleted",
+              "shared",
+              "error"
+            ],
+            "description": "Stored photos removed by this undo; null while the cleanup waits behind a running import"
+          }
+        },
+        "required": [
+          "deleted",
+          "kept",
+          "kept_ids",
+          "staging_deleted",
+          "photos"
+        ]
+      },
+      "WlContentNextEventResponse": {
+        "type": "object",
+        "properties": {}
+      },
+      "WlLineupEventsResponse": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "week_key": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "answers": {
+                  "type": "integer"
+                },
+                "editable": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "games": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "game_index": {
+                        "type": "integer"
+                      },
+                      "rows": {
+                        "type": "integer"
+                      },
+                      "complete": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "game_index",
+                      "rows",
+                      "complete"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "week_key",
+                "status",
+                "answers",
+                "editable",
+                "reason",
+                "games"
+              ]
+            }
+          }
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "WlLineupPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "preview_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "expires_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "event": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "week_key": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "week_key",
+              "status"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "games": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "kept_games": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "game_index": {
+                  "type": "integer"
+                },
+                "round_index": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "question_index": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "reserve_ordinal": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "upload",
+                    "pool"
+                  ]
+                },
+                "row_index": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "view": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {}
+                }
+              },
+              "required": [
+                "game_index",
+                "round_index",
+                "question_index",
+                "reserve_ordinal",
+                "kind",
+                "origin",
+                "row_index",
+                "view"
+              ]
+            }
+          },
+          "replaced": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "game_index": {
+                  "type": "integer"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              "required": [
+                "game_index",
+                "rows"
+              ]
+            }
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "index": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "warning",
+                        "duplicate",
+                        "played",
+                        "error"
+                      ]
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "error",
+                              "warning"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "severity"
+                        ]
+                      }
+                    },
+                    "duplicate_of": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "question_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "where": {
+                          "type": "string",
+                          "enum": [
+                            "pool",
+                            "public",
+                            "history",
+                            "batch"
+                          ]
+                        },
+                        "played": {
+                          "type": "boolean"
+                        },
+                        "week_key": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "status": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "question_id",
+                        "where",
+                        "played",
+                        "week_key",
+                        "status"
+                      ]
+                    },
+                    "similar_to": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "question_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "where": {
+                          "type": "string",
+                          "enum": [
+                            "pool",
+                            "public",
+                            "history",
+                            "batch"
+                          ]
+                        },
+                        "week_key": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "question_id",
+                        "where",
+                        "week_key"
+                      ]
+                    },
+                    "crests": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "club": {
+                            "type": "string"
+                          },
+                          "club_id": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "logo_url": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "club",
+                          "club_id",
+                          "logo_url"
+                        ]
+                      }
+                    },
+                    "image": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "width": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "height": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "bytes": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "content_type": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reason": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "url",
+                        "width",
+                        "height",
+                        "bytes",
+                        "content_type",
+                        "reason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "type",
+                    "status",
+                    "issues",
+                    "duplicate_of",
+                    "similar_to",
+                    "crests",
+                    "image"
+                  ]
+                }
+              },
+              "staging_configured": {
+                "type": "boolean"
+              },
+              "summary": {
+                "type": "object",
+                "properties": {
+                  "ready": {
+                    "type": "number"
+                  },
+                  "warning": {
+                    "type": "number"
+                  },
+                  "duplicate": {
+                    "type": "number"
+                  },
+                  "played": {
+                    "type": "number"
+                  },
+                  "error": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "ready",
+                  "warning",
+                  "duplicate",
+                  "played",
+                  "error"
+                ]
+              }
+            },
+            "required": [
+              "rows",
+              "staging_configured",
+              "summary"
+            ]
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "where": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "row_index": {
+                  "type": "integer",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "where",
+                "message",
+                "row_index"
+              ]
+            }
+          },
+          "undecided": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": [
+          "preview_id",
+          "expires_at",
+          "event",
+          "scope",
+          "games",
+          "kept_games",
+          "slots",
+          "replaced",
+          "checks",
+          "problems",
+          "undecided"
+        ]
+      },
+      "WlLineupSaveResponse": {
+        "type": "object",
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accepted": {
+            "type": "integer"
+          },
+          "already_started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "batch_id",
+          "accepted",
+          "already_started"
+        ]
       }
     },
     "parameters": {}
@@ -27515,6 +28872,3744 @@
           },
           "422": {
             "description": "Query validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/check": {
+      "post": {
+        "summary": "Validate + dedupe uploaded WL questions against the pool and every past event (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "mcq_single",
+                            "true_false",
+                            "input_text",
+                            "countdown_list",
+                            "clue_chain",
+                            "put_in_order",
+                            "imposter_multi_select",
+                            "career_path",
+                            "high_low",
+                            "football_logic",
+                            "missing_xi",
+                            "pass_chain",
+                            "stat_sniper"
+                          ]
+                        },
+                        "difficulty": {
+                          "type": "string",
+                          "enum": [
+                            "easy",
+                            "medium",
+                            "hard"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published",
+                            "archived"
+                          ],
+                          "default": "draft"
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "wl_private"
+                          ]
+                        },
+                        "prompt": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "explanation": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "payload": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "mcq_single"
+                                  ]
+                                },
+                                "image": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "width": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "height": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "aspect_ratio": {
+                                      "type": "string"
+                                    },
+                                    "source_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "storage_status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stored",
+                                        "external_fallback"
+                                      ]
+                                    },
+                                    "storage_error": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "storage_attempted_at": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "date-time"
+                                    },
+                                    "title": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "author": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "nullable": true
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "width",
+                                    "height"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "true_false"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "true"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "false"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "minItems": 2,
+                                  "maxItems": 2
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "imposter_multi_select"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  },
+                                  "minItems": 4,
+                                  "maxItems": 12
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_text"
+                                  ]
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 1
+                                },
+                                "case_sensitive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "accepted_answers",
+                                "case_sensitive"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "countdown_list"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "answer_groups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "display": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "display",
+                                      "accepted_answers"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "answer_groups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "clue_chain"
+                                  ]
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "clues": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text",
+                                          "emoji"
+                                        ]
+                                      },
+                                      "content": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "content"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "display_answer",
+                                "accepted_answers",
+                                "clues"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "put_in_order"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "direction": {
+                                  "type": "string",
+                                  "enum": [
+                                    "asc",
+                                    "desc"
+                                  ]
+                                },
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "label": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "details": {
+                                        "type": "object",
+                                        "nullable": true,
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "emoji": {
+                                        "type": "string",
+                                        "nullable": true
+                                      },
+                                      "sort_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "sort_value"
+                                    ]
+                                  },
+                                  "minItems": 3
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "direction",
+                                "items"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "career_path"
+                                  ]
+                                },
+                                "clubs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 2
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "clubs",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "high_low"
+                                  ]
+                                },
+                                "stat_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "matchups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "left_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "left_value": {
+                                        "type": "number"
+                                      },
+                                      "right_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "right_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "left_name",
+                                      "left_value",
+                                      "right_name",
+                                      "right_value"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "stat_label",
+                                "matchups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "football_logic"
+                                  ]
+                                },
+                                "image_a_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "image_b_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "explanation": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "image_a_url",
+                                "image_b_url",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "missing_xi"
+                                  ]
+                                },
+                                "team": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "opponent": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "match_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "formation": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "score": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "season": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "slots": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "position": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "number": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      },
+                                      "x": {
+                                        "type": "number"
+                                      },
+                                      "y": {
+                                        "type": "number"
+                                      },
+                                      "name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      },
+                                      "tm_id": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "position",
+                                      "number",
+                                      "x",
+                                      "y",
+                                      "name",
+                                      "accepted_answers"
+                                    ]
+                                  }
+                                },
+                                "tm_formation": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "verified": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "matchId": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "checkedAt": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "checkedAt"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "team",
+                                "opponent",
+                                "match_label",
+                                "formation",
+                                "slots"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pass_chain"
+                                  ]
+                                },
+                                "start_tm_id": {
+                                  "type": "integer"
+                                },
+                                "target_tm_id": {
+                                  "type": "integer"
+                                },
+                                "par": {
+                                  "type": "integer",
+                                  "minimum": 2
+                                },
+                                "bridges": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "solution": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "tm_id": {
+                                        "type": "integer"
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "club",
+                                          "manager"
+                                        ],
+                                        "default": "club"
+                                      },
+                                      "via": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "tm_id",
+                                      "via"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "start_tm_id",
+                                "target_tm_id",
+                                "par",
+                                "solution"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "stat_sniper"
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "unit": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "value": {
+                                  "type": "number"
+                                },
+                                "min": {
+                                  "type": "number"
+                                },
+                                "max": {
+                                  "type": "number"
+                                },
+                                "step": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "exclusiveMinimum": true
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "nullable": true
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "kind",
+                                "prompt",
+                                "unit",
+                                "value",
+                                "min",
+                                "max",
+                                "step"
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "difficulty",
+                        "prompt",
+                        "payload"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "questions"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-row report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentCheckResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/import": {
+      "post": {
+        "summary": "Publish uploaded WL questions into the protected pool as a batch (admin, async)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "true_false",
+                      "put_in_order",
+                      "mcq_single",
+                      "career_path",
+                      "clue_chain"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "sync_to_staging": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "force_indexes": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "default": []
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "mcq_single",
+                            "true_false",
+                            "input_text",
+                            "countdown_list",
+                            "clue_chain",
+                            "put_in_order",
+                            "imposter_multi_select",
+                            "career_path",
+                            "high_low",
+                            "football_logic",
+                            "missing_xi",
+                            "pass_chain",
+                            "stat_sniper"
+                          ]
+                        },
+                        "difficulty": {
+                          "type": "string",
+                          "enum": [
+                            "easy",
+                            "medium",
+                            "hard"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published",
+                            "archived"
+                          ],
+                          "default": "draft"
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "wl_private"
+                          ]
+                        },
+                        "prompt": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "explanation": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "payload": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "mcq_single"
+                                  ]
+                                },
+                                "image": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "width": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "height": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "aspect_ratio": {
+                                      "type": "string"
+                                    },
+                                    "source_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "storage_status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stored",
+                                        "external_fallback"
+                                      ]
+                                    },
+                                    "storage_error": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "storage_attempted_at": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "date-time"
+                                    },
+                                    "title": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "author": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "nullable": true
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "width",
+                                    "height"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "true_false"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "true"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "false"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "minItems": 2,
+                                  "maxItems": 2
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "imposter_multi_select"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  },
+                                  "minItems": 4,
+                                  "maxItems": 12
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_text"
+                                  ]
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 1
+                                },
+                                "case_sensitive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "accepted_answers",
+                                "case_sensitive"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "countdown_list"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "answer_groups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "display": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "display",
+                                      "accepted_answers"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "answer_groups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "clue_chain"
+                                  ]
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "clues": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text",
+                                          "emoji"
+                                        ]
+                                      },
+                                      "content": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "content"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "display_answer",
+                                "accepted_answers",
+                                "clues"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "put_in_order"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "direction": {
+                                  "type": "string",
+                                  "enum": [
+                                    "asc",
+                                    "desc"
+                                  ]
+                                },
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "label": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "details": {
+                                        "type": "object",
+                                        "nullable": true,
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "emoji": {
+                                        "type": "string",
+                                        "nullable": true
+                                      },
+                                      "sort_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "sort_value"
+                                    ]
+                                  },
+                                  "minItems": 3
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "direction",
+                                "items"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "career_path"
+                                  ]
+                                },
+                                "clubs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 2
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "clubs",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "high_low"
+                                  ]
+                                },
+                                "stat_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "matchups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "left_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "left_value": {
+                                        "type": "number"
+                                      },
+                                      "right_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "right_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "left_name",
+                                      "left_value",
+                                      "right_name",
+                                      "right_value"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "stat_label",
+                                "matchups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "football_logic"
+                                  ]
+                                },
+                                "image_a_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "image_b_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "explanation": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "image_a_url",
+                                "image_b_url",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "missing_xi"
+                                  ]
+                                },
+                                "team": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "opponent": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "match_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "formation": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "score": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "season": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "slots": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "position": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "number": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      },
+                                      "x": {
+                                        "type": "number"
+                                      },
+                                      "y": {
+                                        "type": "number"
+                                      },
+                                      "name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      },
+                                      "tm_id": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "position",
+                                      "number",
+                                      "x",
+                                      "y",
+                                      "name",
+                                      "accepted_answers"
+                                    ]
+                                  }
+                                },
+                                "tm_formation": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "verified": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "matchId": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "checkedAt": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "checkedAt"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "team",
+                                "opponent",
+                                "match_label",
+                                "formation",
+                                "slots"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pass_chain"
+                                  ]
+                                },
+                                "start_tm_id": {
+                                  "type": "integer"
+                                },
+                                "target_tm_id": {
+                                  "type": "integer"
+                                },
+                                "par": {
+                                  "type": "integer",
+                                  "minimum": 2
+                                },
+                                "bridges": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "solution": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "tm_id": {
+                                        "type": "integer"
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "club",
+                                          "manager"
+                                        ],
+                                        "default": "club"
+                                      },
+                                      "via": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "tm_id",
+                                      "via"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "start_tm_id",
+                                "target_tm_id",
+                                "par",
+                                "solution"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "stat_sniper"
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "unit": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "value": {
+                                  "type": "number"
+                                },
+                                "min": {
+                                  "type": "number"
+                                },
+                                "max": {
+                                  "type": "number"
+                                },
+                                "step": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "exclusiveMinimum": true
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "nullable": true
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "kind",
+                                "prompt",
+                                "unit",
+                                "value",
+                                "min",
+                                "max",
+                                "step"
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "difficulty",
+                        "prompt",
+                        "payload"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "kind",
+                  "questions"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Batch accepted; poll the batch for progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rows blocked (errors / unforced duplicates)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/batches": {
+      "get": {
+        "summary": "Recent WL content import batches (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentBatchesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/batches/{id}": {
+      "get": {
+        "summary": "One WL content batch with per-row state (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batch detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentBatchDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Undo a WL content batch: delete its questions that were never dealt (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Undo outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentUndoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Batch still processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/batches/{id}/schedule": {
+      "post": {
+        "summary": "Re-draw the coming WL event with this batch's questions first (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tournament_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Event to re-draw; defaults to the coming one"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Batch not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Batch not published, no coming event, or play has started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/runway": {
+      "get": {
+        "summary": "Fresh editor inventory vs. drawable WL stock per round kind (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runway",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentRunway"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/next-event": {
+      "get": {
+        "summary": "Frozen content of the coming WL event, per game and round (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Event to show; defaults to the coming one"
+            },
+            "required": false,
+            "description": "Event to show; defaults to the coming one",
+            "name": "tournament_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next event content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentNextEventResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/lineup/events": {
+      "get": {
+        "summary": "Weekends a lineup can be uploaded for, with lock reasons (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlLineupEventsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/lineup/preview": {
+      "post": {
+        "summary": "Validate a lineup upload and preview its exact placements; returns a preview id when it can be saved (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tournament_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "game_0",
+                      "game_1",
+                      "game_2",
+                      "game_3",
+                      "saturday",
+                      "weekend"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 400
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "mcq_single",
+                            "true_false",
+                            "input_text",
+                            "countdown_list",
+                            "clue_chain",
+                            "put_in_order",
+                            "imposter_multi_select",
+                            "career_path",
+                            "high_low",
+                            "football_logic",
+                            "missing_xi",
+                            "pass_chain",
+                            "stat_sniper"
+                          ]
+                        },
+                        "difficulty": {
+                          "type": "string",
+                          "enum": [
+                            "easy",
+                            "medium",
+                            "hard"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published",
+                            "archived"
+                          ],
+                          "default": "draft"
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "wl_private"
+                          ]
+                        },
+                        "prompt": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "explanation": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "payload": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "mcq_single"
+                                  ]
+                                },
+                                "image": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "width": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "height": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true
+                                    },
+                                    "aspect_ratio": {
+                                      "type": "string"
+                                    },
+                                    "source_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "storage_status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stored",
+                                        "external_fallback"
+                                      ]
+                                    },
+                                    "storage_error": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "storage_attempted_at": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "date-time"
+                                    },
+                                    "title": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "author": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "license_url": {
+                                      "type": "string",
+                                      "nullable": true,
+                                      "format": "uri"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "nullable": true
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "width",
+                                    "height"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "true_false"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "true"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "enum": [
+                                              "false"
+                                            ]
+                                          },
+                                          "text": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "is_correct": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "text",
+                                          "is_correct"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "minItems": 2,
+                                  "maxItems": 2
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "imposter_multi_select"
+                                  ]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "text": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "is_correct": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "text",
+                                      "is_correct"
+                                    ]
+                                  },
+                                  "minItems": 4,
+                                  "maxItems": 12
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "options"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "input_text"
+                                  ]
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 1
+                                },
+                                "case_sensitive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "accepted_answers",
+                                "case_sensitive"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "countdown_list"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "answer_groups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "display": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "display",
+                                      "accepted_answers"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "answer_groups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "clue_chain"
+                                  ]
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "clues": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text",
+                                          "emoji"
+                                        ]
+                                      },
+                                      "content": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "content"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "display_answer",
+                                "accepted_answers",
+                                "clues"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "put_in_order"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "direction": {
+                                  "type": "string",
+                                  "enum": [
+                                    "asc",
+                                    "desc"
+                                  ]
+                                },
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "label": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "details": {
+                                        "type": "object",
+                                        "nullable": true,
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "emoji": {
+                                        "type": "string",
+                                        "nullable": true
+                                      },
+                                      "sort_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "sort_value"
+                                    ]
+                                  },
+                                  "minItems": 3
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "prompt",
+                                "direction",
+                                "items"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "career_path"
+                                  ]
+                                },
+                                "clubs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "minItems": 2
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "clubs",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "high_low"
+                                  ]
+                                },
+                                "stat_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "matchups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "left_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "left_value": {
+                                        "type": "number"
+                                      },
+                                      "right_name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "right_value": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "left_name",
+                                      "left_value",
+                                      "right_name",
+                                      "right_value"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "stat_label",
+                                "matchups"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "football_logic"
+                                  ]
+                                },
+                                "image_a_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "image_b_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "display_answer": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "accepted_answers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "minItems": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "explanation": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "image_a_url",
+                                "image_b_url",
+                                "display_answer",
+                                "accepted_answers"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "missing_xi"
+                                  ]
+                                },
+                                "team": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "opponent": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "match_label": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "formation": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "score": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "season": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "slots": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "position": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "number": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      },
+                                      "x": {
+                                        "type": "number"
+                                      },
+                                      "y": {
+                                        "type": "number"
+                                      },
+                                      "name": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "accepted_answers": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "minItems": 1
+                                      },
+                                      "tm_id": {
+                                        "type": "integer",
+                                        "nullable": true
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "position",
+                                      "number",
+                                      "x",
+                                      "y",
+                                      "name",
+                                      "accepted_answers"
+                                    ]
+                                  }
+                                },
+                                "tm_formation": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "verified": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "matchId": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "checkedAt": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "checkedAt"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "team",
+                                "opponent",
+                                "match_label",
+                                "formation",
+                                "slots"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pass_chain"
+                                  ]
+                                },
+                                "start_tm_id": {
+                                  "type": "integer"
+                                },
+                                "target_tm_id": {
+                                  "type": "integer"
+                                },
+                                "par": {
+                                  "type": "integer",
+                                  "minimum": 2
+                                },
+                                "bridges": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "solution": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "tm_id": {
+                                        "type": "integer"
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "club",
+                                          "manager"
+                                        ],
+                                        "default": "club"
+                                      },
+                                      "via": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "tm_id",
+                                      "via"
+                                    ]
+                                  },
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "start_tm_id",
+                                "target_tm_id",
+                                "par",
+                                "solution"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "stat_sniper"
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "prompt": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "unit": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "value": {
+                                  "type": "number"
+                                },
+                                "min": {
+                                  "type": "number"
+                                },
+                                "max": {
+                                  "type": "number"
+                                },
+                                "step": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "exclusiveMinimum": true
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "nullable": true
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "kind",
+                                "prompt",
+                                "unit",
+                                "value",
+                                "min",
+                                "max",
+                                "step"
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "difficulty",
+                        "prompt",
+                        "payload"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 124
+                  },
+                  "slots": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "game_index": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 3
+                        },
+                        "round_index": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0,
+                          "maximum": 4
+                        },
+                        "question_index": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0,
+                          "maximum": 4
+                        },
+                        "reserve_ordinal": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 2
+                        }
+                      },
+                      "required": [
+                        "game_index",
+                        "round_index",
+                        "question_index",
+                        "reserve_ordinal"
+                      ]
+                    }
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  },
+                  "force_indexes": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "default": []
+                  }
+                },
+                "required": [
+                  "tournament_id",
+                  "scope",
+                  "questions",
+                  "slots"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlLineupPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Weekend not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/lineup/save": {
+      "post": {
+        "summary": "Save a previewed lineup: publishes its questions and places them exactly as previewed, or nothing (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "preview_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "preview_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Saving started (poll the batch)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlLineupSaveResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Preview not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preview expired, weekend changed or locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/wl/content/tournaments/{id}/reseed": {
+      "post": {
+        "summary": "Re-draw a not-yet-played tournament's content from the current pool (admin)",
+        "tags": [
+          "WeekendLeagueAdmin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reseed outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlContentReseedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Play started or wrong status",
             "content": {
               "application/json": {
                 "schema": {

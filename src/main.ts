@@ -5,6 +5,7 @@ import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, sto
 import { startSquadSpinSweeper, stopSquadSpinSweeper, startSquadSpinBots, stopSquadSpinBots } from './modules/squad-spin/index.js';
 import { startTriviaMinesSweeper, stopTriviaMinesSweeper, startTriviaMinesBots, stopTriviaMinesBots } from './modules/trivia-mines/index.js';
 import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
+import { startBuscaminasReadinessCheck } from './modules/buscaminas/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { createApp } from './app.js';
@@ -74,6 +75,8 @@ startBotRenameWorker();
 startDailyComebackReminderWorker();
 startRetentionEmailWorker();
 startSeason3FeedbackWorker();
+// Loads the Buscaminas days in the background; warns once if none are seeded.
+startBuscaminasReadinessCheck();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

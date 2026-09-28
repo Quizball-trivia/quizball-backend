@@ -111,7 +111,8 @@ describe('crest registry', () => {
 describe('image probe address policy', () => {
   it('blocks loopback, private, link-local and IPv4-mapped IPv6 forms', () => {
     for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.5.5', '192.168.0.9', '169.254.169.254', '100.64.0.1', '0.0.0.0',
-      '::1', '::', 'fe80::1', 'fe90::1', 'fd00::1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::ffff:10.0.0.1', 'not-an-ip']) {
+      '::1', '::', 'fe80::1', 'fe90::1', 'fd00::1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::ffff:10.0.0.1',
+      '64:ff9b::a9fe:a9fe', '64:ff9b:1::a00:1', '2002:7f00:1::', '192.0.2.10', '198.51.100.7', '203.0.113.9', 'not-an-ip']) {
       expect(isPrivateAddress(ip), ip).toBe(true);
     }
   });

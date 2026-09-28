@@ -1,14 +1,39 @@
 import { Router, type RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
-import { requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
+import { guestHttpBudget, requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
 import { validate } from '../middleware/validate.js';
+import { resolveTrustedClientIp } from '../client-ip.js';
+import { bucketIp } from '../../core/ip-bucket.js';
+import { AuthenticationError } from '../../core/errors.js';
 import { guestAuthMiddleware } from '../../modules/guest/guest.middleware.js';
-import { GUEST_TOKEN_HEADER } from '../../modules/guest/guest.service.js';
+import { GUEST_TOKEN_HEADER, GUEST_TOKEN_SHAPE } from '../../modules/guest/guest.service.js';
 import { boardParamsSchema, buscaminasController, buscaminasGuestSessionRequired, dayQuerySchema, moveSchema, startSchema, tapSchema } from '../../modules/buscaminas/index.js';
 
 /** Buscaminas futbolero — every run is a server row owned by a member or by a guest session. */
 const router = Router();
+
+const inSequence = (handlers: readonly RequestHandler[]): RequestHandler => (req, res, next) => {
+  const step = (i: number) => (error?: unknown) => (error || i === handlers.length ? next(error) : void handlers[i](req, res, step(i + 1)));
+  step(0)();
+};
+
+const requireGuestTokenShape: RequestHandler = (req, _res, next) => {
+  const raw = req.headers[GUEST_TOKEN_HEADER];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  next(token && GUEST_TOKEN_SHAPE.test(token) ? undefined : new AuthenticationError('Missing guest token'));
+};
+
+// Shared (Redis) hourly guest budgets, like the other guest routes. A full run is up to ~280 calls.
+// The address budget runs before the session lookup, so rotating fake tokens costs a counter, not a
+// query; it leaves room for one full run by each of the 30 guest sessions an address may mint an hour.
+const guestPlay = inSequence([
+  requireGuestHttpEnabled,
+  guestHttpBudget('buscaminas-address', 9_000, (req) => bucketIp(resolveTrustedClientIp(req))),
+  requireGuestTokenShape,
+  guestAuthMiddleware,
+  guestHttpBudget('buscaminas', 1_500, (req) => req.guest?.id ?? bucketIp(resolveTrustedClientIp(req))),
+]);
 
 /**
  * Who is playing: a member (bearer or session cookie), else the guest session in `x-guest-token`.
@@ -20,7 +45,7 @@ const identify: RequestHandler = (req, res, next) => {
     if (error) return next(error);
     if (req.user) return next();
     if (req.headers[GUEST_TOKEN_HEADER] === undefined) return next(buscaminasGuestSessionRequired());
-    requireGuestHttpEnabled(req, res, (disabled?: unknown) => (disabled ? next(disabled) : void guestAuthMiddleware(req, res, next)));
+    guestPlay(req, res, next);
   });
 };
 

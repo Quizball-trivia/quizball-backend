@@ -21,6 +21,19 @@ const { service, flags } = vi.hoisted(() => ({
   },
 }));
 
+// Shared guest budgets: an in-memory stand-in for the Redis counter. `exhausted` names budgets already at their limit.
+const redis = vi.hoisted(() => ({ open: true, counts: new Map<string, number>(), exhausted: new Set<string>() }));
+vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => ({
+  get isOpen() { return redis.open; },
+  eval: async (_script: string, input: { keys: string[] }) => {
+    const key = input.keys[0];
+    const name = key.split(':')[2];
+    const count = redis.exhausted.has(name) ? Number.MAX_SAFE_INTEGER : (redis.counts.get(key) ?? 0) + 1;
+    redis.counts.set(key, count);
+    return count;
+  },
+}) }));
+
 vi.mock('../../src/core/config.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/core/config.js')>();
   return { ...original, config: new Proxy(original.config, { get: (target, key) => (key === 'GUEST_HTTP_ENABLED' ? flags.guestHttp : target[key as keyof typeof target]) }) };
@@ -65,6 +78,7 @@ vi.mock('../../src/http/middleware/auth.js', async () => {
 });
 
 import { buscaminasRoutes } from '../../src/http/routes/buscaminas.routes.js';
+import { guestService } from '../../src/modules/guest/guest.service.js';
 import { errorHandler } from '../../src/http/middleware/error-handler.js';
 
 const app = express();
@@ -80,6 +94,9 @@ describe('buscaminas routes: identity', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     flags.guestHttp = true;
+    redis.open = true;
+    redis.counts.clear();
+    redis.exhausted.clear();
   });
 
   it('a member plays by bearer (or session cookie), a guest by its guest session', async () => {
@@ -121,6 +138,48 @@ describe('buscaminas routes: identity', () => {
     expect(service.tap).not.toHaveBeenCalled();
   });
 
+  it('guest calls spend the shared address budget before the session lookup, then a per-guest budget', async () => {
+    await post('/tap', { ...move, cardId: 'c' }).set('x-guest-token', GUEST_A);
+    const keys = [...redis.counts.keys()];
+    expect(keys.some((k) => k.startsWith('guest:http:buscaminas-address:'))).toBe(true);
+    expect(keys).toContainEqual(expect.stringMatching(/^guest:http:buscaminas:guest-a:/));
+    await post('/tap', { ...move, cardId: 'c' }).set('authorization', 'Bearer good');
+    expect(redis.counts.size).toBe(keys.length);
+  });
+
+  it('a flood of fake tokens stops at the address budget without reaching the session lookup', async () => {
+    const fake = await post('/tap', { ...move, cardId: 'c' }).set('x-guest-token', 'c'.repeat(64));
+    expect(fake.status).toBe(401);
+    expect(guestService.resolve).toHaveBeenCalledTimes(1);
+    redis.exhausted.add('buscaminas-address');
+    const limited = await post('/tap', { ...move, cardId: 'c' }).set('x-guest-token', 'd'.repeat(64));
+    expect(limited.status).toBe(429);
+    expect(limited.headers['retry-after']).toBeDefined();
+    expect(guestService.resolve).toHaveBeenCalledTimes(1);
+    expect((await post('/tap', { ...move, cardId: 'c' }).set('authorization', 'Bearer good')).status).toBe(200);
+  });
+
+  it('a malformed guest token is a 401 without a session lookup', async () => {
+    const res = await post('/start', { day: '2026-09-27' }).set('x-guest-token', 'not-a-token');
+    expect(res.status).toBe(401);
+    expect(guestService.resolve).not.toHaveBeenCalled();
+  });
+
+  it('one guest over its budget is 429; another guest keeps playing', async () => {
+    redis.exhausted.add('buscaminas');
+    expect((await post('/next', move).set('x-guest-token', GUEST_B)).status).toBe(429);
+    redis.exhausted.clear();
+    expect((await post('/next', move).set('x-guest-token', GUEST_A)).status).toBe(200);
+    expect(service.next).toHaveBeenCalledTimes(1);
+  });
+
+  it('without Redis guest play fails closed with 503; members still play', async () => {
+    redis.open = false;
+    expect((await post('/start', { day: '2026-09-27' }).set('x-guest-token', GUEST_A)).status).toBe(503);
+    expect(guestService.resolve).not.toHaveBeenCalled();
+    expect((await post('/start', { day: '2026-09-27' }).set('authorization', 'Bearer good')).status).toBe(200);
+  });
+
   it('guest play follows the guest HTTP switch; members are unaffected', async () => {
     flags.guestHttp = false;
     expect((await post('/start', { day: '2026-09-27' }).set('x-guest-token', GUEST_A)).status).toBe(503);
@@ -145,6 +204,9 @@ describe('buscaminas routes: validation, caching, limits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     flags.guestHttp = true;
+    redis.open = true;
+    redis.counts.clear();
+    redis.exhausted.clear();
   });
 
   it('start validates contentVersion as a positive integer up to 2^32', async () => {

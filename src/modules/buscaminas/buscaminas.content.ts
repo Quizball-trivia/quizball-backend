@@ -1,7 +1,7 @@
 import { addDays, LAUNCH_DAY, PUBLISHED_DAYS } from './buscaminas.days.js';
 import { disabled } from './buscaminas.errors.js';
 import { openContent, type SealedContent } from './buscaminas.sealed.js';
-import type { BuscaminasDayContent } from './buscaminas.types.js';
+import type { BuscaminasDayContent, PublicBoard } from './buscaminas.types.js';
 
 export interface IndexedRound {
   id: string;
@@ -15,9 +15,25 @@ export interface IndexedDay {
   day: string;
   contentVersion: number;
   rounds: IndexedRound[];
+  /** Built field by field, so an `ok` flag can never reach a response through it. */
+  board: PublicBoard;
 }
 
 export type ContentIndex = ReadonlyMap<string, IndexedDay>;
+
+export function publicBoard(d: BuscaminasDayContent): PublicBoard {
+  return {
+    day: d.day,
+    number: d.number,
+    contentVersion: d.contentVersion,
+    rounds: d.rounds.map((r) => ({
+      id: r.id,
+      difficulty: r.difficulty,
+      prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr },
+      cards: r.cards.map((c) => ({ id: c.id, name: c.name, img: c.img })),
+    })),
+  };
+}
 
 export function indexContent(days: readonly BuscaminasDayContent[]): ContentIndex {
   const index = new Map<string, IndexedDay>();
@@ -29,6 +45,7 @@ export function indexContent(days: readonly BuscaminasDayContent[]): ContentInde
         const ok = r.cards.filter((c) => c.ok).map((c) => c.id);
         return { id: r.id, cardIds: new Set(r.cards.map((c) => c.id)), okIds: new Set(ok), ok, mines: r.cards.filter((c) => !c.ok).map((c) => c.id) };
       }),
+      board: publicBoard(d),
     });
   }
   return index;

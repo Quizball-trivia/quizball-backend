@@ -1,14 +1,17 @@
 /**
- * Encrypts the Buscaminas answers from the web repo's full day files into the backend.
+ * Encrypts the Buscaminas boards (clues, player cards and answers) from the web repo's full day
+ * files into the backend, which is their only public source: it serves each board once its day
+ * is playable, and never the answers of a live round.
  *
  *   npm run buscaminas:content [-- <srcDir>]
  *
  * <srcDir> is either a directory of YYYY-MM-DD.json day files or a web repo root (its
- * scripts/buscaminas/full/days is used). The key comes from BUSCAMINAS_CONTENT_KEY
- * (environment, else the backend .env).
+ * scripts/buscaminas/full/days is used; default: the sibling buscaminas-web or
+ * frontend-web-next checkout). The key comes from BUSCAMINAS_CONTENT_KEY (environment, else
+ * the backend .env).
  *
  * Writes only src/modules/buscaminas/content/content.enc.ts: the backend repo is public, so
- * plaintext answers must never be committed. A TS module (not JSON) so tsc ships it in dist.
+ * plaintext boards must never be committed. A TS module (not JSON) so tsc ships it in dist.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

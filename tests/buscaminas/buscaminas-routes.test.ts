@@ -8,6 +8,8 @@ const { service } = vi.hoisted(() => ({
     start: vi.fn(async (day: string, userId: string | null, _contentVersion?: number, _client?: string) => ({ token: 't', state: { day, ranked: userId !== null } })),
     leaderboard: vi.fn(async () => ({ day: '2026-09-27', players: 0, top: [], me: null })),
     current: vi.fn(async () => ({ run: null })),
+    board: vi.fn(async (day: string) => ({ board: { day, number: 2, contentVersion: 7, rounds: [] }, live: false })),
+    boards: vi.fn(async () => ({ days: { '2026-09-26': 5, '2026-09-27': 7 } })),
   },
 }));
 
@@ -88,5 +90,52 @@ describe('buscaminas routes', () => {
     let last = 200;
     for (let i = 0; i < 61; i += 1) last = (await request(app).get('/api/v1/buscaminas/leaderboard').set('authorization', 'Bearer good')).status;
     expect(last).toBe(429);
+  });
+
+  it('boards/:day: a finished day is cacheable for a day, the live day for five minutes, both varying on Origin', async () => {
+    const past = await request(app).get('/api/v1/buscaminas/boards/2026-09-27');
+    expect(past.status).toBe(200);
+    expect(past.body).toEqual({ day: '2026-09-27', number: 2, contentVersion: 7, rounds: [] });
+    expect(past.headers['cache-control']).toBe('public, max-age=86400');
+    expect(past.headers.vary).toMatch(/Origin/);
+    expect(past.headers.vary ?? '').not.toMatch(/Authorization|Cookie/);
+    expect(service.board).toHaveBeenLastCalledWith('2026-09-27');
+
+    service.board.mockResolvedValueOnce({ board: { day: '2026-09-28', number: 3, contentVersion: 8, rounds: [] }, live: true });
+    const live = await request(app).get('/api/v1/buscaminas/boards/2026-09-28').set('authorization', 'Bearer good');
+    expect(live.status).toBe(200);
+    expect(live.headers['cache-control']).toBe('public, max-age=300');
+  });
+
+  it('boards/:day: a day that is not playable is a 404 that is never stored; a malformed day is 422', async () => {
+    const { NotFoundError } = await import('../../src/core/errors.js');
+    service.board.mockRejectedValueOnce(new NotFoundError('Day not available'));
+    const missing = await request(app).get('/api/v1/buscaminas/boards/2026-09-29');
+    expect(missing.status).toBe(404);
+    expect(missing.body).toMatchObject({ code: 'NOT_FOUND', message: 'Day not available' });
+    expect(missing.headers['cache-control']).toBe('no-store');
+    expect((await request(app).get('/api/v1/buscaminas/boards/tomorrow')).status).toBe(422);
+    expect(service.board).toHaveBeenCalledTimes(1);
+  });
+
+  it('boards index is public for five minutes', async () => {
+    const res = await request(app).get('/api/v1/buscaminas/boards');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ days: { '2026-09-26': 5, '2026-09-27': 7 } });
+    expect(res.headers['cache-control']).toBe('public, max-age=300');
+    expect(res.headers.vary).toMatch(/Origin/);
+  });
+
+  it('rate limits board reads to 120 a minute per address, shared by the index and the boards', async () => {
+    const first = await request(app).get('/api/v1/buscaminas/boards');
+    expect(first.headers['ratelimit-limit']).toBe('120');
+    const left = Number(first.headers['ratelimit-remaining']);
+    const statuses: number[] = [];
+    for (let i = 0; i <= left; i += 1) statuses.push((await request(app).get(i % 2 ? '/api/v1/buscaminas/boards' : '/api/v1/buscaminas/boards/2026-09-27')).status);
+    expect(statuses.slice(0, left).every((s) => s === 200)).toBe(true);
+    const limited = await request(app).get('/api/v1/buscaminas/boards/2026-09-27');
+    expect(statuses.at(-1)).toBe(429);
+    expect(limited.status).toBe(429);
+    expect(limited.body).toMatchObject({ code: 'RATE_LIMIT_EXCEEDED' });
   });
 });

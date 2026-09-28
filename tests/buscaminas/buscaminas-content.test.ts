@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { createContentLoader } from '../../src/modules/buscaminas/buscaminas.content.js';
+import { createContentLoader, indexContent } from '../../src/modules/buscaminas/buscaminas.content.js';
 import { LAUNCH_DAY, PUBLISHED_DAYS } from '../../src/modules/buscaminas/buscaminas.days.js';
 import { openContent, sealContent, type SealedContent } from '../../src/modules/buscaminas/buscaminas.sealed.js';
 import { createBuscaminasService } from '../../src/modules/buscaminas/buscaminas.service.js';
@@ -29,22 +29,38 @@ function loader(sealed: SealedContent, key: string | undefined) {
 describe('buscaminas sealed content', () => {
   it('ships only the encrypted artifact, as a well-formed AES-256-GCM envelope', async () => {
     expect(readdirSync(contentDir)).toEqual(['content.enc.ts']);
-    expect(readFileSync(join(contentDir, 'content.enc.ts'), 'utf8')).not.toMatch(/"ok"|"cards"|"rounds"/);
+    expect(readFileSync(join(contentDir, 'content.enc.ts'), 'utf8')).not.toMatch(/"ok"|"cards"|"rounds"|"prompt"|"name"|buscaminas\/v1\/p/);
     const { BUSCAMINAS_SEALED_CONTENT: sealed } = await import('../../src/modules/buscaminas/content/content.enc.js');
-    expect(sealed).toMatchObject({ v: 1, alg: 'aes-256-gcm' });
+    expect(sealed).toMatchObject({ v: 2, alg: 'aes-256-gcm' });
     expect(Buffer.from(sealed.iv, 'base64')).toHaveLength(12);
     expect(Buffer.from(sealed.tag, 'base64')).toHaveLength(16);
     expect(Buffer.from(sealed.data, 'base64').length).toBeGreaterThan(0);
   });
 
-  it('round-trips the minimal answer shape and hides it from the ciphertext', () => {
+  it('round-trips the full board (prompts, names, images, answers), drops unknown fields and hides it all from the ciphertext', () => {
     const key = testKey();
     const two = DAYS.slice(0, 2);
-    const withExtras = two.map((d) => ({ ...d, rounds: d.rounds.map((r) => ({ ...r, prompt: 'p', cards: r.cards.map((c) => ({ ...c, name: 'n', img: 'i' })) })) }));
-    const sealed = sealContent(withExtras, key);
-    expect(JSON.stringify(sealed)).not.toMatch(/r0c0|"ok"/);
-    expect(openContent(sealed, key)).toEqual(two);
+    const withExtras = two.map((d) => ({
+      ...d, draft: true,
+      rounds: d.rounds.map((r) => ({ ...r, notes: 'x', prompt: { ...r.prompt, de: 'Hinweis' }, cards: r.cards.map((c) => ({ ...c, evidence: 'e' })) })),
+    }));
+    const sealed = sealContent(withExtras as unknown as BuscaminasDayContent[], key);
+    expect(JSON.stringify(sealed)).not.toMatch(/r0c0|"ok"|Player|clue|buscaminas/);
+    const opened = openContent(sealed, key);
+    expect(opened).toEqual(two);
+    expect(opened[0].rounds[3]).toEqual({
+      id: 'r3', difficulty: 'easy', prompt: { es: 'pista 3', en: 'clue 3', ka: 'მინიშნება 3', tr: 'ipucu 3' },
+      cards: expect.arrayContaining([{ id: 'r3c0', name: 'Player 3-0', img: '/buscaminas/v1/p/r3c0.webp', ok: true }, { id: 'r3c15', name: 'Player 3-15', img: '/buscaminas/v1/p/r3c15.webp', ok: false }]),
+    });
     expect(sealContent(two, key).iv).not.toBe(sealed.iv);
+  });
+
+  it('indexes a public board per day that carries no answers', () => {
+    const index = indexContent(DAYS.slice(0, 1));
+    const board = index.get(LAUNCH_DAY)!.board;
+    expect(board).toMatchObject({ day: LAUNCH_DAY, number: 1, contentVersion: 11 });
+    expect(board.rounds[0]).toEqual({ ...DAYS[0].rounds[0], cards: DAYS[0].rounds[0].cards.map(({ ok: _ok, ...card }) => card) });
+    expect(JSON.stringify(board)).not.toMatch(/"ok"/);
   });
 
   it('decrypts once and indexes the whole calendar', async () => {
@@ -68,7 +84,7 @@ describe('buscaminas sealed content', () => {
     ['tampered ciphertext', (s: SealedContent) => ({ ...s, data: flipFirstByte(s.data) }), null, /decryption failed/],
     ['a tampered auth tag', (s: SealedContent) => ({ ...s, tag: flipFirstByte(s.tag) }), null, /decryption failed/],
     ['a truncated iv', (s: SealedContent) => ({ ...s, iv: s.iv.slice(0, 8) }), null, /malformed/],
-    ['an unknown envelope version', (s: SealedContent) => ({ ...s, v: 2 }) as unknown as SealedContent, null, /unsupported/],
+    ['the retired uncompressed envelope (v1)', (s: SealedContent) => ({ ...s, v: 1 }) as unknown as SealedContent, null, /unsupported/],
   ])('is disabled (503, one attempt, reason without key material) with %s', async (_name, mutate, keyFor, reason) => {
     const key = testKey();
     const given = keyFor ? keyFor() : key;

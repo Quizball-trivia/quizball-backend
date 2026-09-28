@@ -27,13 +27,17 @@ export interface PublicBoard {
   rounds: PublicRound[];
 }
 
-/** The sealed day: the public board plus which cards fit the clue. */
-export interface BuscaminasDayContent {
+/** One buscaminas_days row: `board` is public, `answers` (round id → fitting card ids) never leaves the server. */
+export interface BuscaminasDayRow {
   day: string;
   number: number;
   contentVersion: number;
-  rounds: ReadonlyArray<Omit<PublicRound, 'cards'> & { cards: ReadonlyArray<PublicCard & { ok: boolean }> }>;
+  board: { rounds: PublicRound[] };
+  answers: Record<string, string[]>;
 }
+
+/** Who is playing: a signed-in member or a guest session. */
+export type Player = { kind: 'member'; userId: string } | { kind: 'guest'; guestId: string };
 
 export type RoundOutcome = 'perfect' | 'banked' | 'mine';
 
@@ -43,20 +47,15 @@ export interface RoundResult {
   points: number;
 }
 
-/** Signed run state; also persisted verbatim in buscaminas_runs.state for ranked runs. */
-export interface RunPayload {
+/** buscaminas_runs.state: r = round index, p = picked card ids, m = the mine hit, s = the settled round, res = finished rounds. */
+export interface RunState {
   v: 1;
-  rid: string;
-  d: string;
-  cv: number;
-  u: string | null;
   r: number;
   p: string[];
   m: string | null;
   s: RoundResult | null;
   res: RoundResult[];
   done: boolean;
-  sv: number;
 }
 
 export interface PublicRunState {
@@ -75,10 +74,12 @@ export interface PublicRunState {
 
 export interface BuscaminasRunRow {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  guest_id: string | null;
   day: string;
+  ranked: boolean;
   content_version: number;
-  state: RunPayload;
+  state: RunState;
   state_version: number;
   done: boolean;
   score: number | null;

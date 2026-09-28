@@ -1,495 +1,395 @@
 import { describe, expect, it } from 'vitest';
-import { createBuscaminasService, type BuscaminasDeps } from '../../src/modules/buscaminas/buscaminas.service.js';
-import { indexContent, type ContentIndex } from '../../src/modules/buscaminas/buscaminas.content.js';
-import { RUN_TOKEN_TTL_SECONDS } from '../../src/modules/buscaminas/buscaminas.constants.js';
-import { unavailable } from '../../src/modules/buscaminas/buscaminas.errors.js';
-import { newPayload, perfects } from '../../src/modules/buscaminas/buscaminas.rules.js';
-import { signToken, verifyToken } from '../../src/modules/buscaminas/buscaminas.token.js';
-import { memoryRunLedger, memoryStartCounter, type RunLedger, type StartCounter } from '../../src/modules/buscaminas/buscaminas.ledger.js';
-import type { BuscaminasRunRow } from '../../src/modules/buscaminas/buscaminas.types.js';
-import { makeDay, mineCards, okCards } from './fixtures.js';
+import { createBuscaminasService, type BuscaminasDeps, type RunResponse } from '../../src/modules/buscaminas/buscaminas.service.js';
+import type { ContentIndex } from '../../src/modules/buscaminas/buscaminas.content.js';
+import { perfects } from '../../src/modules/buscaminas/buscaminas.rules.js';
+import type { BuscaminasRunRow, Player } from '../../src/modules/buscaminas/buscaminas.types.js';
+import { indexOf, makeDay, mineCards, okCards } from './fixtures.js';
 
-const SECRET = 's'.repeat(64);
 const TODAY = '2026-09-28';
+const YESTERDAY = '2026-09-27';
 const NOW = new Date('2026-09-28T15:00:00Z');
 const TODAY_CLOSES = new Date('2026-09-29T03:00:00Z');
 
+const member = (userId: string): Player => ({ kind: 'member', userId });
+const guest = (guestId: string): Player => ({ kind: 'guest', guestId });
+const A = member('user-a');
+const B = member('user-b');
+const GA = guest('guest-a');
+const GB = guest('guest-b');
+
 const entry = (r: BuscaminasRunRow, rank: number) => ({
-  rank, userId: r.user_id, username: r.user_id, avatarUrl: null, avatarCustomization: null, country: null, tier: null, score: r.score!, perfects: r.perfects!,
+  rank, userId: r.user_id!, username: r.user_id!, avatarUrl: null, avatarCustomization: null, country: null, tier: null, score: r.score!, perfects: r.perfects!,
 });
 
-/** In-memory repo; `saveState` applies the same statement-time cutoff as the SQL (`clock < closesAt`). */
+/** In-memory buscaminas_runs with the same uniqueness, cutoff (`NOT ranked OR clock < closesAt`) and board filter (ranked AND done) as the SQL. */
 function memoryRepo(now: () => Date) {
   const rows = new Map<string, BuscaminasRunRow & { completedMs: number }>();
   const cutoffs: Date[] = [];
   const hooks: { onLock?: () => void } = {};
-  const key = (u: string, d: string) => `${u}|${d}`;
   const clone = <T>(x: T): T => structuredClone(x);
+  const ownerKey = (p: Player) => (p.kind === 'member' ? `u:${p.userId}` : `g:${p.guestId}`);
+  const rowOwner = (r: BuscaminasRunRow) => (r.user_id ? `u:${r.user_id}` : `g:${r.guest_id}`);
+  const find = (p: Player, day: string) => [...rows.values()].find((r) => rowOwner(r) === ownerKey(p) && r.day === day);
+  const board = (day: string) => [...rows.values()].filter((r) => r.day === day && r.ranked && r.done);
   let clock = 0;
   const repo: BuscaminasDeps['repo'] = {
     withTx: (fn) => fn({} as never),
     async insertRun(_tx, d) {
-      if (rows.has(key(d.userId, d.day))) return null;
-      const row = { id: d.id, user_id: d.userId, day: d.day, content_version: d.contentVersion, state: clone(d.state), state_version: d.state.sv, done: false, score: null, perfects: null, completed_at: null, completedMs: 0 };
-      rows.set(key(d.userId, d.day), row);
+      if (find(d.player, d.day)) return null;
+      const row = {
+        id: d.id, user_id: d.player.kind === 'member' ? d.player.userId : null, guest_id: d.player.kind === 'guest' ? d.player.guestId : null,
+        day: d.day, ranked: d.ranked, content_version: d.contentVersion, state: clone(d.state), state_version: 0,
+        done: false, score: null, perfects: null, completed_at: null, completedMs: 0,
+      };
+      rows.set(row.id, row);
       return clone(row);
     },
-    async lockRun(_tx, u, d) {
-      hooks.onLock?.();
-      const r = rows.get(key(u, d));
+    async lockOwnRun(_tx, p, day) {
+      const r = find(p, day);
       return r ? clone(r) : null;
     },
-    async getRun(u, d) { const r = rows.get(key(u, d)); return r ? clone(r) : null; },
+    async lockRun(_tx, id) {
+      hooks.onLock?.();
+      const r = rows.get(id);
+      return r ? clone(r) : null;
+    },
+    async getRun(p, day) {
+      const r = find(p, day);
+      return r ? clone(r) : null;
+    },
     async saveState(_tx, id, d) {
       cutoffs.push(d.closesAt);
-      if (now().getTime() >= d.closesAt.getTime()) return null;
-      const row = [...rows.values()].find((r) => r.id === id)!;
+      const row = rows.get(id)!;
+      if (row.ranked && now().getTime() >= d.closesAt.getTime()) return null;
       Object.assign(row, {
-        state: clone(d.state), state_version: d.state.sv, content_version: d.contentVersion, done: d.completion !== null,
+        state: clone(d.state), state_version: d.stateVersion, content_version: d.contentVersion, done: d.completion !== null,
         score: d.completion?.score ?? null, perfects: d.completion?.perfects ?? null,
         completed_at: d.completion ? new Date() : null, completedMs: d.completion ? ++clock : 0,
       });
       return clone(row);
     },
-    async rankOf(u, d) {
-      const me = rows.get(key(u, d));
-      if (!me?.done) return null;
-      const better = [...rows.values()].filter((o) => o.day === d && o.done && (o.score! > me.score! || (o.score === me.score && o.completedMs < me.completedMs)));
+    async unrankClosedRun(_tx, id, closesAt) {
+      const row = rows.get(id)!;
+      if (!row.ranked || row.done || now().getTime() < closesAt.getTime()) return null;
+      row.ranked = false;
+      return clone(row);
+    },
+    async rankOf(u, day) {
+      const me = board(day).find((r) => r.user_id === u);
+      if (!me) return null;
+      const better = board(day).filter((o) => o.score! > me.score! || (o.score === me.score && o.completedMs < me.completedMs));
       return entry(me, better.length + 1);
     },
-    async leaderboard(d, limit) {
-      const done = [...rows.values()].filter((r) => r.day === d && r.done).sort((a, b) => b.score! - a.score! || a.completedMs - b.completedMs);
+    async leaderboard(day, limit) {
+      const done = board(day).sort((a, b) => b.score! - a.score! || a.completedMs - b.completedMs);
       return { players: done.length, top: done.slice(0, limit).map((r, i) => entry(r, i + 1)) };
     },
   };
-  return { repo, rows, cutoffs, hooks };
+  return { repo, rows, cutoffs, hooks, find };
 }
 
-/** Any Redis use fails the test: the ranked path must never touch it. */
-const noRedis: RunLedger & StartCounter = {
-  claim: async () => { throw new Error('ranked path touched the run ledger'); },
-  consumed: async () => { throw new Error('ranked path touched the run ledger'); },
-  hit: async () => { throw new Error('ranked path touched the start counter'); },
-};
-
-/** `guestsPlayLive` defaults to the production default (off) and can be flipped mid-test via `flags`. */
-function setup(opts: { now?: Date; days?: string[]; ledger?: RunLedger; starts?: StartCounter; limit?: number; guestsPlayLive?: boolean } = {}) {
-  const days = opts.days ?? ['2026-09-27', TODAY, '2026-09-29'];
-  let content: ContentIndex = indexContent(days.map((d) => makeDay(d)));
+function setup(opts: { now?: Date; days?: string[] } = {}) {
+  const days = opts.days ?? [YESTERDAY, TODAY, '2026-09-29'];
+  let content: ContentIndex = indexOf(...days.map((d) => makeDay(d)));
   const clock = { now: opts.now ?? NOW };
-  const flags = { guestsPlayLive: opts.guestsPlayLive ?? false };
   const mem = memoryRepo(() => clock.now);
-  const starts = memoryStartCounter();
-  const ledger = memoryRunLedger();
-  const svc = createBuscaminasService({
-    repo: mem.repo,
-    ledger: opts.ledger ?? ledger,
-    starts: opts.starts ?? starts,
-    guestsPlayLive: () => flags.guestsPlayLive,
-    liveStartsPerDay: () => opts.limit ?? 8,
-    content: async () => content,
-    secret: () => SECRET,
-    now: () => clock.now,
-  });
-  return { svc, clock, flags, starts, ledger, ...mem, bumpContent: () => { content = indexContent(days.map((d) => makeDay(d, 2))); } };
+  const svc = createBuscaminasService({ repo: mem.repo, content: async () => content, now: () => clock.now });
+  const version = (day: string, variant = 0) => makeDay(day, variant).contentVersion;
+  return { svc, clock, ...mem, version, correct: () => { content = indexOf(...days.map((d) => makeDay(d, 1))); } };
 }
 
-/** Round r: tap `hits` correct cards then bank (or a perfect when hits = 12). */
-async function playRound(svc: ReturnType<typeof setup>['svc'], token: string, r: number, hits: number, user: string | null) {
-  let t = token;
-  for (const id of okCards(r).slice(0, hits)) t = (await svc.tap(t, id, user)).token;
-  if (hits < 12) t = (await svc.bank(t, user)).token;
-  return svc.next(t, user);
+type Svc = ReturnType<typeof setup>['svc'];
+
+/** Round r: tap `hits` correct cards then bank (or a perfect when hits = 12), then next. */
+async function playRound(svc: Svc, p: Player, run: RunResponse, r: number, hits: number): Promise<RunResponse> {
+  let cur = run;
+  for (const id of okCards(r).slice(0, hits)) cur = await svc.tap(p, cur.run.id, cur.run.version, id);
+  if (hits < 12) cur = await svc.bank(p, cur.run.id, cur.run.version);
+  return svc.next(p, cur.run.id, cur.run.version);
+}
+
+async function playAll(svc: Svc, p: Player, run: RunResponse, hits: (r: number) => number): Promise<RunResponse> {
+  let cur = run;
+  for (let r = 0; r < 20; r += 1) cur = await playRound(svc, p, cur, r, hits(r));
+  return cur;
 }
 
 const conflict = (code: string) => ({ statusCode: 409, code });
-const seconds = (d: Date) => Math.floor(d.getTime() / 1000);
+const signIn = { statusCode: 403, code: 'sign_in_for_today' };
 
-describe('buscaminas service', () => {
-  it('guests allowed on the live day get an unranked stateless run with an expiring token; future and unknown days are 404', async () => {
-    const { svc, rows } = setup({ guestsPlayLive: true });
-    const run = await svc.start(TODAY, null);
-    expect(run.state).toMatchObject({ day: TODAY, round: 0, ranked: false, score: 0, done: false });
-    const { payload, claims } = verifyToken(run.token, SECRET);
-    expect(payload.u).toBeNull();
-    expect(claims).toEqual({ iat: seconds(NOW), exp: seconds(NOW) + RUN_TOKEN_TTL_SECONDS });
-    await expect(svc.start('2026-09-29', null)).rejects.toMatchObject({ statusCode: 404 });
-    await expect(svc.start('2026-09-25', null)).rejects.toMatchObject({ statusCode: 404 });
-    expect((await svc.tap(run.token, 'r0c0', null)).ok).toBe(true);
-    expect(rows.size).toBe(0);
-  });
+describe('buscaminas service: guests', () => {
+  it('a guest plays a past day as an unranked row, one per guest session per day, with the full reveal', async () => {
+    const { svc, rows, find } = setup();
+    const run = await svc.start(YESTERDAY, GA);
+    expect(run).toMatchObject({ run: { version: 0 }, state: { day: YESTERDAY, round: 0, ranked: false, score: 0, done: false } });
+    expect(find(GA, YESTERDAY)).toMatchObject({ guest_id: 'guest-a', user_id: null, ranked: false });
+    // Idempotent: the same guest session gets the same run back.
+    expect((await svc.start(YESTERDAY, GA)).run).toEqual(run.run);
+    expect((await svc.start(YESTERDAY, GB)).run.id).not.toBe(run.run.id);
+    expect(rows.size).toBe(2);
 
-  it('a signed-in past-day run is unranked and never stored', async () => {
-    const { svc, rows } = setup();
-    const run = await svc.start('2026-09-27', 'user-a');
-    expect(run.state.ranked).toBe(false);
-    expect(verifyToken(run.token, SECRET).payload.u).toBeNull();
-    expect(rows.size).toBe(0);
-  });
-
-  it('by default guests cannot start the live ranked day (403 sign_in_for_today); signed-in users get the ranked run; no per-address cap', async () => {
-    const { svc, rows } = setup({ starts: noRedis, limit: 1 });
-    const refused = { statusCode: 403, code: 'sign_in_for_today' };
-    await expect(svc.start(TODAY, null)).rejects.toMatchObject(refused);
-    // The policy answers before a stale page's content check; unknown and future days stay 404.
-    await expect(svc.start(TODAY, null, 7)).rejects.toMatchObject(refused);
-    await expect(svc.start('2026-09-29', null)).rejects.toMatchObject({ statusCode: 404 });
-    const ranked = await svc.start(TODAY, 'user-a');
-    expect(ranked.state).toMatchObject({ day: TODAY, ranked: true });
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ state_version: 0 });
-    expect((await svc.tap(ranked.token, 'r0c0', 'user-a')).ok).toBe(true);
-  });
-
-  it('by default guests play past days, uncapped, with the full reveal', async () => {
-    const { svc, rows } = setup({ starts: noRedis, limit: 1 });
-    const runs = await Promise.all([1, 2, 3].map(() => svc.start('2026-09-27', null, undefined, '203.0.113.7')));
-    expect(runs.map((r) => r.state.ranked)).toEqual([false, false, false]);
-    const hit = await svc.tap(runs[0].token, 'r0c0', null);
-    expect(hit.ok).toBe(true);
-    const mine = await svc.tap(hit.token, 'r0c12', null);
-    expect(mine.state.settled).toMatchObject({ outcome: 'mine', found: 1, reveal: { ok: okCards(0), mines: mineCards(0) } });
-    expect(rows.size).toBe(0);
-  });
-
-  it('with guests allowed live they start the live day unranked; turning it off refuses their live-day tokens', async () => {
-    const { svc, flags } = setup({ guestsPlayLive: true });
-    const live = await svc.start(TODAY, null);
-    expect(live.state).toMatchObject({ day: TODAY, ranked: false });
-    const tapped = await svc.tap(live.token, 'r0c0', null);
-    const past = await svc.start('2026-09-27', null);
-    flags.guestsPlayLive = false;
-    await expect(svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
-    await expect(svc.bank(tapped.token, null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
-    expect((await svc.tap(past.token, 'r0c0', null)).ok).toBe(true);
-  });
-
-  it('Redis state loss: a live-day unranked token past its first action is stale; a past-day token fails open', async () => {
-    const { svc, ledger } = setup({ guestsPlayLive: true });
-    const tapped = await svc.tap((await svc.start(TODAY, null)).token, 'r0c0', null);
-    const past = await svc.tap((await svc.start('2026-09-27', null)).token, 'r0c0', null);
-    ledger.runs.clear();
-    await expect(svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject(conflict('stale_state'));
-    await expect(svc.bank(tapped.token, null)).rejects.toMatchObject(conflict('stale_state'));
-    // An invalid move on a lost run is stale too, not a 400 implying the token is still usable.
-    await expect(svc.tap(tapped.token, 'r0c0', null)).rejects.toMatchObject(conflict('stale_state'));
-    expect((await svc.tap(past.token, 'r0c1', null)).ok).toBe(true);
-    // A run started after the loss records its first action and plays on normally.
-    const first = await svc.tap((await svc.start(TODAY, null)).token, 'r0c0', null);
-    expect((await svc.tap(first.token, 'r0c1', null)).ok).toBe(true);
-  });
-
-  it('rejects tokens minted against superseded content with content_changed', async () => {
-    const { svc, bumpContent } = setup({ guestsPlayLive: true });
-    const run = await svc.start(TODAY, null);
-    bumpContent();
-    await expect(svc.tap(run.token, 'r0c0', null)).rejects.toMatchObject(conflict('content_changed'));
-    await expect(svc.bank(run.token, null)).rejects.toMatchObject(conflict('content_changed'));
-    await expect(svc.next(run.token, null)).rejects.toMatchObject(conflict('content_changed'));
-  });
-
-  it('start rejects a page built from other content; tap rejects a card the round lacks', async () => {
-    const { svc } = setup({ guestsPlayLive: true });
-    await expect(svc.start(TODAY, null, 7)).rejects.toMatchObject(conflict('content_changed'));
-    const run = await svc.start(TODAY, null, 1);
-    await expect(svc.tap(run.token, 'not-a-card', null)).rejects.toMatchObject(conflict('content_changed'));
-  });
-
-  it('accepts content-hash versions up to 2^32', async () => {
-    const hash = 2 ** 32;
-    const svc = createBuscaminasService({
-      repo: memoryRepo(() => NOW).repo, ledger: memoryRunLedger(), starts: memoryStartCounter(), guestsPlayLive: () => false, liveStartsPerDay: () => 8,
-      content: async () => indexContent([makeDay(TODAY, hash)]), secret: () => SECRET, now: () => NOW,
-    });
-    const run = await svc.start(TODAY, 'user-a', hash);
-    expect(verifyToken(run.token, SECRET).payload.cv).toBe(hash);
-    expect((await svc.tap(run.token, 'r0c0', 'user-a')).ok).toBe(true);
-  });
-
-  it('unranked tokens are single-use: the same action replays its response, anything else is stale', async () => {
-    const { svc, clock } = setup({ guestsPlayLive: true });
-    const run = await svc.start(TODAY, null);
-    const first = await svc.tap(run.token, 'r0c0', null);
-    clock.now = new Date(NOW.getTime() + 5_000);
-    // The retry is rebuilt from the first issue time, so even its token is identical.
-    expect(await svc.tap(run.token, 'r0c0', null)).toEqual(first);
-    await expect(svc.tap(run.token, 'r0c12', null)).rejects.toMatchObject(conflict('stale_state'));
-    await expect(svc.bank(run.token, null)).rejects.toMatchObject(conflict('stale_state'));
-    const banked = await svc.bank(first.token, null);
-    await expect(svc.tap(first.token, 'r0c1', null)).rejects.toMatchObject(conflict('stale_state'));
-    expect((await svc.next(banked.token, null)).state.round).toBe(1);
-  });
-
-  it('an invalid move does not consume the token', async () => {
-    const { svc } = setup({ guestsPlayLive: true });
-    const run = await svc.start(TODAY, null);
-    await expect(svc.bank(run.token, null)).rejects.toMatchObject({ statusCode: 400 });
-    expect((await svc.tap(run.token, 'r0c0', null)).ok).toBe(true);
-  });
-
-  it('an expired unranked token is stale even when the ledger has forgotten the run', async () => {
-    const { svc, clock } = setup({ guestsPlayLive: true });
-    const run = await svc.start(TODAY, null);
-    const tapped = await svc.tap(run.token, 'r0c0', null);
-    const { claims } = verifyToken(tapped.token, SECRET);
-    clock.now = new Date((claims!.exp - 1) * 1000);
-    expect((await svc.tap(tapped.token, 'r0c1', null)).ok).toBe(true);
-
-    // A fresh ledger stands in for a Redis flush/eviction: only the expiry still guards old tokens.
-    const flushed = setup({ guestsPlayLive: true });
-    const old = await flushed.svc.start(TODAY, null);
-    flushed.clock.now = new Date((verifyToken(old.token, SECRET).claims!.exp) * 1000);
-    await expect(flushed.svc.tap(old.token, 'r0c0', null)).rejects.toMatchObject(conflict('stale_state'));
-    await expect(flushed.svc.bank(old.token, null)).rejects.toMatchObject(conflict('stale_state'));
-
-    const unclaimed = signToken(newPayload('rid-x', TODAY, 1, null), SECRET);
-    await expect(flushed.svc.tap(unclaimed, 'r0c0', null)).rejects.toMatchObject(conflict('stale_state'));
-  });
-
-  it('never reveals a live day, ranked or not; archive days reveal the answers', async () => {
-    const { svc } = setup({ guestsPlayLive: true });
-    const live = await svc.start(TODAY, null);
-    const mine = await svc.tap(live.token, 'r0c12', null);
+    const hit = await svc.tap(GA, run.run.id, 0, 'r0c0');
+    expect(hit).toMatchObject({ ok: true, run: { id: run.run.id, version: 1 } });
+    const mine = await svc.tap(GA, hit.run.id, hit.run.version, 'r0c12');
     expect(mine.ok).toBe(false);
-    expect(mine.state).toMatchObject({ mine: 'r0c12', settled: { outcome: 'mine', found: 0, points: 0, reveal: null } });
-    expect(JSON.stringify(mine)).not.toContain('r0c13');
-
-    const ranked = await svc.start(TODAY, 'user-a');
-    const rankedMine = await svc.tap(ranked.token, 'r0c13', 'user-a');
-    expect(rankedMine.ok).toBe(false);
-    expect(rankedMine.state).toMatchObject({ ranked: true, mine: 'r0c13', settled: { outcome: 'mine', reveal: null } });
-    expect(JSON.stringify(rankedMine)).not.toContain('r0c12');
-    const rankedNext = await svc.next(rankedMine.token, 'user-a');
-    let t = rankedNext.token;
-    for (const id of okCards(1)) t = (await svc.tap(t, id, 'user-a')).token;
-    const perfect = await svc.current('user-a', TODAY);
-    expect(perfect).toMatchObject({ state: { settled: { outcome: 'perfect', reveal: null } } });
-    expect(JSON.stringify(perfect)).not.toContain(mineCards(1)[0]);
-
-    const archive = await svc.start('2026-09-27', null);
-    const archived = await svc.tap(archive.token, 'r0c12', null);
-    expect(archived.state.settled?.reveal).toEqual({ ok: okCards(0), mines: mineCards(0) });
+    expect(mine.state.settled).toMatchObject({ outcome: 'mine', found: 1, reveal: { ok: okCards(0), mines: mineCards(0) } });
+    const next = await svc.next(GA, mine.run.id, mine.run.version);
+    expect(next.state).toMatchObject({ round: 1, picked: [], results: [{ outcome: 'mine', found: 1, points: 0 }] });
+    expect(await svc.current(GA, YESTERDAY)).toEqual(next);
   });
 
-  it('ranked run: resume on start, reject forks, persist score and rank', async () => {
+  it('a guest cannot start the live day (403 sign_in_for_today) and never creates a row for it', async () => {
     const { svc, rows } = setup();
-    const first = await svc.start(TODAY, 'user-a');
-    expect(first.state.ranked).toBe(true);
-    expect(verifyToken(first.token, SECRET).claims).toBeNull();
-    const tapped = await svc.tap(first.token, 'r0c0', 'user-a');
-    const resumed = await svc.start(TODAY, 'user-a');
-    expect(resumed.token).toBe(tapped.token);
+    await expect(svc.start(TODAY, GA)).rejects.toMatchObject(signIn);
+    // The policy answers before a stale page's content check; unknown and future days stay 404.
+    await expect(svc.start(TODAY, GA, 7)).rejects.toMatchObject(signIn);
+    await expect(svc.start('2026-09-29', GA)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(svc.start('2026-09-25', GA)).rejects.toMatchObject({ statusCode: 404 });
+    expect(rows.size).toBe(0);
+    expect(await svc.current(GA, undefined)).toEqual({ run: null });
+  });
+
+  it('a guest run carried over into the live day (pre-launch preview) cannot be played on', async () => {
+    const { svc, clock } = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26'] });
+    const preview = await svc.start('2026-09-26', GA);
+    expect(preview.state.ranked).toBe(false);
+    clock.now = new Date('2026-09-26T15:00:00Z');
+    await expect(svc.tap(GA, preview.run.id, 0, 'r0c0')).rejects.toMatchObject(signIn);
+  });
+});
+
+describe('buscaminas service: members', () => {
+  it('a member\'s live-day run is ranked; /start resumes it (any device) and it lands on the board', async () => {
+    const { svc, find } = setup();
+    const first = await svc.start(TODAY, A, makeDay(TODAY).contentVersion);
+    expect(first.state).toMatchObject({ day: TODAY, ranked: true });
+    expect(find(A, TODAY)).toMatchObject({ user_id: 'user-a', guest_id: null, ranked: true });
+    const tapped = await svc.tap(A, first.run.id, first.run.version, 'r0c0');
+    const resumed = await svc.start(TODAY, A);
+    expect(resumed).toEqual({ run: tapped.run, state: tapped.state });
     expect(resumed.state.picked).toEqual(['r0c0']);
 
-    await expect(svc.tap(first.token, 'r0c1', 'user-a')).rejects.toMatchObject(conflict('stale_state'));
-    await expect(svc.tap(tapped.token, 'r0c1', 'user-b')).rejects.toMatchObject({ statusCode: 403 });
-    await expect(svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject({ statusCode: 403 });
-
-    let t = tapped.token;
-    for (const id of okCards(0).slice(1)) t = (await svc.tap(t, id, 'user-a')).token;
-    let res = await svc.next(t, 'user-a');
-    await expect(svc.next(t, 'user-a')).rejects.toMatchObject(conflict('stale_state'));
-    await expect(svc.bank(t, 'user-a')).rejects.toMatchObject(conflict('stale_state'));
-    for (let r = 1; r < 20; r += 1) res = await playRound(svc, res.token, r, r % 2 ? 12 : 5, 'user-a');
-    expect(res.state.done).toBe(true);
-    expect(res.state.rank).toBe(1);
+    let cur = resumed;
+    for (const id of okCards(0).slice(1)) cur = await svc.tap(A, cur.run.id, cur.run.version, id);
+    cur = await svc.next(A, cur.run.id, cur.run.version);
+    for (let r = 1; r < 20; r += 1) cur = await playRound(svc, A, cur, r, r % 2 ? 12 : 5);
     const expected = 15 + 10 * 15 + 9 * 5;
-    expect(res.state.score).toBe(expected);
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ done: true, score: expected, perfects: perfects(res.state.results) });
-    await expect(svc.next(res.token, 'user-a')).rejects.toMatchObject({ statusCode: 400, message: 'run_done' });
-
-    let rb = await svc.start(TODAY, 'user-b');
-    for (let r = 0; r < 20; r += 1) rb = await playRound(svc, rb.token, r, 12, 'user-b');
-    expect(rb.state).toMatchObject({ score: 300, rank: 1 });
-
-    const board = await svc.leaderboard(undefined, 'user-a');
-    expect(board).toMatchObject({ day: TODAY, players: 2, me: { rank: 2, userId: 'user-a', score: expected } });
-    expect(board.top.map((e) => e.score)).toEqual([300, expected]);
-    expect(await svc.current('user-a', undefined)).toMatchObject({ state: { done: true, rank: 2, ranked: true } });
-    expect(await svc.current('user-c', undefined)).toEqual({ run: null });
+    expect(cur.state).toMatchObject({ done: true, score: expected, rank: 1, ranked: true });
+    expect(find(A, TODAY)).toMatchObject({ done: true, score: expected, perfects: perfects(cur.state.results) });
+    await expect(svc.next(A, cur.run.id, cur.run.version)).rejects.toMatchObject({ statusCode: 400, message: 'run_done' });
+    // A finished run is returned as it is, with the member's rank.
+    expect((await svc.start(TODAY, A)).state).toMatchObject({ done: true, rank: 1 });
+    expect(await svc.current(A, undefined)).toMatchObject({ state: { done: true, rank: 1, ranked: true } });
   });
 
-  it('ranked retries use only the row: an old token is stale_state and /start re-syncs, with no Redis at all', async () => {
-    const { svc, rows } = setup({ ledger: noRedis, starts: noRedis });
-    const run = await svc.start(TODAY, 'user-a');
-    const tapped = await svc.tap(run.token, 'r0c0', 'user-a');
-    expect(tapped.ok).toBe(true);
-    // A network retry of the committed tap: the row has moved on.
-    await expect(svc.tap(run.token, 'r0c0', 'user-a')).rejects.toMatchObject(conflict('stale_state'));
-    await expect(svc.bank(run.token, 'user-a')).rejects.toMatchObject(conflict('stale_state'));
-    const synced = await svc.start(TODAY, 'user-a');
-    expect(synced).toEqual({ token: tapped.token, state: tapped.state });
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ state_version: 1 });
-    expect((await svc.bank(synced.token, 'user-a')).state.settled).toMatchObject({ outcome: 'banked', found: 1 });
+  it('a member\'s past-day run is an unranked row and never reaches the board', async () => {
+    const { svc, find } = setup();
+    const run = await svc.start(YESTERDAY, A);
+    expect(run.state.ranked).toBe(false);
+    expect(find(A, YESTERDAY)).toMatchObject({ ranked: false, user_id: 'user-a' });
+    const done = await playAll(svc, A, run, () => 12);
+    expect(done.state).toMatchObject({ done: true, score: 300, ranked: false });
+    expect(done.state.rank).toBeUndefined();
+    expect(await svc.leaderboard(YESTERDAY, 'user-a')).toEqual({ day: YESTERDAY, players: 0, top: [], me: null });
   });
 
-  it('a forged rid for the same user and version is rejected', async () => {
-    const { svc, rows } = setup();
-    const run = await svc.start(TODAY, 'user-a');
-    rows.get(`user-a|${TODAY}`)!.id = 'another-run';
-    await expect(svc.tap(run.token, 'r0c0', 'user-a')).rejects.toMatchObject(conflict('stale_state'));
+  it('the leaderboard holds ranked, finished member runs only', async () => {
+    const { svc } = setup();
+    // Guests and past-day members play the same past day; nobody is ranked there.
+    await playAll(svc, GA, await svc.start(YESTERDAY, GA), () => 12);
+    await playAll(svc, B, await svc.start(YESTERDAY, B), () => 12);
+    // Live day: A finishes, B finishes lower, a third member never finishes.
+    const a = await playAll(svc, A, await svc.start(TODAY, A), () => 12);
+    const b = await playAll(svc, B, await svc.start(TODAY, B), (r) => (r === 0 ? 5 : 12));
+    const c = await svc.start(TODAY, member('user-c'));
+    await svc.tap(member('user-c'), c.run.id, 0, 'r0c0');
+    expect(a.state).toMatchObject({ score: 300, rank: 1 });
+    expect(b.state).toMatchObject({ score: 290, rank: 2 });
+
+    const board = await svc.leaderboard(undefined, 'user-b');
+    expect(board).toMatchObject({ day: TODAY, players: 2, me: { rank: 2, userId: 'user-b', score: 290 } });
+    expect(board.top.map((e) => [e.userId, e.score])).toEqual([['user-a', 300], ['user-b', 290]]);
+    expect(await svc.leaderboard(YESTERDAY, null)).toMatchObject({ players: 0, top: [] });
+    expect(await svc.leaderboard('2026-12-25', null)).toEqual({ day: '2026-12-25', players: 0, top: [], me: null });
   });
 
-  it('closes an unfinished ranked run at Buenos Aires midnight', async () => {
-    const { svc, clock, rows } = setup();
-    const run = await svc.start(TODAY, 'user-a');
-    const tapped = await svc.tap(run.token, 'r0c0', 'user-a');
+  it('an unfinished ranked run whose day closed goes on as practice (unranked) from /start', async () => {
+    const { svc, clock, find } = setup();
+    const run = await svc.start(TODAY, A);
+    const tapped = await svc.tap(A, run.run.id, 0, 'r0c0');
+    clock.now = new Date('2026-09-29T15:00:00Z');
+    await expect(svc.tap(A, tapped.run.id, tapped.run.version, 'r0c1')).rejects.toMatchObject(conflict('day_over'));
+    const practice = await svc.start(TODAY, A);
+    expect(practice).toMatchObject({ run: tapped.run, state: { ranked: false, picked: ['r0c0'] } });
+    expect(find(A, TODAY)).toMatchObject({ ranked: false });
+    const on = await svc.tap(A, practice.run.id, practice.run.version, 'r0c12');
+    // Now an archive day: the answers are revealed.
+    expect(on.state.settled?.reveal).toEqual({ ok: okCards(0), mines: mineCards(0) });
+  });
+});
+
+describe('buscaminas service: moves', () => {
+  it('only the run\'s owner may move it: guest A not guest B\'s, a member not a guest\'s, a guest not a member\'s', async () => {
+    const { svc } = setup();
+    const ga = await svc.start(YESTERDAY, GA);
+    const am = await svc.start(TODAY, A);
+    const notYours = { statusCode: 403, message: 'run_not_yours' };
+    await expect(svc.tap(GB, ga.run.id, 0, 'r0c0')).rejects.toMatchObject(notYours);
+    await expect(svc.tap(A, ga.run.id, 0, 'r0c0')).rejects.toMatchObject(notYours);
+    await expect(svc.bank(GA, am.run.id, 0)).rejects.toMatchObject(notYours);
+    await expect(svc.next(B, am.run.id, 0)).rejects.toMatchObject(notYours);
+    await expect(svc.tap(A, '00000000-0000-4000-8000-000000000000', 0, 'r0c0')).rejects.toMatchObject({ statusCode: 404 });
+    expect((await svc.tap(GA, ga.run.id, 0, 'r0c0')).ok).toBe(true);
+  });
+
+  it('an outdated version is stale_state (a retry, another tab) and /start re-syncs', async () => {
+    const { svc } = setup();
+    const run = await svc.start(TODAY, A);
+    const tapped = await svc.tap(A, run.run.id, 0, 'r0c0');
+    await expect(svc.tap(A, run.run.id, 0, 'r0c0')).rejects.toMatchObject(conflict('stale_state'));
+    await expect(svc.bank(A, run.run.id, 0)).rejects.toMatchObject(conflict('stale_state'));
+    await expect(svc.tap(A, run.run.id, 5, 'r0c1')).rejects.toMatchObject(conflict('stale_state'));
+    const synced = await svc.start(TODAY, A);
+    expect(synced.run).toEqual({ id: run.run.id, version: 1 });
+    expect((await svc.bank(A, synced.run.id, synced.run.version)).state.settled).toMatchObject({ outcome: 'banked', found: 1 });
+  });
+
+  it('an invalid move changes nothing', async () => {
+    const { svc, find } = setup();
+    const run = await svc.start(YESTERDAY, GA);
+    await expect(svc.bank(GA, run.run.id, 0)).rejects.toMatchObject({ statusCode: 400, message: 'nothing_to_bank' });
+    await expect(svc.next(GA, run.run.id, 0)).rejects.toMatchObject({ statusCode: 400, message: 'round_not_settled' });
+    expect(find(GA, YESTERDAY)).toMatchObject({ state_version: 0 });
+    expect((await svc.tap(GA, run.run.id, 0, 'r0c0')).run.version).toBe(1);
+  });
+
+  it('closes an unfinished ranked run at Buenos Aires midnight; unranked runs never close', async () => {
+    const { svc, clock, find } = setup();
+    const ranked = await svc.tap(A, (await svc.start(TODAY, A)).run.id, 0, 'r0c0');
+    const practice = await svc.tap(GA, (await svc.start(YESTERDAY, GA)).run.id, 0, 'r0c0');
     clock.now = new Date('2026-09-29T03:00:01Z');
-    await expect(svc.tap(tapped.token, 'r0c1', 'user-a')).rejects.toMatchObject(conflict('day_over'));
-    await expect(svc.bank(tapped.token, 'user-a')).rejects.toMatchObject(conflict('day_over'));
-    await expect(svc.current('user-a', TODAY)).rejects.toMatchObject(conflict('day_over'));
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ done: false, state_version: 1 });
-    expect((await svc.start(TODAY, 'user-a')).state.ranked).toBe(false);
-    expect(await svc.current('user-a', undefined)).toEqual({ run: null });
+    await expect(svc.tap(A, ranked.run.id, 1, 'r0c1')).rejects.toMatchObject(conflict('day_over'));
+    await expect(svc.bank(A, ranked.run.id, 1)).rejects.toMatchObject(conflict('day_over'));
+    expect(find(A, TODAY)).toMatchObject({ done: false, state_version: 1 });
+    expect((await svc.tap(GA, practice.run.id, 1, 'r0c1')).ok).toBe(true);
   });
 
   it('the ranked UPDATE carries the day cutoff: admitted before midnight but committed after is day_over', async () => {
-    const { svc, clock, rows, cutoffs, hooks } = setup();
-    const run = await svc.start(TODAY, 'user-a');
-    const tapped = await svc.tap(run.token, 'r0c0', 'user-a');
+    const { svc, clock, find, cutoffs, hooks } = setup();
+    const tapped = await svc.tap(A, (await svc.start(TODAY, A)).run.id, 0, 'r0c0');
     expect(cutoffs).toEqual([TODAY_CLOSES]);
-
     clock.now = new Date('2026-09-29T02:59:59Z');
     hooks.onLock = () => { clock.now = new Date('2026-09-29T03:00:01Z'); };
-    await expect(svc.bank(tapped.token, 'user-a')).rejects.toMatchObject(conflict('day_over'));
+    await expect(svc.bank(A, tapped.run.id, 1)).rejects.toMatchObject(conflict('day_over'));
     expect(cutoffs).toEqual([TODAY_CLOSES, TODAY_CLOSES]);
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ done: false, state_version: 1 });
+    expect(find(A, TODAY)).toMatchObject({ done: false, state_version: 1 });
+  });
+});
+
+describe('buscaminas service: content versions', () => {
+  it('start rejects a page built from other content; a tap on a card the round lacks is content_changed', async () => {
+    const { svc } = setup();
+    await expect(svc.start(YESTERDAY, GA, 7)).rejects.toMatchObject(conflict('content_changed'));
+    const run = await svc.start(YESTERDAY, GA, makeDay(YESTERDAY).contentVersion);
+    await expect(svc.tap(GA, run.run.id, 0, 'not-a-card')).rejects.toMatchObject(conflict('content_changed'));
   });
 
-  it('when guests may play live, caps fresh unranked runs of a live day per address per Buenos Aires day', async () => {
-    const { svc, clock, starts } = setup({ limit: 3, guestsPlayLive: true });
-    for (let i = 0; i < 3; i += 1) await svc.start(TODAY, null, undefined, '203.0.113.7');
-    await expect(svc.start(TODAY, null, undefined, '203.0.113.7')).rejects.toMatchObject({ statusCode: 429, code: 'too_many_runs' });
-    expect((await svc.start(TODAY, null, undefined, '198.51.100.1')).state.ranked).toBe(false);
-    // Archive days are already public, and a signed-in ranked start is one row per user: neither counts.
-    expect((await svc.start('2026-09-27', null, undefined, '203.0.113.7')).state.ranked).toBe(false);
-    expect((await svc.start(TODAY, 'user-a', undefined, '203.0.113.7')).state.ranked).toBe(true);
-    expect(starts.counts.get(`${TODAY}:203.0.113.7`)).toBe(4);
-    expect([...starts.counts.keys()].some((k) => k.startsWith('2026-09-27'))).toBe(false);
-
-    clock.now = new Date('2026-09-29T15:00:00Z');
-    expect((await svc.start('2026-09-29', null, undefined, '203.0.113.7')).state.day).toBe('2026-09-29');
+  it('after a correction, moves on the old content are content_changed; only a client on the new content restarts the run', async () => {
+    const { svc, find, correct, version } = setup();
+    const run = await svc.start(TODAY, A);
+    await svc.tap(A, run.run.id, 0, 'r0c0');
+    correct();
+    await expect(svc.tap(A, run.run.id, 1, 'r0c1')).rejects.toMatchObject(conflict('content_changed'));
+    expect(await svc.current(A, TODAY)).toEqual({ run: null });
+    await expect(svc.start(TODAY, A)).rejects.toMatchObject(conflict('content_changed'));
+    await expect(svc.start(TODAY, A, version(TODAY))).rejects.toMatchObject(conflict('content_changed'));
+    expect(find(A, TODAY)).toMatchObject({ content_version: version(TODAY), state_version: 1 });
+    const restarted = await svc.start(TODAY, A, version(TODAY, 1));
+    expect(restarted).toMatchObject({ run: { id: run.run.id, version: 2 }, state: { round: 0, picked: [], ranked: true } });
+    expect(find(A, TODAY)).toMatchObject({ content_version: version(TODAY, 1) });
+    expect((await svc.tap(A, run.run.id, 2, 'r0c15')).ok).toBe(true);
   });
 
-  it('a Redis failure is a 503 from start and from unranked actions', async () => {
-    const down: RunLedger & StartCounter = {
-      claim: async () => { throw unavailable(); },
-      consumed: async () => { throw unavailable(); },
-      hit: async () => { throw unavailable(); },
-    };
-    const outage = { statusCode: 503, code: 'buscaminas_unavailable' };
-    const { svc } = setup({ ledger: down, starts: down, guestsPlayLive: true });
-    await expect(svc.start(TODAY, null)).rejects.toMatchObject(outage);
-    const iat = seconds(NOW);
-    const token = signToken(newPayload('rid-y', TODAY, 1, null), SECRET, { iat, exp: iat + 60 });
-    await expect(svc.tap(token, 'r0c0', null)).rejects.toMatchObject(outage);
-    await expect(svc.bank(token, null)).rejects.toMatchObject(outage);
-    expect((await svc.start('2026-09-27', null)).state.ranked).toBe(false);
-    expect((await svc.start(TODAY, 'user-a')).state.ranked).toBe(true);
+  it('a finished run on superseded content is kept as it is, without a reveal', async () => {
+    const { svc, correct } = setup();
+    const done = await playAll(svc, GA, await svc.start(YESTERDAY, GA), () => 5);
+    correct();
+    const again = await svc.start(YESTERDAY, GA);
+    expect(again).toMatchObject({ run: done.run, state: { done: true, score: 100 } });
   });
+});
 
-  it('never resets a ranked row to other content unless the client already loaded it', async () => {
-    const { svc, rows, bumpContent } = setup();
-    const run = await svc.start(TODAY, 'user-a');
-    await svc.tap(run.token, 'r0c0', 'user-a');
-    bumpContent();
-    expect(await svc.current('user-a', TODAY)).toEqual({ run: null });
-    await expect(svc.start(TODAY, 'user-a')).rejects.toMatchObject(conflict('content_changed'));
-    await expect(svc.start(TODAY, 'user-a', 1)).rejects.toMatchObject(conflict('content_changed'));
-    expect(rows.get(`user-a|${TODAY}`)).toMatchObject({ content_version: 1, state_version: 1 });
-    const restarted = await svc.start(TODAY, 'user-a', 2);
-    expect(restarted.state).toMatchObject({ round: 0, picked: [], ranked: true });
-    expect(verifyToken(restarted.token, SECRET).payload).toMatchObject({ cv: 2, sv: 2 });
-    expect((await svc.tap(restarted.token, 'r0c0', 'user-a')).ok).toBe(true);
+describe('buscaminas service: reveal rules', () => {
+  it('never reveals a live day; archive days reveal each settled round', async () => {
+    const { svc } = setup();
+    const ranked = await svc.start(TODAY, A);
+    const mine = await svc.tap(A, ranked.run.id, 0, 'r0c13');
+    expect(mine.state).toMatchObject({ ranked: true, mine: 'r0c13', settled: { outcome: 'mine', reveal: null } });
+    expect(JSON.stringify(mine)).not.toContain('r0c12');
+    let cur = await svc.next(A, mine.run.id, mine.run.version);
+    for (const id of okCards(1)) cur = await svc.tap(A, cur.run.id, cur.run.version, id);
+    const perfect = await svc.current(A, TODAY);
+    expect(perfect).toMatchObject({ state: { settled: { outcome: 'perfect', reveal: null } } });
+    expect(JSON.stringify(perfect)).not.toContain(mineCards(1)[0]);
+
+    const archive = await svc.start(YESTERDAY, GA);
+    const archived = await svc.tap(GA, archive.run.id, 0, 'r0c12');
+    expect(archived.state.settled?.reveal).toEqual({ ok: okCards(0), mines: mineCards(0) });
   });
 
   it('before launch the launch puzzle is an unranked, unrevealed preview for everyone; after the last day nothing is ranked', async () => {
-    const PRE_NOW = new Date('2026-09-25T15:00:00Z');
-    // Guests off the live day (default): there is no ranked day yet, so the preview stays open to guests, uncapped.
-    const pre = setup({ now: PRE_NOW, days: ['2026-09-26'], starts: noRedis, limit: 1 });
-    const preview = await pre.svc.start('2026-09-26', 'user-a');
+    const pre = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26'] });
+    const preview = await pre.svc.start('2026-09-26', A);
     expect(preview.state.ranked).toBe(false);
-    expect(pre.rows.size).toBe(0);
-    expect((await pre.svc.tap(preview.token, 'r0c12', 'user-a')).state.settled?.reveal).toBeNull();
-    const guest = await pre.svc.start('2026-09-26', null);
-    await pre.svc.start('2026-09-26', null);
-    expect(guest.state.ranked).toBe(false);
-    const tapped = await pre.svc.tap(guest.token, 'r0c0', null);
-    expect(tapped.ok).toBe(true);
-    // It is still a secret day: its ledger fails closed on a lost entry.
-    pre.ledger.runs.clear();
-    await expect(pre.svc.tap(tapped.token, 'r0c1', null)).rejects.toMatchObject(conflict('stale_state'));
-    expect(await pre.svc.current('user-a', undefined)).toEqual({ run: null });
-    // At launch midnight the preview day becomes the ranked day: a carried-over guest token is refused.
-    const carried = await pre.svc.start('2026-09-26', null);
-    pre.clock.now = new Date('2026-09-26T15:00:00Z');
-    await expect(pre.svc.tap(carried.token, 'r0c0', null)).rejects.toMatchObject({ statusCode: 403, code: 'sign_in_for_today' });
-
-    // Guests allowed on the live day: the preview counts against the per-address cap, as a live start.
-    const capped = setup({ now: PRE_NOW, days: ['2026-09-26'], guestsPlayLive: true });
-    expect((await capped.svc.start('2026-09-26', 'user-a')).state.ranked).toBe(false);
-    expect(capped.starts.counts.get('2026-09-25:unknown')).toBe(1);
+    expect((await pre.svc.tap(A, preview.run.id, 0, 'r0c12')).state.settled?.reveal).toBeNull();
+    expect((await pre.svc.start('2026-09-26', GA)).state.ranked).toBe(false);
 
     const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-24'] });
-    expect((await post.svc.start('2026-12-24', 'user-a')).state.ranked).toBe(false);
-    expect(post.rows.size).toBe(0);
-    expect(post.starts.counts.size).toBe(0);
-    expect(await post.svc.leaderboard('2026-12-25', null)).toEqual({ day: '2026-12-25', players: 0, top: [], me: null });
+    expect((await post.svc.start('2026-12-24', A)).state.ranked).toBe(false);
     expect((await post.svc.leaderboard(undefined, null)).day).toBe('2026-12-24');
   });
 });
 
 describe('buscaminas boards', () => {
-  const expectNoAnswers = (value: unknown) => expect(JSON.stringify(value)).not.toMatch(/"ok"|"mines"|"reveal"/);
+  const expectNoAnswers = (value: unknown) => expect(JSON.stringify(value)).not.toMatch(/"ok"|"mines"|"reveal"|"answers"/);
 
-  it('serves a past or the live board without any ok flag; its day decides how long it may be cached', async () => {
+  it('serves a past or the live board without any answer; its day decides how long it may be cached', async () => {
     const { svc } = setup();
-    const past = await svc.board('2026-09-27');
+    const past = await svc.board(YESTERDAY);
     expect(past.live).toBe(false);
     expect(past.board).toEqual({
-      day: '2026-09-27', number: 2, contentVersion: 1,
-      rounds: makeDay('2026-09-27').rounds.map((r) => ({ id: r.id, difficulty: r.difficulty, prompt: r.prompt, cards: r.cards.map(({ id, name, img }) => ({ id, name, img })) })),
+      day: YESTERDAY, number: 2, contentVersion: makeDay(YESTERDAY).contentVersion,
+      rounds: makeDay(YESTERDAY).rounds.map((r) => ({ id: r.id, difficulty: r.difficulty, prompt: r.prompt, cards: r.cards.map(({ id, name, img }) => ({ id, name, img })) })),
     });
-    expect(past.board.rounds[0].cards[0]).toEqual({ id: 'r0c0', name: 'Player 0-0', img: '/buscaminas/v1/p/r0c0.webp' });
     expectNoAnswers(past);
     const live = await svc.board(TODAY);
     expect(live).toMatchObject({ live: true, board: { day: TODAY, number: 3 } });
-    expect(live.board.rounds).toHaveLength(20);
-    expect(live.board.rounds[0].prompt).toEqual({ es: 'pista 0', en: 'clue 0', ka: 'მინიშნება 0', tr: 'ipucu 0' });
     expectNoAnswers(live);
   });
 
   it('a future day is the same 404 as a day with no content, until it opens at Buenos Aires midnight', async () => {
-    const { svc, clock } = setup();
+    const { svc, clock, version } = setup();
     const errorOf = (day: string) => svc.board(day).then(() => null, (e: { statusCode: number; code: string; message: string; details: unknown }) =>
       ({ statusCode: e.statusCode, code: e.code, message: e.message, details: e.details }));
     const tomorrow = await errorOf('2026-09-29');
     expect(tomorrow).toMatchObject({ statusCode: 404 });
     for (const day of ['2026-09-30', '2026-09-25', '2027-01-01', '2026-02-30']) expect(await errorOf(day)).toEqual(tomorrow);
-    expect((await svc.boards()).days).toEqual({ '2026-09-27': 1, [TODAY]: 1 });
+    expect((await svc.boards()).days).toEqual({ [YESTERDAY]: version(YESTERDAY), [TODAY]: version(TODAY) });
 
     clock.now = new Date('2026-09-29T02:59:59Z');
     expect(await errorOf('2026-09-29')).toEqual(tomorrow);
     clock.now = new Date('2026-09-29T03:00:00Z');
     expect(await svc.board('2026-09-29')).toMatchObject({ live: true, board: { day: '2026-09-29' } });
     expect((await svc.board(TODAY)).live).toBe(false);
-    expect((await svc.boards()).days).toEqual({ '2026-09-27': 1, [TODAY]: 1, '2026-09-29': 1 });
+    expect(Object.keys((await svc.boards()).days)).toEqual([YESTERDAY, TODAY, '2026-09-29']);
   });
 
-  it('the index lists only playable days with their content versions', async () => {
-    const { svc, bumpContent } = setup();
-    bumpContent();
-    expect(await svc.boards()).toEqual({ days: { '2026-09-27': 2, [TODAY]: 2 } });
-  });
-
-  it('before launch only the preview board is open (live); after the last day the final board is archived', async () => {
-    const pre = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26', '2026-09-27'] });
-    expect((await pre.svc.board('2026-09-26')).live).toBe(true);
-    await expect(pre.svc.board('2026-09-27')).rejects.toMatchObject({ statusCode: 404 });
-    expect(await pre.svc.boards()).toEqual({ days: { '2026-09-26': 1 } });
-
-    const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-23', '2026-12-24'] });
-    expect((await post.svc.board('2026-12-24')).live).toBe(false);
-    await expect(post.svc.board('2026-12-25')).rejects.toMatchObject({ statusCode: 404 });
-    expect(await post.svc.boards()).toEqual({ days: { '2026-12-23': 1, '2026-12-24': 1 } });
+  it('with no days seeded every day is a 404 and the index is empty', async () => {
+    const { svc } = setup({ days: [] });
+    expect(await svc.boards()).toEqual({ days: {} });
+    await expect(svc.board(TODAY)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(svc.start(YESTERDAY, GA)).rejects.toMatchObject({ statusCode: 404 });
+    expect(await svc.current(A, undefined)).toEqual({ run: null });
+    expect(await svc.leaderboard(undefined, 'user-a')).toEqual({ day: TODAY, players: 0, top: [], me: null });
   });
 });

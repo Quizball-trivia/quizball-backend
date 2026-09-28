@@ -22,18 +22,14 @@ export const ErrorCode = {
   AUCTION_STARTING_PRICE_UNAVAILABLE: 'auction_starting_price_unavailable',
   /** Buscaminas: the client's day content differs from the server's; reload the day. */
   BUSCAMINAS_CONTENT_CHANGED: 'content_changed',
-  /** Buscaminas: the run moved on (another tab/device) since this token was issued. */
+  /** Buscaminas: the run moved on (another tab/device) since the client's version; re-sync via /start. */
   BUSCAMINAS_STALE_STATE: 'stale_state',
   /** Buscaminas: the ranked day ended in Buenos Aires; the run is closed. */
   BUSCAMINAS_DAY_OVER: 'day_over',
-  /** Buscaminas: this address started too many unranked runs of a day that is still live. */
-  BUSCAMINAS_TOO_MANY_RUNS: 'too_many_runs',
   /** Buscaminas: guests cannot play the live ranked day; the client asks them to sign in (or plays a past day). */
   BUSCAMINAS_SIGN_IN_FOR_TODAY: 'sign_in_for_today',
-  /** Buscaminas: disabled or misconfigured (missing/invalid secret or content). */
-  BUSCAMINAS_DISABLED: 'buscaminas_disabled',
-  /** Buscaminas: its Redis state is unreachable; retry shortly. */
-  BUSCAMINAS_UNAVAILABLE: 'buscaminas_unavailable',
+  /** Buscaminas: neither a member session nor a guest session was sent. */
+  BUSCAMINAS_GUEST_SESSION_REQUIRED: 'guest_session_required',
   /** The caller's account kind (a guest) cannot do this; the client opens the sign-up dialog. */
   CAPABILITY_REQUIRED: 'CAPABILITY_REQUIRED',
 } as const;

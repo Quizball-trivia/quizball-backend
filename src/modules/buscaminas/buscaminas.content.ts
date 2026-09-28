@@ -1,7 +1,4 @@
-import { addDays, LAUNCH_DAY, PUBLISHED_DAYS } from './buscaminas.days.js';
-import { disabled } from './buscaminas.errors.js';
-import { openContent, type SealedContent } from './buscaminas.sealed.js';
-import type { BuscaminasDayContent, PublicBoard } from './buscaminas.types.js';
+import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicBoard, type PublicRound } from './buscaminas.types.js';
 
 export interface IndexedRound {
   id: string;
@@ -15,88 +12,103 @@ export interface IndexedDay {
   day: string;
   contentVersion: number;
   rounds: IndexedRound[];
-  /** Built field by field, so an `ok` flag can never reach a response through it. */
+  /** Built field by field, so an `ok` flag (or any stray field) in the stored board can never reach a response. */
   board: PublicBoard;
 }
 
 export type ContentIndex = ReadonlyMap<string, IndexedDay>;
 
-export function publicBoard(d: BuscaminasDayContent): PublicBoard {
-  return {
-    day: d.day,
-    number: d.number,
-    contentVersion: d.contentVersion,
-    rounds: d.rounds.map((r) => ({
-      id: r.id,
-      difficulty: r.difficulty,
-      prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr },
-      cards: r.cards.map((c) => ({ id: c.id, name: c.name, img: c.img })),
-    })),
-  };
-}
+const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
-export function indexContent(days: readonly BuscaminasDayContent[]): ContentIndex {
-  const index = new Map<string, IndexedDay>();
-  for (const d of days) {
-    index.set(d.day, {
-      day: d.day,
-      contentVersion: d.contentVersion,
-      rounds: d.rounds.map((r) => {
-        const ok = r.cards.filter((c) => c.ok).map((c) => c.id);
-        return { id: r.id, cardIds: new Set(r.cards.map((c) => c.id)), okIds: new Set(ok), ok, mines: r.cards.filter((c) => !c.ok).map((c) => c.id) };
-      }),
-      board: publicBoard(d),
+/** A stored day in serving form; null when the row is malformed (the seed script validates fully, this only keeps a bad row out). */
+export function indexDay(row: BuscaminasDayRow): IndexedDay | null {
+  const rounds = (row.board as { rounds?: unknown })?.rounds;
+  if (!Array.isArray(rounds) || rounds.length === 0) return null;
+  const answers = (row.answers ?? {}) as Record<string, unknown>;
+  const board: PublicRound[] = [];
+  const indexed: IndexedRound[] = [];
+  for (const raw of rounds as Array<Partial<PublicRound>>) {
+    const fitting = answers[raw?.id ?? ''];
+    if (!isText(raw?.id) || !Array.isArray(raw.cards) || !Array.isArray(fitting)) return null;
+    if (!BUSCAMINAS_DIFFICULTIES.includes(raw.difficulty as BuscaminasDifficulty)) return null;
+    const prompt = (raw.prompt ?? {}) as Record<string, unknown>;
+    if (!BUSCAMINAS_LOCALES.every((locale) => isText(prompt[locale]))) return null;
+    const cards = raw.cards.map((c) => ({ id: c?.id, name: c?.name, img: c?.img }));
+    if (!cards.every((c) => isText(c.id) && isText(c.name) && isText(c.img))) return null;
+    const cardIds = new Set(cards.map((c) => c.id as string));
+    const okIds = new Set(fitting as string[]);
+    if (cardIds.size !== cards.length || [...okIds].some((id) => !cardIds.has(id))) return null;
+    board.push({
+      id: raw.id,
+      difficulty: raw.difficulty as BuscaminasDifficulty,
+      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string },
+      cards: cards as PublicRound['cards'],
+    });
+    indexed.push({
+      id: raw.id,
+      cardIds,
+      okIds,
+      ok: cards.filter((c) => okIds.has(c.id as string)).map((c) => c.id as string),
+      mines: cards.filter((c) => !okIds.has(c.id as string)).map((c) => c.id as string),
     });
   }
-  return index;
-}
-
-/** The whole published calendar or nothing: a short artifact would silently empty every later day. */
-export function assertCalendar(days: readonly BuscaminasDayContent[]): void {
-  if (days.length !== PUBLISHED_DAYS) throw new Error(`expected ${PUBLISHED_DAYS} days from ${LAUNCH_DAY}, found ${days.length}`);
-  days.forEach((d, i) => {
-    const expected = addDays(LAUNCH_DAY, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${LAUNCH_DAY}: position ${i + 1} is ${d.day}, expected ${expected}`);
-    if (d.number !== i + 1) throw new Error(`${d.day}: number must be ${i + 1}, found ${d.number}`);
-  });
-}
-
-export interface ContentLoaderDeps {
-  sealed: () => Promise<SealedContent>;
-  key: () => string | undefined;
-}
-
-export type ContentCheck = { ok: true; days: number } | { ok: false; reason: string };
-
-export interface ContentLoader {
-  /** The indexed answers; 503 while they cannot be decrypted or validated. */
-  load(): Promise<ContentIndex>;
-  /** Same single attempt as `load`, reporting why it failed (never key material). */
-  check(): Promise<ContentCheck>;
-}
-
-/** Decrypts once (eagerly via the boot readiness check, else on first use); without a working key the module answers 503 instead of failing boot. */
-export function createContentLoader(deps: ContentLoaderDeps): ContentLoader {
-  let attempt: Promise<{ index: ContentIndex } | { reason: string }> | null = null;
-  const settle = () => {
-    attempt ??= (async () => {
-      const key = deps.key();
-      if (!key) throw new Error('BUSCAMINAS_CONTENT_KEY is not set');
-      const days = openContent(await deps.sealed(), key);
-      assertCalendar(days);
-      return { index: indexContent(days) };
-    })().catch((error: unknown) => ({ reason: error instanceof Error ? error.message : String(error) }));
-    return attempt;
-  };
   return {
-    async load() {
-      const result = await settle();
-      if ('reason' in result) throw disabled();
-      return result.index;
-    },
-    async check() {
-      const result = await settle();
-      return 'reason' in result ? { ok: false, reason: result.reason } : { ok: true, days: result.index.size };
+    day: row.day,
+    contentVersion: row.contentVersion,
+    rounds: indexed,
+    board: { day: row.day, number: row.number, contentVersion: row.contentVersion, rounds: board },
+  };
+}
+
+export interface ContentSource {
+  /** Changes whenever buscaminas_days changes (a seed); cheap enough to ask every few seconds. */
+  fingerprint(): Promise<string>;
+  load(): Promise<BuscaminasDayRow[]>;
+}
+
+export interface ContentLog {
+  warn: (obj: Record<string, unknown>, msg: string) => void;
+  error: (obj: Record<string, unknown>, msg: string) => void;
+}
+
+export interface ContentStore {
+  /** Days in serving form; re-read from the database only when its fingerprint changes. */
+  get(): Promise<ContentIndex>;
+}
+
+export function createContentStore(source: ContentSource, opts: { refreshMs: number; now: () => number; log: ContentLog }): ContentStore {
+  let cached: { fingerprint: string; index: ContentIndex; checkedAt: number } | null = null;
+  let inflight: Promise<ContentIndex> | null = null;
+
+  async function refresh(): Promise<ContentIndex> {
+    const fingerprint = await source.fingerprint();
+    if (cached && cached.fingerprint === fingerprint) {
+      cached.checkedAt = opts.now();
+      return cached.index;
+    }
+    const index = new Map<string, IndexedDay>();
+    for (const row of await source.load()) {
+      const day = indexDay(row);
+      if (day) index.set(row.day, day);
+      else opts.log.error({ day: row.day }, 'Buscaminas day has malformed content; it is not served');
+    }
+    cached = { fingerprint, index, checkedAt: opts.now() };
+    return index;
+  }
+
+  return {
+    async get() {
+      if (cached && opts.now() - cached.checkedAt < opts.refreshMs) return cached.index;
+      inflight ??= refresh().finally(() => { inflight = null; });
+      try {
+        return await inflight;
+      } catch (error) {
+        // A failed re-check keeps serving what was loaded; with nothing loaded yet the request fails.
+        if (!cached) throw error;
+        opts.log.warn({ err: error }, 'Buscaminas content refresh failed; serving the previous copy');
+        cached.checkedAt = opts.now();
+        return cached.index;
+      }
     },
   };
 }

@@ -52,7 +52,7 @@
     "moderate:nicknames": "tsx scripts/moderate-nicknames.ts",
     "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
     "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
-    "buscaminas:content": "tsx scripts/buscaminas-copy-content.ts",
+    "buscaminas:seed": "tsx scripts/buscaminas-seed-days.ts",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",

@@ -217,29 +217,6 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
   SQUAD_SPIN_BOTS_DAILY_SESSIONS: z.coerce.number().int().min(0).max(100000).default(0),
-  // Buscaminas futbolero daily. Needs BUSCAMINAS_TOKEN_SECRET (>= 32 chars, signs the run tokens) and
-  // BUSCAMINAS_CONTENT_KEY (64 hex chars, decrypts the committed answers). Their format is checked by the
-  // module's boot readiness check, not here: a bad value logs one error and the module answers 503
-  // instead of the whole backend failing to boot.
-  BUSCAMINAS_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  BUSCAMINAS_TOKEN_SECRET: z.preprocess(
-    (value) => value === '' ? undefined : value,
-    z.string().optional(),
-  ),
-  BUSCAMINAS_CONTENT_KEY: z.preprocess(
-    (value) => value === '' ? undefined : value,
-    z.string().optional(),
-  ),
-  // Off (default): guests play past days only, so no unranked run can probe the live ranked day's mines.
-  BUSCAMINAS_GUESTS_PLAY_LIVE: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
-  // Fresh unranked runs of a still-live day per address (IPv6 /64) per Buenos Aires day; only used when BUSCAMINAS_GUESTS_PLAY_LIVE is on.
-  BUSCAMINAS_GUEST_LIVE_STARTS_PER_DAY: z.coerce.number().int().min(1).max(10000).default(8),
   ROAD_TO_GOAL_BOTS_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")

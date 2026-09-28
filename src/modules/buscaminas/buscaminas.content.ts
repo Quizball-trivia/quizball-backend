@@ -74,6 +74,8 @@ export interface ContentLog {
 export interface ContentStore {
   /** Days in serving form; re-read from the database only when its fingerprint changes. */
   get(): Promise<ContentIndex>;
+  /** The next get() re-checks the database instead of waiting out the refresh interval. */
+  invalidate(): void;
 }
 
 export function createContentStore(source: ContentSource, opts: { refreshMs: number; now: () => number; log: ContentLog }): ContentStore {
@@ -109,6 +111,9 @@ export function createContentStore(source: ContentSource, opts: { refreshMs: num
         cached.checkedAt = opts.now();
         return cached.index;
       }
+    },
+    invalidate() {
+      if (cached) cached.checkedAt = Number.NEGATIVE_INFINITY;
     },
   };
 }

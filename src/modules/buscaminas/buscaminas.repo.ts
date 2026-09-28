@@ -63,9 +63,28 @@ export const buscaminasRepo = {
   },
 
   /**
+   * The day's content version as stored, share-locked until the transaction ends: a seed changing the
+   * day's answers takes FOR UPDATE on the row, so it waits for this run's write and this read waits for
+   * its commit (then sees the new version). Null when the day is not stored.
+   */
+  async lockDay(tx: TransactionSql, day: string): Promise<number | null> {
+    const q = exec(tx);
+    const [row] = await q<Array<{ content_version: string }>>`SELECT content_version FROM buscaminas_days WHERE day = ${day} FOR SHARE`;
+    return row ? Number(row.content_version) : null;
+  },
+
+  /** Plain read, to tell why a run UPDATE matched no row. */
+  async dayVersion(tx: TransactionSql, day: string): Promise<number | null> {
+    const q = exec(tx);
+    const [row] = await q<Array<{ content_version: string }>>`SELECT content_version FROM buscaminas_days WHERE day = ${day}`;
+    return row ? Number(row.content_version) : null;
+  },
+
+  /**
    * Null when the row is ranked and its day closed (`closesAt`, Buenos Aires midnight) before this
-   * statement ran. clock_timestamp(), not now(): now() is the transaction start, so a request that
-   * began before midnight and waited on the row lock would still pass. Unranked runs never close.
+   * statement ran, or when the day's stored content version is no longer the one written into the run
+   * (its answers were corrected). clock_timestamp(), not now(): now() is the transaction start, so a
+   * request that began before midnight and waited on the row lock would still pass. Unranked runs never close.
    */
   async saveState(
     tx: TransactionSql,
@@ -80,6 +99,7 @@ export const buscaminasRepo = {
           done = ${c !== null}, score = ${c?.score ?? null}, perfects = ${c?.perfects ?? null},
           completed_at = CASE WHEN ${c !== null} THEN clock_timestamp() END
       WHERE id = ${id} AND (NOT ranked OR clock_timestamp() < ${data.closesAt})
+        AND EXISTS (SELECT 1 FROM buscaminas_days d WHERE d.day = buscaminas_runs.day AND d.content_version = ${data.contentVersion})
       RETURNING ${q.unsafe(RUN_COLUMNS)}
     `;
     return toRow(row);

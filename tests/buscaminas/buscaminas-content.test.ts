@@ -77,6 +77,17 @@ describe('buscaminas content store', () => {
     expect(source.load).toHaveBeenCalledTimes(2);
   });
 
+  it('invalidate() makes the next read re-check the database at once', async () => {
+    const { store, source, state } = setup([row('2026-09-27')]);
+    await store.get();
+    state.fingerprint = 'b';
+    state.rows = [row('2026-09-27', 1)];
+    expect((await store.get()).get('2026-09-27')!.contentVersion).toBe(row('2026-09-27').contentVersion);
+    store.invalidate();
+    expect((await store.get()).get('2026-09-27')!.contentVersion).toBe(row('2026-09-27', 1).contentVersion);
+    expect(source.fingerprint).toHaveBeenCalledTimes(2);
+  });
+
   it('skips a malformed day with an error log; an empty table is an empty index', async () => {
     const bad = row('2026-09-28');
     bad.answers = {};

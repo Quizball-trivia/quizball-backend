@@ -125,6 +125,26 @@ describe('buscaminas seed: host guard', () => {
     expect(resolveSeedTarget(`postgresql://postgres:pw@db.${PROJECT_REFS.production}.supabase.co:5432/postgres`, 'production').kind).toBe('production');
   });
 
+  it('trusts a postgres.<ref> user only on a Supabase pooler host; a direct host must agree with it', () => {
+    const staging = PROJECT_REFS.staging;
+    const errorOf = (url: string, target?: 'staging' | 'production') => { try { resolveSeedTarget(url, target); return ''; } catch (e) { return (e as Error).message; } };
+    // Supabase-shaped user on some other host: says nothing about where the connection goes.
+    for (const host of ['wrong.example.com', 'aws-1-eu-central-1.pooler.supabase.com.evil.example', 'pooler.supabase.com', 'x.pooler.supabase.co']) {
+      const url = `postgresql://postgres.${staging}:s3cret-pw@${host}:6543/postgres`;
+      expect(errorOf(url, 'staging')).toMatch(new RegExp(`expects Supabase project ${staging}, but DATABASE_URL points at host `));
+      expect(errorOf(url)).toMatch(/Refusing to seed a non-local database \(host /);
+    }
+    // Pooler host with the matching --target: accepted.
+    expect(resolveSeedTarget(pooler(staging), 'staging')).toEqual({ kind: 'staging', label: `staging (Supabase project ${staging})` });
+    expect(resolveSeedTarget(`postgresql://postgres.${staging}:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres`, 'staging').kind).toBe('staging');
+    // Direct host: its own ref; a postgres.<ref> user naming another project is refused.
+    expect(resolveSeedTarget(`postgresql://postgres:pw@db.${staging}.supabase.co:5432/postgres`, 'staging').kind).toBe('staging');
+    expect(resolveSeedTarget(`postgresql://postgres.${staging}:pw@db.${staging}.supabase.co:5432/postgres`, 'staging').kind).toBe('staging');
+    expect(errorOf(`postgresql://postgres.${staging}:pw@db.${PROJECT_REFS.production}.supabase.co:5432/postgres`, 'staging')).toMatch(/points at host db\.lfbwhx/);
+    // Local: no flag needed, even with a Supabase-shaped user.
+    expect(resolveSeedTarget(`postgresql://postgres.${staging}:pw@localhost:5432/quizball_local`, undefined).kind).toBe('local');
+  });
+
   it('the CLI refuses a remote database before reading files or connecting', () => {
     const root = resolve(__dirname, '../..');
     const empty = mkdtempSync(join(tmpdir(), 'buscaminas-days-'));

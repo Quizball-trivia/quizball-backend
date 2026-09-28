@@ -21,11 +21,16 @@ const entry = (r: BuscaminasRunRow, rank: number) => ({
   rank, userId: r.user_id!, username: r.user_id!, avatarUrl: null, avatarCustomization: null, country: null, tier: null, score: r.score!, perfects: r.perfects!,
 });
 
-/** In-memory buscaminas_runs with the same uniqueness, cutoff (`NOT ranked OR clock < closesAt`) and board filter (ranked AND done) as the SQL. */
-function memoryRepo(now: () => Date) {
+/**
+ * In-memory buscaminas_runs (+ the stored day versions of buscaminas_days) with the same uniqueness,
+ * cutoff (`NOT ranked OR clock < closesAt`), content predicate (stored day version = the run's) and
+ * board filter (ranked AND done) as the SQL.
+ */
+function memoryRepo(now: () => Date, dayVersions: Map<string, number>) {
   const rows = new Map<string, BuscaminasRunRow & { completedMs: number }>();
   const cutoffs: Date[] = [];
-  const hooks: { onLock?: () => void } = {};
+  const hooks: { onLock?: () => void; onDayLock?: () => void } = {};
+  const dayLocks: string[] = [];
   const clone = <T>(x: T): T => structuredClone(x);
   const ownerKey = (p: Player) => (p.kind === 'member' ? `u:${p.userId}` : `g:${p.guestId}`);
   const rowOwner = (r: BuscaminasRunRow) => (r.user_id ? `u:${r.user_id}` : `g:${r.guest_id}`);
@@ -34,6 +39,15 @@ function memoryRepo(now: () => Date) {
   let clock = 0;
   const repo: BuscaminasDeps['repo'] = {
     withTx: (fn) => fn({} as never),
+    async lockDay(_tx, day) {
+      dayLocks.push(day);
+      const version = dayVersions.get(day) ?? null;
+      hooks.onDayLock?.();
+      return version;
+    },
+    async dayVersion(_tx, day) {
+      return dayVersions.get(day) ?? null;
+    },
     async insertRun(_tx, d) {
       if (find(d.player, d.day)) return null;
       const row = {
@@ -61,6 +75,7 @@ function memoryRepo(now: () => Date) {
       cutoffs.push(d.closesAt);
       const row = rows.get(id)!;
       if (row.ranked && now().getTime() >= d.closesAt.getTime()) return null;
+      if (dayVersions.get(row.day) !== d.contentVersion) return null;
       Object.assign(row, {
         state: clone(d.state), state_version: d.stateVersion, content_version: d.contentVersion, done: d.completion !== null,
         score: d.completion?.score ?? null, perfects: d.completion?.perfects ?? null,
@@ -85,17 +100,23 @@ function memoryRepo(now: () => Date) {
       return { players: done.length, top: done.slice(0, limit).map((r, i) => entry(r, i + 1)) };
     },
   };
-  return { repo, rows, cutoffs, hooks, find };
+  return { repo, rows, cutoffs, hooks, find, dayLocks };
 }
 
 function setup(opts: { now?: Date; days?: string[] } = {}) {
   const days = opts.days ?? [YESTERDAY, TODAY, '2026-09-29'];
   let content: ContentIndex = indexOf(...days.map((d) => makeDay(d)));
   const clock = { now: opts.now ?? NOW };
-  const mem = memoryRepo(() => clock.now);
-  const svc = createBuscaminasService({ repo: mem.repo, content: async () => content, now: () => clock.now });
+  const stored = new Map(days.map((d) => [d, makeDay(d).contentVersion]));
+  const mem = memoryRepo(() => clock.now, stored);
+  const stale = { count: 0 };
+  const svc = createBuscaminasService({ repo: mem.repo, content: async () => content, contentStale: () => { stale.count += 1; }, now: () => clock.now });
   const version = (day: string, variant = 0) => makeDay(day, variant).contentVersion;
-  return { svc, clock, ...mem, version, correct: () => { content = indexOf(...days.map((d) => makeDay(d, 1))); } };
+  /** A seed correcting every day's answers commits; the replica's cache has not seen it yet. */
+  const correctDatabase = () => { for (const d of days) stored.set(d, makeDay(d, 1).contentVersion); };
+  /** The replica's cache catches up with the database. */
+  const refreshCache = () => { content = indexOf(...days.map((d) => makeDay(d, 1))); };
+  return { svc, clock, ...mem, stored, stale, version, correctDatabase, refreshCache, correct: () => { correctDatabase(); refreshCache(); } };
 }
 
 type Svc = ReturnType<typeof setup>['svc'];
@@ -308,6 +329,44 @@ describe('buscaminas service: content versions', () => {
     expect(restarted).toMatchObject({ run: { id: run.run.id, version: 2 }, state: { round: 0, picked: [], ranked: true } });
     expect(find(A, TODAY)).toMatchObject({ content_version: version(TODAY, 1) });
     expect((await svc.tap(A, run.run.id, 2, 'r0c15')).ok).toBe(true);
+  });
+
+  it('every start and move share-locks its day and checks the stored version', async () => {
+    const { svc, dayLocks } = setup();
+    const run = await svc.start(YESTERDAY, GA);
+    await svc.tap(GA, run.run.id, 0, 'r0c0');
+    await svc.bank(GA, run.run.id, 1);
+    await svc.next(GA, run.run.id, 2);
+    expect(dayLocks).toEqual([YESTERDAY, YESTERDAY, YESTERDAY, YESTERDAY]);
+  });
+
+  it('a correction committed while this replica still serves the old answers: starts and moves are content_changed, never scored', async () => {
+    const { svc, find, stale, correctDatabase, refreshCache, version } = setup();
+    const ranked = await svc.start(TODAY, A);
+    const tapped = await svc.tap(A, ranked.run.id, 0, 'r0c0');
+    correctDatabase();
+    // r0c15 is a mine in the old answers but fits the corrected ones: the stale cache must not judge it.
+    await expect(svc.tap(A, tapped.run.id, 1, 'r0c15')).rejects.toMatchObject(conflict('content_changed'));
+    await expect(svc.bank(A, tapped.run.id, 1)).rejects.toMatchObject(conflict('content_changed'));
+    await expect(svc.start(YESTERDAY, GA)).rejects.toMatchObject(conflict('content_changed'));
+    expect(find(A, TODAY)).toMatchObject({ state_version: 1, content_version: version(TODAY) });
+    expect(find(GA, YESTERDAY)).toBeUndefined();
+    // Each refusal asks the cache to re-check now instead of after the refresh interval.
+    expect(stale.count).toBe(3);
+
+    refreshCache();
+    const restarted = await svc.start(TODAY, A, version(TODAY, 1));
+    expect(restarted).toMatchObject({ run: { id: ranked.run.id, version: 2 }, state: { round: 0, picked: [], ranked: true } });
+    expect((await svc.tap(A, ranked.run.id, 2, 'r0c15')).ok).toBe(true);
+  });
+
+  it('the run UPDATE itself requires the stored day version: 0 rows is content_changed, not day_over', async () => {
+    const { svc, find, hooks, stored, version } = setup();
+    const run = await svc.start(TODAY, A);
+    // A version change the share lock did not see (it cannot happen under the lock; the predicate is the backstop).
+    hooks.onDayLock = () => { stored.set(TODAY, version(TODAY, 1)); };
+    await expect(svc.tap(A, run.run.id, 0, 'r0c0')).rejects.toMatchObject(conflict('content_changed'));
+    expect(find(A, TODAY)).toMatchObject({ state_version: 0, done: false });
   });
 
   it('a finished run on superseded content is kept as it is, without a reveal', async () => {

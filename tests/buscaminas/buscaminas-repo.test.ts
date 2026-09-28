@@ -34,11 +34,21 @@ describe('buscaminas repo SQL', () => {
     expect(saved).toBeNull();
     const { text, values } = last();
     expect(text).toMatch(/UPDATE buscaminas_runs/);
-    expect(text).toMatch(/WHERE id = \$\? AND \(NOT ranked OR clock_timestamp\(\) < \$\?\)\s+RETURNING/);
+    expect(text).toMatch(/WHERE id = \$\? AND \(NOT ranked OR clock_timestamp\(\) < \$\?\)\s+AND EXISTS/);
     expect(text).toMatch(/completed_at = CASE WHEN \$\? THEN clock_timestamp\(\) END/);
+    // A correction of the day's answers after this move was validated leaves the run untouched.
+    expect(text).toMatch(/AND EXISTS \(SELECT 1 FROM buscaminas_days d WHERE d\.day = buscaminas_runs\.day AND d\.content_version = \$\?\)/);
+    expect(values).toContain(1);
     // now() is the transaction start: a request that waited on the row lock across midnight would slip through.
     expect(text).not.toMatch(/\bnow\(\)/);
-    expect(values.at(-1)).toBe(closesAt);
+    expect(values).toContain(closesAt);
+  });
+
+  it('gameplay share-locks the day row, which a seed correcting it must wait for (FOR UPDATE)', async () => {
+    await buscaminasRepo.lockDay(tx, '2026-09-28');
+    expect(last().text).toMatch(/SELECT content_version FROM buscaminas_days WHERE day = \$\? FOR SHARE/);
+    await buscaminasRepo.dayVersion(tx, '2026-09-28');
+    expect(last().text).not.toMatch(/FOR (SHARE|UPDATE)/);
   });
 
   it('a closed ranked run is unranked only by the database clock, and only while unfinished', async () => {

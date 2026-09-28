@@ -133,6 +133,9 @@ export interface SeedPlan {
   extraDays: string[];
 }
 
+const answersDiffer = (before: BuscaminasDayRow, after: BuscaminasDayRow): boolean =>
+  before.contentVersion !== after.contentVersion || canonical(before.answers) !== canonical(after.answers);
+
 export function planSeed(
   stored: ReadonlyMap<string, BuscaminasDayRow>,
   runs: ReadonlyMap<string, number>,
@@ -145,7 +148,7 @@ export function planSeed(
     const count = runs.get(row.day) ?? 0;
     const base = { day: row.day, number: row.number, runs: count, contentVersion: row.contentVersion, previousVersion: before?.contentVersion ?? null };
     if (!before) return { ...base, status: 'new', answersChanged: false };
-    const answersChanged = before.contentVersion !== row.contentVersion || canonical(before.answers) !== canonical(row.answers);
+    const answersChanged = answersDiffer(before, row);
     const same = !answersChanged && before.number === row.number && canonical(before.board) === canonical(row.board);
     if (answersChanged && count > 0) {
       if (!opts.allowCorrection) blocked.push(`${row.day} (${count} runs): answers changed; pass --allow-correction to correct a played day`);
@@ -167,20 +170,23 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time; readers are never blocked.
+    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
+    const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
+    // days whose answers change waits for those in flight and holds back new ones, so the run count
+    // below is final and no run can start or move on the old answers once they are replaced.
+    const correcting = rows.filter((row) => stored.has(row.day) && answersDiffer(stored.get(row.day)!, row)).map((row) => row.day).sort();
+    if (correcting.length > 0) {
+      await tx`SELECT day FROM buscaminas_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
+    }
     const runRows = await tx<Array<{ day: string; runs: number }>>`
       SELECT day::text AS day, count(*)::int AS runs FROM buscaminas_runs GROUP BY day
     `;
-    const plan = planSeed(
-      new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }])),
-      new Map(runRows.map((r) => [r.day, r.runs])),
-      rows,
-      opts,
-    );
+    const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, r.runs])), rows, opts);
     if (opts.dryRun) return plan;
     const byDay = new Map(rows.map((row) => [row.day, row]));
     for (const entry of plan.entries) {
@@ -202,11 +208,20 @@ export type SeedTargetName = keyof typeof PROJECT_REFS;
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
-/** Supabase project of a direct (db.<ref>.supabase.co) or pooler (user postgres.<ref>) URL; same rule as scripts/migration-safety.mjs. */
+const SUPABASE_POOLER_HOST = /^[a-z0-9-]+\.pooler\.supabase\.com$/;
+const SUPABASE_DIRECT_HOST = /^db\.([a-z0-9]+)\.supabase\.co$/;
+
+/**
+ * The Supabase project a URL really connects to, else null. The pooler names the project only in the
+ * user (postgres.<ref>), so that user is trusted on a Supabase pooler host and nowhere else: on any
+ * other host it says nothing about where the connection goes. A direct host names the project itself.
+ */
 function projectRef(url: URL): string | null {
-  return url.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/)?.[1]
-    ?? decodeURIComponent(url.username).match(/^postgres\.([a-z0-9]+)$/)?.[1]
-    ?? null;
+  const userRef = decodeURIComponent(url.username).match(/^postgres\.([a-z0-9]+)$/)?.[1] ?? null;
+  if (SUPABASE_POOLER_HOST.test(url.hostname)) return userRef;
+  const hostRef = url.hostname.match(SUPABASE_DIRECT_HOST)?.[1] ?? null;
+  if (hostRef && (userRef === null || userRef === hostRef)) return hostRef;
+  return null;
 }
 
 /**

@@ -125,7 +125,8 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
         { fingerprint: () => buscaminasRepo.daysFingerprint(), load: () => buscaminasRepo.loadDays() },
         { refreshMs: 0, now: () => Date.now(), log: { warn: () => undefined, error: () => undefined } },
       );
-      return { store, repo: buscaminasRepo, svc: createBuscaminasService({ repo: buscaminasRepo, content: () => store.get(), now: () => NOW }) };
+      const svc = createBuscaminasService({ repo: buscaminasRepo, content: () => store.get(), contentStale: () => store.invalidate(), now: () => NOW });
+      return { store, repo: buscaminasRepo, svc };
     }
 
     it('seeds the calendar in one transaction: dry run writes nothing, a re-run changes nothing', async () => {
@@ -177,7 +178,71 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
       expect(await svc.current(gb, PAST)).toEqual({ run: null });
     });
 
+    const gate = () => {
+      let open!: () => void;
+      const opened = new Promise<void>((resolve) => { open = resolve; });
+      return { open, opened };
+    };
+    const settledWithin = async (p: Promise<unknown>, ms: number) => {
+      let settled = false;
+      p.then(() => { settled = true; }, () => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return settled;
+    };
+
+    it('a move waits for an in-flight correction of its day, then is content_changed instead of scored on the old answers', async () => {
+      await seed();
+      const { svc } = await service();
+      const ga = { kind: 'guest' as const, guestId: await guestSession() };
+      const run = await svc.start(PAST, ga);
+      const corrected = (await import('../../src/modules/buscaminas/buscaminas.seed.js')).toDayRow(makeDay(PAST, 1));
+      const locked = gate();
+      const commit = gate();
+      // What the seed does for a correction: FOR UPDATE on the day, then the new answers, then commit.
+      const correction = db.sql.begin(async (tx) => {
+        await tx`SELECT day FROM buscaminas_days WHERE day = ${PAST} FOR UPDATE`;
+        await tx`UPDATE buscaminas_days SET content_version = ${corrected.contentVersion}, answers = ${tx.json(corrected.answers as never)} WHERE day = ${PAST}`;
+        locked.open();
+        await commit.opened;
+      });
+      await locked.opened;
+      // r0c15 is a mine in the served (old) answers and fits the corrected ones.
+      const tap = svc.tap(ga, run.run.id, 0, 'r0c15');
+      expect(await settledWithin(tap, 250)).toBe(false);
+      commit.open();
+      await correction;
+      await expect(tap).rejects.toMatchObject({ statusCode: 409, code: 'content_changed' });
+      const [row] = await db.sql`SELECT state_version, content_version FROM buscaminas_runs WHERE id = ${run.run.id}`;
+      expect(row).toEqual({ state_version: 0, content_version: String(makeDay(PAST).contentVersion) });
+    });
+
+    it('a correction waits for an in-flight start on its day, then counts that run and refuses without --allow-correction', async () => {
+      await seed();
+      const { repo } = await service();
+      const g = await guestSession();
+      const started = gate();
+      const commit = gate();
+      const start = repo.withTx(async (tx) => {
+        await repo.lockDay(tx, PAST);
+        await repo.insertRun(tx, {
+          id: randomUUID(), player: { kind: 'guest', guestId: g }, day: PAST, ranked: false, contentVersion: makeDay(PAST).contentVersion,
+          state: { v: 1, r: 0, p: [], m: null, s: null, res: [], done: false },
+        });
+        started.open();
+        await commit.opened;
+      });
+      await started.opened;
+      const seeding = seed(calendar().map((d) => (d.day === PAST ? makeDay(PAST, 1) : d)));
+      expect(await settledWithin(seeding, 250)).toBe(false);
+      commit.open();
+      await start;
+      await expect(seeding).rejects.toThrow(/2026-10-04 \(1 runs\): answers changed/);
+      const [day] = await db.sql`SELECT content_version FROM buscaminas_days WHERE day = ${PAST}`;
+      expect(Number(day.content_version)).toBe(makeDay(PAST).contentVersion);
+    });
+
     it('the ranked cutoff is the database clock; unranked rows never close', async () => {
+      await db.sql`INSERT INTO buscaminas_days (day, number, content_version, board, answers) VALUES (${LIVE}, 10, 1, '{"rounds": []}', '{}'), (${PAST}, 9, 1, '{"rounds": []}', '{}')`;
       const { repo } = await service();
       const u = await user('cutoff');
       const g = await guestSession();
@@ -194,7 +259,21 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
       expect(await repo.withTx((tx) => repo.unrankClosedRun(tx, ranked!.id, closed))).toMatchObject({ ranked: false });
     });
 
+    it('a run write needs the day\'s stored content version to be the run\'s', async () => {
+      await db.sql`INSERT INTO buscaminas_days (day, number, content_version, board, answers) VALUES (${PAST}, 9, 1, '{"rounds": []}', '{}')`;
+      const { repo } = await service();
+      const g = await guestSession();
+      const state = { v: 1 as const, r: 0, p: [], m: null, s: null, res: [], done: false };
+      const run = await repo.withTx((tx) => repo.insertRun(tx, { id: randomUUID(), player: { kind: 'guest', guestId: g }, day: PAST, ranked: false, contentVersion: 1, state }));
+      const save = (contentVersion: number) => repo.withTx((tx) => repo.saveState(tx, run!.id, { state, stateVersion: 1, contentVersion, completion: null, closesAt: new Date(Date.now() + 3_600_000) }));
+      await db.sql`UPDATE buscaminas_days SET content_version = 2 WHERE day = ${PAST}`;
+      expect(await save(1)).toBeNull();
+      expect(await repo.withTx((tx) => repo.dayVersion(tx, PAST))).toBe(2);
+      expect(await save(2)).toMatchObject({ content_version: 2, state_version: 1 });
+    });
+
     it('the leaderboard ranks finished ranked member runs only', async () => {
+      await db.sql`INSERT INTO buscaminas_days (day, number, content_version, board, answers) VALUES (${LIVE}, 10, 1, '{"rounds": []}', '{}')`;
       const { repo } = await service();
       const later = new Date(Date.now() + 3_600_000);
       const state = { v: 1 as const, r: 0, p: [], m: null, s: null, res: [], done: true };

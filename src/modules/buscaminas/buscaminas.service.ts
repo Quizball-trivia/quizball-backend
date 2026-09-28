@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { NotFoundError } from '../../core/errors.js';
+import { NotFoundError, type AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './buscaminas.constants.js';
 import { createContentStore, type ContentIndex, type IndexedDay } from './buscaminas.content.js';
@@ -27,12 +27,14 @@ export interface LeaderboardResponse {
   me: LeaderboardEntry | null;
 }
 
-type Repo = Pick<BuscaminasRepo, 'withTx' | 'insertRun' | 'lockOwnRun' | 'lockRun' | 'getRun' | 'saveState' | 'unrankClosedRun' | 'rankOf' | 'leaderboard'>;
+type Repo = Pick<BuscaminasRepo, 'withTx' | 'lockDay' | 'dayVersion' | 'insertRun' | 'lockOwnRun' | 'lockRun' | 'getRun' | 'saveState' | 'unrankClosedRun' | 'rankOf' | 'leaderboard'>;
 type Tx = Parameters<Parameters<Repo['withTx']>[0]>[0];
 
 export interface BuscaminasDeps {
   repo: Repo;
   content: () => Promise<ContentIndex>;
+  /** The served content turned out older than the database (a correction): re-check it on the next read. */
+  contentStale: () => void;
   now: () => Date;
 }
 
@@ -57,6 +59,26 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     return content;
   }
 
+  /**
+   * Holds the day's row FOR SHARE for the rest of the transaction and checks that the content this
+   * replica serves (cached, up to CONTENT_REFRESH_MS old) is still the stored one. A correction
+   * therefore waits for this write, and a move validated against superseded answers never lands.
+   */
+  async function lockServedDay(tx: Tx, day: IndexedDay): Promise<void> {
+    if ((await deps.repo.lockDay(tx, day.day)) !== day.contentVersion) throw otherContent();
+  }
+
+  /** A run UPDATE matched no row: the ranked cutoff passed, or the day's answers changed under the run. */
+  async function rejectedWrite(tx: Tx, dayId: string, contentVersion: number): Promise<AppError> {
+    return (await deps.repo.dayVersion(tx, dayId)) === contentVersion ? dayOver() : otherContent();
+  }
+
+  /** The client, the run or the database disagrees with the served content: this replica may be the stale one, so it re-checks now. */
+  function otherContent(): AppError {
+    deps.contentStale();
+    return contentChanged();
+  }
+
   async function respond(row: BuscaminasRunRow, day: IndexedDay | null, tx?: Tx): Promise<RunResponse> {
     const rank = row.ranked && row.done && row.user_id ? (await deps.repo.rankOf(row.user_id, row.day, tx))?.rank : undefined;
     // Answers of other content cannot describe this run's cards.
@@ -77,9 +99,10 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     const live = dayId === rankedDay(deps.now());
     // Guests never see the live day's mines: an unranked run of it would probe them for a ranked one.
     if (live && player.kind === 'guest') throw signInForToday();
-    if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw contentChanged();
+    if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
     const closesAt = dayEndsAt(dayId);
     return deps.repo.withTx(async (tx) => {
+      await lockServedDay(tx, day);
       const inserted = await deps.repo.insertRun(tx, {
         id: randomUUID(), player, day: dayId, ranked: live && player.kind === 'member', contentVersion: day.contentVersion, state: rules.newState(),
       });
@@ -94,7 +117,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
         const saved = await deps.repo.saveState(tx, row.id, {
           state: rules.newState(), stateVersion: row.state_version + 1, contentVersion: day.contentVersion, completion: null, closesAt,
         });
-        if (!saved) throw dayOver();
+        if (!saved) throw await rejectedWrite(tx, dayId, day.contentVersion);
         return respond(saved, day, tx);
       }
       return respond(row, day, tx);
@@ -115,14 +138,14 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
       // The row is authoritative: an older version (a retry, another tab) is stale and the client re-syncs via /start.
       if (row.state_version !== version) throw staleState();
       const day = content.get(row.day);
-      if (!day || day.contentVersion !== row.content_version) throw contentChanged();
+      if (!day || day.contentVersion !== row.content_version) throw otherContent();
+      await lockServedDay(tx, day);
       const out = step(row.state, day);
       const completion = out.state.done ? { score: rules.score(out.state), perfects: rules.perfects(out.state.res) } : null;
       const saved = await deps.repo.saveState(tx, row.id, {
         state: out.state, stateVersion: row.state_version + 1, contentVersion: row.content_version, completion, closesAt: dayEndsAt(row.day),
       });
-      // Under the row lock only the ranked midnight cutoff can reject the update.
-      if (!saved) throw dayOver();
+      if (!saved) throw await rejectedWrite(tx, row.day, row.content_version);
       return { ...(await respond(saved, day, tx)), ...out.extra };
     });
     if (response.state.done && response.state.ranked) leaderboards.delete(response.state.day);
@@ -202,6 +225,7 @@ export const buscaminasContent = createContentStore(
 export const buscaminasService = createBuscaminasService({
   repo: buscaminasRepo,
   content: () => buscaminasContent.get(),
+  contentStale: () => buscaminasContent.invalidate(),
   now: () => new Date(),
 });
 

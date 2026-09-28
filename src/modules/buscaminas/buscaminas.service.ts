@@ -65,7 +65,9 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
   async function playableDay(day: string): Promise<IndexedDay> {
     const content = (await deps.content()).get(day);
-    if (!content || !isPlayableDay(day, deps.now())) throw new NotFoundError('Day not available');
+    // Evaluate playability unconditionally so an unknown day and a future day take the same path.
+    const playable = isPlayableDay(day, deps.now());
+    if (!content || !playable) throw new NotFoundError('Day not available');
     return content;
   }
 

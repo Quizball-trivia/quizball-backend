@@ -11,7 +11,9 @@ export function makeDay(day: string, contentVersion = 1): BuscaminasDayContent {
     contentVersion,
     rounds: Array.from({ length: 20 }, (_, r) => ({
       id: `r${r}`,
-      cards: Array.from({ length: 16 }, (_, c) => ({ id: `r${r}c${c}`, ok: c < 12 })),
+      difficulty: r < 10 ? 'easy' as const : 'medium' as const,
+      prompt: { es: `pista ${r}`, en: `clue ${r}`, ka: `მინიშნება ${r}`, tr: `ipucu ${r}` },
+      cards: Array.from({ length: 16 }, (_, c) => ({ id: `r${r}c${c}`, name: `Player ${r}-${c}`, img: `/buscaminas/v1/p/r${r}c${c}.webp`, ok: c < 12 })),
     })),
   };
 }

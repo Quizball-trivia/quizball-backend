@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { bucketIp } from '../../core/ip-bucket.js';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { buscaminasService } from './buscaminas.service.js';
-import type { DayQuery, StartRequest, TapRequest, TokenBodyRequest } from './buscaminas.schemas.js';
+import type { BoardParams, DayQuery, StartRequest, TapRequest, TokenBodyRequest } from './buscaminas.schemas.js';
 
 const userIdOf = (req: Request): string | null => req.user?.id ?? null;
 
@@ -26,6 +26,18 @@ export const buscaminasController = {
   async current(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
     res.json(await buscaminasService.current(req.user!.id, query.day));
+  },
+  /** A finished day is cached for a day; the live one only for minutes, so it can be corrected the same day. */
+  async board(req: Request, res: Response): Promise<void> {
+    const { day } = req.validated.params as BoardParams;
+    const { board, live } = await buscaminasService.board(day);
+    res.setHeader('Cache-Control', live ? 'public, max-age=300' : 'public, max-age=86400');
+    res.json(board);
+  },
+  async boards(_req: Request, res: Response): Promise<void> {
+    const index = await buscaminasService.boards();
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json(index);
   },
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;

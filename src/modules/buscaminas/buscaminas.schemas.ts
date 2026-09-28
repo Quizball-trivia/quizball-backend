@@ -17,3 +17,6 @@ export type TokenBodyRequest = z.infer<typeof tokenBodySchema>;
 
 export const dayQuerySchema = z.object({ day: daySchema.optional() });
 export type DayQuery = z.infer<typeof dayQuerySchema>;
+
+export const boardParamsSchema = z.object({ day: daySchema });
+export type BoardParams = z.infer<typeof boardParamsSchema>;

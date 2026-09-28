@@ -437,3 +437,59 @@ describe('buscaminas service', () => {
     expect((await post.svc.leaderboard(undefined, null)).day).toBe('2026-12-24');
   });
 });
+
+describe('buscaminas boards', () => {
+  const expectNoAnswers = (value: unknown) => expect(JSON.stringify(value)).not.toMatch(/"ok"|"mines"|"reveal"/);
+
+  it('serves a past or the live board without any ok flag; its day decides how long it may be cached', async () => {
+    const { svc } = setup();
+    const past = await svc.board('2026-09-27');
+    expect(past.live).toBe(false);
+    expect(past.board).toEqual({
+      day: '2026-09-27', number: 2, contentVersion: 1,
+      rounds: makeDay('2026-09-27').rounds.map((r) => ({ id: r.id, difficulty: r.difficulty, prompt: r.prompt, cards: r.cards.map(({ id, name, img }) => ({ id, name, img })) })),
+    });
+    expect(past.board.rounds[0].cards[0]).toEqual({ id: 'r0c0', name: 'Player 0-0', img: '/buscaminas/v1/p/r0c0.webp' });
+    expectNoAnswers(past);
+    const live = await svc.board(TODAY);
+    expect(live).toMatchObject({ live: true, board: { day: TODAY, number: 3 } });
+    expect(live.board.rounds).toHaveLength(20);
+    expect(live.board.rounds[0].prompt).toEqual({ es: 'pista 0', en: 'clue 0', ka: 'მინიშნება 0', tr: 'ipucu 0' });
+    expectNoAnswers(live);
+  });
+
+  it('a future day is the same 404 as a day with no content, until it opens at Buenos Aires midnight', async () => {
+    const { svc, clock } = setup();
+    const errorOf = (day: string) => svc.board(day).then(() => null, (e: { statusCode: number; code: string; message: string; details: unknown }) =>
+      ({ statusCode: e.statusCode, code: e.code, message: e.message, details: e.details }));
+    const tomorrow = await errorOf('2026-09-29');
+    expect(tomorrow).toMatchObject({ statusCode: 404 });
+    for (const day of ['2026-09-30', '2026-09-25', '2027-01-01', '2026-02-30']) expect(await errorOf(day)).toEqual(tomorrow);
+    expect((await svc.boards()).days).toEqual({ '2026-09-27': 1, [TODAY]: 1 });
+
+    clock.now = new Date('2026-09-29T02:59:59Z');
+    expect(await errorOf('2026-09-29')).toEqual(tomorrow);
+    clock.now = new Date('2026-09-29T03:00:00Z');
+    expect(await svc.board('2026-09-29')).toMatchObject({ live: true, board: { day: '2026-09-29' } });
+    expect((await svc.board(TODAY)).live).toBe(false);
+    expect((await svc.boards()).days).toEqual({ '2026-09-27': 1, [TODAY]: 1, '2026-09-29': 1 });
+  });
+
+  it('the index lists only playable days with their content versions', async () => {
+    const { svc, bumpContent } = setup();
+    bumpContent();
+    expect(await svc.boards()).toEqual({ days: { '2026-09-27': 2, [TODAY]: 2 } });
+  });
+
+  it('before launch only the preview board is open (live); after the last day the final board is archived', async () => {
+    const pre = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26', '2026-09-27'] });
+    expect((await pre.svc.board('2026-09-26')).live).toBe(true);
+    await expect(pre.svc.board('2026-09-27')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await pre.svc.boards()).toEqual({ days: { '2026-09-26': 1 } });
+
+    const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-23', '2026-12-24'] });
+    expect((await post.svc.board('2026-12-24')).live).toBe(false);
+    await expect(post.svc.board('2026-12-25')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await post.svc.boards()).toEqual({ days: { '2026-12-23': 1, '2026-12-24': 1 } });
+  });
+});

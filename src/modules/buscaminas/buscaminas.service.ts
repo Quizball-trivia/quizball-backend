@@ -11,11 +11,17 @@ import { checkBuscaminasReadiness, usableTokenSecret } from './buscaminas.readin
 import { buscaminasRepo, type BuscaminasRepo } from './buscaminas.repo.js';
 import * as rules from './buscaminas.rules.js';
 import { signToken, verifyToken } from './buscaminas.token.js';
-import type { BuscaminasRunRow, LeaderboardEntry, PublicRunState, RunPayload } from './buscaminas.types.js';
+import type { BuscaminasRunRow, LeaderboardEntry, PublicBoard, PublicRunState, RunPayload } from './buscaminas.types.js';
 
 export interface RunResponse {
   token: string;
   state: PublicRunState;
+}
+
+export interface BoardResponse {
+  board: PublicBoard;
+  /** Still the current puzzle (not yet over in Buenos Aires). */
+  live: boolean;
 }
 
 export interface LeaderboardResponse {
@@ -43,7 +49,7 @@ export interface BuscaminasDeps {
 type Step = (p: RunPayload, day: IndexedDay) => { payload: RunPayload; extra?: { ok: boolean } };
 
 export function createBuscaminasService(deps: BuscaminasDeps) {
-  const board = new Map<string, { at: number; players: number; top: LeaderboardEntry[] }>();
+  const leaderboards = new Map<string, { at: number; players: number; top: LeaderboardEntry[] }>();
   const nowSeconds = () => Math.floor(deps.now().getTime() / 1000);
 
   /** `iat` marks an unranked token (it then expires); ranked tokens are checked against their row instead. */
@@ -56,6 +62,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     }),
   });
 
+  /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
   async function playableDay(day: string): Promise<IndexedDay> {
     const content = (await deps.content()).get(day);
     if (!content || !isPlayableDay(day, deps.now())) throw new NotFoundError('Day not available');
@@ -148,7 +155,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
       if (!saved) throw dayOver();
       return { ...(await responseForRow(saved, day, tx)), ...out.extra };
     });
-    if (response.state.done) board.delete(payload.d);
+    if (response.state.done) leaderboards.delete(payload.d);
     return response;
   }
 
@@ -160,6 +167,18 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
 
   return {
     start,
+
+    async board(dayId: string): Promise<BoardResponse> {
+      const day = await playableDay(dayId);
+      return { board: day.board, live: !isArchiveDay(dayId, deps.now()) };
+    },
+
+    async boards(): Promise<{ days: Record<string, number> }> {
+      const now = deps.now();
+      const days: Record<string, number> = {};
+      for (const [id, day] of await deps.content()) if (isPlayableDay(id, now)) days[id] = day.contentVersion;
+      return { days };
+    },
 
     tap(token: string, cardId: string, userId: string | null): Promise<RunResponse & { ok?: boolean }> {
       return mutate('tap', token, userId, cardId, (p, day) => {
@@ -194,10 +213,10 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> {
       const day = dayId ?? boardDay(deps.now());
       if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
-      let cached = board.get(day);
+      let cached = leaderboards.get(day);
       if (!cached || deps.now().getTime() - cached.at > LEADERBOARD_CACHE_MS) {
         cached = { at: deps.now().getTime(), ...(await deps.repo.leaderboard(day, LEADERBOARD_TOP)) };
-        board.set(day, cached);
+        leaderboards.set(day, cached);
       }
       const me = userId ? await deps.repo.rankOf(userId, day) : null;
       return { day, players: cached.players, top: cached.top, me };

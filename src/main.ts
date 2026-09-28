@@ -75,7 +75,7 @@ startBotRenameWorker();
 startDailyComebackReminderWorker();
 startRetentionEmailWorker();
 startSeason3FeedbackWorker();
-// Decrypts and validates the Buscaminas answers in the background; logs one error if misconfigured.
+// Loads the Buscaminas days in the background; warns once if none are seeded.
 startBuscaminasReadinessCheck();
 
 const dbWatchdog = new DbWatchdog({

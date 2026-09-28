@@ -1,31 +1,37 @@
 import type { Request, Response } from 'express';
-import { bucketIp } from '../../core/ip-bucket.js';
-import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { buscaminasService } from './buscaminas.service.js';
-import type { BoardParams, DayQuery, StartRequest, TapRequest, TokenBodyRequest } from './buscaminas.schemas.js';
+import { guestSessionRequired } from './buscaminas.errors.js';
+import type { Player } from './buscaminas.types.js';
+import type { BoardParams, DayQuery, MoveRequest, StartRequest, TapRequest } from './buscaminas.schemas.js';
 
-const userIdOf = (req: Request): string | null => req.user?.id ?? null;
+/** Set by the routes' identity middleware: a member session, else a guest session. */
+function playerOf(req: Request): Player {
+  if (req.user) return { kind: 'member', userId: req.user.id };
+  if (req.guest) return { kind: 'guest', guestId: req.guest.id };
+  throw guestSessionRequired();
+}
 
 export const buscaminasController = {
   async start(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as StartRequest;
-    res.json(await buscaminasService.start(body.day, userIdOf(req), body.contentVersion, bucketIp(resolveTrustedClientIp(req))));
+    res.json(await buscaminasService.start(body.day, playerOf(req), body.contentVersion));
   },
   async tap(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as TapRequest;
-    res.json(await buscaminasService.tap(body.token, body.cardId, userIdOf(req)));
+    res.json(await buscaminasService.tap(playerOf(req), body.runId, body.version, body.cardId));
   },
   async bank(req: Request, res: Response): Promise<void> {
-    const body = req.validated.body as TokenBodyRequest;
-    res.json(await buscaminasService.bank(body.token, userIdOf(req)));
+    const body = req.validated.body as MoveRequest;
+    res.json(await buscaminasService.bank(playerOf(req), body.runId, body.version));
   },
   async next(req: Request, res: Response): Promise<void> {
-    const body = req.validated.body as TokenBodyRequest;
-    res.json(await buscaminasService.next(body.token, userIdOf(req)));
+    const body = req.validated.body as MoveRequest;
+    res.json(await buscaminasService.next(playerOf(req), body.runId, body.version));
   },
   async current(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
-    res.json(await buscaminasService.current(req.user!.id, query.day));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await buscaminasService.current(playerOf(req), query.day));
   },
   /** A finished day is cached for a day; the live one only for minutes, so it can be corrected the same day. */
   async board(req: Request, res: Response): Promise<void> {
@@ -39,9 +45,10 @@ export const buscaminasController = {
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.json(index);
   },
+  /** Members see their own row in `me`; guests are never on the board. */
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
-    const board = await buscaminasService.leaderboard(query.day, userIdOf(req));
+    const board = await buscaminasService.leaderboard(query.day, req.user?.id ?? null);
     const anonymous = !req.headers.authorization && !req.cookies?.qb_access_token;
     res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
     res.json(board);

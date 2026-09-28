@@ -1,20 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { AuthorizationError, NotFoundError } from '../../core/errors.js';
-import { config } from '../../core/config.js';
+import { NotFoundError, type AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import { LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, RUN_TOKEN_TTL_SECONDS } from './buscaminas.constants.js';
-import { createContentLoader, type ContentIndex, type IndexedDay } from './buscaminas.content.js';
-import { boardDay, dayEndsAt, isArchiveDay, isPlayableDay, rankedDay, releaseDay } from './buscaminas.days.js';
-import { contentChanged, dayOver, disabled, signInForToday, staleState, tooManyRuns } from './buscaminas.errors.js';
-import { redisRunLedger, redisStartCounter, type RunLedger, type StartCounter } from './buscaminas.ledger.js';
-import { checkBuscaminasReadiness, usableTokenSecret } from './buscaminas.readiness.js';
+import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './buscaminas.constants.js';
+import { createContentStore, type ContentIndex, type IndexedDay } from './buscaminas.content.js';
+import { boardDay, dayEndsAt, isArchiveDay, isPlayableDay, rankedDay } from './buscaminas.days.js';
+import { contentChanged, dayOver, notYourRun, signInForToday, staleState } from './buscaminas.errors.js';
 import { buscaminasRepo, type BuscaminasRepo } from './buscaminas.repo.js';
 import * as rules from './buscaminas.rules.js';
-import { signToken, verifyToken } from './buscaminas.token.js';
-import type { BuscaminasRunRow, LeaderboardEntry, PublicBoard, PublicRunState, RunPayload } from './buscaminas.types.js';
+import type { BuscaminasRunRow, LeaderboardEntry, Player, PublicBoard, PublicRunState, RunState } from './buscaminas.types.js';
 
 export interface RunResponse {
-  token: string;
+  run: { id: string; version: number };
   state: PublicRunState;
 }
 
@@ -31,36 +27,28 @@ export interface LeaderboardResponse {
   me: LeaderboardEntry | null;
 }
 
-type Repo = Pick<BuscaminasRepo, 'withTx' | 'insertRun' | 'lockRun' | 'getRun' | 'saveState' | 'rankOf' | 'leaderboard'>;
+type Repo = Pick<BuscaminasRepo, 'withTx' | 'lockDay' | 'dayVersion' | 'insertRun' | 'lockOwnRun' | 'lockRun' | 'getRun' | 'saveState' | 'unrankClosedRun' | 'rankOf' | 'leaderboard'>;
+type Tx = Parameters<Parameters<Repo['withTx']>[0]>[0];
 
 export interface BuscaminasDeps {
   repo: Repo;
-  /** Unranked runs only; the ranked path never touches Redis. */
-  ledger: RunLedger;
-  starts: StartCounter;
-  /** Whether guests may play the live ranked day (then capped per address by `liveStartsPerDay`). */
-  guestsPlayLive: () => boolean;
-  liveStartsPerDay: () => number;
   content: () => Promise<ContentIndex>;
-  secret: () => string;
+  /** The served content turned out older than the database (a correction): re-check it on the next read. */
+  contentStale: () => void;
   now: () => Date;
 }
 
-type Step = (p: RunPayload, day: IndexedDay) => { payload: RunPayload; extra?: { ok: boolean } };
+type Step = (s: RunState, day: IndexedDay) => { state: RunState; extra?: { ok: boolean } };
 
+const owns = (row: BuscaminasRunRow, player: Player): boolean =>
+  player.kind === 'member' ? row.user_id === player.userId : row.guest_id === player.guestId;
+
+/**
+ * Every run, guest or member, is one buscaminas_runs row per player per day: row-locked and
+ * version-checked on every move. A member's run of the live day is ranked; every other run is not.
+ */
 export function createBuscaminasService(deps: BuscaminasDeps) {
   const leaderboards = new Map<string, { at: number; players: number; top: LeaderboardEntry[] }>();
-  const nowSeconds = () => Math.floor(deps.now().getTime() / 1000);
-
-  /** `iat` marks an unranked token (it then expires); ranked tokens are checked against their row instead. */
-  const issue = (payload: RunPayload, day: IndexedDay | null, extra: { ranked: boolean; rank?: number }, iat?: number): RunResponse => ({
-    token: signToken(payload, deps.secret(), iat === undefined ? undefined : { iat, exp: iat + RUN_TOKEN_TTL_SECONDS }),
-    state: rules.publicState(payload, day?.rounds[payload.r] ?? null, {
-      ...extra,
-      // A live day's answers stay hidden for every run, ranked or not, until Buenos Aires midnight.
-      reveal: isArchiveDay(payload.d, deps.now()),
-    }),
-  });
 
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
   async function playableDay(day: string): Promise<IndexedDay> {
@@ -71,98 +59,101 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     return content;
   }
 
-  async function responseForRow(row: BuscaminasRunRow, day: IndexedDay | null, tx?: Parameters<Parameters<Repo['withTx']>[0]>[0]): Promise<RunResponse> {
-    const rank = row.done ? (await deps.repo.rankOf(row.user_id, row.day, tx))?.rank : undefined;
-    return issue(row.state, row.content_version === day?.contentVersion ? day : null, { ranked: true, rank });
+  /**
+   * Holds the day's row FOR SHARE for the rest of the transaction and checks that the content this
+   * replica serves (cached, up to CONTENT_REFRESH_MS old) is still the stored one. A correction
+   * therefore waits for this write, and a move validated against superseded answers never lands.
+   */
+  async function lockServedDay(tx: Tx, day: IndexedDay): Promise<void> {
+    if ((await deps.repo.lockDay(tx, day.day)) !== day.contentVersion) throw otherContent();
   }
 
-  /** Fresh unranked runs of a day whose answers are still secret are the answer oracle; cap them per address across replicas. */
-  async function admitLiveStart(client: string): Promise<void> {
-    const count = await deps.starts.hit(`${releaseDay(deps.now())}:${client}`);
-    if (count > deps.liveStartsPerDay()) throw tooManyRuns();
+  /** A run UPDATE matched no row: the ranked cutoff passed, or the day's answers changed under the run. */
+  async function rejectedWrite(tx: Tx, dayId: string, contentVersion: number): Promise<AppError> {
+    return (await deps.repo.dayVersion(tx, dayId)) === contentVersion ? dayOver() : otherContent();
   }
 
-  /** Unless guests may play live, no unranked run of the live ranked day exists: it would probe the mines for a ranked run. */
-  const unrankedLiveBlocked = (dayId: string): boolean => !deps.guestsPlayLive() && dayId === rankedDay(deps.now());
+  /** The client, the run or the database disagrees with the served content: this replica may be the stale one, so it re-checks now. */
+  function otherContent(): AppError {
+    deps.contentStale();
+    return contentChanged();
+  }
 
-  async function start(dayId: string, userId: string | null, clientContentVersion?: number, client = 'unknown'): Promise<RunResponse> {
+  async function respond(row: BuscaminasRunRow, day: IndexedDay | null, tx?: Tx): Promise<RunResponse> {
+    const rank = row.ranked && row.done && row.user_id ? (await deps.repo.rankOf(row.user_id, row.day, tx))?.rank : undefined;
+    // Answers of other content cannot describe this run's cards.
+    const content = row.content_version === day?.contentVersion ? day : null;
+    return {
+      run: { id: row.id, version: row.state_version },
+      state: rules.publicState(row.state, row.day, content?.rounds[row.state.r] ?? null, {
+        ranked: row.ranked,
+        rank,
+        // A live day's answers stay hidden for every run, ranked or not, until Buenos Aires midnight.
+        reveal: isArchiveDay(row.day, deps.now()),
+      }),
+    };
+  }
+
+  async function start(dayId: string, player: Player, clientContentVersion?: number): Promise<RunResponse> {
     const day = await playableDay(dayId);
-    const unranked = !userId || dayId !== rankedDay(deps.now());
-    if (unranked && unrankedLiveBlocked(dayId)) throw signInForToday();
-    if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw contentChanged();
-    if (unranked) {
-      if (deps.guestsPlayLive() && !isArchiveDay(dayId, deps.now())) await admitLiveStart(client);
-      return issue(rules.newPayload(randomUUID(), dayId, day.contentVersion, null), day, { ranked: false }, nowSeconds());
-    }
+    const live = dayId === rankedDay(deps.now());
+    // Guests never see the live day's mines: an unranked run of it would probe them for a ranked one.
+    if (live && player.kind === 'guest') throw signInForToday();
+    if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
+    const closesAt = dayEndsAt(dayId);
     return deps.repo.withTx(async (tx) => {
-      const id = randomUUID();
+      await lockServedDay(tx, day);
       const inserted = await deps.repo.insertRun(tx, {
-        id, userId, day: dayId, contentVersion: day.contentVersion, state: rules.newPayload(id, dayId, day.contentVersion, userId),
+        id: randomUUID(), player, day: dayId, ranked: live && player.kind === 'member', contentVersion: day.contentVersion, state: rules.newState(),
       });
-      if (inserted) return responseForRow(inserted, day, tx);
-      const row = await deps.repo.lockRun(tx, userId, dayId);
+      if (inserted) return respond(inserted, day, tx);
+      let row = await deps.repo.lockOwnRun(tx, player, dayId);
       if (!row) throw staleState();
+      // The ranked window closed before this run was finished: it goes on as practice, off the board.
+      if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id, closesAt)) ?? row;
       if (!row.done && row.content_version !== day.contentVersion) {
-        // During a rolling deploy old and new processes disagree; only a client that already loaded this content may restart the run.
+        // During a rolling deploy or a correction, only a client that already loaded this content may restart the run.
         if (clientContentVersion !== day.contentVersion) throw contentChanged();
-        const reset = rules.newPayload(row.id, dayId, day.contentVersion, userId, row.state_version + 1);
-        const saved = await deps.repo.saveState(tx, row.id, { state: reset, contentVersion: day.contentVersion, completion: null, closesAt: dayEndsAt(dayId) });
-        if (!saved) throw dayOver();
-        return responseForRow(saved, day, tx);
+        const saved = await deps.repo.saveState(tx, row.id, {
+          state: rules.newState(), stateVersion: row.state_version + 1, contentVersion: day.contentVersion, completion: null, closesAt,
+        });
+        if (!saved) throw await rejectedWrite(tx, dayId, day.contentVersion);
+        return respond(saved, day, tx);
       }
-      return responseForRow(row, day, tx);
+      return respond(row, day, tx);
     });
   }
 
-  async function mutate(action: string, token: string, userId: string | null, input: string, step: Step): Promise<RunResponse> {
-    const { payload, claims } = verifyToken(token, deps.secret());
-    if (payload.u === null && !(claims && claims.exp > nowSeconds())) throw staleState();
-    const day = (await deps.content()).get(payload.d);
-    // Also a token issued while guests could play live, or a pre-launch preview carried past launch midnight.
-    if (payload.u === null && unrankedLiveBlocked(payload.d)) throw signInForToday();
-    if (!day || day.contentVersion !== payload.cv) throw contentChanged();
-
-    if (payload.u === null) {
-      // A live day's ledger fails closed if Redis lost the run; a past day's fails open, its answers being public already.
-      const strict = !isArchiveDay(payload.d, deps.now());
-      let out: ReturnType<Step>;
-      try {
-        out = step(payload, day);
-      } catch (error) {
-        if (await deps.ledger.consumed(payload.rid, payload.sv, strict)) throw staleState();
-        throw error;
-      }
-      const next = { ...out.payload, sv: payload.sv + 1 };
-      const issuedAt = nowSeconds();
-      const claimed = await deps.ledger.claim(payload.rid, payload.sv, `${action}:${input}`, issuedAt, strict);
-      if (claimed.kind === 'stale') throw staleState();
-      // A retry of the consumed action rebuilds the same response (same state, same token) from the first issue time.
-      return { ...issue(next, day, { ranked: false }, claimed.kind === 'replay' ? claimed.iat : issuedAt), ...out.extra };
-    }
-
-    if (payload.d !== rankedDay(deps.now())) throw dayOver();
-    if (payload.u !== userId) throw new AuthorizationError('Sign in to continue this run');
-    const owner = payload.u;
-    const closesAt = dayEndsAt(payload.d);
-    // The row is authoritative: an old token (a retry, another tab) is stale and the client re-syncs via /start.
+  async function mutate(player: Player, runId: string, version: number, step: Step): Promise<RunResponse & { ok?: boolean }> {
+    const content = await deps.content();
+    // Read before waiting on the row lock; the UPDATE itself re-checks the ranked cutoff at statement time.
+    const today = rankedDay(deps.now());
     const response = await deps.repo.withTx(async (tx) => {
-      const row = await deps.repo.lockRun(tx, owner, payload.d);
-      if (!row || row.id !== payload.rid || row.state_version !== payload.sv) throw staleState();
-      if (row.content_version !== payload.cv) throw contentChanged();
+      const row = await deps.repo.lockRun(tx, runId);
+      if (!row) throw new NotFoundError('Run not found');
+      if (!owns(row, player)) throw notYourRun();
+      // Only a pre-launch preview run can be an unranked run of the live day; its guest may not carry it on.
+      if (!row.ranked && player.kind === 'guest' && row.day === today) throw signInForToday();
+      if (row.ranked && row.day !== today) throw dayOver();
+      // The row is authoritative: an older version (a retry, another tab) is stale and the client re-syncs via /start.
+      if (row.state_version !== version) throw staleState();
+      const day = content.get(row.day);
+      if (!day || day.contentVersion !== row.content_version) throw otherContent();
+      await lockServedDay(tx, day);
       const out = step(row.state, day);
-      const next = { ...out.payload, sv: row.state_version + 1 };
-      const completion = next.done ? { score: rules.score(next), perfects: rules.perfects(next.res) } : null;
-      const saved = await deps.repo.saveState(tx, row.id, { state: next, contentVersion: row.content_version, completion, closesAt });
-      // Under the row lock only the midnight cutoff can reject the update.
-      if (!saved) throw dayOver();
-      return { ...(await responseForRow(saved, day, tx)), ...out.extra };
+      const completion = out.state.done ? { score: rules.score(out.state), perfects: rules.perfects(out.state.res) } : null;
+      const saved = await deps.repo.saveState(tx, row.id, {
+        state: out.state, stateVersion: row.state_version + 1, contentVersion: row.content_version, completion, closesAt: dayEndsAt(row.day),
+      });
+      if (!saved) throw await rejectedWrite(tx, row.day, row.content_version);
+      return { ...(await respond(saved, day, tx)), ...out.extra };
     });
-    if (response.state.done) leaderboards.delete(payload.d);
+    if (response.state.done && response.state.ranked) leaderboards.delete(response.state.day);
     return response;
   }
 
-  const roundOf = (p: RunPayload, day: IndexedDay) => {
-    const round = day.rounds[p.r];
+  const roundOf = (s: RunState, day: IndexedDay) => {
+    const round = day.rounds[s.r];
     if (!round) throw contentChanged();
     return round;
   };
@@ -182,34 +173,32 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
       return { days };
     },
 
-    tap(token: string, cardId: string, userId: string | null): Promise<RunResponse & { ok?: boolean }> {
-      return mutate('tap', token, userId, cardId, (p, day) => {
-        const result = rules.tap(p, roundOf(p, day), cardId);
-        return { payload: result.payload, extra: { ok: result.ok } };
+    tap(player: Player, runId: string, version: number, cardId: string): Promise<RunResponse & { ok?: boolean }> {
+      return mutate(player, runId, version, (s, day) => {
+        const result = rules.tap(s, roundOf(s, day), cardId);
+        return { state: result.state, extra: { ok: result.ok } };
       });
     },
 
-    bank(token: string, userId: string | null): Promise<RunResponse> {
-      return mutate('bank', token, userId, '', (p) => ({ payload: rules.bank(p) }));
+    bank(player: Player, runId: string, version: number): Promise<RunResponse> {
+      return mutate(player, runId, version, (s) => ({ state: rules.bank(s) }));
     },
 
-    next(token: string, userId: string | null): Promise<RunResponse> {
-      return mutate('next', token, userId, '', (p, day) => ({ payload: rules.next(p, day.rounds.length) }));
+    next(player: Player, runId: string, version: number): Promise<RunResponse> {
+      return mutate(player, runId, version, (s, day) => ({ state: rules.next(s, day.rounds.length) }));
     },
 
-    async current(userId: string, dayId: string | undefined): Promise<RunResponse | { run: null }> {
-      // Content first, so unusable content is a 503 here like on every other endpoint, even with no run to report.
+    /** The player's run of `dayId` (default: the live day); none until /start created it. */
+    async current(player: Player, dayId: string | undefined): Promise<RunResponse | { run: null }> {
       const content = await deps.content();
-      const ranked = rankedDay(deps.now());
-      const target = dayId ?? ranked;
+      const target = dayId ?? rankedDay(deps.now());
       if (!target) return { run: null };
-      if (target !== ranked) throw dayOver();
-      const row = await deps.repo.getRun(userId, target);
+      const row = await deps.repo.getRun(player, target);
       if (!row) return { run: null };
       const day = content.get(target) ?? null;
       // An unfinished run on other content is restarted by /start; report none so the client calls it.
       if (!row.done && row.content_version !== day?.contentVersion) return { run: null };
-      return responseForRow(row, day);
+      return respond(row, day);
     },
 
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> {
@@ -228,37 +217,25 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
 
 export type BuscaminasService = ReturnType<typeof createBuscaminasService>;
 
-export const buscaminasContent = createContentLoader({
-  sealed: () => import('./content/content.enc.js').then((m) => m.BUSCAMINAS_SEALED_CONTENT),
-  key: () => config.BUSCAMINAS_CONTENT_KEY,
-});
+export const buscaminasContent = createContentStore(
+  { fingerprint: () => buscaminasRepo.daysFingerprint(), load: () => buscaminasRepo.loadDays() },
+  { refreshMs: CONTENT_REFRESH_MS, now: () => Date.now(), log: logger },
+);
 
 export const buscaminasService = createBuscaminasService({
   repo: buscaminasRepo,
-  ledger: redisRunLedger,
-  starts: redisStartCounter,
-  guestsPlayLive: () => config.BUSCAMINAS_GUESTS_PLAY_LIVE,
-  liveStartsPerDay: () => config.BUSCAMINAS_GUEST_LIVE_STARTS_PER_DAY,
-  content: () => buscaminasContent.load(),
-  secret: () => {
-    const secret = usableTokenSecret(config.BUSCAMINAS_TOKEN_SECRET);
-    if (!secret) throw disabled();
-    return secret;
-  },
+  content: () => buscaminasContent.get(),
+  contentStale: () => buscaminasContent.invalidate(),
   now: () => new Date(),
 });
 
-/** Called once at boot; never blocks startup and never throws. */
+/** Called once at boot; never blocks startup and never throws. Missing content only means every day answers 404. */
 export function startBuscaminasReadinessCheck(): void {
-  if (!config.BUSCAMINAS_ENABLED) return;
-  try {
-    void checkBuscaminasReadiness({
-      enabled: config.BUSCAMINAS_ENABLED,
-      tokenSecret: config.BUSCAMINAS_TOKEN_SECRET,
-      content: buscaminasContent,
-      log: logger,
-    }).catch(() => undefined);
-  } catch {
-    // Readiness is diagnostics only; it must never take the process down.
-  }
+  void buscaminasContent.get().then(
+    (index) => {
+      if (index.size === 0) logger.warn('No Buscaminas days loaded (buscaminas_days is empty); run npm run buscaminas:seed');
+      else logger.info({ days: index.size }, 'Buscaminas days loaded');
+    },
+    (error: unknown) => logger.warn({ err: error }, 'Buscaminas days could not be loaded at boot'),
+  );
 }

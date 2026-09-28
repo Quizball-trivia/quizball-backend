@@ -1,23 +1,34 @@
 import { Router, type RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
+import { requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
 import { validate } from '../middleware/validate.js';
-import { config } from '../../core/config.js';
-import { boardParamsSchema, buscaminasController, buscaminasDisabled, dayQuerySchema, startSchema, tapSchema, tokenBodySchema, usableTokenSecret } from '../../modules/buscaminas/index.js';
+import { guestAuthMiddleware } from '../../modules/guest/guest.middleware.js';
+import { GUEST_TOKEN_HEADER } from '../../modules/guest/guest.service.js';
+import { boardParamsSchema, buscaminasController, buscaminasGuestSessionRequired, dayQuerySchema, moveSchema, startSchema, tapSchema } from '../../modules/buscaminas/index.js';
 
-/** Buscaminas futbolero — stateless signed runs for guests and past days; today's run for a signed-in user is row-locked and version-gated. */
+/** Buscaminas futbolero — every run is a server row owned by a member or by a guest session. */
 const router = Router();
 
-const enabled: RequestHandler = (_req, _res, next) => {
-  next(config.BUSCAMINAS_ENABLED && usableTokenSecret(config.BUSCAMINAS_TOKEN_SECRET) ? undefined : buscaminasDisabled());
+/**
+ * Who is playing: a member (bearer or session cookie), else the guest session in `x-guest-token`.
+ * A bad bearer is a 401, never a silent guest run; a stale cookie still falls back to the guest session.
+ */
+const identify: RequestHandler = (req, res, next) => {
+  if (req.headers.authorization) return void authMiddleware(req, res, next);
+  void optionalAuthMiddleware(req, res, (error?: unknown) => {
+    if (error) return next(error);
+    if (req.user) return next();
+    if (req.headers[GUEST_TOKEN_HEADER] === undefined) return next(buscaminasGuestSessionRequired());
+    requireGuestHttpEnabled(req, res, (disabled?: unknown) => (disabled ? next(disabled) : void guestAuthMiddleware(req, res, next)));
+  });
 };
 
-// Per-process burst limits (the codebase has no shared express-rate-limit store). Guests cannot open the
-// live day by default; when BUSCAMINAS_GUESTS_PLAY_LIVE allows it, their per-address cap is Redis-backed in the service.
+// Per-process burst limits (the codebase has no shared express-rate-limit store), keyed by the verified player.
 const limiter = (max: number): RequestHandler => rateLimit({
   windowMs: 60_000,
   max,
-  keyGenerator: (req) => (req.user ? `u:${req.user.id}` : `ip:${req.ip}`),
+  keyGenerator: (req) => (req.user ? `u:${req.user.id}` : req.guest ? `g:${req.guest.id}` : `ip:${req.ip}`),
   standardHeaders: true,
   legacyHeaders: false,
   message: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later', details: null, request_id: null },
@@ -26,12 +37,8 @@ const limiter = (max: number): RequestHandler => rateLimit({
 const playLimiter = limiter(240);
 const startLimiter = limiter(30);
 const readLimiter = limiter(60);
-// Boards are fetched without auth, so this one is per address.
+// Boards are fetched without identity, so this one is per address.
 const boardLimiter = limiter(120);
-
-// A bad bearer on /start must not silently turn a ranked attempt into a guest run; a stale cookie still falls back to guest.
-const startAuth: RequestHandler = (req, res, next) =>
-  void (req.headers.authorization ? authMiddleware(req, res, next) : optionalAuthMiddleware(req, res, next));
 
 const varyOnAuth: RequestHandler = (_req, res, next) => {
   res.vary('Authorization');
@@ -39,7 +46,12 @@ const varyOnAuth: RequestHandler = (_req, res, next) => {
   next();
 };
 
-// The same bytes for every caller (no auth read). Until the controller marks a success cacheable,
+const varyOnPlayer: RequestHandler = (req, res, next) => {
+  res.vary(GUEST_TOKEN_HEADER);
+  varyOnAuth(req, res, next);
+};
+
+// The same bytes for every caller (no identity read). Until the controller marks a success cacheable,
 // a response (a 404 for a day that opens at midnight) must not be stored.
 const publicBoard: RequestHandler = (_req, res, next) => {
   res.vary('Origin');
@@ -47,13 +59,11 @@ const publicBoard: RequestHandler = (_req, res, next) => {
   next();
 };
 
-router.use(enabled);
-
-router.post('/start', startAuth, startLimiter, validate({ body: startSchema }), buscaminasController.start);
-router.post('/tap', optionalAuthMiddleware, playLimiter, validate({ body: tapSchema }), buscaminasController.tap);
-router.post('/bank', optionalAuthMiddleware, playLimiter, validate({ body: tokenBodySchema }), buscaminasController.bank);
-router.post('/next', optionalAuthMiddleware, playLimiter, validate({ body: tokenBodySchema }), buscaminasController.next);
-router.get('/current', varyOnAuth, authMiddleware, readLimiter, validate({ query: dayQuerySchema }), buscaminasController.current);
+router.post('/start', identify, startLimiter, validate({ body: startSchema }), buscaminasController.start);
+router.post('/tap', identify, playLimiter, validate({ body: tapSchema }), buscaminasController.tap);
+router.post('/bank', identify, playLimiter, validate({ body: moveSchema }), buscaminasController.bank);
+router.post('/next', identify, playLimiter, validate({ body: moveSchema }), buscaminasController.next);
+router.get('/current', varyOnPlayer, identify, readLimiter, validate({ query: dayQuerySchema }), buscaminasController.current);
 router.get('/boards', publicBoard, boardLimiter, buscaminasController.boards);
 router.get('/boards/:day', publicBoard, boardLimiter, validate({ params: boardParamsSchema }), buscaminasController.board);
 router.get('/leaderboard', varyOnAuth, optionalAuthMiddleware, readLimiter, validate({ query: dayQuerySchema }), buscaminasController.leaderboard);

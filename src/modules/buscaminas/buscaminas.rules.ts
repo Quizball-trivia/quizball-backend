@@ -2,64 +2,67 @@ import { BadRequestError } from '../../core/errors.js';
 import { PERFECT_BONUS } from './buscaminas.constants.js';
 import { contentChanged } from './buscaminas.errors.js';
 import type { IndexedRound } from './buscaminas.content.js';
-import type { PublicRunState, RoundResult, RunPayload } from './buscaminas.types.js';
+import type { PublicRunState, RoundResult, RunState } from './buscaminas.types.js';
 
-export function newPayload(rid: string, day: string, cv: number, userId: string | null, sv = 0): RunPayload {
-  return { v: 1, rid, d: day, cv, u: userId, r: 0, p: [], m: null, s: null, res: [], done: false, sv };
+export function newState(): RunState {
+  return { v: 1, r: 0, p: [], m: null, s: null, res: [], done: false };
 }
 
-const found = (p: RunPayload): number => p.p.length - (p.m ? 1 : 0);
+/** Only the known fields: rows written by the previous (token) design carry extra ones. */
+const pack = (s: RunState): RunState => ({ v: 1, r: s.r, p: s.p, m: s.m, s: s.s, res: s.res, done: s.done });
+
+const found = (s: RunState): number => s.p.length - (s.m ? 1 : 0);
 
 const rejected = (reason: string): BadRequestError => new BadRequestError(reason, { reason });
 
-export function tap(p: RunPayload, round: IndexedRound, cardId: string): { payload: RunPayload; ok: boolean } {
-  if (p.done) throw rejected('run_done');
-  if (p.s) throw rejected('round_settled');
-  // The token's content version matched, so a card the round lacks means the page shows different content.
+export function tap(s: RunState, round: IndexedRound, cardId: string): { state: RunState; ok: boolean } {
+  if (s.done) throw rejected('run_done');
+  if (s.s) throw rejected('round_settled');
+  // The run's content version matched, so a card the round lacks means the page shows different content.
   if (!round.cardIds.has(cardId)) throw contentChanged();
-  if (p.p.includes(cardId)) throw rejected('already_picked');
-  const picked = [...p.p, cardId];
+  if (s.p.includes(cardId)) throw rejected('already_picked');
+  const picked = [...s.p, cardId];
   if (!round.okIds.has(cardId)) {
-    return { ok: false, payload: { ...p, p: picked, m: cardId, s: { outcome: 'mine', found: found(p), points: 0 } } };
+    return { ok: false, state: pack({ ...s, p: picked, m: cardId, s: { outcome: 'mine', found: found(s), points: 0 } }) };
   }
-  const next = { ...p, p: picked };
+  const next = pack({ ...s, p: picked });
   const hits = found(next);
   if (hits >= round.okIds.size) next.s = { outcome: 'perfect', found: hits, points: hits + PERFECT_BONUS };
-  return { ok: true, payload: next };
+  return { ok: true, state: next };
 }
 
-export function bank(p: RunPayload): RunPayload {
-  if (p.done) throw rejected('run_done');
-  if (p.s) throw rejected('round_settled');
-  const hits = found(p);
+export function bank(s: RunState): RunState {
+  if (s.done) throw rejected('run_done');
+  if (s.s) throw rejected('round_settled');
+  const hits = found(s);
   if (hits < 1) throw rejected('nothing_to_bank');
-  return { ...p, s: { outcome: 'banked', found: hits, points: hits } };
+  return pack({ ...s, s: { outcome: 'banked', found: hits, points: hits } });
 }
 
-export function next(p: RunPayload, totalRounds: number): RunPayload {
-  if (p.done) throw rejected('run_done');
-  if (!p.s) throw rejected('round_not_settled');
-  const res = [...p.res, p.s];
-  if (res.length >= totalRounds) return { ...p, res, s: null, done: true };
-  return { ...p, r: p.r + 1, p: [], m: null, s: null, res };
+export function next(s: RunState, totalRounds: number): RunState {
+  if (s.done) throw rejected('run_done');
+  if (!s.s) throw rejected('round_not_settled');
+  const res = [...s.res, s.s];
+  if (res.length >= totalRounds) return pack({ ...s, res, s: null, done: true });
+  return pack({ ...s, r: s.r + 1, p: [], m: null, s: null, res });
 }
 
-export const score = (p: RunPayload): number => p.res.reduce((sum, r) => sum + r.points, 0) + (p.s?.points ?? 0);
+export const score = (s: RunState): number => s.res.reduce((sum, r) => sum + r.points, 0) + (s.s?.points ?? 0);
 
 export const perfects = (results: readonly RoundResult[]): number => results.filter((r) => r.outcome === 'perfect').length;
 
 /** Answers of the current round appear only once it is settled, and only when `reveal` allows (archive days only, never a live day). */
-export function publicState(p: RunPayload, round: IndexedRound | null, extra: { ranked: boolean; reveal: boolean; rank?: number }): PublicRunState {
+export function publicState(s: RunState, day: string, round: IndexedRound | null, extra: { ranked: boolean; reveal: boolean; rank?: number }): PublicRunState {
   return {
-    day: p.d,
-    round: p.r,
-    picked: [...p.p],
-    found: found(p),
-    mine: p.m,
-    settled: p.s ? { ...p.s, reveal: extra.reveal && round ? { ok: [...round.ok], mines: [...round.mines] } : null } : null,
-    results: [...p.res],
-    done: p.done,
-    score: score(p),
+    day,
+    round: s.r,
+    picked: [...s.p],
+    found: found(s),
+    mine: s.m,
+    settled: s.s ? { ...s.s, reveal: extra.reveal && round ? { ok: [...round.ok], mines: [...round.mines] } : null } : null,
+    results: [...s.res],
+    done: s.done,
+    score: score(s),
     ranked: extra.ranked,
     ...(extra.rank !== undefined ? { rank: extra.rank } : {}),
   };

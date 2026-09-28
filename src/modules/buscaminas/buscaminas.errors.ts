@@ -9,14 +9,11 @@ export const staleState = (): AppError =>
 export const dayOver = (): AppError =>
   new AppError('day_over', 409, ErrorCode.BUSCAMINAS_DAY_OVER, { reason: 'day_over' });
 
-export const tooManyRuns = (): AppError =>
-  new AppError('too_many_runs', 429, ErrorCode.BUSCAMINAS_TOO_MANY_RUNS, { reason: 'too_many_runs' });
-
 export const signInForToday = (): AppError =>
   new AppError('sign_in_for_today', 403, ErrorCode.BUSCAMINAS_SIGN_IN_FOR_TODAY, { reason: 'sign_in_for_today' });
 
-export const disabled = (): AppError => new AppError('Buscaminas is currently disabled', 503, ErrorCode.BUSCAMINAS_DISABLED);
+export const guestSessionRequired = (): AppError =>
+  new AppError('guest_session_required', 401, ErrorCode.BUSCAMINAS_GUEST_SESSION_REQUIRED, { reason: 'guest_session_required' });
 
-/** Redis (run ledger / start counter) failed or stalled: retryable, and never reported as a database error. */
-export const unavailable = (): AppError =>
-  new AppError('Buscaminas is temporarily unavailable', 503, ErrorCode.BUSCAMINAS_UNAVAILABLE, { reason: 'unavailable' });
+export const notYourRun = (): AppError =>
+  new AppError('run_not_yours', 403, ErrorCode.AUTHORIZATION_ERROR, { reason: 'run_not_yours' });

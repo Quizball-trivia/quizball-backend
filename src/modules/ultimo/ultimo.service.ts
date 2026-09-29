@@ -20,7 +20,7 @@ export type LeaderboardResponse = DailyLeaderboardResponse<LeaderboardEntry>;
 export interface UltimoDeps {
   repo: DailyServiceRepo<RunState, UltimoRunRow, LeaderboardEntry> & {
     clock(tx?: TransactionSql): Promise<number>;
-    overdueRuns(beforeMs: number, limit: number): Promise<string[]>;
+    overdueRuns(nowMs: number, graceMs: number, limit: number): Promise<string[]>;
   };
   content: () => Promise<ContentIndex>;
   contentStale: () => void;
@@ -62,14 +62,16 @@ export function createUltimoService(deps: UltimoDeps) {
     answer(player: Player, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
       return core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
         // The clock ran out before this answer arrived: the category is over (written now) and the answer does not count.
-        if (stored.open && !s.open) return { state: s, extra: { result: 'late' } };
+        if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
         const out = rules.answer(s, categoryOf(s, day), text, now);
         return { state: out.state, extra: { result: out.result } };
       });
     },
 
     next(player: Player, runId: string, version: number): Promise<RunResponse> {
-      return core.mutate(player, runId, version, (s) => ({ state: rules.next(s) }));
+      // The last category's clock ran out before this `next`: the run is finished by the clock; record that.
+      return core.mutate(player, runId, version, (s, _day, _now, stored) =>
+        (s.done && !stored.done ? { state: s, settledAt: rules.settledAt(stored, s) } : { state: rules.next(s) }));
     },
 
     current: (player: Player, dayId: string | undefined) => core.current(player, dayId),
@@ -90,7 +92,7 @@ export function createUltimoService(deps: UltimoDeps) {
 
     /** One pass of the settling sweep: runs whose clock ran out with nobody coming back are finished. */
     async settleOverdue(): Promise<number> {
-      const ids = await deps.repo.overdueRuns((await deps.repo.clock()) - ANSWER_GRACE_MS, SETTLE_BATCH);
+      const ids = await deps.repo.overdueRuns(await deps.repo.clock(), ANSWER_GRACE_MS, SETTLE_BATCH);
       for (const id of ids) await core.settleExpired(id).catch((error: unknown) => logger.warn({ err: error, runId: id }, 'Último en pie settle failed'));
       return ids.length;
     },

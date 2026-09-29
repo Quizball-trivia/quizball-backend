@@ -18,9 +18,9 @@ vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
 const url = process.env.ULTIMO_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_ultimo_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local ultimo test database required');
 
-const MIGRATIONS = ['20260930120000_ultimo.sql', '20260930120001_ultimo_validate.sql'].map((f) => join(__dirname, '../../supabase/migrations', f));
+const MIGRATIONS = ['20260930120000_ultimo.sql', '20260930120001_ultimo_validate.sql', '20260930120002_ultimo_swap_checks.sql'].map((f) => join(__dirname, '../../supabase/migrations', f));
 const FIXTURE = `
-  DROP TABLE IF EXISTS ultimo_runs, ultimo_days, duel_matches, duel_pool, lobbies, ranked_profiles, guest_sessions, users CASCADE;
+  DROP TABLE IF EXISTS ultimo_content_ledger, ultimo_runs, ultimo_days, duel_matches, duel_pool, lobbies, ranked_profiles, guest_sessions, users CASCADE;
   CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), nickname text, avatar_url text, avatar_customization jsonb, country text,
     is_ai boolean NOT NULL DEFAULT false, is_guest boolean NOT NULL DEFAULT false, is_seed boolean NOT NULL DEFAULT false,
@@ -103,20 +103,21 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
   });
 
   it('seeds refuse a day category that repeats a duel pool one, and the pool refuses a daily one, inside their locked writes', async () => {
-    const { seedDays } = await import('../../src/modules/ultimo/ultimo.seed.js');
+    const { seedDays, contentHash } = await import('../../src/modules/ultimo/ultimo.seed.js');
     const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
-    const { contentHash } = await import('../../src/modules/ultimo/ultimo.seed.js');
-    const days = [makeDay(0), makeDay(3)].map((d) => ({ ...d, contentVersion: contentHash(d.categories) }));
-    // A pool item that is the same list as a day category under another id and title.
-    const copy = { ...days[0].categories[2], id: 'pool-copy', title: { es: 'Otro título', en: 'Other', ka: 'სხვა', tr: 'Başka' } };
-    const pool = parsePoolFile('ultimo', { game: 'ultimo', items: [copy] });
-    await writePool(db.sql, 'ultimo', pool);
-    await expect(seedDays(db.sql, days, { dryRun: false, allowCorrection: false, allowPoolOverlap: false })).rejects.toThrow(/repeat a duel pool category/);
-    await db.sql`DELETE FROM duel_pool`;
+    const withVersion = (d: ReturnType<typeof makeDay>) => ({ ...d, contentVersion: contentHash(d.categories) });
+    // Pool first, then a day holding a renamed copy of it (other id and titles, same list): refused.
+    const poolFirst = plainCategory('pool-first', 9);
+    await writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [poolFirst] }));
+    const copy = { ...poolFirst, id: 'day-copy', title: { es: 'Otro título', en: 'Other', ka: 'სხვა', tr: 'Başka' } };
+    const withCopy = makeDay(7, [copy, plainCategory('d7b', 8), plainCategory('d7c', 8), plainCategory('d7d', 8), plainCategory('d7e', 8)]);
+    await expect(seedDays(db.sql, [withVersion(withCopy)], { dryRun: false, allowCorrection: false, allowPoolOverlap: false })).rejects.toThrow(/repeat a duel pool category/);
+    // Days that repeat nothing seed; a pool copy of one of their categories is then refused.
+    const days = [makeDay(0), makeDay(3)].map(withVersion);
     await seedDays(db.sql, days, { dryRun: false, allowCorrection: false, allowPoolOverlap: false });
-    await expect(writePool(db.sql, 'ultimo', pool)).rejects.toThrow(/repeat a daily category/);
-    const fresh = parsePoolFile('ultimo', { game: 'ultimo', items: [plainCategory('pool-new', 9)] });
-    await writePool(db.sql, 'ultimo', fresh);
+    const poolCopy = { ...days[0].categories[2], id: 'pool-copy', title: { es: 'Otro', en: 'Another', ka: 'სხვა', tr: 'Diğer' } };
+    await expect(writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [poolCopy] }))).rejects.toThrow(/repeat a daily category/);
+    await writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [plainCategory('pool-new', 9)] }));
   });
 
   it('a ranked run on the database clock: begin, hits, a miss, a whole list, and a finish on the board', async () => {
@@ -187,11 +188,71 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
       VALUES (${user}, ${CLOSED_DAY}, true, ${Number(day.content_version)}, ${db.sql.json(state(dl) as never)}, ${closes}) RETURNING id`;
     const [inTime] = await insert(userId, closes.getTime() - 10_000);
     const [afterClose] = await insert(lateUser, closes.getTime() + 10_000);
-    expect(await svc.settleOverdue()).toBeGreaterThanOrEqual(2);
+    // Only what a settle can write is picked: the run whose clock ran out after midnight is left for /start to unrank.
+    expect(await svc.settleOverdue()).toBeGreaterThanOrEqual(1);
     const rows = await db.sql`SELECT id, done, score, answers FROM ultimo_runs WHERE id IN (${inTime.id}, ${afterClose.id})`;
     const byId = new Map(rows.map((row) => [row.id, row]));
     expect(byId.get(inTime.id)).toMatchObject({ done: true, score: 8 + 3, answers: 11 });
     expect(byId.get(afterClose.id)).toMatchObject({ done: false });
+  });
+
+  it('a player back after midnight keeps a rank earned before it; a read and a final `next` record what the clock decided', async () => {
+    const svc = await service();
+    const { newState } = await import('../../src/modules/ultimo/ultimo.rules.js');
+    const [day] = await db.sql<Array<{ content_version: string }>>`SELECT content_version FROM ultimo_days WHERE day = ${CLOSED_DAY}`;
+    const closes = new Date('2026-09-29T03:00:00Z');
+    const four = [0, 1, 2, 3].map(() => ({ named: 1, complete: false, reason: 'time' }));
+    const lastOpen = (dl: number) => ({ ...newState(), c: 4, open: true, said: [0, 1], dl, res: four });
+    const insert = async (name: string, dl: number) => {
+      const me = await member(name);
+      await db.sql`
+        INSERT INTO ultimo_runs (user_id, day, ranked, content_version, state, closes_at)
+        VALUES (${me.userId}, ${CLOSED_DAY}, true, ${Number(day.content_version)}, ${db.sql.json(lastOpen(dl) as never)}, ${closes})`;
+      return me;
+    };
+    // /start after midnight: the last clock ran out before it, so the run is finished AND stays ranked.
+    const back = await insert('back-after-midnight', closes.getTime() - 20_000);
+    const started = await svc.start(CLOSED_DAY, back);
+    expect(started.state).toMatchObject({ done: true, ranked: true, score: 4 + 2, answers: 6 });
+    const [row] = await db.sql`SELECT done, ranked, completed_at FROM ultimo_runs WHERE user_id = ${back.userId}`;
+    expect(row).toMatchObject({ done: true, ranked: true });
+    // The finish time is when the clock ran out, not when it was written.
+    expect(new Date(row.completed_at).getTime()).toBe(closes.getTime() - 20_000 + 1_500);
+    // A read (GET /current) that finds the clock expired writes it down too.
+    const reader = await insert('reader', closes.getTime() - 20_000);
+    const read = await svc.current(reader, CLOSED_DAY);
+    expect('state' in read && read.state.done).toBe(true);
+    expect((await db.sql`SELECT done FROM ultimo_runs WHERE user_id = ${reader.userId}`)[0].done).toBe(true);
+  });
+
+  it('`next` on an expired last category finishes the run instead of refusing it', async () => {
+    const svc = await service();
+    const { newState } = await import('../../src/modules/ultimo/ultimo.rules.js');
+    const me = await member('final-next');
+    const [day] = await db.sql<Array<{ content_version: string }>>`SELECT content_version FROM ultimo_days WHERE day = ${TODAY}`;
+    const four = [0, 1, 2, 3].map(() => ({ named: 1, complete: false, reason: 'time' }));
+    const past = Date.now() - 10_000;
+    const [run] = await db.sql<Array<{ id: string }>>`
+      INSERT INTO ultimo_runs (user_id, day, ranked, content_version, state, closes_at)
+      VALUES (${me.userId}, ${TODAY}, true, ${Number(day.content_version)}, ${db.sql.json({ ...newState(), c: 4, open: true, said: [0], dl: past, res: four } as never)},
+        '2026-10-02T03:00:00Z') RETURNING id`;
+    const done = await svc.next(me, run.id, 0);
+    expect(done.state).toMatchObject({ done: true, score: 5, answers: 5 });
+  });
+
+  it('the ledger remembers a pool category after its stored copy changes: it can never become a day category', async () => {
+    const { seedDays, contentHash } = await import('../../src/modules/ultimo/ultimo.seed.js');
+    const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+    const played = plainCategory('ledger-played', 9, 'easy');
+    await writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [played] }));
+    // The pool item is replaced by different content (same id) and then deleted outright.
+    await writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [{ ...plainCategory('ledger-other', 10, 'easy'), id: 'ledger-played' }] }));
+    await db.sql`DELETE FROM duel_pool WHERE item_id = 'ledger-played'`;
+    // The originally played list, renamed, as a day category: refused.
+    const renamed = { ...played, id: 'renamed-day', title: { es: 'Nuevo', en: 'New', ka: 'ახალი', tr: 'Yeni' } };
+    const day = makeDay(5, [renamed, plainCategory('d5b', 8), plainCategory('d5c', 8), plainCategory('d5d', 8), plainCategory('d5e', 8)]);
+    await expect(seedDays(db.sql, [{ ...day, contentVersion: contentHash(day.categories) }], { dryRun: true, allowCorrection: false, allowPoolOverlap: false }))
+      .rejects.toThrow(/repeat a duel pool category/);
   });
 
   it('guests play closed days only; a guest run of a closed day discloses what nobody said', async () => {

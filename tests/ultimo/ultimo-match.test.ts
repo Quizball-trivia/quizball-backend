@@ -20,10 +20,19 @@ describe('Último en pie answer matching', () => {
     expect(answerOf('Bruno Martel')).toEqual({ kind: 'answer', index: idx('bruno') });
   });
 
-  it('an explicit alias wins over another answer\'s generated surname', () => {
-    // "Rojo" is Fabián Sosa's alias and Gastón Rojo's surname: the alias names Fabián.
-    expect(answerOf('rojo')).toEqual({ kind: 'answer', index: idx('fabian') });
+  it('an alias that is also another answer\'s surname is ambiguous; a full name always wins', () => {
+    // "Rojo" is Fabián Sosa's alias and Gastón Rojo's surname: neither is guessed for the player.
+    expect(answerOf('rojo')).toEqual({ kind: 'ambiguous' });
     expect(answerOf('Gastón Rojo')).toEqual({ kind: 'answer', index: idx('gaston') });
+    expect(answerOf('Fabián Sosa')).toEqual({ kind: 'answer', index: idx('fabian') });
+    // A club named exactly like another club's last word: its full name names it.
+    const same = (n: string) => ({ es: n, en: n, ka: n, tr: n });
+    const clubs = { ...c, answers: [
+      { id: 'p', display: same('Porteño'), aliases: [] }, { id: 'ep', display: same('Estudiantil Porteño'), aliases: [] },
+      ...c.answers.slice(0, 6),
+    ] };
+    expect(matchAnswer(clubs, 'Porteño')).toEqual({ kind: 'answer', index: 0 });
+    expect(matchAnswer(clubs, 'Estudiantil Porteño')).toEqual({ kind: 'answer', index: 1 });
   });
 
   it('Turkish dotted/dotless i and Georgian script match however they are typed', () => {

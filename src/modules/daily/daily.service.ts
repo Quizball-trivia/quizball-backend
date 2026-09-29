@@ -69,7 +69,12 @@ export interface DailyDeps<State, Row extends DailyRunRowBase<State>, Entry, Day
 }
 
 /** One move: `s` is the run projected to `now`; `stored` is the row's state as it was. */
-export type DailyStep<State, Day, Extra> = (s: State, day: Day, now: number, stored: State) => { state: State; extra?: Extra };
+export type DailyStep<State, Day, Extra> = (s: State, day: Day, now: number, stored: State) => {
+  state: State;
+  extra?: Extra;
+  /** The move only records what the clock decided, at this instant (see saveState's settledAt). */
+  settledAt?: number | null;
+};
 
 const owns = (row: DailyRunRowBase<unknown>, player: DailyPlayer): boolean =>
   player.kind === 'member' ? row.user_id === player.userId : row.guest_id === player.guestId;
@@ -179,6 +184,9 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       if (inserted) return respond(inserted, day, await nowMs(tx), tx);
       let row = await deps.repo.lockOwnRun(tx, player, dayId);
       if (!row) throw staleState();
+      // What the clock settled before the day closed is recorded first, so a run finished in time keeps its rank.
+      const at = await nowMs(tx);
+      if (row.content_version === day.contentVersion) row = await recordProjection(tx, row, at);
       // The ranked window closed before this run was finished: it goes on as practice, off the board.
       if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id)) ?? row;
       // A correction (which unranked the day's runs) replaced the content: an unfinished run moves onto it;
@@ -188,9 +196,6 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
         if (!rebased) throw otherContent();
         row = rebased;
       }
-      // A clock that ran out while the player was away is written down now, so a finished run reaches the board.
-      const at = await nowMs(tx);
-      if (row.content_version === day.contentVersion) row = await recordProjection(tx, row, at);
       return respond(row, day, at, tx);
     }));
   }
@@ -220,7 +225,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       const out = step(rules.project(row.state, at), day, at, row.state);
       const saved = await deps.repo.saveState(tx, row.id, {
         state: out.state, stateVersion: row.state_version + 1, contentVersion: row.content_version, completion: rules.completion(out.state),
-      });
+      }, out.settledAt != null ? new Date(out.settledAt) : undefined);
       if (!saved) throw await rejectedWrite(tx, row.day, row.content_version);
       return { ...(await respond(saved, day, at, tx)), ...out.extra } as RunResponse<Public> & Partial<Extra>;
     });
@@ -240,7 +245,18 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       if (!row) return { run: null };
       const day = content.get(target) ?? null;
       if (row.content_version !== day?.contentVersion) return { run: null };
-      return respond(row, day, await nowMs());
+      const at = await nowMs();
+      if (rules.project(row.state, at) === row.state) return respond(row, day, at);
+      // The clock settled something since the last write: record it (locked like a move), so what this read shows
+      // (a finished run included) is what the board has.
+      return deps.repo.withTx(async (tx) => {
+        await lockServedDay(tx, day);
+        const locked = await deps.repo.lockRun(tx, row.id);
+        if (!locked) return respond(row, day, at);
+        const saved = await recordProjection(tx, locked, await nowMs(tx));
+        if (saved !== locked && rules.completion(saved.state) && saved.ranked) leaderboards.delete(saved.day);
+        return respond(saved, day, await nowMs(tx), tx);
+      });
     },
 
     /**

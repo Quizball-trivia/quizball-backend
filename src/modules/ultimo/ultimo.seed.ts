@@ -4,7 +4,7 @@ import { canonical, resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { CATEGORIES_PER_DAY } from './ultimo.constants.js';
 import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './ultimo.days.js';
-import { ultimoCategorySchema, type UltimoCategory } from './ultimo.match.js';
+import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from './ultimo.match.js';
 
 /**
  * Content seeding for scripts/ultimo-seed-days.ts: validates the private day files and upserts them into
@@ -45,6 +45,9 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     return parsed.data!;
   });
   if (new Set(categories.map((c) => c.id)).size !== categories.length) fail('duplicate category id');
+  categories.forEach((category, i) => {
+    if (unreachableAnswers(category).length > 0) fail(`category ${i + 1}: an answer has no typeable name that names it alone`);
+  });
   return { day, number: d.number as number, contentVersion: contentHash(categories), categories };
 }
 
@@ -59,30 +62,63 @@ export function assertCalendar(days: readonly SeedDay[]): void {
   if (new Set(ids).size !== ids.length) throw new Error('a category id is used on two days');
 }
 
+/** What identifies a category's content: its id, titles, and its answers (ids and names). */
+export interface CategoryKeys { id: string; titles: string[]; answers: string[] }
+
+export const keysOf = (c: UltimoCategory): CategoryKeys => ({
+  id: c.id,
+  titles: [normalizeAnswer(c.title.es), normalizeAnswer(c.title.en)],
+  answers: [...new Set(c.answers.flatMap((a) => [`id:${a.id}`, normalizeAnswer(a.display.en), normalizeAnswer(a.display.es)]))],
+});
+
 /**
- * Two categories are the same content when they share an id, a title, or most of their answers (a renamed or
- * translated copy of one list). Duel packs are harvestable, so a daily category may never be (like) a pool one.
+ * Two categories are the same content when they share an id, a title, or most of their answers (by answer id or name):
+ * a renamed or translated copy of one list is still that list. Duel packs are harvestable, so a daily category may
+ * never be (like) a pool one — nor one that ever was.
  */
-export function sameCategory(a: UltimoCategory, b: UltimoCategory): boolean {
-  if (a.id === b.id || normalizeAnswer(a.title.es) === normalizeAnswer(b.title.es) || normalizeAnswer(a.title.en) === normalizeAnswer(b.title.en)) return true;
-  const set = (c: UltimoCategory) => new Set(c.answers.map((x) => normalizeAnswer(x.display.en)));
-  const [sa, sb] = [set(a), set(b)];
-  let shared = 0;
-  for (const name of sa) if (sb.has(name)) shared += 1;
-  return shared / (sa.size + sb.size - shared) >= 0.6;
+export function sameKeys(a: CategoryKeys, b: CategoryKeys): boolean {
+  if (a.id === b.id || a.titles.some((t) => b.titles.includes(t))) return true;
+  const sb = new Set(b.answers);
+  const shared = a.answers.filter((k) => sb.has(k)).length;
+  return shared / (a.answers.length + b.answers.length - shared) >= 0.6;
 }
+
+export const sameCategory = (a: UltimoCategory, b: UltimoCategory): boolean => sameKeys(keysOf(a), keysOf(b));
 
 /** Both Último seeds (days and duel pool) take this lock and check overlap inside their write transaction. */
 export const ULTIMO_CONTENT_LOCK = 'ultimo-content';
 
-/** Pool categories (every one ever stored, enabled or not) that a day category repeats; by position. */
+export type ContentSide = 'day' | 'pool';
+
+/**
+ * Every category ever published on `side`: the ledger (append-only, so a pool item replaced or disabled after its
+ * list was played is still known) plus what is stored now.
+ */
+export async function publishedKeys(tx: Sql, side: ContentSide): Promise<CategoryKeys[]> {
+  const ledger = await tx<Array<{ keys: CategoryKeys }>>`SELECT keys FROM ultimo_content_ledger WHERE side = ${side}`;
+  const stored = side === 'pool'
+    ? (await tx<Array<{ payload: unknown }>>`SELECT payload FROM duel_pool WHERE game = 'ultimo'`).map((r) => r.payload)
+    : (await tx<Array<{ categories: unknown[] }>>`SELECT categories FROM ultimo_days`).flatMap((r) => r.categories);
+  const current = stored.map((raw) => ultimoCategorySchema.safeParse(raw)).flatMap((p) => (p.success ? [keysOf(p.data)] : []));
+  return [...ledger.map((r) => r.keys), ...current];
+}
+
+/** Records what a seed published (inside its write transaction); an unchanged category is recorded once. */
+export async function recordPublished(tx: Sql, side: ContentSide, categories: readonly UltimoCategory[]): Promise<void> {
+  for (const category of categories) {
+    const keys = keysOf(category);
+    await tx`
+      INSERT INTO ultimo_content_ledger (side, category_id, keys)
+      SELECT ${side}, ${category.id}, ${tx.json(keys as never)}
+      WHERE NOT EXISTS (SELECT 1 FROM ultimo_content_ledger WHERE side = ${side} AND category_id = ${category.id} AND keys = ${tx.json(keys as never)})
+    `;
+  }
+}
+
+/** Day categories (by position) that repeat any pool category ever published. */
 export async function poolOverlapIn(tx: Sql, categories: readonly UltimoCategory[]): Promise<number[]> {
-  const [table] = await tx<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
-  if (!table?.present) return [];
-  const pool = (await tx<Array<{ payload: unknown }>>`SELECT payload FROM duel_pool WHERE game = 'ultimo'`)
-    .map((row) => ultimoCategorySchema.safeParse(row.payload))
-    .flatMap((parsed) => (parsed.success ? [parsed.data] : []));
-  return categories.flatMap((category, i) => (pool.some((item) => sameCategory(category, item)) ? [i] : []));
+  const pool = await publishedKeys(tx, 'pool');
+  return categories.flatMap((category, i) => (pool.some((item) => sameKeys(keysOf(category), item)) ? [i] : []));
 }
 
 export type SeedStatus = 'new' | 'changed' | 'unchanged';
@@ -176,6 +212,7 @@ export async function seedDays(
       `;
       if (entry.contentChanged && entry.runs > 0) await tx`UPDATE ultimo_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
     }
+    await recordPublished(tx, 'day', rows.flatMap((row) => row.categories));
     return { ...plan, poolOverlap: overlap };
   }) as Promise<SeedPlan & { poolOverlap: number }>;
 }

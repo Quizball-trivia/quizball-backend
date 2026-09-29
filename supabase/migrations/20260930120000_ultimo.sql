@@ -70,12 +70,26 @@ CREATE INDEX IF NOT EXISTS idx_ultimo_runs_unfinished
   ON public.ultimo_runs (id)
   WHERE NOT done;
 
+-- Append-only record of every category the seeds published, per side (days / duel pool): a list played on one side can
+-- never be seeded onto the other, even after its stored copy is replaced or disabled.
+CREATE TABLE IF NOT EXISTS public.ultimo_content_ledger (
+  id bigserial PRIMARY KEY,
+  side text NOT NULL,
+  category_id text NOT NULL,
+  keys jsonb NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_ultimo_content_ledger_side CHECK (side IN ('day', 'pool'))
+);
+CREATE INDEX IF NOT EXISTS idx_ultimo_content_ledger_side ON public.ultimo_content_ledger (side, category_id);
+
 -- Server-only (RLS without policies, no client grants): categories and answers must never be readable through
 -- the Data API.
 ALTER TABLE public.ultimo_days ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ultimo_runs ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.ultimo_days, public.ultimo_runs FROM PUBLIC, anon, authenticated;
-GRANT ALL ON public.ultimo_days, public.ultimo_runs TO service_role;
+ALTER TABLE public.ultimo_content_ledger ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ultimo_days, public.ultimo_runs, public.ultimo_content_ledger FROM PUBLIC, anon, authenticated;
+GRANT ALL ON public.ultimo_days, public.ultimo_runs, public.ultimo_content_ledger TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.ultimo_content_ledger_id_seq TO service_role;
 
 DROP TRIGGER IF EXISTS set_ultimo_days_updated_at ON public.ultimo_days;
 CREATE TRIGGER set_ultimo_days_updated_at

@@ -46,10 +46,13 @@ export type Match = { kind: 'answer'; index: number } | { kind: 'ambiguous' } | 
 type Keys = Map<string, Set<number>>;
 
 interface CategoryIndex {
-  /** Display names and aliases, normalised: unique per answer (the schema refuses a name on two answers). */
+  /** Full display names, normalised: unique per answer (the schema refuses a name on two answers). */
   explicit: Keys;
   explicitCompact: Keys;
-  /** Generated forms (surname, name without its first word): shared by several answers they are ambiguous. */
+  /**
+   * Aliases and generated forms (surname, name without its first word) together: a key several answers reach — an
+   * alias that is also another answer's surname included — is ambiguous.
+   */
   derived: Keys;
   derivedCompact: Keys;
 }
@@ -81,7 +84,7 @@ function indexOf(category: UltimoCategory): CategoryIndex {
       if (words.length > 2) add('derived', words.slice(1).join(' '), index);
       if (words.length > 1 && words[words.length - 1].length >= 3) add('derived', words[words.length - 1], index);
     }
-    for (const alias of answer.aliases) add('explicit', normalizeAnswer(alias), index);
+    for (const alias of answer.aliases) add('derived', normalizeAnswer(alias), index);
   });
   indexes.set(category, built);
   return built;
@@ -117,7 +120,7 @@ const resolve = (set: Set<number> | undefined): Match | null =>
 export function matchAnswer(category: UltimoCategory, raw: string): Match {
   const typed = normalizeAnswer(raw);
   if (typed.length < 2) return { kind: 'none' };
-  // Explicit names first (unique by construction), then generated forms, then one typo.
+  // Full names first (unique by construction), then aliases and generated forms, then one typo.
   const index = indexOf(category);
   const target0 = compactOf(typed);
   const exact = resolve(index.explicit.get(typed)) ?? resolve(index.explicitCompact.get(target0))
@@ -134,6 +137,21 @@ export function matchAnswer(category: UltimoCategory, raw: string): Match {
     }
   }
   return resolve(close) ?? { kind: 'none' };
+}
+
+/**
+ * Answers no typeable form can name on its own (a display or alias with a letter or digit that resolves to exactly
+ * that answer): a list holding one could never be completed. Seeds refuse them.
+ */
+export function unreachableAnswers(category: UltimoCategory): string[] {
+  return category.answers.flatMap((answer, index) => {
+    const forms = [...Object.values(answer.display), ...answer.aliases].filter((form) => /[\p{L}\p{N}]/u.test(form));
+    const reachable = forms.some((form) => {
+      const match = matchAnswer(category, form);
+      return match.kind === 'answer' && match.index === index;
+    });
+    return reachable ? [] : [answer.id];
+  });
 }
 
 /** Per-answer clock: 20 s, two seconds less after every two answers said, never under 6 s. */

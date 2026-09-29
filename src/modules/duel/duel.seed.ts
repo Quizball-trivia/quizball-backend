@@ -4,8 +4,8 @@ import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
 import { buscaminasRoundSchema } from './engines/buscaminas.engine.js';
 import { pistasRoundSchema } from './engines/pistas.engine.js';
 import { canonical } from '../pistas/pistas.seed.js';
-import { ultimoCategorySchema, type UltimoCategory } from '../ultimo/ultimo.match.js';
-import { sameCategory, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
+import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '../ultimo/ultimo.match.js';
+import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
 
 export interface PoolRow {
@@ -59,17 +59,14 @@ function ultimoRow(item: unknown): PoolRow | null {
   const parsed = ultimoCategorySchema.safeParse(item);
   if (!parsed.success) return null;
   const category = parsed.data;
+  if (unreachableAnswers(category).length > 0) return null;
   return { itemId: category.id, difficulty: category.difficulty, fingerprint: sha(canonical(category)), payload: category, keys: [] };
 }
 
-/** Pool items (by index) repeating a category of any stored day (same id, title or most of the answers). */
+/** Pool items (by index) repeating any daily category ever published (same id, title or most of the answers). */
 async function ultimoDailyOverlap(sql: Sql, rows: PoolRow[]): Promise<number[]> {
-  const days = await sql<Array<{ categories: unknown[] }>>`SELECT categories FROM ultimo_days`;
-  const daily = days.flatMap((day) => day.categories.flatMap((raw) => {
-    const parsed = ultimoCategorySchema.safeParse(raw);
-    return parsed.success ? [parsed.data] : [];
-  }));
-  return rows.flatMap((row, i) => (daily.some((category) => sameCategory(row.payload as UltimoCategory, category)) ? [i] : []));
+  const daily = await publishedKeys(sql, 'day');
+  return rows.flatMap((row, i) => (daily.some((keys) => sameKeys(keysOf(row.payload as UltimoCategory), keys)) ? [i] : []));
 }
 
 function buscaminasRow(item: unknown): PoolRow | null {
@@ -132,6 +129,7 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       if (result.inserted) inserted += 1;
       else updated += 1;
     }
+    if (game === 'ultimo') await recordPublished(q, 'pool', rows.map((row) => row.payload as UltimoCategory));
   });
   return { inserted, updated };
 }

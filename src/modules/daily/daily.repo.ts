@@ -167,7 +167,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       UPDATE ${q.unsafe(RUNS)}
       SET state = ${q.json(data.state as never)}, state_version = ${data.stateVersion}, content_version = ${data.contentVersion},
           done = ${c !== null}, score = ${c?.score ?? null}, ${q.unsafe(t.stat)} = ${c?.stat ?? null},
-          completed_at = CASE WHEN ${c !== null} THEN clock_timestamp() END
+          completed_at = CASE WHEN ${c !== null} THEN ${settledAt ? q`${settledAt}::timestamptz` : q.unsafe('clock_timestamp()')} END
       WHERE id = ${id} AND (NOT ranked OR clock_timestamp() < closes_at${settledInTime})
         AND EXISTS (SELECT 1 FROM ${q.unsafe(DAYS)} d WHERE d.day = ${q.unsafe(RUNS)}.day AND d.content_version = ${data.contentVersion})
       RETURNING ${q.unsafe(RUN_COLUMNS)}
@@ -182,11 +182,18 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       return Number(row.ms);
     },
 
-    /** Unfinished runs whose state says an open clock ran out before `beforeMs` (the settling sweep's work list). */
-    async overdueRuns(beforeMs: number, limit: number): Promise<string[]> {
+    /**
+     * Unfinished runs whose open clock ran out (dl + grace before `nowMs`) that a settle can write: on their day's
+     * stored content, and unranked or settled before their day closed (the rest are unranked and settled by /start).
+     * Oldest first, so a batch always moves on.
+     */
+    async overdueRuns(nowMs: number, graceMs: number, limit: number): Promise<string[]> {
       const rows = await sql<Array<{ id: string }>>`
-      SELECT id FROM ${sql.unsafe(RUNS)}
-      WHERE NOT done AND state->>'open' = 'true' AND (state->>'dl')::float8 < ${beforeMs}
+      SELECT r.id FROM ${sql.unsafe(RUNS)} r
+      JOIN ${sql.unsafe(DAYS)} d ON d.day = r.day AND d.content_version = r.content_version
+      WHERE NOT r.done AND r.state->>'open' = 'true' AND (r.state->>'dl')::float8 + ${graceMs} < ${nowMs}
+        AND (NOT r.ranked OR (r.state->>'dl')::float8 + ${graceMs} < extract(epoch FROM r.closes_at) * 1000)
+      ORDER BY r.updated_at
       LIMIT ${limit}
     `;
       return rows.map((r) => r.id);

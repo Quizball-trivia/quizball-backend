@@ -195,14 +195,12 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       if (inserted) return respond(inserted, day, await nowMs(tx), tx);
       let row = await deps.repo.lockOwnRun(tx, player, dayId);
       if (!row) throw staleState();
-      // What the clock settled before the day closed is recorded first, so a run finished in time keeps its rank.
+      // What the clock settled before the day closed is recorded first, so a run finished in time keeps its rank;
+      // what it settled after (the database clock decides, even when this request began before midnight) as practice.
       const at = await nowMs(tx);
-      if (row.content_version === day.contentVersion) row = await recordProjection(tx, row, at);
+      if (row.content_version === day.contentVersion) row = await recordOrUnrank(tx, row, at);
       // The ranked window closed before this run was finished: it goes on as practice, off the board.
-      if (row.ranked && !row.done && !live) {
-        const unranked = await deps.repo.unrankClosedRun(tx, row.id);
-        if (unranked) row = unranked.content_version === day.contentVersion ? await recordProjection(tx, unranked, at) : unranked;
-      }
+      if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id)) ?? row;
       // A correction (which unranked the day's runs) replaced the content: an unfinished run moves onto it;
       // a finished one keeps its own and shows no content of the new one.
       if (row.content_version !== day.contentVersion && !row.done) {

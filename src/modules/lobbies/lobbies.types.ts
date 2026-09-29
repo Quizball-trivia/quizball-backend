@@ -1,5 +1,6 @@
 import type { Json } from '../../db/types.js';
 import type { LobbyGameMode } from '../../realtime/socket.types.js';
+import type { DuelGameId } from '../duel/duel.types.js';
 
 export interface RankedLobbyContext {
   isPlacement?: boolean;
@@ -62,6 +63,8 @@ export interface LobbyRow {
   invite_code: string | null;
   mode: 'friendly' | 'ranked';
   game_mode: LobbyGameMode;
+  /** Set exactly when game_mode is 'duel' (lobbies_duel_game_check). */
+  duel_game: DuelGameId | null;
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;

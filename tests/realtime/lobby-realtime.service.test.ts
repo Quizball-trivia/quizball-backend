@@ -454,3 +454,41 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(resumeActiveDraftTimersMock).toHaveBeenCalledWith(io, 'lobby-1');
   });
 });
+
+describe('lobbyRealtimeService friend duel rooms', () => {
+  const activeDuelRoom = { id: 'lobby-1', mode: 'friendly', game_mode: 'duel', duel_game: 'pistas', status: 'active', host_user_id: 'u1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    buildLobbyStateMock.mockResolvedValue({ lobbyId: 'lobby-1', status: 'active' });
+  });
+
+  it('re-binds a reconnecting socket to its active duel room without any draft replay', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1', undefined);
+    listOpenLobbiesForUserMock.mockResolvedValue([activeDuelRoom]);
+
+    await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never, { resume: true });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(socket.emit).toHaveBeenCalledWith('lobby:state', expect.objectContaining({ lobbyId: 'lobby-1' }));
+    expect(socket.emit).not.toHaveBeenCalledWith('draft:start', expect.anything());
+    expect(getLobbyCategoriesMock).not.toHaveBeenCalled();
+    expect(resumeDraftForReconnectedPlayerMock).not.toHaveBeenCalled();
+    expect(resumeActiveDraftTimersMock).not.toHaveBeenCalled();
+  });
+
+  it('a disconnect from an active duel room pauses nothing', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1');
+    getByIdMock.mockResolvedValue(activeDuelRoom);
+
+    await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(pauseDraftForDisconnectedPlayerMock).not.toHaveBeenCalled();
+    expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+});

@@ -30,6 +30,16 @@ export const ErrorCode = {
   BUSCAMINAS_SIGN_IN_FOR_TODAY: 'sign_in_for_today',
   /** Buscaminas: neither a member session nor a guest session was sent. */
   BUSCAMINAS_GUEST_SESSION_REQUIRED: 'guest_session_required',
+  /** Pistas futboleras: the day's content changed since the client (or this run) loaded it; re-sync via /start. */
+  PISTAS_CONTENT_CHANGED: 'content_changed',
+  /** Pistas futboleras: the run moved on (another tab/device) since the client's version; re-sync via /start. */
+  PISTAS_STALE_STATE: 'stale_state',
+  /** Pistas futboleras: the ranked day ended in Buenos Aires; the run is closed. */
+  PISTAS_DAY_OVER: 'day_over',
+  /** Pistas futboleras: guests play closed days only; the client asks them to sign in for today. */
+  PISTAS_SIGN_IN_FOR_TODAY: 'sign_in_for_today',
+  /** Pistas futboleras: neither a member session nor a guest session was sent. */
+  PISTAS_GUEST_SESSION_REQUIRED: 'guest_session_required',
   /** The caller's account kind (a guest) cannot do this; the client opens the sign-up dialog. */
   CAPABILITY_REQUIRED: 'CAPABILITY_REQUIRED',
 } as const;

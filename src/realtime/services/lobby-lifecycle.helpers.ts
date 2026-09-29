@@ -213,6 +213,7 @@ export async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Pr
     hostUserId: '',
     settings: {
       gameMode: 'friendly_possession',
+      duelGame: null,
       friendlyRandom: true,
       friendlyCategoryAId: null,
       friendlyCategoryBId: null,

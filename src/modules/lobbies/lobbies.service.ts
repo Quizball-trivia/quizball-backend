@@ -136,6 +136,7 @@ export const lobbiesService = {
       hostUserId: lobby.host_user_id,
       settings: {
         gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
+        duelGame: lobby.game_mode === 'duel' ? lobby.duel_game ?? null : null,
         friendlyRandom: lobby.friendly_random ?? true,
         friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
         friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
@@ -331,6 +332,7 @@ export const lobbiesService = {
       inviteCode: row.invite_code,
       displayName: row.display_name ?? 'Friendly Lobby',
       gameMode: row.game_mode ?? 'friendly_possession',
+      duelGame: row.game_mode === 'duel' ? row.duel_game ?? null : null,
       isPublic: row.is_public,
       createdAt: row.created_at,
       memberCount: row.member_count,

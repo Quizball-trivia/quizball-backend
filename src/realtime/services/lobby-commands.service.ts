@@ -20,12 +20,10 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import {
-  FRIENDLY_LOBBY_MAX_MEMBERS,
   attachUserSocketsToLobby,
   emitLobbyState,
   generateInviteCode,
   generateLobbyName,
-  FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS,
   maxMembersForFriendlyGameMode,
   normalizeFriendlyGameMode,
   playableMembersForFriendlyGameMode,
@@ -33,6 +31,10 @@ import {
 } from '../lobby-utils.js';
 import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
 import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.service.js';
+import { startDuelMatchFromLobby } from './lobby-duel-start.service.js';
+import { isDuelGame } from '../../modules/duel/duel.config.js';
+import type { DuelGameId } from '../../modules/duel/duel.types.js';
+import { isValidHostStartShape, LOBBY_MODES, lobbyModeUnavailable } from '../../modules/lobbies/lobby-modes.js';
 import { config } from '../../core/config.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -51,23 +53,12 @@ import {
 } from './lobby-lifecycle.helpers.js';
 import { removeUserFromLobbySockets, transferHostIfNeeded } from './lobby-membership.helpers.js';
 
-/**
- * Whether a friendly lobby's member count is a legal host-start shape for the
- * mode. Auction accepts 1-3 humans because empty seats are backfilled with bots.
- */
+/** Whether a friendly lobby's member count is a legal host-start shape for the mode (lobby-modes.ts). */
 function isValidFriendlyStartShape(
   friendlyMode: ReturnType<typeof normalizeFriendlyGameMode>,
   memberCount: number
 ): boolean {
-  if (friendlyMode === 'friendly_possession') return memberCount === 2;
-  if (friendlyMode === 'football_grid') return memberCount === 2;
-  if (friendlyMode === 'friendly_party_quiz') {
-    return memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS;
-  }
-  if (friendlyMode === 'auction') {
-    return memberCount >= 1 && memberCount <= FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS;
-  }
-  return false;
+  return isValidHostStartShape(friendlyMode, memberCount);
 }
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
@@ -77,14 +68,24 @@ const MATCH_START_LOCK_WAIT_MS = 5000;
 export async function createLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; gameMode?: 'football_grid' | 'auction'; correlationId?: string }
+  payload: {
+    mode: 'friendly' | 'ranked';
+    isPublic?: boolean;
+    gameMode?: 'football_grid' | 'auction' | 'duel';
+    duelGame?: DuelGameId;
+    correlationId?: string;
+  }
 ): Promise<LobbyCreateResult> {
   const userId = socket.data.user.id;
   const correlationId = payload.correlationId ?? 'missing';
   // Refused before any session cleanup: a disabled mode must not evict the host from a room they are already in.
-  if (payload.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
-    return { ok: false, code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable', retryable: false, correlationId };
+  const unavailable = payload.mode === 'friendly' && payload.gameMode
+    ? lobbyModeUnavailable(payload.gameMode, payload.duelGame)
+    : null;
+  if (unavailable) {
+    return { ok: false, code: unavailable.code, message: unavailable.message, retryable: false, correlationId };
   }
+  const duelGame = payload.gameMode === 'duel' && isDuelGame(payload.duelGame) ? payload.duelGame : null;
   let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
@@ -151,6 +152,7 @@ export async function createLobby(
         isPublic: payload.isPublic ?? false,
         displayName,
         ...(initialGameMode ? { gameMode: initialGameMode } : {}),
+        duelGame: initialGameMode === 'duel' ? duelGame : null,
       });
 
       await lobbiesRepo.addMember(lobby.id, userId, false);
@@ -497,6 +499,7 @@ export async function updateSettings(
   payload: {
     lobbyId?: string;
     gameMode: LobbyGameMode;
+    duelGame?: DuelGameId | null;
     friendlyRandom?: boolean;
     friendlyCategoryAId?: string | null;
     friendlyCategoryBId?: string | null;
@@ -564,16 +567,28 @@ export async function updateSettings(
       return;
     }
 
-    const currentSettings = {
+    const currentSettings: {
+      gameMode: LobbyGameMode;
+      duelGame: DuelGameId | null;
+      friendlyRandom: boolean;
+      friendlyCategoryAId: string | null;
+      friendlyCategoryBId: string | null;
+    } = {
       gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
+      duelGame: lobby.game_mode === 'duel' ? lobby.duel_game ?? null : null,
       friendlyRandom: lobby.friendly_random ?? true,
       friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
       friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
     };
 
+    const nextGameMode = payload.gameMode ?? currentSettings.gameMode;
     const nextSettings = {
       ...currentSettings,
-      gameMode: payload.gameMode ?? currentSettings.gameMode,
+      gameMode: nextGameMode,
+      // A duel keeps its game unless the host names another one; any other mode has none.
+      duelGame: nextGameMode === 'duel'
+        ? payload.duelGame ?? currentSettings.duelGame
+        : null,
       friendlyRandom:
         payload.friendlyRandom !== undefined
           ? payload.friendlyRandom
@@ -590,26 +605,34 @@ export async function updateSettings(
 
     // Capacity is judged on the mode the host ACTUALLY asked for, before the
     // party-quiz coercion below — otherwise "possession with 3 members" would be
-    // silently reinterpreted as party quiz instead of reported. Leaving auction
-    // while it holds more members than the target allows would strand members,
-    // so reject rather than kick anyone.
-    const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
-    if (nextSettings.gameMode === 'football_grid' && !config.FOOTBALL_GRID_LOBBY_ENABLED) {
-      socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
+    // silently reinterpreted as party quiz instead of reported. Leaving a mode
+    // that never promotes (auction) while it holds more members than the target
+    // allows would strand members, so reject rather than kick anyone.
+    if (nextSettings.gameMode === 'duel' && !isDuelGame(nextSettings.duelGame)) {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'A duel room needs its game' });
       return;
     }
-    if (nextSettings.gameMode === 'football_grid' && memberCount > requestedCapacity) {
+    const unavailable = lobbyModeUnavailable(nextSettings.gameMode, nextSettings.duelGame);
+    if (unavailable) {
+      socket.emit('error', { code: unavailable.code, message: unavailable.message });
+      return;
+    }
+    const nextModeCaps = LOBBY_MODES[nextSettings.gameMode];
+    const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
+    if (!nextModeCaps.promotesToPartyQuiz && memberCount > requestedCapacity) {
       socket.emit('error', {
         code: 'LOBBY_MODE_CAPACITY',
-        message: 'Football Tic Tac Toe supports exactly two players.',
+        message: requestedCapacity === 2
+          ? 'This mode supports exactly two players.'
+          : `This mode supports up to ${requestedCapacity} players. Remove a player before switching.`,
         meta: { memberCount, maxMembers: requestedCapacity, gameMode: nextSettings.gameMode },
       });
       return;
     }
     if (
       lobby.mode === 'friendly' &&
-      currentSettings.gameMode === 'auction' &&
-      nextSettings.gameMode !== 'auction' &&
+      !LOBBY_MODES[normalizeFriendlyGameMode(currentSettings.gameMode)].promotesToPartyQuiz &&
+      nextSettings.gameMode !== currentSettings.gameMode &&
       memberCount > requestedCapacity
     ) {
       socket.emit('error', {
@@ -622,9 +645,10 @@ export async function updateSettings(
 
     if (lobby.mode === 'friendly') {
       // A >2-member lobby is party quiz UNLESS the host explicitly picked
-      // auction, which seats 3 by design.
-      if (memberCount > 2 && nextSettings.gameMode !== 'auction') {
+      // a mode that never promotes (auction seats 3 by design).
+      if (memberCount > 2 && nextModeCaps.promotesToPartyQuiz) {
         nextSettings.gameMode = 'friendly_party_quiz';
+        nextSettings.duelGame = null;
       }
     }
 
@@ -634,12 +658,8 @@ export async function updateSettings(
       socket.emit('error', { code: guestViolation.code, message: guestViolation.message, meta: guestViolation.meta });
       return;
     }
-    if (nextSettings.gameMode === 'auction' || nextSettings.gameMode === 'football_grid') {
-      // Auction has no lobby categories of its own.
-      nextSettings.friendlyRandom = true;
-      nextSettings.friendlyCategoryAId = null;
-      nextSettings.friendlyCategoryBId = null;
-    } else if (nextSettings.gameMode === 'ranked_sim') {
+    if (!LOBBY_MODES[nextSettings.gameMode].needsCategories) {
+      // Auction, grid, ranked sim and duels bring their own content: no lobby categories.
       nextSettings.friendlyRandom = true;
       nextSettings.friendlyCategoryAId = null;
       nextSettings.friendlyCategoryBId = null;
@@ -665,6 +685,7 @@ export async function updateSettings(
     const normalizedVisibility = payload.isPublic ?? lobby.is_public;
     const settingsUnchanged =
       nextSettings.gameMode === currentSettings.gameMode &&
+      nextSettings.duelGame === currentSettings.duelGame &&
       nextSettings.friendlyRandom === currentSettings.friendlyRandom &&
       nextSettings.friendlyCategoryAId === currentSettings.friendlyCategoryAId &&
       nextSettings.friendlyCategoryBId === currentSettings.friendlyCategoryBId &&
@@ -676,15 +697,17 @@ export async function updateSettings(
 
     await lobbiesRepo.updateLobbySettings(lobbyId, {
       gameMode: nextSettings.gameMode,
+      duelGame: nextSettings.duelGame,
       friendlyRandom: nextSettings.friendlyRandom,
       friendlyCategoryAId: nextSettings.friendlyCategoryAId,
       friendlyCategoryBId: nextSettings.friendlyCategoryBId,
     });
 
     // Entering auction opens a third seat and changes the game entirely — clear
-    // ready states so nobody is dragged into a mode they never agreed to.
+    // ready states so nobody is dragged into a mode (or duel game) they never agreed to.
     if (
       nextSettings.gameMode !== currentSettings.gameMode
+      || nextSettings.duelGame !== currentSettings.duelGame
     ) {
       await lobbiesRepo.setAllReady(lobbyId, false);
     }
@@ -698,6 +721,7 @@ export async function updateSettings(
         lobbyId,
         socketId: socket.id,
         gameMode: nextSettings.gameMode,
+        duelGame: nextSettings.duelGame,
         friendlyRandom: nextSettings.friendlyRandom,
         friendlyCategoryAId: nextSettings.friendlyCategoryAId,
         friendlyCategoryBId: nextSettings.friendlyCategoryBId,
@@ -740,7 +764,7 @@ export async function startFriendlyMatch(
   }
 
   const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
-  if (friendlyMode === 'ranked_sim') {
+  if (LOBBY_MODES[friendlyMode].hostStart === null) {
     socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
     return;
   }
@@ -791,7 +815,7 @@ export async function startFriendlyMatch(
       return;
     }
     const currentFriendlyMode = normalizeFriendlyGameMode(currentLobby.game_mode);
-    if (currentFriendlyMode === 'ranked_sim') {
+    if (LOBBY_MODES[currentFriendlyMode].hostStart === null) {
       socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
       return;
     }
@@ -831,6 +855,28 @@ export async function startFriendlyMatch(
         await lobbiesRepo.setAllReady(lobbyId, false);
         await emitLobbyState(io, lobbyId);
         socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start Football Tic Tac Toe' });
+      }
+      return;
+    }
+    // A friend duel runs on duel_matches: the duel runtime locks the roster, flips the room
+    // active and announces duel:found. The game is the locked row's, never the client's.
+    if (currentFriendlyMode === 'duel') {
+      const duelGame = currentLobby.duel_game;
+      const unavailable = lobbyModeUnavailable('duel', duelGame);
+      if (!isDuelGame(duelGame) || unavailable) {
+        socket.emit('error', {
+          code: 'DUEL_UNAVAILABLE',
+          message: unavailable?.message ?? 'This game cannot be played as a friend duel right now',
+        });
+        return;
+      }
+      try {
+        await startDuelMatchFromLobby(io, socket, { lobbyId, duelGame });
+      } catch (error) {
+        logger.warn({ lobbyId, duelGame, error }, 'Failed to create friend duel');
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start the duel' });
       }
       return;
     }

@@ -34,6 +34,7 @@ import { footballGridRepo, footballGridService } from '../../modules/football-gr
 import { footballGridRealtimeService } from './football-grid-realtime.service.js';
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
 import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
+import type { DuelGameId } from '../../modules/duel/duel.types.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -103,8 +104,12 @@ async function renewSharedActivityFences(
   `, { keys, arguments: [fenceToken, String(ttlMs)] }) === 1;
 }
 
+type LiveDuel = { matchId: string; lobbyId: string; game: DuelGameId };
+
 type ResolveContext = {
   activeMatch: Awaited<ReturnType<typeof matchesRepo.getActiveMatchForUser>> | null;
+  /** The live duel of the user's active duel room: that room's activity, not a `matches` row. */
+  activeDuel: LiveDuel | null;
   queueSearchId: string | null;
   queueKind: 'ranked' | 'auction' | 'grid' | null;
   queueCount: number;
@@ -147,8 +152,32 @@ function toSnapshot(context: ResolveContext): SessionStatePayload {
     primaryLobbyStatus,
     queueSearchId: context.queueSearchId,
     openLobbyIds: context.openLobbies.map((lobby) => lobby.id),
+    activeDuel: context.activeDuel,
     resolvedAt: new Date().toISOString(),
   };
+}
+
+function activeDuelLobbyIds(lobbies: LobbyWithJoinedAt[]): string[] {
+  return lobbies.filter((lobby) => lobby.status === 'active' && lobby.game_mode === 'duel').map((lobby) => lobby.id);
+}
+
+/**
+ * Live duels by room, for the given lobbies. Only users sitting in an active duel room pay for
+ * this read; everyone else resolves with the usual match + lobby queries.
+ */
+async function resolveLiveDuelsByLobbyId(lobbies: LobbyWithJoinedAt[]): Promise<Map<string, LiveDuel>> {
+  const lobbyIds = activeDuelLobbyIds(lobbies);
+  if (lobbyIds.length === 0) return new Map();
+  const rows = await lobbiesRepo.listLiveDuelsForLobbies(lobbyIds);
+  return new Map(rows.map((row) => [row.lobby_id, { matchId: row.match_id, lobbyId: row.lobby_id, game: row.game }]));
+}
+
+function firstLiveDuel(lobbies: LobbyWithJoinedAt[], liveDuels: Map<string, LiveDuel>): LiveDuel | null {
+  for (const lobbyId of activeDuelLobbyIds(lobbies)) {
+    const duel = liveDuels.get(lobbyId);
+    if (duel) return duel;
+  }
+  return null;
 }
 
 function isStaleActiveMatch(activityAt: string | null | undefined): boolean {
@@ -234,6 +263,8 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
       ? null
       : rawActiveMatch;
 
+    const liveDuels = await resolveLiveDuelsByLobbyId(openLobbies);
+
     span.setAttribute('quizball.has_active_match', Boolean(activeMatch?.id));
     span.setAttribute('quizball.open_lobby_count', openLobbies.length);
     span.setAttribute('quizball.queue_count', queueEntries.length);
@@ -241,6 +272,7 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
 
     return {
       activeMatch,
+      activeDuel: firstLiveDuel(openLobbies, liveDuels),
       queueSearchId: queueEntry?.id ?? null,
       queueKind: queueEntry?.kind ?? null,
       queueCount: queueEntries.length,
@@ -271,6 +303,8 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
       lobbiesRepo.listOpenLobbiesForUsers(uniqueUserIds),
       queueSearchIdsPromise,
     ]);
+    // One read for every active duel room across the batch (none for the usual batch).
+    const liveDuels = await resolveLiveDuelsByLobbyId([...openLobbiesByUserId.values()].flat());
 
     return new Map(uniqueUserIds.map((userId, index) => {
       const rawActiveMatch = activeMatchesByUserId.get(userId) ?? null;
@@ -286,6 +320,7 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
       const context: ResolveContext = {
         activeMatch,
+        activeDuel: firstLiveDuel(openLobbies, liveDuels),
         queueSearchId: queueEntries[0]?.id ?? null,
         queueKind: queueEntries[0]?.kind ?? null,
         queueCount: queueEntries.length,
@@ -361,13 +396,24 @@ async function hasLiveDraftPhaseState(lobbyId: string): Promise<boolean> {
  * Football Grid lobbies are live while their series is open (active, or rematch window not
  * yet expired). Once rematch eligibility ends, the room closes; a long-idle active grid
  * lobby can mean that final cleanup was lost. Cleanup requires those signals to be absent and more than
- * 30 minutes of DB inactivity.
+ * 30 minutes of DB inactivity. Duel rooms are live exactly while their duel_matches row is.
  */
 async function isActiveLobbyLive(
   io: QuizballServer,
   lobby: LobbyWithJoinedAt,
 ): Promise<boolean> {
   if (lobby.mode === 'ranked') return true;
+
+  // A duel room is active exactly while its duel is live (start and finish flip both in one
+  // transaction), so sockets and idle time say nothing: without a live duel it is abandoned.
+  if (lobby.game_mode === 'duel') {
+    try {
+      return (await lobbiesRepo.listLiveDuelsForLobbies([lobby.id])).length > 0;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live duel state');
+      return true;
+    }
+  }
 
   try {
     const sockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
@@ -1311,7 +1357,7 @@ export const userSessionGuardService = {
         ok: false,
         snapshot,
         reason: 'ACTIVE_MATCH',
-        message: 'You are already in an active draft',
+        message: context.activeDuel ? 'You are already in a duel' : 'You are already in an active draft',
       };
     }
     return { ok: true, snapshot };
@@ -1405,7 +1451,7 @@ export const userSessionGuardService = {
           ok: false,
           snapshot,
           reason: 'ACTIVE_MATCH',
-          message: 'You are already in an active draft',
+          message: context.activeDuel ? 'You are already in a duel' : 'You are already in an active draft',
         };
       }
     }

@@ -13,6 +13,7 @@ import {
   lobbyCapacityForGameMode,
   playableMembersForGameMode,
 } from '../modules/lobbies/lobby-capacity.js';
+import { isLobbyGameMode, modeForMemberCount } from '../modules/lobbies/lobby-modes.js';
 
 export {
   FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS,
@@ -65,15 +66,7 @@ export function generateLobbyName(): string {
 export function normalizeFriendlyGameMode(
   gameMode: string | null | undefined
 ): LobbyGameMode {
-  if (
-    gameMode === 'friendly_party_quiz'
-    || gameMode === 'football_grid'
-    || gameMode === 'auction'
-    || gameMode === 'ranked_sim'
-  ) {
-    return gameMode;
-  }
-  return 'friendly_possession';
+  return isLobbyGameMode(gameMode) ? gameMode : 'friendly_possession';
 }
 
 /**
@@ -118,12 +111,8 @@ async function syncFriendlyLobbyModeForMemberCountInternal(
   const memberCount = await lobbiesRepo.countMembers(lobbyId);
   const currentMode = normalizeFriendlyGameMode(lobby.game_mode);
   // Auction is an explicitly chosen 3-seat mode — a third member is expected
-  // there and must NOT auto-promote the lobby to party quiz.
-  const nextMode = memberCount > 2
-    && currentMode !== 'auction'
-    && currentMode !== 'football_grid'
-    ? 'friendly_party_quiz'
-    : currentMode;
+  // there and must NOT auto-promote the lobby to party quiz (nor grid/duel rooms).
+  const nextMode = modeForMemberCount(currentMode, memberCount);
 
   // Only the actual promotion into party quiz invalidates ready states. An
   // auction lobby taking its expected third member changes nothing.
@@ -135,6 +124,7 @@ async function syncFriendlyLobbyModeForMemberCountInternal(
   if (nextMode !== currentMode) {
     await lobbiesRepo.updateLobbySettings(lobbyId, {
       gameMode: nextMode,
+      duelGame: null,
       friendlyRandom: lobby.friendly_random ?? true,
       friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
       friendlyCategoryBId: null,

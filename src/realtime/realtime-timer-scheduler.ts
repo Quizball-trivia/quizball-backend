@@ -32,6 +32,7 @@ export type RealtimeTimerKind =
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
   | 'football_grid_phase'
+  | 'duel_phase'
   | 'football_grid_matchmaking_fallback'
   | 'football_grid_bot_action'
   | 'football_grid_rematch_expiry'
@@ -62,6 +63,7 @@ export type RealtimeTimerPayload =
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
   | { kind: 'football_grid_phase'; matchId: string; expectedStateVersion: number }
+  | { kind: 'duel_phase'; matchId: string; phaseToken: number }
   | { kind: 'football_grid_matchmaking_fallback'; searchId: string; userId: string }
   | { kind: 'football_grid_bot_action'; matchId: string; expectedStateVersion: number; turnNumber: number }
   | { kind: 'football_grid_rematch_expiry'; seriesId: string; expectedSeriesVersion: number }
@@ -136,6 +138,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'
     && kind !== 'football_grid_phase'
+    && kind !== 'duel_phase'
     && kind !== 'football_grid_matchmaking_fallback'
     && kind !== 'football_grid_bot_action'
     && kind !== 'football_grid_rematch_expiry'

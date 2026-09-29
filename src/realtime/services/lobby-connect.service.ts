@@ -76,6 +76,13 @@ export async function rejoinActiveDraftLobbyOnConnect(
 
   const newestLobby = activeLobbies[0];
   await attachUserSocketsToLobby(io, userId, newestLobby.id);
+  // A duel room has no draft: re-bind the socket (Ready/Start after the duel need it) and show
+  // the room. The duel runtime points the player back at the live duel itself (duel:found).
+  if (newestLobby.game_mode === 'duel') {
+    socket.emit('lobby:state', await lobbiesService.buildLobbyState(newestLobby));
+    logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined active duel room');
+    return;
+  }
   const [state, categories, bans, members] = await Promise.all([
     lobbiesService.buildLobbyState(newestLobby),
     lobbiesService.getLobbyCategories(newestLobby.id),
@@ -144,6 +151,8 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
   }
 
   if (lobby.status === 'active') {
+    // Duels are deadline-driven: a disconnect pauses nothing (idle strikes and the ready gate decide).
+    if (lobby.game_mode === 'duel') return;
     // DB-fallback guard: this socket was never bound to the lobby
     // (socket.data.lobbyId was unset), so it may be an unrelated tab
     // (homepage etc.). If the user still has a live socket in the draft

@@ -34,7 +34,7 @@ function parseArgs(argv: string[]): Args {
     else if (arg === '--allow-overlap') args.allowOverlap = true;
     else if (arg.startsWith('--game')) {
       const game = value();
-      if (!DUEL_GAMES.includes(game as DuelGameId)) throw new Error('--game must be pistas or buscaminas');
+      if (!DUEL_GAMES.includes(game as DuelGameId)) throw new Error(`--game must be one of ${DUEL_GAMES.join(', ')}`);
       args.game = game as DuelGameId;
     } else if (arg.startsWith('--file')) args.file = value();
     else if (arg.startsWith('--target')) {

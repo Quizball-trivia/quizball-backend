@@ -1,9 +1,12 @@
 import { config } from '../../core/config.js';
 import type { LobbyGameMode } from '../socket.types.js';
 import { lobbyCapacityForGameMode } from '../../modules/lobbies/lobby-capacity.js';
+import { LOBBY_GAME_MODES, LOBBY_MODES, modeForMemberCount } from '../../modules/lobbies/lobby-modes.js';
 
 /** What a room may play while it holds at least one guest (owner decision 2026-09-12). */
-export const GUEST_ALLOWED_LOBBY_MODES: ReadonlySet<LobbyGameMode> = new Set<LobbyGameMode>(['football_grid', 'auction', 'ranked_sim']);
+export const GUEST_ALLOWED_LOBBY_MODES: ReadonlySet<LobbyGameMode> = new Set<LobbyGameMode>(
+  LOBBY_GAME_MODES.filter((mode) => LOBBY_MODES[mode].guestAllowed),
+);
 export const MAX_GUESTS_PER_LOBBY = 3;
 
 export interface GuestLobbyMember {
@@ -27,11 +30,11 @@ export function guestCompatibleInitialMode(): LobbyGameMode {
 
 /**
  * The mode the room will actually be in for a member count, mirroring the
- * join/leave normalization (> 2 members promotes to party quiz unless the room
- * is auction or grid).
+ * join/leave normalization (> 2 members promotes to party quiz unless the mode
+ * does not promote: auction, grid, duel).
  */
 export function normalizedModeForMemberCount(mode: LobbyGameMode, memberCount: number): LobbyGameMode {
-  return memberCount > 2 && mode !== 'auction' && mode !== 'football_grid' ? 'friendly_party_quiz' : mode;
+  return modeForMemberCount(mode, memberCount);
 }
 
 /**
@@ -46,7 +49,7 @@ export function validateGuestLobby(members: readonly GuestLobbyMember[], nextMod
     return { code: 'LOBBY_GUEST_LIMIT', message: `A room can hold at most ${MAX_GUESTS_PER_LOBBY} guests`, meta: { maxGuests: MAX_GUESTS_PER_LOBBY } };
   }
   if (!isGuestAllowedLobbyMode(nextMode)) {
-    return { code: 'LOBBY_MODE_REQUIRES_ACCOUNT', message: 'This mode needs an account — Tic Tac Toe, Auction and Ranked sim are open to guests', meta: { gameMode: nextMode } };
+    return { code: 'LOBBY_MODE_REQUIRES_ACCOUNT', message: 'This mode needs an account — Tic Tac Toe, Auction, Ranked sim and friend duels are open to guests', meta: { gameMode: nextMode } };
   }
   const maxMembers = lobbyCapacityForGameMode(nextMode);
   if (members.length > maxMembers) {

@@ -539,6 +539,10 @@ export const duelService = {
     });
   },
 
+  anyLive() {
+    return duelRepo.anyLive();
+  },
+
   staleLiveMatches(limit = 20) {
     return duelRepo.staleLiveMatches(DUEL_MAX_AGE_MS, limit);
   },

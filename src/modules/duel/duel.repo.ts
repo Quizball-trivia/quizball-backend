@@ -347,6 +347,13 @@ export const duelRepo = {
     `;
   },
 
+  async anyLive(): Promise<boolean> {
+    const [row] = await sql<Array<{ live: boolean }>>`
+      SELECT EXISTS (SELECT 1 FROM duel_matches WHERE status IN ('ready', 'countdown', 'active', 'paused')) AS live
+    `;
+    return row?.live ?? false;
+  },
+
   async liveMatchForUser(userId: string): Promise<{ id: string; game: DuelGameId; lobby_id: string | null } | null> {
     const [row] = await sql<Array<{ id: string; game: DuelGameId; lobby_id: string | null }>>`
       SELECT m.id, m.game, m.lobby_id FROM duel_participants p JOIN duel_matches m ON m.id = p.match_id

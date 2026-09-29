@@ -60,6 +60,9 @@ let maintenanceTimer: NodeJS.Timeout | null = null;
 const MAINTENANCE_MS = 60_000;
 const PURGE_EVERY_MS = 60 * 60 * 1000;
 let recoveryRunning = false;
+/** Duels switched off can still be draining; refreshed each maintenance tick, assumed until the first one. */
+let liveDuelsMayExist = true;
+const duelsMayBeLive = (): boolean => anyDuelGameEnabled() || liveDuelsMayExist;
 
 async function emitSnapshot(io: QuizballServer, matchId: string, userId: string, locale?: DuelLocale): Promise<void> {
   const snapshot = await duelService.snapshot(matchId, userId, locale);
@@ -186,6 +189,7 @@ export const duelRealtimeService = {
     let lastPurge = 0;
     maintenanceTimer = setInterval(() => {
       void (async () => {
+        liveDuelsMayExist = await duelService.anyLive();
         for (const id of await duelService.staleLiveMatches()) {
           const effects = await duelService.cancelStale(id).catch((error) => { logger.warn({ error, matchId: id }, 'Duel age-cap cancel failed'); return null; });
           void deliver(io, effects).catch(() => {});
@@ -203,12 +207,16 @@ export const duelRealtimeService = {
   /**
    * A connecting player in a live duel is present again (a paused match may resume) and is pointed back at the
    * duel, wherever on the site they are. Returns whether the socket is now bound to a live duel.
-   * With every duel game switched off, connects pay no lookup (a draining duel still ends on its own clocks).
+   * With every duel game switched off and none left live, connects pay no lookup.
    */
   async onConnect(io: QuizballServer, socket: QuizballSocket): Promise<boolean> {
-    if (!anyDuelGameEnabled()) return false;
+    if (!duelsMayBeLive()) {
+      socket.data.duelChecked = true;
+      return false;
+    }
     const userId = socket.data.user.id;
     const live = await duelService.liveMatchFor(userId);
+    socket.data.duelChecked = true;
     // Always answered, so a client that remembers a duel that has since ended can forget it.
     socket.emit('duel:active', live ? { matchId: live.id, game: live.game, lobbyId: live.lobby_id } : null);
     if (!live) return false;
@@ -219,9 +227,14 @@ export const duelRealtimeService = {
     return true;
   },
 
-  /** Only a socket seen in a duel, or bound to a room (duels start from rooms), can leave a duel seat behind. */
+  /**
+   * Only a socket seen in a duel, bound to a room (duels start from rooms), or not yet checked on connect (it may
+   * be a duel player's replacement socket closing before hydration) can leave a duel seat behind.
+   */
   mayHoldDuelSeat(socket: QuizballSocket): boolean {
-    return Boolean(socket.data.duelMatchId || socket.data.lobbyId);
+    if (socket.data.duelMatchId) return true;
+    if (!duelsMayBeLive()) return false;
+    return Boolean(socket.data.lobbyId) || !socket.data.duelChecked;
   },
 
   /**

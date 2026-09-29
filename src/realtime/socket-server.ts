@@ -398,11 +398,11 @@ async function runPostConnectHydration(
   // that reconnect storms hammer.
   // Skipped when hydration already bound this socket to a live match of any
   // mode: an old grid result must not land on top of a ranked/auction rejoin.
-  // A live duel is live gameplay too: no older result may replay over it.
-  const inDuel = await duelRealtimeService.onConnect(io, socket).catch((error) => {
+  await duelRealtimeService.onConnect(io, socket).catch((error) => {
     logger.warn({ error, userId }, 'Failed to point a reconnecting player at their duel');
-    return false;
   });
+  // A live duel is live gameplay too: no older result may replay over it (even when its presence update failed).
+  const inDuel = Boolean(socket.data.duelMatchId);
   if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);

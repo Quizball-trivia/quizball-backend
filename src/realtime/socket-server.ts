@@ -398,10 +398,12 @@ async function runPostConnectHydration(
   // that reconnect storms hammer.
   // Skipped when hydration already bound this socket to a live match of any
   // mode: an old grid result must not land on top of a ranked/auction rejoin.
-  await duelRealtimeService.onConnect(io, socket).catch((error) => {
+  // A live duel is live gameplay too: no older result may replay over it.
+  const inDuel = await duelRealtimeService.onConnect(io, socket).catch((error) => {
     logger.warn({ error, userId }, 'Failed to point a reconnecting player at their duel');
+    return false;
   });
-  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId) {
+  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
     } catch (error) {
@@ -417,7 +419,7 @@ async function runPostConnectHydration(
     }
   }
 
-  if (!socket.data.matchId) {
+  if (!socket.data.matchId && !inDuel) {
     try {
       await matchRealtimeService.emitPendingForfeitIfAny(socket);
       await matchRealtimeService.emitPendingPartyDropoutIfAny(socket);
@@ -797,7 +799,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
-      duelRealtimeService.handleSocketDisconnect(io, user.id);
+      if (duelRealtimeService.mayHoldDuelSeat(socket)) {
+        runSocketDbTask('duel_disconnect', user.id, () => duelRealtimeService.handleSocketDisconnect(io, user.id));
+      }
       const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
       if (disconnectDbTasks.includes('lobby_disconnect')) {
         runSocketDbTask('lobby_disconnect', user.id, () =>

@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { anyDuelGameEnabled } from '../../modules/duel/duel.config.js';
 import { asDuelLocale, DuelError, duelService, type DuelEffects } from '../../modules/duel/duel.service.js';
 import type { DuelLocale } from '../../modules/duel/duel.types.js';
 import { emitLobbyState } from '../lobby-utils.js';
@@ -201,18 +202,26 @@ export const duelRealtimeService = {
 
   /**
    * A connecting player in a live duel is present again (a paused match may resume) and is pointed back at the
-   * duel, wherever on the site they are.
+   * duel, wherever on the site they are. Returns whether the socket is now bound to a live duel.
+   * With every duel game switched off, connects pay no lookup (a draining duel still ends on its own clocks).
    */
-  async onConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+  async onConnect(io: QuizballServer, socket: QuizballSocket): Promise<boolean> {
+    if (!anyDuelGameEnabled()) return false;
     const userId = socket.data.user.id;
     const live = await duelService.liveMatchFor(userId);
     // Always answered, so a client that remembers a duel that has since ended can forget it.
     socket.emit('duel:active', live ? { matchId: live.id, game: live.game, lobbyId: live.lobby_id } : null);
-    if (!live) return;
+    if (!live) return false;
+    socket.data.duelMatchId = live.id;
     socket.emit('duel:found', { matchId: live.id, game: live.game, lobbyId: live.lobby_id });
     // The lookup may have outlived the socket: a closed socket is not a presence (its disconnect is being handled).
-    if (!socket.connected) return;
-    await deliver(io, await duelService.present(userId));
+    if (socket.connected) await deliver(io, await duelService.present(userId));
+    return true;
+  },
+
+  /** Only a socket seen in a duel, or bound to a room (duels start from rooms), can leave a duel seat behind. */
+  mayHoldDuelSeat(socket: QuizballSocket): boolean {
+    return Boolean(socket.data.duelMatchId || socket.data.lobbyId);
   },
 
   /**
@@ -220,14 +229,12 @@ export const duelRealtimeService = {
    * (a reload, a network hiccup reconnect well within it) does the seat go absent and the match pause.
    * Presence is read across replicas through the user's room.
    */
-  handleSocketDisconnect(io: QuizballServer, userId: string): void {
-    void (async () => {
-      // Read the seat's presence generation now: any (re)connect before the check commits bumps it, and the
-      // check then does nothing, even when the reconnect landed on another replica.
-      const generation = await duelService.presenceGeneration(userId);
-      if (generation === null) return;
-      await markDisconnect(userId);
-      scheduleAbsenceCheck(io, userId, generation, DISCONNECT_DEBOUNCE_MS, 0);
-    })().catch((error) => logger.warn({ error, userId }, 'Duel disconnect bookkeeping failed'));
+  async handleSocketDisconnect(io: QuizballServer, userId: string): Promise<void> {
+    // Read the seat's presence generation now: any (re)connect before the check commits bumps it, and the
+    // check then does nothing, even when the reconnect landed on another replica.
+    const generation = await duelService.presenceGeneration(userId);
+    if (generation === null) return;
+    await markDisconnect(userId);
+    scheduleAbsenceCheck(io, userId, generation, DISCONNECT_DEBOUNCE_MS, 0);
   },
 };

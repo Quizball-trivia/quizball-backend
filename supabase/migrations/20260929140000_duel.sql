@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS public.duel_matches (
   CONSTRAINT chk_duel_matches_active_state CHECK (status <> 'active' OR state IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_duel_matches_due ON public.duel_matches (phase_deadline_at) WHERE status IN ('ready', 'countdown', 'active', 'paused');
+-- The lobby FK's ON DELETE lookup (any lobby delete) and retention both scan history: index them.
+CREATE INDEX IF NOT EXISTS idx_duel_matches_lobby ON public.duel_matches (lobby_id);
+CREATE INDEX IF NOT EXISTS idx_duel_matches_ended ON public.duel_matches (ended_at) WHERE ended_at IS NOT NULL;
 -- One live duel per room.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_duel_matches_live_lobby ON public.duel_matches (lobby_id) WHERE status IN ('ready', 'countdown', 'active', 'paused');
 

@@ -23,6 +23,8 @@ export interface SocketAuthData {
   lobbyId?: string;
   matchId?: string;
   gridMatchId?: string;
+  /** The live duel this socket was seen in (connect or a duel:* event); disconnect bookkeeping keys off it. */
+  duelMatchId?: string;
   connectedAt?: number;
 }
 

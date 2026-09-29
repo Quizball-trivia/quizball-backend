@@ -309,7 +309,7 @@ export const duelRepo = {
   async staleLiveMatches(maxAgeMs: number, limit: number): Promise<string[]> {
     const rows = await sql<Array<{ id: string }>>`
       SELECT id FROM duel_matches
-      WHERE status IN ('ready', 'countdown', 'active', 'paused') AND created_at < clock_timestamp() - make_interval(secs => ${maxAgeMs / 1000})
+      WHERE status IN ('ready', 'countdown', 'active', 'paused') AND created_at < statement_timestamp() - make_interval(secs => ${maxAgeMs / 1000})
       ORDER BY created_at LIMIT ${limit}
     `;
     return rows.map((r) => r.id);
@@ -323,23 +323,26 @@ export const duelRepo = {
     const commands = await sql`
       DELETE FROM duel_commands WHERE ctid IN (
         SELECT c.ctid FROM duel_commands c JOIN duel_matches m ON m.id = c.match_id
-        WHERE m.ended_at < clock_timestamp() - make_interval(days => ${days}) LIMIT ${batch}
+        WHERE m.ended_at < statement_timestamp() - make_interval(days => ${days}) LIMIT ${batch}
       )
     `;
     const contents = await sql`
       DELETE FROM duel_match_content WHERE match_id IN (
         SELECT c.match_id FROM duel_match_content c JOIN duel_matches m ON m.id = c.match_id
-        WHERE m.ended_at < clock_timestamp() - make_interval(days => ${days}) LIMIT ${batch}
+        WHERE m.ended_at < statement_timestamp() - make_interval(days => ${days}) LIMIT ${batch}
       )
     `;
     return { commands: commands.count, contents: contents.count };
   },
 
-  /** Live matches whose clock has run out by the database clock (the recovery poll's work list). */
+  /**
+   * Live matches whose clock has run out by the database clock (the recovery poll's work list). statement_timestamp()
+   * (stable, unlike clock_timestamp()) lets the due index bound the scan; expire() re-reads the fresh clock under the lock.
+   */
   async dueMatches(limit: number): Promise<Array<{ id: string; phase_token: number }>> {
     return sql<Array<{ id: string; phase_token: number }>>`
       SELECT id, phase_token FROM duel_matches
-      WHERE status IN ('ready', 'countdown', 'active', 'paused') AND phase_deadline_at <= clock_timestamp()
+      WHERE status IN ('ready', 'countdown', 'active', 'paused') AND phase_deadline_at <= statement_timestamp()
       ORDER BY phase_deadline_at LIMIT ${limit}
     `;
   },

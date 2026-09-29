@@ -27,6 +27,7 @@ export function registerDuelHandlers(io: QuizballServer, socket: QuizballSocket)
           return;
         }
         const id = (parsed.data as { matchId?: string }).matchId;
+        if (id) socket.data.duelMatchId = id;
         await task(parsed.data).catch((error) => duelRealtimeService.emitError(socket, error, id));
       })().catch((error) => duelRealtimeService.emitError(socket, error));
     }) as never);

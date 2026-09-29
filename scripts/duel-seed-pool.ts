@@ -61,7 +61,9 @@ async function main(): Promise<void> {
   const rows = parsePoolFile(args.game, raw);
   const counts = rows.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.difficulty]: (acc[row.difficulty] ?? 0) + 1 }), {});
   console.log(`${args.game} pool: ${rows.length} items ${JSON.stringify(counts)} -> ${target.label}`);
-  const sql = postgres(process.env.DATABASE_URL!, { max: 1, prepare: false });
+  const sql = postgres(process.env.DATABASE_URL!, {
+    max: 1, prepare: false, connect_timeout: 15, onnotice: () => undefined, ssl: target.kind === 'local' ? false : 'require',
+  });
   try {
     const { overlapping } = await findDailyOverlap(sql, args.game, rows);
     if (overlapping.length > 0) {

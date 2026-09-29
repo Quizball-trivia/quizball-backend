@@ -218,10 +218,11 @@ export const duelRealtimeService = {
       return false;
     }
     const userId = socket.data.user.id;
+    const boundBefore = socket.data.duelMatchId;
     const live = await duelService.liveMatchFor(userId);
     socket.data.duelChecked = true;
-    // The lookup is authoritative: a duel id bound by an earlier (possibly rejected) duel:* event is dropped.
-    socket.data.duelMatchId = live?.id;
+    // The lookup replaces an id bound before it (possibly by a rejected duel:* event), never one bound during it.
+    if (socket.data.duelMatchId === boundBefore) socket.data.duelMatchId = live?.id;
     // Always answered, so a client that remembers a duel that has since ended can forget it.
     socket.emit('duel:active', live ? { matchId: live.id, game: live.game, lobbyId: live.lobby_id } : null);
     if (!live) return false;

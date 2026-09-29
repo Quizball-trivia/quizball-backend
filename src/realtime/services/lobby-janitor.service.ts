@@ -99,7 +99,14 @@ async function sweep(io: QuizballServer): Promise<void> {
     if (candidates.length === 0) return;
     let swept = 0;
     for (const row of candidates) {
-      if (await sweepLobby(io, row)) swept += 1;
+      // Per-lobby isolation: one failing lobby must not block the rest of the
+      // batch (ORDER BY created_at would retry the same poison row first every
+      // sweep). Failed lobbies are simply retried next pass.
+      try {
+        if (await sweepLobby(io, row)) swept += 1;
+      } catch (error) {
+        logger.warn({ error, lobbyId: row.id }, 'Lobby janitor: sweep of one lobby failed; continuing');
+      }
     }
     if (swept > 0) {
       logger.info({ candidates: candidates.length, swept }, 'Lobby janitor sweep complete');

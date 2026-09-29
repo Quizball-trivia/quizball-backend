@@ -48,7 +48,7 @@ beforeEach(() => {
   removeMemberMock.mockReset();
   getByIdMock.mockReset();
   closeLobbyIfEmptyMock.mockReset().mockResolvedValue(true);
-  sqlMock.mockReset();
+  sqlMock.mockReset().mockResolvedValue([]);
 });
 
 describe('lobby janitor sweepLobby', () => {
@@ -61,6 +61,16 @@ describe('lobby janitor sweepLobby', () => {
     expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u1');
     expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u2');
     expect(closeLobbyIfEmptyMock).toHaveBeenCalledWith(expect.anything(), 'l1');
+  });
+
+  it('skips a room whose friend duel is still live (duels are not in matches)', async () => {
+    getByIdMock.mockResolvedValue({ id: 'l5', status: 'waiting' });
+    sqlMock.mockResolvedValueOnce([{ live: true }]);
+    const swept = await lobbyJanitorService.__internals.sweepLobby(
+      ioMock([]), { id: 'l5', status: 'waiting', game_mode: 'duel' });
+    expect(swept).toBe(false);
+    expect(removeMemberMock).not.toHaveBeenCalled();
+    expect(closeLobbyIfEmptyMock).not.toHaveBeenCalled();
   });
 
   it('skips a lobby with a live socket in its room', async () => {

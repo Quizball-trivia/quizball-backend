@@ -14,7 +14,7 @@ if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return count`;
 
 export function guestHttpBudget(
-  name: 'mint' | 'standings' | 'ip' | 'principal' | 'buscaminas-address' | 'buscaminas' | 'pistas-address' | 'pistas',
+  name: 'mint' | 'standings' | 'ip' | 'principal' | 'buscaminas-address' | 'buscaminas' | 'pistas-address' | 'pistas' | 'ultimo-address' | 'ultimo',
   limit: number,
   subject: (req: Request) => string,
 ): RequestHandler {

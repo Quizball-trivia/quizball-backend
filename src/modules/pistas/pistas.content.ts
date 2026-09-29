@@ -1,3 +1,4 @@
+import { createDailyContentStore, type ContentLog, type ContentSource as DailyContentSource, type ContentStore as DailyContentStore } from '../daily/daily.content.js';
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
 import { normalizeAnswer } from './pistas.normalize.js';
 import { CLUE_KINDS, PISTAS_LOCALES, type Clue, type ClueKind, type LocalizedText, type PistasDayRow } from './pistas.types.js';
@@ -59,60 +60,11 @@ export function indexDay(row: PistasDayRow): IndexedDay | null {
 export const copyClue = (c: Clue): Clue => ({ kind: c.kind, icon: c.icon, text: { es: c.text.es, en: c.text.en, ka: c.text.ka, tr: c.text.tr } });
 export const copyText = (t: LocalizedText): LocalizedText => ({ es: t.es, en: t.en, ka: t.ka, tr: t.tr });
 
-export interface ContentSource {
-  /** Changes whenever pistas_days changes (a seed); cheap enough to ask every few seconds. */
-  fingerprint(): Promise<string>;
-  load(): Promise<PistasDayRow[]>;
-}
+export type { ContentLog } from '../daily/daily.content.js';
 
-export interface ContentLog {
-  warn: (obj: Record<string, unknown>, msg: string) => void;
-  error: (obj: Record<string, unknown>, msg: string) => void;
-}
-
-export interface ContentStore {
-  /** Days in serving form; re-read from the database only when its fingerprint changes. */
-  get(): Promise<ContentIndex>;
-  /** The next get() re-checks the database instead of waiting out the refresh interval. */
-  invalidate(): void;
-}
+export type ContentSource = DailyContentSource<PistasDayRow>;
+export type ContentStore = DailyContentStore<IndexedDay>;
 
 export function createContentStore(source: ContentSource, opts: { refreshMs: number; now: () => number; log: ContentLog }): ContentStore {
-  let cached: { fingerprint: string; index: ContentIndex; checkedAt: number } | null = null;
-  let inflight: Promise<ContentIndex> | null = null;
-
-  async function refresh(): Promise<ContentIndex> {
-    const fingerprint = await source.fingerprint();
-    if (cached && cached.fingerprint === fingerprint) {
-      cached.checkedAt = opts.now();
-      return cached.index;
-    }
-    const index = new Map<string, IndexedDay>();
-    for (const row of await source.load()) {
-      const day = indexDay(row);
-      if (day) index.set(row.day, day);
-      else opts.log.error({ day: row.day }, 'Pistas day has malformed content; it is not served');
-    }
-    cached = { fingerprint, index, checkedAt: opts.now() };
-    return index;
-  }
-
-  return {
-    async get() {
-      if (cached && opts.now() - cached.checkedAt < opts.refreshMs) return cached.index;
-      inflight ??= refresh().finally(() => { inflight = null; });
-      try {
-        return await inflight;
-      } catch (error) {
-        // A failed re-check keeps serving what was loaded; with nothing loaded yet the request fails.
-        if (!cached) throw error;
-        opts.log.warn({ err: error }, 'Pistas content refresh failed; serving the previous copy');
-        cached.checkedAt = opts.now();
-        return cached.index;
-      }
-    },
-    invalidate() {
-      if (cached) cached.checkedAt = Number.NEGATIVE_INFINITY;
-    },
-  };
+  return createDailyContentStore(source, indexDay, { ...opts, label: 'Pistas' });
 }

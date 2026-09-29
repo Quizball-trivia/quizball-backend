@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-export const DUEL_GAMES = ['buscaminas', 'pistas'] as const;
+export const DUEL_GAMES = ['buscaminas', 'pistas', 'ultimo'] as const;
 export type DuelGameId = (typeof DUEL_GAMES)[number];
 
 export const DUEL_LOCALES = ['es', 'en', 'ka', 'tr'] as const;

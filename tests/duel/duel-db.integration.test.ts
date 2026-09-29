@@ -214,6 +214,22 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
     expect(await duelService.present(b)).toBeNull();
   });
 
+  it('the resume grace is never more than the pause lasted: a quick drop earns nothing, a real one its seconds back', async () => {
+    const quick = await started('buscaminas');
+    await duelService.absent(quick.b);
+    const kept = (await db.sql`SELECT paused_remaining_ms FROM duel_matches WHERE id = ${quick.matchId}`)[0].paused_remaining_ms as number;
+    const blip = await duelService.present(quick.b);
+    expect(blip!.timer!.dueAt.getTime() - Date.now()).toBeLessThan(kept + 1_000);
+    const real = await started('buscaminas');
+    await duelService.absent(real.b);
+    // The pause began five seconds ago: the full grace is due.
+    await db.sql`UPDATE duel_matches SET paused_at = clock_timestamp() - interval '5 seconds' WHERE id = ${real.matchId}`;
+    const keptReal = (await db.sql`SELECT paused_remaining_ms FROM duel_matches WHERE id = ${real.matchId}`)[0].paused_remaining_ms as number;
+    const back = await duelService.present(real.b);
+    expect(back!.timer!.dueAt.getTime() - Date.now()).toBeGreaterThan(keptReal + DUEL_RESUME_GRACE_MS - 1_000);
+    expect((await db.sql`SELECT paused_at FROM duel_matches WHERE id = ${real.matchId}`)[0].paused_at).toBeNull();
+  });
+
   it('a seat that does not come back within its window forfeits: the rival wins by disconnect', async () => {
     const { matchId, lobbyId, b } = await started('buscaminas');
     await duelService.absent(b);

@@ -48,6 +48,7 @@ import { triviaMinesRoutes } from './trivia-mines.routes.js';
 
 import { buscaminasRoutes } from './buscaminas.routes.js';
 import { pistasRoutes } from './pistas.routes.js';
+import { ultimoRoutes } from './ultimo.routes.js';
 
 import { squadSpinRoutes } from './squad-spin.routes.js';
 
@@ -115,6 +116,7 @@ router.use('/api/v1/trivia-mines', triviaMinesRoutes);
 router.use('/api/v1/buscaminas', buscaminasRoutes);
 
 router.use('/api/v1/pistas', pistasRoutes);
+router.use('/api/v1/ultimo', ultimoRoutes);
 
 router.use('/api/v1/squad-spin', squadSpinRoutes);
 

@@ -28,6 +28,8 @@ export interface DuelMatchRow {
   rng_counter: number;
   paused_from: 'countdown' | 'active' | null;
   paused_remaining_ms: number | null;
+  /** When the current pause began (kept across a re-pause); null while not paused. */
+  paused_at: Date | null;
   result: DuelResult | null;
   /** The database clock when the row was read (clock_timestamp()). */
   now: Date;
@@ -52,7 +54,7 @@ export interface DuelParticipantRow {
 export interface PoolItem { item_id: string; difficulty: string; payload: unknown }
 
 const MATCH_COLUMNS = `id, game, engine_version, lobby_id, status, state, state_version, phase_token, phase_deadline_at,
-  rng_counter, paused_from, paused_remaining_ms, result, clock_timestamp() AS now`;
+  rng_counter, paused_from, paused_remaining_ms, paused_at, result, clock_timestamp() AS now`;
 
 export const duelRepo = {
   withTx<T>(fn: (tx: TransactionSql) => Promise<T>): Promise<T> {
@@ -218,7 +220,7 @@ export const duelRepo = {
     await q`
       UPDATE duel_matches SET status = ${data.status}, state = ${q.json(data.state as never)}, state_version = state_version + 1,
         phase_token = phase_token + 1, phase_deadline_at = NULL, rng_counter = ${data.rngCounter},
-        paused_from = NULL, paused_remaining_ms = NULL,
+        paused_from = NULL, paused_remaining_ms = NULL, paused_at = NULL,
         result = ${q.json(data.result as never)}, ended_at = clock_timestamp()
       WHERE id = ${row.id}
     `;
@@ -246,7 +248,9 @@ export const duelRepo = {
     const [row] = await q<Array<{ phase_token: number; phase_deadline_at: Date }>>`
       UPDATE duel_matches SET status = ${data.status}, state_version = state_version + 1, phase_token = phase_token + 1,
         phase_deadline_at = ${data.deadlineAt}::timestamptz,
-        paused_from = ${data.pausedFrom ?? null}, paused_remaining_ms = ${data.pausedRemainingMs ?? null}
+        paused_from = ${data.pausedFrom ?? null}, paused_remaining_ms = ${data.pausedRemainingMs ?? null},
+        -- The pause's first moment (a re-pause keeps it): resume grants at most the time actually paused.
+        paused_at = CASE WHEN ${data.status} = 'paused' THEN COALESCE(CASE WHEN status = 'paused' THEN paused_at END, clock_timestamp()) END
       WHERE id = ${id}
       RETURNING phase_token, phase_deadline_at
     `;

@@ -14726,7 +14726,8 @@
                             "nullable": true,
                             "enum": [
                               "buscaminas",
-                              "pistas"
+                              "pistas",
+                              "ultimo"
                             ]
                           }
                         },

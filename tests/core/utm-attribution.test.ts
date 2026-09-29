@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   parseUtmAttribution,
   utmAttributionProperties,
@@ -96,6 +96,10 @@ describe('utmAttributionProperties', () => {
 });
 
 describe('authRequestContext carries UTM for the signup path', () => {
+  // authRequestContext reads the real clock; pin it so the fixture never ages past the 30-day window.
+  beforeEach(() => { vi.useFakeTimers({ now: NOW, toFake: ['Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('includes parsed UTM alongside the client IP', async () => {
     const { authRequestContext } = await import('../../src/http/client-ip.js');
     const req = {

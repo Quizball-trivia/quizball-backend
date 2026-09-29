@@ -100,6 +100,9 @@ node_modules
 !scripts/football-grid-content-generator/**
 !scripts/football-grid-content.ts
 !scripts/buscaminas-seed-days.ts
+# Pistas futboleras day seeder (code only; the day files stay private and are passed with --file).
+!scripts/pistas-seed-days.ts
+!scripts/duel-seed-pool.ts
 !scripts/football-grid-catalog-coverage.ts
 !scripts/football-grid-answer-corrections.ts
 !scripts/football-grid-staging-research.ts

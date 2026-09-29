@@ -8,6 +8,8 @@ import {
   RANKED_ELIGIBILITY_HAVING_COUNTS,
   VALID_PAYLOAD_CONDITIONS_NP_RAW,
 } from '../../db/sql-fragments.js';
+import type { DuelGameId } from '../duel/duel.types.js';
+import { FRIENDLY_LOBBY_MAX_MEMBERS, lobbyCapacityByMode } from './lobby-modes.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -24,6 +26,8 @@ export interface CreateLobbyData {
   hostUserId: string;
   inviteCode: string | null;
   gameMode?: LobbyRow['game_mode'];
+  /** Required with gameMode 'duel', null otherwise. */
+  duelGame?: DuelGameId | null;
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;
@@ -71,6 +75,7 @@ export const lobbiesRepo = {
         invite_code,
         mode,
         game_mode,
+        duel_game,
         friendly_random,
         friendly_category_a_id,
         friendly_category_b_id,
@@ -85,6 +90,7 @@ export const lobbiesRepo = {
         ${data.inviteCode},
         ${data.mode},
         ${gameMode},
+        ${data.duelGame ?? null},
         ${friendlyRandom},
         ${data.friendlyCategoryAId ?? null},
         ${data.friendlyCategoryBId ?? null},
@@ -117,6 +123,7 @@ export const lobbiesRepo = {
           invite_code,
           mode,
           game_mode,
+          duel_game,
           friendly_random,
           friendly_category_a_id,
           friendly_category_b_id,
@@ -131,6 +138,7 @@ export const lobbiesRepo = {
           ${data.inviteCode},
           ${data.mode},
           ${gameMode},
+          ${data.duelGame ?? null},
           ${friendlyRandom},
           ${data.friendlyCategoryAId ?? null},
           ${data.friendlyCategoryBId ?? null},
@@ -269,6 +277,8 @@ export const lobbiesRepo = {
     lobbyId: string,
     settings: {
       gameMode: LobbyRow['game_mode'];
+      /** Always written: switching away from a duel clears it (lobbies_duel_game_check). */
+      duelGame: DuelGameId | null;
       friendlyRandom: boolean;
       friendlyCategoryAId: string | null;
       friendlyCategoryBId: string | null;
@@ -278,6 +288,7 @@ export const lobbiesRepo = {
       UPDATE lobbies
       SET
         game_mode = ${settings.gameMode},
+        duel_game = ${settings.duelGame},
         friendly_random = ${settings.friendlyRandom},
         friendly_category_a_id = ${settings.friendlyCategoryAId},
         friendly_category_b_id = ${settings.friendlyCategoryBId},
@@ -395,6 +406,21 @@ export const lobbiesRepo = {
     return rows.length;
   },
 
+  /**
+   * Live duels of the given rooms (a duel room is 'active' exactly while one of these exists).
+   * Lives here, not in the duel module, because the session guard and connect hydration ask it
+   * about lobbies.
+   */
+  async listLiveDuelsForLobbies(lobbyIds: string[]): Promise<Array<{ lobby_id: string; match_id: string; game: DuelGameId }>> {
+    if (lobbyIds.length === 0) return [];
+    return sql<Array<{ lobby_id: string; match_id: string; game: DuelGameId }>>`
+      SELECT lobby_id, id AS match_id, game
+      FROM duel_matches
+      WHERE lobby_id = ANY(${sql.array([...new Set(lobbyIds)])}::uuid[])
+        AND status IN ('ready', 'countdown', 'active', 'paused')
+    `;
+  },
+
   async listPublicLobbies(params: {
     limit: number;
     joinableOnly: boolean;
@@ -403,6 +429,7 @@ export const lobbiesRepo = {
     invite_code: string;
     display_name: string;
     game_mode: LobbyRow['game_mode'];
+    duel_game: LobbyRow['duel_game'];
     is_public: boolean;
     created_at: string;
     host_user_id: string;
@@ -416,6 +443,7 @@ export const lobbiesRepo = {
       invite_code: string;
       display_name: string;
       game_mode: LobbyRow['game_mode'];
+      duel_game: LobbyRow['duel_game'];
       is_public: boolean;
       created_at: string;
       host_user_id: string;
@@ -429,6 +457,7 @@ export const lobbiesRepo = {
         l.invite_code,
         l.display_name,
         l.game_mode,
+        l.duel_game,
         l.is_public,
         l.created_at,
         l.host_user_id,
@@ -448,11 +477,10 @@ export const lobbiesRepo = {
       GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
       HAVING (
         ${params.joinableOnly}::boolean = false
-        OR COUNT(lm.user_id) < CASE
-          WHEN l.game_mode = 'football_grid' THEN 2
-          WHEN l.game_mode = 'auction' THEN 3
-          ELSE 6
-        END
+        OR COUNT(lm.user_id) < COALESCE(
+          (${sql.json(lobbyCapacityByMode())}::jsonb ->> l.game_mode)::int,
+          ${FRIENDLY_LOBBY_MAX_MEMBERS}
+        )
       )
       ORDER BY l.created_at DESC
       LIMIT ${params.limit}

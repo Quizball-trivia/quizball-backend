@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { avatarCustomizationSchema } from '../users/avatar-customization.js';
+import { DUEL_GAMES } from '../duel/duel.types.js';
+import { LOBBY_GAME_MODES } from './lobby-modes.js';
 
 export const listPublicLobbiesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
@@ -10,7 +12,9 @@ export const publicLobbyResponseSchema = z.object({
   lobbyId: z.string().uuid(),
   inviteCode: z.string(),
   displayName: z.string(),
-  gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'football_grid', 'auction', 'ranked_sim']),
+  gameMode: z.enum(LOBBY_GAME_MODES),
+  /** The game of a duel room; null for every other mode. */
+  duelGame: z.enum(DUEL_GAMES).nullable(),
   isPublic: z.boolean(),
   createdAt: z.string().datetime(),
   memberCount: z.number().int(),

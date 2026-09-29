@@ -1,14 +1,31 @@
 import { z } from 'zod';
+import { DUEL_GAMES } from '../../modules/duel/duel.types.js';
+import { LOBBY_GAME_MODES, LOBBY_MODES } from '../../modules/lobbies/lobby-modes.js';
 
 const correlationIdSchema = z.string().min(1).max(128).optional();
+const duelGameSchema = z.enum(DUEL_GAMES);
 
-export const lobbyCreateSchema = z.object({
-  mode: z.enum(['friendly', 'ranked']),
-  isPublic: z.boolean().optional(),
-  // Open the room straight in a friend-playable mode (the game modals' "Play with friend").
-  gameMode: z.enum(['football_grid', 'auction']).optional(),
-  correlationId: correlationIdSchema,
-});
+/** A duel room names its game; no other room has one (mirrors lobbies_duel_game_check). */
+function refineDuelGame(data: { gameMode?: string; duelGame?: string | null }, ctx: z.RefinementCtx): void {
+  if (data.gameMode === 'duel' && !data.duelGame) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A duel room needs its game', path: ['duelGame'] });
+  }
+  if (data.gameMode !== 'duel' && data.duelGame) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a duel room has a duel game', path: ['duelGame'] });
+  }
+}
+
+export const lobbyCreateSchema = z
+  .object({
+    mode: z.enum(['friendly', 'ranked']),
+    isPublic: z.boolean().optional(),
+    // Open the room straight in a friend-playable mode (the game modals' "Play with friend").
+    gameMode: z.enum(['football_grid', 'auction', 'duel']).optional(),
+    // Whether the game is enabled is checked by the service, which answers DUEL_UNAVAILABLE.
+    duelGame: duelGameSchema.optional(),
+    correlationId: correlationIdSchema,
+  })
+  .superRefine(refineDuelGame);
 
 export const lobbyJoinByCodeSchema = z.object({
   inviteCode: z
@@ -30,25 +47,17 @@ export const lobbyReadySchema = z.object({
 export const lobbyUpdateSettingsSchema = z
   .object({
     lobbyId: z.string().uuid().optional(),
-    gameMode: z.enum([
-      'friendly_possession',
-      'friendly_party_quiz',
-      'football_grid',
-      'auction',
-      'ranked_sim',
-    ]),
+    gameMode: z.enum(LOBBY_GAME_MODES),
+    duelGame: duelGameSchema.nullable().optional(),
     friendlyRandom: z.boolean().optional(),
     friendlyCategoryAId: z.string().uuid().nullable().optional(),
     friendlyCategoryBId: z.string().uuid().nullable().optional(),
     isPublic: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    // Auction draws from published auction cards, not lobby categories.
-    if (
-      data.gameMode === 'ranked_sim'
-      || data.gameMode === 'auction'
-      || data.gameMode === 'football_grid'
-    ) return;
+    refineDuelGame(data, ctx);
+    // Auction, grid, ranked sim and duels bring their own content, not lobby categories.
+    if (!LOBBY_MODES[data.gameMode].needsCategories) return;
 
     if (data.friendlyRandom === false) {
       if (!data.friendlyCategoryAId) {

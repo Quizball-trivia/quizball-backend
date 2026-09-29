@@ -14620,7 +14620,8 @@
                               "friendly_party_quiz",
                               "football_grid",
                               "auction",
-                              "ranked_sim"
+                              "ranked_sim",
+                              "duel"
                             ]
                           },
                           "isPublic": {
@@ -14719,6 +14720,14 @@
                               "avatarUrl",
                               "avatarCustomization"
                             ]
+                          },
+                          "duelGame": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "buscaminas",
+                              "pistas"
+                            ]
                           }
                         },
                         "required": [
@@ -14726,6 +14735,7 @@
                           "inviteCode",
                           "displayName",
                           "gameMode",
+                          "duelGame",
                           "isPublic",
                           "createdAt",
                           "memberCount",

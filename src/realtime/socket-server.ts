@@ -1,4 +1,6 @@
 import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
+import { registerDuelHandlers } from './handlers/duel.handler.js';
+import { duelRealtimeService } from './services/duel-realtime.service.js';
 import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
 import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
 import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
@@ -396,7 +398,13 @@ async function runPostConnectHydration(
   // that reconnect storms hammer.
   // Skipped when hydration already bound this socket to a live match of any
   // mode: an old grid result must not land on top of a ranked/auction rejoin.
-  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId) {
+  await duelRealtimeService.onConnect(io, socket).catch((error) => {
+    logger.warn({ error, userId }, 'Failed to point a reconnecting player at their duel');
+  });
+  // A live duel is live gameplay too: no older result may replay over it (even when its presence update failed).
+  // A failed lookup counts as "maybe": pending results wait for a later connect.
+  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked;
+  if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
     } catch (error) {
@@ -412,7 +420,7 @@ async function runPostConnectHydration(
     }
   }
 
-  if (!socket.data.matchId) {
+  if (!socket.data.matchId && !inDuel) {
     try {
       await matchRealtimeService.emitPendingForfeitIfAny(socket);
       await matchRealtimeService.emitPendingPartyDropoutIfAny(socket);
@@ -536,6 +544,9 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     football_grid_phase: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_phase') return;
       await footballGridRealtimeService.handlePhaseTimer(server, payload);
+    },
+    duel_phase: async (server, payload: RealtimeTimerPayload) => {
+      await duelRealtimeService.handlePhaseTimer(server, payload);
     },
     football_grid_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_matchmaking_fallback') return;
@@ -680,6 +691,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   footballGridPresenceService.startNodeHeartbeat();
   footballGridRematchService.startRecovery(io);
   footballGridRealtimeService.startCommandRecovery(io);
+  duelRealtimeService.startRecovery(io);
+  duelRealtimeService.startMaintenance(io);
   footballGridMatchmakingService.startRecovery(io);
   footballGridMatchmakingService.startSweep(io);
 
@@ -724,6 +737,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerWarmupHandlers(io, socket);
     registerAuctionHandlers(io, socket);
     registerFootballGridHandlers(io, socket);
+    registerDuelHandlers(io, socket);
     registerDevHandlers(io, socket);
     registerWlHandlers(io, socket);
 
@@ -786,6 +800,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
+      if (duelRealtimeService.mayHoldDuelSeat(socket)) {
+        runSocketDbTask('duel_disconnect', user.id, () => duelRealtimeService.handleSocketDisconnect(io, user.id));
+      }
       const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
       if (disconnectDbTasks.includes('lobby_disconnect')) {
         runSocketDbTask('lobby_disconnect', user.id, () =>

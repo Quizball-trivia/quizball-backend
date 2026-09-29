@@ -53,12 +53,14 @@
     "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
     "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
     "buscaminas:seed": "tsx scripts/buscaminas-seed-days.ts",
+    "pistas:seed": "tsx scripts/pistas-seed-days.ts",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",
     "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts",
     "test:migrations": "node --test tests/migrations/runner.test.mjs",
-    "test:release-sequence": "node --test tests/migrations/release-sequence.test.mjs"
+    "test:release-sequence": "node --test tests/migrations/release-sequence.test.mjs",
+    "duel:seed": "tsx scripts/duel-seed-pool.ts"
   },
   "keywords": [],
   "author": "",

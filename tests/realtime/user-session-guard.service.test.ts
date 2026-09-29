@@ -22,6 +22,7 @@ const abortLobbyMock = vi.fn();
 const countMembersMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const resolveMatchReplayEvidenceMock = vi.fn();
+const listLiveDuelsForLobbiesMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -55,6 +56,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     countMembers: (...args: unknown[]) => countMembersMock(...args),
     deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
+    listLiveDuelsForLobbies: (...args: unknown[]) => listLiveDuelsForLobbiesMock(...args),
     setHostUser: vi.fn(),
   },
 }));
@@ -1002,5 +1004,112 @@ describe('user-session-guard.service', () => {
     expect(removeMemberMock).not.toHaveBeenCalled();
     expect(snapshot.state).toBe('IN_WAITING_LOBBY');
     expect(snapshot.waitingLobbyId).toBe('fresh-lobby');
+  });
+});
+
+describe('user-session-guard.service — friend duel rooms', () => {
+  const duelRoom = (id: string, status: 'waiting' | 'active' = 'active') => ({
+    id,
+    mode: 'friendly' as const,
+    game_mode: 'duel' as const,
+    duel_game: 'pistas' as const,
+    status,
+    host_user_id: 'u1',
+    updated_at: new Date().toISOString(),
+    joined_at: new Date().toISOString(),
+  });
+  // A member of the room still has a socket bound to it: that must not keep a dead duel room alive.
+  const ioWithRoomSocket = () => ({
+    in: vi.fn(() => ({ fetchSockets: vi.fn(async () => [{ data: { lobbyId: 'duel-room', user: { id: 'u2' } } }]) })),
+    to: vi.fn(() => ({ emit: vi.fn() })),
+  } as unknown as QuizballServer);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRedisClientMock.mockReturnValue(null);
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    getActiveMatchesForUsersMock.mockResolvedValue(new Map());
+    getActiveMatchForLobbyMock.mockResolvedValue(null);
+    listLiveDuelsForLobbiesMock.mockResolvedValue([]);
+    removeMemberMock.mockResolvedValue(undefined);
+    deleteLobbyMock.mockResolvedValue(undefined);
+    countMembersMock.mockResolvedValue(0);
+  });
+
+  it('reports the live duel as the room activity, never as activeMatchId', async () => {
+    listOpenLobbiesForUserMock.mockResolvedValue([duelRoom('duel-room')]);
+    listLiveDuelsForLobbiesMock.mockResolvedValue([{ lobby_id: 'duel-room', match_id: 'duel-1', game: 'pistas' }]);
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.resolveState('u1');
+
+    expect(listLiveDuelsForLobbiesMock).toHaveBeenCalledWith(['duel-room']);
+    expect(snapshot).toMatchObject({
+      state: 'IN_WAITING_LOBBY',
+      activeMatchId: null,
+      waitingLobbyId: 'duel-room',
+      primaryLobbyStatus: 'active',
+      activeDuel: { matchId: 'duel-1', lobbyId: 'duel-room', game: 'pistas' },
+    });
+  });
+
+  it('does not read duels for users outside active duel rooms', async () => {
+    listOpenLobbiesForUserMock.mockResolvedValue([duelRoom('duel-room', 'waiting')]);
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.resolveState('u1');
+    expect(listLiveDuelsForLobbiesMock).not.toHaveBeenCalled();
+    expect(snapshot.activeDuel).toBeNull();
+  });
+
+  it('the batched resolver reads every active duel room in one query', async () => {
+    listOpenLobbiesForUsersMock.mockResolvedValue(new Map([
+      ['u1', [duelRoom('duel-room')]],
+      ['u2', [duelRoom('duel-room')]],
+      ['u3', [{ id: 'waiting-u3', status: 'waiting', joined_at: new Date().toISOString() }]],
+    ]));
+    listLiveDuelsForLobbiesMock.mockResolvedValue([{ lobby_id: 'duel-room', match_id: 'duel-1', game: 'pistas' }]);
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshots = await userSessionGuardService.resolveStates(['u1', 'u2', 'u3']);
+
+    expect(listLiveDuelsForLobbiesMock).toHaveBeenCalledOnce();
+    expect(snapshots.get('u1')).toMatchObject({ activeMatchId: null, activeDuel: { matchId: 'duel-1', lobbyId: 'duel-room' } });
+    expect(snapshots.get('u2')).toMatchObject({ activeDuel: { matchId: 'duel-1' } });
+    expect(snapshots.get('u3')).toMatchObject({ activeDuel: null, waitingLobbyId: 'waiting-u3' });
+  });
+
+  it('keeps an active duel room with a live duel on connect', async () => {
+    listOpenLobbiesForUserMock.mockResolvedValue([duelRoom('duel-room')]);
+    listLiveDuelsForLobbiesMock.mockResolvedValue([{ lobby_id: 'duel-room', match_id: 'duel-1', game: 'pistas' }]);
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(ioWithRoomSocket(), 'u1');
+
+    expect(removeMemberMock).not.toHaveBeenCalled();
+    expect(snapshot).toMatchObject({ waitingLobbyId: 'duel-room', activeDuel: { matchId: 'duel-1' } });
+  });
+
+  it('treats an active duel room without a live duel as abandoned, even with sockets in it', async () => {
+    const lobbies = [duelRoom('duel-room')];
+    listOpenLobbiesForUserMock.mockImplementation(async () => [...lobbies]);
+    removeMemberMock.mockImplementation(async () => { lobbies.splice(0, lobbies.length); });
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(ioWithRoomSocket(), 'u1');
+
+    expect(removeMemberMock).toHaveBeenCalledWith('duel-room', 'u1');
+    expect(deleteLobbyMock).toHaveBeenCalledWith('duel-room');
+    expect(snapshot).toMatchObject({ state: 'IDLE', activeDuel: null });
+  });
+
+  it('blocks entering another room while the duel is live', async () => {
+    listOpenLobbiesForUserMock.mockResolvedValue([duelRoom('duel-room')]);
+    listLiveDuelsForLobbiesMock.mockResolvedValue([{ lobby_id: 'duel-room', match_id: 'duel-1', game: 'pistas' }]);
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForLobbyEntry(ioWithRoomSocket(), 'u1');
+
+    expect(result).toMatchObject({ ok: false, reason: 'ACTIVE_MATCH', message: 'You are already in a duel' });
+    expect(removeMemberMock).not.toHaveBeenCalled();
   });
 });

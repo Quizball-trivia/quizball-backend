@@ -187,6 +187,7 @@ export const duelRealtimeService = {
   startMaintenance(io: QuizballServer): void {
     if (maintenanceTimer) return;
     let lastPurge = 0;
+    void duelService.anyLive().then((live) => { liveDuelsMayExist = live; }).catch(() => {});
     maintenanceTimer = setInterval(() => {
       void (async () => {
         liveDuelsMayExist = await duelService.anyLive();
@@ -212,15 +213,18 @@ export const duelRealtimeService = {
   async onConnect(io: QuizballServer, socket: QuizballSocket): Promise<boolean> {
     if (!duelsMayBeLive()) {
       socket.data.duelChecked = true;
+      socket.data.duelMatchId = undefined;
+      socket.emit('duel:active', null);
       return false;
     }
     const userId = socket.data.user.id;
     const live = await duelService.liveMatchFor(userId);
     socket.data.duelChecked = true;
+    // The lookup is authoritative: a duel id bound by an earlier (possibly rejected) duel:* event is dropped.
+    socket.data.duelMatchId = live?.id;
     // Always answered, so a client that remembers a duel that has since ended can forget it.
     socket.emit('duel:active', live ? { matchId: live.id, game: live.game, lobbyId: live.lobby_id } : null);
     if (!live) return false;
-    socket.data.duelMatchId = live.id;
     socket.emit('duel:found', { matchId: live.id, game: live.game, lobbyId: live.lobby_id });
     // The lookup may have outlived the socket: a closed socket is not a presence (its disconnect is being handled).
     if (socket.connected) await deliver(io, await duelService.present(userId));

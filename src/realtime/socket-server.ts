@@ -402,7 +402,8 @@ async function runPostConnectHydration(
     logger.warn({ error, userId }, 'Failed to point a reconnecting player at their duel');
   });
   // A live duel is live gameplay too: no older result may replay over it (even when its presence update failed).
-  const inDuel = Boolean(socket.data.duelMatchId);
+  // A failed lookup counts as "maybe": pending results wait for a later connect.
+  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked;
   if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);

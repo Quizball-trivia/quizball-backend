@@ -115,6 +115,17 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     return saved ?? row;
   }
 
+  /**
+   * What the clock decided, written down; a ranked run whose window closed before its clock did (a write the ranked
+   * fence refuses) goes on as practice, off the board, and is written down there.
+   */
+  async function recordOrUnrank(tx: Tx, row: Row, at: number): Promise<Row> {
+    const saved = await recordProjection(tx, row, at);
+    if (!saved.ranked || saved.done || rules.project(saved.state, at) === saved.state) return saved;
+    const unranked = await deps.repo.unrankClosedRun(tx, saved.id);
+    return unranked ? recordProjection(tx, unranked, at) : saved;
+  }
+
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
   async function playableDay(day: string): Promise<Day> {
     const content = (await deps.content()).get(day);
@@ -188,7 +199,10 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       const at = await nowMs(tx);
       if (row.content_version === day.contentVersion) row = await recordProjection(tx, row, at);
       // The ranked window closed before this run was finished: it goes on as practice, off the board.
-      if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id)) ?? row;
+      if (row.ranked && !row.done && !live) {
+        const unranked = await deps.repo.unrankClosedRun(tx, row.id);
+        if (unranked) row = unranked.content_version === day.contentVersion ? await recordProjection(tx, unranked, at) : unranked;
+      }
       // A correction (which unranked the day's runs) replaced the content: an unfinished run moves onto it;
       // a finished one keeps its own and shows no content of the new one.
       if (row.content_version !== day.contentVersion && !row.done) {
@@ -253,7 +267,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
         await lockServedDay(tx, day);
         const locked = await deps.repo.lockRun(tx, row.id);
         if (!locked) return respond(row, day, at);
-        const saved = await recordProjection(tx, locked, await nowMs(tx));
+        const saved = await recordOrUnrank(tx, locked, await nowMs(tx));
         if (saved !== locked && rules.completion(saved.state) && saved.ranked) leaderboards.delete(saved.day);
         return respond(saved, day, await nowMs(tx), tx);
       });

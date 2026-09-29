@@ -223,6 +223,11 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     const read = await svc.current(reader, CLOSED_DAY);
     expect('state' in read && read.state.done).toBe(true);
     expect((await db.sql`SELECT done FROM ultimo_runs WHERE user_id = ${reader.userId}`)[0].done).toBe(true);
+    // A read of a run whose clock ran out only after midnight: what it shows is written down, as practice.
+    const lateReader = await insert('late-reader', closes.getTime() + 20_000);
+    const lateRead = await svc.current(lateReader, CLOSED_DAY);
+    expect('state' in lateRead && lateRead.state).toMatchObject({ done: true, ranked: false });
+    expect((await db.sql`SELECT done, ranked FROM ultimo_runs WHERE user_id = ${lateReader.userId}`)[0]).toMatchObject({ done: true, ranked: false });
   });
 
   it('`next` on an expired last category finishes the run instead of refusing it', async () => {

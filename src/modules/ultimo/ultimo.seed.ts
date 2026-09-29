@@ -71,16 +71,24 @@ export const keysOf = (c: UltimoCategory): CategoryKeys => ({
   answers: [...new Set(c.answers.flatMap((a) => [`id:${a.id}`, normalizeAnswer(a.display.en), normalizeAnswer(a.display.es)]))],
 });
 
+const jaccard = (a: readonly string[], b: readonly string[]): number => {
+  const sb = new Set(b);
+  const shared = new Set(a.filter((k) => sb.has(k))).size;
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : shared / union;
+};
+const answerIds = (k: CategoryKeys) => k.answers.filter((key) => key.startsWith('id:'));
+const answerNames = (k: CategoryKeys) => k.answers.filter((key) => !key.startsWith('id:'));
+
 /**
- * Two categories are the same content when they share an id, a title, or most of their answers (by answer id or name):
- * a renamed or translated copy of one list is still that list. Duel packs are harvestable, so a daily category may
- * never be (like) a pool one — nor one that ever was.
+ * Two categories are the same content when they share an id, a title, or most of their answers by id OR by name
+ * (measured apart, so re-keyed answers or renamed displays cannot dilute the match): a renamed or translated copy of
+ * one list is still that list. Duel packs are harvestable, so a daily category may never be (like) a pool one — nor
+ * one that ever was.
  */
 export function sameKeys(a: CategoryKeys, b: CategoryKeys): boolean {
   if (a.id === b.id || a.titles.some((t) => b.titles.includes(t))) return true;
-  const sb = new Set(b.answers);
-  const shared = a.answers.filter((k) => sb.has(k)).length;
-  return shared / (a.answers.length + b.answers.length - shared) >= 0.6;
+  return jaccard(answerIds(a), answerIds(b)) >= 0.6 || jaccard(answerNames(a), answerNames(b)) >= 0.6;
 }
 
 export const sameCategory = (a: UltimoCategory, b: UltimoCategory): boolean => sameKeys(keysOf(a), keysOf(b));

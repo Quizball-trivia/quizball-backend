@@ -11,7 +11,7 @@ vi.setConfig({ testTimeout: 30_000 });
 const lobbiesRepo = {
   createLobby: vi.fn(), addMember: vi.fn(), getByInviteCode: vi.fn(), getById: vi.fn(), listMembersWithUser: vi.fn(),
   countMembers: vi.fn(), countReadyMembers: vi.fn(), updateLobbySettings: vi.fn(), setAllReady: vi.fn(), setVisibility: vi.fn(),
-  updateMemberReady: vi.fn(),
+  updateMemberReady: vi.fn(), findWaitingLobbyForUser: vi.fn(),
 };
 const allowGuestOperation = vi.fn();
 const startDuelMatchFromLobby = vi.fn();
@@ -255,6 +255,21 @@ describe('duel rooms — ready and start', () => {
     await startFriendlyMatch(io as never, socket as never);
     expect(errorCodes(socket)).toEqual([]);
     expect(startDuelMatchFromLobby).toHaveBeenCalledWith(io, socket, { lobbyId: 'L', duelGame: 'pistas' });
+  });
+
+  it('a socket whose room binding is missing (back from a duel, still re-joining) is re-bound to its waiting room', async () => {
+    readyRoom([member('host', false, true), member('g', true, true)], 'pistas');
+    lobbiesRepo.findWaitingLobbyForUser.mockResolvedValue({ id: 'L' });
+    const socket = socketFor('host', false);
+    await startFriendlyMatch(io as never, socket as never);
+    expect(errorCodes(socket)).toEqual([]);
+    expect(socket.join).toHaveBeenCalledWith('lobby:L');
+    expect(socket.data.lobbyId).toBe('L');
+    expect(startDuelMatchFromLobby).toHaveBeenCalledWith(io, socket, { lobbyId: 'L', duelGame: 'pistas' });
+    lobbiesRepo.findWaitingLobbyForUser.mockResolvedValue(null);
+    const stranger = socketFor('nobody', false);
+    await startFriendlyMatch(io as never, stranger as never);
+    expect(errorCodes(stranger)).toEqual(['NOT_IN_LOBBY']);
   });
 
   it('refuses with one member or before both are ready', async () => {

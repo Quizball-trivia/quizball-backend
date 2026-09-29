@@ -408,8 +408,24 @@ export async function joinByCode(
   };
 }
 
+/**
+ * The socket's room, re-bound when the binding is missing: a page that is still re-joining its room (coming back
+ * from a duel for a rematch) or a reconnect can press Ready/Start before the join lands. Only the one waiting room
+ * the user is a member of qualifies, so nothing is joined that the user did not already belong to.
+ */
+async function boundLobbyId(socket: QuizballSocket, override?: string): Promise<string | undefined> {
+  const id = resolveLobbyId(socket, override);
+  if (id) return id;
+  const open = await lobbiesRepo.findWaitingLobbyForUser(socket.data.user.id);
+  if (!open) return undefined;
+  socket.data.lobbyId = open.id;
+  await socket.join(`lobby:${open.id}`);
+  logger.info({ lobbyId: open.id, userId: socket.data.user.id }, 'Lobby binding recovered for a room command');
+  return open.id;
+}
+
 export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean): Promise<void> {
-  const lobbyId = socket.data.lobbyId;
+  const lobbyId = await boundLobbyId(socket);
   if (!lobbyId) return;
 
   const lobby = await lobbiesRepo.getById(lobbyId);
@@ -741,7 +757,7 @@ export async function startFriendlyMatch(
   socket: QuizballSocket,
   lobbyIdOverride?: string
 ): Promise<void> {
-  const lobbyId = resolveLobbyId(socket, lobbyIdOverride);
+  const lobbyId = await boundLobbyId(socket, lobbyIdOverride);
   if (!lobbyId) {
     socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });
     return;

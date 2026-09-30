@@ -2624,16 +2624,23 @@ export const footballGridRepo = {
 
   async getBoardAnswerContext(matchId: string): Promise<{
     aliasReleaseId: string;
-    answers: Array<{ cellIndex: number; footballPlayerId: string }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
       cell_index: number;
       football_player_id: string;
+      player_name_en: string;
+      player_name_ka: string | null;
     }>>`
-      SELECT gm.alias_release_id, a.cell_index, a.football_player_id
+      SELECT gm.alias_release_id, a.cell_index, a.football_player_id,
+             -- fp.name is what the reveal shows; board rows can carry NULL or
+             -- abbreviated display names, so name forms come from the canonical name.
+             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
+             a.player_name_ka
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+        JOIN football_players fp ON fp.id = a.football_player_id
        WHERE gm.match_id = ${matchId}
     `;
     if (!answerRows[0]) throw new Error('Football Grid board answers not found');
@@ -2642,6 +2649,8 @@ export const footballGridRepo = {
       answers: answerRows.map((row) => ({
         cellIndex: row.cell_index,
         footballPlayerId: row.football_player_id,
+        playerNameEn: row.player_name_en,
+        playerNameKa: row.player_name_ka,
       })),
     };
   },

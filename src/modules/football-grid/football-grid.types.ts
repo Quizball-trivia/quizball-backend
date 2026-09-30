@@ -163,7 +163,7 @@ export interface FootballGridResolutionDiagnostics {
   version: 1;
   reason: 'accepted' | 'empty_input' | 'no_matching_alias' | 'recognized_not_in_cell'
     | 'multiple_cell_candidates' | 'multiple_typo_candidates' | 'nearest_typo_not_on_board' | 'player_already_used';
-  method: 'none' | 'exact' | 'orthographic' | 'safe_typo';
+  method: 'none' | 'exact' | 'orthographic' | 'name_form' | 'safe_typo';
   candidatePlayerIds: string[];
   candidateCount: number;
   candidatesTruncated: boolean;

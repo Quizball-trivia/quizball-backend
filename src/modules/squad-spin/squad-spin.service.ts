@@ -331,13 +331,16 @@ export const squadSpinService = {
       if (!combo) throw new AppError('Squad Spin combo missing', 500);
       const answerMs = row.question_dealt_at ? Date.now() - new Date(row.question_dealt_at).getTime() : null;
       const late = questionExpired(row);
-      const resolved = late ? { playerId: null, normalizedInput: '' } : resolveSquadSpinAnswer(input.text, await squadSpinRepo.getAliasesForPlayers(combo.answer_ids, tx));
+      const validAnswers = await answersOf(combo, tx);
+      const resolved = late
+        ? { playerId: null, normalizedInput: '' }
+        : resolveSquadSpinAnswer(input.text, await squadSpinRepo.getAliasesForPlayers(combo.answer_ids, tx), validAnswers);
       const correct = resolved.playerId != null;
       const potBefore = row.pot_milli;
       const hmacInput = roundHmacInput(row.id, row.client_nonce);
 
       if (!correct) {
-        const answers = await oneAnswerOf(combo, tx);
+        const answers = validAnswers.slice(0, 1);
         const lost = await settleLost(tx, row);
         await squadSpinRepo.insertEvent(tx, {
           roundId: lost.id, userId, stateVersion: lost.state_version, eventType: 'answer', spinIndex: row.spins_cleared + 1, comboId: combo.id, tier: combo.tier,
@@ -346,7 +349,7 @@ export const squadSpinService = {
         return { outcome: late ? 'late' : 'wrong', player: null, answers, state: await toPublicState(lost, { answers, tx }) };
       }
 
-      const player = (await answersOf(combo, tx)).find((a) => a.id === resolved.playerId) ?? null;
+      const player = validAnswers.find((a) => a.id === resolved.playerId) ?? null;
       const potAfter = fairPotAfterSpin(row.pot_milli, stepsOf(row)[combo.tier], row.stake_coins);
       const updated = await squadSpinRepo.updateRoundState(tx, row.id, row.state_version, {
         phase: 'decision', pot_milli: potAfter, spins_cleared: row.spins_cleared + 1, question_deadline_at: null,

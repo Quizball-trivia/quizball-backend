@@ -133,3 +133,44 @@ describe('football grid answer resolver', () => {
     expect(result.diagnostics.candidatePlayerIds).toHaveLength(20);
   });
 });
+
+describe('football grid name-form matching (surname alias gap)', () => {
+  const names = [{ playerId: 'p1', nameEn: 'Ramiro Funes Mori', nameKa: null }];
+  const resolve = (submittedText: string, extra: Partial<Parameters<typeof resolveFootballGridAnswer>[0]> = {}) =>
+    resolveFootballGridAnswer({ submittedText, aliases: [alias('a', 'p1', 'ramiro funes mori')],
+      validPlayerIds: ['p1'], boardPlayerIds: ['p1'], usedPlayerIds: [], validPlayerNames: names, ...extra });
+
+  it('accepts the surname (and compound surname) of a valid answer with a NULL alias id', () => {
+    expect(resolve('funes mori')).toMatchObject({ outcome: 'correct', playerId: 'p1', aliasId: null,
+      diagnostics: { method: 'name_form' } });
+    expect(resolve('MORI')).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+    expect(resolve('Sandro Tonali', { aliases: [alias('a', 'p1', 'sandro tonali')],
+      validPlayerNames: [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: 'სანდრო ტონალი' }] }).outcome).toBe('correct');
+    expect(resolve('tonali', { aliases: [alias('a', 'p1', 'sandro tonali')],
+      validPlayerNames: [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: 'სანდრო ტონალი' }] }).outcome).toBe('correct');
+    expect(resolve('ტონალი', { aliases: [alias('a', 'p1', 'sandro tonali')],
+      validPlayerNames: [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: 'სანდრო ტონალი' }] }).outcome).toBe('correct');
+  });
+
+  it('only generates name forms for valid cell players, never for other board players', () => {
+    expect(resolve('funes mori', { validPlayerIds: ['p2'], validPlayerNames: [] }).outcome).toBe('wrong');
+  });
+
+  it('keeps published-alias precedence and flags two valid players sharing a surname as ambiguous', () => {
+    const twins = [
+      { playerId: 'p1', nameEn: 'Ramiro Funes Mori', nameKa: null },
+      { playerId: 'p2', nameEn: 'Rogelio Funes Mori', nameKa: null },
+    ];
+    expect(resolveFootballGridAnswer({ submittedText: 'funes mori', aliases: [],
+      validPlayerIds: ['p1', 'p2'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: twins }))
+      .toMatchObject({ outcome: 'ambiguous', diagnostics: { method: 'name_form' } });
+  });
+
+  it('tolerates typos and Turkish keyboard variants against valid-answer name forms', () => {
+    expect(resolve('funes morri').outcome).toBe('correct');
+    expect(resolve('yıldız', { aliases: [alias('a', 'p1', 'kenan yildiz')],
+      validPlayerNames: [{ playerId: 'p1', nameEn: 'Kenan Yildiz', nameKa: null }] }).outcome).toBe('correct');
+    expect(resolve('van', { aliases: [alias('a', 'p1', 'virgil van dijk')],
+      validPlayerNames: [{ playerId: 'p1', nameEn: 'Virgil van Dijk', nameKa: null }] }).outcome).toBe('wrong');
+  });
+});

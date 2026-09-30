@@ -89,7 +89,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       en: "Pick'em",
       ka: "Pick'em",
       tr: 'Seç',
-      es: "Pick'em",
+      es: 'Impostor',
     },
     description: {
       en: 'Pick the exact set of correct answers.',

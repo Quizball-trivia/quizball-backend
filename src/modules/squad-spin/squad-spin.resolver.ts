@@ -1,4 +1,4 @@
-import { boundedLevenshtein, footballGridOrthographicKey, footballGridTypoDistanceLimit, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
+import { boundedLevenshtein, footballGridOrthographicKey, footballGridTypoDistanceLimit, nameSuffixForms, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
 import type { SquadSpinAliasRow } from './squad-spin.types.js';
 
 interface AnswerCandidate {
@@ -6,32 +6,22 @@ interface AnswerCandidate {
   text: string;
 }
 
-/**
- * Name forms a player is reasonably called by: the full normalised name plus
- * every token suffix ("ramiro funes mori" → "funes mori" → "mori"). The alias
- * release feeding Squad Spin is missing surname forms for ~40% of players and
- * compound surnames ("Funes Mori") never got one at all, so names are matched
- * directly instead of trusting alias coverage.
- */
-function nameForms(playerId: string, name: string): AnswerCandidate[] {
-  const normalized = normalizeFootballGridAnswer(name);
-  if (!normalized) return [];
-  const tokens = normalized.split(' ');
-  const forms: AnswerCandidate[] = [];
-  for (let i = 0; i < tokens.length; i += 1) {
-    const text = tokens.slice(i).join(' ');
-    if (text.length >= 2) forms.push({ playerId, text });
-  }
-  return forms;
-}
+/** Same rule as the live Grid: short forms ("mori") sit one edit from
+ *  unrelated real players ("mari"), so only longer strings absorb typos. */
+const TYPO_MIN_LENGTH = 5;
 
 /**
  * Resolves typed text against the combo's VALID answers only — their aliases
- * and their name forms — so any match is a correct answer. Because every
- * candidate names a valid player, typo tolerance (the same length-scaled
- * distance limit the live Grid uses) is safe against all of them: a near-miss
- * can only credit an answer that was right anyway. Several valid players
- * sharing a surname resolve to the nearest one — all of them are right.
+ * and their name forms (full normalised name + every token suffix, en and ka,
+ * shared with the Grid via nameSuffixForms so the two modes cannot drift).
+ * The alias release is missing surname forms for ~40% of players and compound
+ * surnames ("Funes Mori") never got one, so names are matched directly.
+ * Typo tolerance (the Grid's length-scaled limit) runs against candidates of
+ * length >= 5 when the input is >= 5: every candidate names a valid answer, so
+ * a near-miss credits a correct player, and the length floor keeps one-edit
+ * neighbours of short names ("kane"/"mane") from clearing a spin. Turkish
+ * dotless-ı and ß keyboard variants fold like the live Grid. Several valid
+ * players sharing a surname resolve to the nearest one — all of them are right.
  */
 export function resolveSquadSpinAnswer(
   submittedText: string,
@@ -44,20 +34,20 @@ export function resolveSquadSpinAnswer(
   const candidates: AnswerCandidate[] = [
     ...aliases.map((alias) => ({ playerId: alias.player_id, text: alias.normalized_alias })),
     ...players.flatMap((player) => [
-      ...nameForms(player.id, player.name_en),
-      ...(player.name_ka ? nameForms(player.id, player.name_ka) : []),
+      ...nameSuffixForms(player.name_en).map((text) => ({ playerId: player.id, text })),
+      ...(player.name_ka ? nameSuffixForms(player.name_ka).map((text) => ({ playerId: player.id, text })) : []),
     ]),
   ];
 
-  // Turkish dotless-ı and ß keyboard variants fold like the live Grid.
   const keyboardKey = footballGridOrthographicKey(normalizedInput);
   const exact = candidates.find((candidate) => footballGridOrthographicKey(candidate.text) === keyboardKey);
   if (exact) return { playerId: exact.playerId, normalizedInput };
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);
-  if (limit === 0) return { playerId: null, normalizedInput };
+  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {
+    if (candidate.text.length < TYPO_MIN_LENGTH) continue;
     const distance = boundedLevenshtein(keyboardKey, footballGridOrthographicKey(candidate.text), limit);
     if (distance <= limit && (!best || distance < best.distance)) best = { playerId: candidate.playerId, distance };
   }

@@ -39,7 +39,7 @@ describe('official follow-up correction batch', () => {
     expect(candidate.players.find(p => p.id === vidic.playerId)?.nameEn).toBe(vidic.nameEn);
     const resolved = resolveFootballGridAnswer({ submittedText: 'Nemanja Vidic',
       aliases: candidate.aliases.map((a, i) => ({ ...a, id: String(i) })),
-      validPlayerIds: [vidic.playerId], boardPlayerIds: [vidic.playerId], usedPlayerIds: [] });
+      validPlayerIds: [vidic.playerId], boardPlayerIds: [vidic.playerId], usedPlayerIds: [], validPlayerNames: [] });
     expect(resolved).toMatchObject({ outcome: 'correct', playerId: vidic.playerId });
   });
 
@@ -96,7 +96,7 @@ describe('official follow-up correction batch', () => {
     const resolve = (criterion: string, submittedText: string) => resolveFootballGridAnswer({
       submittedText, aliases: candidate.aliases.map((a, i) => ({ ...a, id: String(i) })),
       validPlayerIds: candidate.memberships.filter(m => m.criterionKey === criterion).map(m => m.playerId),
-      boardPlayerIds: candidate.players.map(p => p.id), usedPlayerIds: [],
+      boardPlayerIds: candidate.players.map(p => p.id), usedPlayerIds: [], validPlayerNames: [],
     });
     expect(resolve('league:premier-league', 'Piqué')).toMatchObject({ outcome: 'correct', playerId: '769e1327-0c83-4245-bd8b-1362c8dce939' });
     expect(resolve('club:arsenal', 'Piqué').outcome).toBe('wrong');

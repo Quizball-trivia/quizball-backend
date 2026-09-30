@@ -50,7 +50,7 @@ describe('current football facts', () => {
     ]));
     const resolve = (text: string, boardIndex: number) => resolveFootballGridAnswer({
       submittedText: text, validPlayerIds: draft.candidate.boards[boardIndex].cells[0].playerIds,
-      boardPlayerIds: draft.candidate.players.map(p => p.id), usedPlayerIds: [],
+      boardPlayerIds: draft.candidate.players.map(p => p.id), usedPlayerIds: [], validPlayerNames: [],
       aliases: draft.candidate.aliases.map((alias, index) => ({ ...alias, id: String(index) })),
     });
     expect(resolve('ხვიჩა კვარაცხელია', 0)).toMatchObject({ outcome: 'correct', playerId: kvaratskhelia });

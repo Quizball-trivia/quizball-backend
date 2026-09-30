@@ -61,7 +61,7 @@ describe('reviewed player-report correction', () => {
     ]));
     const resolve = (text: string, validPlayerIds: string[]) => resolveFootballGridAnswer({
       submittedText: text, validPlayerIds, boardPlayerIds: draft.candidate.players.map(p => p.id),
-      usedPlayerIds: [], aliases: draft.candidate.aliases.map((alias, index) => ({ ...alias, id: String(index) })),
+      usedPlayerIds: [], validPlayerNames: [], aliases: draft.candidate.aliases.map((alias, index) => ({ ...alias, id: String(index) })),
     });
     expect(resolve('პაჩო', draft.candidate.boards[0].cells[0].playerIds)).toMatchObject({
       outcome: 'correct', playerId: pacho });

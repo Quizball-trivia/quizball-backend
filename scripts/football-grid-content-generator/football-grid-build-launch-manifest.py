@@ -1182,7 +1182,17 @@ def build_aliases(players: list[Player], reviewed_at: str) -> list[dict[str, Any
         if len(parts) > 1:
             candidates_by_player[player.uuid].append((parts[0], "en", "given_name"))
             candidates_by_player[player.uuid].append((parts[-1], "en", "family_name"))
+            # Compound surnames ("Funes Mori", "van Dijk"): every token suffix
+            # is a real way the player is named; the last word alone is not
+            # enough. The resolver disambiguates shared forms per cell.
+            for start in range(1, len(parts) - 1):
+                candidates_by_player[player.uuid].append((" ".join(parts[start:]), "en", "compound_surname"))
             candidates_by_player[player.uuid].append((f"{parts[-1]} {' '.join(parts[:-1])}", "en", "reordered"))
+        ka_parts = player.name_ka.strip().split()
+        if len(ka_parts) > 1:
+            candidates_by_player[player.uuid].append((ka_parts[-1], "ka", "family_name"))
+            for start in range(1, len(ka_parts) - 1):
+                candidates_by_player[player.uuid].append((" ".join(ka_parts[start:]), "ka", "compound_surname"))
         for value, _locale, _alias_type in candidates_by_player[player.uuid]:
             candidate_owners[answer_key(value)].add(player.uuid)
 
@@ -1196,7 +1206,7 @@ def build_aliases(players: list[Player], reviewed_at: str) -> list[dict[str, Any
             # A shared surname is still useful: the resolver disambiguates it
             # against the selected cell, returning ambiguous if several fit.
             # Keep the stricter global rule for optional given names/nicknames.
-            if not exact_required and alias_type != "family_name" and len(candidate_owners[normalized]) != 1:
+            if not exact_required and alias_type not in {"family_name", "compound_surname"} and len(candidate_owners[normalized]) != 1:
                 continue
             key = (player.uuid, normalized, locale, alias_type)
             if key in seen:

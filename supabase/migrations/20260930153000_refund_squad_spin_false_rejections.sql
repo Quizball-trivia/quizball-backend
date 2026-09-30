@@ -29,9 +29,9 @@ WITH false_rejections AS (
         AND a.locale = 'en'
         AND a.acceptance_policy = 'exact'
         AND a.normalized_alias LIKE '% ' || btrim(regexp_replace(regexp_replace(
-              translate(lower(e.submitted_text),
-                'áàâäãåçéèêëíìîïñóòôöõúùûüý',
-                'aaaaaaceeeeiiiinooooouuuuy'),
+              replace(translate(lower(e.submitted_text),
+                'áàâäãåçéèêëíìîïñóòôöõúùûüýğşı',
+                'aaaaaaceeeeiiiinooooouuuuygsi'), 'ß', 'ss'),
               '[^a-z0-9 ]', ' ', 'g'), ' +', ' ', 'g'))
     )
 ),

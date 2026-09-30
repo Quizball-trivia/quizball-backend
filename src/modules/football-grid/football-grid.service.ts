@@ -49,6 +49,7 @@ type FootballGridBoardAnswerContent = {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
+  playerNamesById: Map<string, { nameEn: string; nameKa: string | null }>;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -150,10 +151,15 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     current.push(answer.footballPlayerId);
     validPlayerIdsByCell.set(answer.cellIndex, current);
   }
+  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null }>();
+  for (const answer of context.answers) {
+    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa });
+  }
   const value: FootballGridBoardAnswerContent = {
     aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
     validPlayerIdsByCell,
     boardPlayerIds,
+    playerNamesById,
   };
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
@@ -275,12 +281,17 @@ async function processInbox(
       }
       const content = await getBoardAnswerContent(leased.match_id);
       const resolverStartedAt = performance.now();
+      const cellPlayerIds = content.validPlayerIdsByCell.get(leased.cell_index) ?? [];
       resolution = resolveFootballGridAnswer({
         submittedText: leased.submitted_text,
         aliases: content.aliases,
-        validPlayerIds: content.validPlayerIdsByCell.get(leased.cell_index) ?? [],
+        validPlayerIds: cellPlayerIds,
         boardPlayerIds: content.boardPlayerIds,
         usedPlayerIds: [],
+        validPlayerNames: cellPlayerIds.flatMap((playerId) => {
+          const names = content.playerNamesById.get(playerId);
+          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa }] : [];
+        }),
       });
       // Used-player state cannot affect a wrong or ambiguous answer. Avoid a
       // database read for those overwhelmingly common paths and consult the

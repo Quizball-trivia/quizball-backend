@@ -1,4 +1,4 @@
-import { boundedLevenshtein, footballGridTypoDistanceLimit, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
+import { boundedLevenshtein, footballGridOrthographicKey, footballGridTypoDistanceLimit, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
 import type { SquadSpinAliasRow } from './squad-spin.types.js';
 
 interface AnswerCandidate {
@@ -49,14 +49,16 @@ export function resolveSquadSpinAnswer(
     ]),
   ];
 
-  const exact = candidates.find((candidate) => candidate.text === normalizedInput);
+  // Turkish dotless-ı and ß keyboard variants fold like the live Grid.
+  const keyboardKey = footballGridOrthographicKey(normalizedInput);
+  const exact = candidates.find((candidate) => footballGridOrthographicKey(candidate.text) === keyboardKey);
   if (exact) return { playerId: exact.playerId, normalizedInput };
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);
   if (limit === 0) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {
-    const distance = boundedLevenshtein(normalizedInput, candidate.text, limit);
+    const distance = boundedLevenshtein(keyboardKey, footballGridOrthographicKey(candidate.text), limit);
     if (distance <= limit && (!best || distance < best.distance)) best = { playerId: candidate.playerId, distance };
   }
   return { playerId: best?.playerId ?? null, normalizedInput };

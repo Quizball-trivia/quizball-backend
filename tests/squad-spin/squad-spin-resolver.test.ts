@@ -56,6 +56,12 @@ describe('squad-spin resolver', () => {
     expect(resolveSquadSpinAnswer('ტონალი', sparseAliases, sparsePlayers).playerId).toBe('tonali');
   });
 
+  it('folds Turkish dotless-ı keyboard variants like the live Grid', () => {
+    const tr = [{ id: 'yildiz', name_en: 'Kenan Yildiz', name_ka: null }];
+    expect(resolveSquadSpinAnswer('yıldız', [], tr).playerId).toBe('yildiz');
+    expect(resolveSquadSpinAnswer('Kenan Yıldız', [], tr).playerId).toBe('yildiz');
+  });
+
   it('matches suffix name forms only, never a bare particle or first-name-only prefix of a compound name', () => {
     const vanDijk = [{ id: 'vvd', name_en: 'Virgil van Dijk', name_ka: null }];
     expect(resolveSquadSpinAnswer('van dijk', [], vanDijk).playerId).toBe('vvd');

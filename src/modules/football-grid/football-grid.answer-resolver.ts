@@ -28,6 +28,37 @@ export function footballGridOrthographicKey(normalized: string): string {
   return normalized.replace(/ı/g, 'i').replace(/ß/g, 'ss');
 }
 
+export interface FootballGridPlayerNameRecord {
+  playerId: string;
+  nameEn: string;
+  nameKa: string | null;
+}
+
+/**
+ * Name forms of a valid answer: the full normalised name plus every token
+ * suffix ("ramiro funes mori" → "funes mori" → "mori"), en and ka. The alias
+ * releases are missing surname aliases for many players (and compound
+ * surnames never got one), so typed surnames of valid answers were marked
+ * wrong even though the cell's reveal then showed exactly that name. Synthetic
+ * candidates carry an empty alias id, persisted as NULL on the claim.
+ */
+export function footballGridNameFormCandidates(players: FootballGridPlayerNameRecord[]): FootballGridAliasRecord[] {
+  const forms: FootballGridAliasRecord[] = [];
+  for (const player of players) {
+    for (const [name, locale] of [[player.nameEn, 'en'], [player.nameKa, 'ka']] as Array<[string | null, 'en' | 'ka']>) {
+      const normalized = name ? normalizeFootballGridAnswer(name) : '';
+      if (!normalized) continue;
+      const tokens = normalized.split(' ');
+      for (let i = 0; i < tokens.length; i += 1) {
+        const form = tokens.slice(i).join(' ');
+        if (form.length < 2) continue;
+        forms.push({ id: '', playerId: player.playerId, alias: form, normalizedAlias: form, locale, acceptancePolicy: 'exact' });
+      }
+    }
+  }
+  return forms;
+}
+
 export function boundedLevenshtein(left: string, right: string, limit: number): number {
   if (Math.abs(left.length - right.length) > limit) return limit + 1;
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -68,7 +99,7 @@ function classifyCandidates(input: {
   validPlayerIds: Set<string>;
   usedPlayerIds: Set<string>;
   normalizedInput: string;
-  method: 'exact' | 'orthographic' | 'safe_typo';
+  method: 'exact' | 'orthographic' | 'name_form' | 'safe_typo';
 }): FootballGridResolvedAnswer {
   const cellCandidates = [...new Map(
     input.candidates
@@ -89,7 +120,7 @@ function classifyCandidates(input: {
     return {
       outcome: 'already_used',
       playerId: candidate.playerId,
-      aliasId: candidate.id,
+      aliasId: candidate.id || null,
       normalizedInput: input.normalizedInput,
       diagnostics: diagnostics('player_already_used', input.method, input.candidates, 1),
     };
@@ -97,7 +128,7 @@ function classifyCandidates(input: {
   return {
     outcome: 'correct',
     playerId: candidate.playerId,
-    aliasId: candidate.id,
+    aliasId: candidate.id || null,
     normalizedInput: input.normalizedInput,
     diagnostics: diagnostics('accepted', input.method, input.candidates, 1),
   };
@@ -109,6 +140,7 @@ export function resolveFootballGridAnswer(input: {
   validPlayerIds: Iterable<string>;
   boardPlayerIds: Iterable<string>;
   usedPlayerIds: Iterable<string>;
+  validPlayerNames?: FootballGridPlayerNameRecord[];
 }): FootballGridResolvedAnswer {
   const normalizedInput = normalizeFootballGridAnswer(input.submittedText);
   if (!normalizedInput) {
@@ -132,16 +164,30 @@ export function resolveFootballGridAnswer(input: {
     return classifyCandidates({ candidates: orthographic, validPlayerIds, usedPlayerIds, normalizedInput, method: 'orthographic' });
   }
 
+  // Alias releases miss surname forms for many players, so a typed surname of
+  // a VALID answer fell through to "wrong" even though the reveal then showed
+  // that very name. Name forms are generated only for the cell's valid
+  // players: anything else still resolves purely through published aliases.
+  const nameForms = footballGridNameFormCandidates(input.validPlayerNames ?? []);
+  const nameFormMatches = nameForms.filter((form) => footballGridOrthographicKey(form.normalizedAlias) === keyboardKey);
+  if (nameFormMatches.length > 0) {
+    return classifyCandidates({ candidates: nameFormMatches, validPlayerIds, usedPlayerIds, normalizedInput, method: 'name_form' });
+  }
+
   const limit = footballGridTypoDistanceLimit(normalizedInput);
   if (limit === 0) {
     return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput,
       diagnostics: diagnostics('no_matching_alias', 'none') };
   }
-  const fuzzy = input.aliases
+  const fuzzy = [
     // Exact aliases are deliberately exact-only. Only aliases that were
-    // individually reviewed as safe typo targets may broaden acceptance.
-    .filter((alias) => alias.acceptancePolicy === 'safe_typo')
-    .map((alias) => ({ alias, distance: boundedLevenshtein(normalizedInput, alias.normalizedAlias, limit) }))
+    // individually reviewed as safe typo targets may broaden acceptance —
+    // plus the valid answers' own name forms, where a near-miss can only
+    // point at a player that is right for the cell anyway.
+    ...input.aliases.filter((alias) => alias.acceptancePolicy === 'safe_typo'),
+    ...nameForms,
+  ]
+    .map((alias) => ({ alias, distance: boundedLevenshtein(keyboardKey, footballGridOrthographicKey(alias.normalizedAlias), limit) }))
     .filter((candidate) => candidate.distance <= limit);
   if (fuzzy.length === 0) {
     return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput,

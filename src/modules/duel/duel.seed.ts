@@ -3,6 +3,9 @@ import type { Sql } from 'postgres';
 import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
 import { buscaminasRoundSchema } from './engines/buscaminas.engine.js';
 import { pistasRoundSchema } from './engines/pistas.engine.js';
+import { canonical } from '../pistas/pistas.seed.js';
+import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '../ultimo/ultimo.match.js';
+import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
 
 export interface PoolRow {
@@ -25,7 +28,7 @@ export function parsePoolFile(game: DuelGameId, raw: unknown): PoolRow[] {
   if (!Array.isArray(file.items) || file.items.length === 0) throw new Error('pool file needs a non-empty items array');
   const seen = new Set<string>();
   return file.items.map((item, i) => {
-    const row = game === 'pistas' ? pistasRow(item) : buscaminasRow(item);
+    const row = game === 'pistas' ? pistasRow(item) : game === 'ultimo' ? ultimoRow(item) : buscaminasRow(item);
     if (!row) throw new Error(`item ${i} is not a valid ${game} pool item`);
     if (seen.has(row.itemId)) throw new Error(`item ${i}: duplicate id`);
     seen.add(row.itemId);
@@ -52,6 +55,20 @@ function pistasRow(item: unknown): PoolRow | null {
   };
 }
 
+function ultimoRow(item: unknown): PoolRow | null {
+  const parsed = ultimoCategorySchema.safeParse(item);
+  if (!parsed.success) return null;
+  const category = parsed.data;
+  if (unreachableAnswers(category).length > 0) return null;
+  return { itemId: category.id, difficulty: category.difficulty, fingerprint: sha(canonical(category)), payload: category, keys: [] };
+}
+
+/** Pool items (by index) repeating any daily category ever published (same id, title or most of the answers). */
+async function ultimoDailyOverlap(sql: Sql, rows: PoolRow[]): Promise<number[]> {
+  const daily = await publishedKeys(sql, 'day');
+  return rows.flatMap((row, i) => (daily.some((keys) => sameKeys(keysOf(row.payload as UltimoCategory), keys)) ? [i] : []));
+}
+
 function buscaminasRow(item: unknown): PoolRow | null {
   const parsed = buscaminasRoundSchema.safeParse(item);
   if (!parsed.success) return null;
@@ -72,6 +89,7 @@ export interface OverlapReport {
  */
 export async function findDailyOverlap(sql: Sql, game: DuelGameId, rows: PoolRow[]): Promise<OverlapReport> {
   const daily = new Set<string>();
+  if (game === 'ultimo') return { overlapping: await ultimoDailyOverlap(sql, rows) };
   if (game === 'pistas') {
     const days = await sql<Array<{ rounds: Array<{ answer: { display: Record<string, string>; accepted: string[] } }> }>>`SELECT rounds FROM pistas_days`;
     const players = days.flatMap((day) => day.rounds.map((round) => ({ display: Object.values(round.answer.display), accepted: round.answer.accepted })));
@@ -85,7 +103,7 @@ export async function findDailyOverlap(sql: Sql, game: DuelGameId, rows: PoolRow
   return { overlapping };
 }
 
-export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[]): Promise<{ inserted: number; updated: number }> {
+export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opts: { allowOverlap?: boolean } = {}): Promise<{ inserted: number; updated: number }> {
   let inserted = 0;
   let updated = 0;
   await sql.begin(async (tx) => {
@@ -93,6 +111,13 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[]): Pr
     await q`SET LOCAL lock_timeout = '5s'`;
     await q`SET LOCAL statement_timeout = '60s'`;
     await q`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+    if (game === 'ultimo') {
+      // The days seed takes the same lock: the overlap is re-checked here, inside the write, so neither seed can
+      // slip in a category the other is writing at the same moment.
+      await q`SELECT pg_advisory_xact_lock(hashtext(${ULTIMO_CONTENT_LOCK}))`;
+      const overlap = await ultimoDailyOverlap(q, rows);
+      if (overlap.length > 0 && !opts.allowOverlap) throw new Error(`${overlap.length} pool item(s) repeat a daily category; refused`);
+    }
     for (const row of rows) {
       const [result] = await q<Array<{ inserted: boolean }>>`
         INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload, enabled)
@@ -104,6 +129,7 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[]): Pr
       if (result.inserted) inserted += 1;
       else updated += 1;
     }
+    if (game === 'ultimo') await recordPublished(q, 'pool', rows.map((row) => row.payload as UltimoCategory));
   });
   return { inserted, updated };
 }

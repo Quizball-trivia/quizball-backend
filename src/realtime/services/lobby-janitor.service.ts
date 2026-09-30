@@ -45,9 +45,24 @@ async function listStrandedCandidates(): Promise<StrandedLobbyRow[]> {
       AND NOT EXISTS (
         SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active'
       )
+      -- A friend duel runs in duel_matches, not matches: its room is live while the duel is (both players may be away
+      -- for its reconnect window).
+      AND NOT EXISTS (
+        SELECT 1 FROM duel_matches d WHERE d.lobby_id = l.id AND d.status IN ('ready', 'countdown', 'active', 'paused')
+      )
     ORDER BY l.created_at
     LIMIT ${BATCH_LIMIT}
   `;
+}
+
+/** A duel started (or is still running) after the listing: the room is in use. */
+async function lobbyHasLiveDuel(lobbyId: string): Promise<boolean> {
+  const [row] = await sql<Array<{ live: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1 FROM duel_matches WHERE lobby_id = ${lobbyId} AND status IN ('ready', 'countdown', 'active', 'paused')
+    ) AS live
+  `;
+  return row?.live === true;
 }
 
 async function lobbyHasLiveSocket(io: QuizballServer, lobbyId: string): Promise<boolean> {
@@ -68,6 +83,7 @@ async function sweepLobby(io: QuizballServer, row: StrandedLobbyRow): Promise<bo
     // Re-check under the lock: a join/match-start may have raced the sweep.
     const fresh = await lobbiesRepo.getById(row.id);
     if (!fresh || !['waiting', 'active'].includes(fresh.status)) return false;
+    if (await lobbyHasLiveDuel(row.id)) return false;
     if (await lobbyHasLiveSocket(io, row.id)) return false;
 
     // Remove members through the repo so FK state stays consistent, then let

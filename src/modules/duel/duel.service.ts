@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { BM_TIERS } from './engines/buscaminas.engine.js';
+import { UL_TIERS } from './engines/ultimo.engine.js';
 import { currentEngine, engineFor, type AnyEngine } from './duel.registry.js';
 import { duelRepo, type DuelMatchRow, type DuelParticipantRow, type DuelResult, type DuelStatus } from './duel.repo.js';
 import { newSeed, seededRng } from './duel.rng.js';
@@ -50,6 +51,7 @@ const PACKS: Record<DuelGameId, { wanted: Record<string, number>; order: readonl
     wanted: { easy: 3, medium: 4, hard: 3 },
     order: ['easy', 'medium', 'hard', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard'],
   },
+  ultimo: { wanted: { easy: 2, medium: 2, hard: 1 }, order: UL_TIERS },
 };
 
 const contentCache = new Map<string, unknown>();
@@ -173,9 +175,16 @@ async function advanceClock(tx: TransactionSql, row: DuelMatchRow): Promise<{ st
 }
 
 /** A paused match with nobody away any more goes on with the phase time it had left plus a short grace. */
+/**
+ * Back to the paused phase with its remaining time, plus a grace of at most DUEL_RESUME_GRACE_MS and never more than
+ * the pause lasted: a drop-and-reconnect just past the debounce earns (almost) nothing, so pausing cannot be farmed
+ * for thinking time, while a real reconnect gets its few seconds back.
+ */
 async function resume(tx: TransactionSql, row: DuelMatchRow): Promise<{ status: DuelStatus; timer: DuelEffects['timer'] }> {
   const status = row.paused_from ?? 'active';
-  const saved = await duelRepo.setPhase(tx, row.id, { status, deadlineAt: new Date(row.now.getTime() + (row.paused_remaining_ms ?? 0) + DUEL_RESUME_GRACE_MS) });
+  const paused = row.paused_at ? Math.max(0, row.now.getTime() - row.paused_at.getTime()) : DUEL_RESUME_GRACE_MS;
+  const grace = Math.min(DUEL_RESUME_GRACE_MS, paused);
+  const saved = await duelRepo.setPhase(tx, row.id, { status, deadlineAt: new Date(row.now.getTime() + (row.paused_remaining_ms ?? 0) + grace) });
   return { status, timer: { token: saved.phase_token, dueAt: saved.phase_deadline_at } };
 }
 

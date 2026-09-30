@@ -1,98 +1,26 @@
-import { Router, type RequestHandler } from 'express';
-import rateLimit from 'express-rate-limit';
-import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
-import { guestHttpBudget, requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
-import { validate } from '../middleware/validate.js';
-import { resolveTrustedClientIp } from '../client-ip.js';
-import { bucketIp } from '../../core/ip-bucket.js';
-import { AuthenticationError } from '../../core/errors.js';
-import { guestAuthMiddleware } from '../../modules/guest/guest.middleware.js';
-import { GUEST_TOKEN_HEADER, GUEST_TOKEN_SHAPE } from '../../modules/guest/guest.service.js';
 import {
   dayQuerySchema, guessSchema, moveSchema, pistasController, pistasGuestSessionRequired, reviewQuerySchema, startSchema,
 } from '../../modules/pistas/index.js';
-
-/** Pistas futboleras — every run is a server row owned by a member or by a guest session. */
-const router = Router();
-
-const inSequence = (handlers: readonly RequestHandler[]): RequestHandler => (req, res, next) => {
-  const step = (i: number) => (error?: unknown) => (error || i === handlers.length ? next(error) : void handlers[i](req, res, step(i + 1)));
-  step(0)();
-};
-
-const requireGuestTokenShape: RequestHandler = (req, _res, next) => {
-  const raw = req.headers[GUEST_TOKEN_HEADER];
-  const token = Array.isArray(raw) ? raw[0] : raw;
-  next(token && GUEST_TOKEN_SHAPE.test(token) ? undefined : new AuthenticationError('Missing guest token'));
-};
-
-// Shared (Redis) hourly guest budgets, the same as Buscaminas'. A full run is at most ~130 calls
-// (10 rounds × 9 reveals + 2 guesses + next). The address budget runs before the session lookup, so
-// rotating fake tokens costs a counter, not a query.
-const guestPlay = inSequence([
-  requireGuestHttpEnabled,
-  guestHttpBudget('pistas-address', 9_000, (req) => bucketIp(resolveTrustedClientIp(req))),
-  requireGuestTokenShape,
-  guestAuthMiddleware,
-  guestHttpBudget('pistas', 1_500, (req) => req.guest?.id ?? bucketIp(resolveTrustedClientIp(req))),
-]);
+import { createDailyGameRouter } from './daily-game.router.js';
 
 /**
- * Who is playing: a member (bearer or session cookie), else the guest session in `x-guest-token`.
- * A bad bearer is a 401, never a silent guest run; a stale cookie still falls back to the guest session.
+ * Pistas futboleras. A full run is at most ~130 calls (10 rounds × 9 reveals + 2 guesses + next), which the
+ * hourly guest budgets (the same as Buscaminas') cover several times over.
  */
-const identify: RequestHandler = (req, res, next) => {
-  if (req.headers.authorization) return void authMiddleware(req, res, next);
-  void optionalAuthMiddleware(req, res, (error?: unknown) => {
-    if (error) return next(error);
-    if (req.user) return next();
-    if (req.headers[GUEST_TOKEN_HEADER] === undefined) return next(pistasGuestSessionRequired());
-    guestPlay(req, res, next);
-  });
-};
-
-// Per-process burst limits (the codebase has no shared express-rate-limit store), keyed by the verified player.
-const limiter = (max: number): RequestHandler => rateLimit({
-  windowMs: 60_000,
-  max,
-  keyGenerator: (req) => (req.user ? `u:${req.user.id}` : req.guest ? `g:${req.guest.id}` : `ip:${req.ip}`),
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later', details: null, request_id: null },
+export const pistasRoutes = createDailyGameRouter({
+  name: 'pistas',
+  guestBudget: { address: 9_000, session: 1_500 },
+  guestSessionRequired: pistasGuestSessionRequired,
+  schemas: { start: startSchema, dayQuery: dayQuerySchema, reviewQuery: reviewQuerySchema },
+  start: pistasController.start,
+  moves: [
+    { path: 'reveal', schema: moveSchema, handler: pistasController.reveal },
+    { path: 'guess', schema: guessSchema, handler: pistasController.guess },
+    { path: 'giveup', schema: moveSchema, handler: pistasController.giveUp },
+    { path: 'next', schema: moveSchema, handler: pistasController.next },
+  ],
+  current: pistasController.current,
+  boards: pistasController.boards,
+  review: pistasController.review,
+  leaderboard: pistasController.leaderboard,
 });
-const playLimiter = limiter(240);
-const startLimiter = limiter(30);
-const readLimiter = limiter(60);
-// The boards index and closed-day reviews are fetched without identity, so this one is per address.
-const boardLimiter = limiter(120);
-
-const varyOnAuth: RequestHandler = (_req, res, next) => {
-  res.vary('Authorization');
-  res.vary('Cookie');
-  next();
-};
-
-const varyOnPlayer: RequestHandler = (req, res, next) => {
-  res.vary(GUEST_TOKEN_HEADER);
-  varyOnAuth(req, res, next);
-};
-
-// The same bytes for every caller (no identity read). Until the controller marks a success cacheable,
-// a response (a 404 for a day that is not closed yet) must not be stored.
-const publicRead: RequestHandler = (_req, res, next) => {
-  res.vary('Origin');
-  res.setHeader('Cache-Control', 'no-store');
-  next();
-};
-
-router.post('/start', identify, startLimiter, validate({ body: startSchema }), pistasController.start);
-router.post('/reveal', identify, playLimiter, validate({ body: moveSchema }), pistasController.reveal);
-router.post('/guess', identify, playLimiter, validate({ body: guessSchema }), pistasController.guess);
-router.post('/giveup', identify, playLimiter, validate({ body: moveSchema }), pistasController.giveUp);
-router.post('/next', identify, playLimiter, validate({ body: moveSchema }), pistasController.next);
-router.get('/current', varyOnPlayer, identify, readLimiter, validate({ query: dayQuerySchema }), pistasController.current);
-router.get('/boards', publicRead, boardLimiter, pistasController.boards);
-router.get('/review', publicRead, boardLimiter, validate({ query: reviewQuerySchema }), pistasController.review);
-router.get('/leaderboard', varyOnAuth, optionalAuthMiddleware, readLimiter, validate({ query: dayQuerySchema }), pistasController.leaderboard);
-
-export { router as pistasRoutes };

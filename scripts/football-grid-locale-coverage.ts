@@ -37,7 +37,7 @@ export function auditGridLocaleCoverage(manifest: Pick<Manifest, 'players' | 'al
       // owner; this audit supplies a cell containing only the identity being checked.
       const aliases = byKey.get(key) ?? byKeyboardKey.get(footballGridOrthographicKey(key)) ?? [];
       const result = resolveFootballGridAnswer({ submittedText: text, aliases,
-        validPlayerIds: [player.id], boardPlayerIds: [player.id], usedPlayerIds: [] });
+        validPlayerIds: [player.id], boardPlayerIds: [player.id], usedPlayerIds: [], validPlayerNames: [] });
       if (result.outcome !== 'correct' || result.playerId !== player.id) {
         failures.push({ playerId: player.id, form, outcome: result.outcome });
       }

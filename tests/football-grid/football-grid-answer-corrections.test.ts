@@ -35,7 +35,7 @@ function answer(candidate: Pick<Manifest, 'aliases' | 'memberships'>, text: stri
   const valid = candidate.memberships.filter(m => m.criterionKey === column && rows.has(m.playerId)).map(m => m.playerId);
   return resolveFootballGridAnswer({ submittedText: text,
     aliases: candidate.aliases.map((a, i) => ({ ...a, id: `alias-${i}` })),
-    validPlayerIds: valid, boardPlayerIds: valid, usedPlayerIds: used });
+    validPlayerIds: valid, boardPlayerIds: valid, usedPlayerIds: used, validPlayerNames: [] });
 }
 
 describe('production rejected-answer corrections', () => {
@@ -160,7 +160,7 @@ describe('exact surnames are resolved against the cell, not the whole release', 
     expect(addFamilyAliases(manifest, date)).toBe(0);
     const resolve = (text: string, valid: string[], used: string[] = []) => resolveFootballGridAnswer({
       submittedText: text, aliases: manifest.aliases.map((a, i) => ({ ...a, id: String(i) })),
-      validPlayerIds: valid, boardPlayerIds: ['0', '1', '2', '3'], usedPlayerIds: used,
+      validPlayerIds: valid, boardPlayerIds: ['0', '1', '2', '3'], usedPlayerIds: used, validPlayerNames: [],
     });
     expect(resolve('Mbappe', ['0']).outcome).toBe('correct');
     expect(resolve('Mbappé', ['0']).outcome).toBe('correct');

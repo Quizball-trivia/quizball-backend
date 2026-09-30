@@ -331,10 +331,13 @@ export const squadSpinService = {
       if (!combo) throw new AppError('Squad Spin combo missing', 500);
       const answerMs = row.question_dealt_at ? Date.now() - new Date(row.question_dealt_at).getTime() : null;
       const late = questionExpired(row);
-      const validAnswers = await answersOf(combo, tx);
+      const [validAnswers, comboAliases] = await Promise.all([
+        answersOf(combo, tx),
+        late ? Promise.resolve([]) : squadSpinRepo.getAliasesForPlayers(combo.answer_ids, tx),
+      ]);
       const resolved = late
         ? { playerId: null, normalizedInput: '' }
-        : resolveSquadSpinAnswer(input.text, await squadSpinRepo.getAliasesForPlayers(combo.answer_ids, tx), validAnswers);
+        : resolveSquadSpinAnswer(input.text, comboAliases, validAnswers);
       const correct = resolved.playerId != null;
       const potBefore = row.pot_milli;
       const hmacInput = roundHmacInput(row.id, row.client_nonce);

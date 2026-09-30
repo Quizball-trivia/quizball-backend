@@ -69,3 +69,13 @@ describe('squad-spin resolver', () => {
     expect(resolveSquadSpinAnswer('van', [], vanDijk).playerId).toBeNull();
   });
 });
+
+describe('squad-spin typo guard-rails', () => {
+  it('rejects one-edit neighbours of short names that are other real players', () => {
+    const mane = [{ id: 'mane', name_en: 'Sadio Mane', name_ka: null }];
+    expect(resolveSquadSpinAnswer('Kane', [], mane).playerId).toBeNull();
+    const mori = [{ id: 'rfm', name_en: 'Ramiro Funes Mori', name_ka: null }];
+    expect(resolveSquadSpinAnswer('Mari', [], mori).playerId).toBeNull();
+    expect(resolveSquadSpinAnswer('mori', [], mori).playerId).toBe('rfm');
+  });
+});

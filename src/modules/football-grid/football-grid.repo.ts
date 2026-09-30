@@ -2633,9 +2633,14 @@ export const footballGridRepo = {
       player_name_en: string;
       player_name_ka: string | null;
     }>>`
-      SELECT gm.alias_release_id, a.cell_index, a.football_player_id, a.player_name_en, a.player_name_ka
+      SELECT gm.alias_release_id, a.cell_index, a.football_player_id,
+             -- fp.name is what the reveal shows; board rows can carry NULL or
+             -- abbreviated display names, so name forms come from the canonical name.
+             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
+             a.player_name_ka
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+        JOIN football_players fp ON fp.id = a.football_player_id
        WHERE gm.match_id = ${matchId}
     `;
     if (!answerRows[0]) throw new Error('Football Grid board answers not found');

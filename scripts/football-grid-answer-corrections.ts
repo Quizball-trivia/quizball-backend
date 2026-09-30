@@ -116,16 +116,20 @@ export function addFamilyAliases(manifest: Pick<Manifest, 'players' | 'aliases'>
     if (!exactEnglish.has(`${player.id}:${canonical}`)) continue;
     const parts = player.nameEn.trim().split(/\s+/);
     if (parts.length < 2) continue;
-    const alias = parts.at(-1)!;
-    const normalizedAlias = normalizeFootballGridAnswer(alias);
-    if (!normalizedAlias) continue;
-    const key = `${player.id}:en:${normalizedAlias}`;
-    if (keys.has(key)) continue;
-    keys.add(key);
-    manifest.aliases.push({ playerId: player.id, alias, normalizedAlias, locale: 'en',
-      aliasType: 'family_name', acceptancePolicy: 'unique_only',
-      reviewedBy: 'exact-display-family-name-rule-v2', reviewedAt });
-    added += 1;
+    // Every token suffix is a real way the player is named ("Funes Mori" as
+    // well as "Mori"); the last word alone misses compound surnames.
+    for (let start = 1; start < parts.length; start += 1) {
+      const alias = parts.slice(start).join(' ');
+      const normalizedAlias = normalizeFootballGridAnswer(alias);
+      if (!normalizedAlias) continue;
+      const key = `${player.id}:en:${normalizedAlias}`;
+      if (keys.has(key)) continue;
+      keys.add(key);
+      manifest.aliases.push({ playerId: player.id, alias, normalizedAlias, locale: 'en',
+        aliasType: start === parts.length - 1 ? 'family_name' : 'compound_surname', acceptancePolicy: 'unique_only',
+        reviewedBy: 'exact-display-family-name-rule-v2', reviewedAt });
+      added += 1;
+    }
   }
   return added;
 }

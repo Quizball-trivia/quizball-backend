@@ -101,7 +101,12 @@ const INELIGIBLE_ENTRY_STATES = ['disqualified', 'withdrawn', 'cancelled'];
 
 function rolloutWeek(): string | null {
   const week = config.WL_REWARDS_FROM_WEEK;
-  return week && /^\d{4}-\d{2}-\d{2}$/.test(week) ? week : null;
+  if (!week || !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
+  // A real calendar date, not just the shape: '2026-02-30' would pass the
+  // pattern and then make every sweep query fail on its ::date cast, which
+  // would also stop opted-in rehearsals. Treated as unset instead.
+  const parsed = new Date(`${week}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === week ? week : null;
 }
 
 async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow[]> {

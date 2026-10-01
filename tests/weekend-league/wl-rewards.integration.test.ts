@@ -442,6 +442,28 @@ describe('WL reward delivery', () => {
     expect(await coinsOf(second)).toBe(100 + 1500);
   }, 120_000);
 
+  it('treats an impossible rollout date as unset: real events wait, rehearsals still pay, the sweep does not throw', async () => {
+    if (!dbAvailable) return;
+    const real = await seedTournament();
+    const realPlayer = await seedPlayer(real, 'bad-date-real');
+    const rehearsal = await seedTournament({ isTest: true, weekKey: null, rewardPayout: true });
+    const rehearsalPlayer = await seedPlayer(rehearsal, 'bad-date-rehearsal');
+
+    const flags = config as { WL_REWARDS_FROM_WEEK?: string };
+    const original = flags.WL_REWARDS_FROM_WEEK;
+    for (const bad of ['2099-02-30', '2099-13-01', 'next-week']) {
+      flags.WL_REWARDS_FROM_WEEK = bad;
+      try {
+        await expect(rewards.wlRewardsSweep()).resolves.toBeUndefined();
+        expect((await rewards.settleWlRewards(real.id)).freeze).toEqual({ frozen: false, reason: 'before_rollout' });
+      } finally {
+        flags.WL_REWARDS_FROM_WEEK = original;
+      }
+    }
+    expect(await coinsOf(realPlayer)).toBe(100);
+    expect(await coinsOf(rehearsalPlayer)).toBe(100 + 1500);
+  }, 120_000);
+
   it('refuses a single-game rehearsal, whose final is not where the facts look', async () => {
     if (!dbAvailable) return;
     const t = await seedTournament({ isTest: true, weekKey: null, rewardPayout: true });

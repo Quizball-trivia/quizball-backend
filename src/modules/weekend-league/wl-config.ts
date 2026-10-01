@@ -42,6 +42,9 @@ export const wlTournamentConfigSchema = z.object({
   /** Roster bots top the field up to this size at check-in (0 = no bots).
    *  Bots may qualify on merit but never win prizes (awards are humans-only). */
   bot_fill_min_field: z.number().int().min(0).max(2_000).default(0),
+  /** Pay coin/item rewards for this event. Honored ONLY on is_test tournaments
+   *  outside prod (staging rehearsal); real events pay by the global flag. */
+  reward_payout: z.boolean().default(false),
 });
 
 export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;

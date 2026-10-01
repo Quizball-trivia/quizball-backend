@@ -8,6 +8,9 @@ import {
   wlCurrentResponseSchema,
   wlEnterResponseSchema,
   wlQpResponseSchema,
+  wlRewardIdParamSchema,
+  wlRewardSeenResponseSchema,
+  wlRewardsResponseSchema,
 } from './weekend-league.schemas.js';
 import { wlCreateTestSchema } from './wl-ops.service.js';
 import {
@@ -81,6 +84,31 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     security: [{ bearerAuth: [] }],
     responses: {
       200: { description: 'Check-in outcome (idempotent)', schema: checkinResponse },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/weekend-league/rewards',
+    summary: "The caller's granted Weekend League rewards, newest first",
+    tags: ['WeekendLeague'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Granted rewards with a seen flag', schema: wlRewardsResponseSchema.openapi('WlRewardsResponse') },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/weekend-league/rewards/{rewardId}/seen',
+    summary: 'Acknowledge a reward reveal (grants nothing)',
+    tags: ['WeekendLeague'],
+    security: [{ bearerAuth: [] }],
+    pathParams: wlRewardIdParamSchema,
+    responses: {
+      200: { description: 'Whether this call acknowledged it', schema: wlRewardSeenResponseSchema.openapi('WlRewardSeenResponse') },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });

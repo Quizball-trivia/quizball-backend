@@ -180,11 +180,28 @@ export const wlAdminController = {
 
   async deleteTest(req: Request, res: Response): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
-    const deleted = await sql<{ id: string }[]>`
-      DELETE FROM wl_tournaments
-      WHERE id = ${id} AND is_test = true
-      RETURNING id
-    `;
+    // Reward rows deliberately do not cascade from a tournament: a paid
+    // receipt must never vanish with a real event. A rehearsal's go first.
+    const deleted = await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      // Tournament row first: reward settlement reaches the tournament before
+      // its own rows, and taking them in the other order here could deadlock
+      // with a payout pass running at the same moment.
+      await txSql`SELECT id FROM wl_tournaments WHERE id = ${id} AND is_test = true FOR UPDATE`;
+      await txSql`
+        DELETE FROM wl_reward_receipts
+        WHERE tournament_id IN (SELECT id FROM wl_tournaments WHERE id = ${id} AND is_test = true)
+      `;
+      await txSql`
+        DELETE FROM wl_reward_settlements
+        WHERE tournament_id IN (SELECT id FROM wl_tournaments WHERE id = ${id} AND is_test = true)
+      `;
+      return txSql<{ id: string }[]>`
+        DELETE FROM wl_tournaments
+        WHERE id = ${id} AND is_test = true
+        RETURNING id
+      `;
+    });
     if (deleted.length === 0) {
       throw new BadRequestError('Only TEST events can be deleted (cancel real events instead — deleting the row would make the weekly calendar recreate it)');
     }

@@ -27,6 +27,7 @@ import {
   wlPauseTournament,
   wlResumeTournament,
 } from './wl-ops.service.js';
+import { settleWlRewards } from './wl-rewards.js';
 
 const actionSchema = z.object({
   actor: z.string().min(1).max(80),
@@ -78,6 +79,23 @@ export const wlOpsController = {
     const input = actionSchema.parse(req.body ?? {});
     const cancelled = await wlCancelTournament(input.tournament_id, input.actor, input.reason);
     res.json({ cancelled });
+  },
+
+  /**
+   * Repair path for reward payouts (the orchestrator sweep is the normal one).
+   * Same freeze-then-pay code and the same guards, so it is safe to race the
+   * sweep and to repeat: it can only pay receipts that are still pending.
+   */
+  async settleRewards(req: Request, res: Response): Promise<void> {
+    requireOpsToken(req);
+    const body = z.object({
+      actor: z.string().min(1).max(80),
+      tournament_id: z.string().uuid(),
+    }).parse(req.body ?? {});
+    if (!config.WL_REWARDS_ENABLED) throw new BadRequestError('WL rewards are disabled');
+    const result = await settleWlRewards(body.tournament_id, { limit: 500 });
+    logger.warn({ actor: body.actor, tournamentId: body.tournament_id, ...result }, 'WL ops: settle-rewards');
+    res.json(result);
   },
 
   async forceTick(req: Request, res: Response): Promise<void> {

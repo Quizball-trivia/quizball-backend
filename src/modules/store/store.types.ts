@@ -35,6 +35,7 @@ export const STORE_TX_EVENT_TYPES = [
   'squad_spin_stake',
   'squad_spin_payout',
   'squad_spin_refund',
+  'wl_reward',
 ] as const;
 
 export type StoreTxEventType = typeof STORE_TX_EVENT_TYPES[number];

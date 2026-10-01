@@ -10,6 +10,7 @@ import { startPistasReadinessCheck } from './modules/pistas/index.js';
 import { startUltimoReadinessCheck } from './modules/ultimo/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
+import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
 import { createApp } from './app.js';
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
@@ -137,6 +138,7 @@ const shutdown = async (signal: string) => {
     stopDailyComebackReminderWorker(),
     stopRetentionEmailWorker(),
     stopSeason3FeedbackWorker(),
+    stopWlRewardsWorker(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

@@ -77,9 +77,35 @@ export const wlCheckinResponseSchema = z.object({
   reason: z.enum(['ok', 'no_tournament', 'window_closed', 'not_entered', 'not_finalist']).optional(),
 });
 
+export const wlRewardBandSchema = z.enum(['participant', 'finalist', 'top10', 'third', 'second', 'winner']);
+
+export const wlRewardSchema = z.object({
+  id: z.string().uuid(),
+  tournamentId: z.string().uuid(),
+  weekKey: z.string().nullable(),
+  band: wlRewardBandSchema,
+  /** Rank among eligible humans in the final; null for bands below the top 10. */
+  finalRank: z.number().int().positive().nullable(),
+  coins: z.number().int().min(0),
+  items: z.array(z.object({
+    slug: z.string(),
+    avatarPartId: z.string(),
+    slot: z.string(),
+    alreadyOwned: z.boolean(),
+  })),
+  grantedAt: z.string(),
+  seen: z.boolean(),
+});
+
+export const wlRewardsResponseSchema = z.object({ rewards: z.array(wlRewardSchema) });
+export const wlRewardSeenResponseSchema = z.object({ acknowledged: z.boolean() });
+export const wlRewardIdParamSchema = z.object({ rewardId: z.string().uuid() });
+
 export type WlTournamentStatus = z.infer<typeof wlTournamentStatusSchema>;
 export type WlEntryState = z.infer<typeof wlEntryStateSchema>;
 export type WlQpResponse = z.infer<typeof wlQpResponseSchema>;
 export type WlCurrentResponse = z.infer<typeof wlCurrentResponseSchema>;
 export type WlEnterResponse = z.infer<typeof wlEnterResponseSchema>;
 export type WlCheckinResponse = z.infer<typeof wlCheckinResponseSchema>;
+export type WlRewardsResponse = z.infer<typeof wlRewardsResponseSchema>;
+export type WlRewardIdParam = z.infer<typeof wlRewardIdParamSchema>;

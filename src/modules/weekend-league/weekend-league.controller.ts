@@ -2,6 +2,8 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthenticationError } from '../../core/errors.js';
 import { weekendLeagueService } from './weekend-league.service.js';
+import { wlRewardsRepo } from './wl-rewards.js';
+import type { WlRewardIdParam, WlRewardsResponse } from './weekend-league.schemas.js';
 
 function requireUserId(req: Request): string {
   const userId = req.user?.id;
@@ -41,5 +43,35 @@ export const weekendLeagueController = {
   async checkin(req: Request, res: Response): Promise<void> {
     const tournamentId = testTargetSchema.parse(req.body ?? {}).tournament_id;
     res.json(await weekendLeagueService.checkin(requireUserId(req), tournamentId));
+  },
+
+  /** The caller's granted rewards. History stays after acknowledgement. */
+  async rewards(req: Request, res: Response): Promise<void> {
+    const rows = await wlRewardsRepo.listForUser(requireUserId(req));
+    const body: WlRewardsResponse = {
+      rewards: rows.map((row) => ({
+        id: row.id,
+        tournamentId: row.tournament_id,
+        weekKey: row.week_key,
+        band: row.band,
+        finalRank: row.human_rank,
+        coins: row.coins,
+        items: row.items.map((item) => ({
+          slug: item.slug,
+          avatarPartId: item.avatarPartId,
+          slot: item.slot,
+          alreadyOwned: item.alreadyOwned === true,
+        })),
+        grantedAt: row.granted_at ?? '',
+        seen: row.seen_at !== null,
+      })),
+    };
+    res.json(body);
+  },
+
+  /** Marks the reveal as watched. Grants nothing: the reward is already owned. */
+  async rewardSeen(req: Request, res: Response): Promise<void> {
+    const { rewardId } = req.validated.params as WlRewardIdParam;
+    res.json({ acknowledged: await wlRewardsRepo.markSeen(requireUserId(req), rewardId) });
   },
 };

@@ -11,6 +11,7 @@ router.post('/pause', wlOpsController.pause);
 router.post('/resume', wlOpsController.resume);
 router.post('/cancel', wlOpsController.cancel);
 router.post('/force-tick', wlOpsController.forceTick);
+router.post('/settle-rewards', wlOpsController.settleRewards);
 router.post('/skip-poison-event', wlOpsController.skipPoisonEvent);
 router.post('/bootstrap-s2-qp', wlOpsController.bootstrapSeason2Qp);
 

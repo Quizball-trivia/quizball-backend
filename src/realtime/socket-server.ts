@@ -71,6 +71,7 @@ import { buildFinalResultsPayload, emitFinalResultsToMatchParticipants } from '.
 import { startReservationSweeper } from './services/synthetic-bot-reservation-sweeper.service.js';
 import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
 import { startWlOrchestrator } from '../modules/weekend-league/wl-orchestrator.js';
+import { startWlRewardsWorker } from '../modules/weekend-league/wl-rewards.js';
 import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
 import {
@@ -703,6 +704,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // match silently freezes until the 15-minute sweeper.
   scheduleBootMatchTimerRearm(io);
   startWlOrchestrator(io);
+  startWlRewardsWorker();
   scheduleBootAuctionTimerRearm(io);
   void footballGridRealtimeService.rearmActiveMatches().catch((error) => {
     logger.warn({ error }, 'Football Grid boot timer re-arm failed');

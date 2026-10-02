@@ -1242,7 +1242,8 @@
               "trivia_mines_refund",
               "squad_spin_stake",
               "squad_spin_payout",
-              "squad_spin_refund"
+              "squad_spin_refund",
+              "wl_reward"
             ]
           },
           "outcome": {
@@ -1396,7 +1397,8 @@
                     "trivia_mines_refund",
                     "squad_spin_stake",
                     "squad_spin_payout",
-                    "squad_spin_refund"
+                    "squad_spin_refund",
+                    "wl_reward"
                   ]
                 },
                 "outcome": {
@@ -12600,6 +12602,109 @@
           "accepted",
           "already_started"
         ]
+      },
+      "WlRewardsResponse": {
+        "type": "object",
+        "properties": {
+          "rewards": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "tournamentId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "weekKey": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "band": {
+                  "type": "string",
+                  "enum": [
+                    "participant",
+                    "finalist",
+                    "top10",
+                    "third",
+                    "second",
+                    "winner"
+                  ]
+                },
+                "finalRank": {
+                  "type": "integer",
+                  "nullable": true,
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "coins": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "slug": {
+                        "type": "string"
+                      },
+                      "avatarPartId": {
+                        "type": "string"
+                      },
+                      "slot": {
+                        "type": "string"
+                      },
+                      "alreadyOwned": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "slug",
+                      "avatarPartId",
+                      "slot",
+                      "alreadyOwned"
+                    ]
+                  }
+                },
+                "grantedAt": {
+                  "type": "string"
+                },
+                "seen": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "tournamentId",
+                "weekKey",
+                "band",
+                "finalRank",
+                "coins",
+                "items",
+                "grantedAt",
+                "seen"
+              ]
+            }
+          }
+        },
+        "required": [
+          "rewards"
+        ]
+      },
+      "WlRewardSeenResponse": {
+        "type": "object",
+        "properties": {
+          "acknowledged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acknowledged"
+        ]
       }
     },
     "parameters": {}
@@ -16202,7 +16307,8 @@
                 "trivia_mines_refund",
                 "squad_spin_stake",
                 "squad_spin_payout",
-                "squad_spin_refund"
+                "squad_spin_refund",
+                "wl_reward"
               ]
             },
             "required": false,
@@ -16305,7 +16411,8 @@
                               "trivia_mines_refund",
                               "squad_spin_stake",
                               "squad_spin_payout",
-                              "squad_spin_refund"
+                              "squad_spin_refund",
+                              "wl_reward"
                             ]
                           },
                           "outcome": {
@@ -25866,6 +25973,10 @@
                         "minimum": 0,
                         "maximum": 2000,
                         "default": 0
+                      },
+                      "reward_payout": {
+                        "type": "boolean",
+                        "default": false
                       }
                     }
                   }
@@ -32621,6 +32732,87 @@
           },
           "409": {
             "description": "Play started or wrong status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/rewards": {
+      "get": {
+        "summary": "The caller's granted Weekend League rewards, newest first",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Granted rewards with a seen flag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlRewardsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/rewards/{rewardId}/seen": {
+      "post": {
+        "summary": "Acknowledge a reward reveal (grants nothing)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "rewardId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether this call acknowledged it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlRewardSeenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
             "content": {
               "application/json": {
                 "schema": {

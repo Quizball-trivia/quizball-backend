@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
+import { validate } from '../middleware/validate.js';
+import { wlRewardIdParamSchema } from '../../modules/weekend-league/weekend-league.schemas.js';
 import { weekendLeagueController } from '../../modules/weekend-league/index.js';
 
 const router = Router();
@@ -18,5 +20,7 @@ router.get('/qp', weekendLeagueController.qp);
 router.get('/standings', weekendLeagueController.standings);
 router.post('/enter', weekendLeagueController.enter);
 router.post('/checkin', weekendLeagueController.checkin);
+router.get('/rewards', weekendLeagueController.rewards);
+router.post('/rewards/:rewardId/seen', validate({ params: wlRewardIdParamSchema }), weekendLeagueController.rewardSeen);
 
 export const weekendLeagueRoutes = router;

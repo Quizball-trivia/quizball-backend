@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import { canonical } from '../pistas/pistas.seed.js';
 import { GOALS_PER_DAY } from './minuto.constants.js';
 import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './minuto.days.js';
-import { goalSchema, minuteLeaks, MINUTO_TIERS, type MinutoGoal } from './minuto.goal.js';
+import { goalBaseSchema, goalSchema, minuteLeaks, MINUTO_TIERS, type MinutoGoal } from './minuto.goal.js';
 import type { MinutoDayRow } from './minuto.types.js';
 
 /**
@@ -24,7 +24,7 @@ export function contentHash(goals: readonly MinutoGoal[]): number {
   return parseInt(hex.slice(0, 8), 16) || 1;
 }
 
-const GOAL_KEYS = new Set(Object.keys(goalSchema.innerType().innerType().innerType().innerType().shape));
+const GOAL_KEYS = new Set(Object.keys(goalBaseSchema.shape));
 
 /**
  * Describes a refused goal without echoing it: issue codes and known field names only. Zod's own messages can quote

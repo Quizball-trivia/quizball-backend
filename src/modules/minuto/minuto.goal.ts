@@ -38,7 +38,7 @@ export type MinutoTeam = z.infer<typeof team>;
 
 const score = z.tuple([z.number().int().min(0).max(20), z.number().int().min(0).max(20)]);
 
-export const goalSchema = z.object({
+export const goalBaseSchema = z.object({
   /** Opaque (date + hash of public facts): ids reach clients before the guess, so they never encode the minute. */
   id: z.string().regex(/^g\d{8}-[a-f0-9]{10}$/),
   /** Canonical identity (match, scorer, minute): days and the duel pool never share one. */
@@ -64,7 +64,10 @@ export const goalSchema = z.object({
   scoreAfter: score,
   image: z.object({ src: goalPhoto, credit: z.string().trim().min(1).max(200), license: z.enum(MINUTO_LICENSES) }).strict().nullable(),
   minute: z.object({ base: z.number().int().min(1).max(120), added: z.number().int().min(0).max(30) }).strict(),
-}).strict().refine((g) => g.minute.base + g.minute.added <= MAX_MINUTE, 'minute out of range')
+}).strict();
+
+export const goalSchema = goalBaseSchema
+  .refine((g) => g.minute.base + g.minute.added <= MAX_MINUTE, 'minute out of range')
   .refine((g) => g.minute.added === 0 || [45, 90, 105, 120].includes(g.minute.base), 'added time only after 45, 90, 105 or 120')
   .refine((g) => g.scoreAfter[0] <= g.score[0] && g.scoreAfter[1] <= g.score[1], 'scoreAfter beyond the final score')
   .refine((g) => (g.side === 'home' ? g.scoreAfter[0] : g.scoreAfter[1]) >= 1, 'scoreAfter must count the goal');

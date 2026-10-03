@@ -3,6 +3,7 @@ import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { BM_TIERS } from './engines/buscaminas.engine.js';
 import { UL_TIERS } from './engines/ultimo.engine.js';
+import { MD_TIERS } from './engines/minuto.engine.js';
 import { currentEngine, engineFor, type AnyEngine } from './duel.registry.js';
 import { duelRepo, type DuelMatchRow, type DuelParticipantRow, type DuelResult, type DuelStatus } from './duel.repo.js';
 import { newSeed, seededRng } from './duel.rng.js';
@@ -52,15 +53,25 @@ const PACKS: Record<DuelGameId, { wanted: Record<string, number>; order: readonl
     order: ['easy', 'medium', 'hard', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard'],
   },
   ultimo: { wanted: { easy: 2, medium: 2, hard: 1 }, order: UL_TIERS },
+  minuto: { wanted: { easy: 3, medium: 4, hard: 3 }, order: MD_TIERS },
 };
 
 const contentCache = new Map<string, unknown>();
+
+/** A schema error can quote the content (an answer), so callers and logs only ever get a code. */
+function parseOrCode(engine: AnyEngine, raw: unknown): unknown {
+  try {
+    return engine.parseContent(raw);
+  } catch {
+    throw new DuelError('duel_content_invalid', 500);
+  }
+}
 
 function parsedContent(engine: AnyEngine, matchId: string, raw: unknown): unknown {
   const key = `${matchId}:${engine.version}`;
   const hit = contentCache.get(key);
   if (hit) return hit;
-  const parsed = engine.parseContent(raw);
+  const parsed = parseOrCode(engine, raw);
   if (contentCache.size > 500) contentCache.delete(contentCache.keys().next().value as string);
   contentCache.set(key, parsed);
   return parsed;
@@ -125,10 +136,15 @@ async function lockOwned(tx: TransactionSql, matchId: string, userId: string) {
   return { row, ...(await seatOf(tx, row, userId)) };
 }
 
+/**
+ * `unsupported`: this build does not have the match's engine (a newer game during a rolling deploy). The match is left
+ * alone for a replica that has it; the age cap is the backstop. `null`: the content is gone, which only a cancel fixes.
+ */
 async function engineAndContent(tx: TransactionSql, row: DuelMatchRow) {
   const engine = engineFor(row.game, row.engine_version);
+  if (!engine) return 'unsupported' as const;
   const stored = await duelRepo.getContent(tx, row.id);
-  if (!engine || !stored) return null;
+  if (!stored) return null;
   return { engine, content: parsedContent(engine, row.id, stored.content), seed: stored.seed };
 }
 
@@ -159,6 +175,10 @@ async function persist(
 async function advanceClock(tx: TransactionSql, row: DuelMatchRow): Promise<{ status: DuelStatus; timer: DuelEffects['timer'] }> {
   const nowMs = row.now.getTime();
   const loaded = await engineAndContent(tx, row);
+  if (loaded === 'unsupported') {
+    logger.warn({ matchId: row.id, game: row.game, engineVersion: row.engine_version }, 'Duel engine not in this build; left for another replica');
+    return { status: row.status, timer: null };
+  }
   if (!loaded) {
     await duelRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelled(null), rngCounter: row.rng_counter });
     return { status: 'cancelled', timer: null };
@@ -261,7 +281,7 @@ export const duelService = {
     for (const item of items) byDifficulty.set(item.difficulty, [...(byDifficulty.get(item.difficulty) ?? []), item]);
     const dealt = pack.order.map((difficulty) => byDifficulty.get(difficulty)?.shift());
     if (dealt.some((item) => !item)) throw new DuelError('duel_pool_short', 503);
-    const content = engine.parseContent({ rounds: dealt.map((item) => item!.payload) });
+    const content = parseOrCode(engine, { rounds: dealt.map((item) => item!.payload) });
     const seed = newSeed();
     return duelRepo.withTx(async (tx) => {
       const claimed = await duelRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId));
@@ -420,6 +440,8 @@ export const duelService = {
         return { result: await record({ ok: false, code: 'not_active' }), effects: null };
       }
       const loaded = await engineAndContent(tx, row);
+      // Not recorded: the same command, re-sent to a replica that has the engine, must still be judged.
+      if (loaded === 'unsupported') return { result: { ok: false, code: 'engine_unavailable' }, effects: null };
       if (!loaded) {
         await duelRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelled(null), rngCounter: row.rng_counter });
         return { result: await record({ ok: false, code: 'not_active' }), effects: effectsOf(row, participants, 'cancelled', null) };

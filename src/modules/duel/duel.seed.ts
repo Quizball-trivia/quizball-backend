@@ -7,6 +7,8 @@ import { canonical } from '../pistas/pistas.seed.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '../ultimo/ultimo.match.js';
 import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
+import type { MinutoGoal } from '../minuto/minuto.goal.js';
+import { checkGoal, MINUTO_CONTENT_LOCK, overlapping as minutoOverlapping, publishedKeys as minutoPublishedKeys, recordPublished as recordMinutoPublished } from '../minuto/minuto.seed.js';
 
 export interface PoolRow {
   itemId: string;
@@ -28,10 +30,12 @@ export function parsePoolFile(game: DuelGameId, raw: unknown): PoolRow[] {
   if (!Array.isArray(file.items) || file.items.length === 0) throw new Error('pool file needs a non-empty items array');
   const seen = new Set<string>();
   return file.items.map((item, i) => {
-    const row = game === 'pistas' ? pistasRow(item) : game === 'ultimo' ? ultimoRow(item) : buscaminasRow(item);
+    const row = game === 'pistas' ? pistasRow(item) : game === 'ultimo' ? ultimoRow(item) : game === 'minuto' ? minutoRow(item) : buscaminasRow(item);
     if (!row) throw new Error(`item ${i} is not a valid ${game} pool item`);
     if (seen.has(row.itemId)) throw new Error(`item ${i}: duplicate id`);
+    if (game === 'minuto' && seen.has(`fp:${row.fingerprint}`)) throw new Error(`item ${i}: duplicate goal (fingerprint)`);
     seen.add(row.itemId);
+    if (game === 'minuto') seen.add(`fp:${row.fingerprint}`);
     return row;
   });
 }
@@ -69,6 +73,18 @@ async function ultimoDailyOverlap(sql: Sql, rows: PoolRow[]): Promise<number[]> 
   return rows.flatMap((row, i) => (daily.some((keys) => sameKeys(keysOf(row.payload as UltimoCategory), keys)) ? [i] : []));
 }
 
+function minutoRow(item: unknown): PoolRow | null {
+  const checked = checkGoal(item);
+  if ('reason' in checked) return null;
+  const goal = checked.goal;
+  return { itemId: goal.id, difficulty: goal.tier, fingerprint: goal.fingerprint, payload: goal, keys: [] };
+}
+
+/** Pool goals (by index) published on any daily day, now or ever (by id or by fingerprint). */
+async function minutoDailyOverlap(sql: Sql, rows: PoolRow[]): Promise<number[]> {
+  return minutoOverlapping(rows.map((row) => row.payload as MinutoGoal), await minutoPublishedKeys(sql, 'day'));
+}
+
 function buscaminasRow(item: unknown): PoolRow | null {
   const parsed = buscaminasRoundSchema.safeParse(item);
   if (!parsed.success) return null;
@@ -90,6 +106,7 @@ export interface OverlapReport {
 export async function findDailyOverlap(sql: Sql, game: DuelGameId, rows: PoolRow[]): Promise<OverlapReport> {
   const daily = new Set<string>();
   if (game === 'ultimo') return { overlapping: await ultimoDailyOverlap(sql, rows) };
+  if (game === 'minuto') return { overlapping: await minutoDailyOverlap(sql, rows) };
   if (game === 'pistas') {
     const days = await sql<Array<{ rounds: Array<{ answer: { display: Record<string, string>; accepted: string[] } }> }>>`SELECT rounds FROM pistas_days`;
     const players = days.flatMap((day) => day.rounds.map((round) => ({ display: Object.values(round.answer.display), accepted: round.answer.accepted })));
@@ -118,6 +135,16 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       const overlap = await ultimoDailyOverlap(q, rows);
       if (overlap.length > 0 && !opts.allowOverlap) throw new Error(`${overlap.length} pool item(s) repeat a daily category; refused`);
     }
+    if (game === 'minuto') {
+      // Same rule for the goals: the days seed takes this lock too, and the overlap is re-checked inside the write.
+      await q`SELECT pg_advisory_xact_lock(hashtext(${MINUTO_CONTENT_LOCK}))`;
+      const overlap = await minutoDailyOverlap(q, rows);
+      if (overlap.length > 0 && !opts.allowOverlap) throw new Error(`${overlap.length} pool goal(s) are on a daily day; refused`);
+      // One pool row per goal: the same goal under another id could be dealt twice and answer itself.
+      const stored = await q<Array<{ item_id: string; fingerprint: string }>>`SELECT item_id, fingerprint FROM duel_pool WHERE game = 'minuto'`;
+      const twins = rows.filter((row) => stored.some((s) => s.fingerprint === row.fingerprint && s.item_id !== row.itemId));
+      if (twins.length > 0) throw new Error(`${twins.length} pool goal(s) are already in the pool under another id; refused`);
+    }
     for (const row of rows) {
       const [result] = await q<Array<{ inserted: boolean }>>`
         INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload, enabled)
@@ -130,6 +157,7 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       else updated += 1;
     }
     if (game === 'ultimo') await recordPublished(q, 'pool', rows.map((row) => row.payload as UltimoCategory));
+    if (game === 'minuto') await recordMinutoPublished(q, 'pool', rows.map((row) => row.payload as MinutoGoal));
   });
   return { inserted, updated };
 }

@@ -14,7 +14,7 @@ type Handler = RequestHandler;
 
 export interface DailyGameRoutes {
   /** Budget names prefix the shared Redis counters (`<name>-address`, `<name>`). */
-  name: 'pistas' | 'ultimo';
+  name: 'pistas' | 'ultimo' | 'minuto';
   /** Hourly guest budgets: per address (before the session lookup) and per guest session. */
   guestBudget: { address: number; session: number };
   guestSessionRequired: () => AppError;

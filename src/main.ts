@@ -8,6 +8,7 @@ import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFr
 import { startBuscaminasReadinessCheck } from './modules/buscaminas/index.js';
 import { startPistasReadinessCheck } from './modules/pistas/index.js';
 import { startUltimoReadinessCheck } from './modules/ultimo/index.js';
+import { startMinutoReadinessCheck } from './modules/minuto/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -83,6 +84,7 @@ startBuscaminasReadinessCheck();
 // Same for the Pistas futboleras days.
 startPistasReadinessCheck();
 startUltimoReadinessCheck();
+startMinutoReadinessCheck();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

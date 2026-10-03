@@ -1,6 +1,7 @@
 import { buscaminasDuelEngine } from './engines/buscaminas.engine.js';
 import { pistasDuelEngine } from './engines/pistas.engine.js';
 import { ultimoDuelEngine } from './engines/ultimo.engine.js';
+import { minutoDuelEngine } from './engines/minuto.engine.js';
 import type { DuelEngine, DuelGameId } from './duel.types.js';
 
 // Engines are looked up by (game, version): a match keeps the engine it started with across deploys.
@@ -10,12 +11,14 @@ const ENGINES: Record<DuelGameId, Record<number, AnyEngine>> = {
   buscaminas: { [buscaminasDuelEngine.version]: buscaminasDuelEngine as unknown as AnyEngine },
   pistas: { [pistasDuelEngine.version]: pistasDuelEngine as unknown as AnyEngine },
   ultimo: { [ultimoDuelEngine.version]: ultimoDuelEngine as unknown as AnyEngine },
+  minuto: { [minutoDuelEngine.version]: minutoDuelEngine as unknown as AnyEngine },
 };
 
 const CURRENT: Record<DuelGameId, AnyEngine> = {
   buscaminas: buscaminasDuelEngine as unknown as AnyEngine,
   pistas: pistasDuelEngine as unknown as AnyEngine,
   ultimo: ultimoDuelEngine as unknown as AnyEngine,
+  minuto: minutoDuelEngine as unknown as AnyEngine,
 };
 
 export const currentEngine = (game: DuelGameId): AnyEngine => CURRENT[game];

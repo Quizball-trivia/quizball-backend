@@ -162,16 +162,19 @@ async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow
   `;
 }
 
-async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem>> {
-  const items: Record<number, WlRewardItem> = {};
-  for (const [place, slug] of Object.entries(WL_PACK_ITEM_SLUGS)) {
-    const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
-    const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
-    if (!product || product.type !== 'avatar'
-      || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
-      throw new Error(`WL reward product missing or malformed: ${slug}`);
+async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem[]>> {
+  const items: Record<number, WlRewardItem[]> = {};
+  for (const [place, slugs] of Object.entries(WL_PACK_ITEM_SLUGS)) {
+    items[Number(place)] = [];
+    for (const slug of slugs) {
+      const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
+      const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
+      if (!product || product.type !== 'avatar'
+        || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
+        throw new Error(`WL reward product missing or malformed: ${slug}`);
+      }
+      items[Number(place)].push({ slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot });
     }
-    items[Number(place)] = { slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot };
   }
   return items;
 }
@@ -225,7 +228,7 @@ export async function freezeWlRewards(tournamentId: string): Promise<WlFreezeOut
         band: reward.band,
         human_rank: reward.band === 'participant' || reward.band === 'finalist' ? null : f.human_rank,
         coins: reward.coins,
-        items: reward.packPlace ? [packItems[reward.packPlace]] : [],
+        items: reward.packPlace ? packItems[reward.packPlace] : [],
         facts: { ...policyFacts, finalRank: f.final_rank },
       }];
     });

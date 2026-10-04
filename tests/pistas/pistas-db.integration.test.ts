@@ -180,6 +180,14 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
         expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(3);
         await seedDays(db.sql, [next], { dryRun: false, allowCorrection: false, allowRepeats: true, allowPoolOverlap: true });
         expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(4);
+        // That day, re-supplied unchanged beside a new one, is not re-judged; the new day is still checked.
+        const plan = await seed([parseDayFile('2026-09-30.json', raw), makeDay('2026-10-01')]);
+        expect(plan.entries.map((e) => e.status)).toEqual(['unchanged', 'new']);
+        // A disabled pool item still counts: its packs were already dealt.
+        await db.sql`UPDATE duel_pool SET enabled = false`;
+        const laterRaw = rawDay('2026-10-02');
+        laterRaw.rounds[5] = withAnswer(laterRaw.rounds[5], 'Solo Duelo');
+        await expect(seed([parseDayFile('2026-10-02.json', laterRaw)])).rejects.toThrow(/are in the duel pool/);
       } finally {
         await db.sql`DROP TABLE IF EXISTS duel_pool`;
       }

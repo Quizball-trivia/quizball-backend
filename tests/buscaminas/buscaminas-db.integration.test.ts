@@ -181,6 +181,14 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
         const { seedDays, toDayRow } = await import('../../src/modules/buscaminas/buscaminas.seed.js');
         await seedDays(db.sql, [toDayRow(next)], { dryRun: false, allowCorrection: false, allowPoolOverlap: true });
         expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(4);
+        // That day, re-supplied unchanged beside a new one, is not re-judged; the new day is still checked.
+        const after = makeDay(addDays(next.day, 1));
+        expect((await seed([next, after])).entries.map((e) => e.status)).toEqual(['unchanged', 'new']);
+        // A disabled pool item still counts: its packs were already dealt.
+        await db.sql`UPDATE duel_pool SET enabled = false`;
+        const later = makeDay(addDays(after.day, 1));
+        later.rounds[0] = { ...later.rounds[0], prompt: { ...later.rounds[0].prompt, es: 'Solo duelos' } };
+        await expect(seed([later])).rejects.toThrow(/use a duel pool category/);
       } finally {
         await db.sql`DROP TABLE IF EXISTS duel_pool`;
       }

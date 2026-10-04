@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { addDays } from '../../src/modules/pistas/pistas.days.js';
 import { PROJECT_REFS } from '../../src/modules/buscaminas/buscaminas.seed.js';
 import {
-  assertCalendar, canonical, contentHash, parseDayFile, planSeed, repeatedPlayers, resolvePistasSeedTarget, toDayRow,
+  assertCalendar, canonical, contentHash, duelPoolOverlap, parseDayFile, planSeed, repeatedPlayers, resolvePistasSeedTarget, toDayRow,
 } from '../../src/modules/pistas/pistas.seed.js';
 import type { PistasDayRow } from '../../src/modules/pistas/pistas.types.js';
 import { calendar, makeDay, rawDay } from './fixtures.js';
@@ -141,6 +141,22 @@ describe('pistas seed: day file validation', () => {
     }));
     const started = Date.now();
     expect(repeatedPlayers(year, year)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('checks a year of days against a large duel pool, indexed, with samePlayer\'s rule', async () => {
+    const year = Array.from({ length: 365 }, (_, d) => toDayRow({
+      ...makeDay(addDays('2026-09-27', d)),
+      rounds: makeDay('2026-09-27').rounds.map((round, r) => ({
+        ...round, answer: { display: { es: `Jugador ${d} ${r}`, en: `Player ${d} ${r}`, ka: `მოთამაშე ${d} ${r}`, tr: `Oyuncu ${d} ${r}` }, accepted: [`Player ${d} ${r}`] },
+      })),
+    }));
+    const pool = Array.from({ length: 2500 }, (_, i) => ({ answer: { display: { es: `Duelista ${i}` }, accepted: [`Duelista ${i}`] } }));
+    // the daily's display name is a pool player's accepted alias: the same player
+    pool.push({ answer: { display: { es: 'Otro nombre' }, accepted: ['Jugador 7 3'] } });
+    const sql = ((strings: TemplateStringsArray) => Promise.resolve(strings.join('').includes('to_regclass') ? [{ present: true }] : pool)) as never;
+    const started = Date.now();
+    expect(await duelPoolOverlap(sql, year)).toBe(1);
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });

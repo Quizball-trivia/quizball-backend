@@ -4,7 +4,7 @@ import { resolveSeedTarget, type SeedTargetName } from '../buscaminas/buscaminas
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
 import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
 import { CONTENT_START, dayNumber } from './pistas.days.js';
-import { containsWords, normalizeAnswer, samePlayer } from './pistas.normalize.js';
+import { containsWords, normalizeAnswer } from './pistas.normalize.js';
 import {
   CLUE_KINDS, PISTAS_DIFFICULTIES, PISTAS_LOCALES, type Clue, type ClueKind, type LocalizedText, type PistasDayRow, type PistasDifficulty,
   type StoredRound,
@@ -226,12 +226,23 @@ export function planSeed(
 export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): Promise<number> {
   const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
   if (!table?.present) return 0;
+  // Disabled pool items count too: their packs were already dealt.
   const pool = await sql<Array<{ answer: { display: Record<string, string>; accepted: string[] } }>>`
-    SELECT payload->'answer' AS answer FROM duel_pool WHERE game = 'pistas' AND enabled
+    SELECT payload->'answer' AS answer FROM duel_pool WHERE game = 'pistas'
   `;
-  const players = pool.map((item) => ({ display: Object.values(item.answer?.display ?? {}), accepted: item.answer?.accepted ?? [] }));
-  return rows.reduce((n, row) => n + row.rounds.filter((round) =>
-    players.some((player) => samePlayer({ display: Object.values(round.answer.display), accepted: round.answer.accepted }, player))).length, 0);
+  // samePlayer against every pool player, indexed: a display name of one side among all names of the other.
+  const names = (values: Iterable<string>) => [...values].map(normalizeAnswer).filter((v) => v.length > 2);
+  const poolDisplay = new Set<string>();
+  const poolAny = new Set<string>();
+  for (const item of pool) {
+    const display = Object.values(item.answer?.display ?? {});
+    for (const name of names(display)) poolDisplay.add(name);
+    for (const name of names([...display, ...(item.answer?.accepted ?? [])])) poolAny.add(name);
+  }
+  return rows.reduce((n, row) => n + row.rounds.filter((round) => {
+    const display = Object.values(round.answer.display);
+    return names(display).some((name) => poolAny.has(name)) || names([...display, ...round.answer.accepted]).some((name) => poolDisplay.has(name));
+  }).length, 0);
 }
 
 /** Taken by the days seed and the duel pool writer, so each re-checks the other's content inside its own write. */
@@ -251,14 +262,16 @@ export async function seedDays(
     // pool write: the overlap with the duel pool is checked here, inside the write.
     await tx`SELECT pg_advisory_xact_lock(hashtext(${PISTAS_CONTENT_LOCK}))`;
     await tx`LOCK TABLE pistas_days IN SHARE ROW EXCLUSIVE MODE`;
-    const overlap = await duelPoolOverlap(tx, rows);
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
     const storedRows = await tx<Array<Omit<PistasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
     // The stored days are the calendar: a seed may extend it but never leave a hole in it.
     assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+    // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
+    const writing = rows.filter((row) => { const before = stored.get(row.day); return !before || contentDiffers(before, row) || before.number !== row.number; });
+    const overlap = await duelPoolOverlap(tx, writing);
+    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
     // A player is a daily answer once: not twice in the files, and not on a stored day the files do not replace.
     if (!opts.allowRepeats) {
       const supplied = new Set(rows.map((row) => row.day));

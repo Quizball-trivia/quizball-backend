@@ -170,17 +170,21 @@ export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
 
 /**
  * Rounds whose category is in the duel pool (duel packs are harvestable, so a daily category may never be a pool
- * category). Matched like the pool writer does, by the normalised Spanish prompt; no duel_pool table means none.
+ * category). Matched exactly as the pool writer matches the days (normalised Spanish prompt, longer than two
+ * characters); disabled pool items count too, since their packs were already dealt. No duel_pool table means none.
  */
 export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<number> {
   const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
   if (!table?.present) return 0;
   const pool = await sql<Array<{ prompt: string | null }>>`
-    SELECT payload->'prompt'->>'es' AS prompt FROM duel_pool WHERE game = 'buscaminas' AND enabled
+    SELECT payload->'prompt'->>'es' AS prompt FROM duel_pool WHERE game = 'buscaminas'
   `;
-  const keys = new Set(pool.flatMap((item) => (item.prompt ? [normalizeAnswer(item.prompt)] : [])));
+  const keys = new Set(pool.flatMap((item) => (item.prompt ? [normalizeAnswer(item.prompt)] : [])).filter((key) => key.length > 2));
   return rows.reduce((n, row) => n + row.board.rounds.filter((round) => keys.has(normalizeAnswer(round.prompt.es))).length, 0);
 }
+
+const unchangedDay = (before: BuscaminasDayRow | undefined, row: BuscaminasDayRow): boolean =>
+  !!before && !answersDiffer(before, row) && before.number === row.number && canonical(before.board) === canonical(row.board);
 
 /** Plans (and unless `dryRun`, writes) the whole set in ONE transaction; a refused correction writes nothing. */
 export async function seedDays(
@@ -197,12 +201,13 @@ export async function seedDays(
     // pool write: the overlap with the duel pool is checked here, inside the write.
     await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
-    const overlap = await duelPoolOverlap(tx, rows);
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
+    const overlap = await duelPoolOverlap(tx, rows.filter((row) => !unchangedDay(stored.get(row.day), row)));
+    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
     // The stored days are the calendar: a seed may extend it but never leave a hole in it.
     assertUnbrokenCalendar(LAUNCH_DAY, stored.keys(), rows.map((row) => row.day));
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the

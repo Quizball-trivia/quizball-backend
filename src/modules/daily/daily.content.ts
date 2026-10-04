@@ -16,6 +16,21 @@ export interface ContentStore<Day> {
   invalidate(): void;
 }
 
+const storedDayKeys = new WeakMap<ReadonlyMap<string, unknown>, readonly string[]>();
+
+/** Records every stored day behind a served index, malformed ones included. */
+export function rememberStoredDays(index: ReadonlyMap<string, unknown>, days: readonly string[]): void {
+  storedDayKeys.set(index, days);
+}
+
+/**
+ * The days the calendar runs on: every stored day, served or not, so a malformed row 404s only itself instead of
+ * ending the calendar the seed considers unbroken. An index built elsewhere (tests) stands for itself.
+ */
+export function storedDaysOf(index: ReadonlyMap<string, unknown>): Iterable<string> {
+  return storedDayKeys.get(index) ?? index.keys();
+}
+
 /**
  * A daily game's days, cached per replica and re-read only when the table's fingerprint changes. A malformed
  * row is logged and not served; a failed re-check keeps serving what was loaded.
@@ -35,11 +50,13 @@ export function createDailyContentStore<Row extends { day: string }, Day>(
       return cached.index;
     }
     const days = new Map<string, Day>();
-    for (const row of await source.load()) {
+    const rows = await source.load();
+    for (const row of rows) {
       const day = index(row);
       if (day) days.set(row.day, day);
       else opts.log.error({ day: row.day }, `${opts.label} day has malformed content; it is not served`);
     }
+    rememberStoredDays(days, rows.map((row) => row.day));
     cached = { fingerprint, index: days, checkedAt: opts.now() };
     return days;
   }

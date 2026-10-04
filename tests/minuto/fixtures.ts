@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { indexDay, type ContentIndex, type IndexedDay } from '../../src/modules/minuto/minuto.content.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from '../../src/modules/minuto/minuto.days.js';
+import { addDays, CONTENT_START, dayNumber } from '../../src/modules/minuto/minuto.days.js';
 import { parseDayFile, toDayRow, type SeedDay } from '../../src/modules/minuto/minuto.seed.js';
 
 /**
@@ -47,4 +47,5 @@ export const rawDay = (day: string, variant = 0) => ({
 export const makeDay = (day: string, variant = 0): SeedDay => parseDayFile(`${day}.json`, rawDay(day, variant));
 export const indexed = (d: SeedDay): IndexedDay => indexDay(toDayRow(d))!;
 export const indexOf = (...days: SeedDay[]): ContentIndex => new Map(days.map((d) => [d.day, indexed(d)]));
-export const calendar = (): SeedDay[] => Array.from({ length: PUBLISHED_DAYS }, (_, i) => makeDay(addDays(CONTENT_START, i)));
+export const CALENDAR_DAYS = 75;
+export const calendar = (): SeedDay[] => Array.from({ length: CALENDAR_DAYS }, (_, i) => makeDay(addDays(CONTENT_START, i)));

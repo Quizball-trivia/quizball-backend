@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { NotFoundError, type AppError } from '../../core/errors.js';
 import type { TransactionSql } from '../../db/index.js';
-import { dayEndsAt, releaseDay, type DailyCalendar } from './daily.calendar.js';
+import { dayEndsAt, isReleasedDay, releaseDay, type DailyCalendar } from './daily.calendar.js';
+import { storedDaysOf } from './daily.content.js';
 import { contentChanged, dayOver, notYourRun, signInForToday, staleState } from './daily.errors.js';
 import type { DailyBoardEntryBase, DailyPlayer, DailyRunRowBase } from './daily.repo.js';
 
@@ -100,6 +101,16 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
   const leaderboards = new Map<string, { at: number; players: number; top: Entry[] }>();
   /** Days the database clock has closed; once closed a day stays closed. */
   const closedDays = new Set<string>();
+  /** The calendar's last day for each served content index (the index object changes only when the table does). */
+  const lastDays = new WeakMap<ReadonlyMap<string, Day>, string | null>();
+  function lastDayOf(content: ReadonlyMap<string, Day>): string | null {
+    let last = lastDays.get(content);
+    if (last === undefined) {
+      last = calendar.lastDay(storedDaysOf(content));
+      lastDays.set(content, last);
+    }
+    return last;
+  }
 
   const nowMs = async (tx?: Tx): Promise<number> =>
     config.clock === 'database' && deps.repo.clock ? deps.repo.clock(tx) : deps.now().getTime();
@@ -127,12 +138,14 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
   }
 
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
-  async function playableDay(day: string): Promise<Day> {
-    const content = (await deps.content()).get(day);
+  async function playableDay(day: string): Promise<{ day: Day; lastDay: string | null }> {
+    const index = await deps.content();
+    const content = index.get(day);
+    const lastDay = lastDayOf(index);
     // Evaluate playability unconditionally so an unknown day and a future day take the same path.
-    const playable = calendar.isPlayableDay(day, deps.now());
+    const playable = calendar.isPlayableDay(day, lastDay, deps.now());
     if (!content || !playable) throw new NotFoundError('Day not available');
-    return content;
+    return { day: content, lastDay };
   }
 
   async function closedByDatabase(day: string): Promise<boolean> {
@@ -179,13 +192,13 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
   };
 
   async function start(dayId: string, player: DailyPlayer, clientContentVersion?: number): Promise<RunResponse<Public>> {
-    const day = await playableDay(dayId);
+    const { day, lastDay } = await playableDay(dayId);
     const now = deps.now();
     // Guests play closed days only: an unranked run of today would probe it for a ranked one. Closed by the
     // database clock too, the ranked write fence's clock: a replica running ahead must not open the day early.
     if (player.kind === 'guest' && !(calendar.isClosedDay(dayId, now) && (await closedByDatabase(dayId)))) throw signInForToday();
     if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
-    const live = dayId === calendar.rankedDay(now);
+    const live = dayId === calendar.rankedDay(lastDay, now);
     return settled(await deps.repo.withTx(async (tx) => {
       await lockServedDay(tx, day);
       const inserted = await deps.repo.insertRun(tx, {
@@ -216,12 +229,14 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     const content = await deps.content();
     // Read before waiting on the row lock; the UPDATE itself re-checks the ranked cutoff at statement time.
     const now = deps.now();
-    const today = calendar.rankedDay(now);
+    const today = calendar.rankedDay(lastDayOf(content), now);
     const response = await deps.repo.withTx(async (tx) => {
       const dayId = await deps.repo.runDay(tx, runId);
       if (!dayId) throw new NotFoundError('Run not found');
       const day = content.get(dayId);
       if (!day) throw otherContent();
+      // A run of a day the calendar no longer reaches (stored beyond a hole) is not played on.
+      if (!isReleasedDay(dayId, lastDayOf(content))) throw new NotFoundError('Day not available');
       // Day before run, the seed's order: a correction holding the day never waits on a run this move holds.
       await lockServedDay(tx, day);
       const row = await deps.repo.lockRun(tx, runId);
@@ -253,6 +268,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     async current(player: DailyPlayer, dayId: string | undefined): Promise<RunResponse<Public> | { run: null }> {
       const content = await deps.content();
       const target = dayId ?? releaseDay(deps.now());
+      if (!isReleasedDay(target, lastDayOf(content))) return { run: null };
       const row = await deps.repo.getRun(player, target);
       if (!row) return { run: null };
       const day = content.get(target) ?? null;
@@ -280,7 +296,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       await deps.repo.withTx(async (tx) => {
         const dayId = await deps.repo.runDay(tx, runId);
         const day = dayId ? content.get(dayId) : undefined;
-        if (!day) return;
+        if (!day || !isReleasedDay(day.day, lastDayOf(content))) return;
         await lockServedDay(tx, day);
         const row = await deps.repo.lockRun(tx, runId);
         if (!row || row.done || row.content_version !== day.contentVersion) return;
@@ -291,21 +307,24 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
 
     async boards(): Promise<BoardsResponse> {
       const now = deps.now();
+      const content = await deps.content();
+      const lastDay = lastDayOf(content);
       const days: Record<string, number> = {};
-      for (const [id, day] of await deps.content()) if (calendar.isPlayableDay(id, now)) days[id] = day.contentVersion;
+      for (const [id, day] of content) if (calendar.isPlayableDay(id, lastDay, now)) days[id] = day.contentVersion;
       return { days, rankedFrom: config.rankedFrom };
     },
 
     /** A day the database clock has closed (for a review of its answers); anything else is the same 404 as a missing day. */
     async closedDay(dayId: string): Promise<Day> {
-      const day = await playableDay(dayId);
+      const { day } = await playableDay(dayId);
       if (!calendar.isClosedDay(dayId, deps.now()) || !(await closedByDatabase(dayId))) throw new NotFoundError('Day not available');
       return day;
     },
 
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse<Entry>> {
-      const day = dayId ?? calendar.boardDay(deps.now());
-      if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
+      const content = await deps.content();
+      const day = dayId ?? calendar.boardDay(lastDayOf(content), deps.now());
+      if (!content.has(day) || !isReleasedDay(day, lastDayOf(content))) return { day, players: 0, top: [], me: null };
       let cached = leaderboards.get(day);
       if (!cached || deps.now().getTime() - cached.at > config.leaderboardCacheMs) {
         cached = { at: deps.now().getTime(), ...(await deps.repo.leaderboard(day, config.leaderboardTop)) };

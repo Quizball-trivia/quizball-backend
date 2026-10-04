@@ -1,5 +1,5 @@
 import { indexDay, type ContentIndex, type IndexedDay } from '../../src/modules/buscaminas/buscaminas.content.js';
-import { addDays, dayNumber, LAUNCH_DAY, PUBLISHED_DAYS } from '../../src/modules/buscaminas/buscaminas.days.js';
+import { addDays, dayNumber, LAUNCH_DAY } from '../../src/modules/buscaminas/buscaminas.days.js';
 import { answerHash, toDayRow, type SeedDay } from '../../src/modules/buscaminas/buscaminas.seed.js';
 
 /**
@@ -23,5 +23,6 @@ export const indexed = (d: SeedDay): IndexedDay => indexDay(toDayRow(d))!;
 
 export const indexOf = (...days: SeedDay[]): ContentIndex => new Map(days.map((d) => [d.day, indexed(d)]));
 
-/** The full published calendar the seed requires: PUBLISHED_DAYS contiguous days from LAUNCH_DAY. */
-export const calendar = (): SeedDay[] => Array.from({ length: PUBLISHED_DAYS }, (_, i) => makeDay(addDays(LAUNCH_DAY, i)));
+/** A whole calendar as first seeded: 90 contiguous days from LAUNCH_DAY. */
+export const CALENDAR_DAYS = 90;
+export const calendar = (): SeedDay[] => Array.from({ length: CALENDAR_DAYS }, (_, i) => makeDay(addDays(LAUNCH_DAY, i)));

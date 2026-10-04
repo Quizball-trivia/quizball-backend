@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { boardsMaxAge } from '../daily/daily.calendar.js';
 import { ultimoService } from './ultimo.service.js';
 import { guestSessionRequired } from './ultimo.errors.js';
 import type { Player } from './ultimo.types.js';
@@ -34,8 +35,10 @@ export const ultimoController = {
     res.json(await ultimoService.current(playerOf(req), query.day));
   },
   async boards(_req: Request, res: Response): Promise<void> {
+    // Read before the index is built: an index from just before midnight must not get a lifetime computed after it.
+    const maxAge = boardsMaxAge();
     const index = await ultimoService.boards();
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
     res.json(index);
   },
   /** Only closed days are served, and a closed day only changes through a (rare) correction. */
@@ -48,9 +51,11 @@ export const ultimoController = {
   /** Members see their own row in `me`; guests are never on the board. */
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
+    // The default board turns over at midnight: a shared copy must not answer for the next day.
+    const maxAge = boardsMaxAge(new Date(), 15);
     const board = await ultimoService.leaderboard(query.day, req.user?.id ?? null);
     const anonymous = !req.headers.authorization && !req.cookies?.qb_access_token;
-    res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
+    res.setHeader('Cache-Control', anonymous ? `public, max-age=${maxAge}` : 'private, no-store');
     res.json(board);
   },
 };

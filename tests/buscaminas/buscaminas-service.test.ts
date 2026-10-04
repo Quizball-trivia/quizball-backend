@@ -3,8 +3,10 @@ import { createBuscaminasService, type BuscaminasDeps, type RunResponse } from '
 import type { ContentIndex } from '../../src/modules/buscaminas/buscaminas.content.js';
 import { perfects } from '../../src/modules/buscaminas/buscaminas.rules.js';
 import type { BuscaminasRunRow, Player } from '../../src/modules/buscaminas/buscaminas.types.js';
+import { addDays } from '../../src/modules/buscaminas/buscaminas.days.js';
 import { indexOf, makeDay, mineCards, okCards } from './fixtures.js';
 
+const LAUNCH = '2026-09-26';
 const TODAY = '2026-09-28';
 const YESTERDAY = '2026-09-27';
 const NOW = new Date('2026-09-28T15:00:00Z');
@@ -104,7 +106,8 @@ function memoryRepo(now: () => Date, dayVersions: Map<string, number>) {
 }
 
 function setup(opts: { now?: Date; days?: string[] } = {}) {
-  const days = opts.days ?? [YESTERDAY, TODAY, '2026-09-29'];
+  // The stored days are the calendar, so they run unbroken from the launch day.
+  const days = opts.days ?? [LAUNCH, YESTERDAY, TODAY, '2026-09-29'];
   let content: ContentIndex = indexOf(...days.map((d) => makeDay(d)));
   const clock = { now: opts.now ?? NOW };
   const stored = new Map(days.map((d) => [d, makeDay(d).contentVersion]));
@@ -116,7 +119,9 @@ function setup(opts: { now?: Date; days?: string[] } = {}) {
   const correctDatabase = () => { for (const d of days) stored.set(d, makeDay(d, 1).contentVersion); };
   /** The replica's cache catches up with the database. */
   const refreshCache = () => { content = indexOf(...days.map((d) => makeDay(d, 1))); };
-  return { svc, clock, ...mem, stored, stale, version, correctDatabase, refreshCache, correct: () => { correctDatabase(); refreshCache(); } };
+  /** What this replica's cache holds (the stored days stay as they are). */
+  const serve = (served: string[]) => { content = indexOf(...served.map((d) => makeDay(d))); };
+  return { svc, clock, ...mem, stored, stale, version, serve, correctDatabase, refreshCache, correct: () => { correctDatabase(); refreshCache(); } };
 }
 
 type Svc = ReturnType<typeof setup>['svc'];
@@ -403,7 +408,7 @@ describe('buscaminas service: reveal rules', () => {
     expect((await pre.svc.tap(A, preview.run.id, 0, 'r0c12')).state.settled?.reveal).toBeNull();
     expect((await pre.svc.start('2026-09-26', GA)).state.ranked).toBe(false);
 
-    const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-24'] });
+    const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: Array.from({ length: 90 }, (_, i) => addDays(LAUNCH, i)) });
     expect((await post.svc.start('2026-12-24', A)).state.ranked).toBe(false);
     expect((await post.svc.leaderboard(undefined, null)).day).toBe('2026-12-24');
   });
@@ -433,14 +438,59 @@ describe('buscaminas boards', () => {
     const tomorrow = await errorOf('2026-09-29');
     expect(tomorrow).toMatchObject({ statusCode: 404 });
     for (const day of ['2026-09-30', '2026-09-25', '2027-01-01', '2026-02-30']) expect(await errorOf(day)).toEqual(tomorrow);
-    expect((await svc.boards()).days).toEqual({ [YESTERDAY]: version(YESTERDAY), [TODAY]: version(TODAY) });
+    expect((await svc.boards()).days).toEqual({ [LAUNCH]: version(LAUNCH), [YESTERDAY]: version(YESTERDAY), [TODAY]: version(TODAY) });
 
     clock.now = new Date('2026-09-29T02:59:59Z');
     expect(await errorOf('2026-09-29')).toEqual(tomorrow);
     clock.now = new Date('2026-09-29T03:00:00Z');
     expect(await svc.board('2026-09-29')).toMatchObject({ live: true, board: { day: '2026-09-29' } });
     expect((await svc.board(TODAY)).live).toBe(false);
-    expect(Object.keys((await svc.boards()).days)).toEqual([YESTERDAY, TODAY, '2026-09-29']);
+    expect(Object.keys((await svc.boards()).days)).toEqual([LAUNCH, YESTERDAY, TODAY, '2026-09-29']);
+  });
+
+  it('the stored days are the calendar: an appended day opens ranked on its date, a day past a hole never opens', async () => {
+    const run = (n: number) => Array.from({ length: n }, (_, i) => addDays(LAUNCH, i));
+    const dec25 = new Date('2026-12-25T15:00:00Z');
+    // 90 days stored, as first seeded: the 91st date has nothing, and the last day goes on unranked.
+    const ended = setup({ now: dec25, days: run(90) });
+    await expect(ended.svc.board('2026-12-25')).rejects.toMatchObject({ statusCode: 404 });
+    expect((await ended.svc.start('2026-12-24', A)).state.ranked).toBe(false);
+    // One more stored day, no release: it is the live, ranked day.
+    const appended = setup({ now: dec25, days: run(91) });
+    expect(await appended.svc.board('2026-12-25')).toMatchObject({ live: true, board: { day: '2026-12-25', number: 91 } });
+    expect((await appended.svc.start('2026-12-25', A)).state.ranked).toBe(true);
+    expect((await appended.svc.leaderboard(undefined, null)).day).toBe('2026-12-25');
+    // A stored day beyond a missing one is not released, whatever the date.
+    const holed = setup({ now: new Date('2026-12-27T15:00:00Z'), days: [...run(90), '2026-12-26', '2026-12-27'] });
+    await expect(holed.svc.board('2026-12-26')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(holed.svc.board('2026-12-27')).rejects.toMatchObject({ statusCode: 404 });
+    expect(Object.keys((await holed.svc.boards()).days).at(-1)).toBe('2026-12-24');
+    expect((await holed.svc.start('2026-12-24', A)).state.ranked).toBe(false);
+  });
+
+  it('a replica whose cache is behind an appended day re-checks instead of calling a live ranked run over', async () => {
+    const { svc, serve, stale } = setup();
+    const run = await svc.start(TODAY, A);
+    expect(run.state.ranked).toBe(true);
+    // Another replica's view: it has not read the append that added today.
+    serve([LAUNCH, YESTERDAY]);
+    await expect(svc.tap(A, run.run.id, 0, 'r0c0')).rejects.toMatchObject(conflict('content_changed'));
+    expect(stale.count).toBe(1);
+    // Once it has, the move lands on the same ranked run.
+    serve([LAUNCH, YESTERDAY, TODAY]);
+    expect((await svc.tap(A, run.run.id, 0, 'r0c0')).state.ranked).toBe(true);
+  });
+
+  it('a run of a day the calendar no longer reaches is neither played on nor shown', async () => {
+    const { svc, serve } = setup();
+    const run = await svc.start(TODAY, A);
+    // Yesterday's row is gone: today is stored beyond a hole, so the calendar ends at the launch day.
+    serve([LAUNCH, TODAY]);
+    await expect(svc.tap(A, run.run.id, 0, 'r0c0')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await svc.current(A, TODAY)).toEqual({ run: null });
+    await expect(svc.board(TODAY)).rejects.toMatchObject({ statusCode: 404 });
+    // Its leaderboard, asked for by day, shows nothing either.
+    expect(await svc.leaderboard(TODAY, 'user-a')).toEqual({ day: TODAY, players: 0, top: [], me: null });
   });
 
   it('with no days seeded every day is a 404 and the index is empty', async () => {

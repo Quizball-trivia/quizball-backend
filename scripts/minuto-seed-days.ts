@@ -5,8 +5,9 @@
  *   npm run minuto:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction]
  *
  * <daysDir> holds YYYY-MM-DD.json day files ({day, number, goals: [goal] x10}, goal = src/modules/minuto/minuto.goal.ts).
- * Every file is validated (the goal schema, no goal twice by id or fingerprint, contiguous days from the first content
- * day covering the calendar) before the database is touched; an unknown field is refused.
+ * Every file is validated (the goal schema, no goal twice by id or fingerprint, one unbroken run of days) before the
+ * database is touched; an unknown field is refused. The stored days are the calendar: a batch may re-supply stored
+ * days and append the days after them, but never leave a hole, and a goal another day already published is refused.
  *
  * Prints each day as new / changed / unchanged with its content version and run counts, never a minute. A day whose
  * content changes while it has runs is refused unless --allow-correction, which unranks that day's runs. A goal that
@@ -97,7 +98,7 @@ async function main(): Promise<void> {
     const plan = await seedDays(sql, days, { dryRun: !args.write, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap });
     if (plan.poolOverlap > 0) console.warn(`WARNING (local only): ${plan.poolOverlap} daily goal(s) also in the local dev duel pool`);
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
-    if (plan.extraDays.length > 0) console.log(`[minuto:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
+    if (plan.extraDays.length > 0) console.log(`[minuto:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;
     const writes = count('new') + count('changed');
     console.log(`[minuto:seed] ${count('new')} new, ${count('changed')} changed, ${count('unchanged')} unchanged — ${

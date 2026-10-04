@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { CARDS_PER_ROUND, ROUNDS_PER_DAY, TARGETS_PER_ROUND } from './buscaminas.constants.js';
-import { addDays, dayNumber, LAUNCH_DAY, PUBLISHED_DAYS } from './buscaminas.days.js';
+import { addDays, assertUnbrokenCalendar, dayNumber, LAUNCH_DAY } from './buscaminas.days.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicCard, type PublicRound } from './buscaminas.types.js';
 
 /**
@@ -78,12 +78,15 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
   return { day: d.day as string, number: d.number as number, contentVersion: contentVersion as number, rounds };
 }
 
-/** The whole published calendar or nothing: a short set would silently leave later days empty. */
+/**
+ * The supplied files are one unbroken run of days (any length, starting anywhere): the whole calendar, or a batch
+ * that appends to it. Whether the batch connects to the stored days is checked inside the write (`seedDays`).
+ */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length !== PUBLISHED_DAYS) throw new Error(`expected ${PUBLISHED_DAYS} days from ${LAUNCH_DAY}, found ${days.length}`);
+  if (days.length === 0) throw new Error('no days to seed');
   days.forEach((d, i) => {
-    const expected = addDays(LAUNCH_DAY, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${LAUNCH_DAY}: position ${i + 1} is ${d.day}, expected ${expected}`);
+    const expected = addDays(days[0].day, i);
+    if (d.day !== expected) throw new Error(`days must be contiguous: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
 }
 
@@ -176,6 +179,8 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+    assertUnbrokenCalendar(LAUNCH_DAY, stored.keys(), rows.map((row) => row.day));
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose answers change waits for those in flight and holds back new ones, so the run count
     // below is final and no run can start or move on the old answers once they are replaced.

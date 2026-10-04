@@ -4,10 +4,11 @@
  *
  *   npm run buscaminas:seed -- [<daysDir>] [--dry-run] [--allow-correction] [--target staging|production]
  *
- * <daysDir> holds the 90 YYYY-MM-DD.json full day files (default: the sibling web checkout's
+ * <daysDir> holds YYYY-MM-DD.json full day files (default: the sibling web checkout's
  * scripts/buscaminas/full/days, i.e. ../buscaminas-web or ../frontend-web-next). Every file is
  * validated (16 cards, 12 correct, 4 locales, card art under /buscaminas/v1/p/, contentVersion =
- * answer hash, 90 contiguous days from the launch day) before the database is touched.
+ * answer hash, contiguous days) before the database is touched. The files may be the whole calendar
+ * or only the days to append: stored and supplied days together must run unbroken from the launch day.
  *
  * Prints each day as new / changed / unchanged. A day that already has runs keeps its answers
  * unless --allow-correction is passed (the correction must then change contentVersion).
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
   try {
     const plan = await seedDays(sql, days.map(toDayRow), { dryRun: args.dryRun, allowCorrection: args.allowCorrection });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
-    if (plan.extraDays.length > 0) console.log(`[buscaminas:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
+    if (plan.extraDays.length > 0) console.log(`[buscaminas:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;
     const writes = count('new') + count('changed');
     console.log(`[buscaminas:seed] ${count('new')} new, ${count('changed')} changed, ${count('unchanged')} unchanged — ${

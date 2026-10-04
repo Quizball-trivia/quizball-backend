@@ -3,9 +3,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { addDays } from '../../src/modules/pistas/pistas.days.js';
 import { PROJECT_REFS } from '../../src/modules/buscaminas/buscaminas.seed.js';
 import {
-  assertCalendar, canonical, contentHash, parseDayFile, planSeed, resolvePistasSeedTarget, toDayRow,
+  assertCalendar, canonical, contentHash, parseDayFile, planSeed, repeatedPlayers, resolvePistasSeedTarget, toDayRow,
 } from '../../src/modules/pistas/pistas.seed.js';
 import type { PistasDayRow } from '../../src/modules/pistas/pistas.types.js';
 import { calendar, makeDay, rawDay } from './fixtures.js';
@@ -98,13 +99,49 @@ describe('pistas seed: day file validation', () => {
     for (const d of cases) expect(errorOf(() => parseDayFile('f', d))).not.toMatch(/umero|ნომერი|Numara|pista|"r0"/);
   });
 
-  it('requires contiguous days from the first content day covering the whole calendar; later days are allowed', () => {
+  it('takes the whole calendar or a batch that appends to it, as long as the files are contiguous', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 30 days from 2026-09-27/);
+    expect(() => assertCalendar(calendar().slice(0, 4))).not.toThrow();
     expect(() => assertCalendar([...calendar(), makeDay('2026-10-27')])).not.toThrow();
+    expect(() => assertCalendar([makeDay('2026-10-27'), makeDay('2026-10-28')])).not.toThrow();
+    expect(() => assertCalendar([])).toThrow(/no days/);
     const gap = calendar();
     gap[2] = makeDay('2026-10-03');
     expect(() => assertCalendar(gap)).toThrow(/contiguous/);
+  });
+
+  it('finds a player who is the answer on two days, naming positions only', () => {
+    const day = (id: string, names: string[]) => ({
+      day: id,
+      rounds: names.map((name, r) => ({ ...makeDay(id).rounds[r], answer: { display: { es: name, en: name, ka: name, tr: name }, accepted: [name] } })),
+    });
+    const stored = [day('2026-09-27', ['Alfa Uno', 'Beta Dos']), day('2026-09-28', ['Gama Tres', 'Delta Cuatro'])];
+    expect(repeatedPlayers([day('2026-09-29', ['Epsilon Cinco', 'Zeta Seis'])], stored)).toEqual([]);
+    expect(repeatedPlayers([day('2026-09-29', ['Epsilon Cinco', 'Beta Dos'])], stored)).toEqual(['2026-09-29 round 2 = 2026-09-27 round 2']);
+    // Within one set each pair is reported once, and a day never matches itself.
+    expect(repeatedPlayers(stored, stored)).toEqual([]);
+    const twice = [...stored, day('2026-09-29', ['Alfa Uno', 'Otro Mas'])];
+    expect(repeatedPlayers(twice, twice)).toEqual(['2026-09-29 round 1 = 2026-09-27 round 1']);
+    expect(JSON.stringify(repeatedPlayers(twice, twice))).not.toMatch(/Alfa|Uno/);
+    // A nickname shown on one day and accepted on the other is the same player; a shared accepted surname is not.
+    const nick = (id: string, display: string, accepted: string[]) => ({
+      day: id, rounds: [{ ...makeDay(id).rounds[0], answer: { display: { es: display, en: display, ka: display, tr: display }, accepted } }],
+    });
+    expect(repeatedPlayers([nick('2026-09-30', 'El Mago', ['El Mago'])], [nick('2026-09-27', 'Pablo Ficticio', ['Pablo Ficticio', 'El Mago'])])).toHaveLength(1);
+    expect(repeatedPlayers([nick('2026-09-30', 'Hugo Ficticio', ['Hugo Ficticio', 'Ficticio'])], [nick('2026-09-27', 'Pablo Ficticio', ['Pablo Ficticio', 'Ficticio'])])).toEqual([]);
+  });
+
+  it('scans a year of days for repeats in well under the seed transaction budget', () => {
+    const year = Array.from({ length: 365 }, (_, d) => ({
+      day: addDays('2026-09-27', d),
+      rounds: Array.from({ length: 10 }, (_, r) => ({
+        ...makeDay('2026-09-27').rounds[r],
+        answer: { display: { es: `Jugador ${d} ${r}`, en: `Player ${d} ${r}`, ka: `მოთამაშე ${d} ${r}`, tr: `Oyuncu ${d} ${r}` }, accepted: [`Player ${d} ${r}`, `P ${d} ${r}`] },
+      })),
+    }));
+    const started = Date.now();
+    expect(repeatedPlayers(year, year)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
 

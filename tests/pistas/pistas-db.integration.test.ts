@@ -3,8 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
-import { answerOf, calendar, makeDay } from './fixtures.js';
-import { PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
+import { answerOf, calendar, CALENDAR_DAYS, makeDay } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Pistas migration to a fresh schema and runs the repo, the
@@ -126,9 +125,10 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       await db.sql`DELETE FROM pistas_days`;
     });
 
-    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean } = {}) => {
+    // The synthetic fixture has the same ten answers on every day, so repeats are allowed unless a test says otherwise.
+    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean; allowRepeats?: boolean } = {}) => {
       const { seedDays, toDayRow } = await import('../../src/modules/pistas/pistas.seed.js');
-      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false });
+      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false, allowRepeats: opts.allowRepeats ?? true });
     };
 
     async function service() {
@@ -146,7 +146,7 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
 
     it('seeds the calendar in one transaction: dry run writes nothing, a re-run changes nothing, provenance is never stored', async () => {
       const dry = await seed(calendar(), { dryRun: true });
-      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(PUBLISHED_DAYS);
+      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(CALENDAR_DAYS);
       expect(await db.sql`SELECT 1 FROM pistas_days`).toHaveLength(0);
       await seed();
       const rows = await db.sql`SELECT day::text AS day, number, content_version, rounds::text AS rounds FROM pistas_days ORDER BY day`;
@@ -155,6 +155,27 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       expect((await seed()).entries.every((e) => e.status === 'unchanged')).toBe(true);
       const { store } = await service();
       expect((await store.get()).get(PAST)!.contentVersion).toBe(makeDay(PAST).contentVersion);
+    });
+
+    it('appends days to the stored calendar: the next day alone is accepted, a hole or a repeated player is refused', async () => {
+      await seed();
+      const next = makeDay('2026-10-27');
+      // The append is one file; the 30 stored days are untouched and reported as kept.
+      const plan = await seed([next]);
+      expect(plan.entries).toMatchObject([{ day: '2026-10-27', number: 31, status: 'new' }]);
+      expect(plan.extraDays).toHaveLength(CALENDAR_DAYS);
+      expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(CALENDAR_DAYS + 1);
+      // The served calendar follows the table: the appended day is the last one in the index, with no restart.
+      const { store } = await service();
+      expect([...(await store.get()).keys()].sort().at(-1)).toBe('2026-10-27');
+      // A day that would leave a hole writes nothing.
+      await expect(seed([makeDay('2026-10-29')])).rejects.toThrow(/2026-10-28 is missing/);
+      // The synthetic days all share their ten answers: without the test's allowance that is a repeated player.
+      await expect(seed([makeDay('2026-10-28')], { allowRepeats: false })).rejects.toThrow(/a player is the answer on two days/);
+      expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(CALENDAR_DAYS + 1);
+      // An empty table still needs the first content day.
+      await db.sql`DELETE FROM pistas_days`;
+      await expect(seed([next])).rejects.toThrow(/must start at 2026-09-27/);
     });
 
     it('a guest plays a closed day on real rows; the database clock discloses missed answers', async () => {

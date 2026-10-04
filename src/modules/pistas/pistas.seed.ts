@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { resolveSeedTarget, type SeedTargetName } from '../buscaminas/buscaminas.seed.js';
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './pistas.days.js';
+import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { CONTENT_START, dayNumber } from './pistas.days.js';
 import { containsWords, normalizeAnswer, samePlayer } from './pistas.normalize.js';
 import {
   CLUE_KINDS, PISTAS_DIFFICULTIES, PISTAS_LOCALES, type Clue, type ClueKind, type LocalizedText, type PistasDayRow, type PistasDifficulty,
@@ -108,15 +109,59 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
 }
 
 /**
- * The whole published calendar at least: contiguous days from CONTENT_START covering every published
- * day (a short set would silently leave later days empty). Days past the calendar are stored for later.
+ * The supplied files are one unbroken run of days (any length, starting anywhere): the whole calendar, or a batch
+ * that appends to it. Whether the batch connects to the stored days, and repeats no player, is checked inside the
+ * write (`seedDays`).
  */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  if (days.length === 0) throw new Error('no days to seed');
   days.forEach((d, i) => {
-    const expected = addDays(CONTENT_START, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);
+    const expected = addDays(days[0].day, i);
+    if (d.day !== expected) throw new Error(`days must be contiguous: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
+}
+
+type DayPlayers = Pick<PistasDayRow, 'day' | 'rounds'>;
+
+/**
+ * Rounds of `days` whose player is also the answer on a different day of `others`, as "day round N = day round M"
+ * (positions only, never a name). A player may be a daily answer once. The rule is `samePlayer`'s (a display name
+ * of one is a display name or an accepted answer of the other), looked up through two name indexes so a seed of a
+ * year of days stays well inside its transaction budget. Not known here: a player a correction removed from a
+ * played day (Pistas keeps no publication ledger).
+ */
+export function repeatedPlayers(days: readonly DayPlayers[], others: readonly DayPlayers[]): string[] {
+  const names = (values: Iterable<string>) => [...new Set([...values].map(normalizeAnswer).filter((v) => v.length > 2))];
+  type Ref = { day: string; round: number };
+  const byDisplay = new Map<string, Ref[]>();
+  const byAny = new Map<string, Ref[]>();
+  const add = (index: Map<string, Ref[]>, name: string, ref: Ref) => { (index.get(name) ?? index.set(name, []).get(name)!).push(ref); };
+  for (const other of others) {
+    other.rounds.forEach((round, j) => {
+      const ref = { day: other.day, round: j + 1 };
+      const display = names(Object.values(round.answer.display));
+      for (const name of display) add(byDisplay, name, ref);
+      for (const name of names([...Object.values(round.answer.display), ...round.answer.accepted])) add(byAny, name, ref);
+    });
+  }
+  const within = others === days;
+  const found: string[] = [];
+  for (const day of days) {
+    day.rounds.forEach((round, i) => {
+      const display = names(Object.values(round.answer.display));
+      const any = names([...Object.values(round.answer.display), ...round.answer.accepted]);
+      const hits = new Map<string, Ref>();
+      for (const ref of [...display.flatMap((name) => byAny.get(name) ?? []), ...any.flatMap((name) => byDisplay.get(name) ?? [])]) {
+        // Never the day itself; within one set, each pair once (from its later day).
+        if (ref.day === day.day || (within && ref.day > day.day)) continue;
+        hits.set(`${ref.day}#${ref.round}`, ref);
+      }
+      for (const ref of [...hits.values()].sort((a, b) => a.day.localeCompare(b.day) || a.round - b.round)) {
+        found.push(`${day.day} round ${i + 1} = ${ref.day} round ${ref.round}`);
+      }
+    });
+  }
+  return found;
 }
 
 export const toDayRow = (d: SeedDay): PistasDayRow => ({ day: d.day, number: d.number, contentVersion: d.contentVersion, rounds: d.rounds });
@@ -189,7 +234,7 @@ export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): 
     players.some((player) => samePlayer({ display: Object.values(round.answer.display), accepted: round.answer.accepted }, player))).length, 0);
 }
 
-export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedPlan> {
+export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean }): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -203,6 +248,14 @@ export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { 
       SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+    // A player is a daily answer once: not twice in the files, and not on a stored day the files do not replace.
+    if (!opts.allowRepeats) {
+      const supplied = new Set(rows.map((row) => row.day));
+      const repeats = [...repeatedPlayers(rows, rows), ...repeatedPlayers(rows, [...stored.values()].filter((row) => !supplied.has(row.day)))];
+      if (repeats.length > 0) throw new Error(`a player is the answer on two days (pass --allow-repeats to reuse a player on purpose): ${repeats.join('; ')}`);
+    }
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose content changes waits for those in flight and holds back new ones, so the run counts
     // below are final and no run can start or move on the old content once it is replaced.

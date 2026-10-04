@@ -1,5 +1,5 @@
 import { indexDay, type ContentIndex, type IndexedDay } from '../../src/modules/pistas/pistas.content.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
+import { addDays, CONTENT_START, dayNumber } from '../../src/modules/pistas/pistas.days.js';
 import { parseDayFile, toDayRow, type SeedDay } from '../../src/modules/pistas/pistas.seed.js';
 import type { ClueKind } from '../../src/modules/pistas/pistas.types.js';
 
@@ -43,7 +43,8 @@ export const indexed = (d: SeedDay): IndexedDay => indexDay(toDayRow(d))!;
 
 export const indexOf = (...days: SeedDay[]): ContentIndex => new Map(days.map((d) => [d.day, indexed(d)]));
 
-/** The published calendar the seed requires: PUBLISHED_DAYS contiguous days from CONTENT_START. */
-export const calendar = (): SeedDay[] => Array.from({ length: PUBLISHED_DAYS }, (_, i) => makeDay(addDays(CONTENT_START, i)));
+/** A whole calendar as first seeded: 30 contiguous days from CONTENT_START. */
+export const CALENDAR_DAYS = 30;
+export const calendar = (): SeedDay[] => Array.from({ length: CALENDAR_DAYS }, (_, i) => makeDay(addDays(CONTENT_START, i)));
 
 export const answerOf = (r: number): string => `Numero ${r}`;

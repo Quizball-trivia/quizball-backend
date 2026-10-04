@@ -141,6 +141,20 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
       expect(again.entries.every((e) => e.status === 'unchanged')).toBe(true);
     });
 
+    it('appends days to the stored calendar: the next day alone is accepted, a hole is refused', async () => {
+      await seed();
+      const plan = await seed([makeDay('2026-12-25')]);
+      expect(plan.entries).toMatchObject([{ day: '2026-12-25', number: 91, status: 'new' }]);
+      expect(plan.extraDays).toHaveLength(90);
+      expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(91);
+      const { store } = await service();
+      expect([...(await store.get()).keys()].sort().at(-1)).toBe('2026-12-25');
+      await expect(seed([makeDay('2026-12-27')])).rejects.toThrow(/2026-12-26 is missing/);
+      expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(91);
+      await db.sql`DELETE FROM buscaminas_days`;
+      await expect(seed([makeDay('2026-12-25')])).rejects.toThrow(/must start at 2026-09-26/);
+    });
+
     it('refuses to change a played day\'s answers without --allow-correction; a correction reloads the served content', async () => {
       await seed();
       const { svc, store } = await service();

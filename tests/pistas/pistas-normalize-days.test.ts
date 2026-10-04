@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { containsWords, isAcceptedGuess, normalizeAnswer, samePlayer } from '../../src/modules/pistas/pistas.normalize.js';
 import {
-  addDays, boardDay, CONTENT_START, dayEndsAt, dayNumber, isClosedDay, isPlayableDay, LAST_DAY, PUBLISHED_DAYS, RANKED_START, rankedDay, releaseDay,
+  addDays, boardDay, CONTENT_START, dayEndsAt, dayNumber, isClosedDay, isPlayableDay, lastDay, RANKED_START, rankedDay, releaseDay,
 } from '../../src/modules/pistas/pistas.days.js';
 
 describe('pistas answer normalisation', () => {
@@ -51,43 +51,57 @@ describe('pistas answer normalisation', () => {
 });
 
 describe('pistas release calendar', () => {
-  it('runs CONTENT_START … LAST_DAY, ranked from RANKED_START', () => {
-    expect([CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY]).toEqual(['2026-09-27', '2026-09-29', 30, '2026-10-26']);
+  const stored = (n: number) => Array.from({ length: n }, (_, i) => addDays(CONTENT_START, i));
+  const LAST_DAY = '2026-10-26';
+
+  it('runs from CONTENT_START to the last stored day of the unbroken run, ranked from RANKED_START', () => {
+    expect([CONTENT_START, RANKED_START]).toEqual(['2026-09-27', '2026-09-29']);
     expect(dayNumber(CONTENT_START)).toBe(1);
     expect(dayNumber(LAST_DAY)).toBe(30);
+    expect(lastDay(stored(30))).toBe(LAST_DAY);
+    // Appended days extend the calendar with no release; a hole ends it.
+    expect(lastDay(stored(31))).toBe('2026-10-27');
+    expect(lastDay([...stored(30), '2026-10-28'])).toBe(LAST_DAY);
+    expect(lastDay([])).toBeNull();
+    expect(lastDay(stored(30).slice(1))).toBeNull();
   });
 
   it('a day is playable from its own Buenos Aires midnight: never a future or preview day', () => {
     const sep28 = new Date('2026-09-28T15:00:00Z');
-    expect(isPlayableDay('2026-09-27', sep28)).toBe(true);
-    expect(isPlayableDay('2026-09-28', sep28)).toBe(true);
-    expect(isPlayableDay('2026-09-29', sep28)).toBe(false);
-    expect(isPlayableDay('2026-09-26', sep28)).toBe(false);
+    expect(isPlayableDay('2026-09-27', LAST_DAY, sep28)).toBe(true);
+    expect(isPlayableDay('2026-09-28', LAST_DAY, sep28)).toBe(true);
+    expect(isPlayableDay('2026-09-29', LAST_DAY, sep28)).toBe(false);
+    expect(isPlayableDay('2026-09-26', LAST_DAY, sep28)).toBe(false);
     // Before the first content day nothing is playable, not even the first day.
-    expect(isPlayableDay(CONTENT_START, new Date('2026-09-26T15:00:00Z'))).toBe(false);
-    expect(isPlayableDay('2026-09-29', new Date('2026-09-29T02:59:59Z'))).toBe(false);
-    expect(isPlayableDay('2026-09-29', new Date('2026-09-29T03:00:00Z'))).toBe(true);
+    expect(isPlayableDay(CONTENT_START, LAST_DAY, new Date('2026-09-26T15:00:00Z'))).toBe(false);
+    expect(isPlayableDay('2026-09-29', LAST_DAY, new Date('2026-09-29T02:59:59Z'))).toBe(false);
+    expect(isPlayableDay('2026-09-29', LAST_DAY, new Date('2026-09-29T03:00:00Z'))).toBe(true);
     // After the last day, the last day stays playable and nothing later is.
     const after = new Date('2026-11-10T15:00:00Z');
-    expect(isPlayableDay(LAST_DAY, after)).toBe(true);
-    expect(isPlayableDay(addDays(LAST_DAY, 1), after)).toBe(false);
+    expect(isPlayableDay(LAST_DAY, LAST_DAY, after)).toBe(true);
+    expect(isPlayableDay(addDays(LAST_DAY, 1), LAST_DAY, after)).toBe(false);
+    // The same clock once another day is stored: it is playable. With nothing stored, nothing is.
+    expect(isPlayableDay(addDays(LAST_DAY, 1), addDays(LAST_DAY, 1), after)).toBe(true);
+    expect(isPlayableDay(CONTENT_START, null, after)).toBe(false);
   });
 
-  it('ranks today only between RANKED_START and LAST_DAY', () => {
-    expect(rankedDay(new Date('2026-09-28T15:00:00Z'))).toBeNull();
-    expect(rankedDay(new Date('2026-09-29T15:00:00Z'))).toBe('2026-09-29');
-    expect(rankedDay(new Date('2026-10-26T15:00:00Z'))).toBe('2026-10-26');
-    expect(rankedDay(new Date('2026-10-27T15:00:00Z'))).toBeNull();
-    expect(boardDay(new Date('2026-09-28T15:00:00Z'))).toBe(RANKED_START);
-    expect(boardDay(new Date('2026-09-30T15:00:00Z'))).toBe('2026-09-30');
-    expect(boardDay(new Date('2026-11-05T15:00:00Z'))).toBe(LAST_DAY);
+  it('ranks today only between RANKED_START and the last released day', () => {
+    expect(rankedDay(LAST_DAY, new Date('2026-09-28T15:00:00Z'))).toBeNull();
+    expect(rankedDay(LAST_DAY, new Date('2026-09-29T15:00:00Z'))).toBe('2026-09-29');
+    expect(rankedDay(LAST_DAY, new Date('2026-10-26T15:00:00Z'))).toBe('2026-10-26');
+    expect(rankedDay(LAST_DAY, new Date('2026-10-27T15:00:00Z'))).toBeNull();
+    expect(rankedDay('2026-10-27', new Date('2026-10-27T15:00:00Z'))).toBe('2026-10-27');
+    expect(rankedDay(null, new Date('2026-09-29T15:00:00Z'))).toBeNull();
+    expect(boardDay(LAST_DAY, new Date('2026-09-28T15:00:00Z'))).toBe(RANKED_START);
+    expect(boardDay(LAST_DAY, new Date('2026-09-30T15:00:00Z'))).toBe('2026-09-30');
+    expect(boardDay(LAST_DAY, new Date('2026-11-05T15:00:00Z'))).toBe(LAST_DAY);
   });
 
   it('a day closes at the next Buenos Aires midnight, where releaseDay rolls over', () => {
     expect(isClosedDay('2026-09-28', new Date('2026-09-29T02:59:59Z'))).toBe(false);
     expect(isClosedDay('2026-09-28', new Date('2026-09-29T03:00:00Z'))).toBe(true);
     expect(dayEndsAt('2026-09-28').toISOString()).toBe('2026-09-29T03:00:00.000Z');
-    for (let i = 0; i < PUBLISHED_DAYS; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       const day = addDays(CONTENT_START, i);
       const end = dayEndsAt(day).getTime();
       expect(releaseDay(new Date(end - 1))).toBe(day);

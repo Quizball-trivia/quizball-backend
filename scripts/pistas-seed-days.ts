@@ -2,12 +2,14 @@
  * Seeds the Pistas futboleras days (clues + answers) into pistas_days from the private content
  * pipeline's day files, in ONE transaction. Dry run unless --write.
  *
- *   npm run pistas:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction]
+ *   npm run pistas:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction] [--allow-repeats]
  *
  * <daysDir> holds YYYY-MM-DD.json day files ({day, number, rounds: [{id, difficulty, answer: {display,
  * accepted}, clues: [{kind, icon, text}] x10, source}] x10}). Every file is validated (10 rounds x 10
  * clues, 4 locales, every display name normalises into `accepted`, no clue names an accepted answer,
- * contiguous days from the first content day covering the calendar) before the database is touched.
+ * contiguous days) before the database is touched. The files may be the whole calendar or only the days
+ * to append: stored and supplied days together must run unbroken from the first content day, and a
+ * player may be the answer on one day only (--allow-repeats reuses one on purpose).
  * `source` and any other unknown field are dropped: provenance never reaches the database.
  *
  * Prints each day as new / changed / unchanged with its content version and run counts, never an
@@ -29,19 +31,21 @@ interface Args {
   dir: string | undefined;
   write: boolean;
   allowCorrection: boolean;
+  allowRepeats: boolean;
   /** Local development only: the dev duel pool reuses future daily players. */
   allowPoolOverlap: boolean;
   target: PistasSeedTarget | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowPoolOverlap: false, target: undefined };
+  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowRepeats: false, allowPoolOverlap: false, target: undefined };
   const valueOf = (arg: string, name: string, i: number): [string | undefined, number] =>
     (arg === name ? [argv[i + 1], i + 1] : [arg.slice(name.length + 1), i]);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--write') args.write = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--allow-repeats') args.allowRepeats = true;
     else if (arg === '--allow-pool-overlap') args.allowPoolOverlap = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const [value, at] = valueOf(arg, '--target', i);
@@ -100,9 +104,9 @@ async function main(): Promise<void> {
       if (!args.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
       console.warn(`WARNING (local only): ${overlap} daily player(s) are also in the local dev duel pool`);
     }
-    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: !args.write, allowCorrection: args.allowCorrection });
+    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: !args.write, allowCorrection: args.allowCorrection, allowRepeats: args.allowRepeats });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
-    if (plan.extraDays.length > 0) console.log(`[pistas:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
+    if (plan.extraDays.length > 0) console.log(`[pistas:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;
     const writes = count('new') + count('changed');
     console.log(`[pistas:seed] ${count('new')} new, ${count('changed')} changed, ${count('unchanged')} unchanged — ${

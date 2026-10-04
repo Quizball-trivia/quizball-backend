@@ -1,7 +1,9 @@
-/** Mirrors the web release calendar (frontend buscaminas.logic.ts) exactly. */
+/**
+ * The release calendar. It has no fixed length: the stored days are the calendar, so content appended to the days
+ * table opens on its own date with no release. The web reads the same days from /boards.
+ */
 export const RELEASE_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 export const LAUNCH_DAY = '2026-09-26';
-export const PUBLISHED_DAYS = 90;
 
 const DAY_MS = 86_400_000;
 const releaseFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: RELEASE_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -22,27 +24,63 @@ export function addDays(day: string, delta: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + delta * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Before launch → the first puzzle; after the last → the last (never a silent re-run). */
-export function puzzleDayFor(today: string): string {
-  const n = dayNumber(today);
-  if (n < 1) return LAUNCH_DAY;
-  if (n > PUBLISHED_DAYS) return addDays(LAUNCH_DAY, PUBLISHED_DAYS - 1);
-  return today;
+/**
+ * The last day of the unbroken run of stored days that starts at `first`; null when `first` itself has no content.
+ * A calendar ends at its first hole: a day stored beyond a missing one is not released, so a failed append can
+ * never leave a gap players fall into.
+ */
+export function lastReleasedDay(days: Iterable<string>, first: string): string | null {
+  const stored = new Set(days);
+  if (!stored.has(first)) return null;
+  let last = first;
+  for (let next = addDays(last, 1); stored.has(next); next = addDays(next, 1)) last = next;
+  return last;
 }
 
-export const LAST_DAY = addDays(LAUNCH_DAY, PUBLISHED_DAYS - 1);
+/**
+ * A seed may add days anywhere, as long as the stored days and the new ones together still run unbroken from
+ * `first`: no hole inside, and nothing before the first day. Names days only.
+ */
+export function assertUnbrokenCalendar(first: string, stored: Iterable<string>, incoming: Iterable<string>): void {
+  const all = [...new Set([...stored, ...incoming])].sort();
+  if (all.length === 0) throw new Error('no days to seed');
+  if (all[0] !== first) throw new Error(`the calendar must start at ${first}; the earliest day is ${all[0]}`);
+  all.forEach((day, i) => {
+    const expected = addDays(first, i);
+    if (day !== expected) throw new Error(`days must be contiguous from ${first}: ${expected} is missing (next stored or supplied day is ${day})`);
+  });
+}
 
-/** Today's release day while it is a published day; null before launch (the launch puzzle is an unranked preview) and after the last. */
-export function rankedDay(now: Date = new Date()): string | null {
+/** A stored day inside the calendar (not beyond a hole). Runs of any other day are neither moved nor shown. */
+export const isReleasedDay = (day: string, lastDay: string | null): boolean => lastDay !== null && day <= lastDay;
+
+/**
+ * How long a board index may be cached: `cap` seconds, but never past the next Buenos Aires midnight, when the
+ * index gains a day. The web reads the calendar from it, so a copy cached before midnight must not outlive it.
+ */
+export function boardsMaxAge(now: Date = new Date(), cap = 300): number {
+  const untilMidnight = Math.floor((dayEndsAt(releaseDay(now)).getTime() - now.getTime()) / 1000);
+  return Math.max(0, Math.min(cap, untilMidnight));
+}
+
+/** Before launch → the first puzzle; after the last released day → that day (never a silent re-run). */
+export function puzzleDayFor(today: string, lastDay: string | null): string {
+  if (dayNumber(today) < 1) return LAUNCH_DAY;
+  // No content at all: today's (empty) puzzle, as before any day is seeded.
+  return lastDay !== null && today > lastDay ? lastDay : today;
+}
+
+/** Today's release day while it has content; null before launch (the launch puzzle is an unranked preview) and after the last released day. */
+export function rankedDay(lastDay: string | null, now: Date = new Date()): string | null {
   const today = releaseDay(now);
-  return today >= LAUNCH_DAY && today <= LAST_DAY ? today : null;
+  return lastDay !== null && today >= LAUNCH_DAY && today <= lastDay ? today : null;
 }
 
-/** Default leaderboard day: the ranked day, else the launch day before launch and the final day after the run of puzzles. */
-export const boardDay = (now: Date = new Date()): string => rankedDay(now) ?? puzzleDayFor(releaseDay(now));
+/** Default leaderboard day: the ranked day, else the launch day before launch and the last released day after the run of puzzles. */
+export const boardDay = (lastDay: string | null, now: Date = new Date()): string => rankedDay(lastDay, now) ?? puzzleDayFor(releaseDay(now), lastDay);
 
-export function isPlayableDay(day: string, now: Date = new Date()): boolean {
-  return dayNumber(day) >= 1 && day <= puzzleDayFor(releaseDay(now));
+export function isPlayableDay(day: string, lastDay: string | null, now: Date = new Date()): boolean {
+  return lastDay !== null && dayNumber(day) >= 1 && day <= puzzleDayFor(releaseDay(now), lastDay);
 }
 
 /** A day already over in Buenos Aires; its answers can no longer help anyone rank. */

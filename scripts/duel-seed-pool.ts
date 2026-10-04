@@ -1,7 +1,7 @@
 /**
  * Seeds a private duel-only pool (duel_pool) for one game. Dry run unless --write.
  *
- *   npm run duel:seed -- --game pistas|buscaminas|ultimo --file <pool.json> --target local|staging|production [--write] [--allow-overlap]
+ *   npm run duel:seed -- --game pistas|buscaminas|ultimo|minuto --file <pool.json> --target local|staging|production [--write] [--allow-overlap]
  *
  * <pool.json> is {game, items: [...]}, items shaped like one round of the game (Pistas: {id, difficulty,
  * clues x10, answer}; Buscaminas: {id, difficulty, prompt, cards x16, ok x12}). Every item is validated, and

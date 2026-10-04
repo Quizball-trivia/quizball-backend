@@ -39,4 +39,19 @@ describe('minuto goal', () => {
     expect(JSON.stringify(card)).not.toContain(goal.fingerprint);
     expect(card.scorer.name.es).toBe('Goleador 4');
   });
+
+  it('preserves rights-managed photo credits while requiring an opaque first-party path', () => {
+    const image = {
+      src: 'minuto/photos/0123456789abcdef0123456789abcdef.webp',
+      credit: 'Photographer / Getty Images',
+      license: 'Rights-managed',
+    };
+    const raw = { ...rawGoal('2026-10-01', 4), image };
+    const card = publicGoal(goalSchema.parse(raw));
+    expect(card.image).toEqual(image);
+    expect(card).not.toHaveProperty('minute');
+    expect(goalSchema.safeParse({ ...raw, image: { ...image, src: 'https://example.com/photo.webp' } }).success).toBe(false);
+    expect(goalSchema.safeParse({ ...raw, image: { ...image, src: 'minuto/photos/goal-minute-42.webp' } }).success).toBe(false);
+    expect(goalSchema.safeParse({ ...raw, image: { ...image, license: 'Unknown' } }).success).toBe(false);
+  });
 });

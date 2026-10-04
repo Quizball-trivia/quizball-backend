@@ -27,8 +27,8 @@ const playerPhoto = z.string().max(120).regex(/^football-grid\/v1\/players\/[a-f
 const clubCrest = z.string().max(120).regex(/^club-logos\/[a-z0-9-]+\.(?:webp|png|svg)$/);
 /** Goal photos are named by a hash: a path can never carry the minute. */
 const goalPhoto = z.string().max(120).regex(/^minuto\/photos\/[a-f0-9]{16,40}\.webp$/);
-/** Free licences only (plan §3: no agency photos). */
-export const MINUTO_LICENSES = ['CC0', 'Public domain', 'CC BY 2.0', 'CC BY 3.0', 'CC BY 4.0', 'CC BY-SA 2.0', 'CC BY-SA 3.0', 'CC BY-SA 4.0', 'QuizBall'] as const;
+/** Preserve the source licence, including owner-approved rights-managed agency photos. */
+export const MINUTO_LICENSES = ['CC0', 'Public domain', 'CC BY 2.0', 'CC BY 3.0', 'CC BY 4.0', 'CC BY-SA 2.0', 'CC BY-SA 3.0', 'CC BY-SA 4.0', 'QuizBall', 'Rights-managed'] as const;
 
 const team = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('nation'), flag: z.string().regex(/^[a-z]{2}(?:-[a-z]{3})?$/), name: localized }).strict(),

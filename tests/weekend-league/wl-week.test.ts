@@ -55,19 +55,39 @@ describe('weekKeyFor', () => {
 describe('wlUpcomingEventSchedule', () => {
   it('Sunday belongs to the ongoing event until the final starts', async () => {
     const { wlUpcomingEventSchedule } = await import('../../src/modules/weekend-league/wl-week.js');
-    // Sunday 2026-08-02 13:59:59 GE — final not started: still week 2026-08-01.
-    const beforeFinal = geDate('2026-08-02T13:59:59').getTime();
+    // Sunday 2026-08-02 21:59:59 GE — final not started: still week 2026-08-01.
+    const beforeFinal = geDate('2026-08-02T21:59:59').getTime();
     expect(wlUpcomingEventSchedule(beforeFinal).weekKey).toBe('2026-08-01');
-    // Exactly Sunday 14:00 GE — the final has started; creation/selection
+    // Exactly Sunday 22:00 GE — the final has started; creation/selection
     // rolls to next Saturday (the ongoing event is protected by
     // earliest-final DB selection, not by this function).
-    const atFinal = geDate('2026-08-02T14:00:00').getTime();
+    const atFinal = geDate('2026-08-02T22:00:00').getTime();
     expect(wlUpcomingEventSchedule(atFinal).weekKey).toBe('2026-08-08');
     // Monday maps to its own week.
     const monday = geDate('2026-07-27T00:00:00').getTime();
     expect(wlUpcomingEventSchedule(monday).weekKey).toBe('2026-08-01');
     // Entry opens Monday 00:00 GE for the computed week.
     expect(wlUpcomingEventSchedule(monday).entryOpensAtMs).toBe(monday);
+  });
+
+  it('kicks off at 22:00 Georgia time on both days, with entry closing Friday midnight', async () => {
+    const { wlUpcomingEventSchedule } = await import('../../src/modules/weekend-league/wl-week.js');
+    const schedule = wlUpcomingEventSchedule(geDate('2026-10-07T12:00:00').getTime());
+
+    expect(schedule.weekKey).toBe('2026-10-10');
+    expect(new Date(schedule.entryClosesAtMs).toISOString()).toBe('2026-10-09T20:00:00.000Z');
+    expect(new Date(schedule.qualifierStartsAtMs).toISOString()).toBe('2026-10-10T18:00:00.000Z');
+    expect(new Date(schedule.finalStartsAtMs).toISOString()).toBe('2026-10-11T18:00:00.000Z');
+  });
+
+  it('the final still lands on the Georgia Sunday of the same event week', async () => {
+    const { wlUpcomingEventSchedule } = await import('../../src/modules/weekend-league/wl-week.js');
+    const schedule = wlUpcomingEventSchedule(geDate('2026-12-31T15:00:00').getTime());
+    const finalGe = new Date(schedule.finalStartsAtMs + 4 * 3600_000);
+
+    expect(schedule.weekKey).toBe('2027-01-02');
+    expect(finalGe.getUTCDay()).toBe(0);
+    expect(finalGe.toISOString().slice(0, 16)).toBe('2027-01-03T22:00');
   });
 });
 

@@ -27,8 +27,20 @@ export type WlWaveKind =
 export interface WlWaveContent {
   titleEn: string;
   titleKa: string;
+  titleEs: string;
+  titleTr: string;
   bodyEn: string;
   bodyKa: string;
+  bodyEs: string;
+  bodyTr: string;
+}
+
+/** The stored {en, ka, es, tr} fields; clients show field[locale] ?? field.en. */
+export function wlLocalized(content: WlWaveContent) {
+  return {
+    title: { en: content.titleEn, ka: content.titleKa, es: content.titleEs, tr: content.titleTr },
+    body: { en: content.bodyEn, ka: content.bodyKa, es: content.bodyEs, tr: content.bodyTr },
+  };
 }
 
 export const ENTRY_OPEN_CONTENT: WlWaveContent = {
@@ -36,6 +48,10 @@ export const ENTRY_OPEN_CONTENT: WlWaveContent = {
   titleKa: 'უიქენდის ლიგაზე კვალიფიცირებული ხარ!',
   bodyEn: 'You have enough QP — entry is open. Claim your spot for Saturday now.',
   bodyKa: 'საკმარისი QP გაქვს — რეგისტრაცია ღიაა. დაიკავე ადგილი შაბათისთვის ახლავე.',
+  titleEs: '¡Ya puedes jugar la Weekend League!',
+  titleTr: 'Weekend League’e katılmaya hak kazandın!',
+  bodyEs: 'Tienes suficientes QP y la inscripción está abierta. Reserva tu plaza para el sábado.',
+  bodyTr: 'Yeterli QP’n var, kayıtlar açık. Cumartesi için yerini şimdi ayır.',
 };
 
 export const REMINDER_1H_CONTENT: WlWaveContent = {
@@ -43,6 +59,10 @@ export const REMINDER_1H_CONTENT: WlWaveContent = {
   titleKa: 'უიქენდის ლიგა 1 საათში იწყება!',
   bodyEn: 'You are registered — check-in opens shortly before kickoff. Get ready! 🏆',
   bodyKa: 'დარეგისტრირებული ხარ — ჩექინი დაწყებამდე ცოტა ხნით ადრე გაიხსნება. მოემზადე! 🏆',
+  titleEs: '¡La Weekend League empieza en 1 hora!',
+  titleTr: 'Weekend League 1 saat sonra başlıyor!',
+  bodyEs: 'Estás inscrito: podrás confirmar tu asistencia poco antes del inicio. ¡Prepárate! 🏆',
+  bodyTr: 'Kaydın var — giriş başlangıçtan kısa süre önce açılır. Hazır ol! 🏆',
 };
 
 export const REMINDER_30M_CONTENT: WlWaveContent = {
@@ -50,6 +70,10 @@ export const REMINDER_30M_CONTENT: WlWaveContent = {
   titleKa: 'უიქენდის ლიგა 30 წუთში იწყება!',
   bodyEn: 'Almost time — do not miss check-in. Good luck! ⚽',
   bodyKa: 'თითქმის დროა — არ გამოტოვო ჩექინი. წარმატებები! ⚽',
+  titleEs: '¡La Weekend League empieza en 30 minutos!',
+  titleTr: 'Weekend League 30 dakika sonra başlıyor!',
+  bodyEs: 'Ya casi: no te olvides de confirmar tu asistencia. ¡Suerte! ⚽',
+  bodyTr: 'Az kaldı — giriş yapmayı unutma. Bol şans! ⚽',
 };
 
 export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
@@ -57,32 +81,113 @@ export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
   titleKa: 'ჩექინი გახსნილია!',
   bodyEn: 'Confirm your spot — the games start soon.',
   bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
+  titleEs: '¡Ya puedes confirmar tu asistencia!',
+  titleTr: 'Giriş açıldı!',
+  bodyEs: 'Confirma tu plaza: los partidos empiezan pronto.',
+  bodyTr: 'Yerini onayla — maçlar birazdan başlıyor.',
 };
 
-/** 2026-08-09 lesson: 6 of 28 finalists missed the Sunday final because
- *  nothing told them a SECOND check-in was required — the copy must carry
- *  the exact window. */
-export const QUALIFIED_CONTENT: WlWaveContent = {
-  titleEn: 'You made the final! Check in again Sunday 13:50–14:00',
-  titleKa: 'ფინალში გახვედი! ჩექინი კვირას 13:50–14:00',
-  bodyEn: 'The final starts Sunday at 14:00 — and you must check in AGAIN between 13:50 and 14:00. Don’t be late!',
-  bodyKa: 'ფინალი კვირას 14:00-ზეა და ჩექინი ხელახლა არის საჭირო — 13:50-დან 14:00-მდე. არ დააგვიანო!',
-};
+const GE_OFFSET_MS = 4 * 60 * 60 * 1000;
+const GE_DAY_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// "On <day>" — Georgian marks it with the dative case, not a preposition.
+const GE_DAY_KA = ['კვირას', 'ორშაბათს', 'სამშაბათს', 'ოთხშაბათს', 'ხუთშაბათს', 'პარასკევს', 'შაბათს'];
+const GE_DAY_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const GE_DAY_TR = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+
+/** The final's start and check-in opening on the Georgia clock (fixed UTC+4).
+ *  Seconds appear only when a compressed rehearsal is not on whole minutes,
+ *  where 'HH:MM' would print an empty window like "22:00–22:00". */
+function geFinalWindow(finalStartsAtMs: number, checkinWindowMs: number) {
+  const seconds = finalStartsAtMs % 60_000 !== 0 || checkinWindowMs % 60_000 !== 0;
+  const clock = (ms: number) => new Date(ms + GE_OFFSET_MS).toISOString().slice(11, seconds ? 19 : 16);
+  const weekday = (ms: number) => new Date(ms + GE_OFFSET_MS).getUTCDay();
+  const opensAtMs = finalStartsAtMs - checkinWindowMs;
+  const start = clock(finalStartsAtMs);
+  const opens = clock(opensAtMs);
+  const startDay = weekday(finalStartsAtMs);
+  const opensDay = weekday(opensAtMs);
+  // A final just after midnight opens its check-in on the previous day: name
+  // both days then, or a finalist reads the window as a day late.
+  const window = (days: string[]) => (opensDay === startDay
+    ? `${days[startDay]} ${opens}–${start}`
+    : `${days[opensDay]} ${opens} – ${days[startDay]} ${start}`);
+  return {
+    start,
+    opens,
+    dayEn: GE_DAY_EN[startDay],
+    dayKa: GE_DAY_KA[startDay],
+    dayEs: GE_DAY_ES[startDay],
+    dayTr: GE_DAY_TR[startDay],
+    windowEn: window(GE_DAY_EN),
+    windowKa: window(GE_DAY_KA),
+    windowEs: window(GE_DAY_ES.map((day) => `el ${day}`)),
+    windowTr: window(GE_DAY_TR),
+  };
+}
+
+/**
+ * Final-day copy is built from the tournament's own final start, never a
+ * fixed day or hour: a notification is one stored string per language, so it
+ * cannot follow the reader's timezone the way the app screens do. Georgian
+ * copy gives the Georgia clock; English names the zone and sends the reader
+ * to the app for their local time.
+ *
+ * 2026-08-09 lesson: 6 of 28 finalists missed the Sunday final because
+ * nothing told them a SECOND check-in was required — the copy must carry
+ * the exact window.
+ */
+export function qualifiedContent(finalStartsAtMs: number, checkinWindowMs: number): WlWaveContent {
+  if (!Number.isFinite(finalStartsAtMs)) {
+    return {
+      titleEn: 'You made the final! You must check in again',
+      titleKa: 'ფინალში გახვედი! ჩექინი ხელახლა არის საჭირო',
+      bodyEn: 'You must check in AGAIN just before the final starts. Open the app for the exact time. Don’t be late!',
+      bodyKa: 'ფინალის დაწყებამდე ჩექინი ხელახლა არის საჭირო. ზუსტი დრო ნახე აპლიკაციაში. არ დააგვიანო!',
+      titleEs: '¡Estás en la final! Tienes que volver a confirmar tu asistencia',
+      titleTr: 'Finaldesin! Yeniden giriş yapman gerekiyor',
+      bodyEs: 'Tienes que volver a confirmar tu asistencia justo antes de que empiece la final. Mira la hora exacta en la app. ¡No llegues tarde!',
+      bodyTr: 'Final başlamadan hemen önce YENİDEN giriş yapmalısın. Kesin saati uygulamada gör. Geç kalma!',
+    };
+  }
+  const { start, opens, dayEn, dayKa, dayEs, dayTr, windowEn, windowKa, windowEs, windowTr } = geFinalWindow(finalStartsAtMs, checkinWindowMs);
+  return {
+    titleEn: `You made the final! Check in again ${windowEn} Georgia time`,
+    titleKa: `ფინალში გახვედი! ჩექინი ${windowKa}`,
+    bodyEn: `The final starts ${dayEn} at ${start} Georgia time (GMT+4) — the app shows it in your local time. You must check in AGAIN between ${opens} and ${start}. Don’t be late!`,
+    bodyKa: `ფინალი ${dayKa} ${start}-ზეა და ჩექინი ხელახლა არის საჭირო — ${opens}-დან ${start}-მდე. არ დააგვიანო!`,
+    titleEs: `¡Estás en la final! Confirma tu asistencia de nuevo ${windowEs}, hora de Georgia`,
+    titleTr: `Finaldesin! Gürcistan saatiyle ${windowTr} arasında yeniden giriş yap`,
+    bodyEs: `La final empieza el ${dayEs} a las ${start}, hora de Georgia (GMT+4); en la app la ves en tu hora local. Tienes que volver a confirmar tu asistencia entre las ${opens} y las ${start}. ¡No llegues tarde!`,
+    bodyTr: `Final ${dayTr} günü Gürcistan saatiyle ${start} itibarıyla başlıyor (GMT+4); uygulamada kendi yerel saatinle görürsün. ${opens} ile ${start} arasında YENİDEN giriş yapmalısın. Geç kalma!`,
+  };
+}
 
 /** Absolute times, not "in 30 minutes" — the window-gated wave can first
- *  fire mid-window after a restart. */
-export const FINAL_REMINDER_30M_CONTENT: WlWaveContent = {
-  titleEn: 'The final starts today at 14:00!',
-  titleKa: 'ფინალი დღეს 14:00-ზე იწყება!',
-  bodyEn: 'Check-in opens at 13:50. Open the app now so you don’t miss your seat. Good luck! 🍀',
-  bodyKa: 'დღეს გამოვლინდება ჩემპიონი. ჩექინი გაიხსნება 13:50-ზე — შედი აპლიკაციაში ახლავე. წარმატებები! 🍀',
-};
+ *  fire mid-window after a restart. No "today" either: a final just after
+ *  midnight, or a reader abroad, is on another calendar day. */
+export function finalReminder30mContent(finalStartsAtMs: number, checkinWindowMs: number): WlWaveContent {
+  const { start, opens } = geFinalWindow(finalStartsAtMs, checkinWindowMs);
+  return {
+    titleEn: `The final starts at ${start} Georgia time!`,
+    titleKa: `ფინალი ${start}-ზე იწყება!`,
+    bodyEn: `Check-in opens at ${opens} Georgia time (GMT+4). Open the app now so you don’t miss your seat. Good luck! 🍀`,
+    bodyKa: `ჩემპიონი მალე გამოვლინდება. ჩექინი გაიხსნება ${opens}-ზე — შედი აპლიკაციაში ახლავე. წარმატებები! 🍀`,
+    titleEs: `¡La final empieza a las ${start}, hora de Georgia!`,
+    titleTr: `Final Gürcistan saatiyle ${start} itibarıyla başlıyor!`,
+    bodyEs: `Podrás confirmar tu asistencia a partir de las ${opens}, hora de Georgia (GMT+4). Entra ya en la app para no perder tu plaza. ¡Suerte! 🍀`,
+    bodyTr: `Giriş Gürcistan saatiyle ${opens} itibarıyla açılıyor (GMT+4). Yerini kaçırmamak için uygulamayı şimdi aç. Bol şans! 🍀`,
+  };
+}
 
 export const FINAL_CHECKIN_CONTENT: WlWaveContent = {
   titleEn: 'Final check-in is open!',
   titleKa: 'ფინალის ჩექინი გახსნილია!',
   bodyEn: 'Confirm your seat in the final now.',
   bodyKa: 'დაადასტურე შენი ადგილი ფინალში ახლავე.',
+  titleEs: '¡Ya puedes confirmar tu asistencia a la final!',
+  titleTr: 'Final girişi açıldı!',
+  bodyEs: 'Confirma ahora tu plaza en la final.',
+  bodyTr: 'Finaldeki yerini şimdi onayla.',
 };
 
 const STARTED_CONTENT: WlWaveContent = {
@@ -90,6 +195,10 @@ const STARTED_CONTENT: WlWaveContent = {
   titleKa: 'უიქენდის ლიგა იწყება!',
   bodyEn: 'Check in now if you are registered — or watch the games live.',
   bodyKa: 'გაიარე ჩექინი თუ დარეგისტრირებული ხარ — ან უყურე თამაშებს ლაივში.',
+  titleEs: '¡La Weekend League está empezando!',
+  titleTr: 'Weekend League başlıyor!',
+  bodyEs: 'Si estás inscrito, confirma tu asistencia ahora, o mira los partidos en directo.',
+  bodyTr: 'Kaydın varsa şimdi giriş yap — ya da maçları canlı izle.',
 };
 
 function sourceKey(tournamentId: string, kind: WlWaveKind): string {
@@ -109,8 +218,8 @@ export async function wlNotifyEntrants(
     const inserted = await sql<{ id: string }[]>`
       INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
       SELECT e.user_id, 'weekend_league',
-             ${sql.json({ en: content.titleEn, ka: content.titleKa } as never)},
-             ${sql.json({ en: content.bodyEn, ka: content.bodyKa } as never)},
+             ${sql.json(wlLocalized(content).title as never)},
+             ${sql.json(wlLocalized(content).body as never)},
              ${sql.json({ tournament_id: tournamentId, kind } as never)},
              ${key}
       FROM wl_entries e
@@ -154,8 +263,8 @@ export async function wlEnsureStartedWave(tournamentId: string): Promise<number>
     const inserted = await sql<{ id: string }[]>`
       INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
       SELECT c.user_id, 'weekend_league',
-             ${sql.json({ en: content.titleEn, ka: content.titleKa } as never)},
-             ${sql.json({ en: content.bodyEn, ka: content.bodyKa } as never)},
+             ${sql.json(wlLocalized(content).title as never)},
+             ${sql.json(wlLocalized(content).body as never)},
              ${sql.json({ tournament_id: tournamentId, kind: 'started' } as never)},
              ${key}
       FROM (
@@ -296,8 +405,8 @@ export async function wlNotifyQualifiedEntryOpen(
     const inserted = await sql<{ id: string }[]>`
       INSERT INTO notifications (user_id, type, title, body, data, source_event_key)
       SELECT q.user_id, 'weekend_league',
-             ${sql.json({ en: content.titleEn, ka: content.titleKa } as never)},
-             ${sql.json({ en: content.bodyEn, ka: content.bodyKa } as never)},
+             ${sql.json(wlLocalized(content).title as never)},
+             ${sql.json(wlLocalized(content).body as never)},
              ${sql.json({ tournament_id: tournamentId, kind: 'entry_open' } as never)},
              ${key}
       FROM (

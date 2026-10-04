@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
 import { buscaminasPack, pistasPack } from './duel-fixtures.js';
+import { rawGoal } from '../minuto/fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL with the full schema (duel migration applied), e.g. a schema-only copy of a local DB:
@@ -26,10 +27,14 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
     await db.sql`TRUNCATE duel_commands, duel_participants, duel_match_content, duel_matches, duel_pool`;
     // Exactly one pack's worth per game, in the pack's difficulty mix (the deal order within a difficulty is random).
     const order = ['easy', 'medium', 'hard', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard'] as const;
-    const pools = { pistas: pistasPack().rounds.map((r, i) => ({ ...r, difficulty: order[i] })), buscaminas: buscaminasPack().rounds };
+    // Minuto: one goal per pack slot, in the pack's tier mix (3 easy, 4 medium, 3 hard).
+    const tiers = ['easy', 'easy', 'easy', 'medium', 'medium', 'medium', 'medium', 'hard', 'hard', 'hard'] as const;
+    const minuto = tiers.map((tier, r) => ({ ...rawGoal('2099-01-01', r), tier, id: `g20990101-${String(r).padStart(10, '0')}`, difficulty: tier }));
+    const pools = { pistas: pistasPack().rounds.map((r, i) => ({ ...r, difficulty: order[i] })), buscaminas: buscaminasPack().rounds, minuto };
     for (const [game, rounds] of Object.entries(pools)) {
       for (const round of rounds) {
-        await db.sql`INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload) VALUES (${game}, ${round.id}, ${round.difficulty}, ${round.id}, ${db.sql.json(round as never)})`;
+        const { difficulty, ...payload } = round as { difficulty: string } & Record<string, unknown>;
+        await db.sql`INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload) VALUES (${game}, ${round.id as string}, ${difficulty}, ${(game === 'minuto' ? payload.fingerprint : round.id) as string}, ${db.sql.json((game === 'minuto' ? payload : round) as never)})`;
       }
     }
   });
@@ -40,7 +45,7 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
   };
 
   /** A waiting duel room with two ready members: the host (a member) and a guest. */
-  async function room(game: 'pistas' | 'buscaminas') {
+  async function room(game: 'pistas' | 'buscaminas' | 'minuto') {
     const a = await user(`host-${randomUUID().slice(0, 6)}`);
     const b = await user(`guest-${randomUUID().slice(0, 6)}`, true);
     const [lobby] = await db.sql<Array<{ id: string }>>`
@@ -61,7 +66,7 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
   }
 
   /** Both ready, the intro played out: the first game phase is live. */
-  async function started(game: 'pistas' | 'buscaminas') {
+  async function started(game: 'pistas' | 'buscaminas' | 'minuto') {
     const r = await room(game);
     const created = await duelService.createFromLobby({ lobbyId: r.lobbyId, game, players: r.players });
     await duelService.ready(created.matchId, r.a, 'es');
@@ -388,6 +393,69 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
     const late = await duelService.ready(created.matchId, r.b, 'es');
     expect(late).toMatchObject({ status: 'cancelled', finished: true });
     expect((await matchRow(created.matchId)).result).toMatchObject({ reason: 'cancelled', leftSeat: 1 });
+  });
+
+  it('minuto: a guess stays hidden from the rival (snapshot and command result), is final, and the second one reveals both', async () => {
+    const { matchId, a, b } = await started('minuto');
+    const minuteOf = async (r: number) => {
+      const m = ((await db.sql`SELECT content FROM duel_match_content WHERE match_id = ${matchId}`)[0].content as { rounds: Array<{ minute: { base: number; added: number } }> }).rounds[r].minute;
+      return m.base + m.added;
+    };
+    const exact = await minuteOf(0);
+    const id = randomUUID();
+    const first = await duelService.command(matchId, a, id, { type: 'guess', round: 0, minute: exact });
+    expect(first.result).toEqual({ ok: true });
+    const rival = await duelService.snapshot(matchId, b);
+    expect(rival!.view).toMatchObject({ phase: 'guess', me: { answered: false, guess: null }, rival: { answered: true }, settled: null, scores: [0, 0] });
+    expect(JSON.stringify(rival)).not.toMatch(new RegExp(`"(guess|minute)":${exact}\\b`));
+    expect(JSON.stringify(rival)).not.toContain('"minute"');
+    expect((await duelService.snapshot(matchId, a))!.view).toMatchObject({ me: { answered: true, guess: exact } });
+    // Replayed with the same id: same answer, nothing changes; a new id cannot change the guess.
+    expect((await duelService.command(matchId, a, id, { type: 'guess', round: 0, minute: exact })).result).toEqual({ ok: true });
+    expect((await duelService.command(matchId, a, randomUUID(), { type: 'guess', round: 0, minute: 1 })).result).toEqual({ ok: false, code: 'already_answered' });
+    const second = await duelService.command(matchId, b, randomUUID(), { type: 'guess', round: 0, minute: exact + 4 });
+    expect(second.result).toEqual({ ok: true });
+    expect((await duelService.snapshot(matchId, b))!.view).toMatchObject({ phase: 'reveal', settled: { guesses: [exact, exact + 4], points: [3, 0] }, scores: [3, 0] });
+    // The reveal runs out into goal 2; a late guess for goal 1 meets goal 2 and is stale.
+    await runOut(matchId);
+    expect((await duelService.command(matchId, b, randomUUID(), { type: 'guess', round: 0, minute: 10 })).result).toEqual({ ok: false, code: 'stale_round' });
+    expect((await duelService.snapshot(matchId, a))!.view).toMatchObject({ phase: 'guess', round: 1, me: { answered: false } });
+  });
+
+  it('an engine this build does not have leaves the match alone: no cancel on the clock, an unrecorded refusal', async () => {
+    const { matchId, a } = await started('minuto');
+    // A newer build's engine version stands in for a game an old replica does not know during a rolling deploy.
+    const [{ engine_version: version }] = await db.sql<Array<{ engine_version: number }>>`SELECT engine_version FROM duel_matches WHERE id = ${matchId}`;
+    await db.sql`UPDATE duel_matches SET engine_version = 999 WHERE id = ${matchId}`;
+    const before = await matchRow(matchId);
+    const effects = await runOut(matchId);
+    expect(effects).toMatchObject({ status: 'active', timer: null, finished: false });
+    expect(await matchRow(matchId)).toMatchObject({ status: 'active', state_version: before.state_version });
+    const id = randomUUID();
+    expect((await duelService.command(matchId, a, id, { type: 'guess', round: 0, minute: 30 })).result).toEqual({ ok: false, code: 'engine_unavailable' });
+    expect((await db.sql`SELECT count(*)::int AS n FROM duel_commands WHERE match_id = ${matchId}`)[0].n).toBe(0);
+    // Back on a build that has it, the same command is judged.
+    await db.sql`UPDATE duel_matches SET engine_version = ${version}, phase_deadline_at = clock_timestamp() + interval '20 seconds' WHERE id = ${matchId}`;
+    expect((await duelService.command(matchId, a, id, { type: 'guess', round: 0, minute: 30 })).result).toEqual({ ok: true });
+  });
+
+  it('a malformed pool goal refuses the start with a code only, never the goal', async () => {
+    await db.sql`UPDATE duel_pool SET payload = jsonb_set(payload, '{comp}', '"private-minute-73"') WHERE game = 'minuto' AND item_id = (SELECT min(item_id) FROM duel_pool WHERE game = 'minuto')`;
+    const r = await room('minuto');
+    const error = await duelService.createFromLobby({ lobbyId: r.lobbyId, game: 'minuto', players: r.players }).then(() => null, (e: unknown) => e as Error & { code?: string });
+    expect(error).toMatchObject({ code: 'duel_content_invalid' });
+    expect(`${error!.message} ${JSON.stringify(error)}`).not.toContain('private-minute-73');
+  });
+
+  it('content that no longer parses fails with a code only, never the stored goal', async () => {
+    const r = await room('minuto');
+    const created = await duelService.createFromLobby({ lobbyId: r.lobbyId, game: 'minuto', players: r.players });
+    await duelService.ready(created.matchId, r.a, 'es');
+    await duelService.ready(created.matchId, r.b, 'es');
+    await db.sql`UPDATE duel_match_content SET content = jsonb_set(content, '{rounds,0,minute,base}', '"secreto-77"') WHERE match_id = ${created.matchId}`;
+    const error = await runOut(created.matchId).then(() => null, (e: unknown) => e as Error & { code?: string });
+    expect(error).toMatchObject({ code: 'duel_content_invalid' });
+    expect(`${error!.message} ${JSON.stringify(error)}`).not.toContain('secreto-77');
   });
 
   it('buscaminas: turns alternate on the server, an out-of-turn pick is refused, a timeout pick is replayed identically', async () => {

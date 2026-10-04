@@ -54,10 +54,16 @@ export interface DailyTables {
  * when the row is read or written: the same boundary as the ranked write fence, so an answer is never disclosed
  * while a ranked write for that day can still land.
  */
-export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, Entry extends DailyBoardEntryBase, DayRow>(t: DailyTables) {
+export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, Entry extends DailyBoardEntryBase, DayRow>(
+  t: DailyTables,
+  /** statTiebreak: equal scores rank by the board stat (higher first) before the finish time. */
+  opts: { statTiebreak?: boolean } = {},
+) {
   for (const name of Object.values(t)) if (!/^[a-z_]+$/.test(name)) throw new Error(`Bad table config: ${name}`);
   const RUNS = t.runs;
   const DAYS = t.days;
+  const STAT = t.stat;
+  const tiebreak = opts.statTiebreak === true;
   const RUN_COLUMNS = `id, user_id, guest_id, day::text AS day, ranked, content_version, state, state_version, done, score, ${t.stat},
   completed_at, closes_at, clock_timestamp() >= closes_at AS closed`;
 
@@ -241,7 +247,9 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
           WHERE o.day = me.day AND o.ranked AND o.done
             AND ou.is_ai = false AND ou.is_guest = false AND ou.is_seed = false AND ou.is_deleted = false
             AND ou.deleted_at IS NULL AND ou.pending_deletion_at IS NULL
-            AND (o.score > me.score OR (o.score = me.score AND (o.completed_at, o.id) < (me.completed_at, me.id)))
+            AND (o.score > me.score OR (o.score = me.score AND ${tiebreak
+              ? q.unsafe(`(o.${STAT} > me.${STAT} OR (o.${STAT} = me.${STAT} AND (o.completed_at, o.id) < (me.completed_at, me.id)))`)
+              : q.unsafe('(o.completed_at, o.id) < (me.completed_at, me.id)')}))
         )::int AS rank,
         u.id AS "userId",
         COALESCE(NULLIF(u.nickname, ''), 'Player') AS "username",
@@ -265,7 +273,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
     async leaderboard(day: string, limit: number): Promise<{ players: number; top: Entry[] }> {
       const rows = await sql<Array<RawEntry & { players: number }>>`
       SELECT
-        (row_number() OVER (ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC))::int AS rank,
+        (row_number() OVER (ORDER BY r.score DESC NULLS LAST, ${sql.unsafe(tiebreak ? `r.${STAT} DESC NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC))::int AS rank,
         (count(*) OVER ())::int AS players,
         u.id AS "userId",
         COALESCE(NULLIF(u.nickname, ''), 'Player') AS "username",
@@ -281,7 +289,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       WHERE r.day = ${day} AND r.ranked AND r.done
         AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
         AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
-      ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC
+      ORDER BY r.score DESC NULLS LAST, ${sql.unsafe(tiebreak ? `r.${STAT} DESC NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC
       LIMIT ${limit}
     `;
       return { players: rows[0]?.players ?? 0, top: rows.map(({ players: _players, ...row }) => toEntry(row as unknown as RawEntry)) };

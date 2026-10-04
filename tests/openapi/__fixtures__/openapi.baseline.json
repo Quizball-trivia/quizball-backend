@@ -14832,7 +14832,8 @@
                             "enum": [
                               "buscaminas",
                               "pistas",
-                              "ultimo"
+                              "ultimo",
+                              "minuto"
                             ]
                           }
                         },

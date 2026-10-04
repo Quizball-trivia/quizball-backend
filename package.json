@@ -55,6 +55,7 @@
     "buscaminas:seed": "tsx scripts/buscaminas-seed-days.ts",
     "pistas:seed": "tsx scripts/pistas-seed-days.ts",
     "ultimo:seed": "tsx scripts/ultimo-seed-days.ts",
+    "minuto:seed": "tsx scripts/minuto-seed-days.ts",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",

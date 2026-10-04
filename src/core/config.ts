@@ -387,6 +387,16 @@ const configSchema = z.object({
     .optional()
     .default('false'),
   WL_REWARDS_FROM_WEEK: z.string().optional(),
+  // Podium packs also grant the place frame (reward policy v2). Separate from
+  // WL_REWARDS_ENABLED and OFF by default: turn it on only once every running
+  // backend and web build understands the `frame` slot, or an older pod would
+  // fail to read a winner's inventory.
+  WL_REWARD_FRAMES_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .pipe(z.boolean())
+    .optional()
+    .default('false'),
 
   // Daily comeback experiment mechanics. Rewards and outbound reminders ship
   // disabled so deploying the code cannot change the coin economy or send an

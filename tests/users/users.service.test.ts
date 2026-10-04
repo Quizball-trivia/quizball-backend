@@ -174,7 +174,7 @@ const MOCK_H2H = {
 };
 
 function ownedAvatarPart(
-  slot: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair' | 'headwear' | 'earwear',
+  slot: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair' | 'headwear' | 'earwear' | 'frame',
   partId: string,
 ) {
   return {
@@ -326,6 +326,13 @@ describe('usersService.getPublicProfile', () => {
     expect(result.headToHead).toBeNull();
   });
 
+  it('rejects a Weekend League frame the player has not won', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await expect(usersService.updateProfile('user-target-id', { avatarCustomization: { frame: 'frame_wl_champion' } }))
+      .rejects.toMatchObject({ statusCode: 400, details: { missingParts: [{ slot: 'frame', partId: 'frame_wl_champion' }] } });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
   it.each(['headwear', 'earwear'] as const)('rejects an unowned %s item', async (slot) => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
     await expect(usersService.updateProfile('user-target-id', { avatarCustomization: { [slot]: slot === 'headwear' ? 'headwear_cech' : 'earwear_hoop' } })).rejects.toMatchObject({ statusCode: 400 });
@@ -390,6 +397,26 @@ describe('usersService.getPublicProfile', () => {
         hair: 'hair_ramos',
       },
     });
+  });
+
+  it('equips a won Weekend League frame alongside the rest of the avatar', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([
+      ownedAvatarPart('jersey', 'jersey_wl_retro_home'),
+      ownedAvatarPart('frame', 'frame_wl_champion'),
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    const avatarCustomization = { skin: 'skin_male_white', jersey: 'jersey_wl_retro_home', frame: 'frame_wl_champion' };
+
+    await usersService.updateProfile('user-target-id', { avatarCustomization });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', { avatarCustomization });
+  });
+
+  it('does not accept a frame owned under another slot', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([ownedAvatarPart('jersey', 'frame_wl_champion')]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await expect(usersService.updateProfile('user-target-id', { avatarCustomization: { frame: 'frame_wl_champion' } }))
+      .rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('allows keeping an already-equipped paid item while changing another slot', async () => {

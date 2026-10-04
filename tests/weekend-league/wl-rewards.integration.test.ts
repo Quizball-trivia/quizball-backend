@@ -12,6 +12,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 process.env.WL_REWARDS_ENABLED = 'true';
+process.env.WL_REWARD_FRAMES_ENABLED = 'true';
 process.env.WL_REWARDS_FROM_WEEK = '2099-01-01';
 
 let sql: typeof import('../../src/db/index.js').sql;
@@ -120,10 +121,10 @@ const finalist = (finalRank: number, extra: PlayerSeed = {}): PlayerSeed => ({
 
 async function receiptOf(tournamentId: string, userId: string) {
   const [row] = await sql<Array<{
-    band: string; coins: number; status: string; human_rank: number | null;
-    items: Array<{ slug: string; alreadyOwned?: boolean }>; forfeit_reason: string | null;
+    band: string; coins: number; status: string; human_rank: number | null; policy_version: number;
+    items: Array<{ slug: string; slot?: string; avatarPartId?: string; alreadyOwned?: boolean }>; forfeit_reason: string | null;
   }>>`
-    SELECT band, coins, status, human_rank, items, forfeit_reason
+    SELECT band, coins, status, human_rank, policy_version, items, forfeit_reason
     FROM wl_reward_receipts WHERE tournament_id = ${tournamentId} AND user_id = ${userId}
   `;
   return row ?? null;
@@ -247,10 +248,22 @@ describe('WL reward delivery', () => {
     await expectPaid(noShow, 'participant', 1500, null);
     await expectPaid(eliminated, 'participant', 1500, null);
 
-    expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
-    expect(await inventoryOf(second)).toEqual([{ slug: 'avatar_jersey_wl_retro_away', quantity: 1 }]);
-    expect(await inventoryOf(third)).toEqual([{ slug: 'avatar_jersey_wl_retro_training', quantity: 1 }]);
-    expect((await ledgerOf(winner))[0].inventory_delta).toEqual({ avatar_jersey_wl_retro_home: 1 });
+    // Policy v2: each podium pack is the place's jersey AND its frame.
+    expect(await inventoryOf(winner)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_home', quantity: 1 }, { slug: 'avatar_frame_wl_champion', quantity: 1 }]));
+    expect(await inventoryOf(winner)).toHaveLength(2);
+    expect(await inventoryOf(second)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_away', quantity: 1 }, { slug: 'avatar_frame_wl_runnerup', quantity: 1 }]));
+    expect(await inventoryOf(second)).toHaveLength(2);
+    expect(await inventoryOf(third)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_training', quantity: 1 }, { slug: 'avatar_frame_wl_podium', quantity: 1 }]));
+    expect(await inventoryOf(third)).toHaveLength(2);
+    expect((await ledgerOf(winner))[0].inventory_delta).toEqual({ avatar_jersey_wl_retro_home: 1, avatar_frame_wl_champion: 1 });
+    expect((await receiptOf(t.id, winner))).toMatchObject({ policy_version: 2 });
+    expect((await receiptOf(t.id, winner))?.items).toMatchObject([
+      { slug: 'avatar_jersey_wl_retro_home', slot: 'jersey', avatarPartId: 'jersey_wl_retro_home' },
+      { slug: 'avatar_frame_wl_champion', slot: 'frame', avatarPartId: 'frame_wl_champion' },
+    ]);
     expect(await inventoryOf(top10[0])).toEqual([]);
 
     for (const userId of [bot, banned, registeredOnly, checkedInIdle, voidedOnly, seedAccount, deleted, disqualified]) {
@@ -280,7 +293,9 @@ describe('WL reward delivery', () => {
     expect(await coinsOf(participant)).toBe(100 + 1500);
     expect(await ledgerOf(winner)).toHaveLength(1);
     expect(await ledgerOf(participant)).toHaveLength(1);
-    expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
+    expect(await inventoryOf(winner)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_home', quantity: 1 }, { slug: 'avatar_frame_wl_champion', quantity: 1 }]));
+    expect(await inventoryOf(winner)).toHaveLength(2);
   }, 120_000);
 
   it('resumes across bounded passes without paying anyone twice', async () => {
@@ -333,7 +348,7 @@ describe('WL reward delivery', () => {
     expect(await inventoryOf(present)).toEqual([]);
   }, 120_000);
 
-  it('does not duplicate a jersey the winner already owns', async () => {
+  it('does not duplicate a jersey the winner already owns, and still grants the frame', async () => {
     if (!dbAvailable) return;
     const t = await seedTournament();
     const winner = await seedPlayer(t, 'preowned', finalist(1));
@@ -343,9 +358,15 @@ describe('WL reward delivery', () => {
     `;
 
     await rewards.settleWlRewards(t.id);
-    expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
-    expect((await receiptOf(t.id, winner))?.items).toMatchObject([{ slug: 'avatar_jersey_wl_retro_home', alreadyOwned: true }]);
-    expect((await ledgerOf(winner))[0]).toMatchObject({ coins_delta: 40000, inventory_delta: {} });
+    // The pre-owned jersey is not duplicated; the frame is still granted.
+    expect(await inventoryOf(winner)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_home', quantity: 1 }, { slug: 'avatar_frame_wl_champion', quantity: 1 }]));
+    expect(await inventoryOf(winner)).toHaveLength(2);
+    expect((await receiptOf(t.id, winner))?.items).toMatchObject([
+      { slug: 'avatar_jersey_wl_retro_home', alreadyOwned: true },
+      { slug: 'avatar_frame_wl_champion', alreadyOwned: false },
+    ]);
+    expect((await ledgerOf(winner))[0]).toMatchObject({ coins_delta: 40000, inventory_delta: { avatar_frame_wl_champion: 1 } });
   }, 120_000);
 
   it('refuses test, unfinished, undated and pre-rollout tournaments', async () => {
@@ -412,7 +433,8 @@ describe('WL reward delivery', () => {
 
     await rewards.settleWlRewards(t.id);
     expect(await receiptOf(t.id, idleThenWon)).toMatchObject({ band: 'winner', coins: 40000, human_rank: 1 });
-    expect(await inventoryOf(idleThenWon)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
+    expect(await inventoryOf(idleThenWon)).toEqual(expect.arrayContaining([
+      { slug: 'avatar_jersey_wl_retro_home', quantity: 1 }, { slug: 'avatar_frame_wl_champion', quantity: 1 }]));
     expect(await receiptOf(t.id, idleFinalist)).toMatchObject({ band: 'finalist', coins: 4000 });
     expect(await receiptOf(t.id, idleNoShow)).toBeNull();
   }, 120_000);
@@ -570,6 +592,46 @@ describe('WL reward delivery', () => {
     expect(await coinsOf(winner)).toBe(100 + 40000);
     const [mine] = await rewards.wlRewardsRepo.listForUser(winner);
     expect(mine).toMatchObject({ band: 'winner', week_key: null });
+  }, 120_000);
+
+  it('with frames switched off, a podium pack is the jersey alone under policy v1', async () => {
+    if (!dbAvailable) return;
+    const flags = config as { WL_REWARD_FRAMES_ENABLED: boolean };
+    flags.WL_REWARD_FRAMES_ENABLED = false;
+    try {
+      const t = await seedTournament();
+      const winner = await seedPlayer(t, 'frames-off-winner', finalist(1));
+      await rewards.settleWlRewards(t.id);
+      expect(await receiptOf(t.id, winner)).toMatchObject({ policy_version: 1, items: [{ slug: 'avatar_jersey_wl_retro_home' }] });
+      expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
+    } finally {
+      flags.WL_REWARD_FRAMES_ENABLED = true;
+    }
+  }, 120_000);
+
+  it('the rollback keeps a frame product that an ungranted receipt still references', async () => {
+    if (!dbAvailable) return;
+    const t = await seedTournament();
+    const winner = await seedPlayer(t, 'rollback-guard', finalist(1));
+    await rewards.freezeWlRewards(t.id);
+    expect((await receiptOf(t.id, winner))?.items).toMatchObject([{ slug: 'avatar_jersey_wl_retro_home' }, { slug: 'avatar_frame_wl_champion' }]);
+    const { readFileSync } = await import('node:fs');
+    const rollback = readFileSync(new URL('../../supabase/rollback/20261005120000_wl_reward_frames_rollback.sql', import.meta.url), 'utf8');
+    await sql.begin(async (tx) => {
+      // Earlier tests granted champion frames; take those inventory rows out
+      // (inside this rolled-back probe) so only the receipt guard can keep it.
+      await tx`DELETE FROM user_inventory ui USING store_products sp WHERE ui.product_id = sp.id AND sp.slug = 'avatar_frame_wl_champion'`;
+      const [owned] = await tx<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM user_inventory ui JOIN store_products sp ON sp.id = ui.product_id
+        WHERE sp.slug = 'avatar_frame_wl_champion'`;
+      expect(owned.n).toBe(0);
+      await tx.unsafe(rollback);
+      const [kept] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM store_products WHERE slug = 'avatar_frame_wl_champion'`;
+      expect(kept.n).toBe(1);
+      throw new Error('rollback-probe');
+    }).catch((error: Error) => { if (error.message !== 'rollback-probe') throw error; });
+    await rewards.settleWlRewards(t.id);
+    expect(await receiptOf(t.id, winner)).toMatchObject({ status: 'granted' });
   }, 120_000);
 
   it('sweeps only when enabled, and a second sweep changes nothing', async () => {

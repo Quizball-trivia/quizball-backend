@@ -23,8 +23,8 @@ import type { Json } from '../../db/types.js';
 import { storeRepo } from '../store/store.repo.js';
 import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import {
-  WL_PACK_ITEM_SLUGS,
-  WL_REWARD_POLICY_VERSION,
+  wlPackItemSlugs,
+  wlRewardPolicyVersion,
   wlHighestReward,
   type WlRewardBand,
   type WlRewardFacts,
@@ -162,16 +162,19 @@ async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow
   `;
 }
 
-async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem>> {
-  const items: Record<number, WlRewardItem> = {};
-  for (const [place, slug] of Object.entries(WL_PACK_ITEM_SLUGS)) {
-    const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
-    const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
-    if (!product || product.type !== 'avatar'
-      || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
-      throw new Error(`WL reward product missing or malformed: ${slug}`);
+async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem[]>> {
+  const items: Record<number, WlRewardItem[]> = {};
+  for (const [place, slugs] of Object.entries(wlPackItemSlugs(config.WL_REWARD_FRAMES_ENABLED))) {
+    items[Number(place)] = [];
+    for (const slug of slugs) {
+      const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
+      const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
+      if (!product || product.type !== 'avatar'
+        || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
+        throw new Error(`WL reward product missing or malformed: ${slug}`);
+      }
+      items[Number(place)].push({ slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot });
     }
-    items[Number(place)] = { slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot };
   }
   return items;
 }
@@ -225,7 +228,7 @@ export async function freezeWlRewards(tournamentId: string): Promise<WlFreezeOut
         band: reward.band,
         human_rank: reward.band === 'participant' || reward.band === 'finalist' ? null : f.human_rank,
         coins: reward.coins,
-        items: reward.packPlace ? [packItems[reward.packPlace]] : [],
+        items: reward.packPlace ? packItems[reward.packPlace] : [],
         facts: { ...policyFacts, finalRank: f.final_rank },
       }];
     });
@@ -238,7 +241,7 @@ export async function freezeWlRewards(tournamentId: string): Promise<WlFreezeOut
         INSERT INTO wl_reward_receipts (
           tournament_id, week_key, user_id, policy_version, band, human_rank, coins, items, facts
         )
-        SELECT ${tournamentId}, ${t.week_key}::date, r.user_id, ${WL_REWARD_POLICY_VERSION},
+        SELECT ${tournamentId}, ${t.week_key}::date, r.user_id, ${wlRewardPolicyVersion(config.WL_REWARD_FRAMES_ENABLED)},
                r.band, r.human_rank, r.coins, r.items, r.facts
         FROM jsonb_to_recordset(${sql.json(rows as unknown as Json)}::jsonb) AS r(
           user_id uuid, band text, human_rank int, coins int, items jsonb, facts jsonb

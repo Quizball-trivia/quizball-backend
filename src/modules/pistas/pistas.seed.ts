@@ -234,7 +234,12 @@ export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): 
     players.some((player) => samePlayer({ display: Object.values(round.answer.display), accepted: round.answer.accepted }, player))).length, 0);
 }
 
-export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean }): Promise<SeedPlan> {
+/** Taken by the days seed and the duel pool writer, so each re-checks the other's content inside its own write. */
+export const PISTAS_CONTENT_LOCK = 'pistas-content';
+
+export async function seedDays(
+  sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean; allowPoolOverlap?: boolean },
+): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -242,8 +247,12 @@ export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { 
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
+    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
+    // pool write: the overlap with the duel pool is checked here, inside the write.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${PISTAS_CONTENT_LOCK}))`;
     await tx`LOCK TABLE pistas_days IN SHARE ROW EXCLUSIVE MODE`;
+    const overlap = await duelPoolOverlap(tx, rows);
+    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
     const storedRows = await tx<Array<Omit<PistasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
     `;

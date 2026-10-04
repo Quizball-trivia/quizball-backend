@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { CARDS_PER_ROUND, ROUNDS_PER_DAY, TARGETS_PER_ROUND } from './buscaminas.constants.js';
 import { addDays, assertUnbrokenCalendar, dayNumber, LAUNCH_DAY } from './buscaminas.days.js';
+import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicCard, type PublicRound } from './buscaminas.types.js';
 
 /**
@@ -164,8 +165,27 @@ export function planSeed(
   return { entries, extraDays: [...stored.keys()].filter((day) => !incomingDays.has(day)).sort() };
 }
 
+/** Taken by the days seed and the duel pool writer, so each re-checks the other's content inside its own write. */
+export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
+
+/**
+ * Rounds whose category is in the duel pool (duel packs are harvestable, so a daily category may never be a pool
+ * category). Matched like the pool writer does, by the normalised Spanish prompt; no duel_pool table means none.
+ */
+export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<number> {
+  const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
+  if (!table?.present) return 0;
+  const pool = await sql<Array<{ prompt: string | null }>>`
+    SELECT payload->'prompt'->>'es' AS prompt FROM duel_pool WHERE game = 'buscaminas' AND enabled
+  `;
+  const keys = new Set(pool.flatMap((item) => (item.prompt ? [normalizeAnswer(item.prompt)] : [])));
+  return rows.reduce((n, row) => n + row.board.rounds.filter((round) => keys.has(normalizeAnswer(round.prompt.es))).length, 0);
+}
+
 /** Plans (and unless `dryRun`, writes) the whole set in ONE transaction; a refused correction writes nothing. */
-export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedPlan> {
+export async function seedDays(
+  sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap?: boolean },
+): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -173,8 +193,12 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
+    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
+    // pool write: the overlap with the duel pool is checked here, inside the write.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
+    const overlap = await duelPoolOverlap(tx, rows);
+    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;

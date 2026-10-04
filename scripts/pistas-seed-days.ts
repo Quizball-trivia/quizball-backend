@@ -99,12 +99,13 @@ async function main(): Promise<void> {
   });
   try {
     if (args.allowPoolOverlap && target.kind !== 'local') throw new Error('--allow-pool-overlap is for --target local only');
-    const overlap = await duelPoolOverlap(sql, days.map(toDayRow));
-    if (overlap > 0) {
-      if (!args.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
-      console.warn(`WARNING (local only): ${overlap} daily player(s) are also in the local dev duel pool`);
+    if (args.allowPoolOverlap) {
+      const overlap = await duelPoolOverlap(sql, days.map(toDayRow));
+      if (overlap > 0) console.warn(`WARNING (local only): ${overlap} daily player(s) are also in the local dev duel pool`);
     }
-    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: !args.write, allowCorrection: args.allowCorrection, allowRepeats: args.allowRepeats });
+    const plan = await seedDays(sql, days.map(toDayRow), {
+      dryRun: !args.write, allowCorrection: args.allowCorrection, allowRepeats: args.allowRepeats, allowPoolOverlap: args.allowPoolOverlap,
+    });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
     if (plan.extraDays.length > 0) console.log(`[pistas:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;

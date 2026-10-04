@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
-import { answerOf, calendar, CALENDAR_DAYS, makeDay } from './fixtures.js';
+import { answerOf, calendar, CALENDAR_DAYS, makeDay, rawDay } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Pistas migration to a fresh schema and runs the repo, the
@@ -155,6 +155,34 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       expect((await seed()).entries.every((e) => e.status === 'unchanged')).toBe(true);
       const { store } = await service();
       expect((await store.get()).get(PAST)!.contentVersion).toBe(makeDay(PAST).contentVersion);
+    });
+
+    it('a daily answer may not be a duel pool player, and the pool may not take a daily one (each checked inside its write)', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const { parseDayFile, seedDays, toDayRow } = await import('../../src/modules/pistas/pistas.seed.js');
+        const withAnswer = <T extends { answer: unknown }>(round: T, name: string): T =>
+          ({ ...round, answer: { display: { es: name, en: name, ka: name, tr: name }, accepted: [name] } });
+        const poolItem = (name: string) => ({ ...withAnswer(rawDay('2026-09-27').rounds[0], name), id: `pool-${name.replace(/\W/g, '')}` });
+        await seed(calendar().slice(0, 3));
+        // A daily player cannot enter the pool…
+        await expect(writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem(answerOf(3))] })))
+          .rejects.toThrow(/share a player or category with a daily/);
+        await writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem('Solo Duelo')] }));
+        // …and a pool player cannot become a daily answer (the next day is refused whole, nothing written).
+        const raw = rawDay('2026-09-30');
+        raw.rounds[2] = withAnswer(raw.rounds[2], 'Solo Duelo');
+        const next = toDayRow(parseDayFile('2026-09-30.json', raw));
+        await expect(seed([parseDayFile('2026-09-30.json', raw)])).rejects.toThrow(/1 daily player\(s\) are in the duel pool/);
+        expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(3);
+        await seedDays(db.sql, [next], { dryRun: false, allowCorrection: false, allowRepeats: true, allowPoolOverlap: true });
+        expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(4);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
     });
 
     it('appends days to the stored calendar: the next day alone is accepted, a hole or a repeated player is refused', async () => {

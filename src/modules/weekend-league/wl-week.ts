@@ -50,6 +50,15 @@ export function qpForResult(result: 'win' | 'loss' | 'draw'): number {
   return result === 'win' ? WL_QP_WIN : WL_QP_LOSS;
 }
 
+/**
+ * Kickoff hour (Georgia time) of both the Saturday qualifier and the Sunday
+ * final. 22:00 is Georgia's busiest weekend hour and early afternoon in the
+ * Americas; the original 14:00 was 04:00–07:00 there (owner decision
+ * 2026-10-02). Only NEW weekly rows use it: an existing tournament keeps the
+ * timestamps on its row.
+ */
+export const WL_KICKOFF_HOUR_GE = 22;
+
 export interface WlEventSchedule {
   weekKey: string;
   entryOpensAtMs: number;
@@ -88,7 +97,7 @@ function scheduleForSaturday(saturdayGeDate: Date): WlEventSchedule {
     weekKey,
     entryOpensAtMs: saturdayMidnightUtc - 5 * DAY_MS,            // Mon 00:00 GE
     entryClosesAtMs: saturdayMidnightUtc,                        // Fri 24:00 GE
-    qualifierStartsAtMs: saturdayMidnightUtc + 14 * 3600_000,    // Sat 14:00 GE
-    finalStartsAtMs: saturdayMidnightUtc + DAY_MS + 14 * 3600_000, // Sun 14:00 GE
+    qualifierStartsAtMs: saturdayMidnightUtc + WL_KICKOFF_HOUR_GE * 3600_000,
+    finalStartsAtMs: saturdayMidnightUtc + DAY_MS + WL_KICKOFF_HOUR_GE * 3600_000,
   };
 }

@@ -58,6 +58,9 @@ export const wlTournamentSchema = z.object({
    *  against THIS (via an offset), never the device clock, or a skewed
    *  phone shows the wrong time to kickoff. */
   server_now_ms: z.number().int(),
+  /** Podium packs include the place frame (WL_REWARD_FRAMES_ENABLED); the
+   *  prize card states "kit + frame" only when this is true. */
+  reward_frames: z.boolean(),
 });
 
 export const wlCurrentResponseSchema = z.object({

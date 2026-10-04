@@ -618,6 +618,13 @@ describe('WL reward delivery', () => {
     const { readFileSync } = await import('node:fs');
     const rollback = readFileSync(new URL('../../supabase/rollback/20261005120000_wl_reward_frames_rollback.sql', import.meta.url), 'utf8');
     await sql.begin(async (tx) => {
+      // Earlier tests granted champion frames; take those inventory rows out
+      // (inside this rolled-back probe) so only the receipt guard can keep it.
+      await tx`DELETE FROM user_inventory ui USING store_products sp WHERE ui.product_id = sp.id AND sp.slug = 'avatar_frame_wl_champion'`;
+      const [owned] = await tx<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM user_inventory ui JOIN store_products sp ON sp.id = ui.product_id
+        WHERE sp.slug = 'avatar_frame_wl_champion'`;
+      expect(owned.n).toBe(0);
       await tx.unsafe(rollback);
       const [kept] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM store_products WHERE slug = 'avatar_frame_wl_champion'`;
       expect(kept.n).toBe(1);

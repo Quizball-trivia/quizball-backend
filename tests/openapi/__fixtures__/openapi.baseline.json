@@ -8846,6 +8846,9 @@
               },
               "server_now_ms": {
                 "type": "integer"
+              },
+              "reward_frames": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -8864,7 +8867,8 @@
               "current_game_index",
               "break_until_ms",
               "spectator_delay_ms",
-              "server_now_ms"
+              "server_now_ms",
+              "reward_frames"
             ]
           },
           "you": {

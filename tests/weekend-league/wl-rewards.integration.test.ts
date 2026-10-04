@@ -12,6 +12,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 process.env.WL_REWARDS_ENABLED = 'true';
+process.env.WL_REWARD_FRAMES_ENABLED = 'true';
 process.env.WL_REWARDS_FROM_WEEK = '2099-01-01';
 
 let sql: typeof import('../../src/db/index.js').sql;
@@ -591,6 +592,39 @@ describe('WL reward delivery', () => {
     expect(await coinsOf(winner)).toBe(100 + 40000);
     const [mine] = await rewards.wlRewardsRepo.listForUser(winner);
     expect(mine).toMatchObject({ band: 'winner', week_key: null });
+  }, 120_000);
+
+  it('with frames switched off, a podium pack is the jersey alone under policy v1', async () => {
+    if (!dbAvailable) return;
+    const flags = config as { WL_REWARD_FRAMES_ENABLED: boolean };
+    flags.WL_REWARD_FRAMES_ENABLED = false;
+    try {
+      const t = await seedTournament();
+      const winner = await seedPlayer(t, 'frames-off-winner', finalist(1));
+      await rewards.settleWlRewards(t.id);
+      expect(await receiptOf(t.id, winner)).toMatchObject({ policy_version: 1, items: [{ slug: 'avatar_jersey_wl_retro_home' }] });
+      expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
+    } finally {
+      flags.WL_REWARD_FRAMES_ENABLED = true;
+    }
+  }, 120_000);
+
+  it('the rollback keeps a frame product that an ungranted receipt still references', async () => {
+    if (!dbAvailable) return;
+    const t = await seedTournament();
+    const winner = await seedPlayer(t, 'rollback-guard', finalist(1));
+    await rewards.freezeWlRewards(t.id);
+    expect((await receiptOf(t.id, winner))?.items).toMatchObject([{ slug: 'avatar_jersey_wl_retro_home' }, { slug: 'avatar_frame_wl_champion' }]);
+    const { readFileSync } = await import('node:fs');
+    const rollback = readFileSync(new URL('../../supabase/rollback/20261005120000_wl_reward_frames_rollback.sql', import.meta.url), 'utf8');
+    await sql.begin(async (tx) => {
+      await tx.unsafe(rollback);
+      const [kept] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM store_products WHERE slug = 'avatar_frame_wl_champion'`;
+      expect(kept.n).toBe(1);
+      throw new Error('rollback-probe');
+    }).catch((error: Error) => { if (error.message !== 'rollback-probe') throw error; });
+    await rewards.settleWlRewards(t.id);
+    expect(await receiptOf(t.id, winner)).toMatchObject({ status: 'granted' });
   }, 120_000);
 
   it('sweeps only when enabled, and a second sweep changes nothing', async () => {

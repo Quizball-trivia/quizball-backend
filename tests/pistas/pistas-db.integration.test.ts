@@ -20,7 +20,7 @@ if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_pistas_test_[a-z0
 
 const MIGRATION = join(__dirname, '../../supabase/migrations/20260929120000_pistas.sql');
 const FIXTURE = `
-  DROP TABLE IF EXISTS pistas_runs, pistas_days, ranked_profiles, guest_sessions, users CASCADE;
+  DROP TABLE IF EXISTS pistas_runs, pistas_days, buscaminas_content_ledger, pistas_content_ledger, ranked_profiles, guest_sessions, users CASCADE;
   CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), nickname text, avatar_url text, avatar_customization jsonb, country text,
     is_ai boolean NOT NULL DEFAULT false, is_guest boolean NOT NULL DEFAULT false, is_seed boolean NOT NULL DEFAULT false,
@@ -54,6 +54,7 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
     await db.sql.begin((tx) => tx.unsafe(body));
     // Safe to re-run (a ledger out of sync with the schema).
     await db.sql.begin((tx) => tx.unsafe(body));
+    await db.sql.begin((tx) => tx.unsafe(readFileSync(join(__dirname, '../../supabase/migrations/20261005120000_buscaminas_pistas_content_ledgers.sql'), 'utf8')));
   });
   afterAll(async () => { await db.sql?.end(); });
 
@@ -123,6 +124,7 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
     beforeEach(async () => {
       await db.sql`DELETE FROM pistas_runs`;
       await db.sql`DELETE FROM pistas_days`;
+      await db.sql`DELETE FROM pistas_content_ledger`;
     });
 
     // The synthetic fixture has the same ten answers on every day, so repeats are allowed unless a test says otherwise.
@@ -188,6 +190,52 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
         const laterRaw = rawDay('2026-10-02');
         laterRaw.rounds[5] = withAnswer(laterRaw.rounds[5], 'Solo Duelo');
         await expect(seed([parseDayFile('2026-10-02.json', laterRaw)])).rejects.toThrow(/are in the duel pool/);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
+    });
+
+    it('a correction cannot move a player stored before the ledger existed onto another day', async () => {
+      const { parseDayFile } = await import('../../src/modules/pistas/pistas.seed.js');
+      const named = (date: string, edits: Record<number, string>) => {
+        const raw = rawDay(date);
+        raw.rounds = raw.rounds.map((round, r) => {
+          const name = edits[r] ?? `Jugador ${date.replace(/-/g, ' ')} ${r}`;
+          return { ...round, answer: { display: { es: name, en: name, ka: name, tr: name }, accepted: [name] } };
+        });
+        return parseDayFile(`${date}.json`, raw);
+      };
+      await seed([named('2026-09-27', { 4: 'Movido Ahora' }), named('2026-09-28', {})], { allowRepeats: false });
+      await db.sql`DELETE FROM pistas_content_ledger`; // as before the ledger existed
+      // one import: the player leaves day 1 and appears on day 2
+      await expect(seed([named('2026-09-27', {}), named('2026-09-28', { 6: 'Movido Ahora' })], { allowCorrection: true, allowRepeats: false }))
+        .rejects.toThrow(/a player is the answer on two days/);
+    });
+
+    it('remembers published players: one corrected away from a day, or replaced in the pool, still counts', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const { parseDayFile } = await import('../../src/modules/pistas/pistas.seed.js');
+        const withAnswer = <T extends { answer: unknown }>(round: T, name: string): T =>
+          ({ ...round, answer: { display: { es: name, en: name, ka: name, tr: name }, accepted: [name] } });
+        // every player distinct per day (the synthetic fixture repeats its answers), then the test's own names
+        const day = (date: string, edits: Record<number, string>) => {
+          const raw = rawDay(date);
+          raw.rounds = raw.rounds.map((round, r) => withAnswer(round, edits[r] ?? `Jugador ${date.replace(/-/g, ' ')} ${r}`));
+          return parseDayFile(`${date}.json`, raw);
+        };
+        // a pool player published, then replaced under the same id
+        const poolItem = (name: string) => ({ ...withAnswer(rawDay('2026-09-27').rounds[0], name), id: 'pool-1' });
+        await writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem('Solo Duelo')] }));
+        await writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem('Otro Duelo')] }));
+        await seed([day('2026-09-27', { 4: 'Corregido Fuera' })], { allowRepeats: false });
+        await expect(seed([day('2026-09-28', { 0: 'Solo Duelo' })])).rejects.toThrow(/are in the duel pool/);
+        // a player corrected away from a day is still a daily answer: no other day may use it
+        await seed([day('2026-09-27', { 4: 'Nuevo Jugador' })], { allowCorrection: true, allowRepeats: false });
+        await expect(seed([day('2026-09-28', { 2: 'Corregido Fuera' })], { allowRepeats: false })).rejects.toThrow(/a player is the answer on two days/);
       } finally {
         await db.sql`DROP TABLE IF EXISTS duel_pool`;
       }

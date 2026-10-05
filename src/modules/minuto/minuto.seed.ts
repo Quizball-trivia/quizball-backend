@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { canonical } from '../pistas/pistas.seed.js';
 import { GOALS_PER_DAY } from './minuto.constants.js';
-import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { addDays, assertAppendOnly, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
 import { CONTENT_START, dayNumber } from './minuto.days.js';
 import { goalBaseSchema, goalSchema, minuteLeaks, MINUTO_TIERS, type MinutoGoal } from './minuto.goal.js';
 import type { MinutoDayRow } from './minuto.types.js';
@@ -214,49 +214,55 @@ export function planSeed(
  * unranks the day's runs; /start then moves each unfinished run onto the new content.
  */
 export async function seedDays(
-  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean },
+  sql: Sql, rows: readonly SeedDay[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean },
 ): Promise<SeedPlan & { poolOverlap: number }> {
-  return sql.begin(async (transaction) => {
-    const tx = transaction as unknown as Sql;
-    // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
-    await tx`SET LOCAL lock_timeout = '5s'`;
-    await tx`SET LOCAL statement_timeout = '60s'`;
-    await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${MINUTO_CONTENT_LOCK}))`;
-    await tx`LOCK TABLE minuto_days IN SHARE ROW EXCLUSIVE MODE`;
-    const overlap = overlapping(rows.flatMap((row) => row.goals), await publishedKeys(tx, 'pool')).length;
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily goal(s) are in the duel pool; refused (duel content is harvestable)`);
-    const moved = movedDailyGoals(rows, await publishedKeys(tx, 'day'));
-    if (moved.length > 0) throw new Error(`goals already published on another day; refused (their minutes are public): ${moved.slice(0, 10).join('; ')}`);
-    const storedRows = await tx<Array<Omit<StoredDay, 'contentVersion'> & { contentVersion: string }>>`
-      SELECT day::text AS day, number, content_version AS "contentVersion", goals FROM minuto_days
+  return sql.begin((transaction) => seedDaysTx(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan & { poolOverlap: number }>;
+}
+
+/** The seed inside the caller's transaction (a CMS approval commits the batch row and the days together). */
+export async function seedDaysTx(
+  tx: Sql, rows: readonly SeedDay[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean },
+): Promise<SeedPlan & { poolOverlap: number }> {
+  // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
+  await tx`SET LOCAL lock_timeout = '5s'`;
+  await tx`SET LOCAL statement_timeout = '60s'`;
+  await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${MINUTO_CONTENT_LOCK}))`;
+  await tx`LOCK TABLE minuto_days IN SHARE ROW EXCLUSIVE MODE`;
+  const overlap = overlapping(rows.flatMap((row) => row.goals), await publishedKeys(tx, 'pool')).length;
+  if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily goal(s) are in the duel pool; refused (duel content is harvestable)`);
+  const moved = movedDailyGoals(rows, await publishedKeys(tx, 'day'));
+  if (moved.length > 0) throw new Error(`goals already published on another day; refused (their minutes are public): ${moved.slice(0, 10).join('; ')}`);
+  const storedRows = await tx<Array<Omit<StoredDay, 'contentVersion'> & { contentVersion: string }>>`
+    SELECT day::text AS day, number, content_version AS "contentVersion", goals FROM minuto_days
+  `;
+  const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+  // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+  assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+  // An append (CMS-approved batch) may only add days after the stored ones: never correct or re-supply one.
+  if (opts.appendOnly) assertAppendOnly(stored.keys(), rows.map((row) => row.day));
+  const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
+  if (correcting.length > 0) {
+    await tx`SELECT day FROM minuto_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
+  }
+  const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
+    SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM minuto_runs GROUP BY day
+  `;
+  const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
+  if (opts.dryRun) return { ...plan, poolOverlap: overlap };
+  const byDay = new Map(rows.map((row) => [row.day, row]));
+  for (const entry of plan.entries) {
+    if (entry.status === 'unchanged') continue;
+    const row = byDay.get(entry.day)!;
+    await tx`
+      INSERT INTO minuto_days (day, number, content_version, goals)
+      VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.goals as never)})
+      ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, goals = EXCLUDED.goals
     `;
-    const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
-    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
-    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
-    const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
-    if (correcting.length > 0) {
-      await tx`SELECT day FROM minuto_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
-    }
-    const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
-      SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM minuto_runs GROUP BY day
-    `;
-    const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
-    if (opts.dryRun) return { ...plan, poolOverlap: overlap };
-    const byDay = new Map(rows.map((row) => [row.day, row]));
-    for (const entry of plan.entries) {
-      if (entry.status === 'unchanged') continue;
-      const row = byDay.get(entry.day)!;
-      await tx`
-        INSERT INTO minuto_days (day, number, content_version, goals)
-        VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.goals as never)})
-        ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, goals = EXCLUDED.goals
-      `;
-      if (entry.contentChanged && entry.runs > 0) await tx`UPDATE minuto_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
-    }
-    await recordPublished(tx, 'day', rows.flatMap((row) => row.goals.map((goal) => ({ ...goal, day: row.day }))));
-    return { ...plan, poolOverlap: overlap };
-  }) as Promise<SeedPlan & { poolOverlap: number }>;
+    if (entry.contentChanged && entry.runs > 0) await tx`UPDATE minuto_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
+  }
+  await recordPublished(tx, 'day', rows.flatMap((row) => row.goals.map((goal) => ({ ...goal, day: row.day }))));
+  return { ...plan, poolOverlap: overlap };
 }
 
 /** A pool goal's duel difficulty is its tier. */

@@ -1,6 +1,6 @@
 import { lastReleasedDay, releaseDay } from '../buscaminas/buscaminas.days.js';
 
-export { addDays, assertUnbrokenCalendar, boardsMaxAge, dayEndsAt, isReleasedDay, lastReleasedDay, releaseDay, RELEASE_TIME_ZONE } from '../buscaminas/buscaminas.days.js';
+export { addDays, assertAppendOnly, assertUnbrokenCalendar, boardsMaxAge, dayEndsAt, isReleasedDay, lastReleasedDay, releaseDay, RELEASE_TIME_ZONE } from '../buscaminas/buscaminas.days.js';
 
 const DAY_MS = 86_400_000;
 

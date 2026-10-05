@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
-import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
+import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { buscaminasRoundSchema } from './engines/buscaminas.engine.js';
 import { pistasRoundSchema } from './engines/pistas.engine.js';
-import { canonical, PISTAS_CONTENT_LOCK } from '../pistas/pistas.seed.js';
-import { BUSCAMINAS_CONTENT_LOCK } from '../buscaminas/buscaminas.seed.js';
+import { canonical, ledgerDailyPlayers, PISTAS_CONTENT_LOCK, recordPistasContent } from '../pistas/pistas.seed.js';
+import { BUSCAMINAS_CONTENT_LOCK, dailyKeys as buscaminasDailyKeys, recordBuscaminasContent } from '../buscaminas/buscaminas.seed.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '../ultimo/ultimo.match.js';
 import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
@@ -40,6 +40,8 @@ export function parsePoolFile(game: DuelGameId, raw: unknown): PoolRow[] {
     return row;
   });
 }
+
+const displayOf = (payload: unknown): Record<string, string> => (payload as { answer: { display: Record<string, string> } }).answer.display;
 
 function pistasRow(item: unknown): PoolRow | null {
   const parsed = pistasRoundSchema.safeParse(item);
@@ -109,13 +111,28 @@ export async function findDailyOverlap(sql: Sql, game: DuelGameId, rows: PoolRow
   if (game === 'ultimo') return { overlapping: await ultimoDailyOverlap(sql, rows) };
   if (game === 'minuto') return { overlapping: await minutoDailyOverlap(sql, rows) };
   if (game === 'pistas') {
-    const days = await sql<Array<{ rounds: Array<{ answer: { display: Record<string, string>; accepted: string[] } }> }>>`SELECT rounds FROM pistas_days`;
-    const players = days.flatMap((day) => day.rounds.map((round) => ({ display: Object.values(round.answer.display), accepted: round.answer.accepted })));
-    const overlapping = rows.flatMap((row, i) => (row.player && players.some((player) => samePlayer(row.player!, player)) ? [i] : []));
+    // the stored days plus every player a day ever published (the ledger keeps the ones corrected away)
+    const days = [...await sql<Array<{ rounds: Array<{ answer: { display: Record<string, string>; accepted: string[] } }> }>>`SELECT rounds FROM pistas_days`, ...await ledgerDailyPlayers(sql)];
+    // samePlayer against every daily player, indexed: a display name of one side among all names of the other
+    const names = (values: Iterable<string>) => [...values].map(normalizeAnswer).filter((v) => v.length > 2);
+    const dailyDisplay = new Set<string>();
+    const dailyAny = new Set<string>();
+    for (const day of days) {
+      for (const round of day.rounds) {
+        const display = Object.values(round.answer.display);
+        for (const name of names(display)) dailyDisplay.add(name);
+        for (const name of names([...display, ...round.answer.accepted])) dailyAny.add(name);
+      }
+    }
+    const overlapping = rows.flatMap((row, i) => {
+      if (!row.player) return [];
+      const hit = names(row.player.display).some((name) => dailyAny.has(name))
+        || names([...row.player.display, ...row.player.accepted]).some((name) => dailyDisplay.has(name));
+      return hit ? [i] : [];
+    });
     return { overlapping };
   } else {
-    const days = await sql<Array<{ board: { rounds: Array<{ prompt: Record<string, string> }> } }>>`SELECT board FROM buscaminas_days`;
-    for (const day of days) for (const round of day.board.rounds) daily.add(normalizeAnswer(round.prompt.es));
+    for (const key of await buscaminasDailyKeys(sql)) daily.add(key);
   }
   const overlapping = rows.flatMap((row, i) => (row.keys.some((key) => key.length > 2 && daily.has(key)) ? [i] : []));
   return { overlapping };
@@ -152,6 +169,13 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       const twins = rows.filter((row) => stored.some((s) => s.fingerprint === row.fingerprint && s.item_id !== row.itemId));
       if (twins.length > 0) throw new Error(`${twins.length} pool goal(s) are already in the pool under another id; refused`);
     }
+    // what the pool holds before this write (content dealt before the ledger existed, and items this write replaces),
+    // read as stored: an item that would no longer parse is still remembered
+    const beforeWrite = game === 'buscaminas' || game === 'pistas'
+      ? await q<Array<{ prompt: string | null; display: Record<string, string> | null; accepted: string[] | null }>>`
+        SELECT payload->'prompt'->>'es' AS prompt, payload->'answer'->'display' AS display, payload->'answer'->'accepted' AS accepted
+        FROM duel_pool WHERE game = ${game}`
+      : [];
     for (const row of rows) {
       const [result] = await q<Array<{ inserted: boolean }>>`
         INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload, enabled)
@@ -164,6 +188,18 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       else updated += 1;
     }
     if (game === 'ultimo') await recordPublished(q, 'pool', rows.map((row) => row.payload as UltimoCategory));
+    if (game === 'buscaminas') {
+      await recordBuscaminasContent(q, 'pool', [
+        ...beforeWrite.flatMap((r) => (r.prompt ? [{ key: normalizeAnswer(r.prompt), day: null }] : [])),
+        ...rows.flatMap((row) => row.keys.map((key) => ({ key, day: null }))),
+      ]);
+    }
+    if (game === 'pistas') {
+      await recordPistasContent(q, 'pool', [
+        ...beforeWrite.flatMap((r) => (r.display ? [{ display: r.display, accepted: r.accepted ?? [], day: null }] : [])),
+        ...rows.flatMap((row) => (row.player ? [{ display: displayOf(row.payload), accepted: [...row.player.accepted], day: null }] : [])),
+      ]);
+    }
     if (game === 'minuto') await recordMinutoPublished(q, 'pool', rows.map((row) => row.payload as MinutoGoal));
   });
   return { inserted, updated };

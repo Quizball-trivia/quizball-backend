@@ -20,6 +20,15 @@ import {
   reviewQuestionIdParamSchema,
   updateReviewQuestionBodySchema,
 } from '../../modules/agents/index.js';
+import {
+  dayBatchesController,
+  dayBatchIdParamSchema,
+  listDayBatchesQuerySchema,
+  rejectDayBatchBodySchema,
+  spawnDayBatchBodySchema,
+  dayBatchHoldBodySchema,
+  dailyGameParamSchema,
+} from '../../modules/day-batches/index.js';
 
 // Admin-only: the CMS "Agents" section. Spawn generation jobs, monitor runs,
 // review results. Reads/writes the agents schema; the VPS producer processes
@@ -58,6 +67,15 @@ router.post('/review/:questionId/approve', validate({ params: reviewQuestionIdPa
 router.post('/review/:questionId/reject', validate({ params: reviewQuestionIdParamSchema }), agentsController.rejectQuestion);
 router.post('/review/:questionId/regenerate', validate({ params: reviewQuestionIdParamSchema }), agentsController.regenerateQuestion);
 router.patch('/review/:questionId', validate({ params: reviewQuestionIdParamSchema, body: updateReviewQuestionBodySchema }), agentsController.updateReviewQuestion);
+
+// daily-game day batches (built by the pipeline; approving one appends its days to the game)
+router.get('/day-batches', validate({ query: listDayBatchesQuerySchema }), dayBatchesController.list);
+router.get('/day-batches/buffers', dayBatchesController.buffers);
+router.put('/day-batches/settings/:game', validate({ params: dailyGameParamSchema, body: dayBatchHoldBodySchema }), dayBatchesController.setHold);
+router.post('/day-batches', validate({ body: spawnDayBatchBodySchema }), dayBatchesController.spawn);
+router.get('/day-batches/:batchId', validate({ params: dayBatchIdParamSchema }), dayBatchesController.get);
+router.post('/day-batches/:batchId/approve', validate({ params: dayBatchIdParamSchema }), dayBatchesController.approve);
+router.post('/day-batches/:batchId/reject', validate({ params: dayBatchIdParamSchema, body: rejectDayBatchBodySchema }), dayBatchesController.reject);
 
 // sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
 router.get('/roster', agentsController.roster);

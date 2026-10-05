@@ -51,6 +51,13 @@ export function assertUnbrokenCalendar(first: string, stored: Iterable<string>, 
   });
 }
 
+/** An append adds only days the calendar does not have yet (with assertUnbrokenCalendar: right after the last one). */
+export function assertAppendOnly(stored: Iterable<string>, incoming: Iterable<string>): void {
+  const have = new Set(stored);
+  const taken = [...incoming].filter((day) => have.has(day)).sort();
+  if (taken.length > 0) throw new Error(`append only: already stored: ${taken.join(', ')}`);
+}
+
 /** A stored day inside the calendar (not beyond a hole). Runs of any other day are neither moved nor shown. */
 export const isReleasedDay = (day: string, lastDay: string | null): boolean => lastDay !== null && day <= lastDay;
 

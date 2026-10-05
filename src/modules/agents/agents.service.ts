@@ -1,3 +1,4 @@
+import { dailyGameSchema, dayBatchesService } from '../day-batches/index.js';
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import { deleteQuestionImageByUrl } from '../questions/question-image-storage.service.js';
 import { questionsRepo } from '../questions/questions.repo.js';
@@ -342,6 +343,15 @@ export const agentsService = {
     const sched = await agentsRepo.getSchedule(id);
     if (!sched) throw new NotFoundError(`Schedule ${id} not found`);
     const p = (sched.params ?? {}) as Record<string, unknown>;
+    // a daily-game schedule has no category: run it like the CMS "Build next days" button (same one-at-a-time guard)
+    if (sched.job_type === 'daily_days') {
+      const game = dailyGameSchema.safeParse(p.game);
+      if (!game.success) throw new BadRequestError('This daily-days schedule has no valid game in its params.');
+      const { jobId } = await dayBatchesService.spawn(game.data, Math.min(60, Math.max(1, Math.floor(Number(p.days ?? 14)))), userId);
+      const job = await agentsRepo.getJob(jobId);
+      if (!job) throw new NotFoundError('Job not found after spawning');
+      return toJob(job);
+    }
     const picked = pickScheduleCategory(p);
     if (!picked) {
       throw new BadRequestError(
@@ -417,8 +427,10 @@ export const agentsService = {
     return { count: items.length, groups: [...byKey.values()] };
   },
 
-  async reviewCount(): Promise<{ count: number }> {
-    return { count: await agentsRepo.reviewQueueCount() };
+  async reviewCount(): Promise<{ count: number; dayBatches: number }> {
+    const [questions, dayBatches] = await Promise.all([agentsRepo.reviewQueueCount(), agentsRepo.pendingDayBatchCount()]);
+    // the badge counts both: draft questions and daily-game batches waiting for approval
+    return { count: questions + dayBatches, dayBatches };
   },
 
   async approveQuestion(questionId: string): Promise<void> {
@@ -489,23 +501,27 @@ export const agentsService = {
   // The sub-agent roster: one entry per role with description, model, current
   // prompt (truncated), and live stats from sessions. Drives the "Sub-agents" page.
   async roster(): Promise<{ items: AgentRosterEntry[] }> {
-    const ROLES: { role: PromptRole; label: string; description: string; defaultModel: string }[] = [
-      { role: 'generator', label: 'Question Generator', description: 'Writes new questions (English-first) for a category, following each type\u2019s quality contract.', defaultModel: 'claude-sonnet-4-6' },
-      { role: 'dedupe', label: 'Dedupe Checker', description: 'Decides whether a generated question is genuinely new vs. already in the bank.', defaultModel: 'claude-sonnet-4-6' },
-      { role: 'factcheck', label: 'Fact Checker', description: 'Web-grounded, enumerated verification: the premise, the marked answer (derived independently), every distractor/clue/value.', defaultModel: 'claude-sonnet-4-6' },
-      { role: 'judge', label: 'Final Judge', description: 'The editorial gate (replaced the criteria checker + the human happy path): accept \u2192 published live, reject \u2192 regenerate, unsure \u2192 review queue.', defaultModel: 'claude-sonnet-4-6' },
+    const ROLES: { role: PromptRole; label: string; description: string }[] = [
+      { role: 'generator', label: 'Question Generator', description: 'Writes new questions (English-first) for a category, following each type\u2019s quality contract.' },
+      { role: 'dedupe', label: 'Dedupe Checker', description: 'Decides whether a generated question is genuinely new vs. already in the bank.' },
+      { role: 'factcheck', label: 'Fact Checker', description: 'Web-grounded, enumerated verification: the premise, the marked answer (derived independently), every distractor/clue/value.' },
+      { role: 'judge', label: 'Final Judge', description: 'The editorial gate (replaced the criteria checker + the human happy path): accept \u2192 published live, reject \u2192 regenerate, unsure \u2192 review queue.' },
     ];
-    const [stats, prompts] = await Promise.all([agentsRepo.agentStats(), agentsRepo.listActivePrompts()]);
+    const [stats, prompts, routing] = await Promise.all([agentsRepo.agentStats(), agentsRepo.listActivePrompts(), agentsRepo.latestRouting()]);
     const statByRole = new Map(stats.map((s) => [s.role, s]));
     const promptByRole = new Map(prompts.map((p) => [p.role, p]));
     const items = ROLES.map((r) => {
       const s = statByRole.get(r.role);
       const p = promptByRole.get(r.role);
+      // what the pipeline says the role runs on (it reports its routing at startup); else the last model seen in a run
+      const judgeOff = r.role === 'judge' && routing?.singleCheck === true;
       return {
         role: r.role,
         label: r.label,
-        description: r.description,
-        model: s?.last_model ?? r.defaultModel,
+        description: r.role === 'factcheck' && routing?.singleCheck
+          ? `${r.description} Single check: also rules on quality (giveaways, uniqueness, the type contract); no judge runs.`
+          : r.description,
+        model: judgeOff ? 'off (single fact-check)' : routing?.roles?.[r.role] ?? s?.last_model ?? 'not reported yet',
         promptVersion: p?.version ?? null,
         promptPreview: p ? p.content.slice(0, 240) : null,
         runsToday: s?.runs_today ?? 0,

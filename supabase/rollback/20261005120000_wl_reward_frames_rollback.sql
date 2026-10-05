@@ -1,5 +1,5 @@
--- Roll back the Weekend League podium frames. Turn WL_REWARD_FRAMES_ENABLED
--- off first. A product is only removed while nothing references it: no
+-- Roll back the Weekend League podium frames. Deploy code without frames in
+-- WL_PACK_ITEM_SLUGS first. A product is only removed while nothing references it: no
 -- inventory row AND no reward receipt (a frozen but not yet granted v2 receipt
 -- would otherwise fail its grant forever, coins and jersey included).
 DELETE FROM public.store_products p

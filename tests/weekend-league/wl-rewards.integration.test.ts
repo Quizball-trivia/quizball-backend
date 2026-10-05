@@ -11,9 +11,6 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-process.env.WL_REWARDS_ENABLED = 'true';
-process.env.WL_REWARD_FRAMES_ENABLED = 'true';
-process.env.WL_REWARDS_FROM_WEEK = '2099-01-01';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let rewards: typeof import('../../src/modules/weekend-league/wl-rewards.js');
@@ -376,7 +373,7 @@ describe('WL reward delivery', () => {
       [{ status: 'cancelled' }, 'not_completed'],
       [{ status: 'voided' }, 'not_completed'],
       [{ status: 'final_live' }, 'not_completed'],
-      [{ weekKey: '2098-12-27' }, 'before_rollout'],
+      [{ weekKey: '2026-09-26' }, 'before_rollout'],
     ];
     for (const [opts, reason] of cases) {
       const t = await seedTournament(opts);
@@ -439,51 +436,14 @@ describe('WL reward delivery', () => {
     expect(await receiptOf(t.id, idleNoShow)).toBeNull();
   }, 120_000);
 
-  it('stops paying a frozen tournament once it falls outside the rollout', async () => {
+  it('never pays a real weekend from before the first paying week (2026-10-10)', async () => {
     if (!dbAvailable) return;
-    const t = await seedTournament();
-    const first = await seedPlayer(t, 'gate-a');
-    const second = await seedPlayer(t, 'gate-b');
-    expect(await rewards.settleWlRewards(t.id, { limit: 1 })).toMatchObject({ granted: 1, remaining: 1 });
-
-    const flags = config as { WL_REWARDS_FROM_WEEK?: string };
-    const original = flags.WL_REWARDS_FROM_WEEK;
-    flags.WL_REWARDS_FROM_WEEK = '2199-01-01';
-    try {
-      const blocked = await rewards.settleWlRewards(t.id, { limit: 10 });
-      expect(blocked.freeze).toEqual({ frozen: false, reason: 'before_rollout' });
-      expect(blocked.granted).toBe(0);
-    } finally {
-      flags.WL_REWARDS_FROM_WEEK = original;
-    }
-    const paid = [await coinsOf(first), await coinsOf(second)].sort((a, b) => a - b);
-    expect(paid).toEqual([100, 100 + 1500]);
-
-    expect(await rewards.settleWlRewards(t.id)).toMatchObject({ granted: 1, remaining: 0, settled: true });
-    expect(await coinsOf(first)).toBe(100 + 1500);
-    expect(await coinsOf(second)).toBe(100 + 1500);
-  }, 120_000);
-
-  it('treats an impossible rollout date as unset: real events wait, rehearsals still pay, the sweep does not throw', async () => {
-    if (!dbAvailable) return;
-    const real = await seedTournament();
-    const realPlayer = await seedPlayer(real, 'bad-date-real');
-    const rehearsal = await seedTournament({ isTest: true, weekKey: null, rewardPayout: true });
-    const rehearsalPlayer = await seedPlayer(rehearsal, 'bad-date-rehearsal');
-
-    const flags = config as { WL_REWARDS_FROM_WEEK?: string };
-    const original = flags.WL_REWARDS_FROM_WEEK;
-    for (const bad of ['2099-02-30', '2099-13-01', 'next-week']) {
-      flags.WL_REWARDS_FROM_WEEK = bad;
-      try {
-        await expect(rewards.wlRewardsSweep()).resolves.toBeUndefined();
-        expect((await rewards.settleWlRewards(real.id)).freeze).toEqual({ frozen: false, reason: 'before_rollout' });
-      } finally {
-        flags.WL_REWARDS_FROM_WEEK = original;
-      }
-    }
-    expect(await coinsOf(realPlayer)).toBe(100);
-    expect(await coinsOf(rehearsalPlayer)).toBe(100 + 1500);
+    const old = await seedTournament({ weekKey: '2026-10-03' });
+    const player = await seedPlayer(old, 'before-first-week');
+    expect((await rewards.settleWlRewards(old.id)).freeze).toEqual({ frozen: false, reason: 'before_rollout' });
+    await rewards.wlRewardsSweep();
+    expect(await receiptOf(old.id, player)).toBeNull();
+    expect(await coinsOf(player)).toBe(100);
   }, 120_000);
 
   it('refuses a single-game rehearsal, whose final is not where the facts look', async () => {
@@ -594,21 +554,6 @@ describe('WL reward delivery', () => {
     expect(mine).toMatchObject({ band: 'winner', week_key: null });
   }, 120_000);
 
-  it('with frames switched off, a podium pack is the jersey alone under policy v1', async () => {
-    if (!dbAvailable) return;
-    const flags = config as { WL_REWARD_FRAMES_ENABLED: boolean };
-    flags.WL_REWARD_FRAMES_ENABLED = false;
-    try {
-      const t = await seedTournament();
-      const winner = await seedPlayer(t, 'frames-off-winner', finalist(1));
-      await rewards.settleWlRewards(t.id);
-      expect(await receiptOf(t.id, winner)).toMatchObject({ policy_version: 1, items: [{ slug: 'avatar_jersey_wl_retro_home' }] });
-      expect(await inventoryOf(winner)).toEqual([{ slug: 'avatar_jersey_wl_retro_home', quantity: 1 }]);
-    } finally {
-      flags.WL_REWARD_FRAMES_ENABLED = true;
-    }
-  }, 120_000);
-
   it('the rollback keeps a frame product that an ungranted receipt still references', async () => {
     if (!dbAvailable) return;
     const t = await seedTournament();
@@ -634,20 +579,10 @@ describe('WL reward delivery', () => {
     expect(await receiptOf(t.id, winner)).toMatchObject({ status: 'granted' });
   }, 120_000);
 
-  it('sweeps only when enabled, and a second sweep changes nothing', async () => {
+  it('the sweep pays a completed weekend, and a second sweep changes nothing', async () => {
     if (!dbAvailable) return;
     const t = await seedTournament();
     const player = await seedPlayer(t, 'sweep-player');
-    const flags = config as { WL_REWARDS_ENABLED: boolean };
-
-    flags.WL_REWARDS_ENABLED = false;
-    try {
-      await rewards.wlRewardsSweep();
-      expect(await receiptOf(t.id, player)).toBeNull();
-      expect(await settlementOf(t.id)).toBeNull();
-    } finally {
-      flags.WL_REWARDS_ENABLED = true;
-    }
 
     await rewards.wlRewardsSweep();
     expect(await receiptOf(t.id, player)).toMatchObject({ band: 'participant', status: 'granted' });

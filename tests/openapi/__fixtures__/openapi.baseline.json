@@ -8846,9 +8846,6 @@
               },
               "server_now_ms": {
                 "type": "integer"
-              },
-              "reward_frames": {
-                "type": "boolean"
               }
             },
             "required": [
@@ -8867,8 +8864,7 @@
               "current_game_index",
               "break_until_ms",
               "spectator_delay_ms",
-              "server_now_ms",
-              "reward_frames"
+              "server_now_ms"
             ]
           },
           "you": {
@@ -25637,34 +25633,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/weekend-league/reward-policy": {
-      "get": {
-        "summary": "What this week's podium packs contain (public)",
-        "tags": [
-          "WeekendLeague"
-        ],
-        "responses": {
-          "200": {
-            "description": "Whether podium packs include the place frame",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "reward_frames": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "reward_frames"
-                  ]
                 }
               }
             }

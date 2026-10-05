@@ -9,7 +9,6 @@ import {
   wlEnterResponseSchema,
   wlQpResponseSchema,
   wlRewardIdParamSchema,
-  wlRewardPolicyResponseSchema,
   wlRewardSeenResponseSchema,
   wlRewardsResponseSchema,
 } from './weekend-league.schemas.js';
@@ -40,16 +39,6 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
   registry.register('WlQpResponse', qpResponse);
   registry.register('WlEnterResponse', enterResponse);
   registry.register('WlCheckinResponse', checkinResponse);
-
-  registerEndpoint(registry, {
-    method: 'get',
-    path: '/api/v1/weekend-league/reward-policy',
-    summary: 'What this week\'s podium packs contain (public)',
-    tags: ['WeekendLeague'],
-    responses: {
-      200: { description: 'Whether podium packs include the place frame', schema: wlRewardPolicyResponseSchema },
-    },
-  });
 
   registerEndpoint(registry, {
     method: 'get',

@@ -23,8 +23,9 @@ import type { Json } from '../../db/types.js';
 import { storeRepo } from '../store/store.repo.js';
 import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import {
-  wlPackItemSlugs,
-  wlRewardPolicyVersion,
+  WL_PACK_ITEM_SLUGS,
+  WL_REWARD_POLICY_VERSION,
+  WL_REWARDS_FIRST_WEEK,
   wlHighestReward,
   type WlRewardBand,
   type WlRewardFacts,
@@ -90,24 +91,13 @@ function ineligibleReason(t: TournamentGate): WlIneligibleReason | null {
     return optedIn && t.config?.['single_game'] !== true ? null : 'test_tournament';
   }
   if (!t.week_key) return 'no_week_key';
-  const from = rolloutWeek();
-  return !from || t.week_key < from ? 'before_rollout' : null;
+  return t.week_key < WL_REWARDS_FIRST_WEEK ? 'before_rollout' : null;
 }
 
 export type WlGrantOutcome = 'granted' | 'forfeited' | 'skipped';
 
 /** Accounts that may never hold a reward. Shared by the freeze and the pay-time recheck. */
 const INELIGIBLE_ENTRY_STATES = ['disqualified', 'withdrawn', 'cancelled'];
-
-function rolloutWeek(): string | null {
-  const week = config.WL_REWARDS_FROM_WEEK;
-  if (!week || !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
-  // A real calendar date, not just the shape: '2026-02-30' would pass the
-  // pattern and then make every sweep query fail on its ::date cast, which
-  // would also stop opted-in rehearsals. Treated as unset instead.
-  const parsed = new Date(`${week}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === week ? week : null;
-}
 
 async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow[]> {
   // "Played" is an ACCEPTED answer on a run that counted. wl_answers also holds
@@ -164,7 +154,7 @@ async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow
 
 async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem[]>> {
   const items: Record<number, WlRewardItem[]> = {};
-  for (const [place, slugs] of Object.entries(wlPackItemSlugs(config.WL_REWARD_FRAMES_ENABLED))) {
+  for (const [place, slugs] of Object.entries(WL_PACK_ITEM_SLUGS)) {
     items[Number(place)] = [];
     for (const slug of slugs) {
       const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
@@ -241,7 +231,7 @@ export async function freezeWlRewards(tournamentId: string): Promise<WlFreezeOut
         INSERT INTO wl_reward_receipts (
           tournament_id, week_key, user_id, policy_version, band, human_rank, coins, items, facts
         )
-        SELECT ${tournamentId}, ${t.week_key}::date, r.user_id, ${wlRewardPolicyVersion(config.WL_REWARD_FRAMES_ENABLED)},
+        SELECT ${tournamentId}, ${t.week_key}::date, r.user_id, ${WL_REWARD_POLICY_VERSION},
                r.band, r.human_rank, r.coins, r.items, r.facts
         FROM jsonb_to_recordset(${sql.json(rows as unknown as Json)}::jsonb) AS r(
           user_id uuid, band text, human_rank int, coins int, items jsonb, facts jsonb
@@ -542,8 +532,6 @@ export async function settleWlRewards(
   return result;
 }
 
-let warnedMissingRolloutWeek = false;
-
 /** Process-local fallback for when the durable retry state cannot be written. */
 const LOCAL_DEFER_MS = 60_000;
 const locallyDeferred = new Map<string, number>();
@@ -564,12 +552,7 @@ const SWEEP_BUDGET_MS = 8_000;
  * across replicas and restarts.
  */
 export async function wlRewardsSweep(shouldStop: () => boolean = () => false): Promise<void> {
-  if (!config.WL_REWARDS_ENABLED) return;
-  const from = rolloutWeek();
-  if (!from && !warnedMissingRolloutWeek) {
-    warnedMissingRolloutWeek = true;
-    logger.warn('WL rewards enabled without a valid WL_REWARDS_FROM_WEEK; real tournaments will not settle');
-  }
+  const from = WL_REWARDS_FIRST_WEEK;
   const includeTests = config.NODE_ENV !== 'prod';
   const now = Date.now();
   for (const [id, until] of locallyDeferred) {
@@ -630,7 +613,7 @@ export function wlRewardsWorkerTick(): void {
 }
 
 export function startWlRewardsWorker(): void {
-  if (workerTimer || !config.WL_REWARDS_ENABLED) return;
+  if (workerTimer) return;
   workerStopping = false;
   workerTimer = setInterval(wlRewardsWorkerTick, WORKER_INTERVAL_MS);
   workerTimer.unref?.();

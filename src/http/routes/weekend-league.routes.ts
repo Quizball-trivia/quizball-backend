@@ -12,9 +12,6 @@ const router = Router();
 // 2026-09-25) and see an empty board. Optional auth still populates req.user
 // when a session exists.
 router.get('/hall-of-fame', optionalAuthMiddleware, weekendLeagueController.hallOfFame);
-// Public: logged-out visitors see the prize card too, and it must not promise
-// a frame the payout will not grant (WL_REWARD_FRAMES_ENABLED).
-router.get('/reward-policy', weekendLeagueController.rewardPolicy);
 
 router.use(authMiddleware);
 

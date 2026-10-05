@@ -3,7 +3,8 @@ import type { Sql } from 'postgres';
 import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
 import { buscaminasRoundSchema } from './engines/buscaminas.engine.js';
 import { pistasRoundSchema } from './engines/pistas.engine.js';
-import { canonical } from '../pistas/pistas.seed.js';
+import { canonical, PISTAS_CONTENT_LOCK } from '../pistas/pistas.seed.js';
+import { BUSCAMINAS_CONTENT_LOCK } from '../buscaminas/buscaminas.seed.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '../ultimo/ultimo.match.js';
 import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
@@ -128,6 +129,12 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
     await q`SET LOCAL lock_timeout = '5s'`;
     await q`SET LOCAL statement_timeout = '60s'`;
     await q`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+    if (game === 'pistas' || game === 'buscaminas') {
+      // The days seed takes the same lock and checks the pool inside its write; this re-checks the days inside this one.
+      await q`SELECT pg_advisory_xact_lock(hashtext(${game === 'pistas' ? PISTAS_CONTENT_LOCK : BUSCAMINAS_CONTENT_LOCK}))`;
+      const { overlapping } = await findDailyOverlap(q, game, rows);
+      if (overlapping.length > 0 && !opts.allowOverlap) throw new Error(`${overlapping.length} pool item(s) share a player or category with a daily; refused`);
+    }
     if (game === 'ultimo') {
       // The days seed takes the same lock: the overlap is re-checked here, inside the write, so neither seed can
       // slip in a category the other is writing at the same moment.

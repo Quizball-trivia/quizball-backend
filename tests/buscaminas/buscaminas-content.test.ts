@@ -3,6 +3,8 @@ import { createContentStore, indexDay } from '../../src/modules/buscaminas/busca
 import { toDayRow } from '../../src/modules/buscaminas/buscaminas.seed.js';
 import type { BuscaminasDayRow } from '../../src/modules/buscaminas/buscaminas.types.js';
 import { makeDay, mineCards, okCards } from './fixtures.js';
+import { storedDaysOf } from '../../src/modules/daily/daily.content.js';
+import { lastReleasedDay } from '../../src/modules/buscaminas/buscaminas.days.js';
 
 const row = (day = '2026-09-27', variant = 0): BuscaminasDayRow => toDayRow(makeDay(day, variant));
 
@@ -94,6 +96,8 @@ describe('buscaminas content store', () => {
     const { store, log } = setup([row('2026-09-27'), bad]);
     expect([...(await store.get()).keys()]).toEqual(['2026-09-27']);
     expect(log.error).toHaveBeenCalledWith({ day: '2026-09-28' }, expect.any(String));
+    // The unserved day still counts for the calendar: it 404s alone instead of ending the calendar before it.
+    expect(lastReleasedDay(storedDaysOf(await store.get()), '2026-09-27')).toBe('2026-09-28');
     expect((await setup([]).store.get()).size).toBe(0);
   });
 

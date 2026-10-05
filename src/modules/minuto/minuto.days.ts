@@ -7,8 +7,6 @@ export { addDays, dayEndsAt, releaseDay, RELEASE_TIME_ZONE };
 export const CONTENT_START = '2026-09-29';
 /** The first ranked day (the public launch); earlier days are unranked practice for everyone. */
 export const RANKED_START = '2026-10-02';
-/** Days with content, counted from CONTENT_START (75 days ≈ 2½ months). */
-export const PUBLISHED_DAYS = 75;
 
-export const minutoCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });
-export const { LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = minutoCalendar;
+export const minutoCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START });
+export const { lastDay, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = minutoCalendar;

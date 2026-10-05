@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { canonical } from '../pistas/pistas.seed.js';
 import { GOALS_PER_DAY } from './minuto.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './minuto.days.js';
+import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { CONTENT_START, dayNumber } from './minuto.days.js';
 import { goalBaseSchema, goalSchema, minuteLeaks, MINUTO_TIERS, type MinutoGoal } from './minuto.goal.js';
 import type { MinutoDayRow } from './minuto.types.js';
 
@@ -73,15 +74,17 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
 }
 
 /**
- * The whole published calendar at least, contiguous from CONTENT_START, and no goal on two days: a day's review
- * publishes its minutes, so a repeat would hand later players the answer.
+ * The supplied files are one unbroken run of days (any length, starting anywhere: the whole calendar, or a batch that
+ * appends to it) with no goal on two days: a day's review publishes its minutes, so a repeat would hand later players
+ * the answer. Whether the batch connects to the stored days, and repeats no goal published before, is checked inside
+ * the write (`seedDays`).
  */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  if (days.length === 0) throw new Error('no days to seed');
   const seen = new Map<string, string>();
   days.forEach((d, i) => {
-    const expected = addDays(CONTENT_START, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);
+    const expected = addDays(days[0].day, i);
+    if (d.day !== expected) throw new Error(`days must be contiguous: position ${i + 1} is ${d.day}, expected ${expected}`);
     d.goals.forEach((goal, j) => {
       for (const key of [`id:${goal.id}`, `fp:${goal.fingerprint}`]) {
         const other = seen.get(key);
@@ -229,6 +232,8 @@ export async function seedDays(
       SELECT day::text AS day, number, content_version AS "contentVersion", goals FROM minuto_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
     const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
     if (correcting.length > 0) {
       await tx`SELECT day FROM minuto_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;

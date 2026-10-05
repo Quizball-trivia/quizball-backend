@@ -3,6 +3,8 @@ import { createContentStore, indexDay } from '../../src/modules/pistas/pistas.co
 import { toDayRow } from '../../src/modules/pistas/pistas.seed.js';
 import type { PistasDayRow } from '../../src/modules/pistas/pistas.types.js';
 import { makeDay } from './fixtures.js';
+import { storedDaysOf } from '../../src/modules/daily/daily.content.js';
+import { lastDay } from '../../src/modules/pistas/pistas.days.js';
 
 const row = (day = '2026-09-27', variant = 0): PistasDayRow => structuredClone(toDayRow(makeDay(day, variant)));
 
@@ -80,6 +82,9 @@ describe('pistas content store', () => {
     const { store, source, state, log, clock } = setup([row('2026-09-27'), bad]);
     expect([...(await store.get()).keys()]).toEqual(['2026-09-27']);
     expect(log.error).toHaveBeenCalledWith({ day: '2026-09-28' }, expect.any(String));
+    // The unserved day still counts for the calendar: it 404s alone instead of ending the calendar before it.
+    expect([...storedDaysOf(await store.get())]).toEqual(['2026-09-27', '2026-09-28']);
+    expect(lastDay(storedDaysOf(await store.get()))).toBe('2026-09-28');
     state.fingerprint = 'b';
     state.rows = [row('2026-09-27', 1)];
     store.invalidate();

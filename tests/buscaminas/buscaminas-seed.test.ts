@@ -54,9 +54,11 @@ describe('buscaminas seed: day file validation', () => {
     expect(() => parseDayFile('f', swapped)).not.toThrow();
   });
 
-  it('requires the whole calendar: 90 contiguous days from the launch day', () => {
+  it('takes the whole calendar or a batch that appends to it, as long as the files are contiguous', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 89))).toThrow(/expected 90 days/);
+    expect(() => assertCalendar(calendar().slice(0, 89))).not.toThrow();
+    expect(() => assertCalendar([makeDay('2026-12-25'), makeDay('2026-12-26')])).not.toThrow();
+    expect(() => assertCalendar([])).toThrow(/no days/);
     const gap = calendar();
     gap[10] = makeDay('2026-12-25');
     expect(() => assertCalendar(gap)).toThrow(/contiguous/);

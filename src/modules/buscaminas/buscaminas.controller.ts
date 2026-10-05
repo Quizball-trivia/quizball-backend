@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { boardsMaxAge } from './buscaminas.days.js';
 import { buscaminasService } from './buscaminas.service.js';
 import { guestSessionRequired } from './buscaminas.errors.js';
 import type { Player } from './buscaminas.types.js';
@@ -41,16 +42,20 @@ export const buscaminasController = {
     res.json(board);
   },
   async boards(_req: Request, res: Response): Promise<void> {
+    // Read before the index is built: an index from just before midnight must not get a lifetime computed after it.
+    const maxAge = boardsMaxAge();
     const index = await buscaminasService.boards();
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
     res.json(index);
   },
   /** Members see their own row in `me`; guests are never on the board. */
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
+    // The default board turns over at midnight: a shared copy must not answer for the next day.
+    const maxAge = boardsMaxAge(new Date(), 15);
     const board = await buscaminasService.leaderboard(query.day, req.user?.id ?? null);
     const anonymous = !req.headers.authorization && !req.cookies?.qb_access_token;
-    res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
+    res.setHeader('Cache-Control', anonymous ? `public, max-age=${maxAge}` : 'private, no-store');
     res.json(board);
   },
 };

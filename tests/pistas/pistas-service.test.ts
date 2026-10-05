@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createPistasService, type PistasDeps, type RunResponse } from '../../src/modules/pistas/pistas.service.js';
 import type { ContentIndex } from '../../src/modules/pistas/pistas.content.js';
 import type { PistasRunRow, Player } from '../../src/modules/pistas/pistas.types.js';
+import { addDays } from '../../src/modules/pistas/pistas.days.js';
 import { answerOf, indexOf, makeDay } from './fixtures.js';
 
 const TODAY = '2026-09-30';
@@ -135,7 +136,9 @@ function setup(opts: { now?: Date; days?: string[] } = {}) {
     for (const row of mem.rows.values()) row.ranked = false;
   };
   const refreshCache = () => { content = indexOf(...days.map((d) => makeDay(d, 1))); };
-  return { svc, clock, ...mem, stored, stale, version, correctDatabase, refreshCache, correct: () => { correctDatabase(); refreshCache(); } };
+  /** What this replica's cache holds (the stored days stay as they are). */
+  const serve = (served: string[]) => { content = indexOf(...served.map((d) => makeDay(d))); };
+  return { svc, clock, ...mem, stored, stale, version, serve, correctDatabase, refreshCache, correct: () => { correctDatabase(); refreshCache(); } };
 }
 
 type Svc = ReturnType<typeof setup>['svc'];
@@ -477,6 +480,39 @@ describe('pistas boards and review', () => {
     const today = await errorOf(TODAY);
     expect(today).toEqual({ statusCode: 404, message: 'Day not available' });
     for (const day of ['2026-10-01', '2026-09-26', '2027-01-01']) expect(await errorOf(day)).toEqual(today);
+  });
+
+  it('the stored days are the calendar: an appended day opens ranked on its date, a day past a hole never opens', async () => {
+    const run = (n: number) => Array.from({ length: n }, (_, i) => addDays('2026-09-27', i));
+    const oct27 = new Date('2026-10-27T15:00:00Z');
+    // 30 days stored, as first seeded: the 31st date has nothing, and the last day goes on unranked.
+    const ended = setup({ now: oct27, days: run(30) });
+    await expect(ended.svc.start('2026-10-27', A)).rejects.toMatchObject({ statusCode: 404 });
+    expect((await ended.svc.start('2026-10-26', A)).state.ranked).toBe(false);
+    expect((await ended.svc.leaderboard(undefined, null)).day).toBe('2026-10-26');
+    // One more stored day, no release: it is the live, ranked day.
+    const appended = setup({ now: oct27, days: run(31) });
+    expect((await appended.svc.start('2026-10-27', A)).state.ranked).toBe(true);
+    expect(Object.keys((await appended.svc.boards()).days).at(-1)).toBe('2026-10-27');
+    expect((await appended.svc.leaderboard(undefined, null)).day).toBe('2026-10-27');
+    // A stored day beyond a missing one is not released, whatever the date.
+    const holed = setup({ now: new Date('2026-10-29T15:00:00Z'), days: [...run(30), '2026-10-28', '2026-10-29'] });
+    await expect(holed.svc.start('2026-10-29', A)).rejects.toMatchObject({ statusCode: 404 });
+    expect(Object.keys((await holed.svc.boards()).days).at(-1)).toBe('2026-10-26');
+  });
+
+  it('a run of a day the calendar no longer reaches is neither played on nor disclosed', async () => {
+    const { svc, serve } = setup();
+    const run = await svc.start(YESTERDAY, GA);
+    // 2026-09-28 is gone: yesterday is stored beyond a hole, so the calendar ends at the first day.
+    serve(['2026-09-27', YESTERDAY, TODAY]);
+    await expect(svc.giveUp(GA, run.run.id, run.run.version)).rejects.toMatchObject({ statusCode: 404 });
+    expect(await svc.current(GA, YESTERDAY)).toEqual({ run: null });
+    await expect(svc.review(YESTERDAY)).rejects.toMatchObject({ statusCode: 404 });
+    expect(await svc.leaderboard(YESTERDAY, 'user-a')).toEqual({ day: YESTERDAY, players: 0, top: [], me: null });
+    // The hole filled, the run is there again, untouched.
+    serve(['2026-09-27', '2026-09-28', YESTERDAY, TODAY]);
+    expect(await svc.current(GA, YESTERDAY)).toMatchObject({ run: { id: run.run.id, version: run.run.version } });
   });
 
   it('with no days seeded every day is a 404 and the index is empty', async () => {

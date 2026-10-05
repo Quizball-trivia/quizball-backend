@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { NotFoundError, type AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './buscaminas.constants.js';
+import { storedDaysOf } from '../daily/daily.content.js';
 import { createContentStore, type ContentIndex, type IndexedDay } from './buscaminas.content.js';
-import { boardDay, dayEndsAt, isArchiveDay, isPlayableDay, rankedDay } from './buscaminas.days.js';
+import { boardDay, dayEndsAt, isArchiveDay, isPlayableDay, isReleasedDay, lastReleasedDay, LAUNCH_DAY, rankedDay } from './buscaminas.days.js';
 import { contentChanged, dayOver, notYourRun, signInForToday, staleState } from './buscaminas.errors.js';
 import { buscaminasRepo, type BuscaminasRepo } from './buscaminas.repo.js';
 import * as rules from './buscaminas.rules.js';
@@ -49,14 +50,26 @@ const owns = (row: BuscaminasRunRow, player: Player): boolean =>
  */
 export function createBuscaminasService(deps: BuscaminasDeps) {
   const leaderboards = new Map<string, { at: number; players: number; top: LeaderboardEntry[] }>();
+  /** The calendar's last day for each served content index (the index object changes only when the table does). */
+  const lastDays = new WeakMap<ContentIndex, string | null>();
+  function lastDayOf(content: ContentIndex): string | null {
+    let last = lastDays.get(content);
+    if (last === undefined) {
+      last = lastReleasedDay(storedDaysOf(content), LAUNCH_DAY);
+      lastDays.set(content, last);
+    }
+    return last;
+  }
 
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
-  async function playableDay(day: string): Promise<IndexedDay> {
-    const content = (await deps.content()).get(day);
+  async function playableDay(day: string): Promise<{ day: IndexedDay; lastDay: string | null }> {
+    const index = await deps.content();
+    const content = index.get(day);
+    const lastDay = lastDayOf(index);
     // Evaluate playability unconditionally so an unknown day and a future day take the same path.
-    const playable = isPlayableDay(day, deps.now());
+    const playable = isPlayableDay(day, lastDay, deps.now());
     if (!content || !playable) throw new NotFoundError('Day not available');
-    return content;
+    return { day: content, lastDay };
   }
 
   /**
@@ -95,8 +108,8 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
   }
 
   async function start(dayId: string, player: Player, clientContentVersion?: number): Promise<RunResponse> {
-    const day = await playableDay(dayId);
-    const live = dayId === rankedDay(deps.now());
+    const { day, lastDay } = await playableDay(dayId);
+    const live = dayId === rankedDay(lastDay, deps.now());
     // Guests never see the live day's mines: an unranked run of it would probe them for a ranked one.
     if (live && player.kind === 'guest') throw signInForToday();
     if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
@@ -127,11 +140,16 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
   async function mutate(player: Player, runId: string, version: number, step: Step): Promise<RunResponse & { ok?: boolean }> {
     const content = await deps.content();
     // Read before waiting on the row lock; the UPDATE itself re-checks the ranked cutoff at statement time.
-    const today = rankedDay(deps.now());
+    const today = rankedDay(lastDayOf(content), deps.now());
     const response = await deps.repo.withTx(async (tx) => {
       const row = await deps.repo.lockRun(tx, runId);
       if (!row) throw new NotFoundError('Run not found');
       if (!owns(row, player)) throw notYourRun();
+      // This replica does not serve the run's day: its cache is behind a seed (an appended day), so it re-checks
+      // instead of calling a live ranked run over.
+      if (!content.has(row.day)) throw otherContent();
+      // A run of a day the calendar no longer reaches (stored beyond a hole) is not played on.
+      if (!isReleasedDay(row.day, lastDayOf(content))) throw new NotFoundError('Day not available');
       // Only a pre-launch preview run can be an unranked run of the live day; its guest may not carry it on.
       if (!row.ranked && player.kind === 'guest' && row.day === today) throw signInForToday();
       if (row.ranked && row.day !== today) throw dayOver();
@@ -162,14 +180,16 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     start,
 
     async board(dayId: string): Promise<BoardResponse> {
-      const day = await playableDay(dayId);
+      const { day } = await playableDay(dayId);
       return { board: day.board, live: !isArchiveDay(dayId, deps.now()) };
     },
 
     async boards(): Promise<{ days: Record<string, number> }> {
       const now = deps.now();
+      const content = await deps.content();
+      const lastDay = lastDayOf(content);
       const days: Record<string, number> = {};
-      for (const [id, day] of await deps.content()) if (isPlayableDay(id, now)) days[id] = day.contentVersion;
+      for (const [id, day] of content) if (isPlayableDay(id, lastDay, now)) days[id] = day.contentVersion;
       return { days };
     },
 
@@ -191,8 +211,8 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     /** The player's run of `dayId` (default: the live day); none until /start created it. */
     async current(player: Player, dayId: string | undefined): Promise<RunResponse | { run: null }> {
       const content = await deps.content();
-      const target = dayId ?? rankedDay(deps.now());
-      if (!target) return { run: null };
+      const target = dayId ?? rankedDay(lastDayOf(content), deps.now());
+      if (!target || !isReleasedDay(target, lastDayOf(content))) return { run: null };
       const row = await deps.repo.getRun(player, target);
       if (!row) return { run: null };
       const day = content.get(target) ?? null;
@@ -202,8 +222,9 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     },
 
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> {
-      const day = dayId ?? boardDay(deps.now());
-      if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
+      const content = await deps.content();
+      const day = dayId ?? boardDay(lastDayOf(content), deps.now());
+      if (!content.has(day) || !isReleasedDay(day, lastDayOf(content))) return { day, players: 0, top: [], me: null };
       let cached = leaderboards.get(day);
       if (!cached || deps.now().getTime() - cached.at > LEADERBOARD_CACHE_MS) {
         cached = { at: deps.now().getTime(), ...(await deps.repo.leaderboard(day, LEADERBOARD_TOP)) };

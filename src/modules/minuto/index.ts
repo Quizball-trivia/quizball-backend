@@ -4,5 +4,5 @@ export { guestSessionRequired as minutoGuestSessionRequired } from './minuto.err
 export { minutoRepo } from './minuto.repo.js';
 export { startSchema, moveSchema, guessSchema, dayQuerySchema, reviewQuerySchema } from './minuto.schemas.js';
 export * from './minuto.constants.js';
-export { CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } from './minuto.days.js';
+export { CONTENT_START, RANKED_START, lastDay, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } from './minuto.days.js';
 export * from './minuto.types.js';

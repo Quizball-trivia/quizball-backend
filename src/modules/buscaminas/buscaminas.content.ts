@@ -1,3 +1,4 @@
+import { rememberStoredDays } from '../daily/daily.content.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicBoard, type PublicRound } from './buscaminas.types.js';
 
 export interface IndexedRound {
@@ -89,11 +90,13 @@ export function createContentStore(source: ContentSource, opts: { refreshMs: num
       return cached.index;
     }
     const index = new Map<string, IndexedDay>();
-    for (const row of await source.load()) {
+    const rows = await source.load();
+    for (const row of rows) {
       const day = indexDay(row);
       if (day) index.set(row.day, day);
       else opts.log.error({ day: row.day }, 'Buscaminas day has malformed content; it is not served');
     }
+    rememberStoredDays(index, rows.map((row) => row.day));
     cached = { fingerprint, index, checkedAt: opts.now() };
     return index;
   }

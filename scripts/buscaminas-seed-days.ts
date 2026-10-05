@@ -2,15 +2,17 @@
  * Seeds the Buscaminas days (boards + answers) into buscaminas_days from the content
  * pipeline's full day files, in ONE transaction.
  *
- *   npm run buscaminas:seed -- [<daysDir>] [--dry-run] [--allow-correction] [--target staging|production]
+ *   npm run buscaminas:seed -- [<daysDir>] [--dry-run] [--allow-correction] [--allow-pool-overlap] [--target staging|production]
  *
- * <daysDir> holds the 90 YYYY-MM-DD.json full day files (default: the sibling web checkout's
+ * <daysDir> holds YYYY-MM-DD.json full day files (default: the sibling web checkout's
  * scripts/buscaminas/full/days, i.e. ../buscaminas-web or ../frontend-web-next). Every file is
  * validated (16 cards, 12 correct, 4 locales, card art under /buscaminas/v1/p/, contentVersion =
- * answer hash, 90 contiguous days from the launch day) before the database is touched.
+ * answer hash, contiguous days) before the database is touched. The files may be the whole calendar
+ * or only the days to append: stored and supplied days together must run unbroken from the launch day.
  *
  * Prints each day as new / changed / unchanged. A day that already has runs keeps its answers
- * unless --allow-correction is passed (the correction must then change contentVersion).
+ * unless --allow-correction is passed (the correction must then change contentVersion). A round whose
+ * category is in the duel pool is refused inside the write (--allow-pool-overlap: local databases only).
  * A non-local DATABASE_URL is refused unless --target names its Supabase project.
  */
 import 'dotenv/config';
@@ -29,15 +31,17 @@ interface Args {
   dir: string | undefined;
   dryRun: boolean;
   allowCorrection: boolean;
+  allowPoolOverlap: boolean;
   target: SeedTargetName | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, dryRun: false, allowCorrection: false, target: undefined };
+  const args: Args = { dir: undefined, dryRun: false, allowCorrection: false, allowPoolOverlap: false, target: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--allow-pool-overlap') args.allowPoolOverlap = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const value = arg === '--target' ? argv[++i] : arg.slice('--target='.length);
       if (!value || !(value in PROJECT_REFS)) throw new Error('--target must be staging or production');
@@ -90,9 +94,10 @@ async function main(): Promise<void> {
     max: 1, prepare: false, connect_timeout: 15, onnotice: () => undefined, ssl: target.kind === 'local' ? false : 'require',
   });
   try {
-    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: args.dryRun, allowCorrection: args.allowCorrection });
+    if (args.allowPoolOverlap && target.kind !== 'local') throw new Error('--allow-pool-overlap is for local databases only');
+    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: args.dryRun, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
-    if (plan.extraDays.length > 0) console.log(`[buscaminas:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
+    if (plan.extraDays.length > 0) console.log(`[buscaminas:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;
     const writes = count('new') + count('changed');
     console.log(`[buscaminas:seed] ${count('new')} new, ${count('changed')} changed, ${count('unchanged')} unchanged — ${

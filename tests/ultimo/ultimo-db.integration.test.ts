@@ -113,7 +113,8 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     const withCopy = makeDay(7, [copy, plainCategory('d7b', 8), plainCategory('d7c', 8), plainCategory('d7d', 8), plainCategory('d7e', 8)]);
     await expect(seedDays(db.sql, [withVersion(withCopy)], { dryRun: false, allowCorrection: false, allowPoolOverlap: false })).rejects.toThrow(/repeat a duel pool category/);
     // Days that repeat nothing seed; a pool copy of one of their categories is then refused.
-    const days = [makeDay(0), makeDay(3)].map(withVersion);
+    // The stored days are the calendar: seeded unbroken from the first content day.
+    const days = [makeDay(0), makeDay(1), makeDay(2), makeDay(3)].map(withVersion);
     await seedDays(db.sql, days, { dryRun: false, allowCorrection: false, allowPoolOverlap: false });
     const poolCopy = { ...days[0].categories[2], id: 'pool-copy', title: { es: 'Otro', en: 'Another', ka: 'სხვა', tr: 'Diğer' } };
     await expect(writePool(db.sql, 'ultimo', parsePoolFile('ultimo', { game: 'ultimo', items: [poolCopy] }))).rejects.toThrow(/repeat a daily category/);
@@ -273,5 +274,33 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     r = await svc.begin(guest, r.run.id, r.run.version);
     for (const t of ['Nadie', 'Nadie dos', 'Nadie tres']) r = await svc.answer(guest, r.run.id, r.run.version, t);
     expect(r.state.settled?.missing).toHaveLength(past.categories[0].answers.length);
+  });
+
+  it('appends days to the stored calendar: the next day alone is accepted; a hole or a category already used is refused', async () => {
+    const { seedDays, contentHash } = await import('../../src/modules/ultimo/ultimo.seed.js');
+    const opts = { dryRun: false, allowCorrection: false, allowPoolOverlap: false };
+    const withVersion = (d: ReturnType<typeof makeDay>) => ({ ...d, contentVersion: contentHash(d.categories) });
+    const stored = (await db.sql<Array<{ day: string }>>`SELECT day::text AS day FROM ultimo_days ORDER BY day`).map((r) => r.day);
+    const next = stored.length; // days are stored unbroken from the first content day, so the next offset is the count
+    const plan = await seedDays(db.sql, [withVersion(makeDay(next))], opts);
+    expect(plan.entries).toMatchObject([{ number: next + 1, status: 'new' }]);
+    expect(plan.extraDays).toEqual(stored);
+    await expect(seedDays(db.sql, [withVersion(makeDay(next + 2))], opts)).rejects.toThrow(/is missing/);
+    // The following day re-using a stored day's list (same id) is refused; the title alone is enough too.
+    const reused = makeDay(next + 1, [makeDay(0).categories[0], ...makeDay(next + 1).categories.slice(1)]);
+    await expect(seedDays(db.sql, [withVersion(reused)], opts)).rejects.toThrow(/already a daily list/);
+    const renamed = { ...makeDay(0).categories[0], id: 'other-id' };
+    const sameTitle = makeDay(next + 1, [renamed, ...makeDay(next + 1).categories.slice(1)]);
+    await expect(seedDays(db.sql, [withVersion(sameTitle)], opts)).rejects.toThrow(/already a daily list/);
+    // The ledger remembers a list a correction took off its day: it still cannot come back as a new daily list.
+    const appended = makeDay(next);
+    const corrected = makeDay(next, [plainCategory('replacement', 9), ...appended.categories.slice(1)]);
+    await seedDays(db.sql, [withVersion(corrected)], { ...opts, allowCorrection: true });
+    const comeback = makeDay(next + 1, [appended.categories[0], ...makeDay(next + 1).categories.slice(1)]);
+    await expect(seedDays(db.sql, [withVersion(comeback)], opts)).rejects.toThrow(/already a daily list/);
+    // Re-supplying stored days as they are is never a repeat of themselves; reuse on purpose needs the flag.
+    await expect(seedDays(db.sql, [withVersion(makeDay(0)), withVersion(makeDay(1))], opts)).resolves.toMatchObject({ entries: [{ status: 'unchanged' }, { status: 'unchanged' }] });
+    await expect(seedDays(db.sql, [withVersion(comeback)], { ...opts, allowRepeats: true })).resolves.toMatchObject({ entries: [{ status: 'new' }] });
+    expect((await db.sql`SELECT count(*)::int AS n FROM ultimo_days`)[0].n).toBe(next + 2);
   });
 });

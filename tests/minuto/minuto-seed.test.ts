@@ -3,10 +3,12 @@ import { assertCalendar, checkGoal, movedDailyGoals, overlapping, parseDayFile }
 import { calendar, makeDay, rawDay, rawGoal } from './fixtures.js';
 
 describe('minuto seed', () => {
-  it('accepts the full calendar and refuses gaps or a goal on two days (by id or by fingerprint)', () => {
+  it('accepts the full calendar or an append batch and refuses gaps or a goal on two days (by id or by fingerprint)', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
     const days = calendar();
-    expect(() => assertCalendar(days.slice(1))).toThrow(/expected at least|contiguous/);
+    expect(() => assertCalendar(days.slice(40, 47))).not.toThrow();
+    expect(() => assertCalendar([days[3], days[5]])).toThrow(/contiguous/);
+    expect(() => assertCalendar([])).toThrow('no days to seed');
     const repeat = calendar();
     repeat[5] = { ...repeat[5], goals: [repeat[2].goals[3], ...repeat[5].goals.slice(1)] };
     expect(() => assertCalendar(repeat)).toThrow(`same goal as ${repeat[2].day} goal 4`);

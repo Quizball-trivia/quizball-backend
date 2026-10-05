@@ -2,12 +2,14 @@
  * Seeds the Último en pie days (5 closed-list categories each) into ultimo_days from the private content
  * pipeline's day files, in ONE transaction. Dry run unless --write.
  *
- *   npm run ultimo:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction]
+ *   npm run ultimo:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction] [--allow-repeats]
  *
  * <daysDir> holds YYYY-MM-DD.json day files ({day, number, categories: [{id, difficulty, title, hint, answers:
  * [{id, display, aliases}]}] x5}). Every file is validated (the category schema: 4 locales, 8–60 answers, no name
- * on two answers, typeable names; contiguous days from the first content day covering the calendar) before the
- * database is touched. Provenance and any other unknown field are dropped.
+ * on two answers, typeable names; contiguous days) before the database is touched. The files may be the whole
+ * calendar or only the days to append: stored and supplied days together must run unbroken from the first content
+ * day, and a list may be a daily category once (--allow-repeats reuses one on purpose). Provenance and any other
+ * unknown field are dropped.
  *
  * Prints each day as new / changed / unchanged with its content version and run counts, never an answer. A day
  * whose content changes while it has runs is refused unless --allow-correction, which unranks that day's runs.
@@ -28,19 +30,21 @@ interface Args {
   dir: string | undefined;
   write: boolean;
   allowCorrection: boolean;
+  allowRepeats: boolean;
   /** Local development only: a dev duel pool may repeat daily categories. */
   allowPoolOverlap: boolean;
   target: UltimoSeedTarget | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowPoolOverlap: false, target: undefined };
+  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowRepeats: false, allowPoolOverlap: false, target: undefined };
   const valueOf = (arg: string, name: string, i: number): [string | undefined, number] =>
     (arg === name ? [argv[i + 1], i + 1] : [arg.slice(name.length + 1), i]);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--write') args.write = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--allow-repeats') args.allowRepeats = true;
     else if (arg === '--allow-pool-overlap') args.allowPoolOverlap = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const [value, at] = valueOf(arg, '--target', i);
@@ -94,10 +98,10 @@ async function main(): Promise<void> {
   });
   try {
     if (args.allowPoolOverlap && target.kind !== 'local') throw new Error('--allow-pool-overlap is for --target local only');
-    const plan = await seedDays(sql, days, { dryRun: !args.write, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap });
+    const plan = await seedDays(sql, days, { dryRun: !args.write, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap, allowRepeats: args.allowRepeats });
     if (plan.poolOverlap > 0) console.warn(`WARNING (local only): ${plan.poolOverlap} daily categor(ies) also in the local dev duel pool`);
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
-    if (plan.extraDays.length > 0) console.log(`[ultimo:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
+    if (plan.extraDays.length > 0) console.log(`[ultimo:seed] stored days not in the files (kept): ${plan.extraDays.length} (${plan.extraDays[0]} … ${plan.extraDays[plan.extraDays.length - 1]})`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;
     const writes = count('new') + count('changed');
     console.log(`[ultimo:seed] ${count('new')} new, ${count('changed')} changed, ${count('unchanged')} unchanged — ${

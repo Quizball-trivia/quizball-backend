@@ -4,5 +4,5 @@ export { guestSessionRequired as ultimoGuestSessionRequired } from './ultimo.err
 export { ultimoRepo } from './ultimo.repo.js';
 export { startSchema, moveSchema, answerSchema, dayQuerySchema, reviewQuerySchema } from './ultimo.schemas.js';
 export * from './ultimo.constants.js';
-export { CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } from './ultimo.days.js';
+export { CONTENT_START, RANKED_START, lastDay, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } from './ultimo.days.js';
 export * from './ultimo.types.js';

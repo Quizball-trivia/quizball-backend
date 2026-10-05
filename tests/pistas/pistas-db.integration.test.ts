@@ -3,8 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
-import { answerOf, calendar, makeDay } from './fixtures.js';
-import { PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
+import { answerOf, calendar, CALENDAR_DAYS, makeDay, rawDay } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Pistas migration to a fresh schema and runs the repo, the
@@ -126,9 +125,10 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       await db.sql`DELETE FROM pistas_days`;
     });
 
-    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean } = {}) => {
+    // The synthetic fixture has the same ten answers on every day, so repeats are allowed unless a test says otherwise.
+    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean; allowRepeats?: boolean } = {}) => {
       const { seedDays, toDayRow } = await import('../../src/modules/pistas/pistas.seed.js');
-      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false });
+      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false, allowRepeats: opts.allowRepeats ?? true });
     };
 
     async function service() {
@@ -146,7 +146,7 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
 
     it('seeds the calendar in one transaction: dry run writes nothing, a re-run changes nothing, provenance is never stored', async () => {
       const dry = await seed(calendar(), { dryRun: true });
-      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(PUBLISHED_DAYS);
+      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(CALENDAR_DAYS);
       expect(await db.sql`SELECT 1 FROM pistas_days`).toHaveLength(0);
       await seed();
       const rows = await db.sql`SELECT day::text AS day, number, content_version, rounds::text AS rounds FROM pistas_days ORDER BY day`;
@@ -155,6 +155,63 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       expect((await seed()).entries.every((e) => e.status === 'unchanged')).toBe(true);
       const { store } = await service();
       expect((await store.get()).get(PAST)!.contentVersion).toBe(makeDay(PAST).contentVersion);
+    });
+
+    it('a daily answer may not be a duel pool player, and the pool may not take a daily one (each checked inside its write)', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const { parseDayFile, seedDays, toDayRow } = await import('../../src/modules/pistas/pistas.seed.js');
+        const withAnswer = <T extends { answer: unknown }>(round: T, name: string): T =>
+          ({ ...round, answer: { display: { es: name, en: name, ka: name, tr: name }, accepted: [name] } });
+        const poolItem = (name: string) => ({ ...withAnswer(rawDay('2026-09-27').rounds[0], name), id: `pool-${name.replace(/\W/g, '')}` });
+        await seed(calendar().slice(0, 3));
+        // A daily player cannot enter the pool…
+        await expect(writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem(answerOf(3))] })))
+          .rejects.toThrow(/share a player or category with a daily/);
+        await writePool(db.sql, 'pistas', parsePoolFile('pistas', { game: 'pistas', items: [poolItem('Solo Duelo')] }));
+        // …and a pool player cannot become a daily answer (the next day is refused whole, nothing written).
+        const raw = rawDay('2026-09-30');
+        raw.rounds[2] = withAnswer(raw.rounds[2], 'Solo Duelo');
+        const next = toDayRow(parseDayFile('2026-09-30.json', raw));
+        await expect(seed([parseDayFile('2026-09-30.json', raw)])).rejects.toThrow(/1 daily player\(s\) are in the duel pool/);
+        expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(3);
+        await seedDays(db.sql, [next], { dryRun: false, allowCorrection: false, allowRepeats: true, allowPoolOverlap: true });
+        expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(4);
+        // That day, re-supplied unchanged beside a new one, is not re-judged; the new day is still checked.
+        const plan = await seed([parseDayFile('2026-09-30.json', raw), makeDay('2026-10-01')]);
+        expect(plan.entries.map((e) => e.status)).toEqual(['unchanged', 'new']);
+        // A disabled pool item still counts: its packs were already dealt.
+        await db.sql`UPDATE duel_pool SET enabled = false`;
+        const laterRaw = rawDay('2026-10-02');
+        laterRaw.rounds[5] = withAnswer(laterRaw.rounds[5], 'Solo Duelo');
+        await expect(seed([parseDayFile('2026-10-02.json', laterRaw)])).rejects.toThrow(/are in the duel pool/);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
+    });
+
+    it('appends days to the stored calendar: the next day alone is accepted, a hole or a repeated player is refused', async () => {
+      await seed();
+      const next = makeDay('2026-10-27');
+      // The append is one file; the 30 stored days are untouched and reported as kept.
+      const plan = await seed([next]);
+      expect(plan.entries).toMatchObject([{ day: '2026-10-27', number: 31, status: 'new' }]);
+      expect(plan.extraDays).toHaveLength(CALENDAR_DAYS);
+      expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(CALENDAR_DAYS + 1);
+      // The served calendar follows the table: the appended day is the last one in the index, with no restart.
+      const { store } = await service();
+      expect([...(await store.get()).keys()].sort().at(-1)).toBe('2026-10-27');
+      // A day that would leave a hole writes nothing.
+      await expect(seed([makeDay('2026-10-29')])).rejects.toThrow(/2026-10-28 is missing/);
+      // The synthetic days all share their ten answers: without the test's allowance that is a repeated player.
+      await expect(seed([makeDay('2026-10-28')], { allowRepeats: false })).rejects.toThrow(/a player is the answer on two days/);
+      expect((await db.sql`SELECT count(*)::int AS n FROM pistas_days`)[0].n).toBe(CALENDAR_DAYS + 1);
+      // An empty table still needs the first content day.
+      await db.sql`DELETE FROM pistas_days`;
+      await expect(seed([next])).rejects.toThrow(/must start at 2026-09-27/);
     });
 
     it('a guest plays a closed day on real rows; the database clock discloses missed answers', async () => {

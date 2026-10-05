@@ -3,7 +3,8 @@ import type { Sql } from 'postgres';
 import { canonical, resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../pistas/pistas.seed.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { CATEGORIES_PER_DAY } from './ultimo.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './ultimo.days.js';
+import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { CONTENT_START, dayNumber } from './ultimo.days.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from './ultimo.match.js';
 
 /**
@@ -51,15 +52,60 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
   return { day, number: d.number as number, contentVersion: contentHash(categories), categories };
 }
 
-/** Contiguous days from CONTENT_START covering every published day (a short set would leave later days empty). */
+/**
+ * The supplied files are one unbroken run of days (any length, starting anywhere): the whole calendar, or a batch
+ * that appends to it. Whether the batch connects to the stored days, and repeats no category, is checked inside the
+ * write (`seedDays`).
+ */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  if (days.length === 0) throw new Error('no days to seed');
   days.forEach((d, i) => {
-    const expected = addDays(CONTENT_START, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);
+    const expected = addDays(days[0].day, i);
+    if (d.day !== expected) throw new Error(`days must be contiguous: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
-  const ids = days.flatMap((d) => d.categories.map((c) => c.id));
-  if (new Set(ids).size !== ids.length) throw new Error('a category id is used on two days');
+}
+
+/**
+ * The same daily list: one id, one title, or exactly the same answers, by answer id or by name (a renamed or
+ * re-keyed copy). Looser than `sameKeys`, the daily-versus-pool rule, on purpose: two different daily lists may
+ * share most of their players (two squads of one country, consecutive finals), and the first month already has
+ * such pairs.
+ */
+export function sameDailyList(a: CategoryKeys, b: CategoryKeys): boolean {
+  if (a.id === b.id || a.titles.some((t) => b.titles.includes(t))) return true;
+  const sameSet = (x: string[], y: string[]) => x.length > 0 && x.length === y.length && x.every((key) => y.includes(key));
+  const ids = (k: CategoryKeys) => [...new Set(k.answers.filter((key) => key.startsWith('id:')))];
+  const names = (k: CategoryKeys) => [...new Set(k.answers.filter((key) => !key.startsWith('id:')))];
+  return sameSet(ids(a), ids(b)) || sameSet(names(a), names(b));
+}
+
+export interface PublishedLists {
+  /** Lists stored on days the files do not supply. */
+  elsewhere?: readonly CategoryKeys[];
+  /** Every list a day ever published, the supplied days' own lists included (the ledger). */
+  ledger?: readonly CategoryKeys[];
+  /** The lists a supplied day stores now. Re-supplying, correcting or re-keying one of them is not a repeat. */
+  own?: (day: string) => readonly CategoryKeys[];
+}
+
+/**
+ * Categories of `days` that are a daily list already: on a day the files do not supply, in the ledger (except the
+ * lists this very day stores now), on an earlier supplied day, or earlier on the same day. Reported as
+ * "day #position", never by name.
+ */
+export function repeatedCategories(days: readonly SeedDay[], published: PublishedLists = {}): string[] {
+  const supplied = days.flatMap((d) => d.categories.map((category, position) => ({ day: d.day, position, keys: keysOf(category) })));
+  return days.flatMap((d) => {
+    const own = published.own?.(d.day) ?? [];
+    // What the ledger holds of this day's own lists says nothing about a repeat: the day may keep, correct or re-key them.
+    const ledger = (published.ledger ?? []).filter((entry) => !own.some((list) => sameDailyList(entry, list)));
+    return d.categories.flatMap((category, i) => {
+      const keys = keysOf(category);
+      const repeats = [...(published.elsewhere ?? []), ...ledger].some((other) => sameDailyList(keys, other))
+        || supplied.some((other) => (other.day < d.day || (other.day === d.day && other.position < i)) && sameDailyList(keys, other.keys));
+      return repeats ? [`${d.day} #${i + 1}`] : [];
+    });
+  });
 }
 
 /** What identifies a category's content: its id, titles, and its answers (ids and names). */
@@ -182,7 +228,7 @@ export function planSeed(
  * correction unranks the day's runs; /start then moves each unfinished run onto the new content (from scratch).
  */
 export async function seedDays(
-  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean },
+  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; allowRepeats?: boolean },
 ): Promise<SeedPlan & { poolOverlap: number }> {
   return sql.begin(async (transaction) => {
     const tx = transaction as unknown as Sql;
@@ -198,6 +244,21 @@ export async function seedDays(
       SELECT day::text AS day, number, content_version AS "contentVersion", categories FROM ultimo_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+    // A list is a daily category once. Checked against the other supplied lists, the stored days the files do not
+    // replace, and the ledger of everything a day ever published (so a list corrected away is still known). The
+    // lists a day stores now are its own: keeping, correcting or re-keying them is not a repeat.
+    if (!opts.allowRepeats) {
+      const parsedCategories = (raw: unknown): UltimoCategory[] =>
+        (Array.isArray(raw) ? raw : []).map((c) => ultimoCategorySchema.safeParse(c)).flatMap((p) => (p.success ? [p.data] : []));
+      const suppliedDays = new Set(rows.map((row) => row.day));
+      const storedLists = new Map([...stored.values()].map((row) => [row.day, parsedCategories(row.categories).map(keysOf)]));
+      const elsewhere = [...storedLists].filter(([day]) => !suppliedDays.has(day)).flatMap(([, lists]) => lists);
+      const ledger = (await tx<Array<{ keys: CategoryKeys }>>`SELECT keys FROM ultimo_content_ledger WHERE side = 'day'`).map((r) => r.keys);
+      const repeats = repeatedCategories(rows, { elsewhere, ledger, own: (day) => storedLists.get(day) ?? [] });
+      if (repeats.length > 0) throw new Error(`a category was already a daily list (pass --allow-repeats to reuse one on purpose): ${repeats.join(', ')}`);
+    }
     // Every start and move holds FOR SHARE on its day row until it commits; FOR UPDATE on the corrected days waits
     // for those in flight and holds back new ones, so the run counts below are final.
     const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();

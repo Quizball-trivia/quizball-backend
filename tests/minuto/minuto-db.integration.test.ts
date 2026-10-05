@@ -3,8 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
-import { calendar, goalIdOf, makeDay, minuteOf, rawGoal } from './fixtures.js';
-import { PUBLISHED_DAYS } from '../../src/modules/minuto/minuto.days.js';
+import { CALENDAR_DAYS, calendar, goalIdOf, makeDay, minuteOf, rawGoal } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Minuto migration to a fresh schema and runs the seed, the repo and the service
@@ -105,13 +104,13 @@ describe.skipIf(!url)('minuto on real Postgres', () => {
 
     it('seeds the calendar once (a re-run changes nothing) and records every goal in the ledger', async () => {
       const dry = await seed(calendar(), { dryRun: true });
-      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(PUBLISHED_DAYS);
+      expect(dry.entries.filter((e) => e.status === 'new')).toHaveLength(CALENDAR_DAYS);
       expect(await db.sql`SELECT 1 FROM minuto_days`).toHaveLength(0);
       await seed();
-      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_days`)[0].n).toBe(PUBLISHED_DAYS);
-      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_content_ledger WHERE side = 'day'`)[0].n).toBe(PUBLISHED_DAYS * 10);
+      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_days`)[0].n).toBe(CALENDAR_DAYS);
+      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_content_ledger WHERE side = 'day'`)[0].n).toBe(CALENDAR_DAYS * 10);
       expect((await seed()).entries.every((e) => e.status === 'unchanged')).toBe(true);
-      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_content_ledger`)[0].n).toBe(PUBLISHED_DAYS * 10);
+      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_content_ledger`)[0].n).toBe(CALENDAR_DAYS * 10);
     });
 
     it('a guest plays a closed day: no minute before the guess, the real minute with the result, the whole day in the review', async () => {
@@ -174,6 +173,19 @@ describe.skipIf(!url)('minuto on real Postgres', () => {
       await expect(seed(days, { allowCorrection: true })).rejects.toThrow(/already published on another day/);
       // Re-seeding the original calendar is still fine.
       expect((await seed()).entries.every((e) => e.status === 'unchanged')).toBe(true);
+    });
+
+    it('appends a batch after the stored days, refuses a hole, and refuses a goal another day already published', async () => {
+      const days = calendar();
+      await seed(days.slice(0, 40));
+      await expect(seed(days.slice(41, 45))).rejects.toThrow(/is missing/);
+      const reused = days.slice(40, 45);
+      reused[2] = { ...reused[2], goals: [days[5].goals[1], ...reused[2].goals.slice(1)] };
+      await expect(seed(reused)).rejects.toThrow(/already published on another day/);
+      const appended = await seed(days.slice(40, 45));
+      expect(appended.entries.map((e) => e.status)).toEqual(Array(5).fill('new'));
+      expect((await db.sql`SELECT count(*)::int AS n FROM minuto_days`)[0].n).toBe(45);
+      expect((await seed()).entries.filter((e) => e.status === 'new')).toHaveLength(CALENDAR_DAYS - 45);
     });
   });
 });

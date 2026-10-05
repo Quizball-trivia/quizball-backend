@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
 import { calendar, makeDay, okCards } from './fixtures.js';
+import { addDays } from '../../src/modules/buscaminas/buscaminas.days.js';
 
 /**
  * Opt-in, real PostgreSQL: applies BOTH Buscaminas migrations in order to a fresh schema (the prod
@@ -139,6 +140,58 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
       expect(answers).toEqual(okCards(0));
       const again = await seed();
       expect(again.entries.every((e) => e.status === 'unchanged')).toBe(true);
+    });
+
+    it('appends days to the stored calendar: the next day alone is accepted, a hole is refused', async () => {
+      await seed();
+      const plan = await seed([makeDay('2026-12-25')]);
+      expect(plan.entries).toMatchObject([{ day: '2026-12-25', number: 91, status: 'new' }]);
+      expect(plan.extraDays).toHaveLength(90);
+      expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(91);
+      const { store } = await service();
+      expect([...(await store.get()).keys()].sort().at(-1)).toBe('2026-12-25');
+      await expect(seed([makeDay('2026-12-27')])).rejects.toThrow(/2026-12-26 is missing/);
+      expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(91);
+      await db.sql`DELETE FROM buscaminas_days`;
+      await expect(seed([makeDay('2026-12-25')])).rejects.toThrow(/must start at 2026-09-26/);
+    });
+
+    it('a daily round may not use a duel pool category, and the pool may not take a daily one (each checked inside its write)', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const poolRound = (es: string) => ({
+          id: `pool-${es.replace(/\W/g, '')}`, difficulty: 'easy',
+          prompt: { es, en: es, ka: es, tr: es },
+          cards: Array.from({ length: 16 }, (_, c) => ({ id: `p${c}`, name: `Pool ${c}`, img: `/buscaminas/v1/p/p${c}.webp` })),
+          ok: Array.from({ length: 12 }, (_, c) => `p${c}`),
+        });
+        await seed(calendar().slice(0, 3));
+        // A daily category cannot enter the pool…
+        await expect(writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [poolRound('Pista 3')] })))
+          .rejects.toThrow(/share a player or category with a daily/);
+        await writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [poolRound('Solo duelos')] }));
+        // …and a pool category cannot become a daily round (the next day is refused whole, nothing written).
+        const next = makeDay(addDays(calendar()[2].day, 1));
+        next.rounds[4] = { ...next.rounds[4], prompt: { ...next.rounds[4].prompt, es: 'solo  DUELOS' } };
+        await expect(seed([next])).rejects.toThrow(/1 daily round\(s\) use a duel pool category/);
+        expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(3);
+        const { seedDays, toDayRow } = await import('../../src/modules/buscaminas/buscaminas.seed.js');
+        await seedDays(db.sql, [toDayRow(next)], { dryRun: false, allowCorrection: false, allowPoolOverlap: true });
+        expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(4);
+        // That day, re-supplied unchanged beside a new one, is not re-judged; the new day is still checked.
+        const after = makeDay(addDays(next.day, 1));
+        expect((await seed([next, after])).entries.map((e) => e.status)).toEqual(['unchanged', 'new']);
+        // A disabled pool item still counts: its packs were already dealt.
+        await db.sql`UPDATE duel_pool SET enabled = false`;
+        const later = makeDay(addDays(after.day, 1));
+        later.rounds[0] = { ...later.rounds[0], prompt: { ...later.rounds[0].prompt, es: 'Solo duelos' } };
+        await expect(seed([later])).rejects.toThrow(/use a duel pool category/);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
     });
 
     it('refuses to change a played day\'s answers without --allow-correction; a correction reloads the served content', async () => {

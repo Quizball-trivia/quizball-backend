@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { CARDS_PER_ROUND, ROUNDS_PER_DAY, TARGETS_PER_ROUND } from './buscaminas.constants.js';
-import { addDays, dayNumber, LAUNCH_DAY, PUBLISHED_DAYS } from './buscaminas.days.js';
+import { addDays, assertUnbrokenCalendar, dayNumber, LAUNCH_DAY } from './buscaminas.days.js';
+import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicCard, type PublicRound } from './buscaminas.types.js';
 
 /**
@@ -78,12 +79,15 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
   return { day: d.day as string, number: d.number as number, contentVersion: contentVersion as number, rounds };
 }
 
-/** The whole published calendar or nothing: a short set would silently leave later days empty. */
+/**
+ * The supplied files are one unbroken run of days (any length, starting anywhere): the whole calendar, or a batch
+ * that appends to it. Whether the batch connects to the stored days is checked inside the write (`seedDays`).
+ */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length !== PUBLISHED_DAYS) throw new Error(`expected ${PUBLISHED_DAYS} days from ${LAUNCH_DAY}, found ${days.length}`);
+  if (days.length === 0) throw new Error('no days to seed');
   days.forEach((d, i) => {
-    const expected = addDays(LAUNCH_DAY, i);
-    if (d.day !== expected) throw new Error(`days must be contiguous from ${LAUNCH_DAY}: position ${i + 1} is ${d.day}, expected ${expected}`);
+    const expected = addDays(days[0].day, i);
+    if (d.day !== expected) throw new Error(`days must be contiguous: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
 }
 
@@ -161,8 +165,31 @@ export function planSeed(
   return { entries, extraDays: [...stored.keys()].filter((day) => !incomingDays.has(day)).sort() };
 }
 
+/** Taken by the days seed and the duel pool writer, so each re-checks the other's content inside its own write. */
+export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
+
+/**
+ * Rounds whose category is in the duel pool (duel packs are harvestable, so a daily category may never be a pool
+ * category). Matched exactly as the pool writer matches the days (normalised Spanish prompt, longer than two
+ * characters); disabled pool items count too, since their packs were already dealt. No duel_pool table means none.
+ */
+export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<number> {
+  const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
+  if (!table?.present) return 0;
+  const pool = await sql<Array<{ prompt: string | null }>>`
+    SELECT payload->'prompt'->>'es' AS prompt FROM duel_pool WHERE game = 'buscaminas'
+  `;
+  const keys = new Set(pool.flatMap((item) => (item.prompt ? [normalizeAnswer(item.prompt)] : [])).filter((key) => key.length > 2));
+  return rows.reduce((n, row) => n + row.board.rounds.filter((round) => keys.has(normalizeAnswer(round.prompt.es))).length, 0);
+}
+
+const unchangedDay = (before: BuscaminasDayRow | undefined, row: BuscaminasDayRow): boolean =>
+  !!before && !answersDiffer(before, row) && before.number === row.number && canonical(before.board) === canonical(row.board);
+
 /** Plans (and unless `dryRun`, writes) the whole set in ONE transaction; a refused correction writes nothing. */
-export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedPlan> {
+export async function seedDays(
+  sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap?: boolean },
+): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -170,12 +197,19 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
+    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
+    // pool write: the overlap with the duel pool is checked here, inside the write.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
+    const overlap = await duelPoolOverlap(tx, rows.filter((row) => !unchangedDay(stored.get(row.day), row)));
+    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
+    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+    assertUnbrokenCalendar(LAUNCH_DAY, stored.keys(), rows.map((row) => row.day));
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose answers change waits for those in flight and holds back new ones, so the run count
     // below is final and no run can start or move on the old answers once they are replaced.

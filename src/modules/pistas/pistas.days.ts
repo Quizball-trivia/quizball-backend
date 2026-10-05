@@ -10,8 +10,5 @@ export { addDays, dayEndsAt, releaseDay, RELEASE_TIME_ZONE };
 export const CONTENT_START = '2026-09-27';
 /** The first ranked day (the public launch); earlier days are unranked practice for everyone. */
 export const RANKED_START = '2026-09-29';
-/** Days with content, counted from CONTENT_START. */
-export const PUBLISHED_DAYS = 30;
-
-export const pistasCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });
-export const { LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = pistasCalendar;
+export const pistasCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START });
+export const { lastDay, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = pistasCalendar;

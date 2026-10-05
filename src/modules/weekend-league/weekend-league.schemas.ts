@@ -63,6 +63,12 @@ export const wlTournamentSchema = z.object({
   reward_frames: z.boolean(),
 });
 
+/** Public: what this week's podium packs contain, for screens shown before
+ *  (or without) a signed-in tournament load. */
+export const wlRewardPolicyResponseSchema = z.object({
+  reward_frames: z.boolean(),
+});
+
 export const wlCurrentResponseSchema = z.object({
   tournament: wlTournamentSchema.nullable(),
   you: wlYouSchema.nullable(),

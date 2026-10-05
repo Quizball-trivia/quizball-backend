@@ -25644,6 +25644,34 @@
         }
       }
     },
+    "/api/v1/weekend-league/reward-policy": {
+      "get": {
+        "summary": "What this week's podium packs contain (public)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether podium packs include the place frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reward_frames": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "reward_frames"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/weekend-league/current": {
       "get": {
         "summary": "Current Weekend League tournament + the caller's standing",

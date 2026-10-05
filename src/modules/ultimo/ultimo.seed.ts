@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import { canonical, resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../pistas/pistas.seed.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { CATEGORIES_PER_DAY } from './ultimo.constants.js';
-import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { addDays, assertAppendOnly, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
 import { CONTENT_START, dayNumber } from './ultimo.days.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from './ultimo.match.js';
 
@@ -228,60 +228,66 @@ export function planSeed(
  * correction unranks the day's runs; /start then moves each unfinished run onto the new content (from scratch).
  */
 export async function seedDays(
-  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; allowRepeats?: boolean },
+  sql: Sql, rows: readonly SeedDay[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; allowRepeats?: boolean },
 ): Promise<SeedPlan & { poolOverlap: number }> {
-  return sql.begin(async (transaction) => {
-    const tx = transaction as unknown as Sql;
-    // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
-    await tx`SET LOCAL lock_timeout = '5s'`;
-    await tx`SET LOCAL statement_timeout = '60s'`;
-    await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${ULTIMO_CONTENT_LOCK}))`;
-    await tx`LOCK TABLE ultimo_days IN SHARE ROW EXCLUSIVE MODE`;
-    const overlap = (await poolOverlapIn(tx, rows.flatMap((row) => row.categories))).length;
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily categor(ies) repeat a duel pool category; refused (duel content is harvestable)`);
-    const storedRows = await tx<Array<Omit<StoredDay, 'contentVersion'> & { contentVersion: string }>>`
-      SELECT day::text AS day, number, content_version AS "contentVersion", categories FROM ultimo_days
+  return sql.begin((transaction) => seedDaysTx(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan & { poolOverlap: number }>;
+}
+
+/** The seed inside the caller's transaction (a CMS approval commits the batch row and the days together). */
+export async function seedDaysTx(
+  tx: Sql, rows: readonly SeedDay[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; allowRepeats?: boolean },
+): Promise<SeedPlan & { poolOverlap: number }> {
+  // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
+  await tx`SET LOCAL lock_timeout = '5s'`;
+  await tx`SET LOCAL statement_timeout = '60s'`;
+  await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${ULTIMO_CONTENT_LOCK}))`;
+  await tx`LOCK TABLE ultimo_days IN SHARE ROW EXCLUSIVE MODE`;
+  const overlap = (await poolOverlapIn(tx, rows.flatMap((row) => row.categories))).length;
+  if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily categor(ies) repeat a duel pool category; refused (duel content is harvestable)`);
+  const storedRows = await tx<Array<Omit<StoredDay, 'contentVersion'> & { contentVersion: string }>>`
+    SELECT day::text AS day, number, content_version AS "contentVersion", categories FROM ultimo_days
+  `;
+  const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+  // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+  assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+  // An append (CMS-approved batch) may only add days after the stored ones: never correct or re-supply one.
+  if (opts.appendOnly) assertAppendOnly(stored.keys(), rows.map((row) => row.day));
+  // A list is a daily category once. Checked against the other supplied lists, the stored days the files do not
+  // replace, and the ledger of everything a day ever published (so a list corrected away is still known). The
+  // lists a day stores now are its own: keeping, correcting or re-keying them is not a repeat.
+  if (!opts.allowRepeats) {
+    const parsedCategories = (raw: unknown): UltimoCategory[] =>
+      (Array.isArray(raw) ? raw : []).map((c) => ultimoCategorySchema.safeParse(c)).flatMap((p) => (p.success ? [p.data] : []));
+    const suppliedDays = new Set(rows.map((row) => row.day));
+    const storedLists = new Map([...stored.values()].map((row) => [row.day, parsedCategories(row.categories).map(keysOf)]));
+    const elsewhere = [...storedLists].filter(([day]) => !suppliedDays.has(day)).flatMap(([, lists]) => lists);
+    const ledger = (await tx<Array<{ keys: CategoryKeys }>>`SELECT keys FROM ultimo_content_ledger WHERE side = 'day'`).map((r) => r.keys);
+    const repeats = repeatedCategories(rows, { elsewhere, ledger, own: (day) => storedLists.get(day) ?? [] });
+    if (repeats.length > 0) throw new Error(`a category was already a daily list (pass --allow-repeats to reuse one on purpose): ${repeats.join(', ')}`);
+  }
+  // Every start and move holds FOR SHARE on its day row until it commits; FOR UPDATE on the corrected days waits
+  // for those in flight and holds back new ones, so the run counts below are final.
+  const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
+  if (correcting.length > 0) {
+    await tx`SELECT day FROM ultimo_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
+  }
+  const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
+    SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM ultimo_runs GROUP BY day
+  `;
+  const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
+  if (opts.dryRun) return { ...plan, poolOverlap: overlap };
+  const byDay = new Map(rows.map((row) => [row.day, row]));
+  for (const entry of plan.entries) {
+    if (entry.status === 'unchanged') continue;
+    const row = byDay.get(entry.day)!;
+    await tx`
+      INSERT INTO ultimo_days (day, number, content_version, categories)
+      VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.categories as never)})
+      ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, categories = EXCLUDED.categories
     `;
-    const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
-    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
-    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
-    // A list is a daily category once. Checked against the other supplied lists, the stored days the files do not
-    // replace, and the ledger of everything a day ever published (so a list corrected away is still known). The
-    // lists a day stores now are its own: keeping, correcting or re-keying them is not a repeat.
-    if (!opts.allowRepeats) {
-      const parsedCategories = (raw: unknown): UltimoCategory[] =>
-        (Array.isArray(raw) ? raw : []).map((c) => ultimoCategorySchema.safeParse(c)).flatMap((p) => (p.success ? [p.data] : []));
-      const suppliedDays = new Set(rows.map((row) => row.day));
-      const storedLists = new Map([...stored.values()].map((row) => [row.day, parsedCategories(row.categories).map(keysOf)]));
-      const elsewhere = [...storedLists].filter(([day]) => !suppliedDays.has(day)).flatMap(([, lists]) => lists);
-      const ledger = (await tx<Array<{ keys: CategoryKeys }>>`SELECT keys FROM ultimo_content_ledger WHERE side = 'day'`).map((r) => r.keys);
-      const repeats = repeatedCategories(rows, { elsewhere, ledger, own: (day) => storedLists.get(day) ?? [] });
-      if (repeats.length > 0) throw new Error(`a category was already a daily list (pass --allow-repeats to reuse one on purpose): ${repeats.join(', ')}`);
-    }
-    // Every start and move holds FOR SHARE on its day row until it commits; FOR UPDATE on the corrected days waits
-    // for those in flight and holds back new ones, so the run counts below are final.
-    const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
-    if (correcting.length > 0) {
-      await tx`SELECT day FROM ultimo_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
-    }
-    const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
-      SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM ultimo_runs GROUP BY day
-    `;
-    const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
-    if (opts.dryRun) return { ...plan, poolOverlap: overlap };
-    const byDay = new Map(rows.map((row) => [row.day, row]));
-    for (const entry of plan.entries) {
-      if (entry.status === 'unchanged') continue;
-      const row = byDay.get(entry.day)!;
-      await tx`
-        INSERT INTO ultimo_days (day, number, content_version, categories)
-        VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.categories as never)})
-        ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, categories = EXCLUDED.categories
-      `;
-      if (entry.contentChanged && entry.runs > 0) await tx`UPDATE ultimo_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
-    }
-    await recordPublished(tx, 'day', rows.flatMap((row) => row.categories));
-    return { ...plan, poolOverlap: overlap };
-  }) as Promise<SeedPlan & { poolOverlap: number }>;
+    if (entry.contentChanged && entry.runs > 0) await tx`UPDATE ultimo_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
+  }
+  await recordPublished(tx, 'day', rows.flatMap((row) => row.categories));
+  return { ...plan, poolOverlap: overlap };
 }

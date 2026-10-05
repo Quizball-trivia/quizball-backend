@@ -125,6 +125,19 @@ export const agentsRepo = {
     return row;
   },
 
+  /** The role routing the pipeline reported when its producer last started (null before any report). */
+  async latestRouting(): Promise<{ roles?: Record<string, string>; singleCheck?: boolean } | null> {
+    const [row] = await sql<{ routing: { roles?: Record<string, string>; singleCheck?: boolean } | null }[]>`
+      SELECT data->'routing' AS routing FROM agents.events WHERE type = 'producer_start' ORDER BY ts DESC LIMIT 1
+    `;
+    return row?.routing ?? null;
+  },
+
+  async pendingDayBatchCount(): Promise<number> {
+    const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM agents.day_batches WHERE status = 'pending'`;
+    return row?.n ?? 0;
+  },
+
   async createJob(params: {
     type: string;
     params: Json;

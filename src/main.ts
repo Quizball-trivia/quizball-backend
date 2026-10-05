@@ -40,6 +40,7 @@ import {
   startRetentionEmailWorker,
   stopRetentionEmailWorker,
 } from './modules/retention-email/retention-email.worker.js';
+import { startDayBatchAutoApprover, stopDayBatchAutoApprover } from './modules/day-batches/index.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -85,6 +86,8 @@ startBuscaminasReadinessCheck();
 startPistasReadinessCheck();
 startUltimoReadinessCheck();
 startMinutoReadinessCheck();
+// Appends pipeline-built day batches that passed validation (games not on hold).
+startDayBatchAutoApprover();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -141,6 +144,7 @@ const shutdown = async (signal: string) => {
     stopRetentionEmailWorker(),
     stopSeason3FeedbackWorker(),
     stopWlRewardsWorker(),
+    stopDayBatchAutoApprover(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

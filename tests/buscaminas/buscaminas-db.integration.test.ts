@@ -20,7 +20,7 @@ if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_buscaminas_test_[
 
 const MIGRATIONS = join(__dirname, '../../supabase/migrations');
 const FIXTURE = `
-  DROP TABLE IF EXISTS buscaminas_runs, buscaminas_days, ranked_profiles, guest_sessions, users CASCADE;
+  DROP TABLE IF EXISTS buscaminas_runs, buscaminas_days, buscaminas_content_ledger, pistas_content_ledger, ranked_profiles, guest_sessions, users CASCADE;
   CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), nickname text, avatar_url text, avatar_customization jsonb, country text,
     is_ai boolean NOT NULL DEFAULT false, is_guest boolean NOT NULL DEFAULT false, is_seed boolean NOT NULL DEFAULT false,
@@ -51,6 +51,7 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
     const [u] = await db.sql`INSERT INTO users (nickname) VALUES ('legacy') RETURNING id`;
     [{ id: legacyRunId }] = await db.sql`INSERT INTO buscaminas_runs (user_id, day, content_version, state) VALUES (${u.id}, '2026-09-26', 1, ${db.sql.json(LEGACY_STATE)}) RETURNING id`;
     await db.sql.begin((tx) => tx.unsafe(readFileSync(join(MIGRATIONS, '20260928120000_buscaminas_days_and_guest_runs.sql'), 'utf8')));
+    await db.sql.begin((tx) => tx.unsafe(readFileSync(join(MIGRATIONS, '20261005120000_buscaminas_pistas_content_ledgers.sql'), 'utf8')));
   });
   afterAll(async () => { await db.sql?.end(); });
 
@@ -111,6 +112,7 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
     beforeEach(async () => {
       await db.sql`DELETE FROM buscaminas_runs WHERE id <> ${legacyRunId}`;
       await db.sql`DELETE FROM buscaminas_days`;
+      await db.sql`DELETE FROM buscaminas_content_ledger`;
     });
 
     const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean } = {}) => {
@@ -180,6 +182,9 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
         expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(3);
         const { seedDays, toDayRow } = await import('../../src/modules/buscaminas/buscaminas.seed.js');
         await seedDays(db.sql, [toDayRow(next)], { dryRun: false, allowCorrection: false, allowPoolOverlap: true });
+        // An append-only seed (a CMS-approved batch) never touches a stored day, not even to re-supply it unchanged.
+        await expect(seedDays(db.sql, [toDayRow(next), toDayRow(makeDay(addDays(next.day, 1)))], { dryRun: false, allowCorrection: false, appendOnly: true }))
+          .rejects.toThrow(`append only: already stored: ${next.day}`);
         expect((await db.sql`SELECT count(*)::int AS n FROM buscaminas_days`)[0].n).toBe(4);
         // That day, re-supplied unchanged beside a new one, is not re-judged; the new day is still checked.
         const after = makeDay(addDays(next.day, 1));
@@ -189,6 +194,69 @@ describe.skipIf(!url)('buscaminas on real Postgres', () => {
         const later = makeDay(addDays(after.day, 1));
         later.rounds[0] = { ...later.rounds[0], prompt: { ...later.rounds[0].prompt, es: 'Solo duelos' } };
         await expect(seed([later])).rejects.toThrow(/use a duel pool category/);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
+    });
+
+    it('content stored before the ledger existed is remembered on its first replacement', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const round = (es: string) => ({
+          id: 'pool-1', difficulty: 'easy', prompt: { es, en: es, ka: es, tr: es },
+          cards: Array.from({ length: 16 }, (_, c) => ({ id: `p${c}`, name: `Pool ${c}`, img: `/buscaminas/v1/p/p${c}.webp` })),
+          ok: Array.from({ length: 12 }, (_, c) => `p${c}`),
+        });
+        // shipped before the ledger: a pool item and the calendar, with nothing recorded
+        await db.sql`INSERT INTO duel_pool (game, item_id, difficulty, fingerprint, payload) VALUES ('buscaminas', 'pool-1', 'easy', 'f', ${db.sql.json(round('Viejo duelo') as never)})`;
+        const [day0, day1] = calendar().slice(0, 2);
+        day0.rounds[3] = { ...day0.rounds[3], prompt: { ...day0.rounds[3].prompt, es: 'Solo este dia' } };
+        await seed([day0, day1]);
+        await db.sql`DELETE FROM buscaminas_content_ledger`;
+        // the first pool write replaces it: the old category is recorded before it goes
+        await writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [round('Nuevo duelo')] }));
+        const next = makeDay(calendar()[2].day);
+        next.rounds[0] = { ...next.rounds[0], prompt: { ...next.rounds[0].prompt, es: 'Viejo duelo' } };
+        await expect(seed([next])).rejects.toThrow(/use a duel pool category/);
+        // the first day correction records the stored calendar before replacing a category
+        await db.sql`DELETE FROM buscaminas_content_ledger WHERE side = 'day'`;
+        const first = makeDay(calendar()[0].day);
+        first.rounds[3] = { ...first.rounds[3], prompt: { ...first.rounds[3].prompt, es: 'Otra categoria' } };
+        await seed([first], { allowCorrection: true });
+        await expect(writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [{ ...round('Solo este dia'), id: 'pool-2' }] })))
+          .rejects.toThrow(/share a player or category with a daily/);
+      } finally {
+        await db.sql`DROP TABLE IF EXISTS duel_pool`;
+      }
+    });
+
+    it('remembers published content: a pool category replaced since, or a day category corrected away, still blocks', async () => {
+      await db.sql`CREATE TABLE IF NOT EXISTS duel_pool (game text NOT NULL, item_id text NOT NULL, difficulty text NOT NULL,
+        fingerprint text NOT NULL, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (game, item_id))`;
+      try {
+        const { parsePoolFile, writePool } = await import('../../src/modules/duel/duel.seed.js');
+        const round = (es: string) => ({
+          id: 'pool-1', difficulty: 'easy', prompt: { es, en: es, ka: es, tr: es },
+          cards: Array.from({ length: 16 }, (_, c) => ({ id: `p${c}`, name: `Pool ${c}`, img: `/buscaminas/v1/p/p${c}.webp` })),
+          ok: Array.from({ length: 12 }, (_, c) => `p${c}`),
+        });
+        // the pool item is published, then replaced under the same id
+        await writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [round('Solo duelos')] }));
+        await writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [round('Otra cosa')] }));
+        await seed(calendar().slice(0, 2));
+        const next = makeDay(calendar()[2].day);
+        next.rounds[1] = { ...next.rounds[1], prompt: { ...next.rounds[1].prompt, es: 'Solo duelos' } };
+        await expect(seed([next])).rejects.toThrow(/use a duel pool category/);
+        // a day's category corrected away (unplayed) stays published: the pool may not take it
+        const first = makeDay(calendar()[0].day);
+        first.rounds[7] = { ...first.rounds[7], prompt: { ...first.rounds[7].prompt, es: 'Categoria nueva' } };
+        await seed([first], { allowCorrection: true });
+        await expect(writePool(db.sql, 'buscaminas', parsePoolFile('buscaminas', { game: 'buscaminas', items: [{ ...round('pista 7'), id: 'pool-2' }] })))
+          .rejects.toThrow(/share a player or category with a daily/);
       } finally {
         await db.sql`DROP TABLE IF EXISTS duel_pool`;
       }

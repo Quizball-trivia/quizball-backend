@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { CARDS_PER_ROUND, ROUNDS_PER_DAY, TARGETS_PER_ROUND } from './buscaminas.constants.js';
-import { addDays, assertUnbrokenCalendar, dayNumber, LAUNCH_DAY } from './buscaminas.days.js';
+import { addDays, assertAppendOnly, assertUnbrokenCalendar, dayNumber, LAUNCH_DAY } from './buscaminas.days.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicCard, type PublicRound } from './buscaminas.types.js';
 
@@ -176,8 +176,10 @@ export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
 export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<number> {
   const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
   if (!table?.present) return 0;
+  // the pool as it is, plus everything it ever held (the ledger remembers items replaced or removed since)
   const pool = await sql<Array<{ prompt: string | null }>>`
     SELECT payload->'prompt'->>'es' AS prompt FROM duel_pool WHERE game = 'buscaminas'
+    UNION ALL SELECT key FROM buscaminas_content_ledger WHERE side = 'pool'
   `;
   const keys = new Set(pool.flatMap((item) => (item.prompt ? [normalizeAnswer(item.prompt)] : [])).filter((key) => key.length > 2));
   return rows.reduce((n, row) => n + row.board.rounds.filter((round) => keys.has(normalizeAnswer(round.prompt.es))).length, 0);
@@ -187,54 +189,86 @@ const unchangedDay = (before: BuscaminasDayRow | undefined, row: BuscaminasDayRo
   !!before && !answersDiffer(before, row) && before.number === row.number && canonical(before.board) === canonical(row.board);
 
 /** Plans (and unless `dryRun`, writes) the whole set in ONE transaction; a refused correction writes nothing. */
+/** Daily categories ever published: the stored days plus the ledger (days since corrected keep their keys). */
+export async function dailyKeys(sql: Sql): Promise<Set<string>> {
+  const rows = await sql<Array<{ prompt: string | null }>>`
+    SELECT round->'prompt'->>'es' AS prompt FROM buscaminas_days, jsonb_array_elements(board->'rounds') AS round
+    UNION ALL SELECT key FROM buscaminas_content_ledger WHERE side = 'day'
+  `;
+  return new Set(rows.flatMap((row) => (row.prompt ? [normalizeAnswer(row.prompt)] : [])).filter((key) => key.length > 2));
+}
+
+/** Records published content (inside the write's transaction), in one statement; a key already recorded for that side and day is kept once. */
+export async function recordBuscaminasContent(tx: Sql, side: 'day' | 'pool', entries: ReadonlyArray<{ key: string; day: string | null }>): Promise<void> {
+  const rows = entries.filter((entry) => entry.key.length > 2);
+  if (rows.length === 0) return;
+  await tx`
+    INSERT INTO buscaminas_content_ledger (side, key, day)
+    SELECT ${side}, e->>'key', (e->>'day')::date FROM jsonb_array_elements(${tx.json(rows as never)}) AS e
+    ON CONFLICT (side, key, COALESCE(day, '1970-01-01'::date)) DO NOTHING
+  `;
+}
+
+/** A day's category keys, for the ledger. */
+export const dayKeys = (row: Pick<BuscaminasDayRow, 'day' | 'board'>) =>
+  row.board.rounds.map((round) => ({ key: normalizeAnswer(round.prompt.es), day: row.day }));
+
 export async function seedDays(
-  sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap?: boolean },
+  sql: Sql, rows: readonly BuscaminasDayRow[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap?: boolean },
 ): Promise<SeedPlan> {
-  return sql.begin(async (transaction) => {
-    // postgres.js types a transaction without its call signature; it is the same tagged function.
-    const tx = transaction as unknown as Sql;
-    // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
-    await tx`SET LOCAL lock_timeout = '5s'`;
-    await tx`SET LOCAL statement_timeout = '60s'`;
-    await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
-    // pool write: the overlap with the duel pool is checked here, inside the write.
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
-    await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
-    const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
-      SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
+  return sql.begin((transaction) => seedDaysTx(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan>;
+}
+
+/** The seed inside the caller's transaction (a CMS approval commits the batch row and the days together). */
+export async function seedDaysTx(
+  tx: Sql, rows: readonly BuscaminasDayRow[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowPoolOverlap?: boolean },
+): Promise<SeedPlan> {
+  // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
+  await tx`SET LOCAL lock_timeout = '5s'`;
+  await tx`SET LOCAL statement_timeout = '60s'`;
+  await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+  // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
+  // pool write: the overlap with the duel pool is checked here, inside the write.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
+  await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
+  const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
+    SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
+  `;
+  const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+  // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
+  const overlap = await duelPoolOverlap(tx, rows.filter((row) => !unchangedDay(stored.get(row.day), row)));
+  if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
+  // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+  assertUnbrokenCalendar(LAUNCH_DAY, stored.keys(), rows.map((row) => row.day));
+  // An append (CMS-approved batch) may only add days after the stored ones: never correct or re-supply one.
+  if (opts.appendOnly) assertAppendOnly(stored.keys(), rows.map((row) => row.day));
+  // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
+  // days whose answers change waits for those in flight and holds back new ones, so the run count
+  // below is final and no run can start or move on the old answers once they are replaced.
+  const correcting = rows.filter((row) => stored.has(row.day) && answersDiffer(stored.get(row.day)!, row)).map((row) => row.day).sort();
+  if (correcting.length > 0) {
+    await tx`SELECT day FROM buscaminas_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
+  }
+  const runRows = await tx<Array<{ day: string; runs: number }>>`
+    SELECT day::text AS day, count(*)::int AS runs FROM buscaminas_runs GROUP BY day
+  `;
+  const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, r.runs])), rows, opts);
+  if (opts.dryRun) return plan;
+  const byDay = new Map(rows.map((row) => [row.day, row]));
+  for (const entry of plan.entries) {
+    if (entry.status === 'unchanged') continue;
+    const row = byDay.get(entry.day)!;
+    await tx`
+      INSERT INTO buscaminas_days (day, number, content_version, board, answers)
+      VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.board as never)}, ${tx.json(row.answers as never)})
+      ON CONFLICT (day) DO UPDATE
+        SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, board = EXCLUDED.board, answers = EXCLUDED.answers
     `;
-    const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
-    // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
-    const overlap = await duelPoolOverlap(tx, rows.filter((row) => !unchangedDay(stored.get(row.day), row)));
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily round(s) use a duel pool category; refused (duel content is harvestable)`);
-    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
-    assertUnbrokenCalendar(LAUNCH_DAY, stored.keys(), rows.map((row) => row.day));
-    // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
-    // days whose answers change waits for those in flight and holds back new ones, so the run count
-    // below is final and no run can start or move on the old answers once they are replaced.
-    const correcting = rows.filter((row) => stored.has(row.day) && answersDiffer(stored.get(row.day)!, row)).map((row) => row.day).sort();
-    if (correcting.length > 0) {
-      await tx`SELECT day FROM buscaminas_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
-    }
-    const runRows = await tx<Array<{ day: string; runs: number }>>`
-      SELECT day::text AS day, count(*)::int AS runs FROM buscaminas_runs GROUP BY day
-    `;
-    const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, r.runs])), rows, opts);
-    if (opts.dryRun) return plan;
-    const byDay = new Map(rows.map((row) => [row.day, row]));
-    for (const entry of plan.entries) {
-      if (entry.status === 'unchanged') continue;
-      const row = byDay.get(entry.day)!;
-      await tx`
-        INSERT INTO buscaminas_days (day, number, content_version, board, answers)
-        VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.board as never)}, ${tx.json(row.answers as never)})
-        ON CONFLICT (day) DO UPDATE
-          SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, board = EXCLUDED.board, answers = EXCLUDED.answers
-      `;
-    }
-    return plan;
-  }) as Promise<SeedPlan>;
+  }
+  // everything stored before this write (content shipped before the ledger existed, and what a correction replaces)
+  // and everything it wrote: a category stays published even after it leaves the table
+  await recordBuscaminasContent(tx, 'day', [...stored.values(), ...rows].flatMap(dayKeys));
+  return plan;
 }
 
 export const PROJECT_REFS = { staging: 'nsdfiprfmhdqhbfxfwpv', production: 'lfbwhxvwubzeqkztghok' } as const;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { resolveSeedTarget, type SeedTargetName } from '../buscaminas/buscaminas.seed.js';
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
-import { addDays, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
+import { addDays, assertAppendOnly, assertUnbrokenCalendar } from '../daily/daily.calendar.js';
 import { CONTENT_START, dayNumber } from './pistas.days.js';
 import { containsWords, normalizeAnswer } from './pistas.normalize.js';
 import {
@@ -121,7 +121,7 @@ export function assertCalendar(days: readonly SeedDay[]): void {
   });
 }
 
-type DayPlayers = Pick<PistasDayRow, 'day' | 'rounds'>;
+type DayPlayers = { day: string; rounds: ReadonlyArray<{ answer: { display: Record<string, string>; accepted: readonly string[] } }> };
 
 /**
  * Rounds of `days` whose player is also the answer on a different day of `others`, as "day round N = day round M"
@@ -226,9 +226,10 @@ export function planSeed(
 export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): Promise<number> {
   const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
   if (!table?.present) return 0;
-  // Disabled pool items count too: their packs were already dealt.
+  // Disabled pool items count too (their packs were already dealt), and so does everything the pool ever held.
   const pool = await sql<Array<{ answer: { display: Record<string, string>; accepted: string[] } }>>`
     SELECT payload->'answer' AS answer FROM duel_pool WHERE game = 'pistas'
+    UNION ALL SELECT jsonb_build_object('display', display, 'accepted', accepted) FROM pistas_content_ledger WHERE side = 'pool'
   `;
   // samePlayer against every pool player, indexed: a display name of one side among all names of the other.
   const names = (values: Iterable<string>) => [...values].map(normalizeAnswer).filter((v) => v.length > 2);
@@ -248,63 +249,102 @@ export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): 
 /** Taken by the days seed and the duel pool writer, so each re-checks the other's content inside its own write. */
 export const PISTAS_CONTENT_LOCK = 'pistas-content';
 
+type LedgerPlayer = { display: Record<string, string>; accepted: string[] };
+
+/** One ledger identity per player: every normalised name, sorted. */
+const playerIdentity = (player: LedgerPlayer): string =>
+  [...new Set([...Object.values(player.display), ...player.accepted].map(normalizeAnswer).filter((name) => name.length > 2))].sort().join('|');
+
+/** Records published players (inside the write's transaction), in one statement; a player already recorded for that side and day is kept once. */
+export async function recordPistasContent(tx: Sql, side: 'day' | 'pool', entries: ReadonlyArray<LedgerPlayer & { day: string | null }>): Promise<void> {
+  const rows = entries
+    .map(({ display, accepted, day }) => ({ display, accepted, day, identity: playerIdentity({ display, accepted }) }))
+    .filter((row) => row.identity.length > 0);
+  if (rows.length === 0) return;
+  await tx`
+    INSERT INTO pistas_content_ledger (side, display, accepted, identity, day)
+    SELECT ${side}, e->'display', e->'accepted', e->>'identity', (e->>'day')::date FROM jsonb_array_elements(${tx.json(rows as never)}) AS e
+    ON CONFLICT (side, identity, COALESCE(day, '1970-01-01'::date)) DO NOTHING
+  `;
+}
+
+/** Daily answers the ledger remembers (players corrected away included), as pseudo-days. */
+export async function ledgerDailyPlayers(sql: Sql): Promise<DayPlayers[]> {
+  const ledger = await sql<Array<{ day: string; display: Record<string, string>; accepted: string[] }>>`
+    SELECT day::text AS day, display, accepted FROM pistas_content_ledger WHERE side = 'day'
+  `;
+  const byDay = new Map<string, Array<{ answer: LedgerPlayer }>>();
+  for (const entry of ledger) (byDay.get(entry.day) ?? byDay.set(entry.day, []).get(entry.day)!).push({ answer: { display: entry.display, accepted: entry.accepted } });
+  return [...byDay].map(([day, rounds]) => ({ day, rounds }));
+}
+
 export async function seedDays(
-  sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean; allowPoolOverlap?: boolean },
+  sql: Sql, rows: readonly PistasDayRow[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean; allowPoolOverlap?: boolean },
 ): Promise<SeedPlan> {
-  return sql.begin(async (transaction) => {
-    // postgres.js types a transaction without its call signature; it is the same tagged function.
-    const tx = transaction as unknown as Sql;
-    // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
-    await tx`SET LOCAL lock_timeout = '5s'`;
-    await tx`SET LOCAL statement_timeout = '60s'`;
-    await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
-    // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
-    // pool write: the overlap with the duel pool is checked here, inside the write.
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${PISTAS_CONTENT_LOCK}))`;
-    await tx`LOCK TABLE pistas_days IN SHARE ROW EXCLUSIVE MODE`;
-    const storedRows = await tx<Array<Omit<PistasDayRow, 'contentVersion'> & { contentVersion: string }>>`
-      SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
+  return sql.begin((transaction) => seedDaysTx(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan>;
+}
+
+/** The seed inside the caller's transaction (a CMS approval commits the batch row and the days together). */
+export async function seedDaysTx(
+  tx: Sql, rows: readonly PistasDayRow[], opts: { appendOnly?: boolean; dryRun: boolean; allowCorrection: boolean; allowRepeats?: boolean; allowPoolOverlap?: boolean },
+): Promise<SeedPlan> {
+  // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
+  await tx`SET LOCAL lock_timeout = '5s'`;
+  await tx`SET LOCAL statement_timeout = '60s'`;
+  await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+  // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock), and never beside a
+  // pool write: the overlap with the duel pool is checked here, inside the write.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${PISTAS_CONTENT_LOCK}))`;
+  await tx`LOCK TABLE pistas_days IN SHARE ROW EXCLUSIVE MODE`;
+  const storedRows = await tx<Array<Omit<PistasDayRow, 'contentVersion'> & { contentVersion: string }>>`
+    SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
+  `;
+  const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+  // The stored days are the calendar: a seed may extend it but never leave a hole in it.
+  assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
+  // An append (CMS-approved batch) may only add days after the stored ones: never correct or re-supply one.
+  if (opts.appendOnly) assertAppendOnly(stored.keys(), rows.map((row) => row.day));
+  // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
+  const writing = rows.filter((row) => { const before = stored.get(row.day); return !before || contentDiffers(before, row) || before.number !== row.number; });
+  const overlap = await duelPoolOverlap(tx, writing);
+  if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
+  // A player is a daily answer once: never on a day other than the one that published it.
+  if (!opts.allowRepeats) {
+    // everything a day ever published stays used on every OTHER day: the stored days (including the ones these files
+    // replace, before the ledger has seen them) and the ledger (players corrected away); repeatedPlayers skips a day's own
+    const others = [...stored.values(), ...(await ledgerDailyPlayers(tx))];
+    const repeats = [...new Set([...repeatedPlayers(rows, rows), ...repeatedPlayers(rows, others)])];
+    if (repeats.length > 0) throw new Error(`a player is the answer on two days (pass --allow-repeats to reuse a player on purpose): ${repeats.join('; ')}`);
+  }
+  // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
+  // days whose content changes waits for those in flight and holds back new ones, so the run counts
+  // below are final and no run can start or move on the old content once it is replaced.
+  const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
+  if (correcting.length > 0) {
+    await tx`SELECT day FROM pistas_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
+  }
+  const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
+    SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM pistas_runs GROUP BY day
+  `;
+  const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
+  if (opts.dryRun) return plan;
+  const byDay = new Map(rows.map((row) => [row.day, row]));
+  for (const entry of plan.entries) {
+    if (entry.status === 'unchanged') continue;
+    const row = byDay.get(entry.day)!;
+    await tx`
+      INSERT INTO pistas_days (day, number, content_version, rounds)
+      VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.rounds as never)})
+      ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, rounds = EXCLUDED.rounds
     `;
-    const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
-    // The stored days are the calendar: a seed may extend it but never leave a hole in it.
-    assertUnbrokenCalendar(CONTENT_START, stored.keys(), rows.map((row) => row.day));
-    // Only what this seed writes: a stored day supplied again unchanged is not re-judged.
-    const writing = rows.filter((row) => { const before = stored.get(row.day); return !before || contentDiffers(before, row) || before.number !== row.number; });
-    const overlap = await duelPoolOverlap(tx, writing);
-    if (overlap > 0 && !opts.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
-    // A player is a daily answer once: not twice in the files, and not on a stored day the files do not replace.
-    if (!opts.allowRepeats) {
-      const supplied = new Set(rows.map((row) => row.day));
-      const repeats = [...repeatedPlayers(rows, rows), ...repeatedPlayers(rows, [...stored.values()].filter((row) => !supplied.has(row.day)))];
-      if (repeats.length > 0) throw new Error(`a player is the answer on two days (pass --allow-repeats to reuse a player on purpose): ${repeats.join('; ')}`);
+    if (entry.contentChanged && entry.runs > 0) {
+      await tx`UPDATE pistas_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
     }
-    // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
-    // days whose content changes waits for those in flight and holds back new ones, so the run counts
-    // below are final and no run can start or move on the old content once it is replaced.
-    const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();
-    if (correcting.length > 0) {
-      await tx`SELECT day FROM pistas_days WHERE day = ANY(${tx.array(correcting)}::date[]) ORDER BY day FOR UPDATE`;
-    }
-    const runRows = await tx<Array<{ day: string; runs: number; ranked: number }>>`
-      SELECT day::text AS day, count(*)::int AS runs, (count(*) FILTER (WHERE ranked))::int AS ranked FROM pistas_runs GROUP BY day
-    `;
-    const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, { runs: r.runs, ranked: r.ranked }])), rows, opts);
-    if (opts.dryRun) return plan;
-    const byDay = new Map(rows.map((row) => [row.day, row]));
-    for (const entry of plan.entries) {
-      if (entry.status === 'unchanged') continue;
-      const row = byDay.get(entry.day)!;
-      await tx`
-        INSERT INTO pistas_days (day, number, content_version, rounds)
-        VALUES (${row.day}, ${row.number}, ${row.contentVersion}, ${tx.json(row.rounds as never)})
-        ON CONFLICT (day) DO UPDATE SET number = EXCLUDED.number, content_version = EXCLUDED.content_version, rounds = EXCLUDED.rounds
-      `;
-      if (entry.contentChanged && entry.runs > 0) {
-        await tx`UPDATE pistas_runs SET ranked = false WHERE day = ${row.day} AND ranked`;
-      }
-    }
-    return plan;
-  }) as Promise<SeedPlan>;
+  }
+  // everything stored before this write (players shipped before the ledger existed, and what a correction replaces)
+  // and everything it wrote: a player stays published even after it leaves the table
+  await recordPistasContent(tx, 'day', [...stored.values(), ...rows].flatMap((row) => row.rounds.map((round) => ({ ...round.answer, day: row.day }))));
+  return plan;
 }
 
 export type PistasSeedTarget = 'local' | SeedTargetName;

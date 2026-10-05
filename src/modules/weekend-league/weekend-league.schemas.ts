@@ -58,15 +58,6 @@ export const wlTournamentSchema = z.object({
    *  against THIS (via an offset), never the device clock, or a skewed
    *  phone shows the wrong time to kickoff. */
   server_now_ms: z.number().int(),
-  /** Podium packs include the place frame (WL_REWARD_FRAMES_ENABLED); the
-   *  prize card states "kit + frame" only when this is true. */
-  reward_frames: z.boolean(),
-});
-
-/** Public: what this week's podium packs contain, for screens shown before
- *  (or without) a signed-in tournament load. */
-export const wlRewardPolicyResponseSchema = z.object({
-  reward_frames: z.boolean(),
 });
 
 export const wlCurrentResponseSchema = z.object({

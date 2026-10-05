@@ -2,7 +2,6 @@ import { getOrLoadJson } from '../../core/json-cache.js';
 import { sql } from '../../db/index.js';
 import { tierFromRp } from '../ranked/season-rp-formula.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
-import { config } from '../../core/config.js';
 import { wlConfigFrom } from './wl-config.js';
 import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
@@ -307,7 +306,6 @@ export const weekendLeagueService = {
         break_until_ms: breakUntilMsOf(tournament, spectatorDelayMs),
         spectator_delay_ms: spectatorDelayMs,
         server_now_ms: Date.now(),
-        reward_frames: config.WL_REWARD_FRAMES_ENABLED,
       },
       you: {
         entered: entry != null,

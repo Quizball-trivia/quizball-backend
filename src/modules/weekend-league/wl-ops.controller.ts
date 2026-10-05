@@ -92,7 +92,6 @@ export const wlOpsController = {
       actor: z.string().min(1).max(80),
       tournament_id: z.string().uuid(),
     }).parse(req.body ?? {});
-    if (!config.WL_REWARDS_ENABLED) throw new BadRequestError('WL rewards are disabled');
     const result = await settleWlRewards(body.tournament_id, { limit: 500 });
     logger.warn({ actor: body.actor, tournamentId: body.tournament_id, ...result }, 'WL ops: settle-rewards');
     res.json(result);

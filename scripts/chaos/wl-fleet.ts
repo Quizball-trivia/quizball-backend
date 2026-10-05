@@ -58,6 +58,8 @@ interface WlFleetConfig {
   answerDelayMinMs: number;
   answerDelayMaxMs: number;
   runTimeoutSec: number;
+  /** Opt this rehearsal into coin/item reward payouts (non-prod only). */
+  rewardPayout: boolean;
 }
 
 interface AckSample { latencyMs: number; accepted: boolean; reason?: string }
@@ -180,6 +182,7 @@ function parseArgs(argv: string[]): WlFleetConfig {
     answerDelayMaxMs: num('answer-max-ms', 6_000),
     opsToken,
     runTimeoutSec: num('timeout-sec', 2_400),
+    rewardPayout: get('reward-payout') === 'true',
   };
 }
 
@@ -697,6 +700,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
         question_time_ms: cfg.questionTimeMs,
         spectator_delay_ms: cfg.spectatorDelayMs,
         break_ms: 20_000,
+        ...(cfg.rewardPayout ? { reward_payout: true } : {}),
       },
     },
     cfg.opsToken

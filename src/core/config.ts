@@ -376,27 +376,6 @@ const configSchema = z.object({
     .pipe(z.boolean())
     .optional()
     .default('false'),
-  // Weekend League coin/item payouts. Ships OFF so deploying the code cannot
-  // change the coin economy. Even when on, only tournaments whose week_key is
-  // on or after WL_REWARDS_FROM_WEEK (YYYY-MM-DD) settle, so past weekends are
-  // never paid retroactively.
-  WL_REWARDS_ENABLED: z
-    .string()
-    .transform((v) => v === 'true')
-    .pipe(z.boolean())
-    .optional()
-    .default('false'),
-  WL_REWARDS_FROM_WEEK: z.string().optional(),
-  // Podium packs also grant the place frame (reward policy v2). Separate from
-  // WL_REWARDS_ENABLED and OFF by default: turn it on only once every running
-  // backend and web build understands the `frame` slot, or an older pod would
-  // fail to read a winner's inventory.
-  WL_REWARD_FRAMES_ENABLED: z
-    .string()
-    .transform((v) => v === 'true')
-    .pipe(z.boolean())
-    .optional()
-    .default('false'),
 
   // Daily comeback experiment mechanics. Rewards and outbound reminders ship
   // disabled so deploying the code cannot change the coin economy or send an

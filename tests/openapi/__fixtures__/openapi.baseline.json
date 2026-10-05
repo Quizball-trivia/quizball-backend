@@ -421,6 +421,12 @@
                             "maxLength": 64,
                             "pattern": "^[a-z][a-z0-9_]*$"
                           },
+                          "frame": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
                           "hairColor": {
                             "type": "string",
                             "enum": [
@@ -511,6 +517,12 @@
                           "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "frame": {
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 64,
@@ -3002,6 +3014,12 @@
                 "maxLength": 64,
                 "pattern": "^[a-z][a-z0-9_]*$"
               },
+              "frame": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
               "hairColor": {
                 "type": "string",
                 "enum": [
@@ -3122,6 +3140,12 @@
                 "pattern": "^[a-z][a-z0-9_]*$"
               },
               "earwear": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "frame": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 64,
@@ -3535,6 +3559,12 @@
                       "maxLength": 64,
                       "pattern": "^[a-z][a-z0-9_]*$"
                     },
+                    "frame": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
                     "hairColor": {
                       "type": "string",
                       "enum": [
@@ -3724,6 +3754,12 @@
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
                         },
+                        "frame": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
                         "hairColor": {
                           "type": "string",
                           "enum": [
@@ -3908,6 +3944,12 @@
                           "pattern": "^[a-z][a-z0-9_]*$"
                         },
                         "earwear": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
+                        "frame": {
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 64,
@@ -13561,6 +13603,12 @@
                           "maxLength": 64,
                           "pattern": "^[a-z][a-z0-9_]*$"
                         },
+                        "frame": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        },
                         "hairColor": {
                           "type": "string",
                           "enum": [
@@ -14252,6 +14300,12 @@
                                       "maxLength": 64,
                                       "pattern": "^[a-z][a-z0-9_]*$"
                                     },
+                                    "frame": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
                                     "hairColor": {
                                       "type": "string",
                                       "enum": [
@@ -14342,6 +14396,12 @@
                                     "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "frame": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 64,
@@ -14799,6 +14859,12 @@
                                     "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "frame": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 64,
@@ -17766,6 +17832,12 @@
                         "maxLength": 64,
                         "pattern": "^[a-z][a-z0-9_]*$"
                       },
+                      "frame": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
                       "hairColor": {
                         "type": "string",
                         "enum": [
@@ -18570,6 +18642,12 @@
                                 "maxLength": 64,
                                 "pattern": "^[a-z][a-z0-9_]*$"
                               },
+                              "frame": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
                               "hairColor": {
                                 "type": "string",
                                 "enum": [
@@ -18778,6 +18856,12 @@
                                 "pattern": "^[a-z][a-z0-9_]*$"
                               },
                               "earwear": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[a-z][a-z0-9_]*$"
+                              },
+                              "frame": {
                                 "type": "string",
                                 "minLength": 1,
                                 "maxLength": 64,
@@ -19004,6 +19088,12 @@
                                     "maxLength": 64,
                                     "pattern": "^[a-z][a-z0-9_]*$"
                                   },
+                                  "frame": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
                                   "hairColor": {
                                     "type": "string",
                                     "enum": [
@@ -19188,6 +19278,12 @@
                                     "pattern": "^[a-z][a-z0-9_]*$"
                                   },
                                   "earwear": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "frame": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 64,

@@ -1,9 +1,16 @@
 /**
- * Weekend League reward policy v1 (owner-approved 2026-10-01). Pure
- * calculation only; nothing here touches a wallet. One reward per player per
- * weekend: the highest band reached, amounts never stack.
+ * Weekend League reward policy (owner-approved 2026-10-01; podium frames
+ * added 2026-10-04). Pure calculation only; nothing here touches a wallet. One
+ * reward per player per weekend: the highest band reached, amounts never stack.
  */
-export const WL_REWARD_POLICY_VERSION = 1;
+
+/** v1 (Oct 2026 rehearsals): podium packs carried the jersey only.
+ *  v2: the jersey and the place frame. */
+export const WL_REWARD_POLICY_VERSION = 2;
+
+/** First Weekend League week that pays. Earlier weekends (including the
+ *  unpaid voucher-era podiums) are never paid retroactively. */
+export const WL_REWARDS_FIRST_WEEK = '2026-10-10';
 
 export const WL_COIN_REWARDS = Object.freeze({
   participant: 1500,
@@ -17,11 +24,12 @@ export const WL_COIN_REWARDS = Object.freeze({
 export type WlRewardBand = keyof typeof WL_COIN_REWARDS;
 export type WlPackPlace = 1 | 2 | 3;
 
-/** The jersey each podium pack carries ("Retro Playmaker" edition). */
-export const WL_PACK_ITEM_SLUGS: Readonly<Record<WlPackPlace, string>> = Object.freeze({
-  1: 'avatar_jersey_wl_retro_home',
-  2: 'avatar_jersey_wl_retro_away',
-  3: 'avatar_jersey_wl_retro_training',
+/** What each podium pack carries: the "Retro Playmaker" jersey and the
+ *  matching place frame. Receipts keep what was frozen. */
+export const WL_PACK_ITEM_SLUGS: Readonly<Record<WlPackPlace, readonly string[]>> = Object.freeze({
+  1: Object.freeze(['avatar_jersey_wl_retro_home', 'avatar_frame_wl_champion']),
+  2: Object.freeze(['avatar_jersey_wl_retro_away', 'avatar_frame_wl_runnerup']),
+  3: Object.freeze(['avatar_jersey_wl_retro_training', 'avatar_frame_wl_podium']),
 });
 
 /** Server-owned facts only; none of these may come from a client. */

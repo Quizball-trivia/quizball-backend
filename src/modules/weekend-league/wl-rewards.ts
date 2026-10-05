@@ -25,6 +25,7 @@ import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import {
   WL_PACK_ITEM_SLUGS,
   WL_REWARD_POLICY_VERSION,
+  WL_REWARDS_FIRST_WEEK,
   wlHighestReward,
   type WlRewardBand,
   type WlRewardFacts,
@@ -90,24 +91,13 @@ function ineligibleReason(t: TournamentGate): WlIneligibleReason | null {
     return optedIn && t.config?.['single_game'] !== true ? null : 'test_tournament';
   }
   if (!t.week_key) return 'no_week_key';
-  const from = rolloutWeek();
-  return !from || t.week_key < from ? 'before_rollout' : null;
+  return t.week_key < WL_REWARDS_FIRST_WEEK ? 'before_rollout' : null;
 }
 
 export type WlGrantOutcome = 'granted' | 'forfeited' | 'skipped';
 
 /** Accounts that may never hold a reward. Shared by the freeze and the pay-time recheck. */
 const INELIGIBLE_ENTRY_STATES = ['disqualified', 'withdrawn', 'cancelled'];
-
-function rolloutWeek(): string | null {
-  const week = config.WL_REWARDS_FROM_WEEK;
-  if (!week || !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
-  // A real calendar date, not just the shape: '2026-02-30' would pass the
-  // pattern and then make every sweep query fail on its ::date cast, which
-  // would also stop opted-in rehearsals. Treated as unset instead.
-  const parsed = new Date(`${week}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === week ? week : null;
-}
 
 async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow[]> {
   // "Played" is an ACCEPTED answer on a run that counted. wl_answers also holds
@@ -162,16 +152,19 @@ async function loadFacts(tx: typeof sql, tournamentId: string): Promise<FactsRow
   `;
 }
 
-async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem>> {
-  const items: Record<number, WlRewardItem> = {};
-  for (const [place, slug] of Object.entries(WL_PACK_ITEM_SLUGS)) {
-    const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
-    const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
-    if (!product || product.type !== 'avatar'
-      || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
-      throw new Error(`WL reward product missing or malformed: ${slug}`);
+async function resolvePackItems(tx: TransactionSql): Promise<Record<number, WlRewardItem[]>> {
+  const items: Record<number, WlRewardItem[]> = {};
+  for (const [place, slugs] of Object.entries(WL_PACK_ITEM_SLUGS)) {
+    items[Number(place)] = [];
+    for (const slug of slugs) {
+      const product = await storeRepo.getProductBySlugInTx(tx, slug, true);
+      const metadata = (product?.metadata ?? {}) as { avatarPartId?: unknown; slot?: unknown };
+      if (!product || product.type !== 'avatar'
+        || typeof metadata.avatarPartId !== 'string' || typeof metadata.slot !== 'string') {
+        throw new Error(`WL reward product missing or malformed: ${slug}`);
+      }
+      items[Number(place)].push({ slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot });
     }
-    items[Number(place)] = { slug, avatarPartId: metadata.avatarPartId, slot: metadata.slot };
   }
   return items;
 }
@@ -225,7 +218,7 @@ export async function freezeWlRewards(tournamentId: string): Promise<WlFreezeOut
         band: reward.band,
         human_rank: reward.band === 'participant' || reward.band === 'finalist' ? null : f.human_rank,
         coins: reward.coins,
-        items: reward.packPlace ? [packItems[reward.packPlace]] : [],
+        items: reward.packPlace ? packItems[reward.packPlace] : [],
         facts: { ...policyFacts, finalRank: f.final_rank },
       }];
     });
@@ -539,8 +532,6 @@ export async function settleWlRewards(
   return result;
 }
 
-let warnedMissingRolloutWeek = false;
-
 /** Process-local fallback for when the durable retry state cannot be written. */
 const LOCAL_DEFER_MS = 60_000;
 const locallyDeferred = new Map<string, number>();
@@ -561,12 +552,7 @@ const SWEEP_BUDGET_MS = 8_000;
  * across replicas and restarts.
  */
 export async function wlRewardsSweep(shouldStop: () => boolean = () => false): Promise<void> {
-  if (!config.WL_REWARDS_ENABLED) return;
-  const from = rolloutWeek();
-  if (!from && !warnedMissingRolloutWeek) {
-    warnedMissingRolloutWeek = true;
-    logger.warn('WL rewards enabled without a valid WL_REWARDS_FROM_WEEK; real tournaments will not settle');
-  }
+  const from = WL_REWARDS_FIRST_WEEK;
   const includeTests = config.NODE_ENV !== 'prod';
   const now = Date.now();
   for (const [id, until] of locallyDeferred) {
@@ -627,7 +613,7 @@ export function wlRewardsWorkerTick(): void {
 }
 
 export function startWlRewardsWorker(): void {
-  if (workerTimer || !config.WL_REWARDS_ENABLED) return;
+  if (workerTimer) return;
   workerStopping = false;
   workerTimer = setInterval(wlRewardsWorkerTick, WORKER_INTERVAL_MS);
   workerTimer.unref?.();

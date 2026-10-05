@@ -17,7 +17,9 @@ const freeJerseys = [
 ] as const;
 const freeHair = ['hair_boy_basic'] as const;
 
-export const AVATAR_SLOTS = ['skin', 'jersey', 'hair', 'glasses', 'facialHair', 'headwear', 'earwear'] as const;
+/** `frame` is the card drawn around the avatar (Weekend League podium frames),
+ *  not a layer on the figure; it is owned and checked like any other slot. */
+export const AVATAR_SLOTS = ['skin', 'jersey', 'hair', 'glasses', 'facialHair', 'headwear', 'earwear', 'frame'] as const;
 export type AvatarSlot = typeof AVATAR_SLOTS[number];
 
 export const FREE_AVATAR_PART_IDS: Record<AvatarSlot, ReadonlySet<string>> = {
@@ -28,6 +30,7 @@ export const FREE_AVATAR_PART_IDS: Record<AvatarSlot, ReadonlySet<string>> = {
   facialHair: new Set(),
   headwear: new Set(),
   earwear: new Set(),
+  frame: new Set(),
 };
 
 // Paid parts are catalog data, not an API-code enum. Ownership validation in
@@ -48,6 +51,7 @@ export const avatarCustomizationSchema = z.object({
   facialHair: avatarPartIdSchema.optional(),
   headwear: avatarPartIdSchema.optional(),
   earwear: avatarPartIdSchema.optional(),
+  frame: avatarPartIdSchema.optional(),
   hairColor: z.enum(['natural', 'platinum', 'ginger', 'silver', 'blue_tips', 'pink_streaks']).optional(),
 }).strict();
 

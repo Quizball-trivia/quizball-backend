@@ -1,3 +1,4 @@
+import { config } from '../../core/config.js';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthenticationError } from '../../core/errors.js';
@@ -27,6 +28,10 @@ export const weekendLeagueController = {
   // caller. The old requireUserId() gated public data behind a 401.
   async hallOfFame(_req: Request, res: Response): Promise<void> {
     res.json(await weekendLeagueService.hallOfFame());
+  },
+
+  rewardPolicy(_req: Request, res: Response): void {
+    res.json({ reward_frames: config.WL_REWARD_FRAMES_ENABLED });
   },
 
   async qp(req: Request, res: Response): Promise<void> {

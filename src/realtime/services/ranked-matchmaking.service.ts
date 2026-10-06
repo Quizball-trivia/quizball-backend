@@ -19,6 +19,7 @@ import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { fetchUserRoomSockets } from './match-presence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import { SESSION_LOCK_WAIT_MS, userSessionGuardService } from './user-session-guard.service.js';
+import { roomRepo } from '../../modules/room/room.repo.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
 import {
@@ -1035,7 +1036,17 @@ export const rankedMatchmakingService = {
           waitingLobbyId: earlySessionBlock.waitingLobbyId,
           queueSearchId: earlySessionBlock.queueSearchId,
         });
-        await userSessionGuardService.emitState(io, userId);
+        const snapshot = await userSessionGuardService.emitState(io, userId);
+        // A seat in a live room game is a definite refusal, not a pairing or draft still forming: say so, or the
+        // client keeps showing "Searching" for a search that never started.
+        if (!snapshot.activeMatchId && await roomRepo.liveMatchForUser(userId)) {
+          userSessionGuardService.emitBlocked(socket, {
+            reason: 'ACTIVE_MATCH',
+            message: 'You are already in a room game',
+            operation: 'ranked:queue_join',
+            stateSnapshot: snapshot,
+          });
+        }
         return;
       }
 

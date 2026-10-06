@@ -24,19 +24,25 @@ type PublicStatSniperBoard = {
   me: null;
 };
 const PUBLIC_BOARD_TTL_MS = 30_000;
-let publicBoard: { at: number; value: Promise<PublicStatSniperBoard> } | null = null;
+/** A failed load is retried no sooner than this: an outage must not turn every page view into a query. */
+const PUBLIC_BOARD_FAILURE_TTL_MS = 5_000;
+let publicBoard: { day: string; until: number; value: Promise<PublicStatSniperBoard> } | null = null;
 
-/** Served without an account or guest session (every visitor of the public page), so one query per 30 s per replica. */
+/**
+ * Served without an account or guest session (every visitor of the public page), so at most one query per 30 s per
+ * replica. Keyed by the UTC challenge day: yesterday's board is never served as today's after midnight.
+ */
 export function publicStatSniperBoard(now = Date.now()): Promise<PublicStatSniperBoard> {
-  if (publicBoard && now - publicBoard.at < PUBLIC_BOARD_TTL_MS) return publicBoard.value;
+  const day = new Date(now).toISOString().slice(0, 10);
+  if (publicBoard && publicBoard.day === day && now < publicBoard.until) return publicBoard.value;
   const value = dailyChallengesService.getStatSniperLeaderboard(null).then((board) => ({
     challengeDay: board.challengeDay,
     entries: board.entries.map((e) => ({ rank: e.rank, alias: e.username, score: e.score, country: e.country ?? null, avatarCustomization: e.avatarCustomization ?? null })),
     me: null as null,
   }));
-  const entry = { at: now, value };
+  const entry = { day, until: now + PUBLIC_BOARD_TTL_MS, value };
   publicBoard = entry;
-  value.catch(() => { if (publicBoard === entry) publicBoard = null; });
+  value.catch(() => { if (publicBoard === entry) entry.until = now + PUBLIC_BOARD_FAILURE_TTL_MS; });
   return value;
 }
 

@@ -23,6 +23,8 @@ export function ipBucket(req: Request): string {
 export { ipv6Prefix64 };
 const mintLimiter = guestHttpBudget('mint', 30, ipBucket);
 const standingsLimiter = guestHttpBudget('standings', 300, ipBucket);
+// Its own budget: the page board and the in-game board refresh together while a guest plays.
+const statSniperBoardLimiter = guestHttpBudget('stat-sniper-board', 600, ipBucket);
 const guestIpLimiter = guestHttpBudget('ip', 600, ipBucket);
 const guestTokenLimiter = guestHttpBudget('principal', 240, (req) => req.guest?.id ?? ipBucket(req));
 
@@ -38,7 +40,7 @@ router.use(requireGuestHttpEnabled);
 router.post('/session', mintLimiter, validate({ body: createGuestSessionSchema }), guestController.createSession);
 router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await publicStandingsService.get()); });
 // Public like the standings: the Aproximado page shows every visitor today's board (registered before the token-only router).
-router.get('/daily-challenges/stat-sniper/leaderboard', standingsLimiter, guestController.statSniperLeaderboard);
+router.get('/daily-challenges/stat-sniper/leaderboard', statSniperBoardLimiter, guestController.statSniperLeaderboard);
 
 // Friend lobbies: the principal behind a token (rate-limited like every guest call).
 router.post('/principal', guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter, guestController.principal);

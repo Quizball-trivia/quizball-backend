@@ -114,6 +114,10 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
     for (const file of MIGRATIONS) await db.sql.begin((tx) => tx.unsafe(readFileSync(file, 'utf8')));
     // Safe to re-run.
     await db.sql.begin((tx) => tx.unsafe(readFileSync(MIGRATIONS[0], 'utf8')));
+    // The seed ships all 11 games ready in both environments; the tests below make each game ready as they need it.
+    const seeded = await db.sql<{ n: number }[]>`SELECT count(*)::int AS n FROM partner_games WHERE ready AND enabled`;
+    expect(seeded[0].n).toBe(22);
+    await db.sql`UPDATE partner_games SET ready = false`;
 
     partner = await import('../../src/modules/partners/partner-config.js');
     quota = await import('../../src/modules/partners/partner-quota.service.js');

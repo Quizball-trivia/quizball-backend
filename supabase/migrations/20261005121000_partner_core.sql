@@ -257,14 +257,14 @@ GRANT ALL ON public.partner_players, public.partner_sessions, public.partner_con
 REVOKE ALL ON SEQUENCE public.partner_audit_id_seq FROM PUBLIC, anon, authenticated;
 GRANT USAGE, SELECT ON SEQUENCE public.partner_audit_id_seq TO service_role;
 
--- Default rule set (internal doc §3): all 11 games enabled in Freecroco's order, 1 play a day (ranked 10), none
--- ready until its stream ships it. Existing rows are never touched.
+-- Default rule set (internal doc §3): all 11 games enabled and ready in Freecroco's order (they ship together), 1 play a
+-- day (ranked 10). Existing rows are never touched.
 INSERT INTO public.partner_config_versions (partner_slug, environment)
 VALUES ('freecroco', 'test'), ('freecroco', 'production')
 ON CONFLICT (partner_slug, environment) DO NOTHING;
 
 INSERT INTO public.partner_games (partner_slug, environment, game_id, enabled, sort_order, default_limit, ready)
-SELECT 'freecroco', env.environment, g.game_id, true, g.sort_order, CASE WHEN g.game_id = 'ranked' THEN 10 ELSE 1 END, false
+SELECT 'freecroco', env.environment, g.game_id, true, g.sort_order, CASE WHEN g.game_id = 'ranked' THEN 10 ELSE 1 END, true
 FROM (VALUES ('test'), ('production')) AS env(environment)
 CROSS JOIN (VALUES
   ('ranked', 1), ('guess-the-goal', 2), ('true-false', 3), ('countdown', 4), ('pick-em', 5), ('career-path', 6),

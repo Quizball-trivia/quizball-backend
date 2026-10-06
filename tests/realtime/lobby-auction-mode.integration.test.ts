@@ -276,6 +276,9 @@ vi.mock('../../src/modules/users/users.repo.js', () => {
   };
 });
 
+// No live room seats in these lobby scenarios (the session guard checks for one on entry and queue join).
+vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchForUser: async () => null } }));
+
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     createLobby: vi.fn(async (data: {

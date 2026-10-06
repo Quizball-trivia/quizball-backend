@@ -325,13 +325,17 @@ export const objectivesService = {
     };
   },
 
-  async evaluateForMatch(matchId: string): Promise<Record<string, ObjectiveProgressResponse[]>> {
+  /**
+   * `occurredAt` picks the daily/weekly periods. A retried evaluation must pass the match's completion time: event keys
+   * are unique per period, so evaluating "now" after a reset would credit (and pay) the same match again.
+   */
+  async evaluateForMatch(matchId: string, occurredAt?: Date): Promise<Record<string, ObjectiveProgressResponse[]>> {
     const facts = await objectivesRepo.getMatchFacts(matchId);
     if (facts.length === 0) {
       return {};
     }
 
-    const now = new Date();
+    const now = occurredAt ?? new Date();
     const definitions = ACTIVE_OBJECTIVE_DEFINITIONS.filter((definition) =>
       definition.rule.type !== 'complete_all_daily'
       && definition.rule.type !== 'complete_daily_sets'

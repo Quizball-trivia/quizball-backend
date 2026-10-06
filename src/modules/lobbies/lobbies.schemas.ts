@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 import { DUEL_GAMES } from '../duel/duel.types.js';
+import { ROOM_GAMES } from '../room/room.types.js';
 import { LOBBY_GAME_MODES } from './lobby-modes.js';
 
 export const listPublicLobbiesQuerySchema = z.object({
@@ -15,6 +16,8 @@ export const publicLobbyResponseSchema = z.object({
   gameMode: z.enum(LOBBY_GAME_MODES),
   /** The game of a duel room; null for every other mode. */
   duelGame: z.enum(DUEL_GAMES).nullable(),
+  /** The game of a room-game room; null for every other mode. */
+  roomGame: z.enum(ROOM_GAMES).nullable(),
   isPublic: z.boolean(),
   createdAt: z.string().datetime(),
   memberCount: z.number().int(),

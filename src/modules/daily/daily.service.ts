@@ -1,3 +1,4 @@
+import { createLeaderboardCache } from './leaderboard-cache.js';
 import { randomUUID } from 'node:crypto';
 import { NotFoundError, type AppError } from '../../core/errors.js';
 import type { TransactionSql } from '../../db/index.js';
@@ -97,7 +98,9 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
 ) {
   type Tx = TransactionSql;
   const { calendar } = config;
-  const leaderboards = new Map<string, { at: number; players: number; top: Entry[] }>();
+  const leaderboards = createLeaderboardCache<Entry>(
+    (day) => deps.repo.leaderboard(day, config.leaderboardTop), config.leaderboardCacheMs, () => deps.now().getTime(),
+  );
   /** Days the database clock has closed; once closed a day stays closed. */
   const closedDays = new Set<string>();
 
@@ -306,11 +309,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse<Entry>> {
       const day = dayId ?? calendar.boardDay(deps.now());
       if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
-      let cached = leaderboards.get(day);
-      if (!cached || deps.now().getTime() - cached.at > config.leaderboardCacheMs) {
-        cached = { at: deps.now().getTime(), ...(await deps.repo.leaderboard(day, config.leaderboardTop)) };
-        leaderboards.set(day, cached);
-      }
+      const cached = await leaderboards.get(day);
       const me = userId ? await deps.repo.rankOf(userId, day) : null;
       return { day, players: cached.players, top: cached.top, me };
     },

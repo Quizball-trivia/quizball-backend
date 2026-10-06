@@ -9,14 +9,20 @@ import { category, makeDay, nameOf, plainCategory } from './fixtures.js';
  * Opt-in, real PostgreSQL: applies the Último migrations to a fresh schema (with the duel and lobby tables they
  * extend, in their pre-Último shape) and runs the repo, the service (on the database clock), the settling sweep and
  * both seeds against it. Needs an isolated local database:
+ * Isolated audit clones on port 5436 are also accepted.
  *   ULTIMO_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_ultimo_test_1
  * The service's calendar runs on a fixed app clock; answer clocks and day closes use the real database clock.
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
-vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/db/index.js', () => ({
+  get sql() { return db.sql; },
+  // As in production: one transaction with a server-side statement deadline (SET LOCAL), on this suite's database.
+  withStatementTimeout: (run: (tx: unknown) => Promise<unknown>, ms = 30_000) =>
+    db.sql.begin(async (tx) => { await tx.unsafe(`SET LOCAL statement_timeout = ${Math.round(ms)}`); return run(tx); }),
+}));
 
 const url = process.env.ULTIMO_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_ultimo_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local ultimo test database required');
+if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:543(?:2|6)\/quizball_ultimo_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local ultimo test database required');
 
 const MIGRATIONS = ['20260930120000_ultimo.sql', '20260930120001_ultimo_validate.sql', '20260930120002_ultimo_swap_checks.sql'].map((f) => join(__dirname, '../../supabase/migrations', f));
 const FIXTURE = `
@@ -75,7 +81,11 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
       { fingerprint: () => ultimoRepo.daysFingerprint(), load: () => ultimoRepo.loadDays() },
       { refreshMs: 0, now: () => Date.now(), log: { warn: () => undefined, error: () => undefined } },
     );
-    return createUltimoService({ repo: ultimoRepo, content: () => store.get(), contentStale: () => store.invalidate(), now: () => NOW });
+    return createUltimoService({ repo: {
+      ...ultimoRepo,
+      insertRun: (tx, data) => ultimoRepo.insertRun(tx, data.day === TODAY
+        ? { ...data, closesAt: new Date(Date.now() + 60 * 60 * 1000) } : data),
+    }, content: () => store.get(), contentStale: () => store.invalidate(), now: () => NOW });
   }
 
   const member = async (name: string) => {
@@ -240,7 +250,7 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     const [run] = await db.sql<Array<{ id: string }>>`
       INSERT INTO ultimo_runs (user_id, day, ranked, content_version, state, closes_at)
       VALUES (${me.userId}, ${TODAY}, true, ${Number(day.content_version)}, ${db.sql.json({ ...newState(), c: 4, open: true, said: [0], dl: past, res: four } as never)},
-        '2026-10-02T03:00:00Z') RETURNING id`;
+        ${new Date(Date.now() + 60 * 60 * 1000)}) RETURNING id`;
     const done = await svc.next(me, run.id, 0);
     expect(done.state).toMatchObject({ done: true, score: 5, answers: 5 });
   });

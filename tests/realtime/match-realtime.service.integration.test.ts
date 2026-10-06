@@ -223,6 +223,15 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       // layering-violation cleanup; tests still call it `completeMatchMock`
       // for continuity and assert call-site behavior, not implementation.
       completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+      // The locked state update, composed from the repo mocks these scenarios drive: read the saved state, write it.
+      updatePartyQuizState: async (matchId: string, change: (saved: unknown) => unknown) => {
+        // The match the dropout just read (no extra getMatch call: these scenarios queue one-shot results).
+        const match = (await getMatchMock.mock.results.at(-1)?.value) as { status: string; current_q_index: number; state_payload: unknown } | null;
+        if (!match || match.status !== 'active') return null;
+        const state = change(match.state_payload);
+        await setMatchStatePayloadMock(matchId, state, match.current_q_index);
+        return { state, currentQIndex: match.current_q_index };
+      },
     },
   };
 });

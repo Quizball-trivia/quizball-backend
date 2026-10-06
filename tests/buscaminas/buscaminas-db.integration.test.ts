@@ -9,13 +9,19 @@ import { calendar, makeDay, okCards } from './fixtures.js';
  * Opt-in, real PostgreSQL: applies BOTH Buscaminas migrations in order to a fresh schema (the prod
  * path, with a pre-existing member run as on staging) and runs the repo, the service and the seed
  * against it. Needs an isolated local database:
+ * Isolated audit clones on port 5436 are also accepted.
  *   BUSCAMINAS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_buscaminas_test_1
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
-vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/db/index.js', () => ({
+  get sql() { return db.sql; },
+  // As in production: one transaction with a server-side statement deadline (SET LOCAL), on this suite's database.
+  withStatementTimeout: (run: (tx: unknown) => Promise<unknown>, ms = 30_000) =>
+    db.sql.begin(async (tx) => { await tx.unsafe(`SET LOCAL statement_timeout = ${Math.round(ms)}`); return run(tx); }),
+}));
 
 const url = process.env.BUSCAMINAS_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_buscaminas_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local buscaminas test database required');
+if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:543(?:2|6)\/quizball_buscaminas_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local buscaminas test database required');
 
 const MIGRATIONS = join(__dirname, '../../supabase/migrations');
 const FIXTURE = `

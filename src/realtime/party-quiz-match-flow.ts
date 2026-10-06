@@ -1,3 +1,4 @@
+import { gameplayDbTaskLimiter } from './socket-db-task-limiter.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
@@ -8,14 +9,13 @@ import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
-import { objectivesService } from '../modules/objectives/index.js';
+import { runPartyCompletionWork } from './party-completion-work.js';
 import {
   matchesService,
   resolveMatchVariant,
   type PartyQuizStatePayload,
 } from '../modules/matches/matches.service.js';
 import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
-import { progressionService } from '../modules/progression/progression.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { calculatePoints } from './scoring.js';
 import { getRedisClient } from './redis.js';
@@ -547,15 +547,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       const activeMatch = await matchesRepo.getMatch(matchId);
       if (!activeMatch || activeMatch.status !== 'active') return;
 
-      const avgTimes = await matchesService.computeAvgTimes(matchId);
-      const playersBefore = await matchPlayersRepo.listMatchPlayers(matchId);
-      await Promise.all(
-        playersBefore.map((player) =>
-          matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
-        )
-      );
-
-      const players = await matchPlayersRepo.listMatchPlayers(matchId);
+      const players = await matchesService.refreshPlayerAverageTimes(matchId);
       span.setAttribute('quizball.player_count', players.length);
       const standings = buildStandings(players);
       const state = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
@@ -643,26 +635,12 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
         logger.warn({ err, matchId }, 'Party quiz match_completed analytics failed');
       }
 
-      void (async () => {
-        try {
-          await Promise.allSettled([
-            achievementsService.evaluateForMatch(
-              matchId,
-              players.map((player) => player.user_id),
-              'friendly_party_quiz'
-            ),
-            progressionService.awardCompletedMatchXp(matchId),
-            objectivesService.evaluateForMatchBestEffort(matchId),
-          ]);
-
-          const refreshedPayload = await buildFinalResultsPayload(matchId, resultVersion);
-          if (refreshedPayload) {
-            io.to(`match:${matchId}`).emit('match:final_results', refreshedPayload);
-          }
-        } catch (err) {
-          logger.warn({ err, matchId }, 'Party quiz post-completion side effects failed');
+      void runPartyCompletionWork(matchId, players.map((player) => player.user_id), async () => {
+        const refreshedPayload = await buildFinalResultsPayload(matchId, resultVersion);
+        if (refreshedPayload) {
+          io.to(`match:${matchId}`).emit('match:final_results', refreshedPayload);
         }
-      })();
+      }).catch((err) => logger.warn({ err, matchId }, 'Party quiz post-completion side effects failed'));
     } finally {
       await releaseLock(lockKey, lock.token);
     }
@@ -999,13 +977,15 @@ export async function sendPartyQuizQuestion(
     // atomically. It is also one network round trip, which is materially faster
     // than either sequential updates or an explicit begin/update/update/commit
     // transaction during synchronized kickoffs.
-    await matchesService.persistPartyQuestionDispatch({
+    const committed = await matchesService.persistPartyQuestionDispatch({
       matchId,
       qIndex,
       statePayload: state,
       shownAt: playableAt,
       deadlineAt,
     });
+    // A dropout committed after `state` was read is kept by the write; the cache and broadcasts must agree with it.
+    state.droppedUserIds = committed.droppedUserIds;
     // Entry evidence must only be written after durable question state commits.
     await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     const cache = buildInitialCache({
@@ -1333,9 +1313,24 @@ export async function resolvePartyQuizRound(
         return;
       }
 
-      const players = await matchPlayersRepo.listMatchPlayers(matchId);
-      const activePlayers = getActivePartyPlayers(players, state.droppedUserIds);
-      const answers = await matchAnswersRepo.listAnswersForQuestion(matchId, qIndex);
+      const nextIndex = qIndex + 1;
+      // One transaction holding the match row: an answer still being written finishes first (and is counted), and one
+      // arriving later finds the round closed. The players/answers read and the close can no longer interleave, and
+      // the closed state is built from the saved one (a dropout written since is kept).
+      const closed = await matchesService.closePartyQuizRound(matchId, qIndex, nextIndex, (saved) => {
+        const next = sanitizePartyQuizState(saved, match.total_questions);
+        next.currentQuestion = null;
+        next.answeredUserIds = [];
+        bumpStateVersion(next);
+        return next;
+      });
+      if (!closed) {
+        logger.debug({ matchId, qIndex }, 'Party quiz round already closed');
+        return;
+      }
+      const { players, answers } = closed;
+      const closedState = closed.state;
+      const activePlayers = getActivePartyPlayers(players, closedState.droppedUserIds);
       span.setAttribute('quizball.player_count', players.length);
       span.setAttribute('quizball.active_player_count', activePlayers.length);
       span.setAttribute('quizball.answer_count', answers.length);
@@ -1358,16 +1353,10 @@ export async function resolvePartyQuizRound(
       const activeAnswerCount = answers.filter((answer) =>
         activePlayers.some((player) => player.user_id === answer.user_id)
       ).length;
-      state.currentQuestion = null;
-      state.answeredUserIds = [];
-      bumpStateVersion(state);
-
-      const nextIndex = qIndex + 1;
-      await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
       const cache = await getMatchCache(matchId);
       if (cache) {
         cache.currentQIndex = nextIndex;
-        cache.statePayload = state as unknown as MatchCache['statePayload'];
+        cache.statePayload = closedState as unknown as MatchCache['statePayload'];
         cache.currentQuestion = null;
         cache.answers = {};
         await setMatchCache(cache);
@@ -1401,7 +1390,7 @@ export async function resolvePartyQuizRound(
           activeAnswerCount,
           playerCount: players.length,
           activePlayerCount: activePlayers.length,
-          droppedUserIds: state.droppedUserIds,
+          droppedUserIds: closedState.droppedUserIds,
           nextQIndex: nextIndex,
           totalQuestions: match.total_questions,
           rankingOrder: standings.map((standing) => standing.userId),
@@ -1736,7 +1725,8 @@ export async function handlePartyQuizAnswer(
     const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
-    const recorded = await matchesService.recordPartyQuizAnswerIfMissing({
+    // Only this DB write is gameplay-limited (a burst of Party Quiz answers must not crowd out other games' answers).
+    const recorded = await gameplayDbTaskLimiter.run(() => matchesService.recordPartyQuizAnswerIfMissing({
       matchId: payload.matchId,
       qIndex: payload.qIndex,
       userId,
@@ -1746,7 +1736,17 @@ export async function handlePartyQuizAnswer(
       pointsEarned,
       phaseKind: 'normal',
       phaseRound: payload.qIndex + 1,
-    });
+    }));
+
+    if (recorded.roundClosed) {
+      // The round closed (or the match ended) while this answer waited for its write: too late, it scores nothing.
+      logger.info(
+        { eventName: 'match:answer_rejected', matchId: payload.matchId, qIndex: payload.qIndex, userId, reason: 'round_closed' },
+        'Party quiz answer rejected'
+      );
+      socket.emit('error', { code: 'MATCH_NOT_ACTIVE', message: 'That question is no longer active' });
+      return;
+    }
 
     if (!recorded.answer) {
       logger.error({ matchId: payload.matchId, qIndex: payload.qIndex, userId }, 'Party answer record missing after submit');

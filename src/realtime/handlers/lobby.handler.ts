@@ -135,7 +135,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
       }
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:join_by_code');
-      socket.emit('error', { code: 'LOBBY_JOIN_ERROR', message: 'Failed to join lobby' });
+      socket.emit('error', { code: 'LOBBY_JOIN_ERROR', message: 'Failed to join lobby', meta: { inviteCode: parsed.data.inviteCode.toUpperCase() } });
       ack?.({
         ok: false,
         code: 'LOBBY_JOIN_ERROR',

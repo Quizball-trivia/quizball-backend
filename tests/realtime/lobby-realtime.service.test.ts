@@ -79,7 +79,9 @@ vi.mock('../../src/modules/synthetic-bots/synthetic-bots.repo.js', () => ({
   },
 }));
 
-vi.mock('../../src/realtime/socket-db-task-limiter.js', () => ({
+vi.mock('../../src/realtime/socket-db-task-limiter.js', async (importOriginal) => ({
+  // Keep the real class and the other limiters (constructed at import by modules this service pulls in).
+  ...(await importOriginal<typeof import('../../src/realtime/socket-db-task-limiter.js')>()),
   socketDbTaskLimiter: {
     run: (...args: unknown[]) => socketDbTaskRunMock(...args),
   },

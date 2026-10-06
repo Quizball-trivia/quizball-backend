@@ -1,3 +1,4 @@
+import { gameplayDbTaskLimiter, SocketDbTaskOverloadedError } from '../socket-db-task-limiter.js';
 import { logger } from '../../core/logger.js';
 import { anyDuelGameEnabled } from '../../modules/duel/duel.config.js';
 import { asDuelLocale, DuelError, duelService, type DuelEffects } from '../../modules/duel/duel.service.js';
@@ -88,9 +89,11 @@ async function deliver(io: QuizballServer, effects: DuelEffects | null): Promise
       kind: 'duel_phase', matchId: effects.matchId, phaseToken: effects.timer.token,
     }), TIMER_ARM_TIMEOUT_MS).catch((error) => logger.warn({ error, matchId: effects.matchId }, 'Duel timer arm failed; the recovery poll covers it'));
   }
-  await Promise.all(effects.userIds.map((userId) => emitSnapshot(io, effects.matchId, userId).catch((error) => {
-    logger.warn({ error, matchId: effects.matchId, userId }, 'Duel state delivery failed; the client resyncs');
-  })));
+  await duelService.snapshots(effects.matchId, effects.userIds.map((userId) => ({ userId }))).then((snapshots) => {
+    for (const [userId, snapshot] of snapshots) io.to(`user:${userId}`).emit('duel:state', snapshot as DuelStatePayload);
+  }).catch((error) => {
+    logger.warn({ error, matchId: effects.matchId }, 'Duel state delivery failed; the clients resync');
+  });
   if (effects.finished && effects.lobbyId) {
     await emitLobbyState(io, effects.lobbyId).catch((error) => logger.warn({ error, lobbyId: effects.lobbyId }, 'Duel room state delivery failed'));
   }
@@ -101,7 +104,9 @@ function emitError(socket: QuizballSocket, error: unknown, matchId?: string): vo
     socket.emit('duel:error', { code: error.code, message: error.code, ...(matchId ? { matchId } : {}) });
     return;
   }
-  logger.error({ error, matchId, userId: socket.data.user.id }, 'Duel handler failed');
+  // A busy gameplay limiter is load, not a fault: warn without a stack per rejected command.
+  if (error instanceof SocketDbTaskOverloadedError) logger.warn({ reason: error.reason, matchId, userId: socket.data.user.id }, 'Duel command rejected: gameplay DB busy');
+  else logger.error({ error, matchId, userId: socket.data.user.id }, 'Duel handler failed');
   socket.emit('duel:error', { code: 'duel_unavailable', message: 'duel_unavailable', ...(matchId ? { matchId } : {}) });
 }
 
@@ -118,12 +123,13 @@ export const duelRealtimeService = {
   },
 
   async handleReady(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string }): Promise<void> {
-    const effects = await duelService.ready(data.matchId, socket.data.user.id, asDuelLocale(data.locale) ?? 'es');
+    const effects = await gameplayDbTaskLimiter.run(() => duelService.ready(data.matchId, socket.data.user.id, asDuelLocale(data.locale) ?? 'es'));
     await deliver(io, effects);
   },
 
   async handleCommand(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; commandId: string; command: unknown }): Promise<void> {
-    const { result, effects } = await duelService.command(data.matchId, socket.data.user.id, data.commandId, data.command);
+    // The slot covers the commit only: the broadcast below does not hold a gameplay slot.
+    const { result, effects } = await gameplayDbTaskLimiter.run(() => duelService.command(data.matchId, socket.data.user.id, data.commandId, data.command));
     socket.emit('duel:command_result', { matchId: data.matchId, commandId: data.commandId, ...result });
     if (effects) await deliver(io, effects);
     else if (!result.ok) await emitSnapshot(io, data.matchId, socket.data.user.id);
@@ -140,7 +146,8 @@ export const duelRealtimeService = {
   },
 
   async handleForfeit(io: QuizballServer, socket: QuizballSocket, data: { matchId: string }): Promise<void> {
-    await deliver(io, await duelService.forfeit(data.matchId, socket.data.user.id));
+    const effects = await gameplayDbTaskLimiter.run(() => duelService.forfeit(data.matchId, socket.data.user.id));
+    await deliver(io, effects);
   },
 
   async handlePhaseTimer(io: QuizballServer, payload: RealtimeTimerPayload): Promise<void> {

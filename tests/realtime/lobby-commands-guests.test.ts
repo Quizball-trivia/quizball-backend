@@ -10,6 +10,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const lobbiesRepo = {
   createLobby: vi.fn(), addMember: vi.fn(), getByInviteCode: vi.fn(), getById: vi.fn(), listMembersWithUser: vi.fn(),
+  findFriendlyRoomByInviteCode: vi.fn(),
   countMembers: vi.fn(), countReadyMembers: vi.fn(), updateLobbySettings: vi.fn(), setAllReady: vi.fn(), setVisibility: vi.fn(),
 };
 const allowGuestOperation = vi.fn();
@@ -23,8 +24,11 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
     emitBlocked: vi.fn(), emitState: vi.fn(), resolveState: vi.fn(),
   },
 }));
+const acquireLobbyLockWithRetry = vi.fn();
+// Every suite gets the lock by default; the contention test overrides it for its own call.
+beforeEach(() => acquireLobbyLockWithRetry.mockResolvedValue({ acquired: true, token: 't' }));
 vi.mock('../../src/realtime/services/lobby-lifecycle.helpers.js', () => ({
-  acquireLobbyLockWithRetry: vi.fn().mockResolvedValue({ acquired: true, token: 't' }),
+  acquireLobbyLockWithRetry: (...a: unknown[]) => acquireLobbyLockWithRetry(...a),
   closeLobbyIfEmpty: vi.fn(), isRankedAiLobby: () => false, releaseRankedAiLobbyMemberSafely: vi.fn(),
   resolveLobbyId: (socket: { data: { lobbyId?: string } }, override?: string) => override ?? socket.data.lobbyId ?? null,
 }));
@@ -89,6 +93,41 @@ describe('guest rooms — join by code', () => {
     expect(lobbiesRepo.addMember).toHaveBeenCalledWith('L', 'g', false);
   });
 
+  it('refusals say which room it was: account-only and full rooms carry the room (open, mode, host)', async () => {
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'waiting', game_mode: 'friendly_possession', duel_game: null, host_nickname: 'Lionel' });
+    room('friendly_possession', [member('host')]);
+    const socket = socketFor('g', true);
+    expect(await joinByCode(io as never, socket as never, 'abc123', 'c')).toEqual(expect.objectContaining({
+      ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT',
+      room: { roomState: 'open', gameMode: 'friendly_possession', duelGame: null, hostNickname: 'Lionel' },
+    }));
+    // The server's own error event names the code, so the client knows it echoes its join.
+    expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_MODE_REQUIRES_ACCOUNT', meta: expect.objectContaining({ inviteCode: 'ABC123' }) }));
+
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'waiting', game_mode: 'duel', duel_game: 'pistas', host_nickname: null });
+    room('duel', [member('m1'), member('m2')]);
+    expect(await joinByCode(io as never, socketFor('m3') as never, 'abc123', 'c')).toEqual(expect.objectContaining({
+      ok: false, code: 'LOBBY_FULL', room: { roomState: 'open', gameMode: 'duel', duelGame: 'pistas', hostNickname: null },
+    }));
+  });
+
+  it('a busy room (lock contention) refuses with a retry, its error event naming the invite code', async () => {
+    acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false, token: null });
+    room('football_grid', [member('host')]);
+    const socket = socketFor('g', true);
+    expect(await joinByCode(io as never, socket as never, 'abc123', 'c')).toMatchObject({ ok: false, code: 'TRANSITION_IN_PROGRESS', retryable: true });
+    expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'TRANSITION_IN_PROGRESS', meta: { inviteCode: 'ABC123' } }));
+    expect(lobbiesRepo.findFriendlyRoomByInviteCode).not.toHaveBeenCalled();
+  });
+
+  it('a failing room lookup never fails the refusal: the room is unknown', async () => {
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockRejectedValue(new Error('db down'));
+    room('friendly_possession', [member('host')]);
+    expect(await joinByCode(io as never, socketFor('g', true) as never, 'abc123', 'c')).toEqual(expect.objectContaining({
+      ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT', room: { roomState: 'unknown', gameMode: null, duelGame: null, hostNickname: null },
+    }));
+  });
+
   it('a guest cannot join a room whose FINAL mode would be locked (third member → party quiz)', async () => {
     room('ranked_sim', [member('a'), member('b')]);
     const result = await joinByCode(io as never, socketFor('g', true) as never, 'abc123', 'c');
@@ -100,7 +139,7 @@ describe('guest rooms — join by code', () => {
     room('friendly_possession', [member('g1', true)]);
     expect(await joinByCode(io as never, socketFor('m') as never, 'abc123', 'c')).toMatchObject({ ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT' });
     room('auction', [member('g1', true), member('g2', true), member('g3', true)]);
-    expect(await joinByCode(io as never, socketFor('g4', true) as never, 'abc123', 'c')).toMatchObject({ ok: false, code: 'LOBBY_GUEST_LIMIT' });
+    expect(await joinByCode(io as never, socketFor('g4', true) as never, 'abc123', 'c')).toMatchObject({ ok: false, code: 'LOBBY_FULL' });
     room('football_grid', [member('m1'), member('g1', true)]);
     expect(await joinByCode(io as never, socketFor('g2', true) as never, 'abc123', 'c')).toMatchObject({ ok: false, code: 'LOBBY_FULL' });
     room('friendly_party_quiz', [member('g1', true), member('g2', true), member('g3', true), member('m1')]);

@@ -14786,7 +14786,8 @@
                               "football_grid",
                               "auction",
                               "ranked_sim",
-                              "duel"
+                              "duel",
+                              "room_game"
                             ]
                           },
                           "isPublic": {
@@ -14901,6 +14902,13 @@
                               "ultimo",
                               "minuto"
                             ]
+                          },
+                          "roomGame": {
+                            "type": "string",
+                            "enum": [
+                              "aproximado"
+                            ],
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -14909,6 +14917,7 @@
                           "displayName",
                           "gameMode",
                           "duelGame",
+                          "roomGame",
                           "isPublic",
                           "createdAt",
                           "memberCount",
@@ -32910,6 +32919,87 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/party-matches/{matchId}/rewards": {
+      "get": {
+        "summary": "Read confirmed Party Quiz rewards for the authenticated participant",
+        "tags": [
+          "Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "matchId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved reward amounts and processing status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "matchId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "failed",
+                        "ineligible"
+                      ]
+                    },
+                    "xpEarned": {
+                      "type": "integer",
+                      "nullable": true,
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "matchId",
+                    "status",
+                    "xpEarned"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No completed Party Quiz match for this participant",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,3 +1,5 @@
+import { config } from '../core/config.js';
+
 export type SocketDbTaskRejectReason = 'queue_full' | 'wait_timeout';
 
 export interface SocketDbTaskStats {
@@ -174,3 +176,12 @@ export const postConnectDbTaskLimiter = new SocketDbTaskLimiter(4, 12_000, 30_00
 // occupy the disconnect-cleanup or hydration budgets above. Overload here
 // means dropped telemetry rows, never delayed gameplay work.
 export const telemetryDbTaskLimiter = new SocketDbTaskLimiter(2, 200, 5_000);
+
+// Buffer short answer/room-command bursts before they contend for database
+// admission. At most half the DB budget leaves room for broadcasts and other traffic. Both
+// the queue and wait are bounded; delayed packets still obey game deadlines.
+export const gameplayDbTaskLimiter = new SocketDbTaskLimiter(
+  Math.min(6, Math.max(1, Math.floor(Math.min(config.DB_POOL_MAX ?? 12, config.DB_INFLIGHT_LIMIT ?? 12) / 2))),
+  1_024,
+  1_500,
+);

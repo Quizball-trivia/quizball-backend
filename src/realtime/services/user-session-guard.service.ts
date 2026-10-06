@@ -35,6 +35,7 @@ import { footballGridRealtimeService } from './football-grid-realtime.service.js
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
 import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { DuelGameId } from '../../modules/duel/duel.types.js';
+import { roomRepo } from '../../modules/room/room.repo.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -411,6 +412,14 @@ async function isActiveLobbyLive(
       return (await lobbiesRepo.listLiveDuelsForLobbies([lobby.id])).length > 0;
     } catch (error) {
       logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live duel state');
+      return true;
+    }
+  }
+  if (lobby.game_mode === 'room_game') {
+    try {
+      return (await lobbiesRepo.listLiveRoomsForLobbies([lobby.id])).length > 0;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live room game state');
       return true;
     }
   }
@@ -1332,6 +1341,11 @@ export const userSessionGuardService = {
       (lobby) => lobby.id !== keepWaitingLobbyId
     );
     if (!context.queueSearchId && !hasLobbyToClean) {
+      // No membership to read it from, yet a seat can still be live (an earlier cleanup raced its room's start).
+      const seat = await roomRepo.liveMatchForUser(userId);
+      if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+        return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
+      }
       return { ok: true, snapshot };
     }
 
@@ -1359,6 +1373,12 @@ export const userSessionGuardService = {
         reason: 'ACTIVE_MATCH',
         message: context.activeDuel ? 'You are already in a duel' : 'You are already in an active draft',
       };
+    }
+    // Cleanup removed a membership: if that room started meanwhile, its seat is live but no longer visible through
+    // membership. Found by the seat itself; returning to that same room (its own link) stays allowed.
+    const seat = await roomRepo.liveMatchForUser(userId);
+    if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+      return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
     }
     return { ok: true, snapshot };
   },
@@ -1493,6 +1513,17 @@ export const userSessionGuardService = {
         snapshot,
         reason: 'ACTIVE_MATCH',
         message: 'Your lobby state changed. Please retry.',
+      };
+    }
+    // A room seat is found by the seat itself, not through room membership: a room starting while this check cleaned
+    // up its (still "waiting") lobby membership must not let the player queue for another game as well. Checked even
+    // with room games switched off: matches already running when the flag is turned off keep going.
+    if (await roomRepo.liveMatchForUser(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'You are already in a room game',
       };
     }
 

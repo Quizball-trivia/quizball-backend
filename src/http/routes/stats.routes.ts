@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { partyRewardsParamsSchema } from '../../modules/stats/stats.schemas.js';
 import {
   statsController,
   headToHeadQuerySchema,
@@ -10,6 +11,9 @@ import {
 const router = Router();
 
 router.use(authMiddleware);
+
+router.get('/party-matches/:matchId/rewards',
+  validate({ params: partyRewardsParamsSchema }), statsController.partyRewards);
 
 /**
  * GET /api/v1/stats/head-to-head

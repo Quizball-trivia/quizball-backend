@@ -17,11 +17,11 @@ vi.mock('../../src/db/index.js', () => {
     },
     { json: (value: unknown) => value, unsafe: (text: string) => ({ unsafe: text }), begin: vi.fn() },
   );
-  return { sql };
+  return { sql, withStatementTimeout: vi.fn((fn: (tx: unknown) => unknown) => fn(sql)) };
 });
 
 const { pistasRepo } = await import('../../src/modules/pistas/pistas.repo.js');
-const { sql } = await import('../../src/db/index.js');
+const { sql, withStatementTimeout } = await import('../../src/db/index.js');
 const tx = sql as never;
 const last = () => calls.at(-1)!;
 const state = { v: 1 as const, r: 0, n: 1, g: 0, c: null, s: null, res: [], done: false };
@@ -80,6 +80,7 @@ describe('pistas repo SQL', () => {
 
   it('the board and a member\'s rank count ranked, finished runs only, with `solved`', async () => {
     await pistasRepo.leaderboard('2026-09-29', 20);
+    expect(withStatementTimeout).toHaveBeenLastCalledWith(expect.any(Function), 4_000);
     expect(last().text).toMatch(/WHERE r\.day = \$\? AND r\.ranked AND r\.done/);
     expect(last().text).toMatch(/r\.solved/);
     await pistasRepo.rankOf('user-a', '2026-09-29', tx);

@@ -4,10 +4,9 @@ import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.types.js';
-import { objectivesService } from '../../modules/objectives/index.js';
-import { progressionService } from '../../modules/progression/progression.service.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { deleteMatchCache } from '../match-cache.js';
+import { runPartyCompletionWork } from '../party-completion-work.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import {
   lastMatchKey,
@@ -151,10 +150,11 @@ async function completePartyQuizDropoutMatch(params: {
   io: QuizballServer;
   match: MatchRow;
   players: MatchPlayerRow[];
-  winnerId: string | null;
+  /** Picks the winner from the final scores (read after the question is closed, so no answer can still land). */
+  pickWinner: (players: MatchPlayerRow[]) => string | null;
   winnerDecisionMethod: 'forfeit' | 'total_points';
 }): Promise<void> {
-  const { io, match, players, winnerId, winnerDecisionMethod } = params;
+  const { io, match, pickWinner, winnerDecisionMethod } = params;
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
   state.currentQuestion = null;
   state.answeredUserIds = [];
@@ -164,9 +164,8 @@ async function completePartyQuizDropoutMatch(params: {
     {
       eventName: 'party_dropout_match_complete',
       matchId: match.id,
-      winnerId,
       winnerDecisionMethod,
-      playerCount: players.length,
+      playerCount: params.players.length,
       droppedUserIds: state.droppedUserIds,
       currentQIndex: match.current_q_index,
       totalQuestions: match.total_questions,
@@ -175,7 +174,12 @@ async function completePartyQuizDropoutMatch(params: {
   );
 
   cancelMatchQuestionTimer(match.id, match.current_q_index);
+  // Writing the closed question takes the match row: an answer still being written finishes first, and any later
+  // one is refused (it needs this question open). Only then are the scores final, so the winner is chosen after.
   await matchesRepo.setMatchStatePayload(match.id, state, match.current_q_index);
+  const players = await matchPlayersRepo.listMatchPlayers(match.id);
+  const winnerId = pickWinner(players);
+  logger.info({ eventName: 'party_dropout_winner', matchId: match.id, winnerId, winnerDecisionMethod }, 'Party quiz dropout winner chosen from final scores');
   await matchesService.completeMatch(match.id, winnerId);
   await deleteMatchCache(match.id);
 
@@ -189,12 +193,6 @@ async function completePartyQuizDropoutMatch(params: {
   } catch (error) {
     logger.warn({ error, matchId: match.id }, 'Party dropout avg-time update failed');
   }
-
-  try { await progressionService.awardCompletedMatchXp(match.id); }
-  catch (error) { logger.warn({ error, matchId: match.id }, 'Party dropout XP award failed'); }
-
-  try { await objectivesService.evaluateForMatchBestEffort(match.id); }
-  catch (error) { logger.warn({ error, matchId: match.id }, 'Party dropout objectives evaluation failed'); }
 
   const resultVersion = Date.now();
   const redis = getRedisClient();
@@ -237,6 +235,13 @@ async function completePartyQuizDropoutMatch(params: {
       'Party quiz dropout final results emitted'
     );
   }
+
+  // Rewards go through the durable job like a normal ending (achievements, objectives, XP, retried until all succeed);
+  // the results are sent again once they land.
+  void runPartyCompletionWork(match.id, players.map((player) => player.user_id), async () => {
+    const refreshed = await buildFinalResultsPayload(match.id, resultVersion);
+    if (refreshed) await emitFinalResultsToMatchParticipants(io, match.id, refreshed);
+  }).catch((error) => logger.warn({ error, matchId: match.id }, 'Party dropout rewards failed'));
 }
 
 export async function applyPartyQuizDropouts(params: {
@@ -329,12 +334,24 @@ export async function applyPartyQuizDropouts(params: {
       };
     }
 
-    state.droppedUserIds = nextDroppedUserIds;
-    state.answeredUserIds = state.answeredUserIds.filter((userId) => !nextDroppedUserIds.includes(userId));
-    bumpStateVersion(state);
+    // Merged into the state as saved now, under the match row lock: a round that closed or a question that opened
+    // since lockedMatch was read is kept (writing back that older copy would restore a question already past).
+    const merged = await matchesService.updatePartyQuizState(lockedMatch.id, (saved) => {
+      const next = sanitizePartyQuizState(saved, lockedMatch.total_questions);
+      next.droppedUserIds = [...new Set([...next.droppedUserIds, ...requestedDroppedUserIds])];
+      next.answeredUserIds = next.answeredUserIds.filter((userId) => !next.droppedUserIds.includes(userId));
+      bumpStateVersion(next);
+      return next;
+    });
+    if (!merged) {
+      logger.info({ eventName: 'party_dropouts_skipped', matchId: lockedMatch.id, reason: 'match_not_active' }, 'Party quiz dropouts skipped');
+      return { completed: false, continued: false, activeCount: 0 };
+    }
+    Object.assign(state, merged.state);
+    lockedMatch.current_q_index = merged.currentQIndex;
+    lockedMatch.state_payload = state as unknown as typeof lockedMatch.state_payload;
 
-    const activePlayers = getActivePartyPlayers(players, nextDroppedUserIds);
-    await matchesRepo.setMatchStatePayload(lockedMatch.id, state, lockedMatch.current_q_index);
+    const activePlayers = getActivePartyPlayers(players, state.droppedUserIds);
     logger.info(
       {
         eventName: 'party_dropouts_applied',
@@ -370,7 +387,7 @@ export async function applyPartyQuizDropouts(params: {
       if (activePlayers.length === 1) {
         emitPartyOpponentForfeitPending(io, lockedMatch.id, activePlayers, reason);
       }
-      const standingsWinnerId = buildStandings(players)[0]?.userId ?? null;
+      const lastStanding = activePlayers[0]?.user_id ?? null;
       await completePartyQuizDropoutMatch({
         io,
         match: {
@@ -378,7 +395,7 @@ export async function applyPartyQuizDropouts(params: {
           state_payload: state as unknown as Record<string, unknown>,
         },
         players,
-        winnerId: activePlayers[0]?.user_id ?? standingsWinnerId,
+        pickWinner: (final) => lastStanding ?? buildStandings(final)[0]?.userId ?? null,
         winnerDecisionMethod: activePlayers.length === 1 ? 'forfeit' : 'total_points',
       });
       return { completed: true, continued: false, activeCount: activePlayers.length };
@@ -437,7 +454,10 @@ export async function applyPartyQuizDropouts(params: {
               state_payload: state as unknown as Record<string, unknown>,
             },
             players,
-            winnerId: buildStandings(activePlayers)[0]?.userId ?? null,
+            pickWinner: (final) => {
+              const active = new Set(activePlayers.map((player) => player.user_id));
+              return buildStandings(final.filter((player) => active.has(player.user_id)))[0]?.userId ?? null;
+            },
             winnerDecisionMethod: 'total_points',
           });
           return { completed: true, continued: false, activeCount: activePlayers.length };

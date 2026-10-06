@@ -104,12 +104,9 @@ export const duelRepo = {
       INSERT INTO duel_match_content (match_id, seed, item_ids, content)
       VALUES (${match.id}, ${data.seed}, ${data.itemIds}, ${q.json(data.content as never)})
     `;
-    for (const [seat, player] of data.seats.entries()) {
-      await q`
-        INSERT INTO duel_participants (match_id, seat, user_id, is_guest)
-        VALUES (${match.id}, ${seat}, ${player.userId}, ${player.isGuest})
-      `;
-    }
+    await q`INSERT INTO duel_participants ${q(data.seats.map((player, seat) => ({
+      match_id: match.id, seat, user_id: player.userId, is_guest: player.isGuest,
+    })), 'match_id', 'seat', 'user_id', 'is_guest')}`;
     return match;
   },
 
@@ -225,10 +222,15 @@ export const duelRepo = {
       WHERE id = ${row.id}
     `;
     const { scores, winnerSeat } = data.result;
-    for (const seat of [0, 1] as const) {
-      const outcome = data.status === 'cancelled' ? 'cancelled' : winnerSeat === null ? 'draw' : winnerSeat === seat ? 'win' : 'loss';
-      await q`UPDATE duel_participants SET score = ${scores[seat]}, outcome = ${outcome}, active = false WHERE match_id = ${row.id} AND seat = ${seat}`;
-    }
+    await q`
+      UPDATE duel_participants
+      SET score = CASE WHEN seat = 0 THEN ${scores[0]}::int ELSE ${scores[1]}::int END,
+          outcome = CASE WHEN ${data.status} = 'cancelled' THEN 'cancelled'
+                         WHEN ${winnerSeat}::int IS NULL THEN 'draw'
+                         WHEN seat = ${winnerSeat}::int THEN 'win' ELSE 'loss' END,
+          active = false
+      WHERE match_id = ${row.id}
+    `;
     if (row.lobby_id) {
       await q`UPDATE lobbies SET status = 'waiting', updated_at = now() WHERE id = ${row.lobby_id} AND status = 'active' AND game_mode = 'duel'`;
       await q`UPDATE lobby_members SET is_ready = false WHERE lobby_id = ${row.lobby_id}`;

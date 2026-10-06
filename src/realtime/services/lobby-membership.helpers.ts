@@ -35,6 +35,7 @@ export async function emitClosedLobbyStateForMode(
     settings: {
       gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
       duelGame: null,
+      roomGame: null,
       friendlyRandom: true,
       friendlyCategoryAId: null,
       friendlyCategoryBId: null,

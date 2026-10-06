@@ -15,11 +15,11 @@ const RULES: Record<DuelOperation, { limit: number; windowSec: number }> = {
 
 const local = new Map<string, { count: number; resetAt: number }>();
 
-/** `subject` is a user id, or an IP bucket for the `_ip` rules. */
-export async function allowDuelOperation(subject: string, operation: DuelOperation): Promise<boolean> {
+/** `subject` is a user id, or an IP bucket for the `_ip` rules. Room games share the rules under their own keys. */
+export async function allowDuelOperation(subject: string, operation: DuelOperation, namespace: 'duel' | 'room' = 'duel'): Promise<boolean> {
   const rule = RULES[operation];
   const bucket = Math.floor(Date.now() / (rule.windowSec * 1_000));
-  const key = `duel:rate:${operation}:${subject}:${bucket}`;
+  const key = `${namespace}:rate:${operation}:${subject}:${bucket}`;
   const redis = getRedisClient();
   if (redis?.isOpen) {
     const count = await redis.incr(key);

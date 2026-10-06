@@ -6,10 +6,12 @@ import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
 import {
+  gameplayDbTaskLimiter,
   postConnectDbTaskLimiter,
   socketDbTaskLimiter,
 } from '../../realtime/socket-db-task-limiter.js';
 import { socketRuntimeTracker } from '../../realtime/socket-runtime-stats.js';
+import { partyCompletionDbTaskLimiter } from '../../realtime/party-completion-work.js';
 
 const router = Router();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
@@ -85,6 +87,8 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: dbPoolStats(),
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      gameplayDbTasks: gameplayDbTaskLimiter.stats(),
+      partyCompletionDbTasks: partyCompletionDbTaskLimiter.stats(),
       postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),
@@ -98,6 +102,8 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: stats,
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      gameplayDbTasks: gameplayDbTaskLimiter.stats(),
+      partyCompletionDbTasks: partyCompletionDbTaskLimiter.stats(),
       postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),

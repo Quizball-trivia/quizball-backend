@@ -10,6 +10,7 @@ import type {
 import type { FormationName } from '../modules/auction/auction.types.js';
 import type { FootballGridState } from '../modules/football-grid/football-grid.types.js';
 import type { DuelGameId } from '../modules/duel/duel.types.js';
+import type { RoomGameId } from '../modules/room/room.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode =
@@ -19,12 +20,14 @@ export type LobbyGameMode =
   | 'auction'
   | 'ranked_sim'
   /** A friend duel of a daily mini-game; the game is LobbySettings.duelGame. Runs on duel_matches. */
-  | 'duel';
+  | 'duel'
+  /** A 2–6 player room game; the game is LobbySettings.roomGame. Runs on room_matches. */
+  | 'room_game';
 /**
  * Variants backed by the `matches` table engine. Auction and duels are lobby game modes
  * but run on their own stores, so they never become match variants.
  */
-export type MatchVariant = Exclude<LobbyGameMode, 'auction' | 'duel'>;
+export type MatchVariant = Exclude<LobbyGameMode, 'auction' | 'duel' | 'room_game'>;
 export type LobbyStatus = 'waiting' | 'active' | 'closed';
 export type MatchPhase =
   | 'NORMAL_PLAY'
@@ -91,6 +94,8 @@ export interface LobbySettings {
   gameMode: LobbyGameMode;
   /** Set exactly when gameMode is 'duel'. */
   duelGame: DuelGameId | null;
+  /** Set exactly when gameMode is 'room_game'. */
+  roomGame: RoomGameId | null;
   friendlyRandom: boolean;
   friendlyCategoryAId: string | null;
   friendlyCategoryBId: string | null;
@@ -1142,6 +1147,7 @@ export type LobbyCreateResult =
         | 'ALREADY_IN_LOBBY'
         | 'GRID_UNAVAILABLE'
         | 'DUEL_UNAVAILABLE'
+        | 'ROOM_GAME_UNAVAILABLE'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_LOBBY_CREATE'
         | 'LOBBY_CREATE_ERROR'
@@ -1152,6 +1158,14 @@ export type LobbyCreateResult =
       correlationId: string;
       stateSnapshot?: SessionStatePayload;
     };
+
+/** Why an invite join could not use the room: open (refused by its rules), mid-game, ended, or no such room. */
+export interface LobbyJoinRoomInfo {
+  roomState: 'open' | 'in_progress' | 'ended' | 'unknown';
+  gameMode: string | null;
+  duelGame: string | null;
+  hostNickname: string | null;
+}
 
 export type LobbyJoinByCodeResult =
   | {
@@ -1178,6 +1192,7 @@ export type LobbyJoinByCodeResult =
       retryable: boolean;
       correlationId: string;
       stateSnapshot?: SessionStatePayload;
+      room?: LobbyJoinRoomInfo;
     };
 
 export type LobbyLeaveResult =
@@ -1291,6 +1306,22 @@ export interface DuelStatePayload {
   result: DuelResultPayload | null;
 }
 
+export interface RoomFoundPayload {
+  matchId: string;
+  game: RoomGameId;
+  lobbyId: string | null;
+  /** On a start: database time just before the match was created (a "no live seat" read older than this is stale). */
+  startedAt?: number;
+}
+
+/** Database time of the read behind a room:active / room:sitting_out answer. */
+export interface RoomPointerMeta {
+  asOf: number;
+}
+
+/** Built by roomService.snapshot (allow-listed per viewer). */
+export type RoomStatePayload = Record<string, unknown> & { matchId: string; stateVersion: number; serverNow: string };
+
 export interface DuelFoundPayload {
   matchId: string;
   game: DuelGameId;
@@ -1329,9 +1360,11 @@ export interface ClientToServerEvents {
     data: {
       mode: MatchMode;
       isPublic?: boolean;
-      gameMode?: 'football_grid' | 'auction' | 'duel';
+      gameMode?: 'football_grid' | 'auction' | 'duel' | 'room_game';
       /** Required with gameMode 'duel'. */
       duelGame?: DuelGameId;
+      /** Required with gameMode 'room_game'. */
+      roomGame?: RoomGameId;
       correlationId?: string;
     },
     ack?: (result: LobbyCreateResult) => void
@@ -1350,6 +1383,8 @@ export interface ClientToServerEvents {
     gameMode: LobbyGameMode;
     /** Required with gameMode 'duel'; omitted or null otherwise. */
     duelGame?: DuelGameId | null;
+    /** Required with gameMode 'room_game'; omitted or null otherwise. */
+    roomGame?: RoomGameId | null;
     friendlyRandom?: boolean;
     friendlyCategoryAId?: string | null;
     friendlyCategoryBId?: string | null;
@@ -1376,6 +1411,12 @@ export interface ClientToServerEvents {
   'duel:command': (data: { matchId: string; commandId: string; command: unknown }) => void;
   'duel:resync': (data: { matchId: string; locale?: string }) => void;
   'duel:forfeit': (data: { matchId: string; commandId: string }) => void;
+  'room:ready': (data: { matchId: string; locale?: string }) => void;
+  'room:command': (data: { matchId: string; commandId: string; command: unknown }) => void;
+  'room:resync': (data: { matchId: string; locale?: string }) => void;
+  'room:leave': (data: { matchId: string; commandId: string }) => void;
+  /** Where the player stands in their room's match: answered with room:active + room:sitting_out. */
+  'room:pointer': () => void;
   'grid:search_start': (data?: FootballGridSearchStartPayload) => void;
   /** Guest "Play now" (public Tic Tac Toe page): immediate bot pairing, no queue, no rewards. */
   'grid:practice_bot_start': (data?: FootballGridSearchStartPayload) => void;
@@ -1608,6 +1649,15 @@ export interface ServerToClientEvents {
   'duel:state': (data: DuelStatePayload) => void;
   'duel:command_result': (data: DuelCommandResultPayload) => void;
   'duel:error': (data: ErrorPayload & { matchId?: string }) => void;
+  'room:found': (data: RoomFoundPayload) => void;
+  /** Sent on every connect: the player's live room match, or null. */
+  'room:active': (data: RoomFoundPayload | null, meta?: RoomPointerMeta) => void;
+  /** Sent on every connect: the live match of the player's room that they no longer play in, or null. */
+  'room:sitting_out': (data: { matchId: string; lobbyId: string; reason: 'left' | 'out' } | null, meta?: RoomPointerMeta) => void;
+  /** A full snapshot (envelope + per-viewer game view); a resync rebuilds the screen from it. */
+  'room:state': (data: RoomStatePayload) => void;
+  'room:command_result': (data: { matchId: string; commandId: string; ok: boolean; code?: string }) => void;
+  'room:error': (data: ErrorPayload & { matchId?: string }) => void;
   'grid:match_found': (data: FootballGridMatchFoundPayload) => void;
   'grid:loading_state': (data: FootballGridStatePayload) => void;
   'grid:countdown': (data: FootballGridStatePayload & { countdownEndsAt: string }) => void;

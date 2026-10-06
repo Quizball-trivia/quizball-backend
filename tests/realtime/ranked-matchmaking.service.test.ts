@@ -49,8 +49,12 @@ let redisMock: FakeRedis;
 vi.mock('../../src/core/config.js', () => ({
   config: {
     RANKED_HUMAN_QUEUE_ENABLED: true,
+    ROOM_GAMES_ENABLED: [],
   },
 }));
+
+// No live room seat (the session guard checks for one before any queue join).
+vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchForUser: vi.fn(async () => null) } }));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {

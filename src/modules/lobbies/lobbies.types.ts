@@ -1,4 +1,5 @@
 import type { Json } from '../../db/types.js';
+import type { RoomGameId } from '../room/room.types.js';
 import type { LobbyGameMode } from '../../realtime/socket.types.js';
 import type { DuelGameId } from '../duel/duel.types.js';
 
@@ -65,6 +66,8 @@ export interface LobbyRow {
   game_mode: LobbyGameMode;
   /** Set exactly when game_mode is 'duel' (lobbies_duel_game_check). */
   duel_game: DuelGameId | null;
+  /** Set exactly when game_mode is 'room_game' (lobbies_room_game_check). */
+  room_game: RoomGameId | null;
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;

@@ -1,12 +1,20 @@
 import { z } from 'zod';
 import { DUEL_GAMES } from '../../modules/duel/duel.types.js';
+import { ROOM_GAMES } from '../../modules/room/room.types.js';
 import { LOBBY_GAME_MODES, LOBBY_MODES } from '../../modules/lobbies/lobby-modes.js';
 
 const correlationIdSchema = z.string().min(1).max(128).optional();
 const duelGameSchema = z.enum(DUEL_GAMES);
+const roomGameSchema = z.enum(ROOM_GAMES);
 
 /** A duel room names its game; no other room has one (mirrors lobbies_duel_game_check). */
-function refineDuelGame(data: { gameMode?: string; duelGame?: string | null }, ctx: z.RefinementCtx): void {
+function refineDuelGame(data: { gameMode?: string; duelGame?: string | null; roomGame?: string | null }, ctx: z.RefinementCtx): void {
+  if (data.gameMode === 'room_game' && !data.roomGame) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A room-game room needs its game', path: ['roomGame'] });
+  }
+  if (data.gameMode !== 'room_game' && data.roomGame) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a room-game room has a room game', path: ['roomGame'] });
+  }
   if (data.gameMode === 'duel' && !data.duelGame) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A duel room needs its game', path: ['duelGame'] });
   }
@@ -20,9 +28,10 @@ export const lobbyCreateSchema = z
     mode: z.enum(['friendly', 'ranked']),
     isPublic: z.boolean().optional(),
     // Open the room straight in a friend-playable mode (the game modals' "Play with friend").
-    gameMode: z.enum(['football_grid', 'auction', 'duel']).optional(),
-    // Whether the game is enabled is checked by the service, which answers DUEL_UNAVAILABLE.
+    gameMode: z.enum(['football_grid', 'auction', 'duel', 'room_game']).optional(),
+    // Whether the game is enabled is checked by the service, which answers DUEL_UNAVAILABLE / ROOM_GAME_UNAVAILABLE.
     duelGame: duelGameSchema.optional(),
+    roomGame: roomGameSchema.optional(),
     correlationId: correlationIdSchema,
   })
   .superRefine(refineDuelGame);
@@ -49,6 +58,7 @@ export const lobbyUpdateSettingsSchema = z
     lobbyId: z.string().uuid().optional(),
     gameMode: z.enum(LOBBY_GAME_MODES),
     duelGame: duelGameSchema.nullable().optional(),
+    roomGame: roomGameSchema.nullable().optional(),
     friendlyRandom: z.boolean().optional(),
     friendlyCategoryAId: z.string().uuid().nullable().optional(),
     friendlyCategoryBId: z.string().uuid().nullable().optional(),

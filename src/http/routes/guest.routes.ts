@@ -37,6 +37,8 @@ const router = Router();
 router.use(requireGuestHttpEnabled);
 router.post('/session', mintLimiter, validate({ body: createGuestSessionSchema }), guestController.createSession);
 router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await publicStandingsService.get()); });
+// Public like the standings: the Aproximado page shows every visitor today's board (registered before the token-only router).
+router.get('/daily-challenges/stat-sniper/leaderboard', standingsLimiter, guestController.statSniperLeaderboard);
 
 // Friend lobbies: the principal behind a token (rate-limited like every guest call).
 router.post('/principal', guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter, guestController.principal);
@@ -45,7 +47,6 @@ router.post('/journey/link', guestIpLimiter, requireTokenShape, authMiddleware, 
 router.post('/journey/member-activity', guestIpLimiter, authMiddleware, validate({ body: journeyActivitySchema }), guestJourneyController.memberActivity);
 const daily = Router();
 daily.use(guestIpLimiter, requireTokenShape, guestAuthMiddleware, guestTokenLimiter);
-daily.get('/stat-sniper/leaderboard', guestController.statSniperLeaderboard);
 daily.post('/pass-chain/link', validate({ body: passChainLinkBodySchema }), guestController.passChainLink);
 daily.post('/:challengeType/session', validate({ params: dailyChallengeParamSchema, query: dailyChallengeLocaleQuerySchema }), guestController.createDailySession);
 daily.post('/:challengeType/complete', validate({ params: dailyChallengeParamSchema, body: completeDailyChallengeBodySchema }), guestController.completeDaily);

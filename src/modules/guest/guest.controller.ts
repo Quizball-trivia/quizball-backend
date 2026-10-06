@@ -18,6 +18,28 @@ export const createGuestSessionSchema = z.object({
   locale: z.enum(['en', 'ka', 'es', 'tr']).optional(),
 });
 
+type PublicStatSniperBoard = {
+  challengeDay: string;
+  entries: Array<{ rank: number; alias: string; score: number; country: string | null; avatarCustomization: unknown }>;
+  me: null;
+};
+const PUBLIC_BOARD_TTL_MS = 30_000;
+let publicBoard: { at: number; value: Promise<PublicStatSniperBoard> } | null = null;
+
+/** Served without an account or guest session (every visitor of the public page), so one query per 30 s per replica. */
+export function publicStatSniperBoard(now = Date.now()): Promise<PublicStatSniperBoard> {
+  if (publicBoard && now - publicBoard.at < PUBLIC_BOARD_TTL_MS) return publicBoard.value;
+  const value = dailyChallengesService.getStatSniperLeaderboard(null).then((board) => ({
+    challengeDay: board.challengeDay,
+    entries: board.entries.map((e) => ({ rank: e.rank, alias: e.username, score: e.score, country: e.country ?? null, avatarCustomization: e.avatarCustomization ?? null })),
+    me: null as null,
+  }));
+  const entry = { at: now, value };
+  publicBoard = entry;
+  value.catch(() => { if (publicBoard === entry) publicBoard = null; });
+  return value;
+}
+
 export const guestController = {
   async createSession(req: Request, res: Response): Promise<void> {
     const body = (req.validated.body ?? {}) as z.infer<typeof createGuestSessionSchema>;
@@ -80,9 +102,8 @@ export const guestController = {
     res.json(await dailyChallengesService.linkPassChain(`guest:${req.guest!.id}`, body, body.locale));
   },
 
-  /** Public projection of the day's board: alias, rank, score only. */
+  /** Public projection of the day's board (no ids), what the other daily pages show visitors; cached briefly. */
   async statSniperLeaderboard(_req: Request, res: Response): Promise<void> {
-    const board = await dailyChallengesService.getStatSniperLeaderboard(null);
-    res.json({ challengeDay: board.challengeDay, entries: board.entries.map((e) => ({ rank: e.rank, alias: e.username, score: e.score })), me: null });
+    res.json(await publicStatSniperBoard());
   },
 };

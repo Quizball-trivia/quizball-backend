@@ -32,7 +32,7 @@ let publicBoard: { day: string; until: number; value: Promise<PublicStatSniperBo
  * Served without an account or guest session (every visitor of the public page), so at most one query per 30 s per
  * replica. Keyed by the UTC challenge day: yesterday's board is never served as today's after midnight.
  */
-export function publicStatSniperBoard(now = Date.now()): Promise<PublicStatSniperBoard> {
+export function publicStatSniperBoard(now = Date.now(), clock: () => number = Date.now): Promise<PublicStatSniperBoard> {
   const day = new Date(now).toISOString().slice(0, 10);
   if (publicBoard && publicBoard.day === day && now < publicBoard.until) return publicBoard.value;
   const value = dailyChallengesService.getStatSniperLeaderboard(null).then((board) => ({
@@ -42,7 +42,8 @@ export function publicStatSniperBoard(now = Date.now()): Promise<PublicStatSnipe
   }));
   const entry = { day, until: now + PUBLIC_BOARD_TTL_MS, value };
   publicBoard = entry;
-  value.catch(() => { if (publicBoard === entry) entry.until = now + PUBLIC_BOARD_FAILURE_TTL_MS; });
+  // Counted from the failure: a load that took longer than the pause must still hold retries off.
+  value.catch(() => { if (publicBoard === entry) entry.until = clock() + PUBLIC_BOARD_FAILURE_TTL_MS; });
   return value;
 }
 

@@ -36,11 +36,26 @@ describe('public Stat Sniper board', () => {
   it('retries a failed load after a short pause, not on every request', async () => {
     getStatSniperLeaderboard.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce(board('2026-10-06'));
     const { publicStatSniperBoard } = await import('../../src/modules/guest/guest.controller.js');
-    await expect(publicStatSniperBoard(1_000)).rejects.toThrow('timeout');
-    for (let t = 1_010; t < 6_000; t += 10) await expect(publicStatSniperBoard(t)).rejects.toThrow('timeout');
+    const clock = () => 1_000;
+    await expect(publicStatSniperBoard(1_000, clock)).rejects.toThrow('timeout');
+    for (let t = 1_010; t < 6_000; t += 10) await expect(publicStatSniperBoard(t, clock)).rejects.toThrow('timeout');
     expect(getStatSniperLeaderboard).toHaveBeenCalledTimes(1);
     expect((await publicStatSniperBoard(6_001)).entries).toHaveLength(1);
     expect(getStatSniperLeaderboard).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds retries off for 5 s from the failure, even when the load itself was slow', async () => {
+    let rejectLoad: (e: Error) => void = () => {};
+    getStatSniperLeaderboard.mockImplementationOnce(() => new Promise((_, reject) => { rejectLoad = reject; })).mockResolvedValueOnce(board('2026-10-06'));
+    const { publicStatSniperBoard } = await import('../../src/modules/guest/guest.controller.js');
+    let failedAt = 0;
+    const pending = publicStatSniperBoard(1_000, () => failedAt);
+    failedAt = 8_000; // the query failed 7 s after it started
+    rejectLoad(new Error('timeout'));
+    await expect(pending).rejects.toThrow('timeout');
+    await expect(publicStatSniperBoard(9_000, () => failedAt)).rejects.toThrow('timeout');
+    expect(getStatSniperLeaderboard).toHaveBeenCalledTimes(1);
+    expect((await publicStatSniperBoard(13_001, () => failedAt)).entries).toHaveLength(1);
   });
 
   it('never serves the previous day after UTC midnight, even inside the cache window', async () => {

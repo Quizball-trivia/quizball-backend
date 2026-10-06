@@ -348,7 +348,8 @@ export const roomRealtimeService = {
       logger.warn({ error, userId: socket.data.user.id }, 'Room pointer lookup failed on connect; the room screen asks again');
       return undefined;
     });
-    if (live) socket.emit('room:found', { matchId: live.id, game: live.game, lobbyId: live.lobby_id });
+    // No room:found here: the room:active just sent (stamped with its read time) already points at the live seat,
+    // and an unstamped duplicate could override a newer start the client heard meanwhile.
     // Presence does not depend on the pointer read (it finds the live seat itself, and does nothing without one): a
     // read deferred by concurrent deliveries must not leave a connected player marked away.
     if (socket.connected) await deliver(io, await roomService.present(socket.data.user.id));

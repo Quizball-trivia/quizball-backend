@@ -38,7 +38,9 @@ describe('room connect pointer', () => {
     roomService.liveMatchFor.mockResolvedValue(live('B'));
     const socket = socketFor();
     expect(await roomRealtimeService.onConnect(io as never, socket as never)).toBe(true);
-    expect(socket.emitted).toEqual(expect.arrayContaining([['room:active', { matchId: 'B', game: 'aproximado', lobbyId: 'L' }], ['room:sitting_out', null], ['room:found', { matchId: 'B', game: 'aproximado', lobbyId: 'L' }]]));
+    expect(socket.emitted).toEqual(expect.arrayContaining([['room:active', { matchId: 'B', game: 'aproximado', lobbyId: 'L' }], ['room:sitting_out', null]]));
+    // PR review (B3/W1): no unfenced room:found on reconnect; the timestamped room:active carries the pointer.
+    expect(socket.emitted.some(([event]) => event === 'room:found')).toBe(false);
     expect(roomService.present).toHaveBeenCalledWith('u1');
     expect(socket.data.roomMatchId).toBe('B');
   });

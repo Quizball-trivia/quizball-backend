@@ -1369,6 +1369,12 @@ export const userSessionGuardService = {
         message: context.activeDuel ? 'You are already in a duel' : 'You are already in an active draft',
       };
     }
+    // Cleanup removed a membership: if that room started meanwhile, its seat is live but no longer visible through
+    // membership. Found by the seat itself; returning to that same room (its own link) stays allowed.
+    const seat = await roomRepo.liveMatchForUser(userId);
+    if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+      return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
+    }
     return { ok: true, snapshot };
   },
 

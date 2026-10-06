@@ -977,13 +977,15 @@ export async function sendPartyQuizQuestion(
     // atomically. It is also one network round trip, which is materially faster
     // than either sequential updates or an explicit begin/update/update/commit
     // transaction during synchronized kickoffs.
-    await matchesService.persistPartyQuestionDispatch({
+    const committed = await matchesService.persistPartyQuestionDispatch({
       matchId,
       qIndex,
       statePayload: state,
       shownAt: playableAt,
       deadlineAt,
     });
+    // A dropout committed after `state` was read is kept by the write; the cache and broadcasts must agree with it.
+    state.droppedUserIds = committed.droppedUserIds;
     // Entry evidence must only be written after durable question state commits.
     await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     const cache = buildInitialCache({

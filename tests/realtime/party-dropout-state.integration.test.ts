@@ -78,4 +78,34 @@ describe('Party dropout state write — real database', () => {
     });
     expect(answer.inserted).toBe(true);
   });
+
+  it('PR review (B2): a question dispatch built from an older copy of the state keeps a dropout committed meanwhile', async () => {
+    if (!dbAvailable) return;
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const [u] = await sql<{ id: string }[]>`INSERT INTO users (nickname, onboarding_complete) VALUES (${`disp_${randomUUID().slice(0, 8)}`}, true) RETURNING id`;
+      ids.push(u.id); userIds.push(u.id);
+    }
+    const [m] = await sql<{ id: string }[]>`
+      INSERT INTO matches (mode, status, game_variant, category_a_id, category_b_id, current_q_index, total_questions, is_dev, started_at, state_payload)
+      VALUES ('friendly', 'active', 'friendly_party_quiz', ${categoryId}, ${categoryId}, 1, 10, false, now(), ${sql.json({ ...party(0), currentQuestion: null })}) RETURNING id`;
+    matchIds.push(m.id);
+    const [question] = await sql<{ id: string; category_id: string }[]>`SELECT id, category_id FROM questions LIMIT 1`;
+    await sql`INSERT INTO match_questions (match_id, q_index, question_id, category_id, correct_index) VALUES (${m.id}, 1, ${question.id}, ${question.category_id}, 0)`;
+    // The dispatch built its payload before this dropout committed.
+    const stale = { ...party(1), droppedUserIds: [] as string[] };
+    await sql`UPDATE matches SET state_payload = ${sql.json({ ...party(0), currentQuestion: null, droppedUserIds: [ids[2]] })} WHERE id = ${m.id}`;
+    const committed = await matchesService.persistPartyQuestionDispatch({
+      matchId: m.id, qIndex: 1, statePayload: stale, shownAt: new Date(), deadlineAt: new Date(Date.now() + 20_000),
+    });
+    const [after] = await sql<{ state_payload: { currentQuestion: { qIndex: number }; droppedUserIds: string[] } }[]>`SELECT state_payload FROM matches WHERE id = ${m.id}`;
+    expect(after.state_payload.currentQuestion.qIndex).toBe(1);
+    expect(after.state_payload.droppedUserIds).toEqual([ids[2]]);
+    expect(committed).toEqual({ droppedUserIds: [ids[2]] });
+    const refused = await matchesService.recordPartyQuizAnswerIfMissing({
+      matchId: m.id, qIndex: 1, userId: ids[2], selectedIndex: 0, isCorrect: true, timeMs: 900, pointsEarned: 50,
+    });
+    expect(refused.roundClosed).toBe(true);
+  });
 });
+

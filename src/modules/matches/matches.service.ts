@@ -921,9 +921,9 @@ export const matchesService = {
     statePayload: unknown;
     shownAt: Date;
     deadlineAt: Date;
-  }): Promise<void> {
+  }): Promise<{ droppedUserIds: string[] }> {
     const jsonPayload = sql.json(params.statePayload as Json ?? null);
-    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean }>>`
+    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean; dropped: string[] | null }>>`
       WITH target AS (
         SELECT m.id AS match_id, mq.q_index
         FROM matches m
@@ -932,14 +932,21 @@ export const matchesService = {
          AND mq.q_index = ${params.qIndex}
         WHERE m.id = ${params.matchId}
       ),
+      -- The payload was built from an earlier read: keep any dropout committed since (the row as updated is the
+      -- latest committed one), so a dispatch never restores a dropped player.
       updated_match AS (
         UPDATE matches m
-        SET state_payload = ${jsonPayload},
+        SET state_payload = jsonb_set(${jsonPayload}::jsonb, '{droppedUserIds}', (
+              SELECT COALESCE(jsonb_agg(DISTINCT d.user_id), '[]'::jsonb)
+              FROM jsonb_array_elements_text(
+                COALESCE(m.state_payload->'droppedUserIds', '[]'::jsonb) || COALESCE((${jsonPayload}::jsonb)->'droppedUserIds', '[]'::jsonb)
+              ) AS d(user_id)
+            )),
             current_q_index = GREATEST(m.current_q_index, ${params.qIndex}),
             updated_at = NOW()
         FROM target
         WHERE m.id = target.match_id
-        RETURNING m.id
+        RETURNING m.id, m.state_payload->'droppedUserIds' AS dropped
       ),
       updated_question AS (
         UPDATE match_questions mq
@@ -952,7 +959,8 @@ export const matchesService = {
       )
       SELECT
         EXISTS (SELECT 1 FROM updated_match) AS match_updated,
-        EXISTS (SELECT 1 FROM updated_question) AS question_updated
+        EXISTS (SELECT 1 FROM updated_question) AS question_updated,
+        (SELECT dropped FROM updated_match) AS dropped
     `;
 
     if (!result?.match_updated || !result.question_updated) {
@@ -963,6 +971,7 @@ export const matchesService = {
         { matchId: params.matchId, qIndex: params.qIndex },
       );
     }
+    return { droppedUserIds: result.dropped ?? [] };
   },
 
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {

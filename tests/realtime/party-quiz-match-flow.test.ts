@@ -384,7 +384,10 @@ describe('party quiz realtime flow', () => {
     getMatchCacheMock.mockResolvedValue(null);
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     setMatchCacheMock.mockResolvedValue(undefined);
-    persistPartyQuestionDispatchMock.mockResolvedValue(undefined);
+    // The real write returns the dropped players it committed (the payload's own when nothing raced it).
+    persistPartyQuestionDispatchMock.mockImplementation(async (params: { statePayload: { droppedUserIds?: string[] } }) => ({
+      droppedUserIds: params.statePayload?.droppedUserIds ?? [],
+    }));
     refreshPlayerAverageTimesMock.mockImplementation(async () => players.map((player) => ({ ...player })));
     evaluateAchievementsForMatchMock.mockResolvedValue({
       u1: [
@@ -917,7 +920,7 @@ describe('party quiz realtime flow', () => {
     const questionRead = deferred<Awaited<ReturnType<typeof buildMatchQuestionPayloadMock>>>();
     const playersRead = deferred<Awaited<ReturnType<typeof listMatchPlayersMock>>>();
     const pauseRead = deferred<number>();
-    const dispatchWrite = deferred<void>();
+    const dispatchWrite = deferred<{ droppedUserIds: string[] }>();
     const roomEntry = deferred<unknown[]>();
     const fetchSockets = vi.fn(() => roomEntry.promise);
 
@@ -952,7 +955,7 @@ describe('party quiz realtime flow', () => {
     });
     expect(fetchSockets).not.toHaveBeenCalled();
 
-    dispatchWrite.resolve();
+    dispatchWrite.resolve({ droppedUserIds: [] });
     await vi.waitFor(() => expect(fetchSockets).toHaveBeenCalledTimes(1));
     roomEntry.resolve([]);
     await dispatch;

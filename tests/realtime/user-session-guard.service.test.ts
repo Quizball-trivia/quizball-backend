@@ -896,6 +896,30 @@ describe('user-session-guard.service', () => {
     });
   });
 
+  it('PR review (B1): a lobby whose room started during cleanup leaves a live seat; joining another lobby is refused', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const roomLobby = { id: 'room-lobby-A', mode: 'friendly', status: 'waiting', host_user_id: 'room-host', joined_at: new Date(Date.now() - 10_000).toISOString() };
+    listOpenLobbiesForUserMock.mockResolvedValueOnce([roomLobby]).mockResolvedValueOnce([roomLobby]).mockResolvedValueOnce([]);
+    // Room A committed its match while cleanup removed the (still "waiting") membership.
+    liveRoomSeatMock.mockResolvedValueOnce({ id: 'room-match-A', game: 'aproximado', lobby_id: 'room-lobby-A' });
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const elsewhere = await userSessionGuardService.prepareForLobbyEntry(io, 'seated-user', { keepWaitingLobbyId: 'lobby-B' });
+    expect(elsewhere).toMatchObject({ ok: false, reason: 'ACTIVE_MATCH' });
+    // Going back to that same room (its own link while the match runs) stays allowed.
+    listOpenLobbiesForUserMock.mockResolvedValueOnce([roomLobby]).mockResolvedValueOnce([roomLobby]).mockResolvedValueOnce([]);
+    liveRoomSeatMock.mockResolvedValueOnce({ id: 'room-match-A', game: 'aproximado', lobby_id: 'room-lobby-A' });
+    const own = await userSessionGuardService.prepareForLobbyEntry(io, 'seated-user', { keepWaitingLobbyId: 'room-lobby-A' });
+    expect(own.ok).toBe(true);
+    // Leave no queued one-shot values for the next tests.
+    listOpenLobbiesForUserMock.mockReset();
+    liveRoomSeatMock.mockReset();
+    liveRoomSeatMock.mockImplementation(async () => null);
+  });
+
   it('re-reads once after clean connect preparation to observe a concurrent lobby join', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     const joinedAfterCleanupStarted = {

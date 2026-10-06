@@ -125,6 +125,7 @@ async function syncFriendlyLobbyModeForMemberCountInternal(
     await lobbiesRepo.updateLobbySettings(lobbyId, {
       gameMode: nextMode,
       duelGame: null,
+      roomGame: null,
       friendlyRandom: lobby.friendly_random ?? true,
       friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
       friendlyCategoryBId: null,

@@ -1,5 +1,7 @@
 import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
 import { registerDuelHandlers } from './handlers/duel.handler.js';
+import { registerRoomHandlers } from './handlers/room.handler.js';
+import { roomRealtimeService } from './services/room-realtime.service.js';
 import { duelRealtimeService } from './services/duel-realtime.service.js';
 import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
 import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
@@ -405,7 +407,11 @@ async function runPostConnectHydration(
   });
   // A live duel is live gameplay too: no older result may replay over it (even when its presence update failed).
   // A failed lookup counts as "maybe": pending results wait for a later connect.
-  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked;
+  await roomRealtimeService.onConnect(io, socket).catch((error) => {
+    logger.warn({ error, userId }, 'Failed to point a reconnecting player at their room game');
+  });
+  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked
+    || Boolean(socket.data.roomMatchId) || !socket.data.roomChecked;
   if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
@@ -549,6 +555,9 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     },
     duel_phase: async (server, payload: RealtimeTimerPayload) => {
       await duelRealtimeService.handlePhaseTimer(server, payload);
+    },
+    room_phase: async (server, payload: RealtimeTimerPayload) => {
+      await roomRealtimeService.handlePhaseTimer(server, payload);
     },
     football_grid_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_matchmaking_fallback') return;
@@ -696,6 +705,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   footballGridRealtimeService.startCommandRecovery(io);
   duelRealtimeService.startRecovery(io);
   duelRealtimeService.startMaintenance(io);
+  roomRealtimeService.startRecovery(io);
+  roomRealtimeService.startMaintenance(io);
   footballGridMatchmakingService.startRecovery(io);
   footballGridMatchmakingService.startSweep(io);
 
@@ -742,6 +753,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerAuctionHandlers(io, socket);
     registerFootballGridHandlers(io, socket);
     registerDuelHandlers(io, socket);
+    registerRoomHandlers(io, socket);
     registerDevHandlers(io, socket);
     registerWlHandlers(io, socket);
 
@@ -806,6 +818,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       if (duelRealtimeService.mayHoldDuelSeat(socket)) {
         runSocketDbTask('duel_disconnect', user.id, () => duelRealtimeService.handleSocketDisconnect(io, user.id));
+      }
+      if (roomRealtimeService.mayHoldRoomSeat(socket)) {
+        runSocketDbTask('room_disconnect', user.id, () => roomRealtimeService.handleSocketDisconnect(io, user.id));
       }
       const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
       if (disconnectDbTasks.includes('lobby_disconnect')) {

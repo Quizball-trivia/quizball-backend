@@ -35,6 +35,8 @@ import { footballGridRealtimeService } from './football-grid-realtime.service.js
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
 import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { DuelGameId } from '../../modules/duel/duel.types.js';
+import { roomRepo } from '../../modules/room/room.repo.js';
+import { anyRoomGameEnabled } from '../../modules/room/room.config.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -411,6 +413,14 @@ async function isActiveLobbyLive(
       return (await lobbiesRepo.listLiveDuelsForLobbies([lobby.id])).length > 0;
     } catch (error) {
       logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live duel state');
+      return true;
+    }
+  }
+  if (lobby.game_mode === 'room_game') {
+    try {
+      return (await lobbiesRepo.listLiveRoomsForLobbies([lobby.id])).length > 0;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live room game state');
       return true;
     }
   }
@@ -1493,6 +1503,16 @@ export const userSessionGuardService = {
         snapshot,
         reason: 'ACTIVE_MATCH',
         message: 'Your lobby state changed. Please retry.',
+      };
+    }
+    // A room seat is found by the seat itself, not through room membership: a room starting while this check cleaned
+    // up its (still "waiting") lobby membership must not let the player queue for another game as well.
+    if (anyRoomGameEnabled() && await roomRepo.liveMatchForUser(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'You are already in a room game',
       };
     }
 

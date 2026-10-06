@@ -272,16 +272,16 @@ export const matchesRepo = {
     matchId: string,
     winnerId: string | null,
     endedAt?: Date,
-  ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'> | null> {
+  ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant'> | null> {
     // tx.unsafe pattern matches other tx-aware repos in this codebase
     // (TransactionSql doesn't expose the tagged-template call signature
     // cleanly to TS).
-    const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
+    const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant'>[]>(
       `
       UPDATE matches
       SET status = 'completed', winner_user_id = $2, ended_at = COALESCE($3::timestamptz, NOW())
       WHERE id = $1 AND status = 'active'
-      RETURNING id, mode, ended_at, is_dev
+      RETURNING id, mode, ended_at, is_dev, game_variant
       `,
       [matchId, winnerId, endedAt ?? null],
     );

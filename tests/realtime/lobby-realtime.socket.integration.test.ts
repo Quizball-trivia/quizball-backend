@@ -407,6 +407,15 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
 
     getById: vi.fn(async (id: string) => store.lobbies.get(id) ?? null),
 
+    findFriendlyRoomByInviteCode: vi.fn(async (inviteCode: string) => {
+      for (const lobby of store.lobbies.values()) {
+        if (lobby.invite_code === inviteCode && lobby.mode === 'friendly') {
+          return { status: lobby.status, game_mode: lobby.game_mode ?? null, duel_game: null, host_nickname: lobby.host_user_id };
+        }
+      }
+      return null;
+    }),
+
     getByInviteCode: vi.fn(async (inviteCode: string) => {
       for (const lobby of store.lobbies.values()) {
         if (
@@ -1014,6 +1023,28 @@ describe('lobby realtime socket integration', () => {
     expect(store.lobbies.size).toBe(1);
     expect(store.lobbies.get(currentLobby.id)?.id).toBe(currentLobby.id);
     expect(listMembers(currentLobby.id).map((member) => member.user_id)).toEqual(['invalid-invite-u']);
+  });
+
+  it('a refused invite says why: the room ended (with its host), or no such room', async () => {
+    const host = createSocket('ended-host-u');
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+    const lobby = [...store.lobbies.values()][0]!;
+    lobby.status = 'closed';
+    const friend = createSocket('late-friend-u');
+    expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: createdState.inviteCode })).toMatchObject({
+      ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'ended', hostNickname: 'ended-host-u' },
+    });
+    lobby.status = 'active';
+    expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: createdState.inviteCode })).toMatchObject({
+      ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'in_progress' },
+    });
+    expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: 'ZZZ999' })).toMatchObject({
+      ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'unknown', hostNickname: null },
+    });
   });
 
   it('preserves lobby when join_by_code is retried for the same invite', async () => {

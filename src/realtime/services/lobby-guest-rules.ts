@@ -8,6 +8,10 @@ export const GUEST_ALLOWED_LOBBY_MODES: ReadonlySet<LobbyGameMode> = new Set<Lob
   LOBBY_GAME_MODES.filter((mode) => LOBBY_MODES[mode].guestAllowed),
 );
 export const MAX_GUESTS_PER_LOBBY = 3;
+/** A room game is built for a group of guests (a party link): every seat may be a guest. */
+export function maxGuestsForMode(mode: LobbyGameMode): number {
+  return mode === 'room_game' ? lobbyCapacityForGameMode(mode) : MAX_GUESTS_PER_LOBBY;
+}
 
 export interface GuestLobbyMember {
   user_id: string;
@@ -45,15 +49,17 @@ export function normalizedModeForMemberCount(mode: LobbyGameMode, memberCount: n
 export function validateGuestLobby(members: readonly GuestLobbyMember[], nextMode: LobbyGameMode): GuestLobbyViolation | null {
   const guests = members.filter((member) => member.is_guest).length;
   if (guests === 0) return null;
-  if (guests > MAX_GUESTS_PER_LOBBY) {
-    return { code: 'LOBBY_GUEST_LIMIT', message: `A room can hold at most ${MAX_GUESTS_PER_LOBBY} guests`, meta: { maxGuests: MAX_GUESTS_PER_LOBBY } };
-  }
-  if (!isGuestAllowedLobbyMode(nextMode)) {
-    return { code: 'LOBBY_MODE_REQUIRES_ACCOUNT', message: 'This mode needs an account — Tic Tac Toe, Auction, Ranked sim and friend duels are open to guests', meta: { gameMode: nextMode } };
-  }
+  // A full room is the clearer reason (a 7th guest in a 6-seat room game is "full", not "too many guests").
   const maxMembers = lobbyCapacityForGameMode(nextMode);
   if (members.length > maxMembers) {
     return { code: 'LOBBY_FULL', message: 'Lobby is already full', meta: { memberCount: members.length, maxMembers, gameMode: nextMode } };
+  }
+  const maxGuests = maxGuestsForMode(nextMode);
+  if (guests > maxGuests) {
+    return { code: 'LOBBY_GUEST_LIMIT', message: `A room can hold at most ${maxGuests} guests`, meta: { maxGuests } };
+  }
+  if (!isGuestAllowedLobbyMode(nextMode)) {
+    return { code: 'LOBBY_MODE_REQUIRES_ACCOUNT', message: 'This mode needs an account — Tic Tac Toe, Auction, Ranked sim, friend duels and room games are open to guests', meta: { gameMode: nextMode } };
   }
   return null;
 }

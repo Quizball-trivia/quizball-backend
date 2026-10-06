@@ -25,7 +25,7 @@ const getMatchCacheOrRebuildMock = vi.fn();
 const setMatchCacheMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
 const persistPartyQuestionDispatchMock = vi.fn();
-const computeAvgTimesMock = vi.fn();
+const refreshPlayerAverageTimesMock = vi.fn();
 const evaluateAchievementsForMatchMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
 const redisMockState = vi.hoisted(() => ({
@@ -173,11 +173,19 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       ...actual.matchesService,
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       persistPartyQuestionDispatch: (...args: unknown[]) => persistPartyQuestionDispatchMock(...args),
-      computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
+      refreshPlayerAverageTimes: (...args: unknown[]) => refreshPlayerAverageTimesMock(...args),
       completeMatch: (...args: unknown[]) => completeMatchMock(...args),
       // recordPartyQuizAnswerIfMissing moved from matchesRepo to
       // matchesService in Step 5 of the matches.repo split.
       recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
+      // The locked round close, composed from the repo mocks these tests already drive (same order: roster, answers, write).
+      closePartyQuizRound: async (matchId: string, qIndex: number, nextIndex: number, close: (saved: unknown) => unknown) => {
+        const players = await listMatchPlayersMock(matchId);
+        const answers = await listAnswersForQuestionMock(matchId, qIndex);
+        const state = close(((await getMatchMock(matchId)) as { state_payload: unknown }).state_payload);
+        await setMatchStatePayloadMock(matchId, state, nextIndex);
+        return { players, answers, state };
+      },
     },
   };
 });
@@ -377,7 +385,7 @@ describe('party quiz realtime flow', () => {
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     setMatchCacheMock.mockResolvedValue(undefined);
     persistPartyQuestionDispatchMock.mockResolvedValue(undefined);
-    computeAvgTimesMock.mockResolvedValue(new Map());
+    refreshPlayerAverageTimesMock.mockImplementation(async () => players.map((player) => ({ ...player })));
     evaluateAchievementsForMatchMock.mockResolvedValue({
       u1: [
         {

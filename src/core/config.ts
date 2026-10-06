@@ -276,6 +276,11 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /** Room games (2–6 players) by game, comma-separated (e.g. "aproximado"); empty = no room-game rooms. */
+  ROOM_GAMES_ENABLED: z
+    .string()
+    .default('')
+    .transform((val) => val.split(',').map((game) => game.trim()).filter(Boolean)),
   /** Friend duels by game, comma-separated (e.g. "buscaminas,pistas"); empty = no duel rooms. */
   DUEL_GAMES_ENABLED: z
     .string()

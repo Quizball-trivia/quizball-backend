@@ -9,13 +9,19 @@ import { PUBLISHED_DAYS } from '../../src/modules/minuto/minuto.days.js';
 /**
  * Opt-in, real PostgreSQL: applies the Minuto migration to a fresh schema and runs the seed, the repo and the service
  * against it. Needs an isolated local database:
+ * Isolated audit clones on port 5436 are also accepted.
  *   MINUTO_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_minuto_test_1
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
-vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/db/index.js', () => ({
+  get sql() { return db.sql; },
+  // As in production: one transaction with a server-side statement deadline (SET LOCAL), on this suite's database.
+  withStatementTimeout: (run: (tx: unknown) => Promise<unknown>, ms = 30_000) =>
+    db.sql.begin(async (tx) => { await tx.unsafe(`SET LOCAL statement_timeout = ${Math.round(ms)}`); return run(tx); }),
+}));
 
 const url = process.env.MINUTO_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_minuto_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local minuto test database required');
+if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:543(?:2|6)\/quizball_minuto_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local minuto test database required');
 
 const MIGRATIONS = ['20261003120000_minuto.sql', '20261003120001_minuto_validate.sql', '20261003120002_minuto_swap_checks.sql']
   .map((f) => join(__dirname, '../../supabase/migrations', f));

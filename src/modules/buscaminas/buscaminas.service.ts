@@ -1,3 +1,4 @@
+import { createLeaderboardCache } from '../daily/leaderboard-cache.js';
 import { randomUUID } from 'node:crypto';
 import { NotFoundError, type AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
@@ -48,7 +49,9 @@ const owns = (row: BuscaminasRunRow, player: Player): boolean =>
  * version-checked on every move. A member's run of the live day is ranked; every other run is not.
  */
 export function createBuscaminasService(deps: BuscaminasDeps) {
-  const leaderboards = new Map<string, { at: number; players: number; top: LeaderboardEntry[] }>();
+  const leaderboards = createLeaderboardCache<LeaderboardEntry>(
+    (day) => deps.repo.leaderboard(day, LEADERBOARD_TOP), LEADERBOARD_CACHE_MS, () => deps.now().getTime(),
+  );
 
   /** A future day and a day with no content are the same 404: nothing may hint at what is coming. */
   async function playableDay(day: string): Promise<IndexedDay> {
@@ -204,11 +207,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     async leaderboard(dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> {
       const day = dayId ?? boardDay(deps.now());
       if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
-      let cached = leaderboards.get(day);
-      if (!cached || deps.now().getTime() - cached.at > LEADERBOARD_CACHE_MS) {
-        cached = { at: deps.now().getTime(), ...(await deps.repo.leaderboard(day, LEADERBOARD_TOP)) };
-        leaderboards.set(day, cached);
-      }
+      const cached = await leaderboards.get(day);
       const me = userId ? await deps.repo.rankOf(userId, day) : null;
       return { day, players: cached.players, top: cached.top, me };
     },

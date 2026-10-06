@@ -8,9 +8,21 @@ import {
   recentMatchesQuerySchema,
   recentMatchesResponseSchema,
   statsSummaryResponseSchema,
+  partyRewardsParamsSchema,
+  partyRewardsResponseSchema,
 } from './stats.schemas.js';
 
 export function registerStatsOpenApi(registry: OpenAPIRegistry): void {
+  registerEndpoint(registry, {
+    method: 'get', path: '/api/v1/stats/party-matches/{matchId}/rewards',
+    summary: 'Read confirmed Party Quiz rewards for the authenticated participant',
+    tags: ['Stats'], security: [{ bearerAuth: [] }], pathParams: partyRewardsParamsSchema,
+    responses: {
+      200: { description: 'Saved reward amounts and processing status', schema: partyRewardsResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+      404: { description: 'No completed Party Quiz match for this participant', schema: errorResponseSchema },
+    },
+  });
   // Register decorated copies for components.schemas, but pass the raw schemas
   // into route responses — matches the original registry.ts which used raw
   // schemas in paths (so they appear inlined) while the decorated copies

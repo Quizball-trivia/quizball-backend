@@ -970,6 +970,23 @@ export const matchesService = {
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));
   },
 
+  /** Save all average answer times and return the roster in one atomic statement, including players with no answers. */
+  async refreshPlayerAverageTimes(matchId: string): Promise<MatchPlayerRow[]> {
+    return sql<MatchPlayerRow[]>`
+      WITH averages AS (
+        SELECT mp.user_id, AVG(ma.time_ms)::int AS avg_time_ms
+        FROM match_players mp LEFT JOIN match_answers ma ON ma.match_id = mp.match_id AND ma.user_id = mp.user_id
+        WHERE mp.match_id = ${matchId}
+        GROUP BY mp.user_id
+      ), updated AS (
+        UPDATE match_players mp SET avg_time_ms = a.avg_time_ms
+        FROM averages a WHERE mp.match_id = ${matchId} AND mp.user_id = a.user_id
+        RETURNING mp.*
+      )
+      SELECT * FROM updated ORDER BY seat
+    `;
+  },
+
   async abandonMatch(matchId: string): Promise<void> {
     const abandoned = await matchesRepo.abandonMatch(matchId);
     if (!abandoned) {
@@ -1016,6 +1033,18 @@ export const matchesService = {
       // Dev matches don't contribute to aggregate stats.
       if (completed.is_dev) {
         return;
+      }
+
+      // A Party match's reward job is created with its completion (same transaction): no crash in between can leave
+      // a completed match without one. Later inserts of the same job (the completion work) do nothing.
+      if (completed.game_variant === 'friendly_party_quiz') {
+        await (tx as unknown as typeof sql)`
+          INSERT INTO party_reward_jobs (match_id, user_ids, next_attempt_at)
+          SELECT ${matchId}, array_agg(user_id ORDER BY seat), now() + interval '2 minutes'
+          FROM match_players WHERE match_id = ${matchId}
+          HAVING count(*) > 0
+          ON CONFLICT (match_id) DO NOTHING
+        `;
       }
 
       const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
@@ -1098,15 +1127,66 @@ export const matchesService = {
   },
 
   /**
+   * Changes a live Party Quiz match's saved state under its row lock: `change` gets the state as saved now (a round
+   * closed or a question opened since the caller read it is kept). Null when the match is no longer active.
+   */
+  async updatePartyQuizState<State>(
+    matchId: string,
+    change: (savedState: unknown) => State,
+  ): Promise<{ state: State; currentQIndex: number } | null> {
+    return sql.begin(async (tx) => {
+      const q = tx as unknown as typeof sql;
+      const [match] = await q<Array<{ status: string; current_q_index: number; state_payload: unknown }>>`
+        SELECT status, current_q_index, state_payload FROM matches WHERE id = ${matchId} FOR UPDATE
+      `;
+      if (!match || match.status !== 'active') return null;
+      const state = change(match.state_payload);
+      await q`UPDATE matches SET state_payload = ${q.json(state as unknown as Json)}, updated_at = NOW() WHERE id = ${matchId}`;
+      return { state, currentQIndex: match.current_q_index };
+    }) as Promise<{ state: State; currentQIndex: number } | null>;
+  },
+
+  /**
+   * Closes a Party Quiz round: under the match row lock, reads the roster and the round's answers and writes the
+   * resolved state. Answers are written under a share lock on the same row and only while the match is on that
+   * question, so every answer is either in this read or refused. Null when the round is no longer the open one.
+   */
+  async closePartyQuizRound<State>(
+    matchId: string,
+    qIndex: number,
+    nextIndex: number,
+    /** Builds the closed state from the one saved under the lock (a dropout written meanwhile is kept). */
+    close: (savedState: unknown) => State,
+  ): Promise<{ players: MatchPlayerRow[]; answers: MatchAnswerRow[]; state: State } | null> {
+    return sql.begin(async (tx) => {
+      const q = tx as unknown as typeof sql;
+      const [match] = await q<Array<{ status: string; current_q_index: number; state_payload: unknown }>>`
+        SELECT status, current_q_index, state_payload FROM matches WHERE id = ${matchId} FOR UPDATE
+      `;
+      if (!match || match.status !== 'active' || match.current_q_index !== qIndex) return null;
+      const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
+      const answers = await q<MatchAnswerRow[]>`SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}`;
+      const state = close(match.state_payload);
+      await q`
+        UPDATE matches
+        SET state_payload = ${q.json(state as unknown as Json)}, current_q_index = ${nextIndex}, updated_at = NOW()
+        WHERE id = ${matchId}
+      `;
+      return { players, answers, state };
+    }) as Promise<{ players: MatchPlayerRow[]; answers: MatchAnswerRow[]; state: State } | null>;
+  },
+
+  /**
    * Atomic party-quiz answer write. One CTE statement inserts the answer
    * idempotently and updates the player's totals only when that insert won.
    *
-   * This deliberately stays one SQL statement instead of `sql.begin` with
+   * The write deliberately stays one SQL statement instead of `sql.begin` with
    * separate INSERT/UPDATE calls. At streamer load the managed-Postgres
    * network round trips for BEGIN + two statements + COMMIT occupied every
    * app-side pool slot even though Postgres execution itself was sub-ms.
    * A single statement has the same atomicity and duplicate protection with
-   * one quarter of the connection-round-trip pressure.
+   * one quarter of the connection-round-trip pressure. A conflicting concurrent
+   * insert may need a second, read-only statement to see the winning answer.
    */
   async recordPartyQuizAnswerIfMissing(data: {
     matchId: string;
@@ -1120,14 +1200,25 @@ export const matchesService = {
     phaseKind?: MatchQuestionPhaseKind;
     phaseRound?: number | null;
     shooterSeat?: number | null;
-  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
+  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null; roundClosed?: boolean }> {
     try {
-      const [result] = await sql<Array<{
+      let [result] = await sql<Array<{
         inserted: boolean;
         answer: MatchAnswerRow | null;
         player: MatchPlayerRow | null;
+        round_open: boolean;
       }>>`
-        WITH inserted_answer AS (
+        -- Only while the match is active, this question is the open one in the saved state, and this player is not
+        -- dropped. FOR SHARE: a round close or a dropout (both write this row) waits for this write, or this write sees
+        -- their change and inserts nothing, so a late answer never scores after a result or a winner went out.
+        WITH open_round AS (
+          SELECT id FROM matches
+          WHERE id = ${data.matchId} AND status = 'active' AND current_q_index = ${data.qIndex}
+            AND (state_payload->'currentQuestion'->>'qIndex')::int = ${data.qIndex}
+            AND NOT COALESCE(state_payload->'droppedUserIds', '[]'::jsonb) ? ${data.userId}
+          FOR SHARE
+        ),
+        inserted_answer AS (
           INSERT INTO match_answers (
             match_id,
             q_index,
@@ -1153,7 +1244,8 @@ export const matchesService = {
             ${data.phaseKind ?? 'normal'},
             ${data.phaseRound ?? null},
             ${data.shooterSeat ?? null}
-          WHERE EXISTS (
+          WHERE EXISTS (SELECT 1 FROM open_round)
+            AND EXISTS (
             SELECT 1
             FROM match_players
             WHERE match_id = ${data.matchId}
@@ -1195,9 +1287,26 @@ export const matchesService = {
         SELECT
           EXISTS (SELECT 1 FROM inserted_answer) AS inserted,
           (SELECT row_to_json(answer_row) FROM selected_answer answer_row) AS answer,
-          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player
+          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player,
+          EXISTS (SELECT 1 FROM open_round) AS round_open
       `;
 
+      // ON CONFLICT can wait for another insert to commit without making that
+      // row visible to this statement's earlier READ COMMITTED snapshot. Read
+      // again only in that case; never repeat the write or increment totals.
+      if (result && !result.inserted && !result.answer) {
+        const [existing] = await sql<Array<{ answer: MatchAnswerRow; player: MatchPlayerRow }>>`
+          SELECT row_to_json(ma) AS answer, row_to_json(mp) AS player
+          FROM match_answers ma
+          JOIN match_players mp ON mp.match_id = ma.match_id AND mp.user_id = ma.user_id
+          WHERE ma.match_id = ${data.matchId}
+            AND ma.q_index = ${data.qIndex}
+            AND ma.user_id = ${data.userId}
+        `;
+        if (existing) result = { inserted: false, round_open: true, ...existing };
+        // Nothing of this player's for this question, and the round is shut: too late, not a fault.
+        else if (!result.round_open) return { inserted: false, answer: null, player: null, roundClosed: true };
+      }
       if (!result?.answer || !result.player) {
         throw new AppError(
           'Party answer write returned incomplete state',
@@ -1206,7 +1315,7 @@ export const matchesService = {
           { matchId: data.matchId, qIndex: data.qIndex, userId: data.userId },
         );
       }
-      return result;
+      return { inserted: result.inserted, answer: result.answer, player: result.player };
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);

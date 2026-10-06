@@ -1,3 +1,4 @@
+import type { MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestCompatibleInitialMode, normalizedModeForMemberCount, validateGuestLobby } from './lobby-guest-rules.js';
@@ -6,6 +7,7 @@ import type {
   LobbyCreateResult,
   LobbyGameMode,
   LobbyJoinByCodeResult,
+  LobbyJoinRoomInfo,
   LobbyLeaveResult,
 } from '../socket.types.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
@@ -34,6 +36,9 @@ import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.ser
 import { startDuelMatchFromLobby } from './lobby-duel-start.service.js';
 import { isDuelGame } from '../../modules/duel/duel.config.js';
 import type { DuelGameId } from '../../modules/duel/duel.types.js';
+import { isRoomGame, type RoomGameId } from '../../modules/room/room.types.js';
+import { startRoomMatchFromLobby } from './lobby-room-start.service.js';
+import { roomService } from '../../modules/room/room.service.js';
 import { isValidHostStartShape, LOBBY_MODES, lobbyModeUnavailable } from '../../modules/lobbies/lobby-modes.js';
 import { config } from '../../core/config.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
@@ -71,8 +76,9 @@ export async function createLobby(
   payload: {
     mode: 'friendly' | 'ranked';
     isPublic?: boolean;
-    gameMode?: 'football_grid' | 'auction' | 'duel';
+    gameMode?: 'football_grid' | 'auction' | 'duel' | 'room_game';
     duelGame?: DuelGameId;
+    roomGame?: RoomGameId;
     correlationId?: string;
   }
 ): Promise<LobbyCreateResult> {
@@ -80,12 +86,13 @@ export async function createLobby(
   const correlationId = payload.correlationId ?? 'missing';
   // Refused before any session cleanup: a disabled mode must not evict the host from a room they are already in.
   const unavailable = payload.mode === 'friendly' && payload.gameMode
-    ? lobbyModeUnavailable(payload.gameMode, payload.duelGame)
+    ? lobbyModeUnavailable(payload.gameMode, payload.gameMode === 'room_game' ? payload.roomGame : payload.duelGame)
     : null;
   if (unavailable) {
     return { ok: false, code: unavailable.code, message: unavailable.message, retryable: false, correlationId };
   }
   const duelGame = payload.gameMode === 'duel' && isDuelGame(payload.duelGame) ? payload.duelGame : null;
+  const roomGame = payload.gameMode === 'room_game' && isRoomGame(payload.roomGame) ? payload.roomGame : null;
   let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
@@ -153,6 +160,7 @@ export async function createLobby(
         displayName,
         ...(initialGameMode ? { gameMode: initialGameMode } : {}),
         duelGame: initialGameMode === 'duel' ? duelGame : null,
+        roomGame: initialGameMode === 'room_game' ? roomGame : null,
       });
 
       await lobbiesRepo.addMember(lobby.id, userId, false);
@@ -197,6 +205,36 @@ export async function createLobby(
     retryable: true,
     correlationId,
   };
+}
+
+const ROOM_INFO_CODES = new Set(['LOBBY_NOT_FOUND', 'LOBBY_FULL', 'LOBBY_MODE_REQUIRES_ACCOUNT', 'LOBBY_GUEST_LIMIT']);
+const ROOM_INFO_DEADLINE_MS = 1_000;
+const UNKNOWN_ROOM: LobbyJoinRoomInfo = { roomState: 'unknown', gameMode: null, duelGame: null, hostNickname: null };
+
+async function describeInviteRoomBounded(inviteCode: string): Promise<LobbyJoinRoomInfo> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<LobbyJoinRoomInfo>((resolve) => {
+    timer = setTimeout(() => resolve(UNKNOWN_ROOM), ROOM_INFO_DEADLINE_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([describeInviteRoom(inviteCode), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The room behind a refused invite code; never fails the refusal itself. */
+async function describeInviteRoom(inviteCode: string): Promise<LobbyJoinRoomInfo> {
+  try {
+    const row = await lobbiesRepo.findFriendlyRoomByInviteCode(inviteCode);
+    if (!row) return UNKNOWN_ROOM;
+    const roomState = row.status === 'waiting' ? 'open' : row.status === 'active' ? 'in_progress' : 'ended';
+    return { roomState, gameMode: row.game_mode, duelGame: row.duel_game, hostNickname: row.host_nickname };
+  } catch (error) {
+    logger.warn({ error, inviteCode: `${inviteCode.slice(0, 2)}***` }, 'Invite room lookup failed');
+    return UNKNOWN_ROOM;
+  }
 }
 
 export async function joinByCode(
@@ -253,7 +291,7 @@ export async function joinByCode(
         socket.emit('error', {
           code: 'ALREADY_IN_LOBBY',
           message: prepared.message ?? 'You are already in an active match',
-          meta: { stateSnapshot: prepared.snapshot },
+          meta: { stateSnapshot: prepared.snapshot, inviteCode: normalizedCode },
         });
         result = {
           ok: false,
@@ -272,6 +310,7 @@ export async function joinByCode(
         socket.emit('error', {
           code: 'TRANSITION_IN_PROGRESS',
           message: 'Lobby transition in progress. Please retry.',
+          meta: { inviteCode: normalizedCode },
         });
         result = {
           ok: false,
@@ -327,7 +366,7 @@ export async function joinByCode(
         // into after this join (an already-present guest rejoining is exempt).
         if (!alreadyMember && socket.data.user.is_guest === true && !config.GUEST_LOBBIES_PROVISIONING_ENABLED) {
           // Drain: no new guest memberships either; a guest already in the room may rejoin.
-          socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now' });
+          socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', meta: { inviteCode: normalizedCode } });
           result = { ok: false, code: 'CAPABILITY_REQUIRED', message: 'Guest rooms are closed right now', retryable: false, correlationId };
           return;
         }
@@ -337,14 +376,14 @@ export async function joinByCode(
           const violation = validateGuestLobby(nextMembers, nextMode);
           if (violation) {
             logger.warn({ lobbyId: lobby.id, userId, code: violation.code }, 'Lobby join refused by guest rules');
-            socket.emit('error', { code: violation.code, message: violation.message, meta: violation.meta });
+            socket.emit('error', { code: violation.code, message: violation.message, meta: { ...violation.meta, inviteCode: normalizedCode } });
             result = { ok: false, code: violation.code, message: violation.message, retryable: false, correlationId };
             return;
           }
         }
         if (!alreadyMember && members.length >= capacity) {
           logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
-          socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
+          socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full', meta: { inviteCode: normalizedCode } });
           result = {
             ok: false,
             code: 'LOBBY_FULL',
@@ -399,13 +438,19 @@ export async function joinByCode(
   }
 
   await userSessionGuardService.emitState(io, userId);
-  return result ?? {
+  const final: LobbyJoinByCodeResult = (result as LobbyJoinByCodeResult | null) ?? {
     ok: false,
     code: 'LOBBY_JOIN_ERROR',
     message: 'Failed to join lobby',
     retryable: true,
     correlationId,
   };
+  // Why the room could not be used, looked up after every lock is released and bounded: a slow lookup never holds a
+  // lobby or delays the refusal past a short deadline.
+  if (!final.ok && ROOM_INFO_CODES.has(final.code)) {
+    return { ...final, room: await describeInviteRoomBounded(normalizedCode) };
+  }
+  return final;
 }
 
 /**
@@ -516,6 +561,7 @@ export async function updateSettings(
     lobbyId?: string;
     gameMode: LobbyGameMode;
     duelGame?: DuelGameId | null;
+    roomGame?: RoomGameId | null;
     friendlyRandom?: boolean;
     friendlyCategoryAId?: string | null;
     friendlyCategoryBId?: string | null;
@@ -586,12 +632,14 @@ export async function updateSettings(
     const currentSettings: {
       gameMode: LobbyGameMode;
       duelGame: DuelGameId | null;
+      roomGame: RoomGameId | null;
       friendlyRandom: boolean;
       friendlyCategoryAId: string | null;
       friendlyCategoryBId: string | null;
     } = {
       gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
       duelGame: lobby.game_mode === 'duel' ? lobby.duel_game ?? null : null,
+      roomGame: lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null,
       friendlyRandom: lobby.friendly_random ?? true,
       friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
       friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
@@ -604,6 +652,9 @@ export async function updateSettings(
       // A duel keeps its game unless the host names another one; any other mode has none.
       duelGame: nextGameMode === 'duel'
         ? payload.duelGame ?? currentSettings.duelGame
+        : null,
+      roomGame: nextGameMode === 'room_game'
+        ? payload.roomGame ?? currentSettings.roomGame
         : null,
       friendlyRandom:
         payload.friendlyRandom !== undefined
@@ -628,7 +679,11 @@ export async function updateSettings(
       socket.emit('error', { code: 'INVALID_SETTINGS', message: 'A duel room needs its game' });
       return;
     }
-    const unavailable = lobbyModeUnavailable(nextSettings.gameMode, nextSettings.duelGame);
+    if (nextSettings.gameMode === 'room_game' && !isRoomGame(nextSettings.roomGame)) {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'A room-game room needs its game' });
+      return;
+    }
+    const unavailable = lobbyModeUnavailable(nextSettings.gameMode, nextSettings.gameMode === 'room_game' ? nextSettings.roomGame : nextSettings.duelGame);
     if (unavailable) {
       socket.emit('error', { code: unavailable.code, message: unavailable.message });
       return;
@@ -665,6 +720,7 @@ export async function updateSettings(
       if (memberCount > 2 && nextModeCaps.promotesToPartyQuiz) {
         nextSettings.gameMode = 'friendly_party_quiz';
         nextSettings.duelGame = null;
+        nextSettings.roomGame = null;
       }
     }
 
@@ -702,6 +758,7 @@ export async function updateSettings(
     const settingsUnchanged =
       nextSettings.gameMode === currentSettings.gameMode &&
       nextSettings.duelGame === currentSettings.duelGame &&
+      nextSettings.roomGame === currentSettings.roomGame &&
       nextSettings.friendlyRandom === currentSettings.friendlyRandom &&
       nextSettings.friendlyCategoryAId === currentSettings.friendlyCategoryAId &&
       nextSettings.friendlyCategoryBId === currentSettings.friendlyCategoryBId &&
@@ -714,6 +771,7 @@ export async function updateSettings(
     await lobbiesRepo.updateLobbySettings(lobbyId, {
       gameMode: nextSettings.gameMode,
       duelGame: nextSettings.duelGame,
+      roomGame: nextSettings.roomGame,
       friendlyRandom: nextSettings.friendlyRandom,
       friendlyCategoryAId: nextSettings.friendlyCategoryAId,
       friendlyCategoryBId: nextSettings.friendlyCategoryBId,
@@ -724,6 +782,7 @@ export async function updateSettings(
     if (
       nextSettings.gameMode !== currentSettings.gameMode
       || nextSettings.duelGame !== currentSettings.duelGame
+      || nextSettings.roomGame !== currentSettings.roomGame
     ) {
       await lobbiesRepo.setAllReady(lobbyId, false);
     }
@@ -897,6 +956,26 @@ export async function startFriendlyMatch(
       return;
     }
 
+    // A room game runs on room_matches: the room runtime locks the roster, flips the room active and announces
+    // room:found. The game is the locked row's, never the client's.
+    if (currentFriendlyMode === 'room_game') {
+      const roomGame = currentLobby.room_game;
+      const unavailable = lobbyModeUnavailable('room_game', roomGame);
+      if (!isRoomGame(roomGame) || unavailable) {
+        socket.emit('error', { code: 'ROOM_GAME_UNAVAILABLE', message: unavailable?.message ?? 'This game cannot be played with friends right now' });
+        return;
+      }
+      try {
+        await startRoomMatchFromLobby(io, socket, { lobbyId, roomGame });
+      } catch (error) {
+        logger.warn({ lobbyId, roomGame, error }, 'Failed to create room match');
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        socket.emit('error', { code: 'MATCH_CREATE_FAILED', message: 'Unable to start the game' });
+      }
+      return;
+    }
+
     let categoryAId: string;
     let categoryBId: string | null;
 
@@ -977,7 +1056,7 @@ export async function startFriendlyMatch(
       result = await matchesService.createMatchFromLobby({
         lobbyId,
         mode: currentLobby.mode,
-        variant: currentFriendlyMode,
+        variant: currentFriendlyMode as MatchVariant,
         hostUserId: currentLobby.host_user_id,
         categoryAId,
         categoryBId,
@@ -1081,7 +1160,21 @@ export async function leaveLobby(
           return;
         }
 
-        if (lobby.status !== 'waiting') {
+        // Match start closes the old lobby. A socket on another replica may
+        // retain that lobby binding after RemoteSocket room operations; leaving
+        // the already-closed lobby is an idempotent cleanup, not a match leave.
+        if (lobby.status === 'closed') {
+          await socket.leave(`lobby:${lobbyId}`);
+          if (socket.data.lobbyId === lobbyId) socket.data.lobbyId = undefined;
+          result = { ok: true, lobbyId, closed: true, correlationId };
+          return;
+        }
+
+        // A room game keeps its room active while the match runs; a member who is not playing in it (left the match,
+        // or was left out at the ready gate) may still leave the room.
+        const sittingOut = lobby.status === 'active' && lobby.game_mode === 'room_game'
+          && !(await roomService.hasLiveSeat(userId, lobbyId));
+        if (lobby.status !== 'waiting' && !sittingOut) {
           socket.emit('error', {
             code: 'LOBBY_ACTIVE',
             message: 'Match already started. Please reconnect to the match.',

@@ -1,3 +1,4 @@
+import { startPartyRewardReconciler, stopPartyRewardReconciler } from './realtime/party-reward-reconciler.js';
 import { startGuestJourneyWorker, stopGuestJourneyWorker } from './modules/guest/guest-journey.worker.js';
 import { startRegisteredMemberCountWorker, stopRegisteredMemberCountWorker } from './modules/analytics/registered-members.worker.js';
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
@@ -70,6 +71,7 @@ startRoadToGoalBots();
 startSquadSpinSweeper();
 startSquadSpinBots();
 startTriviaMinesSweeper();
+startPartyRewardReconciler();
 startTriviaMinesBots();
 startFreeKicksSweeper();
 startFreeKicksBots();
@@ -134,6 +136,7 @@ const shutdown = async (signal: string) => {
     stopRoadToGoalSweeper(),
     stopSquadSpinSweeper(),
     stopTriviaMinesSweeper(),
+    stopPartyRewardReconciler(),
     stopFreeKicksSweeper(),
     stopBotChallengeResponder(),
     stopBotRenameWorker(),

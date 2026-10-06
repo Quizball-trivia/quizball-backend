@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { statsService } from './stats.service.js';
 import type { HeadToHeadQuery, RecentMatchesQuery } from './stats.schemas.js';
+import { getPartyRewards } from './party-rewards.service.js';
 
 /**
  * Stats controller.
@@ -8,6 +9,12 @@ import type { HeadToHeadQuery, RecentMatchesQuery } from './stats.schemas.js';
  * Controllers read ONLY req.validated.* (never req.body directly).
  */
 export const statsController = {
+  async partyRewards(req: Request, res: Response): Promise<void> {
+    const { matchId } = req.validated.params as { matchId: string };
+    const rewards = await getPartyRewards(matchId, req.user!.id);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(rewards);
+  },
   /**
    * GET /api/v1/stats/head-to-head
    * Get head-to-head summary for two users.

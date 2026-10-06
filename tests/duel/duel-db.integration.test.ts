@@ -6,13 +6,14 @@ import { rawGoal } from '../minuto/fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL with the full schema (duel migration applied), e.g. a schema-only copy of a local DB:
+ * Isolated audit clones on port 5436 are also accepted.
  *   DUEL_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_duel_test_1
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
 vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
 
 const url = process.env.DUEL_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_duel_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local duel test database required');
+if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:543(?:2|6)\/quizball_duel_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local duel test database required');
 
 const { duelService, DUEL_OUTAGE_GRACE_MS, DUEL_COUNTDOWN_MS, DUEL_RECONNECT_MS, DUEL_RESUME_GRACE_MS } = await import('../../src/modules/duel/duel.service.js');
 const { PD_WINDOW_MS } = await import('../../src/modules/duel/engines/pistas.engine.js');
@@ -420,6 +421,31 @@ describe.skipIf(!url)('duel runtime on real Postgres', () => {
     await runOut(matchId);
     expect((await duelService.command(matchId, b, randomUUID(), { type: 'guess', round: 0, minute: 10 })).result).toEqual({ ok: false, code: 'stale_round' });
     expect((await duelService.snapshot(matchId, a))!.view).toMatchObject({ phase: 'guess', round: 1, me: { answered: false } });
+  });
+
+  it('two private seat projections share three reads; outsiders and empty recipients never read content', async () => {
+    const { matchId, a, b } = await started('minuto');
+    await duelService.command(matchId, a, randomUUID(), { type: 'guess', round: 0, minute: 93 });
+    const queries: string[] = [];
+    const previous = db.sql.options.debug;
+    db.sql.options.debug = (_connection, query) => { queries.push(query); };
+    try {
+      const views = await duelService.snapshots(matchId, [{ userId: a, locale: 'ka' }, { userId: b, locale: 'tr' }]);
+      expect(queries).toHaveLength(3);
+      expect(views.get(a)!.mySeat).toBe(0);
+      expect(views.get(b)!.mySeat).toBe(1);
+      expect(views.get(a)!.view).toMatchObject({ me: { guess: 93 } });
+      expect(views.get(b)!.view).toMatchObject({ me: { guess: null }, rival: { answered: true } });
+      expect(JSON.stringify(views.get(b))).not.toContain('"guess":93');
+      expect(JSON.stringify(views.get(b))).not.toContain('"minute"');
+      expect(JSON.stringify(views.get(b))).not.toContain('rounds');
+      queries.length = 0;
+      expect((await duelService.snapshots(matchId, [{ userId: randomUUID() }])).size).toBe(0);
+      expect(queries).toHaveLength(2);
+      queries.length = 0;
+      expect((await duelService.snapshots(matchId, [])).size).toBe(0);
+      expect(queries).toHaveLength(0);
+    } finally { db.sql.options.debug = previous; }
   });
 
   it('an engine this build does not have leaves the match alone: no cancel on the clock, an unrecorded refusal', async () => {

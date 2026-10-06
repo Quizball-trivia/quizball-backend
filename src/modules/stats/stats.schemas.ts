@@ -2,6 +2,15 @@ import { z } from 'zod';
 import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 import { rankedTierSchema } from '../ranked/ranked.schemas.js';
 
+export const partyRewardsParamsSchema = z.object({ matchId: z.string().uuid() });
+export const partyRewardsResponseSchema = z.object({
+  matchId: z.string().uuid(),
+  status: z.enum(['pending', 'complete', 'failed', 'ineligible']),
+  // Null means unconfirmed, not zero. Only a persisted XP ledger row supplies an amount.
+  xpEarned: z.number().int().nonnegative().nullable(),
+});
+export type PartyRewardsResponse = z.infer<typeof partyRewardsResponseSchema>;
+
 export const headToHeadQuerySchema = z.object({
   userA: z.string().uuid(),
   userB: z.string().uuid(),

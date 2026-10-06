@@ -21,8 +21,18 @@ describe('lobby guest rules', () => {
 
   it('caps guests at three and enforces the mode capacity for the resulting room', () => {
     expect(validateGuestLobby([m('g1', true), m('g2', true), m('g3', true)], 'auction')).toBeNull();
-    expect(validateGuestLobby([m('g1', true), m('g2', true), m('g3', true), m('g4', true)], 'auction')?.code).toBe('LOBBY_GUEST_LIMIT');
+    // A full room is reported as full (the clearer reason), a room with free seats but three guests as the guest limit.
+    expect(validateGuestLobby([m('g1', true), m('g2', true), m('g3', true), m('g4', true)], 'auction')?.code).toBe('LOBBY_FULL');
+    expect(validateGuestLobby([m('a'), m('g1', true), m('g2', true), m('g3', true), m('g4', true)], 'friendly_party_quiz')?.code).toBe('LOBBY_GUEST_LIMIT');
     expect(validateGuestLobby([m('a'), m('b'), m('g', true)], 'football_grid')?.code).toBe('LOBBY_FULL');
+  });
+
+  it('a room game seats up to six guests, never more, and keeps its mode as it fills', () => {
+    const guests = (n: number) => Array.from({ length: n }, (_, i) => m(`g${i}`, true));
+    expect(validateGuestLobby(guests(6), 'room_game')).toBeNull();
+    expect(validateGuestLobby(guests(7), 'room_game')?.code).toBe('LOBBY_FULL');
+    expect(validateGuestLobby(guests(4), 'friendly_party_quiz')?.code).toBe('LOBBY_GUEST_LIMIT');
+    expect(normalizedModeForMemberCount('room_game', 6)).toBe('room_game');
   });
 
   it('mirrors the join normalization: a third member in a non-auction/grid room becomes party quiz', () => {

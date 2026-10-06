@@ -17,11 +17,11 @@ vi.mock('../../src/db/index.js', () => {
     },
     { json: (value: unknown) => value, unsafe: (text: string) => ({ unsafe: text }), begin: vi.fn() },
   );
-  return { sql };
+  return { sql, withStatementTimeout: vi.fn((fn: (tx: unknown) => unknown) => fn(sql)) };
 });
 
 const { buscaminasRepo } = await import('../../src/modules/buscaminas/buscaminas.repo.js');
-const { sql } = await import('../../src/db/index.js');
+const { sql, withStatementTimeout } = await import('../../src/db/index.js');
 const tx = sql as never;
 const last = () => calls.at(-1)!;
 
@@ -74,6 +74,7 @@ describe('buscaminas repo SQL', () => {
 
   it('the board and a member\'s rank count ranked, finished runs only', async () => {
     await buscaminasRepo.leaderboard('2026-09-28', 20);
+    expect(withStatementTimeout).toHaveBeenLastCalledWith(expect.any(Function), 4_000);
     expect(last().text).toMatch(/WHERE r\.day = \$\? AND r\.ranked AND r\.done/);
     await buscaminasRepo.rankOf('user-a', '2026-09-28', tx);
     expect(last().text).toMatch(/WHERE o\.day = me\.day AND o\.ranked AND o\.done/);

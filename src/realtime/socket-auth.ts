@@ -27,6 +27,10 @@ export interface SocketAuthData {
   duelMatchId?: string;
   /** The connect-time live-duel lookup has completed for this socket. */
   duelChecked?: boolean;
+  /** The live room match this socket was seen in (connect or a room:* event). */
+  roomMatchId?: string;
+  /** The connect-time live-room lookup has completed for this socket. */
+  roomChecked?: boolean;
   connectedAt?: number;
 }
 

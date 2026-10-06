@@ -168,7 +168,7 @@ describe('duel rooms — settings', () => {
     await updateSettings(io as never, socket as never, { gameMode: 'duel', duelGame: 'buscaminas' });
     expect(errorCodes(socket)).toEqual([]);
     expect(lobbiesRepo.updateLobbySettings).toHaveBeenCalledWith('L', {
-      gameMode: 'duel', duelGame: 'buscaminas', friendlyRandom: true, friendlyCategoryAId: null, friendlyCategoryBId: null,
+      gameMode: 'duel', duelGame: 'buscaminas', roomGame: null, friendlyRandom: true, friendlyCategoryAId: null, friendlyCategoryBId: null,
     });
     expect(lobbiesRepo.setAllReady).toHaveBeenCalledWith('L', false);
   });

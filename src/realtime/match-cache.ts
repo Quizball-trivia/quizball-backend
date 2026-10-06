@@ -126,6 +126,8 @@ export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
   mode: MatchMode;
+  /** Partner ranked pool: such a match never ships a question's answer before it is answered. */
+  partnerPool?: string | null;
   totalQuestions: number;
   categoryAId: string;
   categoryBId: string | null;
@@ -328,6 +330,7 @@ export function buildInitialCache(params: {
     started_at: string;
     current_q_index: number;
     state_payload: unknown;
+    partner_pool?: string | null;
   };
   players: Array<{
     user_id: string;
@@ -355,6 +358,7 @@ export function buildInitialCache(params: {
     matchId: params.match.id,
     status: params.match.status,
     mode: params.match.mode,
+    partnerPool: params.match.partner_pool ?? null,
     totalQuestions: params.match.total_questions,
     categoryAId: params.match.category_a_id,
     categoryBId: params.match.category_b_id,

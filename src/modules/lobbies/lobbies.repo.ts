@@ -399,9 +399,12 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
-             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
+             COALESCE(pp.display_name, u.nickname) AS nickname,
+             u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
       FROM lobby_members lm
       JOIN users u ON u.id = lm.user_id
+      -- Partner players are shown under their partner name, never the internal handle in users.nickname.
+      LEFT JOIN partner_players pp ON pp.user_id = u.id AND u.partner_slug IS NOT NULL
       WHERE lm.lobby_id = ${lobbyId}
       ORDER BY lm.joined_at ASC
     `;

@@ -80,6 +80,7 @@ export const statsRepo = {
         JOIN match_players a ON a.match_id = m.id AND a.user_id = ${userAId}
         JOIN match_players b ON b.match_id = m.id AND b.user_id = ${userBId}
         WHERE m.status = 'completed'
+          AND m.partner_pool IS NULL
       )
       SELECT
         COUNT(*) FILTER (WHERE winner_user_id = ${userAId})::int AS wins_a,
@@ -196,6 +197,7 @@ export const statsRepo = {
       ) opps ON true
       WHERE m.status IN ('completed', 'abandoned')
         AND m.is_dev = false
+        AND m.partner_pool IS NULL
       ORDER BY COALESCE(m.ended_at, m.started_at) DESC
       LIMIT ${limit}
     `;
@@ -251,6 +253,7 @@ export const statsRepo = {
         AND m.mode = 'ranked'
         AND m.status = 'completed'
         AND m.is_dev = false
+        AND m.partner_pool IS NULL
         -- Older and undated matches contribute to neither displayed season.
         AND m.ended_at >= LEAST(${previousStartIso}::timestamptz, ${boundaryIso}::timestamptz)
     `;
@@ -282,6 +285,7 @@ export const statsRepo = {
       WHERE mp.user_id = ${userId}
         AND m.status = 'completed'
         AND m.is_dev = false
+        AND m.partner_pool IS NULL
       ORDER BY m.ended_at DESC NULLS LAST, m.started_at DESC
       LIMIT ${limit}
     `;
@@ -308,6 +312,7 @@ export const statsRepo = {
         WHERE mp.user_id = ANY(${sql.array(uniqueUserIds)}::uuid[])
           AND m.status = 'completed'
           AND m.is_dev = false
+          AND m.partner_pool IS NULL
       ) recent
       WHERE form_rank <= ${limit}
       ORDER BY user_id, form_rank

@@ -1,10 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
-import { AuthenticationError } from '../../core/errors.js';
+import { AuthenticationError, AuthorizationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { detectCountryFromRequest } from '../../core/geo.js';
 import { getAuthProvider } from '../../modules/auth/index.js';
 import { usersService } from '../../modules/users/index.js';
 import { getCachedUser } from '../../modules/users/user-cache.js';
+import { isPartnerToken } from '../../modules/partners/partner-token.js';
 import {
   CAMPAIGN_ATTRIBUTION_HEADER,
   parseCampaignAttribution,
@@ -41,18 +42,61 @@ export function selectAuthToken(authHeader: string | undefined, cookieToken: unk
 }
 
 /**
+ * Partner staff are CMS principals, not players: they may use the partner admin API and read their own account
+ * (the CMS reads `role` from it), nothing else.
+ */
+export function isStaffAllowedRoute(method: string, originalUrl: string): boolean {
+  const path = originalUrl.split('?')[0].replace(/\/+$/, '');
+  return path.startsWith('/partner-admin/v1/') || (method === 'GET' && path === '/api/v1/users/me');
+}
+
+/**
+ * Verify a Supabase JWT and attach req.user + req.identity.
+ *
+ * 1. Refuse partner tokens outright (they are never sent to Supabase; only /partner/v1 accepts them)
+ * 2. Verify JWT → get AuthIdentity
+ * 3. Resolve internal user via getOrCreateFromIdentity()
+ */
+export async function authenticateRequest(req: Request, token: string): Promise<void> {
+  if (isPartnerToken(token)) {
+    throw new AuthenticationError('Invalid or expired token');
+  }
+
+  const authProvider = getAuthProvider();
+  const identity = await authProvider.verifyToken(token);
+
+  logger.debug(
+    { provider: identity.provider, subject: identity.subject },
+    'Token verified'
+  );
+
+  // Only call geo detection if the user doesn't have a country yet — avoids blocking
+  // third-party HTTP call on every authenticated request
+  const cached = await getCachedUser(identity.provider, identity.subject);
+  const detectedCountry = cached?.country ? null : await detectCountryFromRequest(req);
+  const attribution = parseCampaignAttribution(
+    req.headers[CAMPAIGN_ATTRIBUTION_HEADER],
+  );
+  const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
+  const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
+    accountCreation: {
+      ...(typeof req.headers['x-guest-token'] === 'string' ? { guestToken: req.headers['x-guest-token'] } : {}),
+      attribution,
+      utm,
+    },
+  });
+
+  req.identity = identity;
+  req.user = user;
+}
+
+/**
  * Auth middleware.
  * Verifies JWT and attaches user + identity to request.
  *
  * Token extraction supports cookies and Authorization header:
  * - extractBearerToken(req.headers.authorization) — preferred when present
  * - extractCookieToken(req.cookies?.qb_access_token) — fallback for cookie sessions
- *
- * Flow:
- * 1. Extract token from Authorization header or cookies
- * 2. Verify JWT → get AuthIdentity
- * 3. Resolve internal user via getOrCreateFromIdentity()
- * 4. Attach req.user and req.identity
  */
 export async function authMiddleware(
   req: Request,
@@ -60,46 +104,36 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
-    // 1. Extract token from cookies or Authorization header
     const token = selectAuthToken(req.headers.authorization, req.cookies?.qb_access_token);
     if (!token) {
       throw new AuthenticationError('Missing auth token');
     }
 
-    // 2. Verify JWT → get AuthIdentity
-    const authProvider = getAuthProvider();
-    const identity = await authProvider.verifyToken(token);
+    await authenticateRequest(req, token);
 
-    logger.debug(
-      { provider: identity.provider, subject: identity.subject },
-      'Token verified'
-    );
-
-    // 3. Resolve internal user
-    // Only call geo detection if the user doesn't have a country yet — avoids blocking
-    // third-party HTTP call on every authenticated request
-    const cached = await getCachedUser(identity.provider, identity.subject);
-    const detectedCountry = cached?.country ? null : await detectCountryFromRequest(req);
-    const attribution = parseCampaignAttribution(
-      req.headers[CAMPAIGN_ATTRIBUTION_HEADER],
-    );
-    const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
-    const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
-      accountCreation: {
-        ...(typeof req.headers['x-guest-token'] === 'string' ? { guestToken: req.headers['x-guest-token'] } : {}),
-        attribution,
-        utm,
-      },
-    });
-
-    // 4. Attach BOTH to request
-    req.identity = identity;
-    req.user = user;
+    if (req.user?.role === 'partner_staff' && !isStaffAllowedRoute(req.method, req.originalUrl)) {
+      throw new AuthorizationError('Partner staff accounts cannot use this endpoint');
+    }
 
     next();
   } catch (error) {
     next(error);
   }
+}
+
+/**
+ * Mounted in front of every /api/v1 route: a partner player's token (header or cookie) is refused outright, including
+ * on public and optional-auth routes that would otherwise just treat it as a guest. Partner players only use
+ * /partner/v1.
+ */
+export function rejectPartnerCredentials(req: Request, _res: Response, next: NextFunction): void {
+  const bearer = extractBearerToken(req.headers.authorization);
+  const cookie = extractCookieToken(req.cookies?.qb_access_token);
+  if ((bearer && isPartnerToken(bearer)) || (cookie && isPartnerToken(cookie))) {
+    next(new AuthenticationError('Invalid or expired token'));
+    return;
+  }
+  next();
 }
 
 /**

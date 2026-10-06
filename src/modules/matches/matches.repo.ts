@@ -14,6 +14,8 @@ export interface CreateMatchData {
   gameVariant?: MatchRow['game_variant'];
   rankedContext?: RankedLobbyContext | null;
   isDev?: boolean;
+  /** Partner ranked pool (e.g. 'freecroco-test'): partner provenance, settled by the partner path. */
+  partnerPool?: string | null;
 }
 
 /**
@@ -63,11 +65,11 @@ export const matchesRepo = {
     if (tx) {
       const rows = await tx.unsafe<MatchRow[]>(
         `INSERT INTO matches (
-          id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+          id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at, partner_pool
         )
         VALUES (
           gen_random_uuid(), $1, $2, $3, 'active',
-          $4, $5, 0, $6, $7::jsonb, $8::jsonb, $9, NOW()
+          $4, $5, 0, $6, $7::jsonb, $8::jsonb, $9, NOW(), $10
         )
         RETURNING *`,
         [
@@ -86,13 +88,14 @@ export const matchesRepo = {
           (data.statePayload ?? null) as Json,
           (data.rankedContext ?? null) as Json,
           data.isDev ?? false,
+          data.partnerPool ?? null,
         ],
       );
       return rows[0];
     }
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+        id, lobby_id, mode, game_variant, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at, partner_pool
       )
       VALUES (
         gen_random_uuid(), ${data.lobbyId}, ${data.mode}, ${gameVariant}, 'active',
@@ -100,7 +103,8 @@ export const matchesRepo = {
         ${sql.json(data.statePayload as Json ?? null)},
         ${sql.json((data.rankedContext ?? null) as Json)},
         ${data.isDev ?? false},
-        NOW()
+        NOW(),
+        ${data.partnerPool ?? null}
       )
       RETURNING *
     `;
@@ -272,16 +276,16 @@ export const matchesRepo = {
     matchId: string,
     winnerId: string | null,
     endedAt?: Date,
-  ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant'> | null> {
+  ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant' | 'partner_pool'> | null> {
     // tx.unsafe pattern matches other tx-aware repos in this codebase
     // (TransactionSql doesn't expose the tagged-template call signature
     // cleanly to TS).
-    const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant'>[]>(
+    const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev' | 'game_variant' | 'partner_pool'>[]>(
       `
       UPDATE matches
       SET status = 'completed', winner_user_id = $2, ended_at = COALESCE($3::timestamptz, NOW())
       WHERE id = $1 AND status = 'active'
-      RETURNING id, mode, ended_at, is_dev, game_variant
+      RETURNING id, mode, ended_at, is_dev, game_variant, partner_pool
       `,
       [matchId, winnerId, endedAt ?? null],
     );
@@ -447,7 +451,14 @@ export const matchesRepo = {
     return row?.exists ?? false;
   },
 
-  async abandonMatch(matchId: string): Promise<boolean> {
+  async abandonMatch(matchId: string, tx?: TransactionSql): Promise<boolean> {
+    if (tx) {
+      const rows = await tx.unsafe<{ id: string }[]>(
+        `UPDATE matches SET status = 'abandoned', ended_at = NOW() WHERE id = $1 AND status = 'active' RETURNING id`,
+        [matchId],
+      );
+      return rows.length > 0;
+    }
     const rows = await sql<{ id: string }[]>`
       UPDATE matches
       SET status = 'abandoned', ended_at = NOW()

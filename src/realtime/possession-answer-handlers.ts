@@ -158,6 +158,7 @@ export async function handlePossessionAnswer(
     myTotalPoints: number;
     expectedCount: number;
     answerCount: number;
+    partnerPool: string | null;
   };
 
   const aiOpponent = await lookupAiOpponentForMatch(matchId);
@@ -360,6 +361,7 @@ export async function handlePossessionAnswer(
       myTotalPoints: player.totalPoints,
       expectedCount,
       answerCount: currentAnswerCount,
+      partnerPool: cache.partnerPool ?? null,
     };
   });
 
@@ -389,8 +391,10 @@ export async function handlePossessionAnswer(
   });
 
   // Emit live in all phases, penalties included, so the opponent's pick and
-  // score-flight surface the same way as a normal ranked question.
-  socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+  // score-flight surface the same way as a normal ranked question. Partner
+  // (prize) matches never show a pick before the viewer has answered: the
+  // viewer's own answer ack and the round result carry it.
+  if (!committed.partnerPool) socket.to(`match:${matchId}`).emit('match:opponent_answered', {
     matchId,
     qIndex,
     questionKind: committed.question.kind,
@@ -645,6 +649,7 @@ export async function handlePossessionPutInOrderAnswer(
     expectedCount: number;
     answerCount: number;
     foundCount: number;
+    partnerPool: string | null;
   };
 
   const aiOpponent = await lookupAiOpponentForMatch(matchId);
@@ -806,6 +811,7 @@ export async function handlePossessionPutInOrderAnswer(
       expectedCount,
       answerCount: currentAnswerCount,
       foundCount,
+      partnerPool: cache.partnerPool ?? null,
     };
   });
 
@@ -831,7 +837,7 @@ export async function handlePossessionPutInOrderAnswer(
     });
   });
 
-  if (committed.question.phaseKind !== 'penalty') {
+  if (committed.question.phaseKind !== 'penalty' && !committed.partnerPool) {
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
       qIndex,
@@ -917,6 +923,7 @@ export async function handlePossessionCluesAnswer(
     scoringMatcher: 'v1' | 'v2';
     v2MatchKind: string | null;
     v2MatchDistance: number | null;
+    partnerPool: string | null;
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
@@ -1108,6 +1115,7 @@ export async function handlePossessionCluesAnswer(
         scoringMatcher: matcherMode === 'on' ? 'v2' as const : 'v1' as const,
         v2MatchKind: v2Match?.kind ?? null,
         v2MatchDistance: v2Match?.distance ?? null,
+        partnerPool: cache.partnerPool ?? null,
       },
     };
   });
@@ -1161,7 +1169,7 @@ export async function handlePossessionCluesAnswer(
     });
   });
 
-  if (committed.question.phaseKind !== 'penalty') {
+  if (committed.question.phaseKind !== 'penalty' && !committed.partnerPool) {
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
       qIndex,

@@ -8,6 +8,7 @@ import {
 } from '../../core/errors.js';
 import { getRequestId } from '../../core/request-context.js';
 import { logger } from '../../core/logger.js';
+import { isPartnerPath, partnerErrorHandler } from '../../modules/partners/partner-errors.js';
 
 /** Extract keys only from an object to avoid logging sensitive values. */
 function redactValues(obj: Record<string, unknown> | undefined): string[] {
@@ -60,6 +61,10 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
+  if (isPartnerPath(req.originalUrl)) {
+    partnerErrorHandler(err, req, res, _next);
+    return;
+  }
   const requestId = getRequestId();
 
   // Repository adapters can wrap the original driver/admission failure in an

@@ -282,8 +282,9 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         serverNow: new Date().toISOString(),
         // MCQ correctIndex is shipped so the client can show instant tap
         // feedback (matches Trivia Crack / QuizUp pattern). Server still
-        // validates the selectedIndex independently when scoring.
-        correctIndex: cache.currentQuestion.kind === 'multipleChoice'
+        // validates the selectedIndex independently when scoring. Partner
+        // (prize) matches never ship it: the answer ack reveals it.
+        correctIndex: !cache.partnerPool && cache.currentQuestion.kind === 'multipleChoice'
           ? cache.currentQuestion.correctIndex
           : undefined,
         phaseKind: cache.currentQuestion.phaseKind,
@@ -912,6 +913,8 @@ export async function sendPossessionMatchQuestion(
       if (state.phase === 'PENALTY_SHOOTOUT') {
         const completion = await completePossessionMatch(io, matchId, state, cache, {
           source: 'penalty_question_pool_exhausted',
+          // Freecroco: the server ran out of questions — no events, both plays returned (contract §7.1).
+          ...(cache.partnerPool ? { partnerCause: { kind: 'server_failure' as const } } : {}),
         });
         if (!completion.completed) {
           logger.error(
@@ -1053,7 +1056,7 @@ export async function sendPossessionMatchQuestion(
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
       serverNow: new Date().toISOString(),
-      correctIndex: cache.currentQuestion.kind === 'multipleChoice'
+      correctIndex: !cache.partnerPool && cache.currentQuestion.kind === 'multipleChoice'
         ? cache.currentQuestion.correctIndex
         : undefined,
       phaseKind: runtimePhaseKind,
@@ -1197,7 +1200,7 @@ export async function resumePossessionMatchQuestion(
     playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
     serverNow: new Date().toISOString(),
-    correctIndex: currentQuestion.kind === 'multipleChoice'
+    correctIndex: !cache.partnerPool && currentQuestion.kind === 'multipleChoice'
       ? currentQuestion.correctIndex
       : undefined,
     phaseKind: currentQuestion.phaseKind,

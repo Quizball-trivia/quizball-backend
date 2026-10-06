@@ -3,6 +3,14 @@ import { clamp } from './scoring.js';
 
 const MIN_PREFIX_LENGTH = 3;
 
+/** Stricter matching for competitive play (partner plays); the defaults are the public game's. */
+export interface CountdownMatchOptions {
+  /** A partial name counts from this many characters. */
+  minPrefixLength?: number;
+  /** A misspelling counts from this many characters (a short guess is otherwise a partial name in disguise). */
+  minTypoLength?: number;
+}
+
 type AcceptedAnswerMatchKind = 'exact' | 'wholeWord' | 'alias' | 'typo';
 
 interface AcceptedAnswerMatch {
@@ -285,14 +293,15 @@ function hasPrefixMatch(acceptedAnswers: string[], normalizedGuess: string): boo
 export function countdownMatch(
   evaluation: Extract<MatchQuestionEvaluation, { kind: 'countdown' }>,
   guess: string,
-  foundIds: Set<string>
+  foundIds: Set<string>,
+  { minPrefixLength = MIN_PREFIX_LENGTH, minTypoLength = 0 }: CountdownMatchOptions = {}
 ): { id: string; display: Record<string, string> } | null {
   const normalizedGuess = normalizeAnswer(guess);
   if (!normalizedGuess) return null;
 
   const candidates = evaluation.answerGroups.reduce<CountdownCandidate[]>((matches, answerGroup) => {
     const match = matchAcceptedAnswers(guess, answerGroup.acceptedAnswers);
-    if (match) {
+    if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       matches.push({
         id: answerGroup.id,
         display: answerGroup.display,
@@ -318,7 +327,7 @@ export function countdownMatch(
     }
   }
 
-  if (normalizedGuess.length >= MIN_PREFIX_LENGTH) {
+  if (normalizedGuess.length >= minPrefixLength) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
@@ -506,7 +515,8 @@ export function fuzzyMatchesAnswerV2(input: string, acceptedAnswers: string[]): 
 export function countdownMatchV2(
   evaluation: Extract<MatchQuestionEvaluation, { kind: 'countdown' }>,
   guess: string,
-  foundIds: Set<string>
+  foundIds: Set<string>,
+  { minPrefixLength = MIN_PREFIX_LENGTH, minTypoLength = 0 }: CountdownMatchOptions = {}
 ): { id: string; display: Record<string, string> } | null {
   const normalizedGuess = normalizeAnswer(guess);
   if (!normalizedGuess) return null;
@@ -514,7 +524,9 @@ export function countdownMatchV2(
   const candidates: Array<{ id: string; display: Record<string, string>; match: AnswerMatchResult }> = [];
   for (const answerGroup of evaluation.answerGroups) {
     const match = matchAnswerV2(guess, answerGroup.acceptedAnswers);
-    if (match) candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
+    if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
+      candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
+    }
   }
 
   // exact + spaceless share ONE ambiguity tier: separator removal is an exact
@@ -533,7 +545,7 @@ export function countdownMatchV2(
     }
   }
 
-  if (normalizedGuess.length >= MIN_PREFIX_LENGTH && prefixGuessAllowed(normalizedGuess)) {
+  if (normalizedGuess.length >= minPrefixLength && prefixGuessAllowed(normalizedGuess)) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {

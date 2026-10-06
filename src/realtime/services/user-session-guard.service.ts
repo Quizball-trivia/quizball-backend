@@ -25,6 +25,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { rankedPairingInFlightKey } from '../ranked-matchmaking-keys.js';
+import { rankedCancelSearchKeys } from '../../modules/partners/games/ranked/ranked-pool.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
@@ -41,8 +42,6 @@ const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
 export const SESSION_LOCK_WAIT_MS = 1200;
 const SESSION_LOCK_RETRY_INTERVAL_MS = 75;
-const RANKED_QUEUE_KEY = 'ranked:mm:queue';
-const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const RANKED_USER_MAP_KEY = 'ranked:mm:user';
 const RANKED_SEARCH_KEY_PREFIX = 'ranked:mm:search:';
 const AUCTION_QUEUE_KEY = 'auction:mm:queue';
@@ -858,7 +857,7 @@ async function cancelRankedQueueSearch(userId: string): Promise<void> {
 
     span.setAttribute('quizball.redis_available', true);
     await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [RANKED_QUEUE_KEY, RANKED_TIMEOUTS_KEY, RANKED_USER_MAP_KEY],
+      keys: rankedCancelSearchKeys(),
       arguments: [RANKED_SEARCH_KEY_PREFIX, userId, String(Date.now())],
     });
   });

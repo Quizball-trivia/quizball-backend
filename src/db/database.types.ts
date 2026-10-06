@@ -3036,6 +3036,7 @@ export type Database = {
           is_seed: boolean
           nickname: string | null
           onboarding_complete: boolean
+          partner_slug: string | null
           pending_deletion_at: string | null
           phone_number: string | null
           phone_verified_at: string | null
@@ -3071,6 +3072,7 @@ export type Database = {
           is_seed?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
+          partner_slug?: string | null
           pending_deletion_at?: string | null
           phone_number?: string | null
           phone_verified_at?: string | null
@@ -3106,6 +3108,7 @@ export type Database = {
           is_seed?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
+          partner_slug?: string | null
           pending_deletion_at?: string | null
           phone_number?: string | null
           phone_verified_at?: string | null

@@ -240,7 +240,9 @@ export async function abandonPossessionTerminalMatch(
   roster: PossessionTerminalPlayer[],
   source: string
 ): Promise<boolean> {
-  const abandoned = await abandonMatchWithCompleteLock(match.id);
+  const abandoned = match.partner_pool
+    ? await abandonMatchWithCompleteLock(match.id, { kind: 'both_dropped' })
+    : await abandonMatchWithCompleteLock(match.id);
   if (!abandoned.abandoned) return false;
 
   cancelPossessionHalftimeTimer(match.id);
@@ -259,7 +261,7 @@ export async function abandonPossessionTerminalMatch(
     // ghost id is never passed to refundRankedTickets.
     const humanUserIds = roster
       .map((player) => rosterUsers.get(player.user_id))
-      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false && user.partner_slug == null)
       .map((user) => user.id);
     if (humanUserIds.length > 0) {
       try {
@@ -318,7 +320,26 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
   // through finalizeMatchAsForfeit so the match becomes a no-contest and the
   // ticket/RP rule is applied. Outside that window we preserve the existing
   // score-based fallback so a leading human is not gifted as a loss to the AI.
-  const canAwardForfeitWin = canForfeitToPresentPlayers(presence);
+  // Freecroco: the opponent who left during this player's grace (an excused exit) dropped out too: both dropped
+  // (contract §7.1: decided by the score at that moment). Quizball's excused-exit policy is unchanged.
+  const partnerExcusedExit = match.partner_pool != null
+    && presence.absentPlayers.length > 0
+    && presence.exitPendingUserIds.some((userId) => !presence.absentPlayers.some((p) => p.user_id === userId));
+  if (partnerExcusedExit) {
+    const bothDropped = await completePossessionMatchFromProgress(io, match.id, source, { kind: 'both_dropped' });
+    if (bothDropped.completed) {
+      await cleanupPossessionTerminalRedisKeys(match.id, roster);
+      logger.info({ matchId: match.id, source }, 'Partner match: disconnect plus excused exit settled as both dropped');
+      return { finalized: true, abandoned: false };
+    }
+    if (bothDropped.reason === 'lock_not_acquired' || bothDropped.reason === 'not_active') {
+      return { finalized: false, abandoned: false };
+    }
+    const abandoned = await abandonPossessionTerminalMatch(io, match, roster, source);
+    return { finalized: abandoned, abandoned };
+  }
+  // Freecroco: a leaver scores 0 even against a bot (contract §7.1), so the bot may collect the forfeit.
+  const canAwardForfeitWin = canForfeitToPresentPlayers(presence) || match.partner_pool != null;
   const shouldFinalizeEarlyNoContest =
     !canAwardForfeitWin
     && presence.presentPlayers.length > 0

@@ -13,14 +13,24 @@ export async function publishRegisteredMemberCountSnapshot(now = new Date()): Pr
   const client = getPostHogClient();
   if (!client) return;
 
-  const [row] = await sql<{ registered_members: number }[]>`
-    SELECT count(*)::integer AS registered_members
-    FROM users
-    WHERE coalesce(is_ai, false) = false
-      AND coalesce(is_seed, false) = false
-      AND coalesce(is_guest, false) = false
-      AND coalesce(is_deleted, false) = false
-      AND deleted_at IS NULL`;
+  // Members exclude partner players and partner staff; partner players are counted beside them (overall and per
+  // partner), so dashboards can show Quizball users with or without them.
+  const [row] = await sql<{ registered_members: number; partner_players?: number; partner_players_by_partner?: Record<string, number> }[]>`
+    WITH people AS (
+      SELECT partner_slug, role
+      FROM users
+      WHERE coalesce(is_ai, false) = false
+        AND coalesce(is_seed, false) = false
+        AND coalesce(is_guest, false) = false
+        AND coalesce(is_deleted, false) = false
+        AND deleted_at IS NULL
+    )
+    SELECT
+      (SELECT count(*)::integer FROM people WHERE partner_slug IS NULL AND role <> 'partner_staff') AS registered_members,
+      (SELECT count(*)::integer FROM people WHERE partner_slug IS NOT NULL) AS partner_players,
+      (SELECT coalesce(jsonb_object_agg(partner_slug, n), '{}'::jsonb)
+         FROM (SELECT partner_slug, count(*)::integer AS n FROM people WHERE partner_slug IS NOT NULL GROUP BY partner_slug) p
+      ) AS partner_players_by_partner`;
   if (!row) throw new Error('Registered-member count query returned no row');
 
   // Replicas use the same event identity for a five-minute bucket. A retry or
@@ -33,6 +43,9 @@ export async function publishRegisteredMemberCountSnapshot(now = new Date()): Pr
     timestamp: bucket,
     properties: {
       registered_members: row.registered_members,
+      partner_players: row.partner_players ?? 0,
+      partner_players_by_partner: row.partner_players_by_partner ?? {},
+      users_including_partners: row.registered_members + (row.partner_players ?? 0),
       counted_at: now.toISOString(),
       source: `${config.NODE_ENV}.users`,
       environment: config.NODE_ENV,

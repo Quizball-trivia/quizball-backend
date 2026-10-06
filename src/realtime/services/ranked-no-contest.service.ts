@@ -11,6 +11,7 @@ import { lastMatchKey } from '../match-keys.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
+import type { PartnerRankedCause } from '../../modules/partners/games/ranked/ranked-entries.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 
@@ -27,6 +28,8 @@ interface RankedNoContestParams {
   cleanupRedisKeys?: string[];
   /** Users the refund must SKIP (e.g. a penalized serial forfeiter). */
   suppressRefundUserIds?: string[];
+  /** How a partner ranked match ended (settled with the abandon); default: a server-side end. */
+  partnerCause?: PartnerRankedCause;
 }
 
 /**
@@ -56,14 +59,15 @@ export async function finalizeRankedNoContest(
     ...(params.reason ? { cancellationReason: params.reason } : {}),
     roundsPlayed: params.roundsPlayed,
   });
-  await matchesService.abandonMatch(params.matchId);
+  if (params.partnerCause) await matchesService.abandonMatch(params.matchId, params.partnerCause);
+  else await matchesService.abandonMatch(params.matchId);
   await deleteMatchCache(params.matchId);
 
   const suppressed = new Set(params.suppressRefundUserIds ?? []);
   const rosterUsers = await usersRepo.getByIds(params.roster.map((player) => player.user_id));
   const humanUserIds = params.roster
     .map((player) => rosterUsers.get(player.user_id))
-    .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+    .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false && user.partner_slug == null)
     .filter((user) => !suppressed.has(user.id))
     .map((user) => user.id);
   if (humanUserIds.length > 0) {

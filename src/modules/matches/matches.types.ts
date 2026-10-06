@@ -20,6 +20,8 @@ export interface MatchRow {
   ended_at: string | null;
   winner_user_id: string | null;
   is_dev: boolean;
+  /** Partner ranked pool; null for every Quizball match. */
+  partner_pool?: string | null;
 }
 
 export interface MatchPlayerRow {

@@ -25,7 +25,10 @@ let posthogClient: PostHog | null = null;
 // NOT depend on AI ids being registered at creation time. A failed lookup fails
 // OPEN (treat as non-AI) so a flaky DB never silently drops real users' events.
 const AI_LOOKUP_TTL_MS = 5 * 60 * 1000; // 5 min — well within a match lifetime
-const aiCache = new Map<string, { isAi: boolean; accessType: 'guest' | 'member' | 'unknown'; expiresAt: number }>();
+// Partner players are Quizball users too: their events are kept, tagged access_type 'partner' with their
+// partner_slug, so dashboards can count them overall and break them out. They never become PostHog persons.
+type AccessType = 'guest' | 'member' | 'partner' | 'staff' | 'unknown';
+const aiCache = new Map<string, { isAi: boolean; accessType: AccessType; partnerSlug?: string | null; expiresAt: number }>();
 const aiLookupInFlight = new Map<string, Promise<boolean>>();
 
 // trackEvent/identifyUser defer the actual capture behind an async AI lookup
@@ -62,11 +65,18 @@ async function isAiUser(userId: string): Promise<boolean> {
 
   const lookup = (async () => {
     try {
-      const rows = await sql<{ is_ai: boolean; is_guest: boolean }[]>`SELECT is_ai, is_guest FROM users WHERE id = ${userId}`;
-      const isAi = rows[0]?.is_ai === true;
+      const rows = await sql<{ is_ai: boolean; is_guest: boolean; partner_slug?: string | null; role?: string }[]>`
+        SELECT is_ai, is_guest, partner_slug, role FROM users WHERE id = ${userId}`;
+      const row = rows[0];
+      const isAi = row?.is_ai === true;
       if (aiCache.size > 5000) pruneAiCache();
-      const accessType = rows[0]?.is_guest === true ? 'guest' : rows[0]?.is_guest === false ? 'member' : 'unknown';
-      aiCache.set(userId, { isAi, accessType, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
+      const accessType: AccessType = !row ? 'unknown'
+        : row.partner_slug ? 'partner'
+        : row.role === 'partner_staff' ? 'staff'
+        : row.is_guest === true ? 'guest'
+        : row.is_guest === false ? 'member'
+        : 'unknown';
+      aiCache.set(userId, { isAi, accessType, partnerSlug: row?.partner_slug ?? null, expiresAt: Date.now() + AI_LOOKUP_TTL_MS });
       return isAi;
     } catch (error) {
       // Fail open: never drop a real user's event because the DB hiccuped.
@@ -162,7 +172,8 @@ export function trackEvent(
     try {
       if (await isAiUser(distinctId)) return;
       const audience = aiCache.get(distinctId);
-      const accessType = audience && audience.expiresAt > Date.now() ? audience.accessType : 'unknown';
+      const fresh = audience && audience.expiresAt > Date.now() ? audience : null;
+      const accessType = fresh?.accessType ?? 'unknown';
       client.capture({
         distinctId,
         event: eventName,
@@ -171,6 +182,7 @@ export function trackEvent(
         properties: {
           ...properties,
           access_type: accessType,
+          ...(fresh?.partnerSlug ? { partner_slug: fresh.partnerSlug } : {}),
           // Server SDK captures identified events by default. Guest/unknown
           // gameplay must remain measurable without creating a PostHog person.
           ...(accessType === 'member' ? {} : { $process_person_profile: false }),

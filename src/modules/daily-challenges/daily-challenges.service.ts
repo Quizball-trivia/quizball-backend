@@ -1822,6 +1822,27 @@ export const dailyChallengesService = {
     return value;
   },
 
+  /**
+   * Question ids in the frozen guest sets of today and yesterday (UTC, any locale). Those sets are public with their
+   * answers, so the partner dailies never draw them. Read-only: a missing set is not created.
+   */
+  async listPublicGuestSetQuestionIds(challengeType: DailyChallengeType): Promise<string[]> {
+    const today = getDailyChallengeDay();
+    const ids = new Set<string>();
+    for (const day of [today, addUtcDays(today, -1)]) {
+      for (const locale of SUPPORTED_DAILY_CHALLENGE_LOCALES) {
+        const key = guestSetKey(day, challengeType, locale);
+        const cached = (guestSetMemo.get(key)?.value ?? (await readJsonCache(key))) as
+          | { questions?: Array<{ id?: unknown }>; rounds?: Array<{ id?: unknown }> }
+          | null;
+        for (const entry of [...(cached?.questions ?? []), ...(cached?.rounds ?? [])]) {
+          if (typeof entry?.id === 'string') ids.add(entry.id);
+        }
+      }
+    }
+    return [...ids];
+  },
+
   /** True when the puzzle belongs to one of today's frozen guest sets (any locale); guests may only link inside those. */
   async isGuestPuzzleToday(puzzleId: string): Promise<boolean> {
     const day = getDailyChallengeDay();

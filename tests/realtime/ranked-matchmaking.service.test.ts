@@ -1119,7 +1119,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(createLobbyMock).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(
-      { err: fallbackPhaseError },
+      { err: fallbackPhaseError, pool: 'public' },
       'Ranked matchmaking fallback phase failed'
     );
   });

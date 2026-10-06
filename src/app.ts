@@ -206,7 +206,8 @@ export function createApp(): Express {
     app.set('etag', false);
   }
 
-  // Body Parsing
+  // Body Parsing. Partner bodies are a few hundred bytes; parsed first so the app-wide limit never applies to them.
+  app.use(['/partner', '/partner-admin'], express.json({ limit: '64kb' }), express.urlencoded({ extended: false, limit: '64kb' }));
   app.use(express.json({
     limit: '500mb',
     verify: (req, _res, buf) => {

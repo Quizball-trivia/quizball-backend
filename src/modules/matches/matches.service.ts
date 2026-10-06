@@ -39,6 +39,14 @@ import type {
   MatchQuestionWithCategory,
 } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
+import {
+  attachPartnerRankedEntriesInTx,
+  settlePartnerRankedMatchSafely,
+  type PartnerRankedCause,
+} from '../partners/games/ranked/ranked-entries.js';
+import { afterPartnerSettle } from '../partners/games/kit.js';
+import { partnerBegin } from '../partners/partner-analytics.js';
+import { PARTNER_BOT_FIXED_RP } from '../partners/games/ranked/ranked-policy.js';
 
 /**
  * Ensure a JSONB field is a proper object (handles double-encoded strings from DB).
@@ -576,6 +584,10 @@ export const matchesService = {
     categoryBId: string | null;
     isDev?: boolean;
     totalQuestions?: number;
+    /** Partner ranked pool: stamps provenance and moves the partner players' plays onto the match atomically. */
+    partnerPool?: string | null;
+    /** The lobby's partner players (their plays attach to the match). */
+    partnerUserIds?: string[];
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
@@ -684,6 +696,13 @@ export const matchesService = {
         // transferred (Sol P1-D). The lobby retains the bot and the caller's
         // retry re-enters this path.
         try {
+          if (params.partnerPool) {
+            // Fixed strength, no calibrated pin (and so no governor offset) for partner matches.
+            rankedContext = rankedService.buildPersistentBotMatchContext(PARTNER_BOT_FIXED_RP);
+            persistentBotUserId = aiSeatId;
+            persistentMatchHumanId = humanUserId;
+            logger.info({ lobbyId: params.lobbyId, humanUserId, persistentBotUserId, rankedContext }, 'Built partner bot ranked context for match');
+          } else {
           const botProfile = await rankedService.ensureProfile(aiSeatId);
           rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
           persistentBotUserId = aiSeatId;
@@ -701,6 +720,7 @@ export const matchesService = {
             { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, paramsVersion: pin?.paramsVersion ?? null, rankedContext },
             'Built persistent-bot ranked context for match'
           );
+          }
         } catch (err) {
           logger.error(
             { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
@@ -708,6 +728,8 @@ export const matchesService = {
           );
           throw err;
         }
+      } else if (humanUserId && params.partnerPool) {
+        rankedContext = rankedService.buildPersistentBotMatchContext(PARTNER_BOT_FIXED_RP);
       } else if (humanUserId) {
         try {
           const profile = await rankedService.ensureProfile(humanUserId);
@@ -740,8 +762,35 @@ export const matchesService = {
     // path keeps the exact two-statement sequence it had before (flag-off
     // inertness: reservationService.transferInTx is a no-op when the flag is off
     // or no reservation exists, so this branch is byte-equivalent then).
-    const match = persistentBotUserId
-      ? await sql.begin(async (tx) => {
+    const partnerPool = params.mode === 'ranked' ? params.partnerPool ?? null : null;
+    const match = persistentBotUserId || partnerPool
+      ? await partnerBegin(async (tx) => {
+          if (!persistentBotUserId) {
+            // Same lobby lock as draft activation/abort: a partner match and a concurrent lobby teardown are ordered.
+            await syntheticBotsRepo.takeLobbyAdvisoryLockTx(tx, params.lobbyId);
+            const created = await matchesRepo.createMatch({
+              lobbyId: params.lobbyId,
+              mode: params.mode,
+              categoryAId: params.categoryAId,
+              categoryBId: params.categoryBId,
+              totalQuestions,
+              statePayload,
+              rankedContext,
+              isDev: params.isDev,
+              partnerPool,
+            }, tx);
+            await matchPlayersRepo.insertMatchPlayers(
+              created.id,
+              playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
+              tx,
+            );
+            await attachPartnerRankedEntriesInTx(tx, {
+              matchId: created.id,
+              lobbyId: params.lobbyId,
+              userIds: params.partnerUserIds ?? [],
+            });
+            return created;
+          }
           // Take the SAME per-lobby advisory lock the draft activation + abort
           // take, as the FIRST statement — so match creation and a concurrent
           // reservation abort have a TOTAL ORDER on the lobby. This closes the
@@ -760,12 +809,20 @@ export const matchesService = {
             statePayload,
             rankedContext,
             isDev: params.isDev,
+            partnerPool,
           }, tx);
           await matchPlayersRepo.insertMatchPlayers(
             created.id,
             playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
             tx,
           );
+          if (partnerPool) {
+            await attachPartnerRankedEntriesInTx(tx, {
+              matchId: created.id,
+              lobbyId: params.lobbyId,
+              userIds: params.partnerUserIds ?? [],
+            });
+          }
           const transferred = await reservationService.transferInTx(tx, {
             botUserId: persistentBotUserId!,
             lobbyId: params.lobbyId,
@@ -800,7 +857,7 @@ export const matchesService = {
           isDev: params.isDev,
         });
 
-    if (!persistentBotUserId) {
+    if (!persistentBotUserId && !partnerPool) {
       await matchPlayersRepo.insertMatchPlayers(
         match.id,
         playerIds.map((userId, index) => ({
@@ -808,7 +865,7 @@ export const matchesService = {
           seat: index + 1,
         }))
       );
-    } else if (persistentMatchHumanId) {
+    } else if (persistentMatchHumanId && persistentBotUserId) {
       // The Georgia-day counter + session timestamp were bumped inside the
       // creation tx above. Recording the human's recent opponent is a Redis-only
       // LRU (not a durable counter), so it stays best-effort after commit.
@@ -996,8 +1053,31 @@ export const matchesService = {
     `;
   },
 
-  async abandonMatch(matchId: string): Promise<void> {
-    const abandoned = await matchesRepo.abandonMatch(matchId);
+  /**
+   * Abandon an active match. A partner ranked match settles its partner plays in the same transaction (default
+   * cause: a server-side end, both plays returned).
+   */
+  async abandonMatchIfActive(matchId: string, partnerCause?: PartnerRankedCause): Promise<boolean> {
+    let partner = false;
+    const abandoned = await partnerBegin(async (tx) => {
+      const done = await matchesRepo.abandonMatch(matchId, tx);
+      if (!done) return false;
+      const [row] = await tx.unsafe<{ partner_pool: string | null }[]>(
+        'SELECT partner_pool FROM matches WHERE id = $1',
+        [matchId],
+      );
+      if (row?.partner_pool) {
+        partner = true;
+        await settlePartnerRankedMatchSafely(tx, matchId, partnerCause ?? { kind: 'server_failure' });
+      }
+      return true;
+    });
+    if (partner) afterPartnerSettle();
+    return abandoned as boolean;
+  },
+
+  async abandonMatch(matchId: string, partnerCause?: PartnerRankedCause): Promise<void> {
+    const abandoned = await this.abandonMatchIfActive(matchId, partnerCause);
     if (!abandoned) {
       throw new AppError(
         'Match is not active or does not exist',
@@ -1026,9 +1106,14 @@ export const matchesService = {
     matchId: string,
     winnerId: string | null,
     occurredAt?: Date,
-    options: { placements?: Array<{ userId: string; placement: number }> } = {},
+    options: {
+      placements?: Array<{ userId: string; placement: number }>;
+      /** How a partner ranked match ended; its partner plays settle in this transaction. */
+      partnerCause?: PartnerRankedCause;
+    } = {},
   ): Promise<void> {
-    await sql.begin(async (tx) => {
+    let partner = false;
+    await partnerBegin(async (tx) => {
       const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId, occurredAt);
       if (!completed) {
         // Already completed/abandoned — nothing to do.
@@ -1037,6 +1122,13 @@ export const matchesService = {
 
       if (options.placements && options.placements.length > 0) {
         await matchPlayersRepo.setPlacementsInTx(tx, matchId, options.placements);
+      }
+
+      // A partner match settles into partner plays only: no Quizball stats for either side (bots included).
+      if (completed.partner_pool) {
+        partner = true;
+        await settlePartnerRankedMatchSafely(tx, matchId, options.partnerCause ?? { kind: 'natural' });
+        return;
       }
 
       // Dev matches don't contribute to aggregate stats.
@@ -1086,6 +1178,7 @@ export const matchesService = {
 
       await matchesRepo.recordUserModeStats(tx, statRows);
     });
+    if (partner) afterPartnerSettle();
   },
 
   /**

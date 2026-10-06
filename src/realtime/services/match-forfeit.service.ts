@@ -278,6 +278,25 @@ export async function finalizeMatchAsForfeit(
       params.cacheSnapshot
     );
 
+    const partnerMatch = activeMatch.partner_pool != null;
+    if (isRankedEarlyForfeit && partnerMatch) {
+      // Freecroco: leaving during the first two questions cancels the match; the leaver's play stays used, the
+      // opponent's is returned (contract §7.1). No Quizball early-forfeit counter or RP penalty.
+      const resultVersion = await finalizeRankedNoContest({
+        matchId: params.matchId,
+        roster,
+        statePayload: currentPayload,
+        roundsPlayed,
+        cleanupRedisKeys: params.cleanupRedisKeys,
+        partnerCause: { kind: 'early_leave', leaverUserId: params.forfeitingUserId },
+      });
+      logger.info(
+        { matchId: params.matchId, roundsPlayed, forfeitingUserId: params.forfeitingUserId },
+        'Partner ranked match cancelled (early leave)'
+      );
+      return { matchId: params.matchId, winnerId: null, resultVersion, completed: true, cancelledNoContest: true };
+    }
+
     if (isRankedEarlyForfeit) {
       // Bump the forfeiter's rolling 24h early-forfeit counter. Beyond the
       // free limit, the forfeiter is penalized: no ticket refund and a direct
@@ -390,7 +409,13 @@ export async function finalizeMatchAsForfeit(
       winnerDecisionMethod: 'forfeit',
     });
 
-    await matchesService.completeMatch(params.matchId, winnerId);
+    if (partnerMatch) {
+      await matchesService.completeMatch(params.matchId, winnerId, undefined, {
+        partnerCause: { kind: 'left', leaverUserId: params.forfeitingUserId },
+      });
+    } else {
+      await matchesService.completeMatch(params.matchId, winnerId);
+    }
     await deleteMatchCache(params.matchId);
 
     if (activeMatch.mode === 'ranked') {
@@ -408,7 +433,7 @@ export async function finalizeMatchAsForfeit(
     }
 
     try {
-      await objectivesService.evaluateForMatchBestEffort(params.matchId);
+      if (!partnerMatch) await objectivesService.evaluateForMatchBestEffort(params.matchId);
     } catch (error) {
       logger.warn({ error, matchId: params.matchId }, 'Objectives evaluation failed during forfeit finalization');
     }

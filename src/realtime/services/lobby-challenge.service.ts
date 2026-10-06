@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbyChallengeInvitationsRepo } from '../../modules/lobbies/lobby-challenge-invitations.repo.js';
 import { isUserAccountInactive, usersRepo } from '../../modules/users/users.repo.js';
+import { isPartnerOrStaff } from '../../modules/users/account-kind.js';
 import { isPersistentBot } from '../../modules/users/ai-classification.js';
 import { config } from '../../core/config.js';
 import { friendsRepo } from '../../modules/friends/friends.repo.js';
@@ -76,7 +77,7 @@ export async function challengeFriend(
   const userId = socket.data.user.id;
   const toUserId = payload.toUserId;
   const gameMode = payload.gameMode ?? 'friendly_possession';
-  if (socket.data.user.is_guest) {
+  if (socket.data.user.is_guest || isPartnerOrStaff(socket.data.user)) {
     socket.emit('error', { code: 'CAPABILITY_REQUIRED', message: 'An account is required to challenge friends' });
     return;
   }
@@ -94,7 +95,7 @@ export async function challengeFriend(
   }
 
   const targetUser = await usersRepo.getById(toUserId);
-  if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest) {
+  if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest || isPartnerOrStaff(targetUser)) {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_INVALID',
       message: 'This player is unavailable',
@@ -278,7 +279,7 @@ export async function acceptChallenge(
   // admin tool, a test seam). It is asserted on the TARGET of the invite, not
   // on the caller, so it holds no matter who initiates the accept.
   const inviteTarget = await usersRepo.getById(invite.to_user_id);
-  if (!inviteTarget || inviteTarget.is_ai) {
+  if (!inviteTarget || inviteTarget.is_ai || isPartnerOrStaff(inviteTarget)) {
     logger.warn(
       { invitationId: invite.id, toUserId: invite.to_user_id },
       'Blocked challenge accept for a bot target'

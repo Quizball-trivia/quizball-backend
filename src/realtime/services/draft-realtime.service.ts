@@ -24,6 +24,11 @@ import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js'
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { rankedCancelKey } from '../ranked-matchmaking-keys.js';
 import {
+  checkPartnerRankedAdmission,
+  releasePartnerRankedSearch,
+} from '../../modules/partners/games/ranked/ranked-entries.js';
+import { isPartnerRankedPool, rankedPoolForUser } from '../../modules/partners/games/ranked/ranked-pool.js';
+import {
   matchDisconnectKey,
   matchGraceKey,
   matchPauseKey,
@@ -329,6 +334,20 @@ async function consumeRankedTicketsWithConflictRetry(
   }
 }
 
+/** The player who cancelled or went absent keeps the play used once the opponent was shown; the other gets it back. */
+async function releasePartnerSearches(
+  userIds: string[],
+  reason: string,
+  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>,
+): Promise<void> {
+  const left = new Set(signals.filter((s) => s.cancelled || s.absentAfterGrace).map((s) => s.userId));
+  for (const userId of userIds) {
+    await releasePartnerRankedSearch(userId, reason, undefined, { left: left.has(userId) }).catch((error) => {
+      logger.warn({ error, userId, reason }, 'Partner ranked play release failed');
+    });
+  }
+}
+
 async function startMatchFromDraft(
   io: QuizballServer,
   lobbyId: string,
@@ -342,23 +361,48 @@ async function startMatchFromDraft(
 
   let consumedRankedTicketUserIds: string[] = [];
   let rankedHumanUserIds: string[] = [];
+  let partnerPool: string | null = null;
+  let partnerUserIds: string[] = [];
 
   if (lobby.mode === 'ranked') {
     const aiUserId = await resolveRankedAiUserId(lobbyId, members);
-    const ticketUserIds = members
+    const humanUserIds = members
       .filter((member) => member.user_id !== aiUserId)
       .map((member) => member.user_id);
-    rankedHumanUserIds = ticketUserIds;
-    const abortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
+    rankedHumanUserIds = humanUserIds;
+    // Partner players play on their partner's quota, never on tickets, and only ever in their own pool.
+    const humans = await usersRepo.getByIds(humanUserIds);
+    partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
+    const pools = new Set(humanUserIds.map((userId) => rankedPoolForUser(humans.get(userId) ?? {})));
+    if (partnerUserIds.length > 0) {
+      const [pool] = [...pools];
+      const admission = pools.size === 1 && pool && isPartnerRankedPool(pool)
+        ? await checkPartnerRankedAdmission(partnerUserIds)
+        : ({ ok: false, userId: partnerUserIds[0]!, reason: 'no_play' } as const);
+      if (!admission.ok) {
+        logger.warn({ lobbyId, humanUserIds, pools: [...pools], admission }, 'Partner ranked match creation aborted');
+        await abortRankedDraftBeforeMatchCreation(io, lobby, humanUserIds, `partner_${admission.reason}`, []);
+        for (const userId of partnerUserIds) {
+          await releasePartnerRankedSearch(userId, `draft_abort_${admission.reason}`).catch((error) => {
+            logger.warn({ error, lobbyId, userId }, 'Partner ranked play release failed after draft abort');
+          });
+        }
+        return null;
+      }
+      partnerPool = pool!;
+    }
+    const ticketUserIds = humanUserIds.filter((userId) => !partnerUserIds.includes(userId));
+    const abortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
     const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (blockingSignals.length > 0) {
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
-        ticketUserIds,
+        humanUserIds,
         'cancelled_or_absent_before_ticket_consumption',
         abortSignals
       );
+      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', abortSignals);
       return null;
     }
 
@@ -379,7 +423,7 @@ async function startMatchFromDraft(
       consumedRankedTicketUserIds = ticketUserIds;
     }
 
-    const postTicketAbortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
+    const postTicketAbortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
     const postTicketBlockingSignals = postTicketAbortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (postTicketBlockingSignals.length > 0) {
       if (consumedRankedTicketUserIds.length > 0) {
@@ -391,10 +435,11 @@ async function startMatchFromDraft(
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
-        ticketUserIds,
+        humanUserIds,
         'cancelled_or_absent_after_ticket_consumption',
         postTicketAbortSignals
       );
+      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', postTicketAbortSignals);
       return null;
     }
   }
@@ -411,6 +456,7 @@ async function startMatchFromDraft(
       hostUserId: lobby.host_user_id,
       categoryAId: halfOneCategoryId,
       categoryBId: null,
+      ...(partnerPool ? { partnerPool, partnerUserIds } : {}),
     });
   } catch (error) {
     if (consumedRankedTicketUserIds.length > 0) {
@@ -515,7 +561,8 @@ async function startMatchFromDraft(
         'Abandoning newly-created match because player(s) became absent before playable state'
       );
       try {
-        await matchesService.abandonMatch(matchId);
+        // Partner: gone before the match was playable counts as before the match started (plays returned).
+        await matchesService.abandonMatch(matchId, { kind: 'pre_match_abort' });
       } catch (error) {
         // Do NOT refund or tear down surrounding state while the match row is
         // still active — that would orphan a live match with its artifacts

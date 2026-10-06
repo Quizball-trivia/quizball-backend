@@ -1341,6 +1341,11 @@ export const userSessionGuardService = {
       (lobby) => lobby.id !== keepWaitingLobbyId
     );
     if (!context.queueSearchId && !hasLobbyToClean) {
+      // No membership to read it from, yet a seat can still be live (an earlier cleanup raced its room's start).
+      const seat = await roomRepo.liveMatchForUser(userId);
+      if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+        return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
+      }
       return { ok: true, snapshot };
     }
 

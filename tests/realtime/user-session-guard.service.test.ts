@@ -920,6 +920,17 @@ describe('user-session-guard.service', () => {
     liveRoomSeatMock.mockImplementation(async () => null);
   });
 
+  it('PR review (CodeRabbit): a live room seat with no membership left is refused on the quick path too', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValueOnce([]);
+    liveRoomSeatMock.mockResolvedValueOnce({ id: 'room-match-C', game: 'aproximado', lobby_id: 'room-lobby-C' });
+    const io = { in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })), to: vi.fn(() => ({ emit: vi.fn() })) } as unknown as QuizballServer;
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    expect(await userSessionGuardService.prepareForLobbyEntry(io, 'seated-user')).toMatchObject({ ok: false, reason: 'ACTIVE_MATCH' });
+    liveRoomSeatMock.mockReset();
+    liveRoomSeatMock.mockImplementation(async () => null);
+  });
+
   it('re-reads once after clean connect preparation to observe a concurrent lobby join', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     const joinedAfterCleanupStarted = {

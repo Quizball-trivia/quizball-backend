@@ -89,9 +89,18 @@ async function main(): Promise<void> {
         `;
         if (row?.inserted) inserted += 1;
       }
-      return { inserted, updated: rows.length - inserted };
+      // What a match can actually draw from: enabled rows only (a row disabled on purpose stays disabled). Short on
+      // any difficulty: roll back rather than leave a pool that fails at the first start.
+      const enabled = await tx<Array<{ difficulty: string; n: number }>>`
+        SELECT difficulty, count(*)::int AS n FROM room_pool WHERE game = ${args.game!} AND enabled GROUP BY difficulty
+      `;
+      const byDifficulty = Object.fromEntries(enabled.map((e) => [e.difficulty, e.n]));
+      for (const [difficulty, needed] of Object.entries(ROOM_PACK_WANTED)) {
+        if ((byDifficulty[difficulty] ?? 0) < needed) throw new Error(`Enabled pool needs at least ${needed} ${difficulty} items (has ${byDifficulty[difficulty] ?? 0}); nothing written`);
+      }
+      return { inserted, updated: rows.length - inserted, enabled: byDifficulty };
     });
-    console.log(`Written: ${result.inserted} new, ${result.updated} updated.`);
+    console.log(`Written: ${result.inserted} new, ${result.updated} updated. Enabled per difficulty: ${JSON.stringify(result.enabled)}`);
   } finally {
     await sql.end({ timeout: 5 });
   }

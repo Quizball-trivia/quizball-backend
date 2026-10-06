@@ -259,7 +259,8 @@ const main = async () => {
           this.pending.delete(data.commandId);
           if (p.duplicate) {
             duplicateAcks++;
-            if (!data.ok && !['already_answered', 'not_open'].includes(data.code))
+            // A second guess for the same round must be refused: accepting it would mean two answers for one seat.
+            if (data.ok || !['already_answered', 'not_open'].includes(data.code))
               fail(this.roomIndex, 'duplicate', JSON.stringify(data));
             return;
           }

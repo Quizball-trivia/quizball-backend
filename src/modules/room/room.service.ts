@@ -6,8 +6,7 @@ import { ROUND_MS, ROUNDS } from './games/aproximado/aproximado.rules.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import {
   aproximadoContentSchema, ROOM_LOCALES, RoomError, roomCommandSchema,
-  type AproximadoContent, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus,
-} from './room.types.js';
+  type AproximadoContent, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, ROOM_PACK_WANTED } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
 export const ROOM_READY_MS = 20_000;
@@ -21,7 +20,7 @@ export const ROOM_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const ROOM_RETENTION_DAYS = 30;
 export const ROOM_MAX_SEATS = 6;
 const ENGINE_VERSION = 1;
-const PACK = { wanted: { easy: 3, medium: 4, hard: 3 }, order: ['easy', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard', 'medium', 'hard'] } as const;
+const PACK = { wanted: ROOM_PACK_WANTED, order: ['easy', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard', 'medium', 'hard'] } as const;
 
 export interface RoomEffects {
   matchId: string;

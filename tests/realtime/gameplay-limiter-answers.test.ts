@@ -15,7 +15,8 @@ const { gameplayDbTaskLimiter } = await import('../../src/realtime/socket-db-tas
 describe('gameplay limiter scope: match answers', () => {
   it('a ranked answer is handled at once even while gameplay DB work fills every slot', async () => {
     // Party Quiz / room / duel DB work that holds all gameplay slots (never finishes during this test).
-    for (let i = 0; i < 12; i += 1) void gameplayDbTaskLimiter.run(() => new Promise<void>(() => {})).catch(() => {});
+    const releases: Array<() => void> = [];
+    for (let i = 0; i < 12; i += 1) void gameplayDbTaskLimiter.run(() => new Promise<void>((resolve) => { releases.push(resolve); })).catch(() => {});
     expect(gameplayDbTaskLimiter.stats().active).toBeGreaterThan(0);
 
     const handlers = new Map<string, (payload: unknown) => Promise<void>>();
@@ -26,5 +27,6 @@ describe('gameplay limiter scope: match answers', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(handleAnswer).toHaveBeenCalledOnce();
     expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+    releases.forEach((release) => release());
   });
 });

@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
-import { aproximadoItemSchema, ROOM_GAMES, type RoomGameId } from '../src/modules/room/room.types.js';
+import { aproximadoItemSchema, ROOM_GAMES, ROOM_PACK_WANTED, type RoomGameId } from '../src/modules/room/room.types.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 
 const rowSchema = z.object({
@@ -64,6 +64,10 @@ async function main(): Promise<void> {
   if (rows.some((r) => r.payload.id !== r.item_id)) throw new Error('payload.id must equal item_id');
   const counts = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.difficulty]: (acc[r.difficulty] ?? 0) + 1 }), {});
   console.log(`${args.game} room pool: ${rows.length} items ${JSON.stringify(counts)} -> ${target.label}`);
+  // Every match deals ROOM_PACK_WANTED per difficulty; a pool short of one would fail at the first start.
+  for (const [difficulty, needed] of Object.entries(ROOM_PACK_WANTED)) {
+    if ((counts[difficulty] ?? 0) < needed) throw new Error(`Pool needs at least ${needed} ${difficulty} items (has ${counts[difficulty] ?? 0})`);
+  }
   if (!args.write) {
     console.log('Dry run: nothing written (add --write).');
     return;

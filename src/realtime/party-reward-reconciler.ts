@@ -85,6 +85,8 @@ export async function reconcilePartyRewards(
   const added = await backfill();
   const due = await findDue();
   for (const job of due) {
+    // Shutting down: jobs not started stay pending for the next sweep (any replica).
+    if (stopping) break;
     await runPartyCompletionWork(job.matchId, job.userIds, async () => {}, { enqueue: false });
   }
   await pruneDoneJobs();
@@ -94,9 +96,11 @@ export async function reconcilePartyRewards(
 
 let timer: NodeJS.Timeout | null = null;
 let inFlight: Promise<unknown> | null = null;
+let stopping = false;
 
 export function startPartyRewardReconciler(): void {
   if (timer) return;
+  stopping = false;
   timer = setInterval(() => {
     if (inFlight) return;
     inFlight = reconcilePartyRewards()
@@ -107,6 +111,7 @@ export function startPartyRewardReconciler(): void {
 }
 
 export async function stopPartyRewardReconciler(): Promise<void> {
+  stopping = true;
   if (timer) clearInterval(timer);
   timer = null;
   await inFlight;

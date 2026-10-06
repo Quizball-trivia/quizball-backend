@@ -53,6 +53,9 @@ vi.mock('../../src/core/config.js', () => ({
   },
 }));
 
+// No live room seat (the session guard checks for one before any queue join).
+vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchForUser: vi.fn(async () => null) } }));
+
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
     info: vi.fn(),

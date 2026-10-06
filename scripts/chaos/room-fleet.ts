@@ -363,7 +363,12 @@ const main = async () => {
             sent++;
             const payload = { matchId: this.matchId, commandId, command: { type: 'guess', round: r, value } };
             this.socket.emit('room:command', payload);
-            if (fault === 'duplicate' && this.index === 0) this.socket.emit('room:command', payload);
+            if (fault === 'duplicate' && this.index === 0) {
+              // A second guess for the same round under its own id: exercises the server's already-answered path.
+              const duplicateId = randomUUID();
+              this.pending.set(duplicateId, { sentAt: at, duplicate: true });
+              this.socket.emit('room:command', { ...payload, commandId: duplicateId });
+            }
           }),
         argv.includes('--burst') ? 250 : 250 + this.index * 200,
       );

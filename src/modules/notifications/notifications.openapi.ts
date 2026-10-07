@@ -22,7 +22,7 @@ export function registerNotificationsOpenApi(registry: OpenAPIRegistry): void {
   };
   for (const endpoint of [
     { method: 'post' as const, path: 'devices/register', summary: 'Register this account’s native push device', body: registerPushDeviceSchema, code: 200,
-      response: z.object({ registered: z.literal(true) }) },
+      response: z.object({ registered: z.boolean() }) },
     { method: 'post' as const, path: 'devices/unregister', summary: 'Unregister this account’s native push device', body: unregisterPushDeviceSchema, code: 200,
       response: z.object({ unregistered: z.literal(true) }) },
     { method: 'get' as const, path: 'preferences', summary: 'Read the account’s push consent and local reminder time', code: 200, response: pushPreferencesSchema },

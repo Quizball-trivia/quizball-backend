@@ -75,6 +75,15 @@ describe('OpenAPI spec', () => {
     expect(operation?.responses).toHaveProperty('403');
   });
 
+  it('documents stale registration as a boolean acknowledgement',()=>{
+    const operation=generateOpenApiDocument().paths?.['/api/v1/notifications/devices/register']?.post;
+    const response=operation?.responses?.['200'];
+    if (!response||'$ref' in response) throw new Error('Expected inline register response');
+    const schema=response.content?.['application/json']?.schema;
+    if (!schema||'$ref' in schema) throw new Error('Expected inline register schema');
+    expect(schema.properties?.registered).toEqual({type:'boolean'});
+  });
+
   it.each(['register', 'unregister'])('requires a positive safe client revision for push %s', action => {
     const operation = generateOpenApiDocument().paths?.[`/api/v1/notifications/devices/${action}`]?.post;
     const body = operation?.requestBody;

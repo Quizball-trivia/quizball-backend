@@ -10,6 +10,10 @@ let retentionAt = 0;
 const testUsers = () => config.PUSH_TEST_USER_IDS.split(',').map(v => v.trim()).filter(Boolean);
 export const pushUserAllowed = (userId: string) => config.NODE_ENV === 'prod' || testUsers().includes(userId);
 const backoff = (attempt: number) => Math.min(1800, 30 * 2 ** Math.min(attempt - 1, 6)) + Math.floor(Math.random() * 10);
+// These may mean the app's credentials need repair. Keep the job retryable
+// until its original expiry. Tokens are client supplied, so a foreign-project
+// token must not open an account-wide circuit and block unrelated players.
+const credentialFailure = (code:string|null) => code==='InvalidCredentials'||code==='MismatchSenderId';
 async function providerFailure(error: unknown) {
   if (!(error instanceof PushTransportError)) return;
   if ([0,401,403,429].includes(error.status) || error.status >= 500) {
@@ -41,6 +45,7 @@ export async function deliverPushJob(job: PushJob) {
       collapseId: job.event_id, tag: job.event_id, threadId: 'quizball-games' });
     if (ticket.status === 'ok') { await mobilePushRepo.settle(job, 'ticketed', null, ticket.id!, 900); return; }
     const code = ticket.details?.error ?? 'TICKET_ERROR';
+    if (credentialFailure(code)) { await mobilePushRepo.defer(job,1800,code); logger.warn({jobId:job.id,code},'Push credential failure; job retained until expiry'); return; }
     if (code === 'DeviceNotRegistered') await mobilePushRepo.disable(job);
     // A client supplies its token; individual ticket/receipt errors must never
     // pause unrelated devices. Only request-level provider failures open backoff.
@@ -61,6 +66,7 @@ export async function checkPushReceipt(job: PushJob) {
     const receipt = await readExpoReceipt(job.ticket_id!);
     if (!receipt) { await mobilePushRepo.settle(job, job.receipt_checks < 6 ? 'ticketed' : 'unknown', 'RECEIPT_MISSING', null, 300); return; }
     const code = receipt.details?.error ?? null;
+    if (credentialFailure(code)) { await mobilePushRepo.defer(job,1800,code); logger.warn({jobId:job.id,code},'Push receipt credential failure; job retained until expiry'); return; }
     if (code === 'DeviceNotRegistered') await mobilePushRepo.disable(job);
     await mobilePushRepo.settle(job, receipt.status === 'ok' ? 'provider_accepted' : 'failed', code);
   } catch (error) {

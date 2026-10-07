@@ -395,12 +395,12 @@ async function startMatchFromDraft(
         : ({ ok: false, userId: partnerUserIds[0]!, reason: 'no_play' } as const);
       if (!admission.ok) {
         logger.warn({ lobbyId, humanUserIds, pools: [...pools], admission }, 'Partner ranked match creation aborted');
-        await abortRankedDraftBeforeMatchCreation(io, lobby, humanUserIds, `partner_${admission.reason}`, []);
         for (const userId of partnerUserIds) {
           await releasePartnerRankedSearch(userId, `draft_abort_${admission.reason}`).catch((error) => {
-            logger.warn({ err: error, lobbyId, userId }, 'Partner ranked play release failed after draft abort');
+            logger.warn({ err: error, lobbyId, userId }, 'Partner ranked play release failed before draft abort');
           });
         }
+        await abortRankedDraftBeforeMatchCreation(io, lobby, humanUserIds, `partner_${admission.reason}`, []);
         return null;
       }
       partnerPool = pool!;
@@ -409,7 +409,9 @@ async function startMatchFromDraft(
     const abortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
     const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (blockingSignals.length > 0) {
+      // Released while the lobby still exists: a queue join cannot reuse the play in between.
       await recordPartnerLeaverFromSignals(partnerUserIds, abortSignals);
+      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', abortSignals);
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
@@ -417,7 +419,6 @@ async function startMatchFromDraft(
         'cancelled_or_absent_before_ticket_consumption',
         abortSignals
       );
-      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', abortSignals);
       return null;
     }
 
@@ -448,6 +449,7 @@ async function startMatchFromDraft(
         });
       }
       await recordPartnerLeaverFromSignals(partnerUserIds, postTicketAbortSignals);
+      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', postTicketAbortSignals);
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
@@ -455,7 +457,6 @@ async function startMatchFromDraft(
         'cancelled_or_absent_after_ticket_consumption',
         postTicketAbortSignals
       );
-      await releasePartnerSearches(partnerUserIds, 'draft_cancelled_or_absent', postTicketAbortSignals);
       return null;
     }
   }
@@ -1093,6 +1094,7 @@ export async function runDraftGraceExpiry(
         const humans = await usersRepo.getByIds(humanUserIds);
         const partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
         await recordPartnerLeaverFromSignals(partnerUserIds, abortSignals);
+        if (partnerUserIds.length > 0) await releasePartnerSearches(partnerUserIds, 'draft_grace_expired', abortSignals);
         await abortRankedDraftBeforeMatchCreation(
           io,
           activeLobby,
@@ -1100,7 +1102,6 @@ export async function runDraftGraceExpiry(
           'draft_grace_expired_before_ticket_consumption',
           abortSignals
         );
-        if (partnerUserIds.length > 0) await releasePartnerSearches(partnerUserIds, 'draft_grace_expired', abortSignals);
         await clearDraftTimers(lobbyId);
         await cancelRealtimeTimer('draft_grace_expiry', lobbyId).catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to cancel draft grace timer after ranked draft abort');

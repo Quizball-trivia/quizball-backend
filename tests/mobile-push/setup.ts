@@ -1,7 +1,8 @@
 // Deliberately separate from the game's shared test database. Never use a
 // remotely configured DATABASE_URL or mutate a production/staging user.
+import { isolatedPushTestDatabaseUrl } from './database-target.js';
 process.env.NODE_ENV = 'local';
-process.env.DATABASE_URL = 'postgresql://user@127.0.0.1:5432/quizball_push_test_20261007';
+process.env.DATABASE_URL = isolatedPushTestDatabaseUrl(process.env.PUSH_TEST_DATABASE_URL ?? 'postgresql://user@127.0.0.1:5432/quizball_push_test_20261007');
 process.env.SUPABASE_URL = 'https://test.supabase.co';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
 process.env.SUPABASE_JWT_SECRET = 'test-mobile-push-secret-1234567890';

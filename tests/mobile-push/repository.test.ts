@@ -10,6 +10,12 @@ const device={expoPushToken:token,platform:'ios' as const,locale:'tr' as const,t
 beforeAll(async()=>{
   const [database]=await sql`SELECT current_database() AS name`;
   if(database.name!=='quizball_push_test_20261007') throw new Error('Refusing a non-isolated push test database');
+  // Vanilla CI PostgreSQL has no Supabase client roles. Create only those
+  // inert roles after the isolated-database guard, before testing the revokes.
+  await sql.unsafe(`DO $$ BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+  END $$;`);
   await sql.unsafe(`CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY,is_ai boolean DEFAULT false,is_seed boolean DEFAULT false,
     is_banned boolean DEFAULT false,is_deleted boolean DEFAULT false,deleted_at timestamptz,pending_deletion_at timestamptz,
     partner_slug text,role text DEFAULT 'user');

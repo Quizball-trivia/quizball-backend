@@ -98,9 +98,17 @@ export async function tickMobilePush() {
   await drain(false, 80);
   await drain(true, 80);
 }
+export function pushTickErrorCode(error:unknown):string {
+  if (error instanceof Error && 'code' in error) {
+    if (error.code==='PUSH_FINGERPRINT_KEY_CHANGED') return error.code;
+    if (typeof error.code==='string' && /^[0-9A-Z]{5}$/.test(error.code)) return `SQLSTATE_${error.code}`;
+  }
+  return 'UNEXPECTED_TICK_FAILURE';
+}
 export function startMobilePushWorker() {
   if (timer || !config.PUSH_DELIVERY_ENABLED) return;
-  const run = () => { if (inFlight) return; inFlight = tickMobilePush().catch(() => logger.error('Mobile push tick failed')).finally(() => { inFlight = null; }); };
+  const run = () => { if (inFlight) return; inFlight = tickMobilePush().catch((error:unknown) =>
+    logger.error({code:pushTickErrorCode(error)},'Mobile push tick failed')).finally(() => { inFlight = null; }); };
   run(); timer = setInterval(run, 30_000); timer.unref();
 }
 export async function stopMobilePushWorker() { if (timer) clearInterval(timer); timer = null; await inFlight; }

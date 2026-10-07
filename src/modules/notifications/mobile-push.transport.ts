@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { config } from '../../core/config.js';
-const resultSchema = z.object({ status:z.enum(['ok','error']),id:z.string().trim().min(1).optional(),details:z.object({ error:z.string().trim().min(1) }).passthrough().optional() })
-  .refine(result=>result.status!=='error' || Boolean(result.details?.error));
+const safeProviderCodes = new Set(['DeviceNotRegistered','MessageTooBig','MessageRateExceeded','MismatchSenderId','InvalidCredentials']);
+// Expo can return an individual error with a message or details but no error
+// code. It must not open the shared circuit. Never log provider messages: they
+// may include a device token.
+const resultSchema = z.object({ status:z.enum(['ok','error']),id:z.string().trim().min(1).optional(),
+  message:z.string().trim().min(1).optional(),details:z.object({ error:z.string().trim().min(1)
+    .transform(code=>safeProviderCodes.has(code)?code:'UNKNOWN_PROVIDER_ERROR').optional() }).optional() })
+  .refine(result=>result.status!=='error' || Boolean(result.details || result.message));
 export type PushProviderResult = z.infer<typeof resultSchema>;
 export class PushTransportError extends Error {
   constructor(public readonly status:number,public readonly retryAfterSeconds=0) { super(`Expo HTTP ${status}`); }

@@ -30,7 +30,9 @@ export const mobilePushRepo = {
     const identity = pushFingerprintKeyIdentity();
     const [row] = await sql`INSERT INTO mobile_push_provider_state(id,fingerprint_key_identity) VALUES('expo',${identity})
       ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id RETURNING fingerprint_key_identity`;
-    if (row.fingerprint_key_identity !== identity) throw new Error('Push fingerprint key changed; use the documented migration procedure, not a silent rotation');
+    if (row.fingerprint_key_identity !== identity) throw Object.assign(
+      new Error('Push fingerprint key changed; use the documented migration procedure, not a silent rotation'),
+      {code:'PUSH_FINGERPRINT_KEY_CHANGED'});
   },
   async providerBlocked() {
     const [row] = await sql`SELECT backoff_until > now() AS blocked FROM mobile_push_provider_state WHERE id='expo'`;

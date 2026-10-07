@@ -26,11 +26,23 @@ it('classifies malformed provider receipt protocol without leaking response deta
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({data:{ticket:{status:'unexpected'}}})));
   await expect(readExpoReceipt('ticket')).rejects.toMatchObject({status:502,retryAfterSeconds:60});
 });
-it.each([{status:'error'},{status:'error',details:{}},{status:'error',details:{error:''}},{status:'error',details:{error:' '}}])('rejects malformed error results for both tickets and receipts',async result=>{
+it.each([{status:'error'},{status:'error',details:{error:''}},{status:'error',details:{error:' '}}])('rejects malformed error results for both tickets and receipts',async result=>{
   const fetchMock=vi.fn().mockResolvedValueOnce(Response.json({data:[result]})).mockResolvedValueOnce(Response.json({data:{ticket:result}}));
   vi.stubGlobal('fetch',fetchMock);
   await expect(sendExpoPush({to:'sensitive-token'})).rejects.toMatchObject({status:502,retryAfterSeconds:60});
   await expect(readExpoReceipt('ticket')).rejects.toMatchObject({status:502,retryAfterSeconds:60});
+});
+it.each([{status:'error',details:{}},{status:'error',message:'Device rejection includes sensitive-token'}])('accepts individual error results without an optional detailed code',async result=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(Response.json({data:[result]})).mockResolvedValueOnce(Response.json({data:{ticket:result}})));
+  await expect(sendExpoPush({to:'sensitive-token'})).resolves.toEqual(result);
+  await expect(readExpoReceipt('ticket')).resolves.toEqual(result);
+});
+it('normalizes unknown provider error codes before they can be stored or logged',async()=>{
+  const result={status:'error',details:{error:'ExpoPushToken[sensitive-token]',private:'private-provider-data'}};
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(Response.json({data:[result]})).mockResolvedValueOnce(Response.json({data:{ticket:result}})));
+  const safe={status:'error',details:{error:'UNKNOWN_PROVIDER_ERROR'}};
+  await expect(sendExpoPush({to:'sensitive-token'})).resolves.toEqual(safe);
+  await expect(readExpoReceipt('ticket')).resolves.toEqual(safe);
 });
 it('accepts valid provider receipt success without requiring a second ticket ID',async()=>{
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({data:{ticket:{status:'ok'}}})));

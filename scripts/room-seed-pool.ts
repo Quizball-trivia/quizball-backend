@@ -21,6 +21,7 @@ const rowSchema = z.object({
   fingerprint: z.string().min(8).max(64),
   payload: aproximadoItemSchema,
 }).strict();
+const SEED_BATCH = 300;
 const fileSchema = z.object({ game: z.enum(ROOM_GAMES), items: z.array(rowSchema).min(30) }).strict();
 
 function parseArgs(argv: string[]) {
@@ -79,15 +80,22 @@ async function main(): Promise<void> {
     const result = await sql.begin(async (tx) => {
       await tx`SET LOCAL statement_timeout = '120s'`;
       let inserted = 0;
-      for (const r of rows) {
-        const [row] = await tx<Array<{ inserted: boolean }>>`
+      // A few hundred rows per statement: one round trip each (row by row, 900 round trips through the pooler took
+      // long enough for it to drop the connection mid-transaction).
+      for (let i = 0; i < rows.length; i += SEED_BATCH) {
+        const batch = rows.slice(i, i + SEED_BATCH);
+        const written = await tx<Array<{ inserted: boolean }>>`
           INSERT INTO room_pool (game, item_id, difficulty, fingerprint, payload)
-          VALUES (${args.game!}, ${r.item_id}, ${r.difficulty}, ${r.fingerprint}, ${tx.json(r.payload as never)})
+          SELECT ${args.game!}, t.item_id, t.difficulty, t.fingerprint, p.payload
+          FROM unnest(
+            ${batch.map((r) => r.item_id)}::text[], ${batch.map((r) => r.difficulty)}::text[], ${batch.map((r) => r.fingerprint)}::text[]
+          ) WITH ORDINALITY AS t(item_id, difficulty, fingerprint, n)
+          JOIN jsonb_array_elements(${tx.json(batch.map((r) => r.payload) as never)}) WITH ORDINALITY AS p(payload, n) USING (n)
           ON CONFLICT (game, item_id) DO UPDATE SET difficulty = EXCLUDED.difficulty, payload = EXCLUDED.payload,
             fingerprint = EXCLUDED.fingerprint, updated_at = now()
           RETURNING (xmax = 0) AS inserted
         `;
-        if (row?.inserted) inserted += 1;
+        inserted += written.filter((row) => row.inserted).length;
       }
       // What a match can actually draw from: enabled rows only (a row disabled on purpose stays disabled). Short on
       // any difficulty: roll back rather than leave a pool that fails at the first start.

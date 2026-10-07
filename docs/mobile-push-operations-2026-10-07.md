@@ -1,0 +1,43 @@
+# Mobile push operations candidate
+
+This document describes a review candidate, not a deployed service. The owner approved committing/pushing the scoped branch and opening a PR to staging on October 7. No remote migration, delivery flags, worker or campaign was enabled. One dedicated least-privilege Firebase FCM key is assigned to `io.quizball.mobile` in Expo and stored securely outside Git. Its explicitly approved project-only key-creation exception was removed afterward, restoring the enforced inherited policy and the account's original roles. The company APNs key still requires company Apple Developer sign-in; no personal-team key was created. Enhanced Expo push security and the backend access token still need configuration before delivery is enabled.
+
+## Deployment order
+
+1. Review the scoped push migration, routes and worker in a PR to staging. Preserve all unrelated changes and follow the repository's staging-to-main promotion rules.
+2. Apply `supabase/migrations/20261007080112_mobile_push_delivery.sql` in staging through the normal migration workflow. All seven push tables enable RLS and revoke direct client access; account-bound access is through the backend.
+3. Configure keys securely outside source control:
+   - `PUSH_TOKEN_ENCRYPTION_KEY`: random 32-byte hex key for AES-GCM device-token encryption.
+   - `PUSH_TOKEN_ENCRYPTION_KEY_ID`: version label, initially `v1`.
+   - `PUSH_TOKEN_FINGERPRINT_KEY`: independent stable 32-byte hex HMAC key. Do not silently rotate; the provider-state identity fence detects a mismatch.
+   - `PUSH_TOKEN_DECRYPTION_KEYS`: optional JSON version-to-key mapping for a reviewed encryption-key rotation. Retain old keys until records are re-encrypted. Never log this value.
+   - `PUSH_EXPO_ACCESS_TOKEN`: required before enabling delivery. Expo's actual console exposes enhanced push security at the Quizball account scope, not project scope. Enable it only with explicit approval and store its authorized token securely. A revocable Viewer robot is the proposed least-privilege identity; verify it can send before considering any broader role. A nonempty token alone does not prove the account protection is enabled; verify that separately. The native FCM/APNs keys themselves belong in Expo credentials, not here.
+4. Initially leave `PUSH_DELIVERY_ENABLED=false` and `PUSH_REMINDERS_ENABLED=false`. Registration/preferences can be deployed independently from sending.
+5. On staging, enable delivery only with explicit test account UUIDs in `PUSH_TEST_USER_IDS`. The worker and reminder queue reject non-allowlisted staging accounts. An empty list is fail-closed. Do not use production data as fixtures.
+6. Verify real signed iOS/Android self-test delivery and notification taps before a separately approved production promotion.
+
+## Contract and ordering
+
+Device register/unregister require an authenticated first-party bearer, platform and positive safe-integer `clientRevision`. Device ownership comes from authentication, never from a client-supplied user ID. Partner accounts are rejected. Test-send is one request per account/minute; register/unregister/preferences writes share a bounded rate limiter. Campaign preview/send require admin authorization and sending is production-only.
+
+A per-token advisory lock and stored revision fence serialize register/unregister ordering. Logout can create an inactive tombstone even before a delayed registration arrives. Older registration or revocation cannot undo a newer state. Unregister under another owner is a no-op. Responses are acknowledgements, not provider delivery proof.
+
+The mobile client journals unacknowledged cleanup without retaining bearer credentials. It retries under the original authenticated owner. Immediate remote revocation while offline/signed out is not guaranteed; OS-background delivery may remain possible until the server receives cleanup or a newer registration supersedes it.
+
+## Sending safeguards
+
+- Preferences default off. Daily reminders start at 19:00 in the chosen valid IANA timezone, configurable for all 24 hours.
+- The reminder catch-up window is less than two hours. Already-played daily challenges and a recently sent reminder email suppress duplicate reminder scheduling.
+- New-game campaign text must have all four translations and a whitelisted route. No automatic broadcast is triggered by deployment or game creation.
+- `PUSH_CAMPAIGN_MAX_DEVICES` defaults to 1,000 and permits 1–10,000. Above-cap audiences roll back entirely. Confirm actual capacity before raising the cap.
+- Shared provider backoff bounds request-level authorization errors, rate limiting and transient failures. Individual device ticket/receipt errors fail only that job and cannot pause other players. Four concurrent tasks handle up to 80 sends and 80 receipt checks per worker tick.
+- Ownership, active generation, latest consent, expiry and allowlist are rechecked before sending. Preference opt-out and device revocation cancel queued work.
+- Expo tickets are checked for receipts after approximately 15 minutes; checks stop within 23 hours of ticketing. An accepted receipt does not prove the player saw a notification.
+- Ambiguous network/process failures can duplicate delivery: this is bounded at-least-once dispatch, not exactly-once delivery. Tap event IDs are deduplicated client-side.
+- Jobs/events expire; event retention is 30 days and stale devices are removed after 90 days. Disabling delivery stops the worker but does not itself delete account preferences.
+
+## Verification boundaries
+
+The isolated local suite passes 41 tests across repository, worker and transport files using only PostgreSQL `quizball_push_test_20261007` on localhost. It does not configure or contact Expo, Firebase, Apple, staging or production. It covers malformed provider replies (including missing/blank error reasons), timeouts, shared request-level backoff and isolation of individual device failures. OpenAPI export confirms both device routes require the revision field. HTTP middleware deployment, real provider delivery, signed-device taps, production scheduling, key rotation and operational throughput still need live verification.
+
+To stop sending, set `PUSH_DELIVERY_ENABLED=false`. To stop only reminder scheduling/delivery, set `PUSH_REMINDERS_ENABLED=false`. Existing campaigns are not created by these switches. Rollback must preserve the migration's ordering/tombstone state until delayed requests and jobs have been resolved.

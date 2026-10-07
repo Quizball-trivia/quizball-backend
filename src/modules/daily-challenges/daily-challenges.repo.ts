@@ -133,7 +133,9 @@ export const dailyChallengesRepo = {
       FROM daily_challenge_completions c
       JOIN users u ON u.id = c.user_id
       WHERE c.challenge_type = ${challengeType} AND c.challenge_day = ${challengeDay}
-        AND u.is_ai = false AND u.is_banned = false AND u.is_deleted = false
+        -- The same eligibility as the other daily boards: no bots, guests, seeds, or deleted / pending-deletion accounts.
+        AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_banned = false AND u.is_deleted = false
+        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       ORDER BY c.score DESC, c.completed_at ASC
       LIMIT ${limit}
     `;
@@ -148,7 +150,8 @@ export const dailyChallengesRepo = {
         FROM daily_challenge_completions c
         JOIN users u ON u.id = c.user_id
         WHERE c.challenge_type = ${challengeType} AND c.challenge_day = ${challengeDay}
-          AND u.is_ai = false AND u.is_banned = false AND u.is_deleted = false
+          AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_banned = false AND u.is_deleted = false
+          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       )
       SELECT rank::int, score, total::int FROM ranked WHERE user_id = ${userId}
     `;

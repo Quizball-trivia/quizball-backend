@@ -518,7 +518,7 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
       expect(ids[0]).toBe('ranked');
       expect(ids).not.toContain('pick-em');
       expect(res.body.games.find((g: { gameId: string }) => g.gameId === 'countdown')).toEqual({
-        gameId: 'countdown', playsLimit: 3, playsUsed: 0, playsLeft: 3, maxScore: 2500, available: false, inProgress: false,
+        gameId: 'countdown', playsLimit: 3, playsUsed: 0, playsLeft: 3, maxScore: 2500, available: false, inProgress: false, lastResult: null,
       });
       expect(res.body.games.find((g: { gameId: string }) => g.gameId === 'true-false').available).toBe(true);
       await db.sql`DELETE FROM partner_limit_overrides WHERE date = ${today}::date`;
@@ -619,7 +619,14 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
         .body.games.find((g: { gameId: string }) => g.gameId === 'pick-em');
       expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: true });
       await db.sql.begin((tx) => quota.finishPlay(tx, play.id, 0));
-      expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: false });
+      // Ended (here: as a sweeper would while the player was away): the tile carries the result to show instead.
+      expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: false, lastResult: { playId: play.id, score: 0 } });
+      // Two plays finished today: the latest one is the result shown.
+      await setReady('pick-em', true, 2);
+      const second = await db.sql.begin((tx) =>
+        quota.reservePlay(tx, { playerId: player.id, sessionId: started.sessionId, gameId: 'pick-em', sourceRef: `${started.sessionId}-second` }));
+      await db.sql.begin((tx) => quota.finishPlay(tx, second.id, 250));
+      expect(await tile()).toMatchObject({ lastResult: { playId: second.id, score: 250 } });
       await setReady('pick-em', false, 1);
     });
 

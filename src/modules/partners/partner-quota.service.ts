@@ -318,6 +318,9 @@ export interface PartnerGameTile {
   available: boolean;
   /** A started play not finished yet (left or reloaded midway): the tile reopens it even with no plays left. */
   inProgress: boolean;
+  /** Today's latest finished play: shown when the game is opened after it ended (e.g. settled while the player was
+   *  away), instead of an intro whose start would find no plays left. */
+  lastResult: { playId: string; score: number } | null;
 }
 
 export interface MeGamesResponse {
@@ -342,6 +345,11 @@ export async function meGames(
     SELECT DISTINCT game_id FROM partner_plays
     WHERE player_id = ${principal.playerId} AND state = 'started' AND started_at > ${since}`;
   const inProgress = new Set(open.map((r) => r.game_id));
+  const finished = await sql<{ game_id: string; id: string; score: number }[]>`
+    SELECT DISTINCT ON (game_id) game_id, id, score FROM partner_plays
+    WHERE player_id = ${principal.playerId} AND state = 'finished' AND partner_day = ${day}::date AND started_at > ${since}
+    ORDER BY game_id, finished_at DESC`;
+  const lastResult = new Map(finished.map((r) => [r.game_id, { playId: r.id, score: r.score }]));
   return {
     partnerDay: day,
     resetsAt: nextPartnerMidnight(now).toISOString(),
@@ -355,6 +363,7 @@ export async function meGames(
         maxScore: r.gameId === 'ranked' ? rankedMax : PARTNER_GAME_MAX_SCORE[r.gameId],
         available: r.ready,
         inProgress: inProgress.has(r.gameId),
+        lastResult: lastResult.get(r.gameId) ?? null,
       })),
   };
 }

@@ -18,6 +18,35 @@ export const createGuestSessionSchema = z.object({
   locale: z.enum(['en', 'ka', 'es', 'tr']).optional(),
 });
 
+type PublicStatSniperBoard = {
+  challengeDay: string;
+  entries: Array<{ rank: number; alias: string; score: number; country: string | null; avatarCustomization: unknown }>;
+  me: null;
+};
+const PUBLIC_BOARD_TTL_MS = 30_000;
+/** A failed load is retried no sooner than this: an outage must not turn every page view into a query. */
+const PUBLIC_BOARD_FAILURE_TTL_MS = 5_000;
+let publicBoard: { day: string; until: number; value: Promise<PublicStatSniperBoard> } | null = null;
+
+/**
+ * Served without an account or guest session (every visitor of the public page), so at most one query per 30 s per
+ * replica. Keyed by the UTC challenge day: yesterday's board is never served as today's after midnight.
+ */
+export function publicStatSniperBoard(now = Date.now(), clock: () => number = Date.now): Promise<PublicStatSniperBoard> {
+  const day = new Date(now).toISOString().slice(0, 10);
+  if (publicBoard && publicBoard.day === day && now < publicBoard.until) return publicBoard.value;
+  const value = dailyChallengesService.getStatSniperLeaderboard(null).then((board) => ({
+    challengeDay: board.challengeDay,
+    entries: board.entries.map((e) => ({ rank: e.rank, alias: e.username, score: e.score, country: e.country ?? null, avatarCustomization: e.avatarCustomization ?? null })),
+    me: null as null,
+  }));
+  const entry = { day, until: now + PUBLIC_BOARD_TTL_MS, value };
+  publicBoard = entry;
+  // Counted from the failure: a load that took longer than the pause must still hold retries off.
+  value.catch(() => { if (publicBoard === entry) entry.until = clock() + PUBLIC_BOARD_FAILURE_TTL_MS; });
+  return value;
+}
+
 export const guestController = {
   async createSession(req: Request, res: Response): Promise<void> {
     const body = (req.validated.body ?? {}) as z.infer<typeof createGuestSessionSchema>;
@@ -80,9 +109,8 @@ export const guestController = {
     res.json(await dailyChallengesService.linkPassChain(`guest:${req.guest!.id}`, body, body.locale));
   },
 
-  /** Public projection of the day's board: alias, rank, score only. */
+  /** Public projection of the day's board (no ids), what the other daily pages show visitors; cached briefly. */
   async statSniperLeaderboard(_req: Request, res: Response): Promise<void> {
-    const board = await dailyChallengesService.getStatSniperLeaderboard(null);
-    res.json({ challengeDay: board.challengeDay, entries: board.entries.map((e) => ({ rank: e.rank, alias: e.username, score: e.score })), me: null });
+    res.json(await publicStatSniperBoard());
   },
 };

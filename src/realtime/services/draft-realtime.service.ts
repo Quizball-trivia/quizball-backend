@@ -335,6 +335,15 @@ async function consumeRankedTicketsWithConflictRetry(
   }
 }
 
+/** The single Freecroco player who cancelled or went absent, recorded before a teardown erases the evidence. */
+async function recordPartnerLeaverFromSignals(
+  userIds: string[],
+  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>,
+): Promise<void> {
+  const left = signals.filter((s) => s.cancelled || s.absentAfterGrace).map((s) => s.userId);
+  if (userIds.length > 0 && left.length === 1) await recordPartnerRankedLeaver(userIds, left[0]!);
+}
+
 /** The player who cancelled or went absent keeps the play used once the opponent was shown; the other gets it back. */
 async function releasePartnerSearches(
   userIds: string[],
@@ -400,6 +409,7 @@ async function startMatchFromDraft(
     const abortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
     const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (blockingSignals.length > 0) {
+      await recordPartnerLeaverFromSignals(partnerUserIds, abortSignals);
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
@@ -437,6 +447,7 @@ async function startMatchFromDraft(
           reason: 'draft_abort_before_match_creation',
         });
       }
+      await recordPartnerLeaverFromSignals(partnerUserIds, postTicketAbortSignals);
       await abortRankedDraftBeforeMatchCreation(
         io,
         lobby,
@@ -1081,8 +1092,7 @@ export async function runDraftGraceExpiry(
         // Freecroco plays: who left is recorded before the teardown erases the evidence, then released with it.
         const humans = await usersRepo.getByIds(humanUserIds);
         const partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
-        const absent = humanUserIds.filter((userId) => abortSignals.find((sig) => sig.userId === userId)?.absentAfterGrace);
-        if (partnerUserIds.length > 0 && absent.length === 1) await recordPartnerRankedLeaver(partnerUserIds, absent[0]!);
+        await recordPartnerLeaverFromSignals(partnerUserIds, abortSignals);
         await abortRankedDraftBeforeMatchCreation(
           io,
           activeLobby,

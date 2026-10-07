@@ -4,7 +4,7 @@ vi.mock('../../src/modules/notifications/mobile-push.repo.js',()=>({mobilePushRe
   settle:mocks.settle,defer:mocks.defer,claim:mocks.claim,maintain:mocks.maintain,ensureProviderKey:mocks.ensure,queueReminders:mocks.reminders,disable:mocks.disable}}));
 vi.mock('../../src/modules/notifications/mobile-push.transport.js',async importOriginal=>({...await importOriginal<object>(),sendExpoPush:mocks.send,readExpoReceipt:mocks.receipt}));
 vi.mock('../../src/modules/notifications/mobile-push.crypto.js',async importOriginal=>({...await importOriginal<object>(),decryptPushToken:mocks.decrypt}));
-import {tickMobilePush,deliverPushJob,checkPushReceipt} from '../../src/modules/notifications/mobile-push.worker.js';
+import {tickMobilePush,deliverPushJob,checkPushReceipt,pushTickErrorCode} from '../../src/modules/notifications/mobile-push.worker.js';
 import {PushTransportError} from '../../src/modules/notifications/mobile-push.transport.js';
 import {PushTokenDecryptionError} from '../../src/modules/notifications/mobile-push.crypto.js';
 import {config} from '../../src/core/config.js';
@@ -63,4 +63,19 @@ it.each(['MismatchSenderId','InvalidCredentials'])('retains an individual %s tic
   await deliverPushJob(job);expect(mocks.backoff).not.toHaveBeenCalled();
   expect(mocks.defer).toHaveBeenCalledWith(job,1800,code);
   expect(mocks.settle).not.toHaveBeenCalled();
+});
+it('settles a message-only individual rejection without pausing other devices',async()=>{
+  const actual=await vi.importActual<typeof import('../../src/modules/notifications/mobile-push.transport.js')>('../../src/modules/notifications/mobile-push.transport.js');
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({data:[{status:'error',message:'sensitive-token rejection'}]})));
+  mocks.send.mockImplementation(actual.sendExpoPush);await deliverPushJob(job);
+  expect(mocks.backoff).not.toHaveBeenCalled();
+  expect(mocks.settle).toHaveBeenCalledWith(job,'failed','TICKET_ERROR',null,expect.any(Number));
+});
+it.each([
+  [Object.assign(new Error('private detail'),{code:'PUSH_FINGERPRINT_KEY_CHANGED'}),'PUSH_FINGERPRINT_KEY_CHANGED'],
+  [Object.assign(new Error('private query'),{code:'42P01'}),'SQLSTATE_42P01'],
+  [Object.assign(new Error('private token'),{code:'ExpoPushToken[sensitive]'}),'UNEXPECTED_TICK_FAILURE'],
+  [new Error('private credential'),'UNEXPECTED_TICK_FAILURE'],
+])('reports only bounded worker error codes, never raw error messages', (error,expected)=>{
+  expect(pushTickErrorCode(error)).toBe(expected);
 });

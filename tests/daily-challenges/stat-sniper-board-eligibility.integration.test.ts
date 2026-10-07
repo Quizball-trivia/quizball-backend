@@ -51,14 +51,14 @@ afterAll(async () => {
 });
 
 describe('Stat Sniper board eligibility', () => {
-  it('lists only eligible accounts', async () => {
-    if (!dbAvailable) return;
+  it('lists only eligible accounts', async (ctx) => {
+    if (!dbAvailable) ctx.skip();
     const rows = await repo.listTopCompletionsForDay('statSniper', DAY, 10);
     expect(rows.map((r) => r.user_id)).toEqual([ids.real]);
   });
 
-  it('ranks a player among eligible accounts only', async () => {
-    if (!dbAvailable) return;
+  it('ranks a player among eligible accounts only', async (ctx) => {
+    if (!dbAvailable) ctx.skip();
     await expect(repo.getCompletionRankForDay(ids.real!, 'statSniper', DAY)).resolves.toEqual({ rank: 1, score: 50, total: 1 });
   });
 });

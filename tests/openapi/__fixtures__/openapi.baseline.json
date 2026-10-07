@@ -25610,10 +25610,7 @@
                   "type": "object",
                   "properties": {
                     "registered": {
-                      "type": "boolean",
-                      "enum": [
-                        true
-                      ]
+                      "type": "boolean"
                     }
                   },
                   "required": [

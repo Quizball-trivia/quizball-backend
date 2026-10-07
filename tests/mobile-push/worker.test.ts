@@ -50,15 +50,17 @@ it('retains receipt retry classification and disables only generation-fenced inv
   mocks.receipt.mockResolvedValue({status:'error',details:{error:'DeviceNotRegistered'}});await checkPushReceipt({...job,ticket_id:'ticket'});
   expect(mocks.disable).toHaveBeenCalledWith(expect.objectContaining({device_generation:1}));expect(mocks.settle).toHaveBeenCalledWith(expect.anything(),'failed','DeviceNotRegistered');
 });
-it.each(['MismatchSenderId','InvalidCredentials'])('does not open global backoff for an individual %s receipt',async code=>{
+it.each(['MismatchSenderId','InvalidCredentials'])('retains an individual %s receipt for retry without global denial of service',async code=>{
   mocks.receipt.mockResolvedValue({status:'error',details:{error:code}});
   await checkPushReceipt({...job,ticket_id:'ticket'});
   expect(mocks.backoff).not.toHaveBeenCalled();
-  expect(mocks.settle).toHaveBeenCalledWith(expect.anything(),'failed',code);
+  expect(mocks.defer).toHaveBeenCalledWith(expect.objectContaining({ticket_id:'ticket'}),1800,code);
+  expect(mocks.settle).not.toHaveBeenCalled();
   await deliverPushJob(job);expect(mocks.send).toHaveBeenCalledTimes(1);
 });
-it.each(['MismatchSenderId','InvalidCredentials'])('isolates an individual %s ticket',async code=>{
+it.each(['MismatchSenderId','InvalidCredentials'])('retains an individual %s ticket for retry until its original expiry',async code=>{
   mocks.send.mockResolvedValueOnce({status:'error',details:{error:code}});
   await deliverPushJob(job);expect(mocks.backoff).not.toHaveBeenCalled();
-  expect(mocks.settle).toHaveBeenCalledWith(job,'failed',code,null,expect.any(Number));
+  expect(mocks.defer).toHaveBeenCalledWith(job,1800,code);
+  expect(mocks.settle).not.toHaveBeenCalled();
 });

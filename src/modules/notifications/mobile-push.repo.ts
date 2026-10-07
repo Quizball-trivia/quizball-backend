@@ -122,7 +122,7 @@ export const mobilePushRepo = {
       count(DISTINCT u.id) FILTER(WHERE EXISTS(SELECT 1 FROM mobile_push_events e WHERE e.user_id=u.id AND e.category='new_games' AND e.local_day=(now() AT TIME ZONE p.timezone)::date))::int AS "alreadyCapped"
       FROM mobile_push_preferences p JOIN users u ON u.id = p.user_id JOIN mobile_push_devices d ON d.user_id = u.id AND d.active
       WHERE p.new_games_enabled AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_banned AND NOT u.is_deleted
-        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND u.partner_slug IS NULL AND u.role <> 'partner_staff'`;
+        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND (to_jsonb(u)->>'partner_slug') IS NULL AND u.role::text <> 'partner_staff'`;
     return row;
   },
   async queueTest(userId:string) {
@@ -150,7 +150,7 @@ export const mobilePushRepo = {
           ${tx.json(input.title)},${tx.json(input.body)},${input.route}, now() + interval '24 hours'
         FROM mobile_push_preferences p JOIN users u ON u.id = p.user_id
         WHERE p.new_games_enabled AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_banned
-          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND u.partner_slug IS NULL AND u.role <> 'partner_staff'
+          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND (to_jsonb(u)->>'partner_slug') IS NULL AND u.role::text <> 'partner_staff'
           AND EXISTS(SELECT 1 FROM mobile_push_devices d WHERE d.user_id = p.user_id AND d.active)
         ON CONFLICT DO NOTHING RETURNING id`;
       const jobs=await tx`INSERT INTO mobile_push_jobs(event_id, device_id, device_generation)
@@ -172,7 +172,7 @@ export const mobilePushRepo = {
         FROM mobile_push_preferences p JOIN users u ON u.id = p.user_id
         WHERE p.daily_reminders_enabled AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_banned
           AND (${allowedUsers === undefined} OR p.user_id=ANY(${allowedUsers ?? []}::uuid[]))
-          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND u.partner_slug IS NULL AND u.role <> 'partner_staff'
+          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND (to_jsonb(u)->>'partner_slug') IS NULL AND u.role::text <> 'partner_staff'
           AND now() AT TIME ZONE p.timezone >= (now() AT TIME ZONE p.timezone)::date + make_interval(hours => p.daily_reminder_hour)
           AND now() AT TIME ZONE p.timezone < (now() AT TIME ZONE p.timezone)::date + make_interval(hours => p.daily_reminder_hour) + interval '2 hours'
           AND EXISTS(SELECT 1 FROM daily_challenge_configs WHERE is_active)
@@ -207,7 +207,7 @@ export const mobilePushRepo = {
       WHERE j.id = ${job.id} AND j.lease_token = ${job.lease_token} AND d.active AND d.user_id = e.user_id
         AND d.generation = j.device_generation AND e.expires_at > now()
         AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_banned AND u.deleted_at IS NULL
-        AND u.pending_deletion_at IS NULL AND u.partner_slug IS NULL AND u.role <> 'partner_staff'
+        AND u.pending_deletion_at IS NULL AND (to_jsonb(u)->>'partner_slug') IS NULL AND u.role::text <> 'partner_staff'
         AND (e.category = 'test' OR (p.consent_epoch = e.consent_epoch AND
           ((e.category = 'daily' AND p.daily_reminders_enabled) OR (e.category = 'new_games' AND p.new_games_enabled))))`;
     return row ?? null;
@@ -223,9 +223,9 @@ export const mobilePushRepo = {
       WHERE id = ${job.device_id} AND generation = ${job.device_generation}
         AND EXISTS(SELECT 1 FROM mobile_push_jobs j WHERE j.id=${job.id} AND j.lease_token=${job.lease_token} AND j.lease_until>now())`;
   },
-  async defer(job:PushJob, delaySeconds:number) {
+  async defer(job:PushJob, delaySeconds:number, code:string|null=null) {
     await sql`UPDATE mobile_push_jobs SET status='pending', attempts=GREATEST(0,attempts-1),
-      lease_token=NULL,lease_until=NULL,next_attempt_at=now()+make_interval(secs=>${delaySeconds})
+      lease_token=NULL,lease_until=NULL,next_attempt_at=now()+make_interval(secs=>${delaySeconds}),error_code=COALESCE(${code},error_code)
       WHERE id=${job.id} AND lease_token=${job.lease_token}`;
   },
   async maintain(retention = false) {

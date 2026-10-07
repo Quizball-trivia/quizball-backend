@@ -86,6 +86,17 @@ describe.skipIf(!target.isolated && !target.admin)('Freecroco Road to Goal on re
     expect(again.body.error.code).toBe('quota_exhausted');
   });
 
+  it('reopening a run whose question expired while away returns it settled (not an intro whose Start finds no plays)', async () => {
+    const { access, playerId } = await h.launch();
+    const run = (await start(access)).body;
+    await db.sql`UPDATE partner_rtg_runs SET question_deadline_at = now() - interval '10 seconds' WHERE id = ${run.run_id}`;
+    const reopened = await get(access, '/runs/current');
+    expect(reopened.status).toBe(200);
+    expect(reopened.body).toMatchObject({ run_id: run.run_id, status: 'lost', score: 0 });
+    expect((await scoreEvents(db, playerId)).map((e) => e.score)).toEqual([0]);
+    expect((await get(access, '/runs/current')).status).toBe(404);
+  });
+
   it('clearing zone 11 ends the play with 400', async () => {
     const { access, playerId } = await h.launch();
     let state = (await start(access)).body;

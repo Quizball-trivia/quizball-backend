@@ -337,13 +337,12 @@ export const partnerRoadToGoalService = {
     return this.get(partner, runId);
   },
 
-  /** The open run (an expired deadline is settled first), or not_found. */
+  /** The open run, or not_found. A run this read settles (its deadline passed while the player was away) comes back
+   *  settled, so the screen shows its result instead of an intro whose Start would find no plays left. */
   async current(partner: PartnerPrincipal): Promise<PartnerRoadToGoalState> {
     const id = await activeRunId(partner.playerId);
     if (!id) throw new PartnerError('not_found', 'No open run');
-    const state = await this.get(partner, id);
-    if (state.status !== 'active') throw new PartnerError('not_found', 'No open run');
-    return state;
+    return this.get(partner, id);
   },
 
   async get(partner: PartnerPrincipal, runId: string): Promise<PartnerRoadToGoalState> {

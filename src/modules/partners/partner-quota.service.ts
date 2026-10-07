@@ -335,11 +335,12 @@ export async function meGames(
   const rules = await dayRulesForPlayer(principal, principal.playerId, day);
   const showsRanked = rules.some((r) => r.gameId === 'ranked' && r.enabled && r.playsLimit > 0);
   const rankedMax = showsRanked ? await currentRankedMaxScore(principal) : null;
-  // Sweepers settle abandoned plays within hours, so two days bounds the scan without missing one.
+  // Sweepers settle abandoned plays within hours, so two days bounds the scan without missing one (a bound parameter,
+  // so the (player_id, started_at) index range applies).
+  const since = new Date(now.getTime() - 2 * 86_400_000);
   const open = await sql<{ game_id: string }[]>`
     SELECT DISTINCT game_id FROM partner_plays
-    WHERE player_id = ${principal.playerId} AND state = 'started'
-      AND started_at > clock_timestamp() - interval '2 days'`;
+    WHERE player_id = ${principal.playerId} AND state = 'started' AND started_at > ${since}`;
   const inProgress = new Set(open.map((r) => r.game_id));
   return {
     partnerDay: day,

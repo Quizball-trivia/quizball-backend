@@ -15,6 +15,8 @@ vi.mock('../../src/db/index.js', () => {
   const sql = Object.assign(vi.fn(async () => []), { begin: vi.fn(), unsafe: vi.fn(async () => []), json: (v: unknown) => v, array: (v: unknown) => v });
   return { sql, default: sql };
 });
+const releaseMock = vi.fn(async () => true);
+vi.mock('../../src/realtime/locks.js', () => ({ releaseLock: (...a: unknown[]) => releaseMock(...(a as [])), acquireLock: vi.fn(), extendLock: vi.fn() }));
 vi.mock('../../src/core/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -189,7 +191,8 @@ describe('possession question sent mark', () => {
   it('a failed commit removes the mark so the retry can still send (Codex P1-1)', async () => {
     setMatchCacheMock.mockRejectedValueOnce(new Error('redis write failed'));
     await expect(send(true)).rejects.toThrow('redis write failed');
-    expect(redisDel).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4');
+    // Owner-only release: the token this send wrote, never another send's mark.
+    expect(releaseMock).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4', redisSet.mock.calls[0]![1]);
   });
 
   it('reuses a question another send already stored instead of declaring the pool exhausted (Astra v4 P1-3)', async () => {
@@ -218,7 +221,8 @@ describe('possession question sent mark', () => {
     const { io, emit } = createIo();
     const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
     await expect(sendPossessionMatchQuestion(io, snapshot.matchId, 4, { onlyIfUnsent: true })).resolves.toBeNull();
-    expect(redisDel).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4');
+    // Owner-only release: the token this send wrote, never another send's mark.
+    expect(releaseMock).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4', redisSet.mock.calls[0]![1]);
     expect(questionEmitted(emit)).toBe(false);
   });
 });
@@ -251,7 +255,8 @@ describe('real Redis cache-write failure during question dispatch', () => {
     await expect(sendPossessionMatchQuestion(io, cache.matchId, 4, { onlyIfUnsent: true })).rejects.toThrow('synthetic Redis cache write failure');
     expect(questionEmitted(emit)).toBe(false);
     expect(vi.mocked(scheduleRealtimeTimer)).not.toHaveBeenCalledWith('possession_question', 'match-exhausted-special:4', expect.anything(), expect.anything());
-    expect(redisDel).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4');
+    // Owner-only release: the token this send wrote, never another send's mark.
+    expect(releaseMock).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4', redisSet.mock.calls[0]![1]);
   });
 });
 

@@ -73,7 +73,9 @@ import {
   markMatchEnteredForRoom,
   markMatchEnteredForSocket,
 } from './services/match-entry.service.js';
+import { randomUUID } from 'node:crypto';
 import { getRedisClient } from './redis.js';
+import { releaseLock } from './locks.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
@@ -114,6 +116,18 @@ const LOST_TRANSITION_RECOVERY_DELAY_MS = PENALTY_ROUND_READY_ACK_CEILING_MS + T
 /** Phases whose next question comes through a round transition (halftime and completion have their own timers). */
 const TRANSITION_PHASES = new Set<PossessionStatePayload['phase']>(['NORMAL_PLAY', 'LAST_ATTACK', 'PENALTY_SHOOTOUT']);
 
+/**
+ * A completion that lost its lock race (its holder may have died) keeps a durable retry: a question timer for the
+ * current index fires into the resolver, whose missing-question branch finishes a COMPLETED match.
+ */
+export async function armCompletionRetry(matchId: string, qIndex: number): Promise<void> {
+  await scheduleRealtimeTimer('possession_question', questionTimerKey(matchId, qIndex), new Date(Date.now() + 5_000), {
+    kind: 'possession_question',
+    matchId,
+    qIndex,
+  }, { onlyIfAbsent: true });
+}
+
 /** Add-only: never moves a real deadline (or an earlier backup) already set for that index; the payloads are equal. */
 function scheduleTransitionBackup(matchId: string, nextIndex: number, dueAt: Date): Promise<void> {
   return scheduleRealtimeTimer('possession_question', questionTimerKey(matchId, nextIndex), dueAt, {
@@ -133,19 +147,20 @@ function scheduleTransitionBackup(matchId: string, nextIndex: number, dueAt: Dat
 const QUESTION_SENT_TTL_SEC = 30;
 const questionSentKey = (matchId: string, qIndex: number) => `possession:sent:${matchId}:${qIndex}`;
 
-async function markQuestionSent(matchId: string, qIndex: number, onlyIfUnsent: boolean): Promise<boolean> {
+/** Returns this send's token (null: another path holds the mark). The token makes the release owner-only. */
+async function markQuestionSent(matchId: string, qIndex: number, onlyIfUnsent: boolean): Promise<string | null> {
+  const token = randomUUID();
   const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return true;
-  const result = await redis.set(questionSentKey(matchId, qIndex), String(Date.now()), onlyIfUnsent
+  if (!redis || !redis.isOpen) return token;
+  const result = await redis.set(questionSentKey(matchId, qIndex), token, onlyIfUnsent
     ? { NX: true, EX: QUESTION_SENT_TTL_SEC }
     : { EX: QUESTION_SENT_TTL_SEC });
-  return result === 'OK';
+  return result === 'OK' ? token : null;
 }
 
-async function unmarkQuestionSent(matchId: string, qIndex: number): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return;
-  await redis.del(questionSentKey(matchId, qIndex)).catch(() => undefined);
+/** Compare-and-delete: never removes a mark another send took after this one's expired. */
+async function unmarkQuestionSent(matchId: string, qIndex: number, token: string): Promise<void> {
+  await releaseLock(questionSentKey(matchId, qIndex), token).catch(() => undefined);
 }
 
 async function getPauseStartedAt(matchId: string): Promise<string | null> {
@@ -1066,7 +1081,8 @@ export async function sendPossessionMatchQuestion(
       phaseKind: runtimePhaseKind,
     });
 
-    if (!(await markQuestionSent(matchId, qIndex, preloaded?.onlyIfUnsent === true))) {
+    const sentToken = await markQuestionSent(matchId, qIndex, preloaded?.onlyIfUnsent === true);
+    if (!sentToken) {
       logger.info({ matchId, qIndex, ...cacheLogFields(cache) }, 'Possession question dispatch skipped: another path already sent it');
       return null;
     }
@@ -1076,7 +1092,7 @@ export async function sendPossessionMatchQuestion(
       const live = await getMatchCacheOrRebuild(matchId);
       if (!live) {
         // Could not read the live state: nothing was decided, so let the retry try again at once.
-        await unmarkQuestionSent(matchId, qIndex);
+        await unmarkQuestionSent(matchId, qIndex, sentToken);
         logger.warn({ matchId, qIndex }, 'Possession question dispatch skipped: live cache unavailable');
         return null;
       }
@@ -1117,7 +1133,7 @@ export async function sendPossessionMatchQuestion(
       // Strict: a question that is not in the cache must not be published, and its transition backup must stay.
       await setMatchCache(cache, { strict: true });
     } catch (error) {
-      await unmarkQuestionSent(matchId, qIndex);
+      await unmarkQuestionSent(matchId, qIndex, sentToken);
       throw error;
     }
     // The real deadline replaces a transition backup on the same key at once, before the slower publication and
@@ -1352,6 +1368,7 @@ export async function ensurePossessionActiveTimers(
     // locked and checks the match row, so a completion already done or in progress elsewhere is a no-op.
     const result = await completePossessionMatch(io, matchId, state, cache, { source: 'restart_recovery' });
     logger.warn({ eventName: 'match:question_timer', matchId, completed: result.completed, reason: result.reason ?? null }, 'Possession timer ensure completed a match stranded after its final round');
+    if (!result.completed && result.reason === 'lock_not_acquired') await armCompletionRetry(matchId, cache.currentQIndex);
     return true;
   }
   if (state.phase === 'HALFTIME') {

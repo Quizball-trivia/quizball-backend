@@ -53,6 +53,7 @@ import {
   toCachedAnswerByUserId,
 } from './possession-payload-mappers.js';
 import {
+  armCompletionRetry,
   clearQuestionTimer,
   deferQuestionTimer,
   emitMatchState,
@@ -222,7 +223,8 @@ export async function resolvePossessionRound(
       roundConcluded = true;
       if (cache.statePayload.phase === 'COMPLETED') {
         // Its resolve committed COMPLETED, then the process died before completion: finish it (locked, idempotent).
-        await completePossessionMatch(io, matchId, cache.statePayload, cache, { source: 'restart_recovery' });
+        const result = await completePossessionMatch(io, matchId, cache.statePayload, cache, { source: 'restart_recovery' });
+        if (!result.completed && result.reason === 'lock_not_acquired') await armCompletionRetry(matchId, cache.currentQIndex);
       }
       logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
@@ -247,6 +249,15 @@ export async function resolvePossessionRound(
       // A timer for a question that was never sent: question exhaustion (ranked) or the durable backup of a round
       // transition lost with its process (any mode, including the penalty shootout). Send it under this lock.
       const phase = cache.statePayload.phase;
+      if (fromTimeout && phase === 'COMPLETED') {
+        // A completion retry (armCompletionRetry): finish the match; a busy completion lock keeps the 5 s re-arm.
+        const result = await completePossessionMatch(io, matchId, cache.statePayload, cache, { source: 'restart_recovery' });
+        if (result.completed || result.reason !== 'lock_not_acquired') {
+          roundConcluded = true;
+          fromTimeout = false;
+        }
+        return;
+      }
       if (fromTimeout && (phase === 'LAST_ATTACK' || phase === 'NORMAL_PLAY' || phase === 'PENALTY_SHOOTOUT')) {
         if (abortIfLeaseLost('redispatch')) return;
         // Dev pause holds the next question (the live dispatch defers through checkDevPauseAndDefer); retry later.

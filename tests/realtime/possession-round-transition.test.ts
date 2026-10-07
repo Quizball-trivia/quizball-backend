@@ -191,6 +191,16 @@ describe('recovery of a match stuck between rounds (rejoin / boot)', () => {
     expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
   });
 
+  it('keeps a durable completion retry when another holder has the completion lock (CodeRabbit)', async () => {
+    const stranded = betweenRounds({ currentQIndex: 12 });
+    stranded.statePayload.phase = 'COMPLETED';
+    vi.mocked(getMatchCacheOrRebuild).mockResolvedValue(stranded);
+    completeMock.mockResolvedValueOnce({ completed: false, reason: 'lock_not_acquired' } as never);
+    const { ensurePossessionActiveTimers } = await import('../../src/realtime/possession-question-dispatch.js');
+    await ensurePossessionActiveTimers(io, 'm1');
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith('possession_question', 'm1:12', expect.any(Date), { kind: 'possession_question', matchId: 'm1', qIndex: 12 }, { onlyIfAbsent: true });
+  });
+
   it('leaves the first question to match start and a paused match to resume', async () => {
     const { ensurePossessionActiveTimers } = await import('../../src/realtime/possession-question-dispatch.js');
     vi.mocked(getMatchCacheOrRebuild).mockResolvedValue(betweenRounds({ currentQIndex: 0 }));

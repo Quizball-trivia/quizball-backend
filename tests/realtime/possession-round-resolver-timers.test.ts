@@ -316,6 +316,24 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
     expect(completePossessionMatchMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, live.statePayload, live, { source: 'restart_recovery' });
   });
 
+  it('a completion retry timer finishes a COMPLETED match, and re-arms while the completion lock is busy', async () => {
+    const stranded = createCache({ mode: 'ranked', currentQuestion: null });
+    stranded.statePayload.phase = 'COMPLETED';
+    getMatchCacheOrRebuildMock.mockResolvedValue(stranded);
+    completePossessionMatchMock.mockResolvedValueOnce({ completed: false, reason: 'lock_not_acquired' });
+    await resolveRound(true);
+    expect(completePossessionMatchMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, stranded.statePayload, stranded, { source: 'restart_recovery' });
+    expect(deferQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX, 5000);
+    expect(sendQuestionMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    getMatchCacheOrRebuildMock.mockResolvedValue(stranded);
+    completePossessionMatchMock.mockResolvedValueOnce({ completed: true });
+    await resolveRound(true);
+    expect(deferQuestionTimerMock).not.toHaveBeenCalled();
+    expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
+  });
+
   it('does not send a question from a timer during halftime (its own timers own it)', async () => {
     const cache = createCache({ mode: 'ranked', currentQuestion: null });
     cache.statePayload.phase = 'HALFTIME';

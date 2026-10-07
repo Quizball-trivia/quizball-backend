@@ -12,6 +12,9 @@ export default defineConfig({
     // shared DB. The pure-unit regression tests (adapter, clock) stay in.
     exclude: [
       ...configDefaults.exclude,
+      // Push tests rebuild only their isolated database and must run with the
+      // dedicated serial config/credentials, never the shared game database.
+      'tests/mobile-push/*.test.ts',
       // WL DB-integration tier is serial-only (vitest.wl.config.ts,
       // `npm run test:wl`): parallel workers shadow each other's
       // "current tournament" against the shared local DB.

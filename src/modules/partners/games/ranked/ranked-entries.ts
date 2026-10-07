@@ -173,13 +173,19 @@ export async function markPartnerRankedOpponentShown(userIds: string[]): Promise
 }
 
 /**
- * Whether a play that ends without a result goes back to the player. Before an opponent was shown it always does. After
- * that, never to the player known to have ended it, and to anyone else only while under the daily allowance (which also
- * covers any path that could not tell who left).
+ * Whether a play that ends without a result goes back. Before an opponent was shown it always does. After that: never
+ * to the player known to have ended it; always to a player whose opponent is known to have ended it (recorded as
+ * 'early_leave', so it never counts below); to anyone else only while under the daily allowance, which bounds every
+ * path that cannot tell who left.
  */
-async function returnsPlay(tx: Db, entry: EntryRow, endedByThisPlayer: boolean): Promise<boolean> {
+async function returnsPlay(
+  tx: Db,
+  entry: EntryRow,
+  who: { endedByThisPlayer?: boolean; endedByOpponent?: boolean },
+): Promise<boolean> {
   if (entry.opponent_shown_at === null && entry.match_id === null) return true;
-  if (endedByThisPlayer) return false;
+  if (who.endedByThisPlayer) return false;
+  if (who.endedByOpponent) return true;
   const [row] = await tx<{ n: number }[]>`
     SELECT count(*)::int AS n
     FROM partner_ranked_entries e
@@ -187,6 +193,7 @@ async function returnsPlay(tx: Db, entry: EntryRow, endedByThisPlayer: boolean):
     CROSS JOIN (SELECT partner_day FROM partner_plays WHERE id = ${entry.play_id}) day
     WHERE e.user_id = ${entry.user_id} AND e.id <> ${entry.id} AND e.refunded
       AND (e.opponent_shown_at IS NOT NULL OR e.match_id IS NOT NULL)
+      AND e.terminal_cause IS DISTINCT FROM 'early_leave'
       AND p.partner_day = day.partner_day
       -- Entries are created on their play's Tbilisi day; the window only lets the (user_id, created_at) index serve it.
       AND e.created_at >= (day.partner_day::timestamp AT TIME ZONE 'Asia/Tbilisi') - interval '1 hour'
@@ -196,14 +203,14 @@ async function returnsPlay(tx: Db, entry: EntryRow, endedByThisPlayer: boolean):
 
 /**
  * Ends a search that never became a match, with no event. Whether the play goes back is `returnsPlay`'s rule; `left`
- * says this player ended it (cancelled or went absent). Only an entry still 'searching' is touched (only `playId`'s,
+ * says this player ended it (cancelled or went absent), `opponentLeft` that the opponent did. Only an entry still 'searching' is touched (only `playId`'s,
  * when given); a play already cancelled by a block stays used.
  */
 export async function releasePartnerRankedSearch(
   userId: string,
   reason: string,
   playId?: string,
-  opts: { left?: boolean } = {},
+  opts: { left?: boolean; opponentLeft?: boolean } = {},
 ): Promise<boolean> {
   let refund = true;
   const released = await partnerBegin(async (t) => {
@@ -216,9 +223,9 @@ export async function releasePartnerRankedSearch(
     const [before] = await tx<{ state: string }[]>`SELECT state FROM partner_plays WHERE id = ${row.play_id}`;
     // A play the block already cancelled stays used and keeps its cause.
     const blocked = before?.state === 'cancelled';
-    refund = await returnsPlay(tx, row, opts.left === true);
+    refund = await returnsPlay(tx, row, { endedByThisPlayer: opts.left, endedByOpponent: opts.opponentLeft });
     const play = await cancelPlay(t, row.play_id, { refund, reason: refund ? 'search_cancelled' : 'left_before_match' });
-    const cause = blocked ? 'blocked' : refund ? 'search_cancelled' : 'early_leave';
+    const cause = blocked ? 'blocked' : !refund || (opts.opponentLeft && !opts.left) ? 'early_leave' : 'search_cancelled';
     await tx`
       UPDATE partner_ranked_entries
       SET state = 'cancelled', terminal_cause = ${cause}, refunded = ${play.refunded},
@@ -397,7 +404,10 @@ export async function settlePartnerRankedMatchInTx(
         WHERE id = ${entry.id}`;
     } else {
       const leaver = 'leaverUserId' in cause ? cause.leaverUserId : null;
-      const refund = result.refund && await returnsPlay(tx, entry, leaver === entry.user_id);
+      const refund = result.refund && await returnsPlay(tx, entry, {
+        endedByThisPlayer: leaver === entry.user_id,
+        endedByOpponent: leaver !== null && leaver !== entry.user_id,
+      });
       const play = await cancelPlay(t, entry.play_id, { refund, reason: causeLabel(cause) });
       await tx`
         UPDATE partner_ranked_entries

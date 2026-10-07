@@ -341,8 +341,11 @@ async function releasePartnerSearches(
   signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>,
 ): Promise<void> {
   const left = new Set(signals.filter((s) => s.cancelled || s.absentAfterGrace).map((s) => s.userId));
+  // Both gone is nobody's fault in particular (like both dropping in a match): the daily allowance decides.
+  const blame = left.size === 1 ? left : new Set<string>();
   for (const userId of userIds) {
-    await releasePartnerRankedSearch(userId, reason, undefined, { left: left.has(userId) }).catch((error) => {
+    const who = { left: blame.has(userId), opponentLeft: blame.size === 1 && !blame.has(userId) };
+    await releasePartnerRankedSearch(userId, reason, undefined, who).catch((error) => {
       logger.warn({ err: error, userId, reason }, 'Partner ranked play release failed');
     });
   }

@@ -133,7 +133,11 @@ async function bestEffortCancelRankedQueueSearch(userId: string, source: string)
  * provably holds no lobby or match (a failed teardown may leave one able to progress); the partner reconciler returns
  * any play skipped here once the player is idle.
  */
-async function releasePartnerSearch(userId: string, reason: string, opts: { left?: boolean } = {}): Promise<void> {
+async function releasePartnerSearch(
+  userId: string,
+  reason: string,
+  opts: { left?: boolean; opponentLeft?: boolean } = {},
+): Promise<void> {
   try {
     const snapshot = await userSessionGuardService.resolveState(userId);
     if (snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') return;
@@ -443,7 +447,7 @@ export async function startHumanRankedMatch(
             searchId: null,
           });
           io.to(`user:${survivorId}`).emit('ranked:queue_left');
-          if (partnerPool) await releasePartnerSearch(survivorId, 'ranked_pair_opponent_cancelled');
+          if (partnerPool) await releasePartnerSearch(survivorId, 'ranked_pair_opponent_cancelled', { opponentLeft: true });
         }
         await Promise.all(survivors.map((id) => userSessionGuardService.emitState(io, id)));
       };
@@ -763,7 +767,10 @@ async function closePartnerPairLobby(
       await userSessionGuardService.cleanupRankedQueueArtifacts(io, player.userId);
     });
     if (!player.cancelled) io.to(`user:${player.userId}`).emit('ranked:queue_left');
-    await releasePartnerSearch(player.userId, 'pair_cancelled_before_draft', { left: player.cancelled });
+    await releasePartnerSearch(player.userId, 'pair_cancelled_before_draft', {
+      left: player.cancelled,
+      opponentLeft: players.some((p) => p.cancelled && p.userId !== player.userId),
+    });
     await userSessionGuardService.emitState(io, player.userId);
   }
 }

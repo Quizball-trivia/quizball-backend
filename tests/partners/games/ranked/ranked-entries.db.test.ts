@@ -294,6 +294,22 @@ describe.skipIf(!isolated && !adminTarget)('partner ranked plays on real Postgre
     expect(entries.RANKED_RETURNS_AFTER_REVEAL_PER_DAY).toBe(2);
   });
 
+  it('plays returned because the opponent left never count toward the allowance', async () => {
+    const p = await launch();
+    for (let i = 0; i < 3; i += 1) {
+      const { entry } = await entries.reservePartnerRankedPlay(p);
+      await entries.markPartnerRankedOpponentShown([p.userId]);
+      await entries.releasePartnerRankedSearch(p.userId, 'test', undefined, { opponentLeft: true });
+      expect(await play(entry.playId)).toMatchObject({ refunded: true });
+      const [row] = await db.sql`SELECT terminal_cause FROM partner_ranked_entries WHERE id = ${entry.id}`;
+      expect(row.terminal_cause).toBe('early_leave');
+    }
+    const { entry } = await entries.reservePartnerRankedPlay(p);
+    await entries.markPartnerRankedOpponentShown([p.userId]);
+    await entries.releasePartnerRankedSearch(p.userId, 'test');
+    expect(await play(entry.playId)).toMatchObject({ refunded: true });
+  });
+
   it('a match that ends with no result counts toward the same daily allowance', async () => {
     const [a, b] = [await launch(), await launch()];
     for (let i = 0; i < 2; i += 1) {

@@ -130,7 +130,8 @@ function createQuestion(): CachedQuestion {
     shooterSeat: null,
     attackerSeat: 1,
     shownAt: new Date(Date.now() - 10_000).toISOString(),
-    deadlineAt: new Date(Date.now() + 5_000).toISOString(),
+    // Timeout-driven resolves run after the deadline (the timer is due at deadline + grace + buffer).
+    deadlineAt: new Date(Date.now() - 1_000).toISOString(),
     questionDTO: {
       id: 'question-1',
       type: 'multiple_choice',
@@ -243,9 +244,74 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
     sendQuestionMock.mockResolvedValue({ correctIndex: 1 });
     await resolveRound(true);
-    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX);
+    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX, { onlyIfUnsent: true });
     expect(deferQuestionTimerMock).not.toHaveBeenCalled();
     expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ranked', 'PENALTY_SHOOTOUT'],
+    ['friendly', 'NORMAL_PLAY'],
+    ['friendly', 'PENALTY_SHOOTOUT'],
+  ] as const)('sends a question a lost round transition never sent (%s, %s)', async (mode, phase) => {
+    // The durable backup of a goal/penalty ready gate fires into this branch after a restart (staging 2026-10-07).
+    const cache = createCache({ mode, currentQuestion: null });
+    cache.statePayload.phase = phase;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    sendQuestionMock.mockResolvedValue({ correctIndex: 1 });
+    await resolveRound(true);
+    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX, { onlyIfUnsent: true });
+    expect(deferQuestionTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the recovery armed when re-sending a lost transition hits a transient error (Codex P1-1)', async () => {
+    const cache = createCache({ mode: 'ranked', currentQuestion: null });
+    cache.statePayload.phase = 'PENALTY_SHOOTOUT';
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    sendQuestionMock.mockRejectedValue(new Error('transient database error'));
+    await resolveRound(true).catch(() => undefined);
+    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX, { onlyIfUnsent: true });
+    // Nothing "claims" the transition: the failed attempt leaves a durable retry, and the next one sends it.
+    expect(deferQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX, 5000);
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('a timer that fires before the question deadline re-arms to it and resolves nothing (Astra v2 P1-2)', async () => {
+    const cache = createCache({ mode: 'ranked' });
+    cache.currentQuestion!.deadlineAt = new Date(Date.now() + 8_000).toISOString();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    await resolveRound(true);
+    const [, , dueInMs] = deferQuestionTimerMock.mock.calls.at(-1) as [string, number, number];
+    expect(dueInMs).toBeGreaterThan(7_000);
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+    expect(sendQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('trusts a live cache waiting for this question: no DB rebuild that could rewind it (Astra v2 P1-3, v3 P1-2)', async () => {
+    const live = createCache({ mode: 'ranked', currentQuestion: null });
+    live.statePayload.phase = 'NORMAL_PLAY';
+    getMatchCacheOrRebuildMock.mockResolvedValue(live);
+    sendQuestionMock.mockResolvedValue({ correctIndex: 1 });
+    await resolveRound(true);
+    expect(rebuildCacheFromDBMock).not.toHaveBeenCalled();
+    expect(sendQuestionMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, Q_INDEX, { onlyIfUnsent: true });
+  });
+
+  it('a stale timer (live cache already past it) never rebuilds from the DB (Astra v4 P1-4)', async () => {
+    const live = createCache({ mode: 'ranked' });
+    live.currentQIndex = Q_INDEX + 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(live);
+    await resolveRound(true);
+    expect(rebuildCacheFromDBMock).not.toHaveBeenCalled();
+    expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
+  });
+
+  it('does not send a question from a timer during halftime (its own timers own it)', async () => {
+    const cache = createCache({ mode: 'ranked', currentQuestion: null });
+    cache.statePayload.phase = 'HALFTIME';
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    await resolveRound(true);
+    expect(sendQuestionMock).not.toHaveBeenCalled();
   });
 
   it('clears the old timer when missing-question recovery cancels the match', async () => {

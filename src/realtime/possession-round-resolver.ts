@@ -77,6 +77,8 @@ import {
   type Seat,
 } from './possession-state.js';
 import { getRedisClient } from './redis.js';
+import { shouldResolveQuestionTimeoutNow } from './possession-timing.js';
+import { TIMEOUT_RESOLVE_BUFFER_MS, TIMEOUT_RESOLVE_GRACE_MS } from './possession-state.js';
 import { calculateCountdownScore } from './scoring.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchRoundResultDeltas } from './socket.types.js';
@@ -191,9 +193,21 @@ export async function resolvePossessionRound(
       );
       return;
     }
-    if (fromTimeout && (cache.currentQIndex !== qIndex || !cache.currentQuestion)) {
+    // Refresh from the DB only when the live cache disagrees with this timer's round. "Waiting for this index, no
+    // question yet" is the live cache's own transition state (DB checkpoints of routine rounds omit the possession
+    // state), so rebuilding there would rewind it.
+    // A timer for a round the live cache already passed is stale and rebuilding for it could rewind state (a DB
+    // snapshot at the same index can carry older possession), so only a cache BEHIND its timer is refreshed.
+    if (fromTimeout && cache.currentQIndex < qIndex) {
       const rebuilt = await rebuildCacheFromDB(matchId);
-      if (rebuilt) {
+      // The DB holds fire-and-forget checkpoints: a snapshot behind the live cache (a transition persisted to Redis
+      // but not yet to the DB when a process died) must not rewind it.
+      if (rebuilt && rebuilt.currentQIndex < cache.currentQIndex) {
+        logger.warn(
+          { eventName: 'match:round_result', matchId, qIndex, rebuiltQIndex: rebuilt.currentQIndex, ...cacheLogFields(cache) },
+          'Possession round resolve kept the live cache: DB checkpoint is behind'
+        );
+      } else if (rebuilt) {
         cache = rebuilt;
         if (abortIfLeaseLost('cache_refresh')) return;
         await setMatchCache(rebuilt);
@@ -226,10 +240,17 @@ export async function resolvePossessionRound(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: missing current question'
       );
-      if (fromTimeout && cache.mode === 'ranked'
-        && (cache.statePayload.phase === 'LAST_ATTACK' || cache.statePayload.phase === 'NORMAL_PLAY')) {
+      // A timer for a question that was never sent: question exhaustion (ranked) or the durable backup of a round
+      // transition lost with its process (any mode, including the penalty shootout). Send it under this lock.
+      const phase = cache.statePayload.phase;
+      if (fromTimeout && (phase === 'LAST_ATTACK' || phase === 'NORMAL_PLAY' || phase === 'PENALTY_SHOOTOUT')) {
         if (abortIfLeaseLost('redispatch')) return;
-        const dispatched = await sendPossessionMatchQuestion(io, matchId, qIndex);
+        // Dev pause holds the next question (the live dispatch defers through checkDevPauseAndDefer); retry later.
+        if (await redis.get(`match:devPaused:${matchId}`)) {
+          logger.info({ eventName: 'match:round_result', matchId, qIndex }, 'Possession missing-question redispatch deferred: dev pause');
+          return;
+        }
+        const dispatched = await sendPossessionMatchQuestion(io, matchId, qIndex, { onlyIfUnsent: true });
         // Dispatch owns the new deadline. Do not clear
         // that timer or overwrite it with this obsolete round's 5s retry.
         if (dispatched) fromTimeout = false;
@@ -254,6 +275,20 @@ export async function resolvePossessionRound(
           ...questionLogFields(question),
         },
         'Possession round resolve skipped: match paused'
+      );
+      return;
+    }
+
+    // A timer never ends a question before its deadline. A transition backup (same key) can fire in the moment
+    // after its question was published but before the real deadline replaced it: re-arm to the deadline instead.
+    const deadlineMs = question.deadlineAt ? new Date(question.deadlineAt).getTime() : Number.NaN;
+    if (fromTimeout && Number.isFinite(deadlineMs) && !shouldResolveQuestionTimeoutNow(question.deadlineAt, Date.now())) {
+      const dueInMs = Math.max(0, deadlineMs + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS - Date.now());
+      await deferQuestionTimer(matchId, qIndex, dueInMs);
+      fromTimeout = false;
+      logger.info(
+        { eventName: 'match:round_result', matchId, qIndex, dueInMs, ...questionLogFields(question) },
+        'Possession round timeout fired early: re-armed to the question deadline'
       );
       return;
     }

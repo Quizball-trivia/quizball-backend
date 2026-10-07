@@ -621,6 +621,12 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
       await db.sql.begin((tx) => quota.finishPlay(tx, play.id, 0));
       // Ended (here: as a sweeper would while the player was away): the tile carries the result to show instead.
       expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: false, lastResult: { playId: play.id, score: 0 } });
+      // Two plays finished today: the latest one is the result shown.
+      await setReady('pick-em', true, 2);
+      const second = await db.sql.begin((tx) =>
+        quota.reservePlay(tx, { playerId: player.id, sessionId: started.sessionId, gameId: 'pick-em', sourceRef: `${started.sessionId}-second` }));
+      await db.sql.begin((tx) => quota.finishPlay(tx, second.id, 250));
+      expect(await tile()).toMatchObject({ lastResult: { playId: second.id, score: 250 } });
       await setReady('pick-em', false, 1);
     });
 

@@ -18,10 +18,12 @@ beforeAll(async()=>{
   END $$;`);
   await sql.unsafe(`CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY,is_ai boolean DEFAULT false,is_seed boolean DEFAULT false,
     is_banned boolean DEFAULT false,is_deleted boolean DEFAULT false,deleted_at timestamptz,pending_deletion_at timestamptz,
-    partner_slug text,role text DEFAULT 'user');
+    role text DEFAULT 'user');
     CREATE TABLE IF NOT EXISTS daily_challenge_configs(is_active boolean);
     CREATE TABLE IF NOT EXISTS daily_challenge_completions(user_id uuid,challenge_day date);
     CREATE TABLE IF NOT EXISTS daily_challenge_reminders(user_id uuid,status text,sent_at timestamptz);`);
+  // Run all regular tests against main's schema, which has no partner column.
+  await sql.unsafe('ALTER TABLE users DROP COLUMN IF EXISTS partner_slug');
   // This database is disposable and was created solely for this test suite.
   // Rebuild just the named test tables so each run exercises the exact migration.
   await sql.unsafe('DROP TABLE IF EXISTS mobile_push_jobs,mobile_push_events,mobile_push_campaigns,mobile_push_consent_log,mobile_push_preferences,mobile_push_devices,mobile_push_provider_state CASCADE');
@@ -40,6 +42,23 @@ it('registers atomically, encrypts tokens, and defaults marketing consent off',a
   expect(rows).toHaveLength(1);expect(rows[0].token_encrypted).not.toContain(token);
   expect(decryptPushToken(rows[0].token_encrypted)).toBe(token);
   expect(await repo.getPreferences(alice)).toEqual({matchInvitesEnabled:false,dailyRemindersEnabled:false,newGamesEnabled:false,dailyReminderHour:19,timezone:'Europe/Istanbul'});
+});
+it('works without a partner column and still excludes optional staging partner identities',async()=>{
+  await repo.register(alice,device);await repo.updatePreferences(alice,{newGamesEnabled:true});
+  expect(await repo.previewCampaign()).toMatchObject({users:1,devices:1});
+  await repo.queueTest(alice);const job=await repo.claim();expect(await repo.payload(job!)).not.toBeNull();
+  await sql.unsafe('ALTER TABLE users ADD COLUMN partner_slug text');
+  try {
+    await sql`UPDATE users SET partner_slug='partner-test' WHERE id=${alice}`;
+    expect(await repo.previewCampaign()).toMatchObject({users:0,devices:0});
+    expect(await repo.payload(job!)).toBeNull();
+  } finally { await sql.unsafe('ALTER TABLE users DROP COLUMN partner_slug'); }
+});
+it('credential deferral keeps the job retryable without consuming transient-send attempts',async()=>{
+  await repo.register(alice,device);await repo.queueTest(alice);const job=await repo.claim();
+  await repo.defer(job!,1800,'InvalidCredentials');
+  const [row]=await sql`SELECT status,attempts,error_code,next_attempt_at>now() AS delayed FROM mobile_push_jobs`;
+  expect(row).toMatchObject({status:'pending',attempts:0,error_code:'InvalidCredentials',delayed:true});
 });
 it('caps each user at five active tokens even with concurrent registration',async()=>{
   const results=await Promise.allSettled(Array.from({length:9},(_,i)=>repo.register(alice,{...device,expoPushToken:`ExpoPushToken[testdevice0000000${i}]`})));

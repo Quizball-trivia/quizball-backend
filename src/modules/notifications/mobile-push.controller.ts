@@ -6,7 +6,10 @@ import type {PushDeviceInput,PushUnregisterInput,PushPreferencesUpdate,PushCampa
 import {pushUserAllowed} from './mobile-push.worker.js';
 export function requirePushBearer(req:Request,_res:Response,next:NextFunction) {
   if (!/^Bearer\s+\S+$/i.test(req.headers.authorization??'')) throw new AuthenticationError('Bearer authentication required');
-  if (req.user?.partner_slug!=null||req.user?.role==='partner_staff') throw new AuthorizationError('Quizball account required');
+  // Also reject partner identities when this isolated module runs against a
+  // schema that does not yet include the optional partner account fields.
+  const account: {partner_slug?:unknown;role?:string}|undefined=req.user;
+  if (account?.partner_slug!=null||account?.role==='partner_staff') throw new AuthorizationError('Quizball account required');
   next();
 }
 export const mobilePushController={

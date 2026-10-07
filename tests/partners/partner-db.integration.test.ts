@@ -518,7 +518,7 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
       expect(ids[0]).toBe('ranked');
       expect(ids).not.toContain('pick-em');
       expect(res.body.games.find((g: { gameId: string }) => g.gameId === 'countdown')).toEqual({
-        gameId: 'countdown', playsLimit: 3, playsUsed: 0, playsLeft: 3, maxScore: 2500, available: false,
+        gameId: 'countdown', playsLimit: 3, playsUsed: 0, playsLeft: 3, maxScore: 2500, available: false, inProgress: false,
       });
       expect(res.body.games.find((g: { gameId: string }) => g.gameId === 'true-false').available).toBe(true);
       await db.sql`DELETE FROM partner_limit_overrides WHERE date = ${today}::date`;
@@ -608,6 +608,19 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
       const early = await at('2026-10-05T20:00:00.000Z', 'next-day');
       expect(early.partnerDay).toBe('2026-10-06');
       await setReady('higher-lower', false, 1);
+    });
+
+    it('me/games marks a started, unfinished play as in progress even with no plays left (so it can be reopened)', async () => {
+      const { init: started, player, access } = await launch(id('p'));
+      await setReady('pick-em', true, 1);
+      const play = await db.sql.begin((tx) =>
+        quota.reservePlay(tx, { playerId: player.id, sessionId: started.sessionId, gameId: 'pick-em', sourceRef: `${started.sessionId}-open` }));
+      const tile = async () => (await request(app).get('/partner/v1/me/games').set('Authorization', `Bearer ${access}`))
+        .body.games.find((g: { gameId: string }) => g.gameId === 'pick-em');
+      expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: true });
+      await db.sql.begin((tx) => quota.finishPlay(tx, play.id, 0));
+      expect(await tile()).toMatchObject({ playsLeft: 0, inProgress: false });
+      await setReady('pick-em', false, 1);
     });
 
     it('refuses games that are off or not ready, and blocked players; a play finished after a block is cancelled', async () => {

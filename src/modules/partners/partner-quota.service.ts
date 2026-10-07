@@ -316,6 +316,8 @@ export interface PartnerGameTile {
   playsLeft: number;
   maxScore: number | null;
   available: boolean;
+  /** A started play not finished yet (left or reloaded midway): the tile reopens it even with no plays left. */
+  inProgress: boolean;
 }
 
 export interface MeGamesResponse {
@@ -333,6 +335,13 @@ export async function meGames(
   const rules = await dayRulesForPlayer(principal, principal.playerId, day);
   const showsRanked = rules.some((r) => r.gameId === 'ranked' && r.enabled && r.playsLimit > 0);
   const rankedMax = showsRanked ? await currentRankedMaxScore(principal) : null;
+  // Sweepers settle abandoned plays within hours, so two days bounds the scan without missing one (a bound parameter,
+  // so the (player_id, started_at) index range applies).
+  const since = new Date(now.getTime() - 2 * 86_400_000);
+  const open = await sql<{ game_id: string }[]>`
+    SELECT DISTINCT game_id FROM partner_plays
+    WHERE player_id = ${principal.playerId} AND state = 'started' AND started_at > ${since}`;
+  const inProgress = new Set(open.map((r) => r.game_id));
   return {
     partnerDay: day,
     resetsAt: nextPartnerMidnight(now).toISOString(),
@@ -345,6 +354,7 @@ export async function meGames(
         playsLeft: Math.max(0, r.playsLimit - r.playsUsed),
         maxScore: r.gameId === 'ranked' ? rankedMax : PARTNER_GAME_MAX_SCORE[r.gameId],
         available: r.ready,
+        inProgress: inProgress.has(r.gameId),
       })),
   };
 }

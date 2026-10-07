@@ -48,7 +48,7 @@ const HALFTIME_READY_DEFER_MAX = 3;
 
 // ── Types ──
 
-type SendQuestionFn = (io: QuizballServer, matchId: string, qIndex: number, opts?: { cache?: import('./match-cache.js').MatchCache; postReadyAck?: boolean }) => Promise<{ correctIndex: number } | null>;
+type SendQuestionFn = (io: QuizballServer, matchId: string, qIndex: number, opts?: { cache?: import('./match-cache.js').MatchCache; postReadyAck?: boolean; onlyIfUnsent?: boolean }) => Promise<{ correctIndex: number } | null>;
 type ResolveAiUserFn = (matchId: string) => Promise<string | null>;
 
 export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; resolveAiUserId: ResolveAiUserFn }) {
@@ -614,7 +614,9 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         'Possession halftime finalized'
       );
 
-      await deps.sendQuestion(io, matchId, cache.currentQIndex, { cache });
+      // The first question after halftime has never been sent: a transition send, so it cannot publish on top of a
+      // recovery that already sent it.
+      await deps.sendQuestion(io, matchId, cache.currentQIndex, { cache, onlyIfUnsent: true });
     } finally {
       if (!keepHalftimeTimers) {
         clearHalftimeTimer(matchId);

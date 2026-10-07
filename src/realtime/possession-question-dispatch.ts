@@ -73,7 +73,9 @@ import {
   markMatchEnteredForRoom,
   markMatchEnteredForSocket,
 } from './services/match-entry.service.js';
+import { randomUUID } from 'node:crypto';
 import { getRedisClient } from './redis.js';
+import { releaseLock } from './locks.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
@@ -99,6 +101,67 @@ const GOAL_ROUND_READY_ACK_CEILING_MS =
 const PENALTY_ROUND_READY_ACK_CEILING_MS = 10_000;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+
+/**
+ * A goal/penalty ready gate and the shootout intro wait in this process only, so a restart inside the wait froze the
+ * match (staging 2026-10-07). Each such wait is backed by an ordinary durable `possession_question` timer for the NEXT
+ * index: if the question goes out normally, its own deadline timer replaces the backup (same key); if the process is
+ * gone, the timer fires into the round resolver, whose missing-question branch sends it under the round lock and
+ * fence, with its retry. An existing timer kind on purpose: replicas still on the previous release consume the shared
+ * timer set during a rolling deploy and must understand it.
+ */
+const TRANSITION_BACKUP_MARGIN_MS = 3_000;
+/** Recovery of a wait that has no backup (lost with a previous release): after any live in-memory wait has fired. */
+const LOST_TRANSITION_RECOVERY_DELAY_MS = PENALTY_ROUND_READY_ACK_CEILING_MS + TRANSITION_BACKUP_MARGIN_MS;
+/** Phases whose next question comes through a round transition (halftime and completion have their own timers). */
+const TRANSITION_PHASES = new Set<PossessionStatePayload['phase']>(['NORMAL_PLAY', 'LAST_ATTACK', 'PENALTY_SHOOTOUT']);
+
+/**
+ * A completion that lost its lock race (its holder may have died) keeps a durable retry: a question timer for the
+ * current index fires into the resolver, whose missing-question branch finishes a COMPLETED match.
+ */
+export async function armCompletionRetry(matchId: string, qIndex: number): Promise<void> {
+  await scheduleRealtimeTimer('possession_question', questionTimerKey(matchId, qIndex), new Date(Date.now() + 5_000), {
+    kind: 'possession_question',
+    matchId,
+    qIndex,
+  }, { onlyIfAbsent: true });
+}
+
+/** Add-only: never moves a real deadline (or an earlier backup) already set for that index; the payloads are equal. */
+function scheduleTransitionBackup(matchId: string, nextIndex: number, dueAt: Date): Promise<void> {
+  return scheduleRealtimeTimer('possession_question', questionTimerKey(matchId, nextIndex), dueAt, {
+    kind: 'possession_question',
+    matchId,
+    qIndex: nextIndex,
+  }, { onlyIfAbsent: true });
+}
+
+/**
+ * One publication per question. Every send marks `possession:sent:<match>:<q>` right before its first state change;
+ * a transition send (live wait, durable backup, recovery) takes it only if unset, so concurrent paths publish once,
+ * and a deliberate re-send of the current question (resume, halftime, start) overwrites it. The mark only has to
+ * cover concurrent sends: once one commits, the cache itself shows the question. So it is short-lived, and a mark
+ * orphaned by a crash before the commit stops blocking the retries after QUESTION_SENT_TTL_SEC.
+ */
+const QUESTION_SENT_TTL_SEC = 30;
+const questionSentKey = (matchId: string, qIndex: number) => `possession:sent:${matchId}:${qIndex}`;
+
+/** Returns this send's token (null: another path holds the mark). The token makes the release owner-only. */
+async function markQuestionSent(matchId: string, qIndex: number, onlyIfUnsent: boolean): Promise<string | null> {
+  const token = randomUUID();
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return token;
+  const result = await redis.set(questionSentKey(matchId, qIndex), token, onlyIfUnsent
+    ? { NX: true, EX: QUESTION_SENT_TTL_SEC }
+    : { EX: QUESTION_SENT_TTL_SEC });
+  return result === 'OK' ? token : null;
+}
+
+/** Compare-and-delete: never removes a mark another send took after this one's expired. */
+async function unmarkQuestionSent(matchId: string, qIndex: number, token: string): Promise<void> {
+  await releaseLock(questionSentKey(matchId, qIndex), token).catch(() => undefined);
+}
 
 async function getPauseStartedAt(matchId: string): Promise<string | null> {
   const redis = getRedisClient();
@@ -726,11 +789,19 @@ export async function scheduleNextPossessionQuestion(
   );
   const dispatch = (opts?: { postReadyAck?: boolean }) => {
     const fire = () => {
-      logger.info(
-        { matchId, nextIndex, postReadyAck: opts?.postReadyAck ?? false },
-        'Possession next question dispatch firing'
-      );
-      void sendPossessionMatchQuestion(io, matchId, nextIndex, opts).catch((error) => {
+      void (async () => {
+        // A late in-memory wait must not resend a question its durable backup already sent.
+        const current = await getMatchCacheOrRebuild(matchId);
+        if (current && (current.currentQIndex !== nextIndex || (current.currentQuestion?.qIndex ?? -1) >= nextIndex)) {
+          logger.info({ matchId, nextIndex, ...cacheLogFields(current) }, 'Possession next question dispatch skipped: already sent or moved on');
+          return;
+        }
+        logger.info(
+          { matchId, nextIndex, postReadyAck: opts?.postReadyAck ?? false },
+          'Possession next question dispatch firing'
+        );
+        await sendPossessionMatchQuestion(io, matchId, nextIndex, { postReadyAck: opts?.postReadyAck, onlyIfUnsent: true });
+      })().catch((error) => {
         logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
       });
     };
@@ -763,6 +834,11 @@ export async function scheduleNextPossessionQuestion(
       { matchId, resolvedQIndex, nextIndex, goalScoredBySeat, waitingUserIds: humanUserIds },
       'Possession goal transition waiting for ready acks'
     );
+    const ceilingMs = harnessDelayMs(
+      phaseKind === 'penalty' ? PENALTY_ROUND_READY_ACK_CEILING_MS : GOAL_ROUND_READY_ACK_CEILING_MS,
+    );
+    await scheduleTransitionBackup(matchId, nextIndex, new Date(Date.now() + ceilingMs + TRANSITION_BACKUP_MARGIN_MS))
+      .catch((error) => logger.error({ error, matchId, nextIndex }, 'Failed to schedule possession transition backup'));
     pendingReadyGates.open({
       scopeId: matchId,
       token: resolvedQIndex,
@@ -770,9 +846,7 @@ export async function scheduleNextPossessionQuestion(
       // Harness has no real client to send the post-goal ready ack, so it would
       // sit the full ~9s ceiling on EVERY goal. Collapse the ceiling under
       // fast-timers (prod untouched) so goals don't dominate match time.
-      ceilingMs: harnessDelayMs(
-        phaseKind === 'penalty' ? PENALTY_ROUND_READY_ACK_CEILING_MS : GOAL_ROUND_READY_ACK_CEILING_MS,
-      ),
+      ceilingMs,
       dispatch: () => dispatch({ postReadyAck: true }),
       // Ceiling hit = at least one client never acked (backgrounded tab, dead
       // socket). That client's animations may still be mid-flight, so fall
@@ -792,6 +866,13 @@ export async function scheduleNextPossessionQuestion(
   // Production is untouched (harnessDelayMs returns prodMs unless REGRESSION_FAST_TIMERS).
   const delay = harnessDelayMs(getNextQuestionDelayMs({ phase }));
   logger.info({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
+  if (getNextQuestionDelayMs({ phase }) > 0) {
+    // A real wait (the shootout intro), not the immediate normal-round dispatch: back it like a ready gate.
+    await scheduleTransitionBackup(matchId, nextIndex, new Date(Date.now() + delay + TRANSITION_BACKUP_MARGIN_MS))
+      .catch((error) => logger.error({ error, matchId, nextIndex }, 'Failed to schedule possession transition backup'));
+    setTimeout(() => dispatch(), delay);
+    return;
+  }
   setTimeout(() => dispatch(), delay);
 }
 
@@ -799,7 +880,12 @@ export async function sendPossessionMatchQuestion(
   io: QuizballServer,
   matchId: string,
   qIndex: number,
-  preloaded?: { cache?: MatchCache; postReadyAck?: boolean }
+  preloaded?: {
+    cache?: MatchCache;
+    postReadyAck?: boolean;
+    /** Transition sends: publish only if no other path already sent this question (see markQuestionSent). */
+    onlyIfUnsent?: boolean;
+  }
 ): Promise<{ correctIndex: number } | null> {
   return withSpan('match.possession.send_question', {
     'quizball.match_id': matchId,
@@ -898,7 +984,13 @@ export async function sendPossessionMatchQuestion(
     const humanUserIds = cache.players
       .map((p) => p.userId)
       .filter((id) => id !== aiUserId);
-    const picked = await maybePickQuestionForState(matchId, state, categoryIds, humanUserIds);
+    const selected = await maybePickQuestionForState(matchId, state, categoryIds, humanUserIds);
+    // Another send may already hold this slot (its row inserted, its publish in flight or lost): the selection then
+    // excludes that row, so reuse it rather than treat the pool as exhausted and end or cancel the match.
+    const stored = selected ? null : await matchQuestionsRepo.getMatchQuestion(matchId, qIndex);
+    const picked = selected ?? (stored
+      ? { questionId: stored.question_id, categoryId: stored.category_id, correctIndex: stored.correct_index }
+      : null);
     if (!picked) {
       logger.error(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },
@@ -989,6 +1081,27 @@ export async function sendPossessionMatchQuestion(
       phaseKind: runtimePhaseKind,
     });
 
+    const sentToken = await markQuestionSent(matchId, qIndex, preloaded?.onlyIfUnsent === true);
+    if (!sentToken) {
+      logger.info({ matchId, qIndex, ...cacheLogFields(cache) }, 'Possession question dispatch skipped: another path already sent it');
+      return null;
+    }
+    if (preloaded?.onlyIfUnsent) {
+      // Holding the mark, confirm against the LIVE cache, not this send's earlier snapshot: a send that stalled past
+      // the mark's TTL must not publish over a match that moved on (the question went out, or play advanced).
+      const live = await getMatchCacheOrRebuild(matchId);
+      if (!live) {
+        // Could not read the live state: nothing was decided, so let the retry try again at once.
+        await unmarkQuestionSent(matchId, qIndex, sentToken);
+        logger.warn({ matchId, qIndex }, 'Possession question dispatch skipped: live cache unavailable');
+        return null;
+      }
+      if (live.status !== 'active' || live.currentQIndex !== qIndex || (live.currentQuestion?.qIndex ?? -1) >= qIndex) {
+        logger.warn({ matchId, qIndex, ...cacheLogFields(live) }, 'Possession question dispatch skipped: live state moved on while this send was preparing');
+        return null;
+      }
+    }
+
     state.currentQuestion = {
       qIndex,
       phaseKind: runtimePhaseKind,
@@ -1016,7 +1129,17 @@ export async function sendPossessionMatchQuestion(
     cache.revealAcks = {};
     bumpStateVersion(state);
 
-    await setMatchCache(cache);
+    try {
+      // Strict: a question that is not in the cache must not be published, and its transition backup must stay.
+      await setMatchCache(cache, { strict: true });
+    } catch (error) {
+      await unmarkQuestionSent(matchId, qIndex, sentToken);
+      throw error;
+    }
+    // The real deadline replaces a transition backup on the same key at once, before the slower publication and
+    // room bookkeeping: a replica without the early-fire guard (rolling deploy) must not find the backup due while
+    // this question is already live.
+    scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
     // Routine question dispatch only advances the q-index heartbeat; the full
     // state_payload checkpoint happens at recovery-relevant boundaries (see
     // the resolver's checkpoint policy + rebuildCacheFromDB taking the max of
@@ -1072,7 +1195,6 @@ export async function sendPossessionMatchQuestion(
       phase_kind: runtimePhaseKind,
     });
 
-    scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
     logger.info(
       {
         eventName: 'match:question_timer',
@@ -1241,6 +1363,14 @@ export async function ensurePossessionActiveTimers(
   }
 
   const state = cache.statePayload;
+  if (state.phase === 'COMPLETED') {
+    // The final round committed COMPLETED but the process died before completion ran: finish it now. Completion is
+    // locked and checks the match row, so a completion already done or in progress elsewhere is a no-op.
+    const result = await completePossessionMatch(io, matchId, state, cache, { source: 'restart_recovery' });
+    logger.warn({ eventName: 'match:question_timer', matchId, completed: result.completed, reason: result.reason ?? null }, 'Possession timer ensure completed a match stranded after its final round');
+    if (!result.completed && result.reason === 'lock_not_acquired') await armCompletionRetry(matchId, cache.currentQIndex);
+    return true;
+  }
   if (state.phase === 'HALFTIME') {
     logger.info({ eventName: 'match:halftime_timer', matchId, half: state.half }, 'Possession timer ensure scheduling halftime timers');
     scheduleHalftimeTimeout(io, matchId);
@@ -1250,6 +1380,19 @@ export async function ensurePossessionActiveTimers(
 
   const currentQuestion = cache.currentQuestion;
   if (!currentQuestion) {
+    // Between rounds: a resolved round whose next question is not out yet. Its wait must be backed by a timer; one
+    // lost with a process on the previous release is re-created. Not before the first question (match start owns
+    // it) and not while paused (resume owns it).
+    if (cache.currentQIndex > 0 && TRANSITION_PHASES.has(state.phase) && !(await getPauseStartedAt(matchId))) {
+      const nextIndex = cache.currentQIndex;
+      if (await hasPendingRealtimeTimer('possession_question', questionTimerKey(matchId, nextIndex))) {
+        logger.info({ eventName: 'match:question_timer', matchId, nextIndex }, 'Possession timer ensure kept the pending transition backup');
+        return true;
+      }
+      await scheduleTransitionBackup(matchId, nextIndex, new Date(Date.now() + harnessDelayMs(LOST_TRANSITION_RECOVERY_DELAY_MS)));
+      logger.warn({ eventName: 'match:question_timer', matchId, nextIndex, ...cacheLogFields(cache) }, 'Possession timer ensure re-created a lost round transition');
+      return true;
+    }
     logger.warn({ eventName: 'match:question_timer', matchId, ...cacheLogFields(cache) }, 'Possession timer ensure skipped: missing current question');
     return false;
   }

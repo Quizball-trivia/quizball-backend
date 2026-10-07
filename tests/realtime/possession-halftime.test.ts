@@ -196,7 +196,7 @@ describe('possession halftime finalize', () => {
       expect.anything(),
       'match-1',
       6,
-      { cache }
+      { cache, onlyIfUnsent: true }
     );
     expect(cache.statePayload.phase).toBe('NORMAL_PLAY');
     expect(cache.statePayload.half).toBe(2);
@@ -302,7 +302,7 @@ describe('possession halftime finalize', () => {
         expect.anything(),
         'match-1',
         6,
-        { cache }
+        { cache, onlyIfUnsent: true }
       );
     } finally {
       halftime.clearHalftimeAiBanTimer('match-1');

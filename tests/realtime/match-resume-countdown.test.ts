@@ -252,6 +252,18 @@ describe('completeResumeCountdown → possession resume', () => {
     await completeResumeCountdown(io, 'm1', Date.now() - 5_000);
 
     expect(emit).toHaveBeenCalledWith('match:resume', { matchId: 'm1', nextQIndex: 5 });
-    expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 5);
+    // Q5 was never sent: filling it is a transition send, so it cannot publish on top of a backup that already did.
+    expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 5, { onlyIfUnsent: true });
+  });
+
+  it('re-timing a question already out overwrites its sent mark (a deliberate re-send)', async () => {
+    resumePossessionMatchQuestionMock.mockResolvedValue(false);
+    getMatchCacheOrRebuildMock.mockResolvedValue({ currentQIndex: 5, currentQuestion: { qIndex: 5 } });
+    const { io } = createIo();
+
+    const { completeResumeCountdown } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await completeResumeCountdown(io, 'm1', Date.now() - 5_000);
+
+    expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 5, { onlyIfUnsent: false });
   });
 });

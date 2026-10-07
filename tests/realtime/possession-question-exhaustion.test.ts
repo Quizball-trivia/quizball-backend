@@ -45,6 +45,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
     getRandomImageMcqCandidatesForMatch: (...args: unknown[]) => getRandomImageMcqCandidatesForMatchMock(...args),
     getImageMcqCandidateForMatchById: (...args: unknown[]) => getImageMcqCandidateForMatchByIdMock(...args),
     insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
+    getMatchQuestion: vi.fn(async () => null),
     setQuestionTiming: vi.fn(),
   },
 }));

@@ -1333,10 +1333,14 @@ export async function completeResumeCountdown(
     // if it holds an ACTIVE question at the newer index, resume that question
     // (a fresh dispatch would clear its answers and reset its timing).
     let targetQIndex = activeMatch.current_q_index;
+    // Re-timing a question already out overwrites its sent mark; filling one that was never sent is a transition and
+    // must not publish on top of a backup/recovery that already sent it.
+    let fillsMissingQuestion = false;
     if (variant !== 'friendly_party_quiz') {
       const cache = await getMatchCacheOrRebuild(matchId);
       if (cache && Number.isInteger(cache.currentQIndex)) {
         targetQIndex = Math.max(targetQIndex, cache.currentQIndex);
+        fillsMissingQuestion = cache.currentQuestion?.qIndex !== targetQIndex;
         if (cache.currentQuestion?.qIndex === targetQIndex && targetQIndex !== activeMatch.current_q_index) {
           const fallbackPauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
             ? pauseStartedAtMs
@@ -1362,7 +1366,7 @@ export async function completeResumeCountdown(
       await sendPartyQuizQuestion(io, matchId, targetQIndex);
       return;
     }
-    await sendMatchQuestion(io, matchId, targetQIndex);
+    await sendMatchQuestion(io, matchId, targetQIndex, { onlyIfUnsent: fillsMissingQuestion });
   } catch (err) {
     logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
   }

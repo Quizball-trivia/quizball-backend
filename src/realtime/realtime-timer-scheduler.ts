@@ -398,9 +398,14 @@ export async function scheduleRealtimeTimer(
   key: string,
   dueAt: Date,
   payload: RealtimeTimerPayload,
-  options?: { requireDurable?: boolean }
+  /**
+   * `onlyIfAbsent`: add the timer but never move an existing one with the same kind+key (a backup must not
+   * overwrite a real deadline). Its payload is still written, so use it only where both payloads are identical.
+   */
+  options?: { requireDurable?: boolean; onlyIfAbsent?: boolean }
 ): Promise<void> {
   const member = timerMember(kind, key);
+  if (options?.onlyIfAbsent && localFallbackTimers.has(member)) return;
   clearLocalFallbackTimer(member);
 
   const redis = getRedisClient();
@@ -419,7 +424,7 @@ export async function scheduleRealtimeTimer(
   await redis
     .multi()
     .set(timerPayloadKey(member), JSON.stringify(payload), { EX: TIMER_PAYLOAD_TTL_SEC })
-    .zAdd(TIMER_ZSET_KEY, [{ score: dueAt.getTime(), value: member }])
+    .zAdd(TIMER_ZSET_KEY, [{ score: dueAt.getTime(), value: member }], options?.onlyIfAbsent ? { NX: true } : undefined)
     .exec();
 }
 

@@ -3,7 +3,12 @@ import request from 'supertest';
 import express from 'express';
 import '../setup.js';
 
-// Budgets need Redis; this test is about routing, so they pass through. The feature gate stays real.
+// Guest play switched on regardless of the machine's env (CI has it off).
+vi.mock('../../src/core/config.js', async (orig) => {
+  const actual = await orig<{ config: Record<string, unknown> }>();
+  return { ...actual, config: { ...actual.config, GUEST_HTTP_ENABLED: true } };
+});
+// Budgets need Redis; this test is about routing, so they pass through.
 vi.mock('../../src/http/middleware/guest-http-budget.js', async (orig) => ({
   ...(await orig<object>()),
   guestHttpBudget: () => (_req: unknown, _res: unknown, next: () => void) => next(),

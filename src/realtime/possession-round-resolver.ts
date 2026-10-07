@@ -220,6 +220,10 @@ export async function resolvePossessionRound(
     if (cache.currentQIndex > qIndex) {
       // This round is already behind us — its timers are stale; clear them.
       roundConcluded = true;
+      if (cache.statePayload.phase === 'COMPLETED') {
+        // Its resolve committed COMPLETED, then the process died before completion: finish it (locked, idempotent).
+        await completePossessionMatch(io, matchId, cache.statePayload, cache, { source: 'restart_recovery' });
+      }
       logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: qIndex already advanced'
@@ -897,6 +901,10 @@ export async function resolvePossessionRound(
 
     if (state.phase === 'COMPLETED') {
       logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
+      // Test-only hook (never in prod): hold the gap between the COMPLETED commit and completion so the restart gate
+      // can kill the process inside it.
+      const pauseMs = config.NODE_ENV === 'prod' ? 0 : Number(process.env.CHAOS_PAUSE_BEFORE_COMPLETION_MS ?? 0);
+      if (pauseMs > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, pauseMs));
       await completePossessionMatch(io, matchId, state, cache);
       return;
     }

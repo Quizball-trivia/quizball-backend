@@ -1114,7 +1114,8 @@ export async function sendPossessionMatchQuestion(
     bumpStateVersion(state);
 
     try {
-      await setMatchCache(cache);
+      // Strict: a question that is not in the cache must not be published, and its transition backup must stay.
+      await setMatchCache(cache, { strict: true });
     } catch (error) {
       await unmarkQuestionSent(matchId, qIndex);
       throw error;
@@ -1346,6 +1347,13 @@ export async function ensurePossessionActiveTimers(
   }
 
   const state = cache.statePayload;
+  if (state.phase === 'COMPLETED') {
+    // The final round committed COMPLETED but the process died before completion ran: finish it now. Completion is
+    // locked and checks the match row, so a completion already done or in progress elsewhere is a no-op.
+    const result = await completePossessionMatch(io, matchId, state, cache, { source: 'restart_recovery' });
+    logger.warn({ eventName: 'match:question_timer', matchId, completed: result.completed, reason: result.reason ?? null }, 'Possession timer ensure completed a match stranded after its final round');
+    return true;
+  }
   if (state.phase === 'HALFTIME') {
     logger.info({ eventName: 'match:halftime_timer', matchId, half: state.half }, 'Possession timer ensure scheduling halftime timers');
     scheduleHalftimeTimeout(io, matchId);

@@ -222,3 +222,36 @@ describe('possession question sent mark', () => {
     expect(questionEmitted(emit)).toBe(false);
   });
 });
+
+// Codex review of #790: the real cache writer (not a rejecting mock) must make a failed commit a failed send.
+describe('real Redis cache-write failure during question dispatch', () => {
+  it('does not publish the question or replace its backup when the authoritative cache write fails', async () => {
+    vi.clearAllMocks();
+    getMatchMock.mockResolvedValue({ status: 'active' });
+    getRecentlySeenQuestionIdsMock.mockResolvedValue([]);
+    insertMatchQuestionIfMissingMock.mockResolvedValue(true);
+    getRandomQuestionCandidatesForMatchMock.mockImplementation(async (params: { questionTypes: string[] }) => (
+      params.questionTypes[0] === 'mcq_single' ? [{ id: 'q-mcq', category_id: 'category-a', payload: {
+        type: 'mcq_single', options: [
+          { id: 'a', text: { en: 'A' }, is_correct: true }, { id: 'b', text: { en: 'B' }, is_correct: false },
+          { id: 'c', text: { en: 'C' }, is_correct: false }, { id: 'd', text: { en: 'D' }, is_correct: false },
+        ],
+      } }] : []
+    ));
+    // The sent mark succeeds; storing the question's cache fails.
+    redisSet.mockResolvedValueOnce('OK').mockRejectedValueOnce(new Error('synthetic Redis cache write failure'));
+    const realCache = await vi.importActual<typeof import('../../src/realtime/match-cache.js')>('../../src/realtime/match-cache.js');
+    setMatchCacheMock.mockImplementationOnce(realCache.setMatchCache as never);
+    const cache = createCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const { io, emit } = createIo();
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    const { scheduleRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+
+    await expect(sendPossessionMatchQuestion(io, cache.matchId, 4, { onlyIfUnsent: true })).rejects.toThrow('synthetic Redis cache write failure');
+    expect(questionEmitted(emit)).toBe(false);
+    expect(vi.mocked(scheduleRealtimeTimer)).not.toHaveBeenCalledWith('possession_question', 'match-exhausted-special:4', expect.anything(), expect.anything());
+    expect(redisDel).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4');
+  });
+});
+

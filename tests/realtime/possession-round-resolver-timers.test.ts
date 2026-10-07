@@ -306,6 +306,16 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
     expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
   });
 
+  it('a leftover timer finishes a match whose final round committed COMPLETED before the process died', async () => {
+    const live = createCache({ mode: 'ranked', currentQuestion: null });
+    live.currentQIndex = Q_INDEX + 1;
+    live.statePayload.phase = 'COMPLETED';
+    getMatchCacheOrRebuildMock.mockResolvedValue(live);
+    completePossessionMatchMock.mockResolvedValue({ completed: true });
+    await resolveRound(true);
+    expect(completePossessionMatchMock).toHaveBeenCalledWith(expect.anything(), MATCH_ID, live.statePayload, live, { source: 'restart_recovery' });
+  });
+
   it('does not send a question from a timer during halftime (its own timers own it)', async () => {
     const cache = createCache({ mode: 'ranked', currentQuestion: null });
     cache.statePayload.phase = 'HALFTIME';

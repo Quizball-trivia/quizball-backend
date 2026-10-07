@@ -38,6 +38,10 @@ const KILL_AFTER_MS = Number(opt('kill-after-ms', '2500'));
 // Optional checkout for the FIRST backend only (e.g. the previous release): the deploy case, where an old process
 // dies mid-transition and the new code must recover a wait that never had a durable timer.
 const FIRST_CWD = argv.includes('--first-cwd') ? resolve(opt('first-cwd', '.')) : undefined;
+// between-rounds (default): kill inside a goal/penalty ready-gated wait. final-round: kill after the final round
+// committed COMPLETED but before completion ran (held open by the non-prod CHAOS_PAUSE_BEFORE_COMPLETION_MS hook).
+const SCENARIO = opt('scenario', 'between-rounds') as 'between-rounds' | 'final-round';
+if (!['between-rounds', 'final-round'].includes(SCENARIO)) throw new Error(`Unknown --scenario ${SCENARIO}`);
 const API = `http://127.0.0.1:${PORT}`;
 const OUT = resolve(opt('out', join(tmpdir(), 'possession-restart-gate')));
 mkdirSync(OUT, { recursive: true });
@@ -87,6 +91,7 @@ function startBackend(): ChildProcess {
       NODE_ENV: 'local', PORT: String(PORT), DATABASE_URL, REDIS_URL: redisBase.href,
       SUPABASE_JWKS_URL: `http://127.0.0.1:${AUTH_PORT}/jwks`, SUPABASE_JWT_ISSUER: issuer, SUPABASE_JWT_AUDIENCE: 'authenticated',
       LOG_LEVEL: 'info', REGRESSION_FAST_TIMERS: '',
+      CHAOS_PAUSE_BEFORE_COMPLETION_MS: SCENARIO === 'final-round' ? '8000' : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -117,7 +122,7 @@ try {
   // --- play until a round result after the first question ------------------------------------------------------
   socket = client();
   const resolved = await new Promise<{ matchId: string; qIndex: number }>((done, fail) => {
-    const timer = setTimeout(() => fail(new Error('No ready-gated round within 240 s')), 240_000);
+    const timer = setTimeout(() => fail(new Error(SCENARIO === 'final-round' ? 'Match did not reach COMPLETED within 8 min' : 'No ready-gated round within 240 s')), SCENARIO === 'final-round' ? 480_000 : 240_000);
     let lastQuestion = -1;
     socket!.on('connect', () => socket!.emit('dev:quick_match', {}));
     socket!.on('error', (e: unknown) => log('server error event', JSON.stringify(e)));
@@ -126,8 +131,14 @@ try {
       log(`question ${q.qIndex} (${q.question?.kind ?? '?'})`);
       setTimeout(() => socket!.emit('match:answer', { matchId: q.matchId, qIndex: q.qIndex, selectedIndex: 0, timeMs: 1200 }), 1200);
     });
+    socket!.on('match:state', (st: { matchId: string; phase: string }) => {
+      if (SCENARIO !== 'final-round' || st.phase !== 'COMPLETED') return;
+      log('final round committed COMPLETED -> killing before completion');
+      clearTimeout(timer); done({ matchId: st.matchId, qIndex: Number.MAX_SAFE_INTEGER });
+    });
     socket!.on('match:round_result', (r: { matchId: string; qIndex: number }) => {
       log(`round result ${r.qIndex}`);
+      if (SCENARIO === 'final-round') return;
       setTimeout(() => {
         if (lastQuestion > r.qIndex) return; // next question already out: no gap here, keep playing
         log(`round ${r.qIndex}: no question within ${GATE_PROBE_MS} ms -> ready-gated transition`);
@@ -139,10 +150,12 @@ try {
   // --- the gap: kill before the next question ------------------------------------------------------------------
   let earlyQuestion = false;
   socket.on('match:question', (q: { qIndex: number }) => { if (q.qIndex > resolved.qIndex) earlyQuestion = true; });
-  await sleep(Math.max(0, KILL_AFTER_MS - GATE_PROBE_MS));
+  if (SCENARIO === 'between-rounds') await sleep(Math.max(0, KILL_AFTER_MS - GATE_PROBE_MS));
   if (earlyQuestion) throw new Error('Next question arrived before the kill; lower --kill-after-ms');
   kill(backend);
-  log(`SIGKILL backend #${generation} ${KILL_AFTER_MS} ms after round ${resolved.qIndex} (match ${resolved.matchId.slice(0, 8)})`);
+  log(SCENARIO === 'final-round'
+    ? `SIGKILL backend #${generation} between the COMPLETED commit and completion (match ${resolved.matchId.slice(0, 8)})`
+    : `SIGKILL backend #${generation} ${KILL_AFTER_MS} ms after round ${resolved.qIndex} (match ${resolved.matchId.slice(0, 8)})`);
   socket.close();
   await sleep(1000);
 
@@ -158,7 +171,7 @@ try {
   let recoveredAt: number | null = null;
   type Final = { matchId: string; winnerId: string | null; players: Record<string, { goals?: number; totalPoints?: number }>; cancelledNoContest?: boolean };
   const final = await new Promise<Final | null>((done) => {
-    const recoveryTimer = setTimeout(() => { if (recoveredAt === null) done(null); }, DEADLINE_MS);
+    const recoveryTimer = setTimeout(() => { if (recoveredAt === null) done(null); }, SCENARIO === 'final-round' ? 8 * 60_000 : DEADLINE_MS);
     const matchTimer = setTimeout(() => done(null), 8 * 60_000);
     socket!.on('connect', () => socket!.emit('match:rejoin', { matchId: resolved.matchId }));
     socket!.on('match:question', (q: { matchId: string; qIndex: number }) => {
@@ -175,7 +188,11 @@ try {
 
   // --- verdict: recovered once, completed normally, scores and rewards written once ------------------------------
   const checks: Array<[string, boolean, string?]> = [];
-  checks.push([`question ${nextIndex} arrived after the restart`, recoveredAt !== null, recoveredAt === null ? `none within ${DEADLINE_MS} ms` : `+${recoveredAt} ms`]);
+  if (SCENARIO === 'between-rounds') {
+    checks.push([`question ${nextIndex} arrived after the restart`, recoveredAt !== null, recoveredAt === null ? `none within ${DEADLINE_MS} ms` : `+${recoveredAt} ms`]);
+  } else {
+    checks.push(['no question sent after the final round', seen.length === 0, seen.length ? `got ${seen.join(',')}` : 'none']);
+  }
   const dupes = seen.filter((q, i) => seen.indexOf(q) !== i);
   checks.push(['no question sent twice after the restart', dupes.length === 0, dupes.length ? `repeated: ${dupes.join(',')}` : `${seen.length} questions`]);
   checks.push(['match reached its normal final result', Boolean(final && !final.cancelledNoContest), final ? `winner ${final.winnerId?.slice(0, 8) ?? 'draw'}` : 'no final results']);

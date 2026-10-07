@@ -62,8 +62,9 @@ vi.mock('../../src/realtime/possession-match-flow.js', () => ({
   schedulePossessionAiAnswer: vi.fn(),
   schedulePossessionAiHalftimeBan: vi.fn(),
 }));
+const completeMock = vi.fn(async () => ({ completed: true }));
 vi.mock('../../src/realtime/possession-completion.js', () => ({
-  completePossessionMatch: vi.fn(),
+  completePossessionMatch: (...args: unknown[]) => completeMock(...(args as [])),
 }));
 const redisGet = vi.fn(async () => null as string | null);
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -177,6 +178,16 @@ describe('recovery of a match stuck between rounds (rejoin / boot)', () => {
     hasPendingMock.mockResolvedValue(true);
     const { ensurePossessionActiveTimers } = await import('../../src/realtime/possession-question-dispatch.js');
     await expect(ensurePossessionActiveTimers(io, 'm1')).resolves.toBe(true);
+    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('finishes a match stranded between its COMPLETED commit and completion (Codex: final-round restart)', async () => {
+    const stranded = betweenRounds({ currentQIndex: 12 });
+    stranded.statePayload.phase = 'COMPLETED';
+    vi.mocked(getMatchCacheOrRebuild).mockResolvedValue(stranded);
+    const { ensurePossessionActiveTimers } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(ensurePossessionActiveTimers(io, 'm1')).resolves.toBe(true);
+    expect(completeMock).toHaveBeenCalledWith(io, 'm1', stranded.statePayload, stranded, { source: 'restart_recovery' });
     expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
   });
 

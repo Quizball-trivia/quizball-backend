@@ -134,7 +134,7 @@ export const mobilePushRepo = {
         SELECT p.user_id,'test',CURRENT_DATE,gen_random_uuid()::text,p.consent_epoch,
           ${tx.json({en:'Quizball push test',ka:'Quizball შეტყობინების ტესტი',es:'Prueba de Quizball',tr:'Quizball bildirim testi'})},
           ${tx.json({en:'Tap to open your daily games.',ka:'შეეხე დღის თამაშების გასახსნელად.',es:'Toca para abrir tus juegos diarios.',tr:'Günlük oyunlarını açmak için dokun.'})},
-          '/(app)/daily/challenges',now()+interval '10 minutes' FROM mobile_push_preferences p WHERE p.user_id=${userId} RETURNING id`;
+          '/(tabs)',now()+interval '10 minutes' FROM mobile_push_preferences p WHERE p.user_id=${userId} RETURNING id`;
       if (!event) return {queued:0};
       const jobs=await tx`INSERT INTO mobile_push_jobs(event_id,device_id,device_generation)
         SELECT ${event.id},d.id,d.generation FROM mobile_push_devices d WHERE d.user_id=${userId} AND d.active RETURNING id`;
@@ -142,14 +142,16 @@ export const mobilePushRepo = {
     });
   },
   async queueCampaign(creatorId: string, input: PushCampaignInput) {
+    // Keep old operator requests compatible, but never queue the retired hub.
+    const route = input.route === '/(app)/daily/challenges' ? '/(tabs)' : input.route;
     return sql.begin(async transaction => {
       const tx = transaction as unknown as typeof sql;
       const inserted = await tx`INSERT INTO mobile_push_campaigns(id, created_by, title, body, route)
-        VALUES(${input.campaignId},${creatorId},${tx.json(input.title)},${tx.json(input.body)},${input.route}) ON CONFLICT DO NOTHING RETURNING id`;
+        VALUES(${input.campaignId},${creatorId},${tx.json(input.title)},${tx.json(input.body)},${route}) ON CONFLICT DO NOTHING RETURNING id`;
       if (!inserted.length) return { queued: 0, duplicate: true };
       const events = await tx`INSERT INTO mobile_push_events(user_id, category, local_day, source_key, consent_epoch, title, body, route, expires_at)
         SELECT p.user_id, 'new_games', (now() AT TIME ZONE p.timezone)::date, ${input.campaignId}, p.consent_epoch,
-          ${tx.json(input.title)},${tx.json(input.body)},${input.route}, now() + interval '24 hours'
+          ${tx.json(input.title)},${tx.json(input.body)},${route}, now() + interval '24 hours'
         FROM mobile_push_preferences p JOIN users u ON u.id = p.user_id
         WHERE p.new_games_enabled AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_banned
           AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL AND (to_jsonb(u)->>'partner_slug') IS NULL AND u.role::text <> 'partner_staff'
@@ -169,7 +171,7 @@ export const mobilePushRepo = {
       const tx = transaction as unknown as typeof sql;
       await tx`INSERT INTO mobile_push_events(user_id,category,local_day,source_key,consent_epoch,title,body,route,expires_at)
         SELECT p.user_id,'daily',(now() AT TIME ZONE p.timezone)::date, 'daily:' || (now() AT TIME ZONE p.timezone)::date,
-          p.consent_epoch,${tx.json(reminderTitle)},${tx.json(reminderBody)},'/(app)/daily/challenges',
+          p.consent_epoch,${tx.json(reminderTitle)},${tx.json(reminderBody)},'/(tabs)',
           LEAST(now() + interval '2 hours', (((now() AT TIME ZONE p.timezone)::date + make_interval(hours => p.daily_reminder_hour) + interval '2 hours') AT TIME ZONE p.timezone))
         FROM mobile_push_preferences p JOIN users u ON u.id = p.user_id
         WHERE p.daily_reminders_enabled AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_banned

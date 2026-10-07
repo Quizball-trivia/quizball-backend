@@ -17,7 +17,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, mkdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import postgres from 'postgres';
 import { io as connect, type Socket } from 'socket.io-client';
@@ -38,7 +39,7 @@ const KILL_AFTER_MS = Number(opt('kill-after-ms', '2500'));
 // dies mid-transition and the new code must recover a wait that never had a durable timer.
 const FIRST_CWD = argv.includes('--first-cwd') ? resolve(opt('first-cwd', '.')) : undefined;
 const API = `http://127.0.0.1:${PORT}`;
-const OUT = resolve(opt('out', '/private/tmp/possession-restart-gate'));
+const OUT = resolve(opt('out', join(tmpdir(), 'possession-restart-gate')));
 mkdirSync(OUT, { recursive: true });
 
 const envFile = readFileSync(resolve('.env'), 'utf8');

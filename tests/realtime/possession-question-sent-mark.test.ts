@@ -211,4 +211,14 @@ describe('possession question sent mark', () => {
     expect(setMatchCacheMock).not.toHaveBeenCalled();
     expect(questionEmitted(emit)).toBe(false);
   });
+
+  it('releases the mark when the live state cannot be read, so the retry is not held off', async () => {
+    const snapshot = createCache();
+    getMatchCacheOrRebuildMock.mockResolvedValueOnce(snapshot).mockResolvedValue(null);
+    const { io, emit } = createIo();
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+    await expect(sendPossessionMatchQuestion(io, snapshot.matchId, 4, { onlyIfUnsent: true })).resolves.toBeNull();
+    expect(redisDel).toHaveBeenCalledWith('possession:sent:match-exhausted-special:4');
+    expect(questionEmitted(emit)).toBe(false);
+  });
 });

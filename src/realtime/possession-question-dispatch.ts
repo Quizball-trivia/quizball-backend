@@ -1074,7 +1074,13 @@ export async function sendPossessionMatchQuestion(
       // Holding the mark, confirm against the LIVE cache, not this send's earlier snapshot: a send that stalled past
       // the mark's TTL must not publish over a match that moved on (the question went out, or play advanced).
       const live = await getMatchCacheOrRebuild(matchId);
-      if (!live || live.status !== 'active' || live.currentQIndex !== qIndex || (live.currentQuestion?.qIndex ?? -1) >= qIndex) {
+      if (!live) {
+        // Could not read the live state: nothing was decided, so let the retry try again at once.
+        await unmarkQuestionSent(matchId, qIndex);
+        logger.warn({ matchId, qIndex }, 'Possession question dispatch skipped: live cache unavailable');
+        return null;
+      }
+      if (live.status !== 'active' || live.currentQIndex !== qIndex || (live.currentQuestion?.qIndex ?? -1) >= qIndex) {
         logger.warn({ matchId, qIndex, ...cacheLogFields(live) }, 'Possession question dispatch skipped: live state moved on while this send was preparing');
         return null;
       }

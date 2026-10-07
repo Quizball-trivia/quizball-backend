@@ -40,14 +40,16 @@ const noStore: RequestHandler = (_req, res, next) => {
 };
 
 // The browser exchange is the only unauthenticated partner call; per address, per process. Sized for a mobile carrier
-// putting a whole audience behind one IP (a promo spike), with a burst cap so one address cannot take the database's
-// admission slots all at once; a token is 256 bits, so these only stop floods.
-export const REDEEM_LIMITS = {
+// putting a whole audience behind one IP (a promo spike), with a burst cap so one address cannot send hundreds of
+// exchanges at once; a token is 256 bits, so these only stop floods.
+export type RedeemLimits = Record<'burst' | 'sustained', { windowMs: number; max: number }>;
+
+export const REDEEM_LIMITS: RedeemLimits = {
   burst: { windowMs: 5_000, max: 50 },
   sustained: { windowMs: 60_000, max: 600 },
-} as const;
+};
 
-export function createRedeemLimiters(limits: typeof REDEEM_LIMITS = REDEEM_LIMITS): RequestHandler[] {
+export function createRedeemLimiters(limits: RedeemLimits = REDEEM_LIMITS): RequestHandler[] {
   return (['burst', 'sustained'] as const).map((name) =>
     rateLimit({
       windowMs: limits[name].windowMs,

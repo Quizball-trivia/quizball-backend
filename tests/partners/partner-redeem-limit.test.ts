@@ -1,9 +1,9 @@
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { createRedeemLimiters, REDEEM_LIMITS } from '../../src/http/routes/partner.routes.js';
+import { createRedeemLimiters, REDEEM_LIMITS, type RedeemLimits } from '../../src/http/routes/partner.routes.js';
 
-function app(limits: typeof REDEEM_LIMITS) {
+function app(limits: RedeemLimits) {
   const a = express();
   a.post('/redeem', ...createRedeemLimiters(limits), (_req, res) => {
     res.json({ ok: true });

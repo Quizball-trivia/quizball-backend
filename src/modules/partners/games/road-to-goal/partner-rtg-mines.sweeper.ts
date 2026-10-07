@@ -18,7 +18,7 @@ async function sweepOnce(): Promise<void> {
       const { settled } = await sweep();
       if (settled > 0) logger.info({ game, settled }, 'partner sweeper settled abandoned runs');
     } catch (error) {
-      logger.error({ error, game }, 'partner sweeper failed');
+      logger.error({ err: error, game }, 'partner sweeper failed');
     }
   }
 }

@@ -15,7 +15,7 @@ export function startPartnerJanitor(): void {
       .then((n) => {
         if (n > 0) logger.info({ expired: n }, 'partner janitor expired unopened launches');
       })
-      .catch((error) => logger.error({ error }, 'partner janitor failed'))
+      .catch((error) => logger.error({ err: error }, 'partner janitor failed'))
       .finally(() => {
         inFlight = null;
       });

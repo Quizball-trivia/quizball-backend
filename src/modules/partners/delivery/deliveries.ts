@@ -173,14 +173,17 @@ export async function resendPartnerScoreEvent(input: {
 }
 
 /** `GET /partner/v1/me/results`: the player's latest finished plays and how their score events stand. */
-export async function listRecentResultsForPlayer(playerId: string, limit = 20): Promise<MeResultsResponse> {
+export async function listRecentResultsForPlayer(
+  partner: { slug: string; environment: string; externalPlayerId: string },
+  limit = 20,
+): Promise<MeResultsResponse> {
   const capped = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
   const rows = await sql<{
     play_id: string; game_id: PartnerGameId; score: number; occurred_at: Date; status: DeliveryStatus;
   }[]>`
     SELECT play_id::text AS play_id, game_id, score, occurred_at, status
     FROM partner_score_events
-    WHERE partner_slug = 'freecroco' AND player_id = ${playerId}
+    WHERE partner_slug = ${partner.slug} AND environment = ${partner.environment} AND player_id = ${partner.externalPlayerId}
     ORDER BY occurred_at DESC, id DESC
     LIMIT ${capped}`;
   return {

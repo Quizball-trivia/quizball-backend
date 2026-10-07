@@ -473,7 +473,7 @@ export const partnerRoadToGoalService = {
         });
         if (done) settled += 1;
       } catch (error) {
-        logger.error({ error, runId: run.id }, 'partner road-to-goal sweep failed for run');
+        logger.error({ err: error, runId: run.id }, 'partner road-to-goal sweep failed for run');
       }
     }
     if (settled > 0) afterPartnerSettle();

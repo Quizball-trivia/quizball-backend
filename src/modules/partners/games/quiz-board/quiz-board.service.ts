@@ -557,7 +557,7 @@ export async function sweepQuizBoards(limit = 50): Promise<number> {
       const view = await moveBoard({ boardId: id }, 'en', null, { skipLocked: true });
       if (view?.phase === 'finished') finished += 1;
     } catch (error) {
-      logger.error({ error, boardId: id }, 'quiz-board sweep failed for a board');
+      logger.error({ err: error, boardId: id }, 'quiz-board sweep failed for a board');
     }
   }
   return finished;

@@ -343,7 +343,7 @@ async function releasePartnerSearches(
   const left = new Set(signals.filter((s) => s.cancelled || s.absentAfterGrace).map((s) => s.userId));
   for (const userId of userIds) {
     await releasePartnerRankedSearch(userId, reason, undefined, { left: left.has(userId) }).catch((error) => {
-      logger.warn({ error, userId, reason }, 'Partner ranked play release failed');
+      logger.warn({ err: error, userId, reason }, 'Partner ranked play release failed');
     });
   }
 }
@@ -384,7 +384,7 @@ async function startMatchFromDraft(
         await abortRankedDraftBeforeMatchCreation(io, lobby, humanUserIds, `partner_${admission.reason}`, []);
         for (const userId of partnerUserIds) {
           await releasePartnerRankedSearch(userId, `draft_abort_${admission.reason}`).catch((error) => {
-            logger.warn({ error, lobbyId, userId }, 'Partner ranked play release failed after draft abort');
+            logger.warn({ err: error, lobbyId, userId }, 'Partner ranked play release failed after draft abort');
           });
         }
         return null;

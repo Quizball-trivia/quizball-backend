@@ -16,7 +16,7 @@ export function startPartnerCardDetectiveSweeper(): void {
       .then((settled) => {
         if (settled > 0) logger.info({ settled }, 'partner card-detective sweeper settled idle plays');
       })
-      .catch((error) => logger.error({ error }, 'partner card-detective sweeper failed'))
+      .catch((error) => logger.error({ err: error }, 'partner card-detective sweeper failed'))
       .finally(() => {
         inFlight = null;
       });

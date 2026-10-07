@@ -6,6 +6,7 @@
  *  or solves are ever recorded for partner players. */
 
 import { sql, type TransactionSql } from '../../../../db/index.js';
+import { logger } from '../../../../core/logger.js';
 import { partnerBegin } from '../../partner-analytics.js';
 import { asSql, type Db } from '../../partner-db.js';
 import { PartnerError } from '../../partner-errors.js';
@@ -608,6 +609,10 @@ export const partnerGuessTheGoalService = {
           return true;
         }
         return Boolean(await settleIfOverdue(tx, lock.row, lock.session, Date.now()));
+      }).catch((err) => {
+        // One failing play must not hold back the rest of the batch on every run.
+        logger.error({ err, sessionId: candidate.session_id }, 'Partner Guess the Goal sweep failed for a play');
+        return false;
       });
       if (done) settled += 1;
     }

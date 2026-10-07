@@ -440,6 +440,9 @@ function holdReconcileLease(token: string): { held: () => boolean; stop: () => v
     void extendLock(RECONCILE_LOCK, token, RECONCILE_LOCK_TTL_MS).then((ok) => {
       if (ok) validUntil = askedAt + RECONCILE_LOCK_TTL_MS;
       else lost = true;
+    }, (err) => {
+      lost = true;
+      logger.warn({ err }, 'Partner ranked reconcile lease renewal failed');
     });
   }, RECONCILE_LOCK_TTL_MS / 3);
   renew.unref?.();

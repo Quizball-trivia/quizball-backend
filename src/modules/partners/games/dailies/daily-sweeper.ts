@@ -15,7 +15,7 @@ export function startPartnerDailiesSweeper(): void {
       .then((settled) => {
         if (settled > 0) logger.info({ settled }, 'partner dailies sweeper settled abandoned plays');
       })
-      .catch((error) => logger.error({ error }, 'partner dailies sweeper failed'))
+      .catch((error) => logger.error({ err: error }, 'partner dailies sweeper failed'))
       .finally(() => {
         inFlight = null;
       });

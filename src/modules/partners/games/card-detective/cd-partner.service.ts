@@ -6,6 +6,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { sql } from '../../../../db/index.js';
+import { logger } from '../../../../core/logger.js';
 import { partnerBegin } from '../../partner-analytics.js';
 import { asSql, type Db } from '../../partner-db.js';
 import { PartnerError } from '../../partner-errors.js';
@@ -326,7 +327,11 @@ async function playEnd(tx: Db, playId: string): Promise<PlayEnd | null> {
 }
 
 /** Persists the cards; when every card is resolved (or `endNow`), settles the play: one score event at `at`. */
-async function save(tx: Db, row: PlayRow, opts: { endNow?: boolean; at?: Date } = {}): Promise<{ row: PlayRow; end: PlayEnd | null }> {
+async function save(
+  tx: Db,
+  row: PlayRow,
+  opts: { endNow?: boolean; at?: Date; cause?: 'idle' | 'quit' } = {},
+): Promise<{ row: PlayRow; end: PlayEnd | null }> {
   const done = opts.endNow || row.current_index >= row.cards.length;
   const [saved] = await tx<PlayRow[]>`
     UPDATE partner_card_detective_plays
@@ -338,7 +343,7 @@ async function save(tx: Db, row: PlayRow, opts: { endNow?: boolean; at?: Date } 
   if (!done) return { row: saved, end: null };
   const score = Math.min(CD_CARD_COUNT * CD_START_POINTS, saved.cards.reduce((sum, c) => sum + c.points, 0));
   const end = await settlePartnerPlay(tx as never, row.play_id, score, opts.at, undefined, {
-    endCause: opts.endNow ? 'idle' : 'completed',
+    endCause: opts.endNow ? (opts.cause ?? 'idle') : 'completed',
   });
   return { row: saved, end };
 }
@@ -480,7 +485,7 @@ export const partnerCardDetectiveService = {
       const { row, ctx } = await lockRow(tx, partner, playId);
       if (ctx.cancelled || row.settled_at) return { value: toState(row, partner.language, ctx), settled: false };
       const idle = await settleIfIdle(tx, row);
-      const saved = idle ?? (await save(tx, row, { endNow: true }));
+      const saved = idle ?? (await save(tx, row, { endNow: true, cause: 'quit' }));
       return { value: toState(saved.row, partner.language, afterSave(ctx, saved.end)), settled: true };
     });
   },
@@ -496,6 +501,7 @@ export const partnerCardDetectiveService = {
       ORDER BY g.idle_deadline LIMIT ${limit}`;
     let settled = 0;
     for (const { play_id, player_id } of due) {
+      // One failing play must not hold back the rest of the batch on every run.
       const done = await partnerBegin(async (t) => {
         const tx = asSql(t);
         const active = await lockPlayer(tx, player_id);
@@ -511,6 +517,9 @@ export const partnerCardDetectiveService = {
           return true;
         }
         return Boolean(await settleIfIdle(tx, row));
+      }).catch((err) => {
+        logger.error({ err, playId: play_id }, 'Partner Card Detective sweep failed for a play');
+        return false;
       });
       if (done) settled += 1;
     }

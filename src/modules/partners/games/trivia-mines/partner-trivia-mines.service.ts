@@ -506,7 +506,7 @@ export const partnerTriviaMinesService = {
         });
         if (done) settled += 1;
       } catch (error) {
-        logger.error({ error, runId: run.id }, 'partner trivia-mines sweep failed for run');
+        logger.error({ err: error, runId: run.id }, 'partner trivia-mines sweep failed for run');
       }
     }
     if (settled > 0) afterPartnerSettle();

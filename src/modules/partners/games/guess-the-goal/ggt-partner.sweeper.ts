@@ -16,7 +16,7 @@ export function startPartnerGuessTheGoalSweeper(): void {
       .then((settled) => {
         if (settled > 0) logger.info({ settled }, 'partner guess-the-goal sweeper settled plays');
       })
-      .catch((error) => logger.error({ error }, 'partner guess-the-goal sweeper failed'))
+      .catch((error) => logger.error({ err: error }, 'partner guess-the-goal sweeper failed'))
       .finally(() => {
         inFlight = null;
       });

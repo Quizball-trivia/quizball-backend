@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
+import { AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { isTransientDatabaseError } from '../../http/middleware/error-handler.js';
 
@@ -122,6 +123,16 @@ export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) =
     : undefined;
   if (typeof parserStatus === 'number' && parserStatus >= 400 && parserStatus < 500) {
     return sendPartnerError(res, new PartnerError('invalid_request', 'The body is not valid JSON'));
+  }
+  // A shared Quizball middleware refused the request (validation, auth): same status, partner format.
+  if (err instanceof AppError && err.statusCode < 500) {
+    const code: PartnerErrorCode =
+      err.statusCode === 401 ? 'unauthorized'
+      : err.statusCode === 403 ? 'forbidden'
+      : err.statusCode === 404 ? 'not_found'
+      : err.statusCode === 429 ? 'rate_limited'
+      : 'invalid_request';
+    return sendPartnerError(res, new PartnerError(code));
   }
   if (isTransientDatabaseError(err)) {
     logger.warn({ err, path: req.path }, 'Partner request: transient database failure');

@@ -699,13 +699,13 @@ describe.skipIf(!isolated && !adminTarget)('partner score delivery on real Postg
       await run(dispatcher());
       const pending = await enqueue({ playerId: 'me', occurredAt: new Date('2026-10-07T12:00:00.000Z') });
       await enqueue({ playerId: 'someone-else' });
-      const { results } = await deliveries.listRecentResultsForPlayer('me', 20);
+      const { results } = await deliveries.listRecentResultsForPlayer({ slug: 'freecroco', environment: 'test', externalPlayerId: 'me' }, 20);
       expect(results).toEqual([
         { playId: pending.playId, gameId: 'ranked', score: 150, finishedAt: '2026-10-07T12:00:00.000Z', delivery: 'pending' },
         { playId: dead.playId, gameId: 'pick-em', score: 250, finishedAt: '2026-10-07T11:00:00.000Z', delivery: 'failed' },
         { playId: sent.playId, gameId: 'ranked', score: 150, finishedAt: '2026-10-07T10:00:00.000Z', delivery: 'sent' },
       ]);
-      expect((await deliveries.listRecentResultsForPlayer('me', 1)).results).toHaveLength(1);
+      expect((await deliveries.listRecentResultsForPlayer({ slug: 'freecroco', environment: 'test', externalPlayerId: 'me' }, 1)).results).toHaveLength(1);
     });
 
     it('delivery health: ok, then degraded past 5 minutes, down past an hour', async () => {

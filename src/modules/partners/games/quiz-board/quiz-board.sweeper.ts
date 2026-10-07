@@ -15,7 +15,7 @@ export function startQuizBoardSweeper(): void {
       .then((finished) => {
         if (finished > 0) logger.info({ finished }, 'partner quiz-board sweep finished abandoned boards');
       })
-      .catch((error) => logger.error({ error }, 'partner quiz-board sweep failed'))
+      .catch((error) => logger.error({ err: error }, 'partner quiz-board sweep failed'))
       .finally(() => {
         inFlight = null;
       });

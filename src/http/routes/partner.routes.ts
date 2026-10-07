@@ -125,7 +125,7 @@ v1.get('/me/games', partnerPlayerAuth, async (req, res) => {
 
 v1.get('/me/results', partnerPlayerAuth, async (req, res) => {
   const limit = Number(req.query.limit ?? 20);
-  res.json(await listRecentResultsForPlayer(req.partner!.externalPlayerId, limit));
+  res.json(await listRecentResultsForPlayer(req.partner!, limit));
 });
 
 v1.use('/games/countdown', partnerPlayerAuth, createPartnerDailyGameRouter('countdown'));

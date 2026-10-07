@@ -39,10 +39,11 @@ const noStore: RequestHandler = (_req, res, next) => {
   next();
 };
 
-// The browser exchange is the only unauthenticated partner call; per address, per process.
+// The browser exchange is the only unauthenticated partner call; per address, per process. Sized for a mobile carrier
+// putting a whole audience behind one IP (a promo spike); a token is 256 bits, so this only stops floods.
 const redeemLimiter = rateLimit({
   windowMs: 60_000,
-  max: 60,
+  max: 600,
   keyGenerator: (req) => `redeem:${resolveTrustedClientIp(req) ?? req.ip}`,
   standardHeaders: true,
   legacyHeaders: false,

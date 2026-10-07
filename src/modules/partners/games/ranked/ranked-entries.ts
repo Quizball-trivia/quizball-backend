@@ -173,6 +173,22 @@ export async function markPartnerRankedOpponentShown(userIds: string[]): Promise
 }
 
 /**
+ * Records, before a pre-match teardown erases its evidence, which player ended the search (the one Freecroco player
+ * who cancelled or went absent), on every given player's searching entry. A release that fails is retried by the
+ * reconciler, which then still knows who left. Best effort: without it the daily allowance decides.
+ */
+export async function recordPartnerRankedLeaver(userIds: string[], leaverUserId: string): Promise<void> {
+  if (userIds.length === 0) return;
+  try {
+    await sql`
+      UPDATE partner_ranked_entries SET leaver_user_id = ${leaverUserId}, updated_at = clock_timestamp()
+      WHERE user_id = ANY(${userIds}::uuid[]) AND state = 'searching'`;
+  } catch (error) {
+    logger.warn({ err: error, userIds, leaverUserId }, 'Partner ranked leaver not recorded');
+  }
+}
+
+/**
  * Whether a play that ends without a result goes back. Before an opponent was shown it always does. After that: never
  * to the player known to have ended it; always to a player whose opponent is known to have ended it (recorded as
  * 'early_leave', so it never counts below); to anyone else only while under the daily allowance, which bounds every
@@ -223,9 +239,12 @@ export async function releasePartnerRankedSearch(
     const [before] = await tx<{ state: string }[]>`SELECT state FROM partner_plays WHERE id = ${row.play_id}`;
     // A play the block already cancelled stays used and keeps its cause.
     const blocked = before?.state === 'cancelled';
-    refund = await returnsPlay(tx, row, { endedByThisPlayer: opts.left, endedByOpponent: opts.opponentLeft });
+    // Who left, as the caller knows it or as recorded before the teardown (a retried release by the reconciler).
+    const left = opts.left ?? (row.leaver_user_id !== null && row.leaver_user_id === userId);
+    const opponentLeft = opts.opponentLeft ?? (row.leaver_user_id !== null && row.leaver_user_id !== userId);
+    refund = await returnsPlay(tx, row, { endedByThisPlayer: left, endedByOpponent: opponentLeft });
     const play = await cancelPlay(t, row.play_id, { refund, reason: refund ? 'search_cancelled' : 'left_before_match' });
-    const cause = blocked ? 'blocked' : !refund || (opts.opponentLeft && !opts.left) ? 'early_leave' : 'search_cancelled';
+    const cause = blocked ? 'blocked' : !refund || (opponentLeft && !left) ? 'early_leave' : 'search_cancelled';
     await tx`
       UPDATE partner_ranked_entries
       SET state = 'cancelled', terminal_cause = ${cause}, refunded = ${play.refunded},
@@ -274,7 +293,8 @@ export async function attachPartnerRankedEntriesInTx(
   for (const userId of input.userIds) {
     const attached = await tx<{ id: string; partner_slug: string; environment: string; wait_ms: number }[]>`
       UPDATE partner_ranked_entries e
-      SET state = 'playing', match_id = ${input.matchId}, lobby_id = ${input.lobbyId}, updated_at = clock_timestamp()
+      SET state = 'playing', match_id = ${input.matchId}, lobby_id = ${input.lobbyId}, leaver_user_id = NULL,
+          updated_at = clock_timestamp()
       FROM partner_plays pl
       WHERE e.user_id = ${userId} AND e.state = 'searching' AND pl.id = e.play_id AND pl.state = 'started'
       RETURNING e.id, e.partner_slug, e.environment,

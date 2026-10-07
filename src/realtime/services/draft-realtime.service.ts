@@ -25,6 +25,7 @@ import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { rankedCancelKey } from '../ranked-matchmaking-keys.js';
 import {
   checkPartnerRankedAdmission,
+  recordPartnerRankedLeaver,
   releasePartnerRankedSearch,
 } from '../../modules/partners/games/ranked/ranked-entries.js';
 import { isPartnerRankedPool, rankedPoolForUser } from '../../modules/partners/games/ranked/ranked-pool.js';
@@ -343,6 +344,7 @@ async function releasePartnerSearches(
   const left = new Set(signals.filter((s) => s.cancelled || s.absentAfterGrace).map((s) => s.userId));
   // Both gone is nobody's fault in particular (like both dropping in a match): the daily allowance decides.
   const blame = left.size === 1 ? left : new Set<string>();
+  if (blame.size === 1) await recordPartnerRankedLeaver(userIds, [...blame][0]!);
   for (const userId of userIds) {
     const who = { left: blame.has(userId), opponentLeft: blame.size === 1 && !blame.has(userId) };
     await releasePartnerRankedSearch(userId, reason, undefined, who).catch((error) => {
@@ -1076,6 +1078,11 @@ export async function runDraftGraceExpiry(
 
       if (absentHumanUserIds.length > 0) {
         const abortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
+        // Freecroco plays: who left is recorded before the teardown erases the evidence, then released with it.
+        const humans = await usersRepo.getByIds(humanUserIds);
+        const partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
+        const absent = humanUserIds.filter((userId) => abortSignals.find((sig) => sig.userId === userId)?.absentAfterGrace);
+        if (partnerUserIds.length > 0 && absent.length === 1) await recordPartnerRankedLeaver(partnerUserIds, absent[0]!);
         await abortRankedDraftBeforeMatchCreation(
           io,
           activeLobby,
@@ -1083,9 +1090,6 @@ export async function runDraftGraceExpiry(
           'draft_grace_expired_before_ticket_consumption',
           abortSignals
         );
-        // Freecroco plays end here with who left known; the reconciler would release them without it.
-        const humans = await usersRepo.getByIds(humanUserIds);
-        const partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
         if (partnerUserIds.length > 0) await releasePartnerSearches(partnerUserIds, 'draft_grace_expired', abortSignals);
         await clearDraftTimers(lobbyId);
         await cancelRealtimeTimer('draft_grace_expiry', lobbyId).catch((error) => {

@@ -310,6 +310,20 @@ describe.skipIf(!isolated && !adminTarget)('partner ranked plays on real Postgre
     expect(await play(entry.playId)).toMatchObject({ refunded: true });
   });
 
+  it('a release retried without context (the reconciler) still uses the leaver recorded before the teardown', async () => {
+    const [a, b] = [await launch(), await launch()];
+    const ea = (await entries.reservePartnerRankedPlay(a)).entry;
+    const eb = (await entries.reservePartnerRankedPlay(b)).entry;
+    await entries.markPartnerRankedOpponentShown([a.userId, b.userId]);
+    await entries.recordPartnerRankedLeaver([a.userId, b.userId], a.userId);
+    await entries.releasePartnerRankedSearch(b.userId, 'reconciler_idle_search');
+    await entries.releasePartnerRankedSearch(a.userId, 'reconciler_idle_search');
+    expect(await play(ea.playId)).toMatchObject({ refunded: false });
+    expect(await play(eb.playId)).toMatchObject({ refunded: true });
+    const rows = await db.sql`SELECT user_id, terminal_cause FROM partner_ranked_entries WHERE id IN (${ea.id}, ${eb.id})`;
+    expect(rows.map((r) => r.terminal_cause)).toEqual(['early_leave', 'early_leave']);
+  });
+
   it('a match that ends with no result counts toward the same daily allowance', async () => {
     const [a, b] = [await launch(), await launch()];
     for (let i = 0; i < 2; i += 1) {

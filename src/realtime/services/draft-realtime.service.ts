@@ -1083,6 +1083,10 @@ export async function runDraftGraceExpiry(
           'draft_grace_expired_before_ticket_consumption',
           abortSignals
         );
+        // Freecroco plays end here with who left known; the reconciler would release them without it.
+        const humans = await usersRepo.getByIds(humanUserIds);
+        const partnerUserIds = humanUserIds.filter((userId) => humans.get(userId)?.partner_slug != null);
+        if (partnerUserIds.length > 0) await releasePartnerSearches(partnerUserIds, 'draft_grace_expired', abortSignals);
         await clearDraftTimers(lobbyId);
         await cancelRealtimeTimer('draft_grace_expiry', lobbyId).catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to cancel draft grace timer after ranked draft abort');

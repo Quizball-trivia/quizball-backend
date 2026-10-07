@@ -39,15 +39,31 @@ const noStore: RequestHandler = (_req, res, next) => {
   next();
 };
 
-// The browser exchange is the only unauthenticated partner call; per address, per process.
-const redeemLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 60,
-  keyGenerator: (req) => `redeem:${resolveTrustedClientIp(req) ?? req.ip}`,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (_req, res) => sendPartnerError(res, new PartnerError('rate_limited', undefined, 60)),
-});
+// The browser exchange is the only unauthenticated partner call; per address, per process. Sized for a mobile carrier
+// putting a whole audience behind one IP (a promo spike), with a burst cap so one address cannot send hundreds of
+// exchanges at once; a token is 256 bits, so these only stop floods.
+export type RedeemLimits = Record<'burst' | 'sustained', { windowMs: number; max: number }>;
+
+export const REDEEM_LIMITS: RedeemLimits = {
+  burst: { windowMs: 5_000, max: 50 },
+  sustained: { windowMs: 60_000, max: 600 },
+};
+
+export function createRedeemLimiters(limits: RedeemLimits = REDEEM_LIMITS): RequestHandler[] {
+  return (['burst', 'sustained'] as const).map((name) =>
+    rateLimit({
+      windowMs: limits[name].windowMs,
+      max: limits[name].max,
+      keyGenerator: (req) => `redeem-${name}:${resolveTrustedClientIp(req) ?? req.ip}`,
+      standardHeaders: true,
+      legacyHeaders: false,
+      handler: (_req, res) =>
+        sendPartnerError(res, new PartnerError('rate_limited', undefined, Math.ceil(limits[name].windowMs / 1000))),
+    }),
+  );
+}
+
+const redeemLimiters = createRedeemLimiters();
 
 /** Per session (the bearer token) rather than per address: Georgian carriers put whole audiences behind one IP.
  *  Counted before auth, so a flood with a valid token stops before its database check. */
@@ -106,7 +122,7 @@ v1.get('/status', ...partnerMachineAuth, async (_req, res) => {
   res.status(status.status === 'down' ? 503 : 200).json(status);
 });
 
-v1.post('/sessions/redeem', redeemLimiter, async (req, res) => {
+v1.post('/sessions/redeem', ...redeemLimiters, async (req, res) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   const config = requirePartnerConfig();
   const { token } = parsePartnerInput(redeemBodySchema, req.body);

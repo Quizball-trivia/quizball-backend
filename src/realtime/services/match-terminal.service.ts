@@ -1,4 +1,6 @@
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
+import { matchesService } from '../../modules/matches/matches.service.js';
+import type { PartnerRankedCause } from '../../modules/partners/games/ranked/ranked-entries.js';
 import { deleteMatchCache } from '../match-cache.js';
 import { acquireLock, releaseLock } from '../locks.js';
 
@@ -8,7 +10,9 @@ export type AbandonMatchWithCompleteLockResult = {
 };
 
 export async function abandonMatchWithCompleteLock(
-  matchId: string
+  matchId: string,
+  /** How a partner ranked match ended (default: a server-side end, both plays returned). */
+  partnerCause?: PartnerRankedCause,
 ): Promise<AbandonMatchWithCompleteLockResult> {
   const lockKey = `lock:match:${matchId}:complete`;
   const lock = await acquireLock(lockKey, 15_000);
@@ -22,7 +26,10 @@ export async function abandonMatchWithCompleteLock(
       return { abandoned: false, reason: 'not_active' };
     }
 
-    const abandoned = await matchesRepo.abandonMatch(matchId);
+    // A partner match settles its partner plays in the abandon transaction.
+    const abandoned = activeMatch.partner_pool
+      ? await matchesService.abandonMatchIfActive(matchId, partnerCause)
+      : await matchesRepo.abandonMatch(matchId);
     if (abandoned) {
       await deleteMatchCache(matchId);
     }

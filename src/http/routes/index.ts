@@ -59,6 +59,9 @@ import { roadToGoalRoutes } from './road-to-goal.routes.js';
 
 import { adminFootballGridRoutes } from './admin-football-grid.routes.js';
 
+import { rejectPartnerCredentials } from '../middleware/auth.js';
+import { partnerRoutes } from './partner.routes.js';
+
 const router = Router();
 
 // Health check (not versioned)
@@ -70,6 +73,7 @@ if (config.DOCS_ENABLED) {
 }
 
 // API v1 routes
+router.use('/api/v1', rejectPartnerCredentials);
 router.use('/api/v1/auth', authRoutes);
 router.use('/api/v1/users', usersRoutes);
 router.use('/api/v1/friends', friendsRoutes);
@@ -127,5 +131,8 @@ router.use('/api/v1/guest', guestRoutes);
 router.use('/api/v1/road-to-goal', roadToGoalRoutes);
 
 router.use('/api/v1/admin/football-grid', adminFootballGridRoutes);
+
+// Partner integration at the API root: /partner/v1 (machine, browser, player) and /partner-admin/v1 (staff).
+router.use(partnerRoutes);
 
 export const routes = router;

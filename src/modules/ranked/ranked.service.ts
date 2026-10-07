@@ -297,7 +297,8 @@ export const rankedService = {
     // Guests (friend rooms) never own a ranked profile: every presentation path
     // (auction cards, grid HUD, lobby RP) gets a synthetic unplaced profile instead.
     const user = await usersRepo.getById(userId);
-    if (user?.is_guest) return guestRankedProfile(userId);
+    // Partner players never hold RP or a leaderboard row either.
+    if (user?.is_guest || user?.partner_slug) return guestRankedProfile(userId);
     const profile = await rankedRepo.ensureProfile(userId);
     const normalizedTier = tierFromRp(profile.rp);
     if (profile.tier === normalizedTier) return profile;
@@ -399,7 +400,8 @@ export const rankedService = {
     occurredAt?: Date,
   ): Promise<RankedMatchOutcome | null> {
     const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.mode !== 'ranked' || match.status !== 'completed') {
+    // Partner matches settle into partner plays only (no RP, coins, QP or governor updates for either side).
+    if (!match || match.mode !== 'ranked' || match.status !== 'completed' || match.partner_pool) {
       logger.debug({ matchId, mode: match?.mode, status: match?.status }, 'Ranked settlement skipped: match not eligible');
       return null;
     }

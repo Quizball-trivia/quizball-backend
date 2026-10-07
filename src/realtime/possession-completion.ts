@@ -41,6 +41,8 @@ import { finalizeRankedNoContest } from './services/ranked-no-contest.service.js
 import { hasNoHumanInteraction, isNoContestHuman } from './services/match-interaction.service.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchFinalResultsPayload } from './socket.types.js';
+import type { PartnerRankedCause } from '../modules/partners/games/ranked/ranked-entries.js';
+import { resolveMatchPresence } from './services/match-presence.service.js';
 
 export type ProgressDecisionBasis = 'goals' | 'penalty_goals' | 'total_points' | 'correct_answers';
 export type ProgressResolutionDecision = ResolutionDecision & { basis: ProgressDecisionBasis };
@@ -61,7 +63,21 @@ type CompletionDecision = ResolutionDecision & {
 type CompletePossessionMatchOptions = {
   decisionStrategy?: 'natural' | 'progress';
   source?: string;
+  /** Partner matches: why the match ended when the caller knows (both dropped, a server-side end); inferred otherwise. */
+  partnerCause?: PartnerRankedCause;
 };
+
+/** Whether any human of the match is connected (the bot is always "present"; an excused exit is not presence). */
+async function anyHumanPresent(
+  io: QuizballServer,
+  matchId: string,
+  roster: Array<{ user_id: string }>,
+): Promise<boolean> {
+  const presence = await resolveMatchPresence(io, matchId, roster, { includeUserRoomSockets: true });
+  return presence.playerStates.some((state) => state.present
+    && !state.reasons.includes('ai')
+    && state.reasons.some((reason) => reason !== 'exit_pending'));
+}
 
 export function decideWinner(
   players: Array<{ user_id: string; seat: number; total_points: number; correct_answers?: number }>,
@@ -269,7 +285,8 @@ export async function completePossessionMatch(
     // (grace expiry / orphan resolver / disconnect) already owns forfeit-first
     // and its own no-contest+refund handling, and must keep completing by
     // existing progress (S15b) — this guard must not intercept that path.
-    if (match.mode === 'ranked' && options.decisionStrategy !== 'progress') {
+    // Partner matches are scored as played (contract §7.1); real leaves are handled by the disconnect paths.
+    if (match.mode === 'ranked' && options.decisionStrategy !== 'progress' && match.partner_pool == null) {
       const rosterUsers = await usersRepo.getByIds(decisionInput.map((player) => player.user_id));
       const humanUserIds = new Set(
         decisionInput
@@ -325,10 +342,24 @@ export async function completePossessionMatch(
     // A draw places both sides 1st. The placements ride in the completion
     // transaction: if they cannot be written the status flip rolls back too,
     // so a retry (round-resolver / replay) re-enters here and still settles.
+    const partnerMatch = match.partner_pool != null;
+    // Partner matches: the progress strategy ends a match both players dropped out of (contract §7.1). A match
+    // timers played out with no human connected (a crash nobody came back from) is not a played result either:
+    // it is scored as both dropped (score decides; level → both plays returned, no events).
+    // An explicit cause from the caller (e.g. the server ran out of questions) wins over any inference.
+    const partnerCause: PartnerRankedCause = options.partnerCause
+      ?? (options.decisionStrategy === 'progress'
+        ? { kind: 'both_dropped' }
+        : partnerMatch && !(await anyHumanPresent(io, matchId, decisionInput))
+          ? { kind: 'both_dropped' }
+          : { kind: 'natural' });
     if (decision.method === 'draw') {
       await matchesService.completeMatch(matchId, decision.winnerId, undefined, {
         placements: decisionInput.map((player) => ({ userId: player.user_id, placement: 1 })),
+        ...(partnerMatch ? { partnerCause } : {}),
       });
+    } else if (partnerMatch) {
+      await matchesService.completeMatch(matchId, decision.winnerId, undefined, { partnerCause });
     } else {
       await matchesService.completeMatch(matchId, decision.winnerId);
     }
@@ -453,11 +484,13 @@ export async function completePossessionMatch(
       .filter((userId) => finalUsers.get(userId)?.is_guest === false);
     const [xpAwardResult, achievementResult] = await Promise.allSettled([
       progressionService.awardCompletedMatchXp(matchId),
-      achievementsService.evaluateForMatch(
-        matchId,
-        achievementUserIds,
-        match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
-      ),
+      partnerMatch
+        ? Promise.resolve({})
+        : achievementsService.evaluateForMatch(
+          matchId,
+          achievementUserIds,
+          match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
+        ),
     ]);
     if (xpAwardResult.status === 'rejected') {
       logger.warn({ err: xpAwardResult.reason, matchId }, 'Match XP award failed after completion');
@@ -533,9 +566,11 @@ export async function completePossessionMatch(
     ];
     io.to(finalResultRooms).emit('match:final_results', finalResultsPayload);
 
-    fireAndForget('evaluateObjectivesAfterPossessionFinalResults', async () => {
-      await objectivesService.evaluateForMatchBestEffort(matchId);
-    });
+    if (!partnerMatch) {
+      fireAndForget('evaluateObjectivesAfterPossessionFinalResults', async () => {
+        await objectivesService.evaluateForMatchBestEffort(matchId);
+      });
+    }
 
     for (const player of finalPlayers) {
       const opponentPlayer = finalPlayers.find((p) => p.user_id !== player.user_id);
@@ -596,13 +631,14 @@ export async function completePossessionMatch(
 export async function completePossessionMatchFromProgress(
   io: QuizballServer,
   matchId: string,
-  source: string
+  source: string,
+  partnerCause?: PartnerRankedCause
 ): Promise<CompletePossessionMatchResult> {
   return completePossessionMatch(
     io,
     matchId,
     parsePossessionState(null),
     undefined,
-    { decisionStrategy: 'progress', source }
+    { decisionStrategy: 'progress', source, partnerCause }
   );
 }

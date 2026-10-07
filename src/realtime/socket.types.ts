@@ -1570,6 +1570,8 @@ export type WlEventPayload =
 
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
+  /** A Freecroco socket's partner session ended (blocked, replaced, expired); the socket closes right after. */
+  'partner:session_ended': (data: { reason: string }) => void;
   'wl:phase': (data: WlPhaseEventPayload) => void;
   'wl:dispatch': (data: WlDispatchEventPayload) => void;
   'wl:clue_reveal': (data: WlClueRevealEventPayload) => void;

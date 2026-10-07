@@ -100,7 +100,8 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
   // receive a normal forfeit win. Inside the ranked <2-round window, route the
   // absent human through the shared finalizer so it cancels as a no-contest;
   // later matches still fall through to progress and preserve the earned score.
-  const canAwardForfeitWin = canForfeitToPresentPlayers(presence);
+  // Freecroco: a leaver scores 0 even against a bot (contract §7.1), so the bot may collect the forfeit.
+  const canAwardForfeitWin = canForfeitToPresentPlayers(presence) || match.partner_pool != null;
   const shouldFinalizeEarlyNoContest =
     !canAwardForfeitWin
     && presence.presentPlayers.length > 0
@@ -148,7 +149,14 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
     }
   }
 
-  const progressResult = await completePossessionMatchFromProgress(io, match.id, source);
+  // Partner: everyone gone = both dropped out (scored by the table); a stale match with its players still here
+  // is a server-side end (both plays back).
+  const partnerCause = presence.presentPlayers.length === 0
+    ? { kind: 'both_dropped' as const }
+    : { kind: 'server_failure' as const };
+  const progressResult = match.partner_pool
+    ? await completePossessionMatchFromProgress(io, match.id, source, partnerCause)
+    : await completePossessionMatchFromProgress(io, match.id, source);
   if (progressResult.completed) {
     await cleanupOrphanMatchRedisKeys(match.id, userIds);
     logger.info(
@@ -171,7 +179,9 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
     return { outcome: 'skipped', reason: 'progress_lock_or_inactive' };
   }
 
-  const abandoned = await abandonMatchWithCompleteLock(match.id);
+  const abandoned = match.partner_pool
+    ? await abandonMatchWithCompleteLock(match.id, partnerCause)
+    : await abandonMatchWithCompleteLock(match.id);
   if (!abandoned.abandoned) {
     return { outcome: 'skipped', reason: 'abandon_lock_or_inactive' };
   }
@@ -193,7 +203,7 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
       // missing/deleted id is human (no ghost refunds).
       humanUserIds = roster
         .map((player) => rosterUsers.get(player.user_id))
-        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false && user.partner_slug == null)
         .map((user) => user.id);
       if (humanUserIds.length > 0) {
         await storeService.refundRankedTickets(humanUserIds);

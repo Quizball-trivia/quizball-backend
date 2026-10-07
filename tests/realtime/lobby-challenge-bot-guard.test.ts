@@ -349,3 +349,37 @@ describe('acceptChallenge — ZERO ACCEPTS for an is_ai target (hard invariant)'
     expect(updateInvitationStatusMock).toHaveBeenCalledWith('invite-3', 'accepted');
   });
 });
+
+describe('challengeFriend — partner players and partner staff are never challengeable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runWithUserTransitionLockMock.mockResolvedValue(false);
+    expireStalePendingBetweenMock.mockResolvedValue(undefined);
+    findPendingBetweenMock.mockResolvedValue(null);
+    friendshipExistsMock.mockResolvedValue(true);
+  });
+
+  for (const [kind, target] of [
+    ['partner player', { id: 'p-1', is_ai: false, is_guest: false, partner_slug: 'freecroco', role: 'user' }],
+    ['partner staff', { id: 's-1', is_ai: false, is_guest: false, partner_slug: null, role: 'partner_staff' }],
+  ] as const) {
+    it(`rejects a ${kind} target even when befriended`, async () => {
+      getByIdMock.mockResolvedValue(target);
+      const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
+      const { socket, emit } = makeSocket('human-1');
+      await challengeFriend({} as never, socket, { toUserId: target.id });
+      expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_CHALLENGE_INVALID' }));
+      expect(runWithUserTransitionLockMock).not.toHaveBeenCalled();
+    });
+  }
+
+  it('refuses a challenge sent by a partner player', async () => {
+    getByIdMock.mockResolvedValue({ id: 'human-2', is_ai: false });
+    const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
+    const emit = vi.fn();
+    const socket = { data: { user: { id: 'p-1', partner_slug: 'freecroco', role: 'user' } }, emit, join: vi.fn() } as never;
+    await challengeFriend({} as never, socket, { toUserId: 'human-2' });
+    expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'CAPABILITY_REQUIRED' }));
+    expect(getByIdMock).not.toHaveBeenCalled();
+  });
+});

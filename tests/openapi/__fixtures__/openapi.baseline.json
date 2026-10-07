@@ -2952,7 +2952,8 @@
             "type": "string",
             "enum": [
               "admin",
-              "user"
+              "user",
+              "partner_staff"
             ]
           },
           "nickname": {
@@ -13541,7 +13542,8 @@
                       "type": "string",
                       "enum": [
                         "admin",
-                        "user"
+                        "user",
+                        "partner_staff"
                       ]
                     },
                     "nickname": {

@@ -34,16 +34,34 @@ import {
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 import {
-  RANKED_MM_QUEUE_KEY,
+  PUBLIC_RANKED_POOL,
   RANKED_MM_SEARCH_KEY_PREFIX,
-  RANKED_MM_TIMEOUTS_KEY,
   RANKED_MM_USER_MAP_KEY,
+  rankedPoolKeys,
+  type RankedPool,
   rankedCancelKey,
   rankedJoinDebounceKey,
   rankedLeaveGuardKey,
   rankedPairingInFlightKey,
   rankedSearchKey,
 } from '../ranked-matchmaking-keys.js';
+import {
+  activeRankedPools,
+  partnerRankedPool,
+  isPartnerRankedPool,
+  rankedCancelSearchKeys,
+  rankedPoolForUser,
+} from '../../modules/partners/games/ranked/ranked-pool.js';
+import { PARTNER_SAME_OPPONENT_DAILY_CAP } from '../../modules/partners/games/ranked/ranked-policy.js';
+import {
+  countPartnerMatchesBetweenToday,
+  partnerDisplayNames,
+  markPartnerRankedOpponentShown,
+  releasePartnerRankedSearch,
+  reservePartnerRankedPlay,
+  touchPartnerRankedSearch,
+} from '../../modules/partners/games/ranked/ranked-entries.js';
+import { PartnerError } from '../../modules/partners/partner-errors.js';
 
 const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
@@ -100,13 +118,32 @@ async function bestEffortCancelRankedQueueSearch(userId: string, source: string)
 
   try {
     const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+      keys: rankedCancelSearchKeys(),
       arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
     });
     return toStringArray(resultRaw)[0] ?? null;
   } catch (error) {
     logger.warn({ err: error, userId, source }, 'Ranked stale queue cleanup failed');
     return null;
+  }
+}
+
+/**
+ * A partner player's search ended before any match started: return the play (contract §7.1). Only when the player
+ * provably holds no lobby or match (a failed teardown may leave one able to progress); the partner reconciler returns
+ * any play skipped here once the player is idle.
+ */
+async function releasePartnerSearch(
+  userId: string,
+  reason: string,
+  opts: { left?: boolean; opponentLeft?: boolean } = {},
+): Promise<void> {
+  try {
+    const snapshot = await userSessionGuardService.resolveState(userId);
+    if (snapshot.activeMatchId || snapshot.waitingLobbyId || snapshot.state === 'CORRUPT_MULTI_STATE') return;
+    await releasePartnerRankedSearch(userId, reason, undefined, opts);
+  } catch (error) {
+    logger.warn({ err: error, userId, reason }, 'Partner ranked play release failed');
   }
 }
 
@@ -282,9 +319,39 @@ async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): P
  * the enqueue in handleQueueJoin so the player keeps searching instead of
  * silently falling out of matchmaking.
  */
-async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<void> {
+async function requeueRankedSearch(io: QuizballServer, userId: string, pool: RankedPool): Promise<void> {
+  if (!isPartnerRankedPool(pool)) {
+    await enqueueRequeuedSearch(io, userId, pool, null);
+    return;
+  }
+  // As a queue join does: under the user's session lock, where the partner reconciler judges this play's search, and
+  // only while the play is still open.
+  const locked = await userSessionGuardService.withUserSessionLock(userId, async () => {
+    const playId = await touchPartnerRankedSearch(userId);
+    if (!playId) {
+      logger.info({ userId }, 'Partner re-queue skipped: the ranked play has ended');
+      io.to(`user:${userId}`).emit('ranked:queue_left');
+      await userSessionGuardService.emitState(io, userId);
+      return;
+    }
+    await enqueueRequeuedSearch(io, userId, pool, playId);
+  }, { waitMs: SESSION_LOCK_WAIT_MS });
+  if (locked === null) {
+    logger.warn({ userId }, 'Partner re-queue skipped: user session lock busy');
+    io.to(`user:${userId}`).emit('ranked:queue_left');
+    await userSessionGuardService.emitState(io, userId);
+  }
+}
+
+async function enqueueRequeuedSearch(
+  io: QuizballServer,
+  userId: string,
+  pool: RankedPool,
+  partnerPlayId: string | null,
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
+  const poolKeys = rankedPoolKeys(pool);
   const now = Date.now();
   const deadlineAt = now + SEARCH_DURATION_MS;
   const newSearchId = randomUUID();
@@ -296,16 +363,18 @@ async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<
     status: 'queued',
     queuedAt: String(now),
     deadlineAt: String(deadlineAt),
+    pool,
   };
   if (socket?.data?.currentCountry) {
     searchFields.countryCode = socket.data.currentCountry;
   }
+  if (partnerPlayId) searchFields.playId = partnerPlayId;
   const multiResult = await redis
     .multi()
     .hSet(rankedSearchKey(newSearchId), searchFields)
     .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
-    .zAdd(RANKED_MM_QUEUE_KEY, { score: now, value: newSearchId })
-    .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+    .zAdd(poolKeys.queue, { score: now, value: newSearchId })
+    .zAdd(poolKeys.timeouts, { score: deadlineAt, value: newSearchId })
     .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
     .exec();
 
@@ -330,8 +399,11 @@ export async function startHumanRankedMatch(
   sessionCountries?: {
     userA?: string | null;
     userB?: string | null;
-  }
+  },
+  pool: RankedPool = PUBLIC_RANKED_POOL
 ): Promise<void> {
+  const partnerPool = isPartnerRankedPool(pool);
+  let botsInstead = false;
   await withSpan('ranked.match_found.human', {
     'quizball.user_a_id': userAId,
     'quizball.user_b_id': userBId,
@@ -375,6 +447,7 @@ export async function startHumanRankedMatch(
             searchId: null,
           });
           io.to(`user:${survivorId}`).emit('ranked:queue_left');
+          if (partnerPool) await releasePartnerSearch(survivorId, 'ranked_pair_opponent_cancelled', { opponentLeft: true });
         }
         await Promise.all(survivors.map((id) => userSessionGuardService.emitState(io, id)));
       };
@@ -436,9 +509,10 @@ export async function startHumanRankedMatch(
           });
           io.to(`user:${absentId}`).emit('ranked:queue_left');
           await userSessionGuardService.emitState(io, absentId);
+          if (partnerPool) await releasePartnerSearch(absentId, 'ranked_human_pair_absent_socket');
         }
         for (const presentId of presentUserIds) {
-          await requeueRankedSearch(io, presentId);
+          await requeueRankedSearch(io, presentId, pool);
         }
         span.setAttribute('quizball.skipped_absent_socket', true);
         return true;
@@ -464,12 +538,33 @@ export async function startHumanRankedMatch(
         return;
       }
 
+      if (partnerPool && await countPartnerMatchesBetweenToday(userAId, userBId) >= PARTNER_SAME_OPPONENT_DAILY_CAP) {
+        logger.info({ userAId, userBId }, 'Partner pair already met the daily cap; each gets a bot');
+        botsInstead = true;
+        span.setAttribute('quizball.partner_same_opponent_cap', true);
+        return;
+      }
+
+      // Pools never mix: both players must belong to the pool they were paired in.
+      if (rankedPoolForUser(userA) !== pool || rankedPoolForUser(userB) !== pool) {
+        logger.error({ userAId, userBId, pool }, 'Ranked pairing refused: players are not both in the paired pool');
+        for (const userId of [userAId, userBId]) {
+          await handleStaleRankedQueueUser(io, userId, 'ranked_pair_pool_mismatch');
+          await userSessionGuardService.emitState(io, userId);
+        }
+        span.setAttribute('quizball.skipped_pool_mismatch', true);
+        return;
+      }
+
       const [profileA, profileB] = await Promise.all([
         rankedService.ensureProfile(userAId),
         rankedService.ensureProfile(userBId),
       ]);
-      const wallets = await getRankedTicketWallets([userAId, userBId]);
-      const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
+      // Partner players hold a reserved play instead of a ticket (checked again when the match is created).
+      const wallets = partnerPool ? {} : await getRankedTicketWallets([userAId, userBId]);
+      const insufficientUserIds = partnerPool
+        ? []
+        : [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
       if (insufficientUserIds.length > 0) {
         logger.warn(
           {
@@ -541,6 +636,13 @@ export async function startHumanRankedMatch(
 
       if (await abortIfMissingLiveSocket()) return;
 
+      // From here the opponent can be shown (lobby state, match_found, a reconnect): record it first, or show nothing.
+      if (partnerPool && !await markPartnerRankedOpponentShown([userAId, userBId])) {
+        await releaseUncancelledUsers(false, false);
+        span.setAttribute('quizball.skipped_reveal_not_recorded', true);
+        return;
+      }
+
       const lobby = await lobbiesRepo.createLobby({
         mode: 'ranked',
         hostUserId: userAId,
@@ -567,12 +669,13 @@ export async function startHumanRankedMatch(
         statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
       ]);
 
+      const shownNames = partnerPool ? await partnerDisplayNames([userAId, userBId]) : new Map<string, string>();
       io.to(`user:${userAId}`).emit('ranked:match_found', {
         lobbyId: lobby.id,
         myRecentForm: formA,
         opponent: {
           id: userB.id,
-          username: userB.nickname ?? 'Player',
+          username: shownNames.get(userB.id) ?? userB.nickname ?? 'Player',
           avatarUrl: userB.avatar_url,
           avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
           favoriteClub: userB.favorite_club ?? null,
@@ -586,7 +689,7 @@ export async function startHumanRankedMatch(
         myRecentForm: formB,
         opponent: {
           id: userA.id,
-          username: userA.nickname ?? 'Player',
+          username: shownNames.get(userA.id) ?? userA.nickname ?? 'Player',
           avatarUrl: userA.avatar_url,
           avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
           favoriteClub: userA.favorite_club ?? null,
@@ -635,6 +738,9 @@ export async function startHumanRankedMatch(
       await clearPairingInFlight([userAId, userBId]);
     }
   });
+  if (botsInstead) {
+    await Promise.all([userAId, userBId].map((userId) => startAiFallback(io, userId, undefined, pool)));
+  }
 }
 
 /**
@@ -643,6 +749,32 @@ export async function startHumanRankedMatch(
  * cancel flags and the lobby state so a late or duplicate fire is a no-op —
  * identical guards to the previous in-process setTimeout, but restart-proof.
  */
+/**
+ * A partner pair whose match never started because one side cancelled: the waiting lobby closes and both plays go
+ * back (contract §7.1, cancelled before a match starts); the other player is told the search ended.
+ */
+async function closePartnerPairLobby(
+  io: QuizballServer,
+  lobbyId: string,
+  players: Array<{ userId: string; cancelled: boolean }>,
+): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'waiting' || lobby.mode !== 'ranked') return;
+  const users = await usersRepo.getByIds(players.map((p) => p.userId));
+  if (!players.some((p) => users.get(p.userId)?.partner_slug)) return;
+  for (const player of players) {
+    await userSessionGuardService.withUserSessionLock(player.userId, async () => {
+      await userSessionGuardService.cleanupRankedQueueArtifacts(io, player.userId);
+    });
+    if (!player.cancelled) io.to(`user:${player.userId}`).emit('ranked:queue_left');
+    await releasePartnerSearch(player.userId, 'pair_cancelled_before_draft', {
+      left: player.cancelled,
+      opponentLeft: players.some((p) => p.cancelled && p.userId !== player.userId),
+    });
+    await userSessionGuardService.emitState(io, player.userId);
+  }
+}
+
 export async function runRankedDraftStart(
   io: QuizballServer,
   lobbyId: string,
@@ -660,6 +792,10 @@ export async function runRankedDraftStart(
         { lobbyId, userAId, userBId },
         'Ranked human draft start skipped because a player cancelled search'
       );
+      await closePartnerPairLobby(io, lobbyId, [
+        { userId: userAId, cancelled: Boolean(userACancelled) },
+        { userId: userBId, cancelled: Boolean(userBCancelled) },
+      ]);
       return;
     }
   }
@@ -690,7 +826,9 @@ async function startAiFallback(
   io: QuizballServer,
   userId: string,
   claimedSearchId?: string,
+  pool: RankedPool = PUBLIC_RANKED_POOL,
 ): Promise<void> {
+  const partnerPool = isPartnerRankedPool(pool);
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
   }, async () => {
@@ -728,16 +866,24 @@ async function startAiFallback(
       io.to(`user:${userId}`).emit('ranked:queue_left');
       await userSessionGuardService.emitState(io, userId);
       logger.warn({ userId }, 'Ranked matchmaking fallback skipped: queued user has no live socket');
+      if (partnerPool) await releasePartnerSearch(userId, 'ranked_ai_fallback_absent_socket');
       rankedDebug('fallback_skipped_absent_socket', {
         user: rankedDebugUser(userId),
       });
       return;
     }
-    if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
+    if (!partnerPool && !await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
       return;
     }
-    const started = await startRankedAiForUser(io, userId, { skipSearchEmit: true });
-    if (!started) return;
+    // The partner search already waited its ~10 s (contract §7.1); the bot is found right away.
+    const started = await startRankedAiForUser(io, userId, {
+      skipSearchEmit: true,
+      ...(partnerPool ? { searchDurationMs: 500, partner: true } : {}),
+    });
+    if (!started) {
+      if (partnerPool) await releasePartnerSearch(userId, 'ranked_ai_fallback_failed');
+      return;
+    }
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
     rankedDebug('fallback_to_ai', {
       user: rankedDebugUser(userId),
@@ -746,8 +892,9 @@ async function startAiFallback(
   });
 }
 
-async function processFallbacks(io: QuizballServer): Promise<void> {
-  await withSpan('ranked.process_fallbacks', {}, async (span) => {
+async function processFallbacks(io: QuizballServer, pool: RankedPool): Promise<void> {
+  const poolKeys = rankedPoolKeys(pool);
+  await withSpan('ranked.process_fallbacks', { 'quizball.ranked_pool': pool }, async (span) => {
     const redis = getRedisClient();
     if (!redis) {
       span.setAttribute('quizball.redis_available', false);
@@ -760,7 +907,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     // human pair. Leave the whole queue to the atomic pair phase while at
     // least two candidates remain; fallbacks resume on the next tick once
     // fewer than two searches are available.
-    const queuedCount = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    const queuedCount = await redis.zCard(poolKeys.queue);
     span.setAttribute('quizball.queued_search_count', queuedCount);
     if (queuedCount >= 2) {
       span.setAttribute('quizball.deferred_for_human_pair', true);
@@ -768,7 +915,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     }
 
     const now = Date.now();
-    const due = await redis.zRangeByScore(RANKED_MM_TIMEOUTS_KEY, 0, now, {
+    const due = await redis.zRangeByScore(poolKeys.timeouts, 0, now, {
       LIMIT: { offset: 0, count: MAX_FALLBACKS_PER_TICK },
     });
     span.setAttribute('quizball.due_search_count', due.length);
@@ -777,7 +924,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     let fallbackFailureCount = 0;
     for (const searchId of due) {
       const resultRaw = await redis.eval(RANKED_MM_CLAIM_FALLBACK_SCRIPT, {
-        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY, rankedSearchKey(searchId)],
+        keys: [poolKeys.queue, poolKeys.timeouts, RANKED_MM_USER_MAP_KEY, rankedSearchKey(searchId)],
         arguments: [searchId, String(now), String(now)],
       });
       const result = toStringArray(resultRaw);
@@ -785,7 +932,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       if (!userId) continue;
       fallbackCount += 1;
       try {
-        await startAiFallback(io, userId, searchId);
+        await startAiFallback(io, userId, searchId, pool);
       } catch (error) {
         fallbackFailureCount += 1;
         logger.error(
@@ -799,8 +946,9 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
   });
 }
 
-async function processPairs(io: QuizballServer): Promise<void> {
-  await withSpan('ranked.process_pairs', {}, async (span) => {
+async function processPairs(io: QuizballServer, pool: RankedPool): Promise<void> {
+  const poolKeys = rankedPoolKeys(pool);
+  await withSpan('ranked.process_pairs', { 'quizball.ranked_pool': pool }, async (span) => {
     const redis = getRedisClient();
     if (!redis) {
       span.setAttribute('quizball.redis_available', false);
@@ -811,7 +959,7 @@ async function processPairs(io: QuizballServer): Promise<void> {
     let pairFailureCount = 0;
     for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
       const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
-        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+        keys: [poolKeys.queue, poolKeys.timeouts, RANKED_MM_USER_MAP_KEY],
         arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
       });
       const result = toStringArray(resultRaw);
@@ -836,7 +984,7 @@ async function processPairs(io: QuizballServer): Promise<void> {
         await startHumanRankedMatch(io, userAId, userBId, {
           userA: userACountryCode,
           userB: userBCountryCode,
-        });
+        }, pool);
       } catch (error) {
         pairFailureCount += 1;
         logger.error(
@@ -874,20 +1022,24 @@ async function rankedTick(): Promise<void> {
       span.setAttribute('quizball.tick_lock_acquired', true);
       let phaseFailureCount = 0;
       try {
-        try {
-          await processFallbacks(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.fallback_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking fallback phase failed');
-        }
+        for (const pool of activeRankedPools()) {
+          // The public queue stays off with its flag; the partner pool runs regardless.
+          if (pool === PUBLIC_RANKED_POOL && !config.RANKED_HUMAN_QUEUE_ENABLED) continue;
+          try {
+            await processFallbacks(io, pool);
+          } catch (error) {
+            phaseFailureCount += 1;
+            span.setAttribute('quizball.fallback_phase_failed', true);
+            logger.error({ err: error, pool }, 'Ranked matchmaking fallback phase failed');
+          }
 
-        try {
-          await processPairs(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.pair_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking pair phase failed');
+          try {
+            await processPairs(io, pool);
+          } catch (error) {
+            phaseFailureCount += 1;
+            span.setAttribute('quizball.pair_phase_failed', true);
+            logger.error({ err: error, pool }, 'Ranked matchmaking pair phase failed');
+          }
         }
 
         span.setAttribute('quizball.phase_failure_count', phaseFailureCount);
@@ -907,7 +1059,8 @@ async function rankedTick(): Promise<void> {
 
 export const rankedMatchmakingService = {
   start(io: QuizballServer): void {
-    if (loopTimer || !config.RANKED_HUMAN_QUEUE_ENABLED) return;
+    // The partner pool always queues (contract §7.1: a Freecroco opponent first, a bot after ~10 s).
+    if (loopTimer || (!config.RANKED_HUMAN_QUEUE_ENABLED && !partnerRankedPool())) return;
     loopIo = io;
     loopTimer = setInterval(() => {
       void rankedTick().catch((error) => {
@@ -937,6 +1090,43 @@ export const rankedMatchmakingService = {
   ): Promise<void> {
     assertCapability(socket.data.user, 'rankedEntry');
     const userId = socket.data.user.id;
+    const pool = rankedPoolForUser(socket.data.user);
+    const partner = socket.data.partner ?? null;
+    if (!pool || (isPartnerRankedPool(pool) !== Boolean(partner))) {
+      logger.warn({ userId, pool }, 'Ranked queue join refused: no ranked pool for this player');
+      socket.emit('ranked:queue_left');
+      socket.emit('error', { code: 'RANKED_QUEUE_UNAVAILABLE', message: 'Ranked is not available right now.' });
+      return;
+    }
+    const poolKeys = rankedPoolKeys(pool);
+    /**
+     * Partner players reserve today's play (quota, Tbilisi day) when a search starts, instead of a ticket; an open
+     * play is reused, so a re-sent join or a requeue never takes a second one.
+     */
+    let partnerPlayId: string | null = null;
+    const reservePartnerPlay = async (): Promise<boolean> => {
+      if (!partner) return true;
+      try {
+        const { entry, reused } = await reservePartnerRankedPlay(partner);
+        if (entry.state !== 'searching') {
+          await userSessionGuardService.emitState(io, userId);
+          return false;
+        }
+        partnerPlayId = entry.playId;
+        logger.info({ userId, playId: entry.playId, reused }, 'Partner ranked play reserved for search');
+        return true;
+      } catch (error) {
+        if (!(error instanceof PartnerError)) throw error;
+        logger.info({ userId, code: error.code }, 'Partner ranked queue join refused');
+        socket.emit('ranked:queue_left');
+        socket.emit('error', {
+          code: error.code === 'quota_exhausted' ? 'PARTNER_QUOTA_EXHAUSTED' : 'PARTNER_PLAY_UNAVAILABLE',
+          message: error.message,
+          meta: { partnerCode: error.code },
+        });
+        return false;
+      }
+    };
     const queueClientContext = {
       source: payload?.source ?? 'unknown',
       clientReason: payload?.reason ?? 'initial',
@@ -1050,7 +1240,7 @@ export const rankedMatchmakingService = {
         return;
       }
 
-      if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
+      if (!partner && !await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
         span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
         trackRankedQueueJoinIgnored({
           userId,
@@ -1087,7 +1277,7 @@ export const rankedMatchmakingService = {
         return;
       }
 
-      if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
+      if (!config.RANKED_HUMAN_QUEUE_ENABLED && !partner) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
         rankedDebug('queue_join_ai_only', {
           user: rankedDebugUser(userId),
@@ -1096,7 +1286,8 @@ export const rankedMatchmakingService = {
         if (redis) {
           await redis.del(rankedCancelKey(userId));
         }
-        await startRankedAiForUser(io, userId);
+        if (!await reservePartnerPlay()) return;
+        if (!await startRankedAiForUser(io, userId) && partner) await releasePartnerSearch(userId, 'ranked_ai_only_failed');
         return;
       }
 
@@ -1106,6 +1297,12 @@ export const rankedMatchmakingService = {
           user: rankedDebugUser(userId),
         });
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
+        if (partner) {
+          // A Freecroco player is matched with other Freecroco players first; without the queue, refuse (no play taken).
+          socket.emit('ranked:queue_left');
+          socket.emit('error', { code: 'RANKED_QUEUE_UNAVAILABLE', message: 'Ranked queue is unavailable, please retry' });
+          return;
+        }
         await startRankedAiForUser(io, userId);
         return;
       }
@@ -1283,23 +1480,30 @@ export const rankedMatchmakingService = {
             await redis.hDel(RANKED_MM_USER_MAP_KEY, userId);
           }
 
+          if (!await reservePartnerPlay()) {
+            await redis.del(rankedJoinDebounceKey(userId));
+            return;
+          }
           const newSearchId = randomUUID();
           const searchFields: Record<string, string> = {
             userId,
             status: 'queued',
             queuedAt: String(now),
             deadlineAt: String(deadlineAt),
+            pool,
           };
           if (socket.data.currentCountry) {
             searchFields.countryCode = socket.data.currentCountry;
           }
+          // The partner reconciler tears a stuck search down only when it belongs to the play it judged stuck.
+          if (partnerPlayId) searchFields.playId = partnerPlayId;
 
           const multiResult = await redis
             .multi()
             .hSet(rankedSearchKey(newSearchId), searchFields)
             .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
-            .zAdd(RANKED_MM_QUEUE_KEY, { score: now, value: newSearchId })
-            .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+            .zAdd(poolKeys.queue, { score: now, value: newSearchId })
+            .zAdd(poolKeys.timeouts, { score: deadlineAt, value: newSearchId })
             .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
             .exec();
 
@@ -1313,7 +1517,7 @@ export const rankedMatchmakingService = {
           }
 
           io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-          const queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
+          const queueSize = await redis.zCard(poolKeys.queue);
           span.setAttribute('quizball.queue_size', queueSize);
           logger.info(
             { userId, searchId: newSearchId, queueSize, ...queueClientContext },
@@ -1391,7 +1595,7 @@ export const rankedMatchmakingService = {
             'Ranked queue leave guard set'
           );
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            keys: rankedCancelSearchKeys(),
             arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
           });
           const result = toStringArray(resultRaw);
@@ -1417,6 +1621,12 @@ export const rankedMatchmakingService = {
 
           socket.emit('ranked:queue_left');
           const snapshot = await userSessionGuardService.cleanupRankedQueueArtifacts(io, userId);
+          // Cancelled while still searching: the partner play goes back; after the opponent was shown it stays used
+          // (the entry records that moment). A pairing that already claimed the search sees the cancel marker; the
+          // reconciler settles its play once the player is idle.
+          if (socket.data.partner && !snapshot.activeMatchId && !snapshot.waitingLobbyId) {
+            await releasePartnerSearch(userId, 'queue_leave', { left: true });
+          }
           io.to(`user:${userId}`).emit('session:state', snapshot);
           logger.info(
             {
@@ -1484,7 +1694,7 @@ export const rankedMatchmakingService = {
           // avoid creating a lobby for a socketless player.
           await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            keys: rankedCancelSearchKeys(),
             arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
           });
           const result = toStringArray(resultRaw);
@@ -1497,6 +1707,7 @@ export const rankedMatchmakingService = {
           });
           if (result.length > 0) {
             logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
+            if (socket.data.partner) await releasePartnerSearch(userId, 'disconnect_during_search');
             rankedDebug('disconnect_removed_queue_search', {
               user: rankedDebugUser(userId),
               socket: socket.id,
@@ -1544,4 +1755,9 @@ export const rankedMatchmakingService = {
       );
     });
   },
+};
+
+/** Test seam: the ghost-pairing requeue, which runs only deep inside a pairing. */
+export const __rankedMatchmakingInternals = {
+  requeueRankedSearch,
 };

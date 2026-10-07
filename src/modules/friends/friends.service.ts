@@ -1,6 +1,7 @@
 import { assertCapability } from '../users/capabilities.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { isUserAccountInactive, usersRepo } from '../users/users.repo.js';
+import { isPartnerOrStaff } from '../users/account-kind.js';
 import { progressionService } from '../progression/progression.service.js';
 import { notificationsService } from '../notifications/notifications.service.js';
 import { logger } from '../../core/logger.js';
@@ -85,9 +86,10 @@ export const friendsService = {
 
     const senderUser = await usersRepo.getById(senderUserId);
     if (senderUser) assertCapability(senderUser, 'social');
+    if (senderUser && isPartnerOrStaff(senderUser)) throw new NotFoundError('Target user not found');
     const targetUser = await usersRepo.getById(targetUserId);
-    // A guest is never a friend target either: it is not a discoverable account.
-    if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest) {
+    // Guests, partner players and partner staff are never friend targets: they are not discoverable accounts.
+    if (!targetUser || isUserAccountInactive(targetUser) || targetUser.is_guest || isPartnerOrStaff(targetUser)) {
       throw new NotFoundError('Target user not found');
     }
 

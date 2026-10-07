@@ -1,6 +1,15 @@
 import { startPartyRewardReconciler, stopPartyRewardReconciler } from './realtime/party-reward-reconciler.js';
 import { startGuestJourneyWorker, stopGuestJourneyWorker } from './modules/guest/guest-journey.worker.js';
+import { startPartnerDeliveryWorker, stopPartnerDeliveryWorker } from './modules/partners/delivery/worker.js';
+import { getScoreDeliveryHealth } from './modules/partners/delivery/deliveries.js';
+import { registerScoreDeliveryStatus } from './modules/partners/partner-status.js';
 import { startRegisteredMemberCountWorker, stopRegisteredMemberCountWorker } from './modules/analytics/registered-members.worker.js';
+import { startPartnerJanitor, stopPartnerJanitor } from './modules/partners/partner-janitor.js';
+import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules/partners/games/dailies/daily-sweeper.js';
+import { startQuizBoardSweeper, stopQuizBoardSweeper } from './modules/partners/games/quiz-board/index.js';
+import { startPartnerRtgMinesSweeper, stopPartnerRtgMinesSweeper } from './modules/partners/games/road-to-goal/partner-rtg-mines.sweeper.js';
+import { startPartnerGuessTheGoalSweeper, stopPartnerGuessTheGoalSweeper } from './modules/partners/games/guess-the-goal/index.js';
+import { startPartnerCardDetectiveSweeper, stopPartnerCardDetectiveSweeper } from './modules/partners/games/card-detective/index.js';
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
 import { startSquadSpinSweeper, stopSquadSpinSweeper, startSquadSpinBots, stopSquadSpinBots } from './modules/squad-spin/index.js';
@@ -24,7 +33,7 @@ import {
   withDbWatchdogProbe,
 } from './db/index.js';
 import { DbWatchdog } from './db/watchdog.js';
-import { initSocketServer } from './realtime/socket-server.js';
+import { initSocketServer, stopPartnerRankedRealtime } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
 import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
@@ -65,7 +74,16 @@ const server = httpServer.listen(config.PORT, () => {
 startAiFriendResponder();
 startGuestSweeper();
 startGuestJourneyWorker();
+// Idle until PARTNER_FREECROCO_CONFIG carries Freecroco's score-events webhook.
+startPartnerDeliveryWorker();
+registerScoreDeliveryStatus(async () => ({ ...(await getScoreDeliveryHealth()), measuredAt: new Date() }));
 startRegisteredMemberCountWorker();
+startPartnerJanitor();
+startPartnerDailiesSweeper();
+startQuizBoardSweeper();
+startPartnerRtgMinesSweeper();
+startPartnerGuessTheGoalSweeper();
+startPartnerCardDetectiveSweeper();
 startRoadToGoalSweeper();
 startRoadToGoalBots();
 startSquadSpinSweeper();
@@ -132,7 +150,14 @@ const shutdown = async (signal: string) => {
     stopAiFriendResponder(),
     stopGuestSweeper(),
     stopGuestJourneyWorker(),
+    stopPartnerDeliveryWorker(),
     stopRegisteredMemberCountWorker(),
+    stopPartnerJanitor(),
+    stopPartnerDailiesSweeper(),
+    stopQuizBoardSweeper(),
+    stopPartnerRtgMinesSweeper(),
+    stopPartnerGuessTheGoalSweeper(),
+    stopPartnerCardDetectiveSweeper(),
     stopRoadToGoalSweeper(),
     stopSquadSpinSweeper(),
     stopTriviaMinesSweeper(),
@@ -147,6 +172,8 @@ const shutdown = async (signal: string) => {
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });
+  // A Freecroco ranked reconciliation still running settles through the socket server: let it finish first.
+  await stopPartnerRankedRealtime().catch((error) => logger.error({ error }, 'Shutdown cleanup step failed'));
   io.close();
   server.close(async () => {
     await responderStopped;

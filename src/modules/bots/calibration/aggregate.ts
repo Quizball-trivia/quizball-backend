@@ -75,6 +75,7 @@ export function eligibleAnswersQuery(sql: Sql, opts: { limit?: number } = {}): P
     WHERE m.mode = 'ranked'
       AND m.status = 'completed'
       AND m.is_dev = false
+      AND m.partner_pool IS NULL
       AND u.is_ai = false
       AND u.is_seed = false
       AND u.is_deleted = false

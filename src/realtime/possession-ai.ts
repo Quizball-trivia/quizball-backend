@@ -820,6 +820,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         foundAnswerIds?: string[];
         submittedOrderIds?: string[];
         clueIndex?: number | null;
+        partnerPool: string | null;
       };
 
       // Phase A (unlocked): read the cache and compute the AI's decision. The
@@ -1105,6 +1106,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           foundAnswerIds,
           submittedOrderIds,
           clueIndex,
+          partnerPool: live.partnerPool ?? null,
         };
       });
 
@@ -1139,7 +1141,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       // Bots behave like humans, penalties included: the human handler emits
       // live in all phases. Countdown stays hidden (open-ended typing whose
       // found-count is resolved at the round result).
-      if (committed.questionKind !== 'countdown') {
+      // Partner (prize) matches: the bot's pick reaches the human only after their own answer (ack, round result).
+      if (committed.questionKind !== 'countdown' && !committed.partnerPool) {
         io.to(`match:${matchId}`).emit('match:opponent_answered', {
           matchId,
           qIndex,

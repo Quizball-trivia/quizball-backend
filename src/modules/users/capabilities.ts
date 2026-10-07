@@ -65,6 +65,9 @@ export function assertCapability(user: GuestClassifiable, capability: Capability
  * and adds the guest exclusion. Match SEMANTICS (head-to-head, forfeit) must be
  * computed from participants BEFORE filtering recipients with this.
  */
-export function isProgressionEligible(user: AiClassifiable & GuestClassifiable): boolean {
-  return isRankedSettleEligible(user) && !isGuestUser(user);
+export function isProgressionEligible(
+  user: AiClassifiable & GuestClassifiable & { partner_slug?: string | null },
+): boolean {
+  // Partner players never earn Quizball progression, whatever match they are in.
+  return isRankedSettleEligible(user) && !isGuestUser(user) && user.partner_slug == null;
 }

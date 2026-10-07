@@ -299,3 +299,62 @@ describe('resolveOrphanPossessionMatchTerminal — same guard on the stale/orpha
     expect(result.outcome).toBe('abandoned');
   });
 });
+
+describe('resolvePossessionTerminalAfterDisconnect — Freecroco partner matches (contract §7.1)', () => {
+  const partnerMatch = { ...match, partner_pool: 'freecroco-test' } as unknown as MatchRow;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    completeFromProgressMock.mockResolvedValue({ completed: true, winnerId: HUMAN, decisionBasis: 'goals' });
+    finalizeForfeitMock.mockResolvedValue({ completed: true, winnerId: BOT, resultVersion: 1 });
+  });
+
+  it('a human who drops out against a bot is the leaver (forfeit), even when leading', async () => {
+    const { resolvePossessionTerminalAfterDisconnect } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    resolveMatchPresenceMock.mockResolvedValue({ ...presence([
+      { id: HUMAN, present: false, reasons: ['disconnect_key'] },
+      { id: BOT, present: true, reasons: ['ai'] },
+    ]), exitPendingUserIds: [] });
+    await resolvePossessionTerminalAfterDisconnect({
+      io: createIo(), match: partnerMatch, roster, cacheSnapshot: null,
+      disconnectedUserIds: [HUMAN], source: 'disconnect_grace_expired',
+    });
+    expect(finalizeForfeitMock).toHaveBeenCalledWith(expect.objectContaining({ forfeitingUserId: HUMAN }));
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+  });
+
+  it('the opponent left during the grace (excused exit): both dropped, decided by the score', async () => {
+    const { resolvePossessionTerminalAfterDisconnect } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const other = 'human-2';
+    resolveMatchPresenceMock.mockResolvedValue({ ...presence([
+      { id: HUMAN, present: false, reasons: ['disconnect_key'] },
+      { id: other, present: true, reasons: ['exit_pending'] },
+    ]), exitPendingUserIds: [other] });
+    const result = await resolvePossessionTerminalAfterDisconnect({
+      io: createIo(), match: partnerMatch, roster: [{ user_id: HUMAN, seat: 1 }, { user_id: other, seat: 2 }] as never[],
+      cacheSnapshot: null, disconnectedUserIds: [HUMAN], source: 'disconnect_grace_expired',
+    });
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(completeFromProgressMock).toHaveBeenCalledWith(expect.anything(), 'm1', 'disconnect_grace_expired', { kind: 'both_dropped' });
+    expect(result).toEqual({ finalized: true, abandoned: false });
+  });
+
+  it('a Quizball match keeps the excused-exit policy (forfeit to the present player)', async () => {
+    const { resolvePossessionTerminalAfterDisconnect } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const other = 'human-2';
+    resolveMatchPresenceMock.mockResolvedValue({ ...presence([
+      { id: HUMAN, present: false, reasons: ['disconnect_key'] },
+      { id: other, present: true, reasons: ['exit_pending'] },
+    ]), exitPendingUserIds: [other] });
+    await resolvePossessionTerminalAfterDisconnect({
+      io: createIo(), match, roster: [{ user_id: HUMAN, seat: 1 }, { user_id: other, seat: 2 }] as never[],
+      cacheSnapshot: null, disconnectedUserIds: [HUMAN], source: 'disconnect_grace_expired',
+    });
+    expect(finalizeForfeitMock).toHaveBeenCalledWith(expect.objectContaining({ forfeitingUserId: HUMAN }));
+  });
+});

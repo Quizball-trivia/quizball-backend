@@ -9,21 +9,21 @@ import { statsRepo } from '../../src/modules/stats/stats.repo.js';
 // tables, schema setup, or database writes are needed. Like the other database
 // integration suites, this self-skips when the local test database is absent.
 const fixtures = `
-  WITH matches(id, mode, status, is_dev, winner_user_id, ended_at) AS (
+  WITH matches(id, mode, status, is_dev, winner_user_id, ended_at, partner_pool) AS (
     VALUES
-      (0, 'ranked', 'completed', false, 'self', '2026-07-01'::timestamptz),
-      (1, 'ranked', 'completed', false, 'opponent', '2026-07-03'::timestamptz),
-      (2, 'ranked', 'completed', false, NULL, '2026-07-04'::timestamptz),
-      (3, 'ranked', 'completed', false, NULL, '2026-07-05'::timestamptz),
-      (4, 'ranked', 'completed', false, 'self', '2026-08-01'::timestamptz),
-      (5, 'ranked', 'completed', false, 'opponent', '2026-08-02'::timestamptz),
-      (6, 'ranked', 'completed', false, NULL, '2026-08-03'::timestamptz),
-      (7, 'ranked', 'completed', false, NULL, '2026-08-04'::timestamptz),
-      (8, 'ranked', 'completed', false, 'self', '2026-06-30'::timestamptz),
-      (9, 'ranked', 'completed', true, 'self', '2026-08-05'::timestamptz),
-      (10, 'ranked', 'active', false, 'self', '2026-08-06'::timestamptz),
-      (11, 'friendly', 'completed', false, 'self', '2026-08-07'::timestamptz),
-      (12, 'ranked', 'completed', false, 'self', NULL::timestamptz)
+      (0, 'ranked', 'completed', false, 'self', '2026-07-01'::timestamptz, NULL::text),
+      (1, 'ranked', 'completed', false, 'opponent', '2026-07-03'::timestamptz, NULL::text),
+      (2, 'ranked', 'completed', false, NULL, '2026-07-04'::timestamptz, NULL::text),
+      (3, 'ranked', 'completed', false, NULL, '2026-07-05'::timestamptz, NULL::text),
+      (4, 'ranked', 'completed', false, 'self', '2026-08-01'::timestamptz, NULL::text),
+      (5, 'ranked', 'completed', false, 'opponent', '2026-08-02'::timestamptz, NULL::text),
+      (6, 'ranked', 'completed', false, NULL, '2026-08-03'::timestamptz, NULL::text),
+      (7, 'ranked', 'completed', false, NULL, '2026-08-04'::timestamptz, NULL::text),
+      (8, 'ranked', 'completed', false, 'self', '2026-06-30'::timestamptz, NULL::text),
+      (9, 'ranked', 'completed', true, 'self', '2026-08-05'::timestamptz, NULL::text),
+      (10, 'ranked', 'active', false, 'self', '2026-08-06'::timestamptz, NULL::text),
+      (11, 'friendly', 'completed', false, 'self', '2026-08-07'::timestamptz, NULL::text),
+      (12, 'ranked', 'completed', false, 'self', NULL::timestamptz, NULL::text)
   ), match_players(match_id, user_id) AS (
     VALUES
       (0, 'self'), (0, 'opponent'), (1, 'self'), (1, 'opponent'),

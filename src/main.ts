@@ -1,4 +1,5 @@
 import { startPartyRewardReconciler, stopPartyRewardReconciler } from './realtime/party-reward-reconciler.js';
+import { startMobilePushWorker,stopMobilePushWorker } from './modules/notifications/mobile-push.worker.js';
 import { startGuestJourneyWorker, stopGuestJourneyWorker } from './modules/guest/guest-journey.worker.js';
 import { startPartnerDeliveryWorker, stopPartnerDeliveryWorker } from './modules/partners/delivery/worker.js';
 import { getScoreDeliveryHealth } from './modules/partners/delivery/deliveries.js';
@@ -97,6 +98,7 @@ startFreeKicksBots();
 startBotChallengeResponder();
 startBotRenameWorker();
 startDailyComebackReminderWorker();
+startMobilePushWorker();
 startRetentionEmailWorker();
 startSeason3FeedbackWorker();
 // Loads the Buscaminas days in the background; warns once if none are seeded.
@@ -166,6 +168,7 @@ const shutdown = async (signal: string) => {
     stopBotChallengeResponder(),
     stopBotRenameWorker(),
     stopDailyComebackReminderWorker(),
+    stopMobilePushWorker(),
     stopRetentionEmailWorker(),
     stopSeason3FeedbackWorker(),
     stopWlRewardsWorker(),

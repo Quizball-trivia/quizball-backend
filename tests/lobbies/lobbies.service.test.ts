@@ -149,6 +149,7 @@ describe('lobbiesService public/friendly helpers', () => {
         displayName: 'Party Room',
         gameMode: 'friendly_party_quiz',
         duelGame: null,
+        roomGame: null,
         isPublic: true,
         createdAt: expect.any(String),
         memberCount: 4,

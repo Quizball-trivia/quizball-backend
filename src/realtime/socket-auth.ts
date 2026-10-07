@@ -12,6 +12,9 @@ import { withSpan } from '../core/tracing.js';
 import type { AuthIdentity } from '../core/types.js';
 import type { User as DbUser } from '../db/types.js';
 import { getCachedUser } from '../modules/users/user-cache.js';
+import { isPartnerToken } from '../modules/partners/partner-token.js';
+import type { PartnerPrincipal } from '../modules/partners/partner-player-auth.js';
+import { authenticatePartnerSocket } from '../modules/partners/games/ranked/ranked-realtime.js';
 import { rememberCurrentCountry } from './session-country.js';
 import { AppError } from '../core/errors.js';
 import { DbOverloadedError } from '../db/index.js';
@@ -27,7 +30,15 @@ export interface SocketAuthData {
   duelMatchId?: string;
   /** The connect-time live-duel lookup has completed for this socket. */
   duelChecked?: boolean;
+  /** The live room match this socket was seen in (connect or a room:* event). */
+  roomMatchId?: string;
+  /** The connect-time live-room lookup has completed for this socket. */
+  roomChecked?: boolean;
   connectedAt?: number;
+  /** A Freecroco player (partner access token): only the ranked events are allowed on this socket. */
+  partner?: PartnerPrincipal;
+  /** Set once the connect-time session check admitted this partner socket. */
+  partnerAdmitted?: boolean;
 }
 
 function safeDecode(value: string): string {
@@ -91,6 +102,31 @@ export async function socketAuthMiddleware(
       }
 
       span.setAttribute('quizball.auth_token_present', true);
+      // Partner tokens never go to Supabase: a valid partner access token with a live session plays ranked only.
+      if (isPartnerToken(token)) {
+        let partnerAuth: Awaited<ReturnType<typeof authenticatePartnerSocket>>;
+        try {
+          partnerAuth = await authenticatePartnerSocket(token);
+        } catch (error) {
+          span.setAttribute('quizball.partner_refused', true);
+          const refused = new Error('Authentication required');
+          const reason = (error as { reason?: unknown }).reason;
+          (refused as Error & { data?: unknown }).data = { code: 'PARTNER_SESSION_ENDED', reason: typeof reason === 'string' ? reason : 'expired' };
+          next(refused);
+          return;
+        }
+        span.setAttribute('quizball.partner', true);
+        span.setAttribute('quizball.user_id', partnerAuth.user.id);
+        const data: SocketAuthData = {
+          user: partnerAuth.user,
+          identity: { provider: 'partner', subject: partnerAuth.partner.playerId, claims: {} },
+          currentCountry: null,
+          partner: partnerAuth.partner,
+        };
+        socket.data = { ...(socket.data ?? {}), ...data };
+        next();
+        return;
+      }
       // Guest tokens (64 hex, minted for the public pages) authenticate friend-room
       // play only. Drain order: provisioning off stops NEW guests and new rooms
       // (existing guests may finish); reconnect off refuses every guest socket.
@@ -128,6 +164,12 @@ export async function socketAuthMiddleware(
         span.setAttribute('quizball.is_guest', true);
       } else {
         user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
+      }
+      // Partner staff are CMS principals, not players.
+      if (user.role === 'partner_staff') {
+        span.setAttribute('quizball.staff_refused', true);
+        next(new Error('Authentication required'));
+        return;
       }
       if (detectedCountry) {
         await rememberCurrentCountry(user.id, detectedCountry);

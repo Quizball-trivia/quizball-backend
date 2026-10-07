@@ -1,5 +1,7 @@
 import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
 import { registerDuelHandlers } from './handlers/duel.handler.js';
+import { registerRoomHandlers } from './handlers/room.handler.js';
+import { roomRealtimeService } from './services/room-realtime.service.js';
 import { duelRealtimeService } from './services/duel-realtime.service.js';
 import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
 import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
@@ -16,6 +18,13 @@ import { config } from '../core/config.js';
 import { logger } from '../core/logger.js';
 import { initRedisClients } from './redis.js';
 import { socketAuthMiddleware, type SocketAuthData } from './socket-auth.js';
+import {
+  connectPartnerSocket,
+  partnerSocketAdmitted,
+  registerPartnerRankedBlockHandler,
+  startPartnerRankedReconciler,
+  stopPartnerRankedReconciler,
+} from '../modules/partners/games/ranked/ranked-realtime.js';
 import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
@@ -405,7 +414,11 @@ async function runPostConnectHydration(
   });
   // A live duel is live gameplay too: no older result may replay over it (even when its presence update failed).
   // A failed lookup counts as "maybe": pending results wait for a later connect.
-  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked;
+  await roomRealtimeService.onConnect(io, socket).catch((error) => {
+    logger.warn({ error, userId }, 'Failed to point a reconnecting player at their room game');
+  });
+  const inDuel = Boolean(socket.data.duelMatchId) || !socket.data.duelChecked
+    || Boolean(socket.data.roomMatchId) || !socket.data.roomChecked;
   if (config.FOOTBALL_GRID_QUEUE_ENABLED && !socket.data.matchId && !inDuel) {
     try {
       await footballGridRealtimeService.flushPendingGridResultsOnConnect(io, socket);
@@ -550,6 +563,9 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     duel_phase: async (server, payload: RealtimeTimerPayload) => {
       await duelRealtimeService.handlePhaseTimer(server, payload);
     },
+    room_phase: async (server, payload: RealtimeTimerPayload) => {
+      await roomRealtimeService.handlePhaseTimer(server, payload);
+    },
     football_grid_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_matchmaking_fallback') return;
       await footballGridMatchmakingService.handleFallbackTimer(server, payload.searchId, payload.userId);
@@ -624,6 +640,15 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
   };
 }
 
+let unregisterPartnerRankedBlock: (() => void) | null = null;
+
+/** Stops the Freecroco ranked block handler and reconciler (shutdown, or before re-initialising). */
+export function stopPartnerRankedRealtime(): Promise<void> {
+  unregisterPartnerRankedBlock?.();
+  unregisterPartnerRankedBlock = null;
+  return stopPartnerRankedReconciler();
+}
+
 export async function initSocketServer(httpServer: HttpServer): Promise<QuizballServer> {
   const io: QuizballServer = new Server(httpServer, {
     cors: {
@@ -696,6 +721,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   footballGridRealtimeService.startCommandRecovery(io);
   duelRealtimeService.startRecovery(io);
   duelRealtimeService.startMaintenance(io);
+  roomRealtimeService.startRecovery(io);
+  roomRealtimeService.startMaintenance(io);
   footballGridMatchmakingService.startRecovery(io);
   footballGridMatchmakingService.startSweep(io);
 
@@ -712,6 +739,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
   rankedMatchmakingService.start(io);
   auctionMatchmakingService.start(io);
+  // A re-initialised server must not keep reconciling or handling blocks through the previous one.
+  await stopPartnerRankedRealtime();
+  unregisterPartnerRankedBlock = registerPartnerRankedBlockHandler(io);
+  startPartnerRankedReconciler(io);
 
   if (onlineCountRefreshTimer) {
     clearInterval(onlineCountRefreshTimer);
@@ -727,6 +758,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     socketRuntimeTracker.connected();
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
+    // Before any handler: a partner socket may send only the ranked events, and nothing until it is admitted.
+    const partnerAdmission = socket.data.partner ? connectPartnerSocket(io, socket) : null;
 
     // Store connection time for session duration tracking
     const connectedAt = Date.now();
@@ -742,6 +775,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerAuctionHandlers(io, socket);
     registerFootballGridHandlers(io, socket);
     registerDuelHandlers(io, socket);
+    registerRoomHandlers(io, socket);
     registerDevHandlers(io, socket);
     registerWlHandlers(io, socket);
 
@@ -803,9 +837,15 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       // Calculate actual session duration from connection time
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
+      // A refused partner socket (a stale handshake) handled nothing: its disconnect must not end the live session's
+      // search or match.
+      if (!partnerSocketAdmitted(socket.data)) return;
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       if (duelRealtimeService.mayHoldDuelSeat(socket)) {
         runSocketDbTask('duel_disconnect', user.id, () => duelRealtimeService.handleSocketDisconnect(io, user.id));
+      }
+      if (roomRealtimeService.mayHoldRoomSeat(socket)) {
+        runSocketDbTask('room_disconnect', user.id, () => roomRealtimeService.handleSocketDisconnect(io, user.id));
       }
       const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
       if (disconnectDbTasks.includes('lobby_disconnect')) {
@@ -837,10 +877,17 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       socket: socket.id,
       transport: socket.conn.transport.name,
     });
-    void trackUserOnline(user.id);
+    // Partner players are not part of Quizball's online presence.
+    if (!socket.data.partner) void trackUserOnline(user.id);
     void emitOnlineCount(io, socket);
     scheduleOnlineCountBroadcast(io);
-    runLimitedPostConnectHydration(io, socket);
+    if (partnerAdmission) {
+      void partnerAdmission.then((admitted) => {
+        if (admitted) runLimitedPostConnectHydration(io, socket);
+      });
+    } else {
+      runLimitedPostConnectHydration(io, socket);
+    }
   });
 
   return io;

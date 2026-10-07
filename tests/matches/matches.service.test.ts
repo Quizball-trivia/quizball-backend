@@ -659,6 +659,39 @@ describe('matches.service recordPartyQuizAnswerIfMissing', () => {
     ).rejects.toThrow(/incomplete state/);
   });
 
+  it('reads the winning answer with a fresh snapshot after a concurrent duplicate', async () => {
+    sqlQueryMock.mockResolvedValueOnce([{ inserted: false, answer: null, player: { total_points: 0 }, round_open: true }])
+      .mockResolvedValueOnce([{ answer: { id: 'winner', selected_index: 1, points_earned: 8 }, player: { total_points: 8 } }]);
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
+    expect(result).toEqual({ inserted: false, answer: { id: 'winner', selected_index: 1, points_earned: 8 }, player: { total_points: 8 } });
+    expect(sqlQueryMock).toHaveBeenCalledTimes(2);
+    expect(sqlQueryMock.mock.calls[1][0].join('')).not.toMatch(/INSERT|UPDATE/);
+  });
+
+  it('still rejects a missing participant or answer after the conflict read', async () => {
+    sqlQueryMock.mockResolvedValueOnce([{ inserted: false, answer: null, player: null, round_open: true }]).mockResolvedValueOnce([]);
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await expect(matchesService.recordPartyQuizAnswerIfMissing(answerInput)).rejects.toThrow(/incomplete state/);
+  });
+
+  it('review 2026-10-06 B1: a closed round with no answer of this player returns roundClosed (after the fresh read)', async () => {
+    sqlQueryMock.mockResolvedValueOnce([{ inserted: false, answer: null, player: null, round_open: false }]).mockResolvedValueOnce([]);
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
+    expect(result).toEqual({ inserted: false, answer: null, player: null, roundClosed: true });
+    expect(sqlQueryMock).toHaveBeenCalledTimes(2);
+    expect(sqlQueryMock.mock.calls[0][0].join('')).toMatch(/current_q_index = .*FOR SHARE/s);
+  });
+
+  it('review round 4 (#6): an answer already recorded is returned (acknowledged) even when the round has closed since', async () => {
+    sqlQueryMock.mockResolvedValueOnce([{ inserted: false, answer: null, player: null, round_open: false }])
+      .mockResolvedValueOnce([{ answer: { id: 'original', selected_index: 2 }, player: { total_points: 17 } }]);
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
+    expect(result).toEqual({ inserted: false, answer: { id: 'original', selected_index: 2 }, player: { total_points: 17 } });
+  });
+
   it('wraps database errors from the atomic statement', async () => {
     sqlQueryMock.mockRejectedValue(new Error('statement failed'));
 

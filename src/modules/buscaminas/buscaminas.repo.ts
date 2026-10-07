@@ -1,7 +1,11 @@
-import { sql, type TransactionSql } from '../../db/index.js';
+import { sql, withStatementTimeout, type TransactionSql } from '../../db/index.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import type { BuscaminasDayRow, BuscaminasRunRow, LeaderboardEntry, Player, RunState } from './buscaminas.types.js';
+
+// A real server-side bound (SET LOCAL inside the transaction: the pooler drops startup timeouts), shorter than the
+// cache's abandon age, so a public board query can never hold a connection indefinitely.
+const LEADERBOARD_STATEMENT_MS = 4_000;
 
 const exec = (tx: TransactionSql): typeof sql => tx as unknown as typeof sql;
 
@@ -148,10 +152,21 @@ export const buscaminasRepo = {
 
   /** Top ranked, finished runs and the player count from one snapshot. Guest and unranked runs never appear. */
   async leaderboard(day: string, limit: number): Promise<{ players: number; top: LeaderboardEntry[] }> {
-    const rows = await sql<Array<RawEntry & { players: number }>>`
-      SELECT
-        (row_number() OVER (ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC))::int AS rank,
-        (count(*) OVER ())::int AS players,
+    const rows = await withStatementTimeout((tx) => exec(tx)<Array<RawEntry & { players: number }>>`
+      WITH eligible AS MATERIALIZED (
+        SELECT r.id, r.user_id, r.score, r.perfects, r.completed_at
+        FROM buscaminas_runs r JOIN users u ON u.id = r.user_id
+        WHERE r.day = ${day} AND r.ranked AND r.done
+          AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
+          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+      ), leaders AS (
+        SELECT r.*, (row_number() OVER (ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC))::int AS rank,
+               (count(*) OVER ())::int AS players
+        FROM eligible r
+        ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC
+        LIMIT ${limit}
+      )
+      SELECT r.rank, r.players,
         u.id AS "userId",
         COALESCE(NULLIF(u.nickname, ''), 'Player') AS "username",
         u.avatar_url AS "avatarUrl",
@@ -160,15 +175,11 @@ export const buscaminasRepo = {
         CASE WHEN rp.placement_status = 'placed' THEN rp.tier END AS "tier",
         r.score,
         r.perfects
-      FROM buscaminas_runs r
+      FROM leaders r
       JOIN users u ON u.id = r.user_id
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
-      WHERE r.day = ${day} AND r.ranked AND r.done
-        AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
-        AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
-      ORDER BY r.score DESC NULLS LAST, r.completed_at ASC, r.id ASC
-      LIMIT ${limit}
-    `;
+      ORDER BY r.rank
+    `, LEADERBOARD_STATEMENT_MS);
     return { players: rows[0]?.players ?? 0, top: rows.map(({ players: _players, ...row }) => toEntry(row)) };
   },
 

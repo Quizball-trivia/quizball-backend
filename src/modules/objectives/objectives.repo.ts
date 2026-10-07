@@ -233,6 +233,14 @@ export const objectivesRepo = {
       INSERT INTO user_objective_events (user_id, objective_id, period_start, event_key)
       SELECT $1, t.objective_id, t.period_start, $4
       FROM unnest($2::text[], $3::timestamptz[]) AS t(objective_id, period_start)
+      -- One credit per match and objective, whatever the period: a match evaluated once by the clock of its
+      -- processing (after a reset) and again by its end time must not count in both periods. A match straddles at
+      -- most one reset, so the neighbouring periods suffice (and keep this on the (user, objective, period) index).
+      WHERE NOT EXISTS (
+        SELECT 1 FROM user_objective_events e
+        WHERE e.user_id = $1 AND e.objective_id = t.objective_id AND e.event_key = $4
+          AND e.period_start BETWEEN t.period_start - interval '8 days' AND t.period_start + interval '8 days'
+      )
       ON CONFLICT (user_id, objective_id, period_start, event_key) DO NOTHING
       RETURNING objective_id
       `,

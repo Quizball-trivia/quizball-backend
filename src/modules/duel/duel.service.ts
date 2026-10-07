@@ -43,6 +43,15 @@ export interface DuelEffects {
   finished: boolean;
 }
 
+export interface DuelSnapshot {
+  matchId: string; lobbyId: string | null; game: DuelGameId; stateVersion: number; status: DuelStatus;
+  phaseToken: number; phaseDeadlineAt: string | null; serverNow: string; mySeat: Seat;
+  seats: Array<{ seat: Seat; userId: string; username: string; avatarUrl: string | null;
+    avatarCustomization: DuelParticipantRow['avatar_customization']; isGuest: boolean; ready: boolean;
+    connected: boolean; absenceBudgetMs: number }>;
+  pausedFrom: DuelMatchRow['paused_from']; view: unknown; result: DuelResult | null;
+}
+
 export type CommandResult = { ok: true } | { ok: false; code: string };
 
 /** Pool items per difficulty for one match, and the round order they are dealt in. */
@@ -523,39 +532,49 @@ export const duelService = {
     });
   },
 
-  /** Everything one seat's screen needs, read without locks; null when the user is not in the match. */
-  async snapshot(matchId: string, userId: string, localeOverride?: DuelLocale) {
+  /** One read of the match, roster and private content; each recipient gets only its engine projection. */
+  async snapshots(matchId: string, recipients: Array<{ userId: string; locale?: DuelLocale }>): Promise<Map<string, DuelSnapshot>> {
+    const snapshots = new Map<string, DuelSnapshot>();
+    if (!recipients.length) return snapshots;
     const row = await duelRepo.getMatch(matchId);
-    if (!row) return null;
+    if (!row) return snapshots;
     const participants = await duelRepo.participants(undefined, row.id);
-    const me = participants.find((p) => p.user_id === userId);
-    if (!me) return null;
-    const locale = localeOverride ?? me.locale;
-    let view: unknown = null;
-    if (row.state !== null) {
-      const engine = engineFor(row.game, row.engine_version);
-      const stored = engine ? await duelRepo.getContent(undefined, row.id) : null;
-      if (engine && stored) view = engine.view(row.state, parsedContent(engine, row.id, stored.content), me.seat, locale);
+    const members = recipients.flatMap((recipient) => {
+      const me = participants.find((p) => p.user_id === recipient.userId);
+      return me ? [{ me, locale: recipient.locale ?? me.locale }] : [];
+    });
+    if (!members.length) return snapshots;
+    const engine = row.state !== null ? engineFor(row.game, row.engine_version) : null;
+    const stored = engine ? await duelRepo.getContent(undefined, row.id) : null;
+    const content = engine && stored ? parsedContent(engine, row.id, stored.content) : null;
+    for (const { me, locale } of members) {
+      const view = engine && content ? engine.view(row.state, content, me.seat, locale) : null;
+      snapshots.set(me.user_id, {
+        matchId: row.id,
+        lobbyId: row.lobby_id,
+        game: row.game,
+        stateVersion: row.state_version,
+        status: row.status,
+        phaseToken: row.phase_token,
+        phaseDeadlineAt: row.phase_deadline_at?.toISOString() ?? null,
+        serverNow: row.now.toISOString(),
+        mySeat: me.seat,
+        seats: participants.map((p) => ({
+          seat: p.seat, userId: p.user_id, username: p.nickname ?? 'Jugador', avatarUrl: p.avatar_url,
+          avatarCustomization: p.avatar_customization, isGuest: p.is_guest, ready: p.ready_at !== null,
+          connected: p.connected, absenceBudgetMs: p.absence_budget_ms,
+        })),
+        pausedFrom: row.paused_from,
+        view,
+        result: row.result,
+      });
     }
-    return {
-      matchId: row.id,
-      lobbyId: row.lobby_id,
-      game: row.game,
-      stateVersion: row.state_version,
-      status: row.status,
-      phaseToken: row.phase_token,
-      phaseDeadlineAt: row.phase_deadline_at?.toISOString() ?? null,
-      serverNow: row.now.toISOString(),
-      mySeat: me.seat,
-      seats: participants.map((p) => ({
-        seat: p.seat, userId: p.user_id, username: p.nickname ?? 'Jugador', avatarUrl: p.avatar_url,
-        avatarCustomization: p.avatar_customization, isGuest: p.is_guest, ready: p.ready_at !== null,
-        connected: p.connected, absenceBudgetMs: p.absence_budget_ms,
-      })),
-      pausedFrom: row.paused_from,
-      view,
-      result: row.result,
-    };
+    return snapshots;
+  },
+
+  /** Everything one seat's screen needs; outsiders never load private content. */
+  async snapshot(matchId: string, userId: string, localeOverride?: DuelLocale): Promise<DuelSnapshot | null> {
+    return (await duelService.snapshots(matchId, [{ userId, locale: localeOverride }])).get(userId) ?? null;
   },
 
   /** Safety net: a live match past the hard age cap is cancelled as no contest (nobody's fault, nobody wins). */

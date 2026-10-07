@@ -2952,7 +2952,8 @@
             "type": "string",
             "enum": [
               "admin",
-              "user"
+              "user",
+              "partner_staff"
             ]
           },
           "nickname": {
@@ -13541,7 +13542,8 @@
                       "type": "string",
                       "enum": [
                         "admin",
-                        "user"
+                        "user",
+                        "partner_staff"
                       ]
                     },
                     "nickname": {
@@ -14786,7 +14788,8 @@
                               "football_grid",
                               "auction",
                               "ranked_sim",
-                              "duel"
+                              "duel",
+                              "room_game"
                             ]
                           },
                           "isPublic": {
@@ -14901,6 +14904,13 @@
                               "ultimo",
                               "minuto"
                             ]
+                          },
+                          "roomGame": {
+                            "type": "string",
+                            "enum": [
+                              "aproximado"
+                            ],
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -14909,6 +14919,7 @@
                           "displayName",
                           "gameMode",
                           "duelGame",
+                          "roomGame",
                           "isPublic",
                           "createdAt",
                           "memberCount",
@@ -25524,6 +25535,866 @@
         }
       }
     },
+    "/api/v1/notifications/devices/register": {
+      "post": {
+        "summary": "Register this account’s native push device",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expoPushToken": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": "^(Expo(nent)?PushToken)\\[[A-Za-z0-9_-]{10,200}\\]$"
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "ios",
+                      "android"
+                    ]
+                  },
+                  "clientRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka",
+                      "es",
+                      "tr"
+                    ],
+                    "default": "en"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "default": "UTC"
+                  },
+                  "appVersion": {
+                    "type": "string",
+                    "maxLength": 50
+                  }
+                },
+                "required": [
+                  "expoPushToken",
+                  "platform",
+                  "clientRevision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registered": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "registered"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/devices/unregister": {
+      "post": {
+        "summary": "Unregister this account’s native push device",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expoPushToken": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": "^(Expo(nent)?PushToken)\\[[A-Za-z0-9_-]{10,200}\\]$"
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "ios",
+                      "android"
+                    ]
+                  },
+                  "clientRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "expoPushToken",
+                  "platform",
+                  "clientRevision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "unregistered": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "unregistered"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/preferences": {
+      "get": {
+        "summary": "Read the account’s push consent and local reminder time",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "matchInvitesEnabled": {
+                      "type": "boolean"
+                    },
+                    "dailyRemindersEnabled": {
+                      "type": "boolean"
+                    },
+                    "newGamesEnabled": {
+                      "type": "boolean"
+                    },
+                    "dailyReminderHour": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 23
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "required": [
+                    "matchInvitesEnabled",
+                    "dailyRemindersEnabled",
+                    "newGamesEnabled",
+                    "dailyReminderHour",
+                    "timezone"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update explicit push consent and reminder time",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "matchInvitesEnabled": {
+                    "type": "boolean"
+                  },
+                  "dailyRemindersEnabled": {
+                    "type": "boolean"
+                  },
+                  "newGamesEnabled": {
+                    "type": "boolean"
+                  },
+                  "dailyReminderHour": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "maxLength": 100
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "matchInvitesEnabled": {
+                      "type": "boolean"
+                    },
+                    "dailyRemindersEnabled": {
+                      "type": "boolean"
+                    },
+                    "newGamesEnabled": {
+                      "type": "boolean"
+                    },
+                    "dailyReminderHour": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 23
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "required": [
+                    "matchInvitesEnabled",
+                    "dailyRemindersEnabled",
+                    "newGamesEnabled",
+                    "dailyReminderHour",
+                    "timezone"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/devices/test": {
+      "post": {
+        "summary": "Queue a notification only to the current account’s devices",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queued": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "queued"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/campaigns/preview": {
+      "get": {
+        "summary": "Admin: count eligible opted-in campaign recipients",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "users": {
+                      "type": "integer"
+                    },
+                    "devices": {
+                      "type": "integer"
+                    },
+                    "alreadyCapped": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "users",
+                    "devices",
+                    "alreadyCapped"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/campaigns/send": {
+      "post": {
+        "summary": "Admin: explicitly queue an idempotent production campaign",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "campaignId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "title": {
+                    "type": "object",
+                    "properties": {
+                      "en": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
+                      },
+                      "ka": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
+                      },
+                      "es": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
+                      },
+                      "tr": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
+                      }
+                    },
+                    "required": [
+                      "en",
+                      "ka",
+                      "es",
+                      "tr"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "en": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "ka": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "es": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "tr": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      }
+                    },
+                    "required": [
+                      "en",
+                      "ka",
+                      "es",
+                      "tr"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "route": {
+                    "type": "string",
+                    "enum": [
+                      "/(tabs)",
+                      "/(tabs)/events",
+                      "/(tabs)/leaderboard",
+                      "/(app)/daily/challenges",
+                      "/(game)/training",
+                      "/(game)/grid-training",
+                      "/(tabs)/store"
+                    ]
+                  },
+                  "confirmSend": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "required": [
+                  "campaignId",
+                  "title",
+                  "body",
+                  "route",
+                  "confirmSend"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Push account state or queue result; a queue/ticket is not proof of delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queued": {
+                      "type": "integer"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "queued",
+                    "duplicate"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account or admin permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push capability is not configured or enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notifications/unread-count": {
       "get": {
         "summary": "Get the current user unread notification count",
@@ -32910,6 +33781,87 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/party-matches/{matchId}/rewards": {
+      "get": {
+        "summary": "Read confirmed Party Quiz rewards for the authenticated participant",
+        "tags": [
+          "Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "matchId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved reward amounts and processing status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "matchId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "failed",
+                        "ineligible"
+                      ]
+                    },
+                    "xpEarned": {
+                      "type": "integer",
+                      "nullable": true,
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "matchId",
+                    "status",
+                    "xpEarned"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No completed Party Quiz match for this participant",
             "content": {
               "application/json": {
                 "schema": {

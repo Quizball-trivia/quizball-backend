@@ -29,7 +29,7 @@ import type {
   I18nText,
 } from './guess-the-goal.types.js';
 
-interface PublicOption {
+export interface PublicOption {
   id: string;
   text: I18nText;
 }
@@ -142,7 +142,7 @@ function anonymizeOptions(options: ChoreographyOption[], prefix: string): Choreo
  * Meaningful player ids ('maradona') become p1..pN; a step referencing an
  * unknown player aborts the start loudly rather than leaking the id.
  */
-function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
+export function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
   const idMap = new Map<string, string>();
   const players: ChoreographyPlayer[] = goal.players.map((p, i) => {
     const anon = `p${i + 1}`;
@@ -186,7 +186,7 @@ function buildSnapshot(goal: GoalChoreographyRow): GoalSnapshot {
 }
 
 /** Snapshot order is already randomized — serving strips correctness only. */
-function stripOptions(options: ChoreographyOption[]): PublicOption[] {
+export function stripOptions(options: ChoreographyOption[]): PublicOption[] {
   return options.map((o) => ({ id: o.id, text: o.text }));
 }
 
@@ -320,7 +320,7 @@ function bonusAwards(session: GgtSessionRow): AwardSummary {
   };
 }
 
-function correctOptionOf(options: ChoreographyOption[]): ChoreographyOption {
+export function correctOptionOf(options: ChoreographyOption[]): ChoreographyOption {
   const correct = options.find((o) => o.is_correct);
   if (!correct) throw new ConflictError('Content has no correct option');
   return correct;

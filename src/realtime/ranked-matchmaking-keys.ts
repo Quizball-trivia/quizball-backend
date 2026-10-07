@@ -22,3 +22,21 @@ export function rankedLeaveGuardKey(userId: string): string {
 export function rankedPairingInFlightKey(userId: string): string {
   return `ranked:mm:pairing:${userId}`;
 }
+
+/**
+ * Ranked matchmaking pools. Quizball members play in the public pool; a partner's players only ever meet each other
+ * (or a bot), so each partner environment gets its own queue and timeouts. The user map and search hashes stay
+ * shared: user and search ids are unique across pools and a user holds at most one ranked search.
+ */
+export const PUBLIC_RANKED_POOL = 'public';
+export type RankedPool = string;
+
+export interface RankedPoolKeys {
+  queue: string;
+  timeouts: string;
+}
+
+export function rankedPoolKeys(pool: RankedPool): RankedPoolKeys {
+  if (pool === PUBLIC_RANKED_POOL) return { queue: RANKED_MM_QUEUE_KEY, timeouts: RANKED_MM_TIMEOUTS_KEY };
+  return { queue: `ranked:mm:pool:${pool}:queue`, timeouts: `ranked:mm:pool:${pool}:timeouts` };
+}

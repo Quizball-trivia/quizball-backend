@@ -9,15 +9,21 @@ import { PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
 /**
  * Opt-in, real PostgreSQL: applies the Pistas migration to a fresh schema and runs the repo, the
  * service and the seed against it. Needs an isolated local database:
+ * Isolated audit clones on port 5436 are also accepted.
  *   PISTAS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_pistas_test_1
  * The service runs on a fixed app clock; the database clock is real, so only days long closed
  * (PAST) or explicit closes_at instants are used where the database clock decides.
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
-vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/db/index.js', () => ({
+  get sql() { return db.sql; },
+  // As in production: one transaction with a server-side statement deadline (SET LOCAL), on this suite's database.
+  withStatementTimeout: (run: (tx: unknown) => Promise<unknown>, ms = 30_000) =>
+    db.sql.begin(async (tx) => { await tx.unsafe(`SET LOCAL statement_timeout = ${Math.round(ms)}`); return run(tx); }),
+}));
 
 const url = process.env.PISTAS_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:5432\/quizball_pistas_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local pistas test database required');
+if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:543(?:2|6)\/quizball_pistas_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local pistas test database required');
 
 const MIGRATION = join(__dirname, '../../supabase/migrations/20260929120000_pistas.sql');
 const FIXTURE = `

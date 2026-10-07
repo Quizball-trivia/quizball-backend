@@ -1,6 +1,17 @@
 import type { Request, Response } from 'express';
 import { statsService } from './stats.service.js';
 import type { HeadToHeadQuery, RecentMatchesQuery } from './stats.schemas.js';
+import { getPartyRewards } from './party-rewards.service.js';
+import { NotFoundError } from '../../core/errors.js';
+import { usersRepo } from '../users/users.repo.js';
+import { isPartnerOrStaff } from '../users/account-kind.js';
+
+/** Partner players and partner staff have no public history: another caller gets the same 404 as a missing user. */
+async function assertStatsTargetVisible(targetUserId: string, callerId: string | undefined): Promise<void> {
+  if (targetUserId === callerId) return;
+  const user = await usersRepo.getById(targetUserId);
+  if (user && isPartnerOrStaff(user)) throw new NotFoundError('User not found');
+}
 
 /**
  * Stats controller.
@@ -8,12 +19,19 @@ import type { HeadToHeadQuery, RecentMatchesQuery } from './stats.schemas.js';
  * Controllers read ONLY req.validated.* (never req.body directly).
  */
 export const statsController = {
+  async partyRewards(req: Request, res: Response): Promise<void> {
+    const { matchId } = req.validated.params as { matchId: string };
+    const rewards = await getPartyRewards(matchId, req.user!.id);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(rewards);
+  },
   /**
    * GET /api/v1/stats/head-to-head
    * Get head-to-head summary for two users.
    */
   async headToHead(req: Request, res: Response): Promise<void> {
     const { userA, userB } = req.validated.query as HeadToHeadQuery;
+    await Promise.all([assertStatsTargetVisible(userA, req.user?.id), assertStatsTargetVisible(userB, req.user?.id)]);
     const summary = await statsService.getHeadToHead(userA, userB);
     res.json(summary);
   },
@@ -25,6 +43,7 @@ export const statsController = {
   async recentMatches(req: Request, res: Response): Promise<void> {
     const { limit, userId } = req.validated.query as RecentMatchesQuery;
     const targetUserId = userId ?? req.user!.id;
+    await assertStatsTargetVisible(targetUserId, req.user?.id);
     const items = await statsService.getRecentMatchesForUser(targetUserId, limit);
     res.json({ items });
   },

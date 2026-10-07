@@ -15,6 +15,7 @@ import {
   rankedAiLobbyKey,
 } from '../ai-ranked.constants.js';
 import { attachUserSocketsToLobby, emitLobbyState } from '../lobby-utils.js';
+import { markPartnerRankedOpponentShown } from '../../modules/partners/games/ranked/ranked-entries.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { startDraft } from './lobby-draft-start.service.js';
 import { randomIntBetween, RANKED_AI_KEY_TTL_SEC, detachAllSocketsFromLobby } from './lobby-lifecycle.helpers.js';
@@ -130,7 +131,7 @@ async function compensateAbortLobby(
 async function emitRankedPreparationFailure(params: {
   io: QuizballServer;
   userId: string;
-  lobbyId: string;
+  lobbyId: string | null;
   source: string;
   message: string;
 }): Promise<void> {
@@ -225,6 +226,8 @@ export async function startRankedAiForUser(
   options?: {
     skipSearchEmit?: boolean;
     searchDurationMs?: number;
+    /** A Freecroco player: the reveal of the bot is recorded on their ranked play first (fails closed). */
+    partner?: boolean;
   }
 ): Promise<boolean> {
   return withSpan('ranked.match_found.ai.prepare', {
@@ -233,6 +236,16 @@ export async function startRankedAiForUser(
     if (await hasRankedCancelRequest(userId)) {
       logger.info({ userId }, 'Ranked AI search preparation skipped because user cancelled search');
       span.setAttribute('quizball.skipped_cancelled', true);
+      return false;
+    }
+    if (options?.partner && !await markPartnerRankedOpponentShown([userId])) {
+      await emitRankedPreparationFailure({
+        io,
+        userId,
+        lobbyId: null,
+        source: 'ranked_partner_reveal_not_recorded',
+        message: 'No ranked opponent is available right now. Please retry.',
+      });
       return false;
     }
     const playerProfile = await rankedService.ensureProfile(userId);

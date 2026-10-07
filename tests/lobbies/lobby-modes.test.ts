@@ -47,11 +47,24 @@ describe('lobby mode capability map', () => {
       ['auction', 3, 3],
       ['ranked_sim', 6, 2],
       ['duel', 2, 2],
+      ['room_game', 6, 6],
     ]);
-    expect([...GUEST_ALLOWED_LOBBY_MODES].sort()).toEqual(['auction', 'duel', 'football_grid', 'ranked_sim']);
+    expect([...GUEST_ALLOWED_LOBBY_MODES].sort()).toEqual(['auction', 'duel', 'football_grid', 'ranked_sim', 'room_game']);
     expect(lobbyCapacityByMode()).toEqual({
-      friendly_possession: 6, friendly_party_quiz: 6, football_grid: 2, auction: 3, ranked_sim: 6, duel: 2,
+      friendly_possession: 6, friendly_party_quiz: 6, football_grid: 2, auction: 3, ranked_sim: 6, duel: 2, room_game: 6,
     });
+  });
+
+  it('room games: 2–6 players, guests welcome, behind their own switch', () => {
+    expect(isValidHostStartShape('room_game', 1)).toBe(false);
+    expect(isValidHostStartShape('room_game', 2)).toBe(true);
+    expect(isValidHostStartShape('room_game', 6)).toBe(true);
+    expect(isValidHostStartShape('room_game', 7)).toBe(false);
+    expect(GUEST_ALLOWED_LOBBY_MODES.has('room_game')).toBe(true);
+    expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'room_game', roomGame: 'aproximado' }).success).toBe(true);
+    expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'room_game' }).success).toBe(false);
+    expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'room_game', roomGame: 'chess' }).success).toBe(false);
+    expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'auction', roomGame: 'aproximado' }).success).toBe(false);
   });
 
   it('host start shapes', () => {
@@ -120,7 +133,8 @@ describe('duel payload schemas', () => {
       createdAt: new Date().toISOString(), memberCount: 1, maxMembers: 2,
       host: { id: '6f1c7b52-7d5e-4a53-9f55-0d9b5c1f5a12', username: 'h', avatarUrl: null, avatarCustomization: null },
     };
-    expect(publicLobbyResponseSchema.safeParse({ ...base, gameMode: 'duel', duelGame: 'pistas' }).success).toBe(true);
-    expect(publicLobbyResponseSchema.safeParse({ ...base, gameMode: 'auction', duelGame: null }).success).toBe(true);
+    expect(publicLobbyResponseSchema.safeParse({ ...base, gameMode: 'duel', duelGame: 'pistas', roomGame: null }).success).toBe(true);
+    expect(publicLobbyResponseSchema.safeParse({ ...base, gameMode: 'auction', duelGame: null, roomGame: null }).success).toBe(true);
+    expect(publicLobbyResponseSchema.safeParse({ ...base, gameMode: 'room_game', duelGame: null, roomGame: 'aproximado' }).success).toBe(true);
   });
 });

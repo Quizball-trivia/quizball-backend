@@ -1,4 +1,5 @@
 import type { User } from '../../db/types.js';
+import { isPartnerOrStaff } from './account-kind.js';
 import {
   isUserAccountInactive,
   isUserBanned,
@@ -741,7 +742,7 @@ export const usersService = {
 
   async assertPublicUserVisible(id: string): Promise<void> {
     const user = await usersRepo.getById(id);
-    if (!user || isUserAccountInactive(user) || user.is_guest) {
+    if (!user || isUserAccountInactive(user) || user.is_guest || isPartnerOrStaff(user)) {
       throw new NotFoundError('User not found');
     }
   },
@@ -871,8 +872,8 @@ export const usersService = {
    */
   async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
     const user = await usersRepo.getById(targetUserId);
-    // Guests have no public projection (no profile, rank, history or achievements).
-    if (!user || isUserAccountInactive(user) || user.is_guest) {
+    // Guests, partner players and partner staff have no public projection (no profile, rank, history or achievements).
+    if (!user || isUserAccountInactive(user) || user.is_guest || isPartnerOrStaff(user)) {
       throw new NotFoundError('User not found');
     }
 

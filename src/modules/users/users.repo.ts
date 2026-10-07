@@ -76,6 +76,21 @@ export function isUserBanned(user: Pick<User, 'is_banned'>): boolean {
   return Boolean(user.is_banned);
 }
 
+/**
+ * A partner player's users.nickname is an internal handle kept out of the members' name space; everywhere a name is
+ * shown (lobby, draft, match, results) they appear under the name their partner sent us.
+ */
+async function withPartnerNames(db: Pick<TransactionSql, 'unsafe'>, users: User[]): Promise<User[]> {
+  const partnerIds = users.filter((user) => user.partner_slug != null).map((user) => user.id);
+  if (partnerIds.length === 0) return users;
+  const rows = await db.unsafe<{ user_id: string; display_name: string }[]>(
+    'SELECT user_id, display_name FROM partner_players WHERE user_id = ANY($1::uuid[]) AND display_name IS NOT NULL',
+    [partnerIds],
+  );
+  const names = new Map(rows.map((row) => [row.user_id, row.display_name]));
+  return users.map((user) => (names.has(user.id) ? { ...user, nickname: names.get(user.id)! } : user));
+}
+
 export const usersRepo = {
   async ensureFixedUser(data: {
     id: string;
@@ -140,6 +155,8 @@ export const usersRepo = {
       WHERE lower(nickname) = lower(${trimmed})
         AND (is_ai = false OR ai_kind = 'persistent')
         AND is_guest = false
+        AND partner_slug IS NULL
+        AND role <> 'partner_staff'
         AND is_deleted = false
         AND deleted_at IS NULL
         AND pending_deletion_at IS NULL
@@ -389,7 +406,9 @@ export const usersRepo = {
     const [user] = await sql<User[]>`
       SELECT * FROM users WHERE id = ${id}
     `;
-    return user ?? null;
+    if (!user) return null;
+    const [shown] = await withPartnerNames(sql, [user]);
+    return shown;
   },
 
   async getActiveByPhoneNumber(phoneNumber: string): Promise<User | null> {
@@ -447,7 +466,8 @@ export const usersRepo = {
       SELECT * FROM users WHERE id = ANY(${sql.array(uniqueIds)}::uuid[])
     `;
 
-    return new Map(results.map((user) => [user.id, user]));
+    const shown = await withPartnerNames(tx ?? sql, results);
+    return new Map(shown.map((user) => [user.id, user]));
   },
 
   async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{
@@ -502,6 +522,8 @@ export const usersRepo = {
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE (u.is_ai = false OR u.ai_kind = 'persistent')
         AND u.is_guest = false
+        AND u.partner_slug IS NULL
+        AND u.role <> 'partner_staff'
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
@@ -549,9 +571,14 @@ export const usersRepo = {
     const searchPattern = params.search
       ? `%${params.search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`
       : null;
+    // Partner players are shown, searched and sorted by their partner name, never the internal handle. The member
+    // query plan stays as it was: names are overlaid on the page afterwards, and the partner lookups only touch
+    // partner rows.
     const searchFilter = searchPattern
-      ? sql`AND (u.nickname ILIKE ${searchPattern} ESCAPE '\\' OR u.email ILIKE ${searchPattern} ESCAPE '\\')`
+      ? sql`AND ((u.partner_slug IS NULL AND u.nickname ILIKE ${searchPattern} ESCAPE '\\') OR u.email ILIKE ${searchPattern} ESCAPE '\\'
+          OR u.id IN (SELECT pp.user_id FROM partner_players pp WHERE pp.display_name ILIKE ${searchPattern} ESCAPE '\\'))`
       : sql``;
+    const sortByName = params.orderBy === 'nickname';
 
     const activeFilters = sql`
       u.is_ai = false
@@ -570,7 +597,7 @@ export const usersRepo = {
         case 'rp':
           return sql`rp.rp ${direction} NULLS LAST, u.created_at DESC`;
         case 'nickname':
-          return sql`u.nickname ${direction} NULLS LAST, u.created_at DESC`;
+          return sql`COALESCE(pp.display_name, u.nickname) ${direction} NULLS LAST, u.created_at DESC`;
         case 'created_at':
         default:
           return sql`u.created_at ${direction}`;
@@ -603,6 +630,7 @@ export const usersRepo = {
         u.id,
         u.email,
         u.nickname,
+        u.partner_slug,
         u.country,
         u.avatar_url,
         u.total_xp,
@@ -615,6 +643,7 @@ export const usersRepo = {
         rp.placement_status AS ranked_placement_status
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
+      ${sortByName ? sql`LEFT JOIN partner_players pp ON pp.user_id = u.id AND u.partner_slug IS NOT NULL` : sql``}
       WHERE ${activeFilters}
       ${searchFilter}
       ORDER BY ${orderClause}
@@ -622,7 +651,11 @@ export const usersRepo = {
       OFFSET ${offset}
     `;
 
-    return { items, total: totalRow?.total ?? 0 };
+    const shown = await withPartnerNames(sql, items as unknown as User[]);
+    return {
+      items: shown.map(({ partner_slug: _partnerSlug, ...item }) => item) as unknown as typeof items,
+      total: totalRow?.total ?? 0,
+    };
   },
 
   /**

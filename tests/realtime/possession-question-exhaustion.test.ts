@@ -45,6 +45,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
     getRandomImageMcqCandidatesForMatch: (...args: unknown[]) => getRandomImageMcqCandidatesForMatchMock(...args),
     getImageMcqCandidateForMatchById: (...args: unknown[]) => getImageMcqCandidateForMatchByIdMock(...args),
     insertMatchQuestionIfMissing: (...args: unknown[]) => insertMatchQuestionIfMissingMock(...args),
+    getMatchQuestion: vi.fn(async () => null),
     setQuestionTiming: vi.fn(),
   },
 }));
@@ -162,6 +163,22 @@ describe('possession question exhaustion', () => {
       cache.statePayload,
       cache,
       { source: 'penalty_question_pool_exhausted' },
+    );
+  });
+
+  it('a Freecroco partner shootout that runs out of questions ends as a server failure (no events, plays back)', async () => {
+    const cache = { ...createCache('PENALTY_SHOOTOUT'), partnerPool: 'freecroco-test' };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const { sendPossessionMatchQuestion } = await import('../../src/realtime/possession-question-dispatch.js');
+
+    await expect(sendPossessionMatchQuestion(createIo(), cache.matchId, 22)).resolves.toBeNull();
+
+    expect(completePossessionMatchMock).toHaveBeenCalledWith(
+      expect.anything(),
+      cache.matchId,
+      cache.statePayload,
+      cache,
+      { source: 'penalty_question_pool_exhausted', partnerCause: { kind: 'server_failure' } },
     );
   });
 

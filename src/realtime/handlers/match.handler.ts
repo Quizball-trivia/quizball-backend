@@ -21,6 +21,7 @@ import { logger } from '../../core/logger.js';
 import { matchRealtimeService } from '../services/match-realtime.service.js';
 import { handleVisibilitySignal } from '../services/match-visibility.service.js';
 import { handlePossessionHalftimeUiReady } from '../possession-match-flow.js';
+import { SocketDbTaskOverloadedError } from '../socket-db-task-limiter.js';
 
 export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('match:visibility_signal', async (payload) => {
@@ -49,17 +50,24 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
+      // Not limited here: ranked/possession answers are Redis-only on their critical path. Party Quiz limits its own
+      // DB write (party-quiz-match-flow.ts).
       await matchRealtimeService.handleAnswer(io, socket, parsed.data);
     } catch (error) {
-      logger.error(
-        {
-          err: error,
-          userId: socket.data.user?.id,
-          matchId: parsed.data.matchId,
-          qIndex: parsed.data.qIndex,
-        },
-        'Error handling match:answer'
-      );
+      if (error instanceof SocketDbTaskOverloadedError) {
+        // Load, not a fault: a short warning without the error object (no stack per rejected answer).
+        logger.warn({ reason: error.reason, userId: socket.data.user?.id, matchId: parsed.data.matchId, qIndex: parsed.data.qIndex }, 'match:answer rejected: gameplay DB busy');
+      } else {
+        logger.error(
+          {
+            err: error,
+            userId: socket.data.user?.id,
+            matchId: parsed.data.matchId,
+            qIndex: parsed.data.qIndex,
+          },
+          'Error handling match:answer'
+        );
+      }
       socket.emit('error', {
         code: 'MATCH_ANSWER_ERROR',
         message: 'Failed to process answer',

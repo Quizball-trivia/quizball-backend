@@ -23,7 +23,8 @@ export function cancelMatchQuestionTimer(matchId: string, qIndex: number): void 
 export async function sendMatchQuestion(
   io: QuizballServer,
   matchId: string,
-  qIndex: number
+  qIndex: number,
+  options?: { onlyIfUnsent?: boolean }
 ): Promise<{ correctIndex: number } | null> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match) {
@@ -39,7 +40,7 @@ export async function sendMatchQuestion(
     return sendPartyQuizQuestion(io, matchId, qIndex);
   }
 
-  return sendPossessionMatchQuestion(io, matchId, qIndex);
+  return sendPossessionMatchQuestion(io, matchId, qIndex, options);
 }
 
 export async function resolveRound(

@@ -459,6 +459,11 @@ export const syntheticBotsRepo = {
           OR EXISTS (
             SELECT 1 FROM matches m WHERE m.id = r.match_id AND m.status = 'abandoned'
           )
+          -- Partner matches never settle RP: their bot is free once the match has ended.
+          OR EXISTS (
+            SELECT 1 FROM matches m
+             WHERE m.id = r.match_id AND m.status <> 'active' AND m.partner_pool IS NOT NULL
+          )
           OR EXISTS (
             SELECT 1 FROM matches m
              WHERE m.id = r.match_id

@@ -15,6 +15,15 @@ const configSchema = z.object({
     .transform((val) => val === "true" || val === "1"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   DEFAULT_LOCALE: z.string().default("en"),
+  PUSH_DELIVERY_ENABLED: z.enum(['true','false']).default('false').transform(v => v === 'true'),
+  PUSH_REMINDERS_ENABLED: z.enum(['true','false']).default('false').transform(v => v === 'true'),
+  PUSH_TEST_USER_IDS: z.string().default('').refine(v => v.split(',').map(id=>id.trim()).filter(Boolean).every(id=>z.string().uuid().safeParse(id).success), 'Push test users must be UUIDs'),
+  PUSH_CAMPAIGN_MAX_DEVICES: z.coerce.number().int().min(1).max(10000).default(1000),
+  PUSH_EXPO_ACCESS_TOKEN: z.string().optional(),
+  PUSH_TOKEN_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  PUSH_TOKEN_ENCRYPTION_KEY_ID: z.string().regex(/^[a-zA-Z0-9_-]{1,40}$/).default('v1'),
+  PUSH_TOKEN_DECRYPTION_KEYS: z.string().optional(),
+  PUSH_TOKEN_FINGERPRINT_KEY: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   PUBLIC_SITE_ORIGIN: z.preprocess(
     (value) => value === '' ? undefined : value,
     z.string().url().default('https://quizball.io'),
@@ -276,6 +285,11 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /** Room games (2–6 players) by game, comma-separated (e.g. "aproximado"); empty = no room-game rooms. */
+  ROOM_GAMES_ENABLED: z
+    .string()
+    .default('')
+    .transform((val) => val.split(',').map((game) => game.trim()).filter(Boolean)),
   /** Friend duels by game, comma-separated (e.g. "buscaminas,pistas"); empty = no duel rooms. */
   DUEL_GAMES_ENABLED: z
     .string()
@@ -511,6 +525,20 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       `Invalid configuration: ${JSON.stringify(fieldErrors)}`,
       { fieldErrors },
     );
+  }
+
+  if (result.data.PUSH_DELIVERY_ENABLED && (!result.data.PUSH_TOKEN_ENCRYPTION_KEY || !result.data.PUSH_TOKEN_FINGERPRINT_KEY)) {
+    throw new ConfigError('Push delivery requires encryption and stable fingerprint keys.');
+  }
+  if (result.data.PUSH_DELIVERY_ENABLED && !result.data.PUSH_EXPO_ACCESS_TOKEN?.trim()) {
+    throw new ConfigError('Push delivery requires an Expo access token and project enhanced push security.');
+  }
+  if (result.data.PUSH_TOKEN_DECRYPTION_KEYS) {
+    try {
+      const keys = JSON.parse(result.data.PUSH_TOKEN_DECRYPTION_KEYS);
+      if (!keys || Array.isArray(keys) || typeof keys !== 'object' ||
+          Object.entries(keys).some(([id, value]) => !/^[a-zA-Z0-9_-]{1,40}$/.test(id) || typeof value !== 'string' || !/^[a-f0-9]{64}$/i.test(value))) throw new Error();
+    } catch { throw new ConfigError('Push decryption key ring must contain versioned 32-byte hexadecimal keys.'); }
   }
 
   const searchConsoleValues = [

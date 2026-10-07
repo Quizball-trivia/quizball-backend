@@ -57,4 +57,43 @@ describe('OpenAPI spec', () => {
     ).sort();
     expect(schemas).toEqual(baselineSchemas);
   });
+
+  it.each([
+    ['devices/register', 'post'],
+    ['devices/unregister', 'post'],
+    ['preferences', 'get'],
+    ['preferences', 'patch'],
+    ['devices/test', 'post'],
+    ['campaigns/preview', 'get'],
+    ['campaigns/send', 'post'],
+  ] as const)('requires bearer authentication for push %s %s', (path, method) => {
+    const doc = generateOpenApiDocument();
+    const operation = doc.paths?.[`/api/v1/notifications/${path}`]?.[method];
+    expect(operation).toBeDefined();
+    expect(operation?.security).toEqual([{ bearerAuth: [] }]);
+    expect(operation?.responses).toHaveProperty('401');
+    expect(operation?.responses).toHaveProperty('403');
+  });
+
+  it('documents stale registration as a boolean acknowledgement',()=>{
+    const operation=generateOpenApiDocument().paths?.['/api/v1/notifications/devices/register']?.post;
+    const response=operation?.responses?.['200'];
+    if (!response||'$ref' in response) throw new Error('Expected inline register response');
+    const schema=response.content?.['application/json']?.schema;
+    if (!schema||'$ref' in schema) throw new Error('Expected inline register schema');
+    expect(schema.properties?.registered).toEqual({type:'boolean'});
+  });
+
+  it.each(['register', 'unregister'])('requires a positive safe client revision for push %s', action => {
+    const operation = generateOpenApiDocument().paths?.[`/api/v1/notifications/devices/${action}`]?.post;
+    const body = operation?.requestBody;
+    expect(body).toBeDefined();
+    if (!body || '$ref' in body) throw new Error('Expected an inline push request body');
+    const schema = body.content['application/json']?.schema;
+    if (!schema || '$ref' in schema) throw new Error('Expected an inline push schema');
+    expect(schema.required).toContain('clientRevision');
+    expect(schema.properties?.clientRevision).toMatchObject({
+      type: 'integer', minimum: 0, exclusiveMinimum: true, maximum: Number.MAX_SAFE_INTEGER,
+    });
+  });
 });

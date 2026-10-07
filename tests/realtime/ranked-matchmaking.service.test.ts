@@ -49,8 +49,12 @@ let redisMock: FakeRedis;
 vi.mock('../../src/core/config.js', () => ({
   config: {
     RANKED_HUMAN_QUEUE_ENABLED: true,
+    ROOM_GAMES_ENABLED: [],
   },
 }));
+
+// No live room seat (the session guard checks for one before any queue join).
+vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchForUser: vi.fn(async () => null) } }));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -406,6 +410,44 @@ describe('ranked-matchmaking.service queue behavior', () => {
       expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'lobby-live-wait' })
     );
     prepareSpy.mockRestore();
+  });
+
+  it('tells the client it is blocked when the ignored join comes from a seat in a live room game', async () => {
+    // Staging QA 2026-10-06: Aproximado in one tab, ranked in another. The join is ignored (correct), but a bare
+    // session:state left the client "searching" forever. A live room seat is a definite refusal: say so.
+    const service = await loadService();
+    const { roomRepo } = await import('../../src/modules/room/room.repo.js');
+    vi.mocked(roomRepo.liveMatchForUser).mockResolvedValue({ id: 'room-match', game: 'aproximado', lobby_id: 'room-lobby' } as never);
+    try {
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      listOpenLobbiesForUserMock.mockResolvedValue([makeOpenLobby('room-lobby', 'active')]);
+      lobbyRoomSockets.set('room-lobby', [{ id: 'friend', leave: vi.fn(), data: { user: { id: 'u2' }, lobbyId: 'room-lobby', connectedAt: Date.now() } }]);
+
+      await service.handleQueueJoin(io, socket as never, { source: 'mode_select', reason: 'initial' });
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+      expect(socket.emit).toHaveBeenCalledWith('session:blocked', expect.objectContaining({
+        reason: 'ACTIVE_MATCH',
+        operation: 'ranked:queue_join',
+        stateSnapshot: expect.objectContaining({ waitingLobbyId: 'room-lobby' }),
+      }));
+    } finally {
+      vi.mocked(roomRepo.liveMatchForUser).mockResolvedValue(null);
+    }
+  });
+
+  it('keeps the bare session:state (no blocked event) when the ignored join has no room seat', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    listOpenLobbiesForUserMock.mockResolvedValue([makeOpenLobby('lobby-live-wait', 'waiting')]);
+
+    await service.handleQueueJoin(io, socket as never);
+
+    expect(socket.emit).not.toHaveBeenCalledWith('session:blocked', expect.anything());
   });
 
   describe('abandoned waiting lobby heal on an explicit ranked join', () => {
@@ -1077,7 +1119,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(createLobbyMock).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(
-      { err: fallbackPhaseError },
+      { err: fallbackPhaseError, pool: 'public' },
       'Ranked matchmaking fallback phase failed'
     );
   });

@@ -10,7 +10,7 @@ import { friendStatusSchema } from '../friends/friends.schemas.js';
 import { avatarCustomizationSchema, parseStoredAvatarCustomization } from './avatar-customization.js';
 import { countryCodeSchema, i18nFieldSchema } from '../../http/schemas/shared.js';
 
-export const userRoleSchema = z.enum(['admin', 'user']);
+export const userRoleSchema = z.enum(['admin', 'user', 'partner_staff']);
 export type UserRole = z.infer<typeof userRoleSchema>;
 
 /**

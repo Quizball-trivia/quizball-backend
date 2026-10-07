@@ -1,11 +1,13 @@
 import { config } from '../../core/config.js';
 import { isDuelGameEnabled } from '../duel/duel.config.js';
+import { isRoomGameEnabled } from '../room/room.config.js';
 import type { LobbyGameMode } from '../../realtime/socket.types.js';
 
 export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
 export const FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS = 3;
 export const FOOTBALL_GRID_LOBBY_MAX_MEMBERS = 2;
 export const DUEL_LOBBY_MAX_MEMBERS = 2;
+export const ROOM_GAME_LOBBY_MAX_MEMBERS = 6;
 
 export interface LobbyModeCapabilities {
   /** Members a room may HOLD in this mode (possession grows past 2 and then promotes to party quiz). */
@@ -21,7 +23,8 @@ export interface LobbyModeCapabilities {
   /** More than two members turn the room into party quiz. */
   promotesToPartyQuiz: boolean;
   /** Kill switch: null while the mode can be chosen, else the error the client gets. */
-  unavailable: (duelGame: unknown) => { code: 'GRID_UNAVAILABLE' | 'DUEL_UNAVAILABLE'; message: string } | null;
+  /** `game` is the room's duelGame (duel) or roomGame (room_game). */
+  unavailable: (game: unknown) => { code: 'GRID_UNAVAILABLE' | 'DUEL_UNAVAILABLE' | 'ROOM_GAME_UNAVAILABLE'; message: string } | null;
 }
 
 const alwaysAvailable = () => null;
@@ -88,6 +91,18 @@ export const LOBBY_MODES: Readonly<Record<LobbyGameMode, LobbyModeCapabilities>>
       ? null
       : { code: 'DUEL_UNAVAILABLE', message: 'This game cannot be played as a friend duel right now' }),
   },
+  // A 2–6 player room game (lobbies.room_game); runs on room_matches. Two players = a 1v1 of the same game.
+  room_game: {
+    capacity: ROOM_GAME_LOBBY_MAX_MEMBERS,
+    playable: ROOM_GAME_LOBBY_MAX_MEMBERS,
+    guestAllowed: true,
+    hostStart: { min: 2, max: ROOM_GAME_LOBBY_MAX_MEMBERS },
+    needsCategories: false,
+    promotesToPartyQuiz: false,
+    unavailable: (roomGame) => (isRoomGameEnabled(roomGame)
+      ? null
+      : { code: 'ROOM_GAME_UNAVAILABLE', message: 'This game cannot be played with friends right now' }),
+  },
 };
 
 export const LOBBY_GAME_MODES = Object.keys(LOBBY_MODES) as [LobbyGameMode, ...LobbyGameMode[]];
@@ -96,8 +111,8 @@ export function isLobbyGameMode(value: unknown): value is LobbyGameMode {
   return typeof value === 'string' && Object.hasOwn(LOBBY_MODES, value);
 }
 
-export function lobbyModeUnavailable(mode: LobbyGameMode, duelGame?: unknown) {
-  return LOBBY_MODES[mode].unavailable(duelGame);
+export function lobbyModeUnavailable(mode: LobbyGameMode, game?: unknown) {
+  return LOBBY_MODES[mode].unavailable(game);
 }
 
 export function isValidHostStartShape(mode: LobbyGameMode, memberCount: number): boolean {

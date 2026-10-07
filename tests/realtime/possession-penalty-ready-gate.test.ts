@@ -47,10 +47,11 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
   getMatchCacheOrRebuild: vi.fn(),
   setMatchCache: vi.fn(),
 }));
+const scheduleRealtimeTimerMock = vi.fn(async () => undefined);
 vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
-  cancelRealtimeTimer: vi.fn(),
-  hasPendingRealtimeTimer: vi.fn(),
-  scheduleRealtimeTimer: vi.fn(),
+  cancelRealtimeTimer: vi.fn(async () => undefined),
+  hasPendingRealtimeTimer: vi.fn(async () => false),
+  scheduleRealtimeTimer: (...args: unknown[]) => scheduleRealtimeTimerMock(...(args as [])),
 }));
 vi.mock('../../src/realtime/possession-match-flow.js', () => ({
   ensureHalftimeCategories: vi.fn(),
@@ -139,6 +140,17 @@ describe('penalty rounds and the ready-ack gate', () => {
     expect(params.ceilingMs).toBe(10_000);
     expect(typeof params.dispatchOnTimeout).toBe('function');
     expect(params.dispatchOnTimeout).not.toBe(params.dispatch);
+    // A durable backup outlives the in-memory gate: a restart during the wait still sends the next question.
+    // An ordinary question timer for the NEXT index (understood by every replica during a rolling deploy).
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+      'possession_question',
+      'match-gate:13',
+      expect.any(Date),
+      { kind: 'possession_question', matchId: 'match-gate', qIndex: 13 },
+      { onlyIfAbsent: true },
+    );
+    const dueAt = (scheduleRealtimeTimerMock.mock.calls.at(-1) as unknown as [string, string, Date])[2];
+    expect(dueAt.getTime() - Date.now()).toBeGreaterThanOrEqual(13_000);
   });
 
   it('keeps the plain timer path for an ordinary non-goal round (no gate)', async () => {

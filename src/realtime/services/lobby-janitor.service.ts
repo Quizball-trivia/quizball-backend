@@ -50,6 +50,9 @@ async function listStrandedCandidates(): Promise<StrandedLobbyRow[]> {
       AND NOT EXISTS (
         SELECT 1 FROM duel_matches d WHERE d.lobby_id = l.id AND d.status IN ('ready', 'countdown', 'active', 'paused')
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM room_matches r WHERE r.lobby_id = l.id AND r.status IN ('ready', 'active')
+      )
     ORDER BY l.created_at
     LIMIT ${BATCH_LIMIT}
   `;
@@ -60,6 +63,8 @@ async function lobbyHasLiveDuel(lobbyId: string): Promise<boolean> {
   const [row] = await sql<Array<{ live: boolean }>>`
     SELECT EXISTS (
       SELECT 1 FROM duel_matches WHERE lobby_id = ${lobbyId} AND status IN ('ready', 'countdown', 'active', 'paused')
+    ) OR EXISTS (
+      SELECT 1 FROM room_matches WHERE lobby_id = ${lobbyId} AND status IN ('ready', 'active')
     ) AS live
   `;
   return row?.live === true;

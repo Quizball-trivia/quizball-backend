@@ -182,9 +182,9 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
   statSniper: {
     challengeType: 'statSniper',
     title: {
-      en: 'Stat Sniper',
-      ka: 'სტატ-სნაიპერი',
-      tr: 'Stat Sniper',
+      en: 'Closest Wins',
+      ka: 'სტატ სნაიპერი',
+      tr: 'En Yakın Tahmin',
       es: 'Aproximado futbolero',
     },
     description: {

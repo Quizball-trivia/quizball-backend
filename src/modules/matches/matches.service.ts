@@ -39,6 +39,14 @@ import type {
   MatchQuestionWithCategory,
 } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
+import {
+  attachPartnerRankedEntriesInTx,
+  settlePartnerRankedMatchSafely,
+  type PartnerRankedCause,
+} from '../partners/games/ranked/ranked-entries.js';
+import { afterPartnerSettle } from '../partners/games/kit.js';
+import { partnerBegin } from '../partners/partner-analytics.js';
+import { PARTNER_BOT_FIXED_RP } from '../partners/games/ranked/ranked-policy.js';
 
 /**
  * Ensure a JSONB field is a proper object (handles double-encoded strings from DB).
@@ -576,6 +584,10 @@ export const matchesService = {
     categoryBId: string | null;
     isDev?: boolean;
     totalQuestions?: number;
+    /** Partner ranked pool: stamps provenance and moves the partner players' plays onto the match atomically. */
+    partnerPool?: string | null;
+    /** The lobby's partner players (their plays attach to the match). */
+    partnerUserIds?: string[];
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
@@ -684,6 +696,13 @@ export const matchesService = {
         // transferred (Sol P1-D). The lobby retains the bot and the caller's
         // retry re-enters this path.
         try {
+          if (params.partnerPool) {
+            // Fixed strength, no calibrated pin (and so no governor offset) for partner matches.
+            rankedContext = rankedService.buildPersistentBotMatchContext(PARTNER_BOT_FIXED_RP);
+            persistentBotUserId = aiSeatId;
+            persistentMatchHumanId = humanUserId;
+            logger.info({ lobbyId: params.lobbyId, humanUserId, persistentBotUserId, rankedContext }, 'Built partner bot ranked context for match');
+          } else {
           const botProfile = await rankedService.ensureProfile(aiSeatId);
           rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
           persistentBotUserId = aiSeatId;
@@ -701,6 +720,7 @@ export const matchesService = {
             { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, paramsVersion: pin?.paramsVersion ?? null, rankedContext },
             'Built persistent-bot ranked context for match'
           );
+          }
         } catch (err) {
           logger.error(
             { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
@@ -708,6 +728,8 @@ export const matchesService = {
           );
           throw err;
         }
+      } else if (humanUserId && params.partnerPool) {
+        rankedContext = rankedService.buildPersistentBotMatchContext(PARTNER_BOT_FIXED_RP);
       } else if (humanUserId) {
         try {
           const profile = await rankedService.ensureProfile(humanUserId);
@@ -740,8 +762,35 @@ export const matchesService = {
     // path keeps the exact two-statement sequence it had before (flag-off
     // inertness: reservationService.transferInTx is a no-op when the flag is off
     // or no reservation exists, so this branch is byte-equivalent then).
-    const match = persistentBotUserId
-      ? await sql.begin(async (tx) => {
+    const partnerPool = params.mode === 'ranked' ? params.partnerPool ?? null : null;
+    const match = persistentBotUserId || partnerPool
+      ? await partnerBegin(async (tx) => {
+          if (!persistentBotUserId) {
+            // Same lobby lock as draft activation/abort: a partner match and a concurrent lobby teardown are ordered.
+            await syntheticBotsRepo.takeLobbyAdvisoryLockTx(tx, params.lobbyId);
+            const created = await matchesRepo.createMatch({
+              lobbyId: params.lobbyId,
+              mode: params.mode,
+              categoryAId: params.categoryAId,
+              categoryBId: params.categoryBId,
+              totalQuestions,
+              statePayload,
+              rankedContext,
+              isDev: params.isDev,
+              partnerPool,
+            }, tx);
+            await matchPlayersRepo.insertMatchPlayers(
+              created.id,
+              playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
+              tx,
+            );
+            await attachPartnerRankedEntriesInTx(tx, {
+              matchId: created.id,
+              lobbyId: params.lobbyId,
+              userIds: params.partnerUserIds ?? [],
+            });
+            return created;
+          }
           // Take the SAME per-lobby advisory lock the draft activation + abort
           // take, as the FIRST statement — so match creation and a concurrent
           // reservation abort have a TOTAL ORDER on the lobby. This closes the
@@ -760,12 +809,20 @@ export const matchesService = {
             statePayload,
             rankedContext,
             isDev: params.isDev,
+            partnerPool,
           }, tx);
           await matchPlayersRepo.insertMatchPlayers(
             created.id,
             playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
             tx,
           );
+          if (partnerPool) {
+            await attachPartnerRankedEntriesInTx(tx, {
+              matchId: created.id,
+              lobbyId: params.lobbyId,
+              userIds: params.partnerUserIds ?? [],
+            });
+          }
           const transferred = await reservationService.transferInTx(tx, {
             botUserId: persistentBotUserId!,
             lobbyId: params.lobbyId,
@@ -800,7 +857,7 @@ export const matchesService = {
           isDev: params.isDev,
         });
 
-    if (!persistentBotUserId) {
+    if (!persistentBotUserId && !partnerPool) {
       await matchPlayersRepo.insertMatchPlayers(
         match.id,
         playerIds.map((userId, index) => ({
@@ -808,7 +865,7 @@ export const matchesService = {
           seat: index + 1,
         }))
       );
-    } else if (persistentMatchHumanId) {
+    } else if (persistentMatchHumanId && persistentBotUserId) {
       // The Georgia-day counter + session timestamp were bumped inside the
       // creation tx above. Recording the human's recent opponent is a Redis-only
       // LRU (not a durable counter), so it stays best-effort after commit.
@@ -921,9 +978,9 @@ export const matchesService = {
     statePayload: unknown;
     shownAt: Date;
     deadlineAt: Date;
-  }): Promise<void> {
+  }): Promise<{ droppedUserIds: string[] }> {
     const jsonPayload = sql.json(params.statePayload as Json ?? null);
-    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean }>>`
+    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean; dropped: string[] | null }>>`
       WITH target AS (
         SELECT m.id AS match_id, mq.q_index
         FROM matches m
@@ -932,14 +989,21 @@ export const matchesService = {
          AND mq.q_index = ${params.qIndex}
         WHERE m.id = ${params.matchId}
       ),
+      -- The payload was built from an earlier read: keep any dropout committed since (the row as updated is the
+      -- latest committed one), so a dispatch never restores a dropped player.
       updated_match AS (
         UPDATE matches m
-        SET state_payload = ${jsonPayload},
+        SET state_payload = jsonb_set(${jsonPayload}::jsonb, '{droppedUserIds}', (
+              SELECT COALESCE(jsonb_agg(DISTINCT d.user_id), '[]'::jsonb)
+              FROM jsonb_array_elements_text(
+                COALESCE(m.state_payload->'droppedUserIds', '[]'::jsonb) || COALESCE((${jsonPayload}::jsonb)->'droppedUserIds', '[]'::jsonb)
+              ) AS d(user_id)
+            )),
             current_q_index = GREATEST(m.current_q_index, ${params.qIndex}),
             updated_at = NOW()
         FROM target
         WHERE m.id = target.match_id
-        RETURNING m.id
+        RETURNING m.id, m.state_payload->'droppedUserIds' AS dropped
       ),
       updated_question AS (
         UPDATE match_questions mq
@@ -952,7 +1016,8 @@ export const matchesService = {
       )
       SELECT
         EXISTS (SELECT 1 FROM updated_match) AS match_updated,
-        EXISTS (SELECT 1 FROM updated_question) AS question_updated
+        EXISTS (SELECT 1 FROM updated_question) AS question_updated,
+        (SELECT dropped FROM updated_match) AS dropped
     `;
 
     if (!result?.match_updated || !result.question_updated) {
@@ -963,6 +1028,7 @@ export const matchesService = {
         { matchId: params.matchId, qIndex: params.qIndex },
       );
     }
+    return { droppedUserIds: result.dropped ?? [] };
   },
 
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
@@ -970,8 +1036,48 @@ export const matchesService = {
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));
   },
 
-  async abandonMatch(matchId: string): Promise<void> {
-    const abandoned = await matchesRepo.abandonMatch(matchId);
+  /** Save all average answer times and return the roster in one atomic statement, including players with no answers. */
+  async refreshPlayerAverageTimes(matchId: string): Promise<MatchPlayerRow[]> {
+    return sql<MatchPlayerRow[]>`
+      WITH averages AS (
+        SELECT mp.user_id, AVG(ma.time_ms)::int AS avg_time_ms
+        FROM match_players mp LEFT JOIN match_answers ma ON ma.match_id = mp.match_id AND ma.user_id = mp.user_id
+        WHERE mp.match_id = ${matchId}
+        GROUP BY mp.user_id
+      ), updated AS (
+        UPDATE match_players mp SET avg_time_ms = a.avg_time_ms
+        FROM averages a WHERE mp.match_id = ${matchId} AND mp.user_id = a.user_id
+        RETURNING mp.*
+      )
+      SELECT * FROM updated ORDER BY seat
+    `;
+  },
+
+  /**
+   * Abandon an active match. A partner ranked match settles its partner plays in the same transaction (default
+   * cause: a server-side end, both plays returned).
+   */
+  async abandonMatchIfActive(matchId: string, partnerCause?: PartnerRankedCause): Promise<boolean> {
+    let partner = false;
+    const abandoned = await partnerBegin(async (tx) => {
+      const done = await matchesRepo.abandonMatch(matchId, tx);
+      if (!done) return false;
+      const [row] = await tx.unsafe<{ partner_pool: string | null }[]>(
+        'SELECT partner_pool FROM matches WHERE id = $1',
+        [matchId],
+      );
+      if (row?.partner_pool) {
+        partner = true;
+        await settlePartnerRankedMatchSafely(tx, matchId, partnerCause ?? { kind: 'server_failure' });
+      }
+      return true;
+    });
+    if (partner) afterPartnerSettle();
+    return abandoned as boolean;
+  },
+
+  async abandonMatch(matchId: string, partnerCause?: PartnerRankedCause): Promise<void> {
+    const abandoned = await this.abandonMatchIfActive(matchId, partnerCause);
     if (!abandoned) {
       throw new AppError(
         'Match is not active or does not exist',
@@ -1000,9 +1106,14 @@ export const matchesService = {
     matchId: string,
     winnerId: string | null,
     occurredAt?: Date,
-    options: { placements?: Array<{ userId: string; placement: number }> } = {},
+    options: {
+      placements?: Array<{ userId: string; placement: number }>;
+      /** How a partner ranked match ended; its partner plays settle in this transaction. */
+      partnerCause?: PartnerRankedCause;
+    } = {},
   ): Promise<void> {
-    await sql.begin(async (tx) => {
+    let partner = false;
+    await partnerBegin(async (tx) => {
       const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId, occurredAt);
       if (!completed) {
         // Already completed/abandoned — nothing to do.
@@ -1013,9 +1124,28 @@ export const matchesService = {
         await matchPlayersRepo.setPlacementsInTx(tx, matchId, options.placements);
       }
 
+      // A partner match settles into partner plays only: no Quizball stats for either side (bots included).
+      if (completed.partner_pool) {
+        partner = true;
+        await settlePartnerRankedMatchSafely(tx, matchId, options.partnerCause ?? { kind: 'natural' });
+        return;
+      }
+
       // Dev matches don't contribute to aggregate stats.
       if (completed.is_dev) {
         return;
+      }
+
+      // A Party match's reward job is created with its completion (same transaction): no crash in between can leave
+      // a completed match without one. Later inserts of the same job (the completion work) do nothing.
+      if (completed.game_variant === 'friendly_party_quiz') {
+        await (tx as unknown as typeof sql)`
+          INSERT INTO party_reward_jobs (match_id, user_ids, next_attempt_at)
+          SELECT ${matchId}, array_agg(user_id ORDER BY seat), now() + interval '2 minutes'
+          FROM match_players WHERE match_id = ${matchId}
+          HAVING count(*) > 0
+          ON CONFLICT (match_id) DO NOTHING
+        `;
       }
 
       const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
@@ -1048,6 +1178,7 @@ export const matchesService = {
 
       await matchesRepo.recordUserModeStats(tx, statRows);
     });
+    if (partner) afterPartnerSettle();
   },
 
   /**
@@ -1098,15 +1229,66 @@ export const matchesService = {
   },
 
   /**
+   * Changes a live Party Quiz match's saved state under its row lock: `change` gets the state as saved now (a round
+   * closed or a question opened since the caller read it is kept). Null when the match is no longer active.
+   */
+  async updatePartyQuizState<State>(
+    matchId: string,
+    change: (savedState: unknown) => State,
+  ): Promise<{ state: State; currentQIndex: number } | null> {
+    return sql.begin(async (tx) => {
+      const q = tx as unknown as typeof sql;
+      const [match] = await q<Array<{ status: string; current_q_index: number; state_payload: unknown }>>`
+        SELECT status, current_q_index, state_payload FROM matches WHERE id = ${matchId} FOR UPDATE
+      `;
+      if (!match || match.status !== 'active') return null;
+      const state = change(match.state_payload);
+      await q`UPDATE matches SET state_payload = ${q.json(state as unknown as Json)}, updated_at = NOW() WHERE id = ${matchId}`;
+      return { state, currentQIndex: match.current_q_index };
+    }) as Promise<{ state: State; currentQIndex: number } | null>;
+  },
+
+  /**
+   * Closes a Party Quiz round: under the match row lock, reads the roster and the round's answers and writes the
+   * resolved state. Answers are written under a share lock on the same row and only while the match is on that
+   * question, so every answer is either in this read or refused. Null when the round is no longer the open one.
+   */
+  async closePartyQuizRound<State>(
+    matchId: string,
+    qIndex: number,
+    nextIndex: number,
+    /** Builds the closed state from the one saved under the lock (a dropout written meanwhile is kept). */
+    close: (savedState: unknown) => State,
+  ): Promise<{ players: MatchPlayerRow[]; answers: MatchAnswerRow[]; state: State } | null> {
+    return sql.begin(async (tx) => {
+      const q = tx as unknown as typeof sql;
+      const [match] = await q<Array<{ status: string; current_q_index: number; state_payload: unknown }>>`
+        SELECT status, current_q_index, state_payload FROM matches WHERE id = ${matchId} FOR UPDATE
+      `;
+      if (!match || match.status !== 'active' || match.current_q_index !== qIndex) return null;
+      const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
+      const answers = await q<MatchAnswerRow[]>`SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}`;
+      const state = close(match.state_payload);
+      await q`
+        UPDATE matches
+        SET state_payload = ${q.json(state as unknown as Json)}, current_q_index = ${nextIndex}, updated_at = NOW()
+        WHERE id = ${matchId}
+      `;
+      return { players, answers, state };
+    }) as Promise<{ players: MatchPlayerRow[]; answers: MatchAnswerRow[]; state: State } | null>;
+  },
+
+  /**
    * Atomic party-quiz answer write. One CTE statement inserts the answer
    * idempotently and updates the player's totals only when that insert won.
    *
-   * This deliberately stays one SQL statement instead of `sql.begin` with
+   * The write deliberately stays one SQL statement instead of `sql.begin` with
    * separate INSERT/UPDATE calls. At streamer load the managed-Postgres
    * network round trips for BEGIN + two statements + COMMIT occupied every
    * app-side pool slot even though Postgres execution itself was sub-ms.
    * A single statement has the same atomicity and duplicate protection with
-   * one quarter of the connection-round-trip pressure.
+   * one quarter of the connection-round-trip pressure. A conflicting concurrent
+   * insert may need a second, read-only statement to see the winning answer.
    */
   async recordPartyQuizAnswerIfMissing(data: {
     matchId: string;
@@ -1120,14 +1302,25 @@ export const matchesService = {
     phaseKind?: MatchQuestionPhaseKind;
     phaseRound?: number | null;
     shooterSeat?: number | null;
-  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
+  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null; roundClosed?: boolean }> {
     try {
-      const [result] = await sql<Array<{
+      let [result] = await sql<Array<{
         inserted: boolean;
         answer: MatchAnswerRow | null;
         player: MatchPlayerRow | null;
+        round_open: boolean;
       }>>`
-        WITH inserted_answer AS (
+        -- Only while the match is active, this question is the open one in the saved state, and this player is not
+        -- dropped. FOR SHARE: a round close or a dropout (both write this row) waits for this write, or this write sees
+        -- their change and inserts nothing, so a late answer never scores after a result or a winner went out.
+        WITH open_round AS (
+          SELECT id FROM matches
+          WHERE id = ${data.matchId} AND status = 'active' AND current_q_index = ${data.qIndex}
+            AND (state_payload->'currentQuestion'->>'qIndex')::int = ${data.qIndex}
+            AND NOT COALESCE(state_payload->'droppedUserIds', '[]'::jsonb) ? ${data.userId}
+          FOR SHARE
+        ),
+        inserted_answer AS (
           INSERT INTO match_answers (
             match_id,
             q_index,
@@ -1153,7 +1346,8 @@ export const matchesService = {
             ${data.phaseKind ?? 'normal'},
             ${data.phaseRound ?? null},
             ${data.shooterSeat ?? null}
-          WHERE EXISTS (
+          WHERE EXISTS (SELECT 1 FROM open_round)
+            AND EXISTS (
             SELECT 1
             FROM match_players
             WHERE match_id = ${data.matchId}
@@ -1195,9 +1389,26 @@ export const matchesService = {
         SELECT
           EXISTS (SELECT 1 FROM inserted_answer) AS inserted,
           (SELECT row_to_json(answer_row) FROM selected_answer answer_row) AS answer,
-          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player
+          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player,
+          EXISTS (SELECT 1 FROM open_round) AS round_open
       `;
 
+      // ON CONFLICT can wait for another insert to commit without making that
+      // row visible to this statement's earlier READ COMMITTED snapshot. Read
+      // again only in that case; never repeat the write or increment totals.
+      if (result && !result.inserted && !result.answer) {
+        const [existing] = await sql<Array<{ answer: MatchAnswerRow; player: MatchPlayerRow }>>`
+          SELECT row_to_json(ma) AS answer, row_to_json(mp) AS player
+          FROM match_answers ma
+          JOIN match_players mp ON mp.match_id = ma.match_id AND mp.user_id = ma.user_id
+          WHERE ma.match_id = ${data.matchId}
+            AND ma.q_index = ${data.qIndex}
+            AND ma.user_id = ${data.userId}
+        `;
+        if (existing) result = { inserted: false, round_open: true, ...existing };
+        // Nothing of this player's for this question, and the round is shut: too late, not a fault.
+        else if (!result.round_open) return { inserted: false, answer: null, player: null, roundClosed: true };
+      }
       if (!result?.answer || !result.player) {
         throw new AppError(
           'Party answer write returned incomplete state',
@@ -1206,7 +1417,7 @@ export const matchesService = {
           { matchId: data.matchId, qIndex: data.qIndex, userId: data.userId },
         );
       }
-      return result;
+      return { inserted: result.inserted, answer: result.answer, player: result.player };
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);

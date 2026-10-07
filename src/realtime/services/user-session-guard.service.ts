@@ -25,6 +25,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { rankedPairingInFlightKey } from '../ranked-matchmaking-keys.js';
+import { rankedCancelSearchKeys } from '../../modules/partners/games/ranked/ranked-pool.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
@@ -35,13 +36,12 @@ import { footballGridRealtimeService } from './football-grid-realtime.service.js
 import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
 import { hasPendingRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { DuelGameId } from '../../modules/duel/duel.types.js';
+import { roomRepo } from '../../modules/room/room.repo.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
 export const SESSION_LOCK_WAIT_MS = 1200;
 const SESSION_LOCK_RETRY_INTERVAL_MS = 75;
-const RANKED_QUEUE_KEY = 'ranked:mm:queue';
-const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const RANKED_USER_MAP_KEY = 'ranked:mm:user';
 const RANKED_SEARCH_KEY_PREFIX = 'ranked:mm:search:';
 const AUCTION_QUEUE_KEY = 'auction:mm:queue';
@@ -411,6 +411,14 @@ async function isActiveLobbyLive(
       return (await lobbiesRepo.listLiveDuelsForLobbies([lobby.id])).length > 0;
     } catch (error) {
       logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live duel state');
+      return true;
+    }
+  }
+  if (lobby.game_mode === 'room_game') {
+    try {
+      return (await lobbiesRepo.listLiveRoomsForLobbies([lobby.id])).length > 0;
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed to inspect live room game state');
       return true;
     }
   }
@@ -849,7 +857,7 @@ async function cancelRankedQueueSearch(userId: string): Promise<void> {
 
     span.setAttribute('quizball.redis_available', true);
     await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [RANKED_QUEUE_KEY, RANKED_TIMEOUTS_KEY, RANKED_USER_MAP_KEY],
+      keys: rankedCancelSearchKeys(),
       arguments: [RANKED_SEARCH_KEY_PREFIX, userId, String(Date.now())],
     });
   });
@@ -1332,6 +1340,11 @@ export const userSessionGuardService = {
       (lobby) => lobby.id !== keepWaitingLobbyId
     );
     if (!context.queueSearchId && !hasLobbyToClean) {
+      // No membership to read it from, yet a seat can still be live (an earlier cleanup raced its room's start).
+      const seat = await roomRepo.liveMatchForUser(userId);
+      if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+        return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
+      }
       return { ok: true, snapshot };
     }
 
@@ -1359,6 +1372,12 @@ export const userSessionGuardService = {
         reason: 'ACTIVE_MATCH',
         message: context.activeDuel ? 'You are already in a duel' : 'You are already in an active draft',
       };
+    }
+    // Cleanup removed a membership: if that room started meanwhile, its seat is live but no longer visible through
+    // membership. Found by the seat itself; returning to that same room (its own link) stays allowed.
+    const seat = await roomRepo.liveMatchForUser(userId);
+    if (seat && seat.lobby_id !== keepWaitingLobbyId) {
+      return { ok: false, snapshot, reason: 'ACTIVE_MATCH', message: 'You are already in a room game' };
     }
     return { ok: true, snapshot };
   },
@@ -1493,6 +1512,17 @@ export const userSessionGuardService = {
         snapshot,
         reason: 'ACTIVE_MATCH',
         message: 'Your lobby state changed. Please retry.',
+      };
+    }
+    // A room seat is found by the seat itself, not through room membership: a room starting while this check cleaned
+    // up its (still "waiting") lobby membership must not let the player queue for another game as well. Checked even
+    // with room games switched off: matches already running when the flag is turned off keep going.
+    if (await roomRepo.liveMatchForUser(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'You are already in a room game',
       };
     }
 

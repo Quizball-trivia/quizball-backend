@@ -36,7 +36,8 @@ export const progressionService = {
 
   async awardCompletedMatchXp(matchId: string, occurredAt?: Date): Promise<void> {
     const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'completed' || match.is_dev) {
+    // Partner ranked matches award nothing on Quizball, bots included.
+    if (!match || match.status !== 'completed' || match.is_dev || match.partner_pool) {
       return;
     }
     // Football Grid owns XP settlement in its transactional outbox adapter.

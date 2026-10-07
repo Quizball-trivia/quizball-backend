@@ -1,3 +1,4 @@
+import type { RoomGameId } from '../room/room.types.js';
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import {
@@ -28,6 +29,8 @@ export interface CreateLobbyData {
   gameMode?: LobbyRow['game_mode'];
   /** Required with gameMode 'duel', null otherwise. */
   duelGame?: DuelGameId | null;
+  /** Required with gameMode 'room_game', null otherwise. */
+  roomGame?: RoomGameId | null;
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;
@@ -76,6 +79,7 @@ export const lobbiesRepo = {
         mode,
         game_mode,
         duel_game,
+        room_game,
         friendly_random,
         friendly_category_a_id,
         friendly_category_b_id,
@@ -91,6 +95,7 @@ export const lobbiesRepo = {
         ${data.mode},
         ${gameMode},
         ${data.duelGame ?? null},
+        ${data.roomGame ?? null},
         ${friendlyRandom},
         ${data.friendlyCategoryAId ?? null},
         ${data.friendlyCategoryBId ?? null},
@@ -124,6 +129,7 @@ export const lobbiesRepo = {
           mode,
           game_mode,
           duel_game,
+          room_game,
           friendly_random,
           friendly_category_a_id,
           friendly_category_b_id,
@@ -139,6 +145,7 @@ export const lobbiesRepo = {
           ${data.mode},
           ${gameMode},
           ${data.duelGame ?? null},
+          ${data.roomGame ?? null},
           ${friendlyRandom},
           ${data.friendlyCategoryAId ?? null},
           ${data.friendlyCategoryBId ?? null},
@@ -170,6 +177,22 @@ export const lobbiesRepo = {
   async getById(id: string): Promise<LobbyRow | null> {
     const [row] = await sql<LobbyRow[]>`
       SELECT * FROM lobbies WHERE id = ${id}
+    `;
+    return row ?? null;
+  },
+
+  /**
+   * A friend room by invite code in any state (codes are unique over all rows): tells a refused join whether the room
+   * ended, is mid-game or never existed, and whose room it was.
+   */
+  async findFriendlyRoomByInviteCode(
+    inviteCode: string
+  ): Promise<{ status: string; game_mode: string | null; duel_game: string | null; host_nickname: string | null } | null> {
+    const [row] = await sql<{ status: string; game_mode: string | null; duel_game: string | null; host_nickname: string | null }[]>`
+      SELECT l.status, l.game_mode, l.duel_game, u.nickname AS host_nickname
+      FROM lobbies l
+      LEFT JOIN users u ON u.id = l.host_user_id
+      WHERE l.invite_code = ${inviteCode} AND l.mode = 'friendly'
     `;
     return row ?? null;
   },
@@ -279,6 +302,8 @@ export const lobbiesRepo = {
       gameMode: LobbyRow['game_mode'];
       /** Always written: switching away from a duel clears it (lobbies_duel_game_check). */
       duelGame: DuelGameId | null;
+      /** Always written: switching away from a room game clears it (lobbies_room_game_check). */
+      roomGame: RoomGameId | null;
       friendlyRandom: boolean;
       friendlyCategoryAId: string | null;
       friendlyCategoryBId: string | null;
@@ -289,6 +314,7 @@ export const lobbiesRepo = {
       SET
         game_mode = ${settings.gameMode},
         duel_game = ${settings.duelGame},
+        room_game = ${settings.roomGame},
         friendly_random = ${settings.friendlyRandom},
         friendly_category_a_id = ${settings.friendlyCategoryAId},
         friendly_category_b_id = ${settings.friendlyCategoryBId},
@@ -373,9 +399,12 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
-             u.nickname, u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
+             COALESCE(pp.display_name, u.nickname) AS nickname,
+             u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
       FROM lobby_members lm
       JOIN users u ON u.id = lm.user_id
+      -- Partner players are shown under their partner name, never the internal handle in users.nickname.
+      LEFT JOIN partner_players pp ON pp.user_id = u.id AND u.partner_slug IS NOT NULL
       WHERE lm.lobby_id = ${lobbyId}
       ORDER BY lm.joined_at ASC
     `;
@@ -411,6 +440,14 @@ export const lobbiesRepo = {
    * Lives here, not in the duel module, because the session guard and connect hydration ask it
    * about lobbies.
    */
+  async listLiveRoomsForLobbies(lobbyIds: string[]): Promise<Array<{ lobby_id: string; match_id: string; game: RoomGameId }>> {
+    if (lobbyIds.length === 0) return [];
+    return sql<Array<{ lobby_id: string; match_id: string; game: RoomGameId }>>`
+      SELECT lobby_id, id AS match_id, game FROM room_matches
+      WHERE lobby_id = ANY(${sql.array([...new Set(lobbyIds)])}::uuid[]) AND status IN ('ready', 'active')
+    `;
+  },
+
   async listLiveDuelsForLobbies(lobbyIds: string[]): Promise<Array<{ lobby_id: string; match_id: string; game: DuelGameId }>> {
     if (lobbyIds.length === 0) return [];
     return sql<Array<{ lobby_id: string; match_id: string; game: DuelGameId }>>`
@@ -430,6 +467,7 @@ export const lobbiesRepo = {
     display_name: string;
     game_mode: LobbyRow['game_mode'];
     duel_game: LobbyRow['duel_game'];
+    room_game: LobbyRow['room_game'];
     is_public: boolean;
     created_at: string;
     host_user_id: string;
@@ -444,6 +482,7 @@ export const lobbiesRepo = {
       display_name: string;
       game_mode: LobbyRow['game_mode'];
       duel_game: LobbyRow['duel_game'];
+      room_game: LobbyRow['room_game'];
       is_public: boolean;
       created_at: string;
       host_user_id: string;
@@ -458,6 +497,7 @@ export const lobbiesRepo = {
         l.display_name,
         l.game_mode,
         l.duel_game,
+        l.room_game,
         l.is_public,
         l.created_at,
         l.host_user_id,

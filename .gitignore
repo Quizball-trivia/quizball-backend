@@ -105,6 +105,10 @@ node_modules
 !scripts/ultimo-seed-days.ts
 !scripts/minuto-seed-days.ts
 !scripts/duel-seed-pool.ts
+# Local fake of Freecroco's score-events endpoint (code only, no keys).
+!scripts/freecroco-simulator.ts
+# Freecroco dailies content pool seeder (counts only, no content or keys).
+!scripts/partner-content-pool-seed.ts
 !scripts/football-grid-catalog-coverage.ts
 !scripts/football-grid-answer-corrections.ts
 !scripts/football-grid-staging-research.ts

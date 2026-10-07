@@ -126,6 +126,8 @@ export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
   mode: MatchMode;
+  /** Partner ranked pool: such a match never ships a question's answer before it is answered. */
+  partnerPool?: string | null;
   totalQuestions: number;
   categoryAId: string;
   categoryBId: string | null;
@@ -328,6 +330,7 @@ export function buildInitialCache(params: {
     started_at: string;
     current_q_index: number;
     state_payload: unknown;
+    partner_pool?: string | null;
   };
   players: Array<{
     user_id: string;
@@ -355,6 +358,7 @@ export function buildInitialCache(params: {
     matchId: params.match.id,
     status: params.match.status,
     mode: params.match.mode,
+    partnerPool: params.match.partner_pool ?? null,
     totalQuestions: params.match.total_questions,
     categoryAId: params.match.category_a_id,
     categoryBId: params.match.category_b_id,
@@ -704,14 +708,24 @@ export async function commitCachedRevealAck(
   return stored ? 'stored' : 'duplicate';
 }
 
-export async function setMatchCache(cache: MatchCache): Promise<void> {
+/**
+ * Best-effort by default: a failed write is logged and swallowed. `strict` (recovery-critical writes, e.g. committing
+ * a dispatched question) reports the failure instead, so the caller can keep its recovery path. Without a configured
+ * Redis client (single-process mode) there is no cache to write, strict or not.
+ */
+export async function setMatchCache(cache: MatchCache, options?: { strict?: boolean }): Promise<void> {
   await withSpan('match.cache.set', {
     'quizball.match_id': cache.matchId,
     'quizball.current_q_index': cache.currentQIndex,
   }, async (span) => {
     const redis = getRedisClient();
-    if (!redis || !redis.isOpen) {
+    if (!redis) {
       span.setAttribute('quizball.cache_backend_available', false);
+      return;
+    }
+    if (!redis.isOpen) {
+      span.setAttribute('quizball.cache_backend_available', false);
+      if (options?.strict) throw new Error('Match cache unavailable');
       return;
     }
     try {
@@ -721,6 +735,7 @@ export async function setMatchCache(cache: MatchCache): Promise<void> {
     } catch (error) {
       span.setAttribute('quizball.cache_write_failed', true);
       logger.error({ error, matchId: cache.matchId }, 'Failed to write match cache');
+      if (options?.strict) throw error;
     }
   });
 }

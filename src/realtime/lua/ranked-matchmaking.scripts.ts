@@ -129,6 +129,10 @@ end
 redis.call('HSET', searchKey, 'status', 'cancelled', 'cancelledAt', cancelledAt)
 redis.call('ZREM', queueKey, searchId)
 redis.call('ZREM', timeoutKey, searchId)
+-- KEYS[4..]: other pools' queue/timeouts sets (the search lives in exactly one pool).
+for i = 4, #KEYS do
+  redis.call('ZREM', KEYS[i], searchId)
+end
 redis.call('HDEL', userMapKey, userId)
 
 return { searchId }

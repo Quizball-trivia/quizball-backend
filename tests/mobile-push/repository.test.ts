@@ -43,6 +43,22 @@ it('registers atomically, encrypts tokens, and defaults marketing consent off',a
   expect(decryptPushToken(rows[0].token_encrypted)).toBe(token);
   expect(await repo.getPreferences(alice)).toEqual({matchInvitesEnabled:false,dailyRemindersEnabled:false,newGamesEnabled:false,dailyReminderHour:19,timezone:'Europe/Istanbul'});
 });
+it('queues self-test notifications for the current Home catalogue', async () => {
+  await repo.register(alice, device);
+  expect(await repo.queueTest(alice)).toEqual({ queued: 1 });
+  const job = await repo.claim();
+  expect(await repo.payload(job!)).toMatchObject({ category: 'test', route: '/(tabs)', user_id: alice });
+});
+it('normalizes legacy campaign destinations without resurrecting the daily hub', async () => {
+  await repo.register(alice, device);
+  await repo.updatePreferences(alice, { newGamesEnabled: true });
+  await repo.queueCampaign(alice, { campaignId: '33333333-3333-4333-8333-333333333333',
+    title: { en: 'Game', ka: 'თამაში', es: 'Juego', tr: 'Oyun' },
+    body: { en: 'Play', ka: 'ითამაშე', es: 'Juega', tr: 'Oyna' },
+    route: '/(app)/daily/challenges', confirmSend: true });
+  expect(await sql`SELECT route FROM mobile_push_campaigns`).toEqual([{ route: '/(tabs)' }]);
+  expect(await repo.payload((await repo.claim())!)).toMatchObject({ category: 'new_games', route: '/(tabs)' });
+});
 it('works without a partner column and still excludes optional staging partner identities',async()=>{
   await repo.register(alice,device);await repo.updatePreferences(alice,{newGamesEnabled:true});
   expect(await repo.previewCampaign()).toMatchObject({users:1,devices:1});
@@ -93,6 +109,7 @@ it('queues reminders at hour 23, with one user event per day and fan-out per dev
   await Promise.all([repo.queueReminders(),repo.queueReminders()]);
   const events=await sql`SELECT * FROM mobile_push_events`;const jobs=await sql`SELECT * FROM mobile_push_jobs`;
   expect(events).toHaveLength(1);expect(jobs).toHaveLength(2);
+  expect(events[0].route).toBe('/(tabs)');
 });
 it('suppresses played-day reminders and recent email reminders',async()=>{
   const [zone]=await sql`SELECT name,extract(hour FROM now() AT TIME ZONE name)::int AS hour FROM pg_timezone_names LIMIT 1`;

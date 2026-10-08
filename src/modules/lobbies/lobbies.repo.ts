@@ -314,6 +314,8 @@ export const lobbiesRepo = {
       SET
         game_mode = ${settings.gameMode},
         duel_game = ${settings.duelGame},
+        -- A room's options belong to its game: another game (or mode) starts from that game's defaults.
+        room_options = CASE WHEN room_game IS NOT DISTINCT FROM ${settings.roomGame} THEN room_options ELSE NULL END,
         room_game = ${settings.roomGame},
         friendly_random = ${settings.friendlyRandom},
         friendly_category_a_id = ${settings.friendlyCategoryAId},
@@ -423,6 +425,26 @@ export const lobbiesRepo = {
       WHERE lobby_id = ${lobbyId} AND is_ready = true
     `;
     return row?.count ?? 0;
+  },
+
+  /** The host's choices for the room game; only a waiting room-game room of that game takes them. */
+  /**
+   * Stores a waiting room's game options and un-readies everyone in the same statement: nobody stays ready for
+   * settings they did not see. False when the room is no longer a waiting room of that game.
+   */
+  async setRoomOptions(lobbyId: string, roomGame: RoomGameId, options: Record<string, unknown> | null): Promise<boolean> {
+    const rows = await sql<Array<{ id: string }>>`
+      WITH changed AS (
+        UPDATE lobbies SET room_options = ${options === null ? null : sql.json(options as never)}, updated_at = NOW()
+        WHERE id = ${lobbyId} AND status = 'waiting' AND game_mode = 'room_game' AND room_game = ${roomGame}
+        RETURNING id
+      ), unready AS (
+        -- No is_ready filter: a Ready that commits while this statement waits on that row must be cleared too.
+        UPDATE lobby_members SET is_ready = false WHERE lobby_id IN (SELECT id FROM changed)
+      )
+      SELECT id FROM changed
+    `;
+    return rows.length === 1;
   },
 
   async setAllReady(lobbyId: string, isReady: boolean): Promise<number> {

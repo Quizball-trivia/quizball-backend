@@ -14908,7 +14908,9 @@
                           "roomGame": {
                             "type": "string",
                             "enum": [
-                              "aproximado"
+                              "aproximado",
+                              "shared_player",
+                              "name_chain"
                             ],
                             "nullable": true
                           }

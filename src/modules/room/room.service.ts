@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
-import { finalStandings, isIdle, OUTAGE_MS, seatsChanged, startMatch, submitGuess, tick, type EngineConfig, type EngineState, type SeatChange } from './games/aproximado/aproximado.engine.js';
-import { ROUND_MS, ROUNDS } from './games/aproximado/aproximado.rules.js';
+import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
+import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
-import {
-  aproximadoContentSchema, ROOM_LOCALES, RoomError, roomCommandSchema,
-  type AproximadoContent, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, ROOM_PACK_WANTED } from './room.types.js';
+import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
 export const ROOM_READY_MS = 20_000;
@@ -19,8 +17,8 @@ export const ROOM_OUTAGE_GRACE_MS = 5_000;
 export const ROOM_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const ROOM_RETENTION_DAYS = 30;
 export const ROOM_MAX_SEATS = 6;
-const ENGINE_VERSION = 1;
-const PACK = { wanted: ROOM_PACK_WANTED, order: ['easy', 'medium', 'easy', 'medium', 'hard', 'medium', 'easy', 'hard', 'medium', 'hard'] } as const;
+/** A scheduler deadline missed by more than this is an outage (server or database stalled), not a slow timer. */
+const ROOM_OUTAGE_MS = 5_000;
 
 export interface RoomEffects {
   matchId: string;
@@ -45,19 +43,58 @@ const stableHash = (value: unknown): string => {
   return createHash('sha256').update(JSON.stringify(canon(value) ?? null)).digest('hex');
 };
 
+type EngineState = RoomEngineState;
+
+const ENGINE_UNSUPPORTED = 'engine_unsupported';
+/** For callers nobody is waiting on (a timer, a presence check): another replica owns a match this build cannot run. */
+const unlessUnsupported = <T>(work: Promise<T | null>): Promise<T | null> => work.catch((error: unknown) => {
+  if (error instanceof RoomError && error.code === ENGINE_UNSUPPORTED) return null;
+  throw error;
+});
+
+const hydrated = async (engine: AnyRoomEngine, content: unknown): Promise<unknown> => (engine.hydrate ? engine.hydrate(content) : content);
+
 /** A schema error can quote the content (an answer): callers and logs only ever get a code. */
-function parseContent(raw: unknown): AproximadoContent {
-  const parsed = aproximadoContentSchema.safeParse(raw);
-  if (!parsed.success) throw new RoomError('room_content_invalid', 500);
-  return parsed.data;
+function parseContent(engine: AnyRoomEngine, raw: unknown): unknown {
+  const content = engine.parseContent(raw);
+  if (content === null) throw new RoomError('room_content_invalid', 500);
+  return content;
 }
 
-const engineConfig = (content: AproximadoContent, seats: number): EngineConfig => ({
-  questions: content.questions.map((q) => ({ id: q.id, kind: q.kind, prompt: '', unit: '', precision: q.precision, exactWithin: q.exactWithin, value: q.value })),
-  // A 1v1 is closest-takes-it (the videos' rule); three or more play the podium.
-  scoring: seats === 2 ? 'closest' : 'podium',
-  rounds: ROUNDS,
-});
+/** Parsed content of the live matches this replica is serving, most recently used last. */
+const contentCache = new Map<string, unknown>();
+const CONTENT_CACHE_MAX = 300;
+const isLive = (status: RoomStatus) => status === 'ready' || status === 'active';
+
+/**
+ * A match's content, parsed; null when its row is gone. The row is written once, with the match, and never changes,
+ * so while the match is live each replica keeps it instead of reading it back (about 10 KB for a match of club pairs)
+ * on every action and every delivery. Ended matches are read from the table.
+ */
+async function contentOf(tx: TransactionSql | undefined, row: Pick<RoomMatchRow, 'id' | 'status' | 'has_content'>, engine: AnyRoomEngine): Promise<unknown | null> {
+  // The row is gone (deleted by hand, or a bug): the same answer whether or not this replica had it in memory.
+  if (!row.has_content) {
+    contentCache.delete(row.id);
+    return null;
+  }
+  const live = isLive(row.status);
+  const cached = live ? contentCache.get(row.id) : undefined;
+  if (cached !== undefined) {
+    contentCache.delete(row.id);
+    contentCache.set(row.id, cached);
+    return cached;
+  }
+  const raw = await roomRepo.getContent(tx, row.id);
+  if (raw === null) return null;
+  const content = parseContent(engine, raw);
+  if (live) {
+    contentCache.set(row.id, content);
+    if (contentCache.size > CONTENT_CACHE_MAX) contentCache.delete(contentCache.keys().next().value!);
+  } else {
+    contentCache.delete(row.id);
+  }
+  return content;
+}
 
 const effectsOf = (row: RoomMatchRow, seats: RoomSeatRow[], status: RoomStatus, timer: RoomEffects['timer']): RoomEffects => ({
   matchId: row.id, lobbyId: row.lobby_id, userIds: seats.map((s) => s.user_id), status, timer,
@@ -66,11 +103,11 @@ const effectsOf = (row: RoomMatchRow, seats: RoomSeatRow[], status: RoomStatus, 
 
 const admittedSeats = (seats: RoomSeatRow[]) => seats.filter((s) => s.admitted).sort((a, b) => a.seat! - b.seat!);
 
-function resultOf(state: EngineState, seats: RoomSeatRow[]): RoomResult {
+function resultOf(engine: AnyRoomEngine, state: EngineState, seats: RoomSeatRow[]): RoomResult {
   const userOf = new Map(admittedSeats(seats).map((s) => [s.seat!, s.user_id]));
   return {
     reason: 'score',
-    standings: finalStandings(state).map((s) => ({
+    standings: engine.standings(state).map((s) => ({
       seat: s.seat, userId: userOf.get(s.seat)!, points: s.points, roundWins: s.roundWins, place: s.place, withdrawn: state.status[s.seat] === 'withdrawn',
     })),
   };
@@ -78,19 +115,23 @@ function resultOf(state: EngineState, seats: RoomSeatRow[]): RoomResult {
 
 const cancelledResult = (): RoomResult => ({ reason: 'cancelled', standings: [] });
 
-interface Loaded { row: RoomMatchRow; seats: RoomSeatRow[]; content: AproximadoContent }
+interface Loaded { row: RoomMatchRow; seats: RoomSeatRow[]; content: unknown; engine: AnyRoomEngine }
 
 async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null> {
   const row = await roomRepo.lockMatch(tx, matchId);
   if (!row) return null;
   const seats = await roomRepo.seats(tx, row.id);
-  const raw = await roomRepo.getContent(tx, row.id);
-  if (raw === null) {
+  const engine = roomEngineFor(row.game, row.engine_version);
+  // A game or engine version this build does not have (a newer replica started the match during a deploy): it is not
+  // ours to touch. Interactive callers get a retryable refusal; timers and presence checks let it be.
+  if (!engine) throw new RoomError(ENGINE_UNSUPPORTED, 503);
+  const content = await contentOf(tx, row, engine);
+  if (content === null) {
     // Content gone (retention or a bug): only a cancel can end it cleanly.
-    if (row.status === 'ready' || row.status === 'active') await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
+    if (isLive(row.status)) await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
     return null;
   }
-  return { row, seats, content: parseContent(raw) };
+  return { row, seats, content: await hydrated(engine, content), engine };
 }
 
 /**
@@ -99,9 +140,10 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
  */
 async function persist(tx: TransactionSql, l: Loaded, state: EngineState, started = false): Promise<RoomEffects> {
   const seats = await roomRepo.seats(tx, l.row.id);
-  if (state.phase === 'over' || state.phase === 'cancelled') {
-    const status = state.phase === 'over' ? 'completed' : 'cancelled';
-    await roomRepo.finish(tx, l.row, { status, state, result: status === 'completed' ? resultOf(state, seats) : cancelledResult() });
+  const status = l.engine.terminal(state);
+  if (status) {
+    contentCache.delete(l.row.id);
+    await roomRepo.finish(tx, l.row, { status, state, result: status === 'completed' ? resultOf(l.engine, state, seats) : cancelledResult() });
     return effectsOf(l.row, seats, status, null);
   }
   const absences = admittedSeats(seats)
@@ -112,11 +154,10 @@ async function persist(tx: TransactionSql, l: Loaded, state: EngineState, starte
   return effectsOf(l.row, seats, 'active', { token: saved.phase_token, dueAt: saved.phase_deadline_at });
 }
 
-/** The engine's clock up to `nowMs`: intro → question → reveal → next, and the early close once everyone eligible is in. */
-function runClock(state: EngineState, content: AproximadoContent, nowMs: number): EngineState {
-  const cfg = engineConfig(content, state.status.length);
-  for (let i = 0; i < 4 && state.phase !== 'over' && state.phase !== 'cancelled'; i += 1) {
-    const next = tick(state, cfg, nowMs);
+/** The engine's clock up to `nowMs`: every boundary already due, and an early close once everyone eligible is in. */
+function runClock(l: Loaded, state: EngineState, nowMs: number): EngineState {
+  for (let i = 0; i < 4 && !l.engine.terminal(state); i += 1) {
+    const next = l.engine.tick(state, l.content, nowMs);
     if (next === state) break;
     state = next;
   }
@@ -128,9 +169,9 @@ function runClock(state: EngineState, content: AproximadoContent, nowMs: number)
  * order: the engine's own deadlines (intro → question → reveal → next) and each away seat's absence deadline (seats
  * sharing a deadline are withdrawn as one batch; on a tie the engine goes first). So a match that was already over is
  * never reversed by a later absence, and an absence that came first can end the match before a later reveal.
- * A scheduler deadline missed by more than OUTAGE_MS means the server was not running: every open absence window is
- * rebased (what it had left, at least ROOM_OUTAGE_GRACE_MS, from now; the outage is not charged) and an open question
- * gets a fresh window (guesses and missed counts kept), whichever deadline revealed the outage.
+ * A scheduler deadline missed by more than ROOM_OUTAGE_MS means the server was not running: every open absence window
+ * is rebased (what it had left, at least ROOM_OUTAGE_GRACE_MS, from now; the outage is not charged) and the engine
+ * gives its open phase a fresh window, whichever deadline revealed the outage.
  * `changed` also covers rebased absence rows, so the caller persists the new scheduler deadline (never rebasing twice).
  */
 async function advance(tx: TransactionSql, l: Loaded): Promise<{ state: EngineState; changed: boolean }> {
@@ -138,18 +179,16 @@ async function advance(tx: TransactionSql, l: Loaded): Promise<{ state: EngineSt
   const outageStart = l.row.phase_deadline_at;
   let state = l.row.state as EngineState;
   const before = state;
-  if (outageStart && nowMs - outageStart.getTime() > OUTAGE_MS) {
+  if (outageStart && nowMs - outageStart.getTime() > ROOM_OUTAGE_MS) {
     const rebased = l.seats.some((s) => s.active && !s.connected && s.absence_deadline_at);
     if (rebased) {
       await roomRepo.rebaseAbsences(tx, l.row.id, outageStart, l.row.now, ROOM_OUTAGE_GRACE_MS);
       l.seats = await roomRepo.seats(tx, l.row.id);
     }
-    if (state.phase === 'guess') state = { ...state, deadline: nowMs + ROUND_MS };
-    state = runClock(state, l.content, nowMs);
+    state = runClock(l, l.engine.afterOutage(state, l.content, nowMs), nowMs);
     return { state, changed: rebased || state !== before };
   }
-  const cfg = engineConfig(l.content, state.status.length);
-  for (let i = 0; i < 40 && state.phase !== 'over' && state.phase !== 'cancelled'; i += 1) {
+  for (let i = 0; i < 40 && !l.engine.terminal(state); i += 1) {
     const current = state;
     const away = admittedSeats(l.seats).filter((s) => current.status[s.seat!] === 'away' && s.absence_deadline_at);
     const nextAbsence = Math.min(...away.map((s) => s.absence_deadline_at!.getTime()));
@@ -157,15 +196,15 @@ async function advance(tx: TransactionSql, l: Loaded): Promise<{ state: EngineSt
     if (Math.min(nextAbsence, nextEngine) > nowMs) break;
     if (nextAbsence < nextEngine) {
       const batch = away.filter((s) => s.absence_deadline_at!.getTime() === nextAbsence);
-      state = seatsChanged(current, batch.map((s): SeatChange => ({ seat: s.seat!, change: 'leave' })));
+      state = l.engine.seatsChanged(current, batch.map((s): RoomSeatChange => ({ seat: s.seat!, change: 'leave' })), nextAbsence);
       for (const s of batch) await roomRepo.deactivate(tx, l.row.id, s.user_id);
     } else {
-      state = tick(current, cfg, nextEngine);
+      state = l.engine.tick(current, l.content, nextEngine);
       if (state === current) break;
     }
   }
   // Then the present moment: the early close, once everyone eligible is in.
-  state = runClock(state, l.content, nowMs);
+  state = runClock(l, state, nowMs);
   return { state, changed: state !== before };
 }
 
@@ -181,12 +220,12 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const admitted = ready.sort((a, b) => a.slot - b.slot).map((s, seat) => ({ userId: s.user_id, seat }));
   await roomRepo.admit(tx, l.row.id, admitted);
   const nowMs = l.row.now.getTime();
-  let state = startMatch(admitted.length, engineConfig(l.content, admitted.length), nowMs);
+  let state = l.engine.start(admitted.length, l.content, nowMs);
   // Admitted but without a socket right now: away from the start, with its own absence window.
   const away = ready.filter((s) => !s.connected);
   if (away.length > 0) {
     const seatOf = new Map(admitted.map((a) => [a.userId, a.seat]));
-    state = seatsChanged(state, away.map((s): SeatChange => ({ seat: seatOf.get(s.user_id)!, change: 'away' })));
+    state = l.engine.seatsChanged(state, away.map((s): RoomSeatChange => ({ seat: seatOf.get(s.user_id)!, change: 'away' })), nowMs);
     for (const s of away) await roomRepo.setAbsenceDeadline(tx, l.row.id, s.user_id, new Date(nowMs + absenceWindow(s)));
   }
   return persist(tx, l, state, true);
@@ -228,7 +267,7 @@ async function presentLocked(tx: TransactionSql, l: Loaded, userId: string): Pro
   const charge = seat.absent_since ? Math.min(nowMs, until) - seat.absent_since.getTime() : 0;
   await roomRepo.markPresent(tx, l.row.id, userId, charge);
   // Back may make this seat the last one the open question waited for (it had answered before dropping).
-  return persist(tx, l, runClock(seatsChanged(advanced.state, [{ seat: me.seat!, change: 'back' }]), l.content, nowMs));
+  return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'back' }], nowMs), nowMs));
 }
 
 const absenceWindow = (s: RoomSeatRow) => Math.max(0, Math.min(ROOM_AWAY_MS, ROOM_AWAY_BUDGET_MS - s.absence_used_ms));
@@ -239,41 +278,16 @@ function seatOf(l: Loaded, userId: string): RoomSeatRow {
   return me;
 }
 
-function projectSnapshot(row: RoomMatchRow, seats: RoomSeatRow[], state: EngineState | null, content: AproximadoContent | null, userId: string, localeOverride?: RoomLocale) {
+function projectSnapshot(row: RoomMatchRow, seats: RoomSeatRow[], state: EngineState | null, content: unknown, engine: AnyRoomEngine | null, userId: string, localeOverride?: RoomLocale) {
   const me = seats.find((s) => s.user_id === userId);
   if (!me) return null;
   const locale = localeOverride ?? me.locale;
-  const admitted = admittedSeats(seats);
-  const table = state ? finalStandings(state) : [];
   const seatView = (s: RoomSeatRow) => ({
     seat: s.seat, slot: s.slot, userId: s.user_id, username: s.nickname ?? 'Jugador', avatarUrl: s.avatar_url,
     avatarCustomization: s.avatar_customization, isGuest: s.is_guest, ready: s.ready_at !== null, connected: s.connected,
     admitted: s.admitted, active: s.active,
   });
-  let view: unknown = null;
-  if (state && content && me.admitted) {
-    const q = content.questions[state.round];
-    const reveal = state.phase === 'reveal' ? state.results[state.results.length - 1] ?? null : null;
-    view = {
-      phase: state.phase === 'cancelled' ? 'over' : state.phase,
-      round: state.round,
-      totalRounds: ROUNDS,
-      scoring: state.status.length === 2 ? 'closest' : 'podium',
-      question: { id: q.id, kind: q.kind, prompt: q.prompt[locale], unit: q.unit[locale], precision: q.precision },
-      seats: admitted.map((s) => ({
-        seat: s.seat!, status: state.status[s.seat!],
-        answered: state.phase === 'guess' ? state.guesses[s.seat!] !== null : reveal ? reveal.entries[s.seat!]?.guess !== null : false,
-        idle: isIdle(state, s.seat!), score: table.find((t) => t.seat === s.seat)?.points ?? 0,
-      })),
-      mySeat: me.seat,
-      myGuess: state.phase === 'guess' ? state.guesses[me.seat!] : reveal ? reveal.entries[me.seat!]?.guess ?? null : null,
-      reveal,
-      // Only revealed rounds: the open question's guesses are never in here.
-      results: state.results,
-      standings: state.phase === 'over' ? table : null,
-      deadline: state.phase === 'over' || state.phase === 'cancelled' ? null : new Date(state.deadline).toISOString(),
-    };
-  }
+  const view = state && content !== null && engine && me.admitted ? engine.view(state, content, me.seat!, locale) : null;
   return {
     matchId: row.id,
     lobbyId: row.lobby_id,
@@ -295,20 +309,22 @@ export const roomService = {
    * Host start of a ready room (2–6 members). The questions are picked before the transaction; the transaction re-checks
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
-  async createFromLobby(input: { lobbyId: string; game: RoomGameId; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
+  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
     if (input.players.length < 2 || input.players.length > ROOM_MAX_SEATS) throw new RoomError('room_needs_players');
-    const items = await roomRepo.pickPool(input.game, input.players.map((p) => p.userId), PACK.wanted);
-    const byDifficulty = new Map<string, typeof items>();
-    for (const item of items) byDifficulty.set(item.difficulty, [...(byDifficulty.get(item.difficulty) ?? []), item]);
-    const dealt = PACK.order.map((d) => byDifficulty.get(d)?.shift());
-    if (dealt.some((item) => !item)) throw new RoomError('room_pool_short', 503);
-    const content = parseContent({ questions: dealt.map((item) => item!.payload) });
+    const engine = currentRoomEngine(input.game);
+    const options = engine.parseOptions(input.options ?? null);
+    if (options === undefined) throw new RoomError('room_options_invalid');
+    const dealt = await engine.deal((wanted, tag) => roomRepo.pickPool(input.game, input.players.map((p) => p.userId), wanted, tag ?? null), options);
+    if (!dealt) throw new RoomError('room_pool_short', 503);
+    // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
+    parseContent(engine, dealt.content);
     const created = await roomRepo.withTx(async (tx) => {
-      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId));
+      // The room must still hold the options this content was dealt for (the host may have changed them meanwhile).
+      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
-        game: input.game, engineVersion: ENGINE_VERSION, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
-        itemIds: dealt.map((item) => item!.item_id), content, seats: input.players,
+        game: input.game, engineVersion: engine.version, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
+        itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
       return {
         matchId: created.id, lobbyId: input.lobbyId, userIds: input.players.map((p) => p.userId), status: 'ready',
@@ -320,11 +336,12 @@ export const roomService = {
   },
 
   /** A seat's screen is up. When every seat is, the gate closes early and the match starts. */
-  async ready(matchId: string, userId: string, locale: RoomLocale): Promise<RoomEffects | null> {
+  async ready(matchId: string, userId: string, locale: RoomLocale, clientGames?: readonly string[]): Promise<RoomEffects | null> {
     return roomRepo.withTx(async (tx) => {
       const l = await load(tx, matchId);
       if (!l) return null;
       const me = seatOf(l, userId);
+      if (!clientCanPlay(l.row.game, clientGames)) throw new RoomError('client_outdated', 409);
       // A ready on a running match (a screen that reconnected) is a presence: an older disconnect check must not win.
       if (l.row.status === 'active') return (await presentLocked(tx, l, userId)) ?? effectsOf(l.row, l.seats, 'active', null);
       if (l.row.status !== 'ready') return effectsOf(l.row, l.seats, l.row.status, null);
@@ -378,14 +395,13 @@ export const roomService = {
       const advanced = await advance(tx, l);
       let state = advanced.state;
       let result: RoomCommandResult = { ok: true };
-      const parsed = roomCommandSchema.safeParse(raw);
+      const parsed = l.engine.commandSchema.safeParse(raw);
       if (!parsed.success) result = { ok: false, code: 'invalid_command' };
-      else if (state.phase === 'guess' && state.round !== parsed.data.round) result = { ok: false, code: 'stale_round' };
       else {
         const nowMs = l.row.now.getTime();
-        const submitted = submitGuess(state, engineConfig(l.content, state.status.length), me.seat!, parsed.data.value, nowMs);
-        if (submitted.error) result = { ok: false, code: submitted.error };
-        else state = tick(submitted.state, engineConfig(l.content, state.status.length), nowMs); // early close when everyone is in
+        const applied = l.engine.apply(state, l.content, me.seat!, parsed.data, nowMs);
+        if (applied.error) result = { ok: false, code: applied.error };
+        else state = l.engine.tick(applied.state, l.content, nowMs); // early close when everyone is in
       }
       await record(result);
       if (state === l.row.state && !advanced.changed) return { result, effects: carried };
@@ -416,7 +432,7 @@ export const roomService = {
       if (l.row.status !== 'active' || !me.admitted) return gate.effects;
       const advanced = await advance(tx, l);
       // The seat that left may have been the last one the open question was waiting for.
-      return persist(tx, l, runClock(seatsChanged(advanced.state, [{ seat: me.seat!, change: 'leave' }]), l.content, l.row.now.getTime()));
+      return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'leave' }], l.row.now.getTime()), l.row.now.getTime()));
     });
   },
 
@@ -427,7 +443,7 @@ export const roomService = {
   async absent(userId: string, fence: PresenceFence | null = null): Promise<RoomEffects | null> {
     const live = await roomRepo.liveMatchForUser(userId);
     if (!live || (fence && fence.matchId !== live.id)) return null;
-    return roomRepo.withTx(async (tx) => {
+    return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, live.id);
       if (!loaded) return null;
       const first = seatOf(loaded, userId);
@@ -443,28 +459,30 @@ export const roomService = {
       }
       if (l.row.status !== 'active' || !me.admitted) return gate.effects;
       const advanced = await advance(tx, l);
-      if (advanced.state.status[me.seat!] === 'withdrawn' || advanced.state.phase === 'over' || advanced.state.phase === 'cancelled') {
+      if (advanced.state.status[me.seat!] === 'withdrawn' || l.engine.terminal(advanced.state)) {
         return advanced.changed ? persist(tx, l, advanced.state) : gate.effects;
       }
       await roomRepo.markAbsent(tx, l.row.id, userId, new Date(l.row.now.getTime() + absenceWindow(me)));
-      return persist(tx, l, runClock(seatsChanged(advanced.state, [{ seat: me.seat!, change: 'away' }]), l.content, l.row.now.getTime()));
-    });
+      return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'away' }], l.row.now.getTime()), l.row.now.getTime()));
+    }));
   },
 
   /**
    * A seat is here (a socket connected, or its screen resynced). A seat whose absence deadline already passed was
    * withdrawn by the catch-up; otherwise its time away is charged and it plays on (an open question is still open).
    */
-  async present(userId: string): Promise<RoomEffects | null> {
+  async present(userId: string, clientGames?: readonly string[]): Promise<RoomEffects | null> {
     const live = await roomRepo.liveMatchForUser(userId);
     if (!live) return null;
-    return roomRepo.withTx(async (tx) => {
+    return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, live.id);
       if (!loaded) return null;
       const gate = await settleGate(tx, loaded);
       if (!gate.l) return gate.effects;
+      // A socket that cannot draw this game (a tab loaded before it shipped) does not bring the seat back.
+      if (!clientCanPlay(gate.l.row.game, clientGames)) return gate.effects;
       return (await presentLocked(tx, gate.l, userId)) ?? gate.effects;
-    });
+    }));
   },
 
   presenceGeneration(userId: string): Promise<PresenceFence | null> {
@@ -473,7 +491,7 @@ export const roomService = {
 
   /** The match deadline ran out (timer or recovery poll). An old phase token, or a deadline not yet due, changes nothing. */
   async expire(matchId: string, token: number | null): Promise<RoomEffects | null> {
-    return roomRepo.withTx(async (tx) => {
+    return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const l = await load(tx, matchId);
       if (!l || (l.row.status !== 'ready' && l.row.status !== 'active') || !l.row.phase_deadline_at) return null;
       if (token !== null && token !== l.row.phase_token) return null;
@@ -483,7 +501,7 @@ export const roomService = {
       if (l.row.status === 'ready') return closeGate(tx, l, true);
       const advanced = await advance(tx, l);
       return persist(tx, l, advanced.state);
-    });
+    }));
   },
 
   /**
@@ -506,10 +524,11 @@ export const roomService = {
     const recipients = [...new Set(userIds)].filter((id) => members.has(id));
     if (recipients.length === 0) return snapshots;
     const state = row.state as EngineState | null;
-    const raw = state ? await roomRepo.getContent(undefined, row.id) : null;
-    const content = raw ? parseContent(raw) : null;
+    const engine = roomEngineFor(row.game, row.engine_version);
+    const parsed = state && engine ? await contentOf(undefined, row, engine) : null;
+    const content = parsed !== null && engine ? await hydrated(engine, parsed) : null;
     for (const userId of recipients) {
-      const snapshot = projectSnapshot(row, seats, state, content, userId, localeOverride);
+      const snapshot = projectSnapshot(row, seats, state, content, engine, userId, localeOverride);
       if (snapshot) snapshots.set(userId, snapshot);
     }
     return snapshots;
@@ -536,6 +555,17 @@ export const roomService = {
   anyLive: () => roomRepo.anyLive(),
   staleLiveMatches: (limit = 20) => roomRepo.staleLiveMatches(ROOM_MAX_AGE_MS, limit),
   purgeEnded: () => roomRepo.purgeEnded(ROOM_RETENTION_DAYS, 5_000),
+
+  /** What a seat's refused text was about, for a report; null when there is nothing to report (see RoomEngine.refusal). */
+  async refusal(matchId: string, userId: string, round: number, text: string): Promise<(RoomRefusal & { game: RoomGameId }) | null> {
+    const found = await roomRepo.seatedMatch(matchId, userId);
+    if (!found || found.state === null) return null;
+    const engine = roomEngineFor(found.game, found.engine_version);
+    const content = engine?.refusal ? engine.parseContent(found.content) : null;
+    if (!engine?.refusal || content === null) return null;
+    const refusal = engine.refusal(found.state as EngineState, await hydrated(engine, content), round, text);
+    return refusal && { ...refusal, game: found.game };
+  },
 };
 
 export { ROOM_LOCALES };

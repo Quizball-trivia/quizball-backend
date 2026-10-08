@@ -18,6 +18,8 @@ export interface RoomMatchRow {
   result: RoomResult | null;
   /** The database clock when the row was locked (read after the lock wait). */
   now: Date;
+  /** The match still has its content row (a replica keeps live content in memory and must notice when the row is gone). */
+  has_content: boolean;
 }
 
 export interface RoomSeatRow {
@@ -46,15 +48,19 @@ export interface PresenceFence { matchId: string; gen: number }
 
 export interface RoomPoolItem { item_id: string; difficulty: string; payload: unknown }
 
-const MATCH_COLUMNS = `id, game, engine_version, lobby_id, status, state, state_version, phase_token, phase_deadline_at, result, clock_timestamp() AS now`;
+const MATCH_COLUMNS = `id, game, engine_version, lobby_id, status, state, state_version, phase_token, phase_deadline_at, result, clock_timestamp() AS now,
+  EXISTS (SELECT 1 FROM room_match_content c WHERE c.match_id = room_matches.id) AS has_content`;
 
 export const roomRepo = {
   withTx<T>(fn: (tx: TransactionSql) => Promise<T>): Promise<T> {
     return sql.begin((tx) => fn(tx)) as Promise<T>;
   },
 
-  /** `wanted` items per difficulty, preferring items none of the players met in their last 40 room matches. */
-  async pickPool(game: RoomGameId, userIds: string[], wanted: Record<string, number>): Promise<RoomPoolItem[]> {
+  /**
+   * `wanted` items per difficulty (of one tag, when given), preferring items none of the players met in their last 40
+   * room matches of the game.
+   */
+  async pickPool(game: RoomGameId, userIds: string[], wanted: Record<string, number>, tag: string | null = null): Promise<RoomPoolItem[]> {
     const difficulties = Object.keys(wanted);
     const counts = difficulties.map((d) => wanted[d]);
     return sql<RoomPoolItem[]>`
@@ -72,11 +78,15 @@ export const roomRepo = {
       ), wanted AS (
         SELECT * FROM unnest(${difficulties}::text[], ${counts}::int[]) AS w(difficulty, n)
       ), ranked AS (
-        SELECT p.item_id, p.difficulty, p.payload,
+        -- Ids only: the payloads (about 1 KB each) are fetched for the picked rows, not sorted with the whole pool.
+        SELECT p.item_id, p.difficulty,
                row_number() OVER (PARTITION BY p.difficulty ORDER BY (p.item_id IN (SELECT item_id FROM recent)), random()) AS rn
         FROM room_pool p WHERE p.game = ${game} AND p.enabled AND p.difficulty IN (SELECT difficulty FROM wanted)
+          AND (${tag}::text IS NULL OR p.tags @> ARRAY[${tag}]::text[])
       )
-      SELECT r.item_id, r.difficulty, r.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty WHERE r.rn <= w.n
+      SELECT r.item_id, r.difficulty, p.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty
+      JOIN room_pool p ON p.game = ${game} AND p.item_id = r.item_id
+      WHERE r.rn <= w.n
     `;
   },
 
@@ -84,7 +94,7 @@ export const roomRepo = {
    * The room this start came from, re-checked under lock: exactly these members, all ready, still waiting, still a
    * room-game room of this game. Flips it active; false when anything changed since the host pressed start.
    */
-  async claimLobby(tx: TransactionSql, lobbyId: string, game: RoomGameId, userIds: string[]): Promise<boolean> {
+  async claimLobby(tx: TransactionSql, lobbyId: string, game: RoomGameId, userIds: string[], options: unknown = null): Promise<boolean> {
     const q = exec(tx);
     const members = await q<Array<{ user_id: string; is_ready: boolean }>>`
       SELECT user_id, is_ready FROM lobby_members WHERE lobby_id = ${lobbyId} ORDER BY user_id FOR UPDATE
@@ -94,6 +104,7 @@ export const roomRepo = {
     const activated = await q<Array<{ id: string }>>`
       UPDATE lobbies SET status = 'active', updated_at = now()
       WHERE id = ${lobbyId} AND status = 'waiting' AND game_mode = 'room_game' AND room_game = ${game}
+        AND room_options IS NOT DISTINCT FROM ${options === null || options === undefined ? null : q.json(options as never)}::jsonb
       RETURNING id
     `;
     return activated.length === 1;
@@ -126,6 +137,16 @@ export const roomRepo = {
 
   async getMatch(id: string): Promise<RoomMatchRow | null> {
     const [row] = await sql<RoomMatchRow[]>`SELECT ${sql.unsafe(MATCH_COLUMNS)} FROM room_matches WHERE id = ${id}`;
+    return row ?? null;
+  },
+
+  /** A match with its content, for a player who was admitted to it (live or ended); null for anyone else. */
+  async seatedMatch(id: string, userId: string): Promise<{ game: RoomGameId; engine_version: number; state: unknown; content: unknown } | null> {
+    const [row] = await sql<Array<{ game: RoomGameId; engine_version: number; state: unknown; content: unknown }>>`
+      SELECT m.game, m.engine_version, m.state, c.content
+      FROM room_seats s JOIN room_matches m ON m.id = s.match_id JOIN room_match_content c ON c.match_id = m.id
+      WHERE s.match_id = ${id} AND s.user_id = ${userId} AND s.admitted
+    `;
     return row ?? null;
   },
 

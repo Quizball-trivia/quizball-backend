@@ -136,7 +136,7 @@ describe('room games — start', () => {
     const socket = socketFor('host', false, 'L');
     await startFriendlyMatch(io as never, socket as never);
     expect(errorCodes(socket)).toEqual([]);
-    expect(startRoomMatchFromLobby).toHaveBeenCalledWith(io, socket, { lobbyId: 'L', roomGame: 'aproximado' });
+    expect(startRoomMatchFromLobby).toHaveBeenCalledWith(io, socket, { lobbyId: 'L', roomGame: 'aproximado', options: null });
     expect(tryAcquireDraftStartGuard).not.toHaveBeenCalled();
   });
 

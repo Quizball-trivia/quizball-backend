@@ -4,6 +4,7 @@ import { anyRoomGameEnabled } from '../../modules/room/room.config.js';
 import { roomService, type RoomEffects } from '../../modules/room/room.service.js';
 import type { PresenceFence } from '../../modules/room/room.repo.js';
 import { asRoomLocale, RoomError, type RoomGameId, type RoomLocale } from '../../modules/room/room.types.js';
+import { wordgameReportsService } from '../../modules/wordgame-reports/wordgame-reports.service.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { scheduleRealtimeTimer, type RealtimeTimerPayload } from '../realtime-timer-scheduler.js';
 import { getRedisClient } from '../redis.js';
@@ -232,8 +233,8 @@ export const roomRealtimeService = {
     await deliver(io, effects);
   },
 
-  async handleReady(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string }): Promise<void> {
-    const effects = await gameplayDbTaskLimiter.run(() => roomService.ready(data.matchId, socket.data.user.id, asRoomLocale(data.locale) ?? 'es'));
+  async handleReady(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string; games?: string[] }): Promise<void> {
+    const effects = await gameplayDbTaskLimiter.run(() => roomService.ready(data.matchId, socket.data.user.id, asRoomLocale(data.locale) ?? 'es', data.games));
     await deliver(io, effects);
   },
 
@@ -245,11 +246,11 @@ export const roomRealtimeService = {
     else if (!result.ok) await emitSnapshot(io, data.matchId, socket.data.user.id);
   },
 
-  async handleResync(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string }): Promise<void> {
+  async handleResync(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string; games?: string[] }): Promise<void> {
     const locale = asRoomLocale(data.locale);
     if (locale) await roomService.setLocale(data.matchId, socket.data.user.id, locale);
     // A screen asking for the state is a player who is here: a missed connect must not leave the seat away.
-    await deliver(io, await roomService.present(socket.data.user.id));
+    await deliver(io, await roomService.present(socket.data.user.id, data.games));
     const snapshot = await roomService.snapshot(data.matchId, socket.data.user.id, locale);
     if (!snapshot) throw new RoomError('room_not_found', 404);
     bindIfLive(socket, snapshot);
@@ -261,6 +262,14 @@ export const roomRealtimeService = {
     await deliver(io, effects);
     // The leaver's own screen always learns the outcome, even when the seat was already gone.
     if (!effects) await emitSnapshot(io, data.matchId, socket.data.user.id);
+  },
+
+  /** "That was right": stored for the weekly review when the text really was refused in a match the player sat in. No answer either way. */
+  async handleReport(socket: QuizballSocket, data: { matchId: string; round: number; text: string }): Promise<void> {
+    const userId = socket.data.user.id;
+    const refusal = await roomService.refusal(data.matchId, userId, data.round, data.text);
+    if (!refusal || (refusal.game !== 'shared_player' && refusal.game !== 'name_chain')) return;
+    await wordgameReportsService.file({ game: refusal.game, source: 'room', contextId: data.matchId, round: data.round, reporter: { userId } }, refusal, data.text);
   },
 
   async handlePhaseTimer(io: QuizballServer, payload: RealtimeTimerPayload): Promise<void> {
@@ -325,6 +334,8 @@ export const roomRealtimeService = {
           lastPurge = Date.now();
           const purged = await roomService.purgeEnded();
           if (purged.commands + purged.contents > 0) logger.info(purged, 'Room retention purge');
+          const reports = await wordgameReportsService.purge();
+          if (reports > 0) logger.info({ reports }, 'Word game reports retention purge');
         }
       })().catch((error) => logger.warn({ error }, 'Room maintenance failed'));
     }, MAINTENANCE_MS);

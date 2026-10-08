@@ -57,6 +57,8 @@
     "pistas:seed": "tsx scripts/pistas-seed-days.ts",
     "ultimo:seed": "tsx scripts/ultimo-seed-days.ts",
     "minuto:seed": "tsx scripts/minuto-seed-days.ts",
+    "wordgames:seed-release": "tsx scripts/wordgames-seed-release.ts",
+    "wordgames:seed-days": "tsx scripts/wordgames-seed-days.ts",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
     "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
     "bot:burnin": "tsx scripts/bot-burnin/index.ts",

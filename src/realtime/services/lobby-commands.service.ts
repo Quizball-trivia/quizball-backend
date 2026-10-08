@@ -966,7 +966,7 @@ export async function startFriendlyMatch(
         return;
       }
       try {
-        await startRoomMatchFromLobby(io, socket, { lobbyId, roomGame });
+        await startRoomMatchFromLobby(io, socket, { lobbyId, roomGame, options: currentLobby.room_options ?? null });
       } catch (error) {
         logger.warn({ lobbyId, roomGame, error }, 'Failed to create room match');
         await lobbiesRepo.setAllReady(lobbyId, false);

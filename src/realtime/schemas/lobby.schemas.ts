@@ -49,6 +49,12 @@ export const lobbyLeaveSchema = z.object({
   correlationId: correlationIdSchema,
 });
 
+export const lobbyRoomOptionsSchema = z.object({
+  lobbyId: z.string().uuid().optional(),
+  // The room's game decides what is valid; this only bounds the size.
+  options: z.record(z.union([z.string().max(32), z.number(), z.boolean()])).nullable().refine((o) => o === null || Object.keys(o).length <= 8, 'too many options'),
+});
+
 export const lobbyReadySchema = z.object({
   ready: z.boolean(),
 });

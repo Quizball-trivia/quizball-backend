@@ -138,6 +138,7 @@ export const lobbiesService = {
         gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
         duelGame: lobby.game_mode === 'duel' ? lobby.duel_game ?? null : null,
         roomGame: lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null,
+        roomOptions: lobby.game_mode === 'room_game' ? lobby.room_options ?? null : null,
         friendlyRandom: lobby.friendly_random ?? true,
         friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
         friendlyCategoryBId: lobby.friendly_category_b_id ?? null,

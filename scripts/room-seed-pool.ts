@@ -136,7 +136,7 @@ async function main(): Promise<void> {
         let unknown = 0;
         for (let i = 0; i < accepted.length; i += 5_000) {
           const [{ n }] = await tx<Array<{ n: number }>>`
-            SELECT count(*)::int AS n FROM unnest(${accepted.slice(i, i + 5_000)}::text[]) AS a(pid)
+            SELECT count(*)::int AS n FROM unnest(${tx.array(accepted.slice(i, i + 5_000))}::text[]) AS a(pid)
             WHERE NOT EXISTS (SELECT 1 FROM wordgame_players p WHERE p.release_id = ${releases[0]} AND p.pid = a.pid)`;
           unknown += n;
         }

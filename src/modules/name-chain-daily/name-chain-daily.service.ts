@@ -112,18 +112,16 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
     current: (player: DailyPlayer, dayId: string | undefined) => core.current(player, dayId),
     boards: (): Promise<BoardsResponse> => core.boards(),
 
-    /** The three names a closed day's chains started from; anything else is the same 404 as a missing day. */
+    /**
+     * The name a closed day's first chain started from: the one start every player shared. Later chains start from a
+     * name that depends on what each player had already used, so they are not part of the day's review. Anything else
+     * is the same 404 as a missing day.
+     */
     async review(dayId: string): Promise<ReviewResponse> {
       const day = await core.closedDay(dayId);
-      const used = new Set<string>();
-      const starts: string[] = [];
-      for (let i = 0; i < rules.CHAINS_PER_DAY; i += 1) {
-        const pid = pickStart(day.universe, used, 0, draw(day.seed, i));
-        if (!pid) break;
-        used.add(pid);
-        starts.push(day.universe.player(pid)?.name ?? '');
-      }
-      return { day: dayId, starts };
+      const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));
+      const name = pid ? day.universe.player(pid)?.name ?? null : null;
+      return { day: dayId, starts: name ? [name] : [] };
     },
 
     leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => core.leaderboard(dayId, userId),

@@ -18,7 +18,7 @@ import { warmupRealtimeService } from './warmup-realtime.service.js';
 export async function startRoomMatchFromLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  input: { lobbyId: string; roomGame: RoomGameId },
+  input: { lobbyId: string; roomGame: RoomGameId; options?: Record<string, unknown> | null },
 ): Promise<void> {
   const members = orderLobbyMembersByJoinTime(await lobbiesRepo.listMembersWithUser(input.lobbyId));
   if (members.length < 2 || members.length > ROOM_MAX_SEATS || members.some((m) => m.is_ai)) throw new RoomError('room_needs_players');
@@ -29,6 +29,7 @@ export async function startRoomMatchFromLobby(
   const effects = await roomService.createFromLobby({
     lobbyId: input.lobbyId,
     game: input.roomGame,
+    options: input.options ?? null,
     players: members.map((m) => ({ userId: m.user_id, isGuest: m.is_guest === true })),
   });
   // Committed: any pointer read in flight is now stale, before the room's active state goes out.

@@ -256,15 +256,40 @@ describe.skipIf(!url)('room runtime on real Postgres', () => {
   it('reads one shared snapshot for six recipients and skips unused content reads', async () => {
     const r = await started(6);
     queries.length = 0;
+    // The match and its seats; the content of a live match was read once, when it started, and is kept.
     expect((await roomService.snapshots(r.matchId, [...r.ids, r.ids[0]])).size).toBe(6);
-    expect(queries).toHaveLength(3);
-    expect(queries.filter((query) => /FROM room_match_content/.test(query))).toHaveLength(1);
+    expect(queries).toHaveLength(2);
+    expect(queries.some((query) => /SELECT content FROM room_match_content/.test(query))).toBe(false);
     queries.length = 0;
     expect((await roomService.snapshots(r.matchId, [])).size).toBe(0);
     expect(queries).toHaveLength(0);
     expect(await roomService.snapshot(r.matchId, randomUUID())).toBeNull();
     expect(queries).toHaveLength(2);
-    expect(queries.some((query) => /FROM room_match_content/.test(query))).toBe(false);
+    expect(queries.some((query) => /SELECT content FROM room_match_content/.test(query))).toBe(false);
+  });
+
+  it('keeps the content of a live match in memory and reads an ended match from the table', async () => {
+    const r = await started(2);
+    queries.length = 0;
+    await guess(r.matchId, r.ids[0], 0, 5);
+    await roomService.snapshots(r.matchId, r.ids);
+    expect(queries.some((query) => /SELECT content FROM room_match_content/.test(query))).toBe(false);
+    await roomService.leave(r.matchId, r.ids[0]);
+    expect((await matchRow(r.matchId)).status).not.toBe('active');
+    queries.length = 0;
+    expect((await roomService.snapshots(r.matchId, r.ids)).size).toBe(2);
+    expect(queries.filter((query) => /SELECT content FROM room_match_content/.test(query))).toHaveLength(1);
+  });
+
+  it('a live match whose content row is gone is cancelled, whether or not this replica had the content in memory', async () => {
+    const r = await started(2);
+    await roomService.snapshots(r.matchId, r.ids); // the content is in memory now
+    await db.sql`DELETE FROM room_match_content WHERE match_id = ${r.matchId}`;
+    expect((await roomService.snapshot(r.matchId, r.ids[0]))?.view ?? null).toBeNull();
+    await db.sql`UPDATE room_matches SET phase_deadline_at = clock_timestamp() - interval '10 milliseconds' WHERE id = ${r.matchId}`;
+    await roomService.expire(r.matchId, (await matchRow(r.matchId)).phase_token);
+    expect((await matchRow(r.matchId)).status).toBe('cancelled');
+    expect((await lobbyRow(r.lobbyId)).status).toBe('waiting');
   });
 
   it('batches six-seat creation, admission and final placements without losing any seat or score', async () => {

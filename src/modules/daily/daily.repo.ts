@@ -60,8 +60,13 @@ export interface DailyTables {
  */
 export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, Entry extends DailyBoardEntryBase, DayRow>(
   t: DailyTables,
-  /** statTiebreak: equal scores rank by the board stat (higher first) before the finish time. */
-  opts: { statTiebreak?: boolean } = {},
+  /**
+   * statTiebreak: equal scores rank by the board stat (higher first) before the finish time.
+   * openClockIndex: the runs table has an index of open clocks, ((state->>'dl')::float8) WHERE NOT done AND
+   * state->>'open' = 'true'; the settle sweep then reads only the clocks that ran out, however many unfinished runs
+   * the table has collected.
+   */
+  opts: { statTiebreak?: boolean; openClockIndex?: boolean } = {},
 ) {
   for (const name of Object.values(t)) if (!/^[a-z_]+$/.test(name)) throw new Error(`Bad table config: ${name}`);
   const RUNS = t.runs;
@@ -198,6 +203,18 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
      * Oldest first, so a batch always moves on.
      */
     async overdueRuns(nowMs: number, graceMs: number, limit: number): Promise<string[]> {
+      if (opts.openClockIndex) {
+        // The same runs as below, asked the way the open-clock index answers: the deadline alone on one side.
+        const due = await sql<Array<{ id: string }>>`
+        SELECT r.id FROM ${sql.unsafe(RUNS)} r
+        JOIN ${sql.unsafe(DAYS)} d ON d.day = r.day AND d.content_version = r.content_version
+        WHERE NOT r.done AND r.state->>'open' = 'true' AND (r.state->>'dl')::float8 < ${nowMs - graceMs}::float8
+          AND (NOT r.ranked OR (r.state->>'dl')::float8 + ${graceMs} < extract(epoch FROM r.closes_at) * 1000)
+        ORDER BY (r.state->>'dl')::float8
+        LIMIT ${limit}
+      `;
+        return due.map((r) => r.id);
+      }
       const rows = await sql<Array<{ id: string }>>`
       SELECT r.id FROM ${sql.unsafe(RUNS)} r
       JOIN ${sql.unsafe(DAYS)} d ON d.day = r.day AND d.content_version = r.content_version

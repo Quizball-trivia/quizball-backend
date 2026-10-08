@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Questions per difficulty in one match: the pool needs at least this many of each. */
 export const ROOM_PACK_WANTED = { easy: 3, medium: 4, hard: 3 } as const;

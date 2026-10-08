@@ -187,9 +187,9 @@ export const lobbiesRepo = {
    */
   async findFriendlyRoomByInviteCode(
     inviteCode: string
-  ): Promise<{ status: string; game_mode: string | null; duel_game: string | null; host_nickname: string | null } | null> {
-    const [row] = await sql<{ status: string; game_mode: string | null; duel_game: string | null; host_nickname: string | null }[]>`
-      SELECT l.status, l.game_mode, l.duel_game, u.nickname AS host_nickname
+  ): Promise<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null } | null> {
+    const [row] = await sql<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null }[]>`
+      SELECT l.status, l.game_mode, l.duel_game, l.room_game, u.nickname AS host_nickname
       FROM lobbies l
       LEFT JOIN users u ON u.id = l.host_user_id
       WHERE l.invite_code = ${inviteCode} AND l.mode = 'friendly'
@@ -429,22 +429,24 @@ export const lobbiesRepo = {
 
   /** The host's choices for the room game; only a waiting room-game room of that game takes them. */
   /**
-   * Stores a waiting room's game options and un-readies everyone in the same statement: nobody stays ready for
-   * settings they did not see. False when the room is no longer a waiting room of that game.
+   * Stores a waiting room's game options and un-readies everyone, atomically: nobody stays ready for settings they did
+   * not see. Members are locked first and the room second, the order a Ready (member, then the room's activity stamp)
+   * and a start (members, then the room) take, so the three cannot deadlock. False when the room is no longer a waiting
+   * room of that game.
    */
   async setRoomOptions(lobbyId: string, roomGame: RoomGameId, options: Record<string, unknown> | null): Promise<boolean> {
-    const rows = await sql<Array<{ id: string }>>`
-      WITH changed AS (
-        UPDATE lobbies SET room_options = ${options === null ? null : sql.json(options as never)}, updated_at = NOW()
+    return sql.begin(async (transaction) => {
+      const tx = transaction as unknown as typeof sql;
+      await tx`SELECT user_id FROM lobby_members WHERE lobby_id = ${lobbyId} ORDER BY user_id FOR UPDATE`;
+      const changed = await tx<Array<{ id: string }>>`
+        UPDATE lobbies SET room_options = ${options === null ? null : tx.json(options as never)}, updated_at = NOW()
         WHERE id = ${lobbyId} AND status = 'waiting' AND game_mode = 'room_game' AND room_game = ${roomGame}
         RETURNING id
-      ), unready AS (
-        -- No is_ready filter: a Ready that commits while this statement waits on that row must be cleared too.
-        UPDATE lobby_members SET is_ready = false WHERE lobby_id IN (SELECT id FROM changed)
-      )
-      SELECT id FROM changed
-    `;
-    return rows.length === 1;
+      `;
+      if (changed.length !== 1) return false;
+      await tx`UPDATE lobby_members SET is_ready = false WHERE lobby_id = ${lobbyId}`;
+      return true;
+    }) as Promise<boolean>;
   },
 
   async setAllReady(lobbyId: string, isReady: boolean): Promise<number> {

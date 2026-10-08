@@ -1166,6 +1166,8 @@ export interface LobbyJoinRoomInfo {
   roomState: 'open' | 'in_progress' | 'ended' | 'unknown';
   gameMode: string | null;
   duelGame: string | null;
+  /** The room game of a room-game room, so "start your own" opens the same game. */
+  roomGame: string | null;
   hostNickname: string | null;
 }
 

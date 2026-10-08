@@ -209,7 +209,7 @@ export async function createLobby(
 
 const ROOM_INFO_CODES = new Set(['LOBBY_NOT_FOUND', 'LOBBY_FULL', 'LOBBY_MODE_REQUIRES_ACCOUNT', 'LOBBY_GUEST_LIMIT']);
 const ROOM_INFO_DEADLINE_MS = 1_000;
-const UNKNOWN_ROOM: LobbyJoinRoomInfo = { roomState: 'unknown', gameMode: null, duelGame: null, hostNickname: null };
+const UNKNOWN_ROOM: LobbyJoinRoomInfo = { roomState: 'unknown', gameMode: null, duelGame: null, roomGame: null, hostNickname: null };
 
 async function describeInviteRoomBounded(inviteCode: string): Promise<LobbyJoinRoomInfo> {
   let timer: NodeJS.Timeout | undefined;
@@ -230,7 +230,7 @@ async function describeInviteRoom(inviteCode: string): Promise<LobbyJoinRoomInfo
     const row = await lobbiesRepo.findFriendlyRoomByInviteCode(inviteCode);
     if (!row) return UNKNOWN_ROOM;
     const roomState = row.status === 'waiting' ? 'open' : row.status === 'active' ? 'in_progress' : 'ended';
-    return { roomState, gameMode: row.game_mode, duelGame: row.duel_game, hostNickname: row.host_nickname };
+    return { roomState, gameMode: row.game_mode, duelGame: row.duel_game, roomGame: row.room_game ?? null, hostNickname: row.host_nickname };
   } catch (error) {
     logger.warn({ error, inviteCode: `${inviteCode.slice(0, 2)}***` }, 'Invite room lookup failed');
     return UNKNOWN_ROOM;

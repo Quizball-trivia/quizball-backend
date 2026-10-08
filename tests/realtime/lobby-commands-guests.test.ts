@@ -99,7 +99,7 @@ describe('guest rooms — join by code', () => {
     const socket = socketFor('g', true);
     expect(await joinByCode(io as never, socket as never, 'abc123', 'c')).toEqual(expect.objectContaining({
       ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT',
-      room: { roomState: 'open', gameMode: 'friendly_possession', duelGame: null, hostNickname: 'Lionel' },
+      room: { roomState: 'open', gameMode: 'friendly_possession', duelGame: null, roomGame: null, hostNickname: 'Lionel' },
     }));
     // The server's own error event names the code, so the client knows it echoes its join.
     expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_MODE_REQUIRES_ACCOUNT', meta: expect.objectContaining({ inviteCode: 'ABC123' }) }));
@@ -107,7 +107,14 @@ describe('guest rooms — join by code', () => {
     lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'waiting', game_mode: 'duel', duel_game: 'pistas', host_nickname: null });
     room('duel', [member('m1'), member('m2')]);
     expect(await joinByCode(io as never, socketFor('m3') as never, 'abc123', 'c')).toEqual(expect.objectContaining({
-      ok: false, code: 'LOBBY_FULL', room: { roomState: 'open', gameMode: 'duel', duelGame: 'pistas', hostNickname: null },
+      ok: false, code: 'LOBBY_FULL', room: { roomState: 'open', gameMode: 'duel', duelGame: 'pistas', roomGame: null, hostNickname: null },
+    }));
+
+    // A room-game room names its game, so the refused player can start the same one.
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'waiting', game_mode: 'room_game', duel_game: null, room_game: 'name_chain', host_nickname: null });
+    room('duel', [member('m1'), member('m2')]);
+    expect(await joinByCode(io as never, socketFor('m4') as never, 'abc123', 'c')).toEqual(expect.objectContaining({
+      ok: false, code: 'LOBBY_FULL', room: { roomState: 'open', gameMode: 'room_game', duelGame: null, roomGame: 'name_chain', hostNickname: null },
     }));
   });
 
@@ -124,7 +131,7 @@ describe('guest rooms — join by code', () => {
     lobbiesRepo.findFriendlyRoomByInviteCode.mockRejectedValue(new Error('db down'));
     room('friendly_possession', [member('host')]);
     expect(await joinByCode(io as never, socketFor('g', true) as never, 'abc123', 'c')).toEqual(expect.objectContaining({
-      ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT', room: { roomState: 'unknown', gameMode: null, duelGame: null, hostNickname: null },
+      ok: false, code: 'LOBBY_MODE_REQUIRES_ACCOUNT', room: { roomState: 'unknown', gameMode: null, duelGame: null, roomGame: null, hostNickname: null },
     }));
   });
 

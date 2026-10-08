@@ -227,7 +227,8 @@ describe.skipIf(!url)('played for both on the room runtime (real Postgres)', () 
   it('sweepers: a live match is left alone, one stuck past the age cap is cancelled and its room reopened', async () => {
     const live = await racing(2);
     const stuck = await racing(3);
-    await db.sql`UPDATE room_matches SET created_at = now() - interval '4 hours' WHERE id = ${stuck.matchId}`;
+    // Older than anything other tests may have left live in this database: first in the oldest-first listing.
+    await db.sql`UPDATE room_matches SET created_at = now() - interval '10 years' WHERE id = ${stuck.matchId}`;
     const stale = await roomService.staleLiveMatches(100);
     expect(stale).toContain(stuck.matchId);
     expect(stale).not.toContain(live.matchId);

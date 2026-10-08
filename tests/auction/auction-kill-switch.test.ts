@@ -4,6 +4,9 @@ import '../setup.js';
 // AUCTION_ENABLED defaults false in config; this file exercises the DISABLED
 // path, so no config mock: a fresh deploy must reject new auction entry with a
 // clean error and never reach validation or the matchmaking service.
+// ...and no .env either: a developer's AUCTION_ENABLED=true must not switch the path under test off.
+vi.mock('dotenv', () => ({ config: () => ({ parsed: {} }) }));
+delete process.env.AUCTION_ENABLED;
 const searchStartMock = vi.fn();
 vi.mock('../../src/realtime/services/auction-matchmaking.service.js', () => ({
   auctionMatchmakingService: { handleSearchStart: (...args: unknown[]) => searchStartMock(...args) },

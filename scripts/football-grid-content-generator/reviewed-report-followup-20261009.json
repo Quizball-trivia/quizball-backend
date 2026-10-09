@@ -1,0 +1,155 @@
+{
+  "facts": [
+    {
+      "playerId": "95faf5b6-9e1c-4879-854d-6a8746bbc3b8",
+      "nameEn": "Ronaldo Nazario",
+      "criteria": [
+        "league:eredivisie"
+      ],
+      "url": "https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox",
+      "fact": "PSV states that Ronaldo scored 42 Eredivisie goals in his two seasons at the club (1994-96).",
+      "presentOnly": true
+    },
+    {
+      "playerId": "95faf5b6-9e1c-4879-854d-6a8746bbc3b8",
+      "nameEn": "Ronaldo Nazario",
+      "criteria": [
+        "league:la-liga"
+      ],
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "95faf5b6-9e1c-4879-854d-6a8746bbc3b8",
+      "nameEn": "Ronaldo Nazario",
+      "criteria": [
+        "league:serie-a"
+      ],
+      "url": "https://www.inter.it/en/news/2020-06-06-facts-ronaldo-fenomeno-inter-hall-of-fame",
+      "fact": "Inter records Ronaldo's 49 Serie A goals for the club between 1997 and 2002.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "league:eredivisie"
+      ],
+      "url": "https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox",
+      "fact": "PSV states that Ronaldo scored 42 Eredivisie goals in his two seasons at the club (1994-96).",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "league:la-liga"
+      ],
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "league:serie-a"
+      ],
+      "url": "https://www.inter.it/en/news/2020-06-06-facts-ronaldo-fenomeno-inter-hall-of-fame",
+      "fact": "Inter records Ronaldo's 49 Serie A goals for the club between 1997 and 2002.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
+      "nameEn": "Ronaldo",
+      "criteria": [
+        "league:eredivisie"
+      ],
+      "url": "https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox",
+      "fact": "PSV states that Ronaldo scored 42 Eredivisie goals in his two seasons at the club (1994-96).",
+      "presentOnly": true
+    },
+    {
+      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
+      "nameEn": "Ronaldo",
+      "criteria": [
+        "league:la-liga"
+      ],
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
+      "nameEn": "Ronaldo",
+      "criteria": [
+        "league:serie-a"
+      ],
+      "url": "https://www.inter.it/en/news/2020-06-06-facts-ronaldo-fenomeno-inter-hall-of-fame",
+      "fact": "Inter records Ronaldo's 49 Serie A goals for the club between 1997 and 2002.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "club-psv-eindhoven"
+      ],
+      "url": "https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox",
+      "fact": "PSV states that Ronaldo played two seasons for the club before leaving for FC Barcelona.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "club:fc-barcelona"
+      ],
+      "url": "https://www.fcbarcelona.com/en/card/648048/ronaldo-luiz-nazario",
+      "fact": "FC Barcelona records that Ronaldo spent the 1996-97 season at the club, scoring 47 goals in 51 games.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "club:real-madrid-cf"
+      ],
+      "url": "https://www.realmadrid.com/en-US/the-club/history/football-legends/ronaldo-luis-nazario-de-lima",
+      "fact": "Real Madrid records that Ronaldo signed in 2002 and played for the club until 2007.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "79f167d2-9d12-4f3e-91c0-0fbbf1b7d994",
+      "nameEn": "Ronaldo Nazário",
+      "criteria": [
+        "club:ac-milan"
+      ],
+      "url": "https://www.acmilan.com/en/club/legends/players/ronaldo",
+      "fact": "AC Milan records that Ronaldo joined from Real Madrid in January 2007 and played 20 Serie A matches for the club.",
+      "presentOnly": true
+    },
+    {
+      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
+      "nameEn": "Ronaldo",
+      "criteria": [
+        "club:ac-milan"
+      ],
+      "url": "https://www.acmilan.com/en/club/legends/players/ronaldo",
+      "fact": "AC Milan records that Ronaldo joined from Real Madrid in January 2007 and played 20 Serie A matches for the club.",
+      "presentOnly": true
+    }
+  ],
+  "aliases": [
+    {
+      "playerId": "95faf5b6-9e1c-4879-854d-6a8746bbc3b8",
+      "nameEn": "Ronaldo Nazario",
+      "alias": "ნაზარიო",
+      "locale": "ka",
+      "url": "https://www.realmadrid.com/en-US/the-club/history/football-legends/ronaldo-luis-nazario-de-lima",
+      "fact": "Real Madrid names the player in full as Ronaldo Luís Nazário de Lima; Nazário is his family name.",
+      "presentOnly": true
+    }
+  ]
+}

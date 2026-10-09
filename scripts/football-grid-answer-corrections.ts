@@ -7,6 +7,7 @@ import { normalizeFootballGridAnswer } from '../src/modules/football-grid/footba
 import officialFollowup from './football-grid-content-generator/official-answer-followup-20260923.json' with { type: 'json' };
 import reportFollowup from './football-grid-content-generator/reviewed-report-followup-20260923.json' with { type: 'json' };
 import currentFacts from './football-grid-content-generator/current-facts-20260924.json' with { type: 'json' };
+import legendReports from './football-grid-content-generator/reviewed-report-followup-20261009.json' with { type: 'json' };
 
 export const CORRECTION_SOURCE = 'official-football-answer-review-20260921';
 export const CONFIRMED_FACTS = [
@@ -48,6 +49,8 @@ export const REPORT_FOLLOWUP_BATCH = 'reviewed-player-reports-20260923';
 export const REPORT_FOLLOWUP_SOURCE = 'reviewed-football-player-reports-20260923';
 export const CURRENT_FACTS_BATCH = 'current-football-facts-20260924';
 export const CURRENT_FACTS_SOURCE = 'official-football-facts-through-20260831';
+export const LEGEND_REPORT_BATCH = 'reviewed-player-reports-20261009';
+export const LEGEND_REPORT_SOURCE = 'reviewed-football-player-reports-20261009';
 
 function correctionBatch(batch: unknown) {
   if (batch === undefined) return {
@@ -74,13 +77,19 @@ function correctionBatch(batch: unknown) {
     reviewer: 'official-football-fact-audit-20260924', datasetVersion: 'match-facts-through-2026-08-31',
     providerName: 'UEFA, Premier League, LaLiga and official club match records',
   };
+  if (batch === LEGEND_REPORT_BATCH) return {
+    sourceKey: LEGEND_REPORT_SOURCE, facts: legendReports.facts,
+    aliases: legendReports.aliases,
+    reviewer: 'official-player-report-review-20261009', datasetVersion: 'player-reports-2026-10-09',
+    providerName: 'PSV, FC Barcelona, Real Madrid, Inter, AC Milan, Corinthians, LaLiga and UEFA official sites',
+  };
   throw new Error('Unknown answer correction batch');
 }
 
 /** A correction release names its own provenance in relationshipSnapshot. */
 export function correctionSourceIdentity(batch: unknown): { sourceKey: string; datasetVersion: string } | null {
-  if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH &&
-      batch !== REPORT_FOLLOWUP_BATCH && batch !== CURRENT_FACTS_BATCH) return null;
+  if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH && batch !== REPORT_FOLLOWUP_BATCH
+      && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH) return null;
   const selected = correctionBatch(batch);
   return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
 }
@@ -163,6 +172,9 @@ export function prepareAnswerCorrections(
     const relevant = correction.criteria.filter(key => criteria.has(key));
     if (!relevant.length) continue;
     const existing = players.get(correction.playerId);
+    // A fact that completes a display record of one pack only: the other pack keeps its own record of the same
+    // person, so nothing is imported for it there.
+    if (!existing && 'presentOnly' in correction && correction.presentOnly) continue;
     const donor = playerCatalog.players.find(p => p.id === correction.playerId);
     if ((existing && existing.nameEn !== correction.nameEn) || (donor && donor.nameEn !== correction.nameEn)) {
       throw new Error(`Player identity mismatch: ${correction.playerId}`);
@@ -207,6 +219,7 @@ export function prepareAnswerCorrections(
   if ('aliases' in selected) {
     for (const reviewed of selected.aliases) {
       const player = players.get(reviewed.playerId);
+      if (!player && 'presentOnly' in reviewed && reviewed.presentOnly) continue;
       if (!player || player.nameEn !== reviewed.nameEn) {
         throw new Error(`Reviewed alias player identity mismatch: ${reviewed.playerId}`);
       }

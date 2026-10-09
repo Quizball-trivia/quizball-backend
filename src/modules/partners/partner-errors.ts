@@ -1,5 +1,5 @@
-import type { ErrorRequestHandler, Response } from 'express';
-import { ZodError, type ZodType } from 'zod';
+import type { ErrorRequestHandler, Request, Response } from 'express';
+import { ZodArray, ZodDefault, ZodEffects, ZodError, ZodNullable, ZodObject, ZodOptional, type ZodIssue, type ZodType, type ZodTypeAny } from 'zod';
 import { AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { isTransientDatabaseError } from '../../http/middleware/error-handler.js';
@@ -101,6 +101,64 @@ export class PartnerError extends Error {
     this.name = 'PartnerError';
     this.status = STATUS[code];
   }
+
+  /** For our logs only, never sent: which input field failed validation. */
+  invalidInput?: InvalidInput;
+}
+
+export type InvalidInput = { field: string; issue: string; expected?: string; received?: string };
+
+/** An invalid_request that also tells our logs which field it was about. */
+export function invalidInputError(message: string | undefined, invalid: InvalidInput): PartnerError {
+  const error = new PartnerError('invalid_request', message);
+  error.invalidInput = invalid;
+  return error;
+}
+
+/** The issue's path with only names the schema itself declares; anything else (a caller-chosen record key, a
+ *  refinement's custom path) could be the caller's own text and is masked. */
+function schemaField(schema: ZodTypeAny | undefined, path: ReadonlyArray<string | number>): string {
+  const parts: string[] = [];
+  let node = schema;
+  for (const part of path) {
+    for (;;) {
+      if (node instanceof ZodEffects) node = node.innerType();
+      else if (node instanceof ZodDefault) node = node.removeDefault();
+      else if (node instanceof ZodOptional || node instanceof ZodNullable) node = node.unwrap();
+      else break;
+    }
+    if (node instanceof ZodObject && typeof part === 'string' && Object.hasOwn(node.shape, part)) {
+      parts.push(part);
+      node = node.shape[part];
+    } else if (node instanceof ZodArray && typeof part === 'number') {
+      parts.push(String(part));
+      node = node.element;
+    } else {
+      parts.push('?');
+      node = undefined;
+    }
+  }
+  return parts.join('.') || 'body';
+}
+
+/** Zod's failure kind and type names. Its messages quote the input, so they stay out of the logs. */
+function describeIssue(issue: ZodIssue | undefined, schema?: ZodTypeAny): InvalidInput {
+  if (!issue) return { field: 'body', issue: 'invalid' };
+  const field = schemaField(schema, issue.path);
+  if (issue.code === 'invalid_type') return { field, issue: issue.code, expected: issue.expected, received: issue.received };
+  if (issue.code === 'invalid_string' && typeof issue.validation === 'string') return { field, issue: `${issue.code}:${issue.validation}` };
+  return { field, issue: issue.code };
+}
+
+const LOGGED_CONTENT_TYPES = new Set(['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
+
+function logInvalidInput(req: Request, invalid: InvalidInput): void {
+  // A body sent as an unparsed content type fails as "first field missing", so the type is the useful clue.
+  const mediaType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  const contentType = mediaType === '' ? 'none' : LOGGED_CONTENT_TYPES.has(mediaType) ? mediaType : 'other';
+  // The route pattern, not the URL: a URL carries caller text (ids, anything at all before a route matches).
+  const route: unknown = (req.route as { path?: unknown } | undefined)?.path;
+  logger.warn({ reason: 'invalid_request', ...(typeof route === 'string' ? { route } : {}), contentType, ...invalid }, 'Partner request refused');
 }
 
 export function sendPartnerError(res: Response, error: PartnerError): void {
@@ -113,15 +171,25 @@ export function sendPartnerError(res: Response, error: PartnerError): void {
 
 /** Partner routers answer in the partner format `{ error: { code, message } }`, never the Quizball one. */
 export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
-  if (err instanceof PartnerError) return sendPartnerError(res, err);
-  if (err instanceof ZodError) return sendPartnerError(res, new PartnerError('invalid_request'));
+  if (err instanceof PartnerError) {
+    if (err.code === 'invalid_request') logInvalidInput(req, err.invalidInput ?? { field: '?', issue: 'rule' });
+    return sendPartnerError(res, err);
+  }
+  if (err instanceof ZodError) {
+    logInvalidInput(req, describeIssue(err.issues[0]));
+    return sendPartnerError(res, new PartnerError('invalid_request'));
+  }
   // Express could not decode a route parameter (malformed %-encoding in :playerId).
-  if (err instanceof URIError) return sendPartnerError(res, new PartnerError('invalid_request', 'A path parameter is not valid'));
+  if (err instanceof URIError) {
+    logInvalidInput(req, { field: 'path', issue: 'encoding' });
+    return sendPartnerError(res, new PartnerError('invalid_request', 'A path parameter is not valid'));
+  }
   // body-parser: malformed JSON, too large, wrong charset (raised before any partner router runs).
   const parserStatus = (err as { type?: unknown; status?: unknown }).type !== undefined
     ? (err as { status?: unknown }).status
     : undefined;
   if (typeof parserStatus === 'number' && parserStatus >= 400 && parserStatus < 500) {
+    logInvalidInput(req, { field: 'body', issue: 'unreadable' });
     return sendPartnerError(res, new PartnerError('invalid_request', 'The body is not valid JSON'));
   }
   // A shared Quizball middleware refused the request (validation, auth): same status, partner format.
@@ -132,6 +200,7 @@ export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) =
       : err.statusCode === 404 ? 'not_found'
       : err.statusCode === 429 ? 'rate_limited'
       : 'invalid_request';
+    if (code === 'invalid_request') logInvalidInput(req, { field: '?', issue: 'refused' });
     return sendPartnerError(res, new PartnerError(code));
   }
   if (isTransientDatabaseError(err)) {
@@ -146,7 +215,7 @@ export function parsePartnerInput<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    throw new PartnerError('invalid_request', issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : undefined);
+    throw invalidInputError(issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : undefined, describeIssue(issue, schema));
   }
   return parsed.data;
 }

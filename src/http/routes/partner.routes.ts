@@ -3,6 +3,7 @@ import { Router, type Request, type RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import { resolveTrustedClientIp } from '../client-ip.js';
 import {
+  invalidInputError,
   parsePartnerInput,
   partnerErrorHandler,
   PartnerError,
@@ -91,7 +92,7 @@ const playerLimiter = bearerLimiter('player', 240);
 const staffLimiter = bearerLimiter('staff', 300);
 
 function playerIdParam(raw: string): string {
-  if (!PARTNER_IDENTIFIER.test(raw)) throw new PartnerError('invalid_request', 'playerId: invalid');
+  if (!PARTNER_IDENTIFIER.test(raw)) throw invalidInputError('playerId: invalid', { field: 'playerId', issue: 'invalid_string:regex' });
   return raw;
 }
 

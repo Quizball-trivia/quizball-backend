@@ -16,8 +16,8 @@
       "criteria": [
         "league:la-liga"
       ],
-      "url": "https://www.laliga.com/en-GB/news/footballers-who-played-real-madrid-fc-barcelona",
-      "fact": "LaLiga lists Ronaldo among the footballers who played for both FC Barcelona and Real Madrid, and records his 2002/03 league title with Real Madrid.",
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
       "presentOnly": true
     },
     {
@@ -46,8 +46,8 @@
       "criteria": [
         "league:la-liga"
       ],
-      "url": "https://www.laliga.com/en-GB/news/footballers-who-played-real-madrid-fc-barcelona",
-      "fact": "LaLiga lists Ronaldo among the footballers who played for both FC Barcelona and Real Madrid, and records his 2002/03 league title with Real Madrid.",
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
       "presentOnly": true
     },
     {
@@ -76,8 +76,8 @@
       "criteria": [
         "league:la-liga"
       ],
-      "url": "https://www.laliga.com/en-GB/news/footballers-who-played-real-madrid-fc-barcelona",
-      "fact": "LaLiga lists Ronaldo among the footballers who played for both FC Barcelona and Real Madrid, and records his 2002/03 league title with Real Madrid.",
+      "url": "https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona",
+      "fact": "FC Barcelona records that Ronaldo scored 34 league goals for the club in 1996-97, winning the Pichichi as La Liga's top scorer.",
       "presentOnly": true
     },
     {
@@ -138,26 +138,6 @@
       ],
       "url": "https://www.acmilan.com/en/club/legends/players/ronaldo",
       "fact": "AC Milan records that Ronaldo joined from Real Madrid in January 2007 and played 20 Serie A matches for the club.",
-      "presentOnly": true
-    },
-    {
-      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
-      "nameEn": "Ronaldo",
-      "criteria": [
-        "club-corinthians"
-      ],
-      "url": "https://www.corinthians.com.br/noticias/confira-a-trajetoria-do-fenomeno-no-timao",
-      "fact": "Corinthians records that Ronaldo played 69 matches and scored 35 goals in his two years at the club.",
-      "presentOnly": true
-    },
-    {
-      "playerId": "778ab168-1244-4cd2-930a-6a26b384fc0b",
-      "nameEn": "Ronaldo",
-      "criteria": [
-        "club-cruzeiro"
-      ],
-      "url": "https://www.uefa.com/uefachampionsleague/news/01bd-0ea894317954-7913b08e2883-1000--ronaldo-unveiled-by-rossoneri/",
-      "fact": "UEFA records that Ronaldo began his career with Cruzeiro before moving to PSV Eindhoven.",
       "presentOnly": true
     }
   ],

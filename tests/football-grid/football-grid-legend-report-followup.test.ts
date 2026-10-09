@@ -45,9 +45,9 @@ function pack(kind: 'european' | 'themed'): Manifest {
   } as unknown as Manifest;
 }
 
-const resolveIn = (candidate: Manifest, cell: number, text: string) => resolveFootballGridAnswer({
+const resolveIn = (candidate: Manifest, cell: number, text: string, usedPlayerIds: string[] = []) => resolveFootballGridAnswer({
   submittedText: text, validPlayerIds: candidate.boards[0].cells[cell].playerIds, boardPlayerIds: candidate.players.map(p => p.id),
-  usedPlayerIds: [], validPlayerNames: [], aliases: candidate.aliases.map((entry, index) => ({ ...entry, id: String(index) })),
+  usedPlayerIds, validPlayerNames: [], aliases: candidate.aliases.map((entry, index) => ({ ...entry, id: String(index) })),
 });
 
 describe('reviewed player report: a legend with clubs but no leagues', () => {
@@ -86,11 +86,29 @@ describe('reviewed player report: a legend with clubs but no leagues', () => {
     expect(draft.candidate.players.map(p => p.id)).not.toContain(european);
     const added = (id: string) => draft.changes.addedMemberships.filter(m => m.playerId === id).map(m => m.criterionKey).sort();
     expect(added(themedFull)).toEqual(['club-psv-eindhoven', 'club:ac-milan', 'club:fc-barcelona', 'club:real-madrid-cf', 'league:eredivisie', 'league:la-liga', 'league:serie-a']);
-    expect(added(themedShort)).toEqual(['club-corinthians', 'club-cruzeiro', 'club:ac-milan', 'league:eredivisie', 'league:la-liga', 'league:serie-a']);
+    // The short-name record gets his leagues and Milan only: the Brazilian clubs stay with the full-name record.
+    expect(added(themedShort)).toEqual(['club:ac-milan', 'league:eredivisie', 'league:la-liga', 'league:serie-a']);
     expect(resolveIn(draft.candidate, 0, 'ნაზარიო')).toMatchObject({ outcome: 'correct', playerId: themedFull });
     expect(resolveIn(draft.candidate, 0, 'Ronaldo')).toMatchObject({ outcome: 'correct', playerId: themedShort });
     expect(resolveIn(draft.candidate, 4, 'Ronaldo Nazário')).toMatchObject({ outcome: 'correct', playerId: themedFull });
     const approved = approveAnswerCorrections(draft, 'fixture-reviewer', at);
     expect(matchesPrescribedAnswerCorrection(source, catalog, approved)).toBe(true);
+  });
+
+  it('what completing two records of one person does NOT fix: the used-player rule sees two players', () => {
+    const draft = prepareAnswerCorrections(pack('themed'), pack('european'), 101, at, LEGEND_REPORT_BATCH);
+    // "Ronaldo" used for PSV x Serie A; the full name is still accepted in another cell of the same board.
+    expect(resolveIn(draft.candidate, 0, 'Ronaldo Nazário', [themedShort])).toMatchObject({ outcome: 'correct', playerId: themedFull });
+    // The same record cannot be used twice.
+    expect(resolveIn(draft.candidate, 0, 'Ronaldo', [themedShort]).outcome).not.toBe('correct');
+  });
+
+  it('a short name shared with another footballer who also fits the cell asks for more, as for any two namesakes', () => {
+    const source = pack('european');
+    source.aliases.push(alias(other, 'რონალდო', 'ka'));
+    expect(resolveIn(source, 0, 'რონალდო')).toMatchObject({ outcome: 'correct', playerId: other });
+    const draft = prepareAnswerCorrections(source, source, 101, at, LEGEND_REPORT_BATCH);
+    expect(resolveIn(draft.candidate, 0, 'რონალდო').outcome).toBe('ambiguous');
+    expect(resolveIn(draft.candidate, 0, 'ნაზარიო')).toMatchObject({ outcome: 'correct', playerId: european });
   });
 });

@@ -23,9 +23,9 @@ Every fact cites an official club, league or UEFA page that was opened and read 
 | Fact | Source |
 | --- | --- |
 | Eredivisie, with PSV (42 league goals in two seasons) | [PSV](https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox) |
-| La Liga, with Barcelona and Real Madrid | [LaLiga](https://www.laliga.com/en-GB/news/footballers-who-played-real-madrid-fc-barcelona) |
+| La Liga, with Barcelona (34 league goals in 1996-97, Pichichi) | [FC Barcelona](https://www.fcbarcelona.com/en/football/first-team/news/2191787/25-years-since-ronaldo-signed-for-fc-barcelona) |
 | Serie A, with Inter (49 league goals) | [Inter](https://www.inter.it/en/news/2020-06-06-facts-ronaldo-fenomeno-inter-hall-of-fame) |
-| Played for PSV, Barcelona, Real Madrid, AC Milan, Corinthians, Cruzeiro (themed records) | [PSV](https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox), [FC Barcelona](https://www.fcbarcelona.com/en/card/648048/ronaldo-luiz-nazario), [Real Madrid](https://www.realmadrid.com/en-US/the-club/history/football-legends/ronaldo-luis-nazario-de-lima), [AC Milan](https://www.acmilan.com/en/club/legends/players/ronaldo), [Corinthians](https://www.corinthians.com.br/noticias/confira-a-trajetoria-do-fenomeno-no-timao), [UEFA](https://www.uefa.com/uefachampionsleague/news/01bd-0ea894317954-7913b08e2883-1000--ronaldo-unveiled-by-rossoneri/) |
+| Played for PSV, Barcelona, Real Madrid and AC Milan (the clubs the themed "Ronaldo Nazário" record lacks; AC Milan also for the themed "Ronaldo" record) | [PSV](https://www.psv.nl/media/artikel/psv-tv-special-over-ronaldo-op-fox), [FC Barcelona](https://www.fcbarcelona.com/en/card/648048/ronaldo-luiz-nazario), [Real Madrid](https://www.realmadrid.com/en-US/the-club/history/football-legends/ronaldo-luis-nazario-de-lima), [AC Milan](https://www.acmilan.com/en/club/legends/players/ronaldo) |
 
 The pinned season aggregates (`salimt/football-datasets`, provider id 3140) agree on every league and season; they are a
 cross-check only, not the cited source (their reuse status is not established).
@@ -40,15 +40,29 @@ Against the 9 October staging exports (same release numbers and player ids as pr
 | Release | Memberships | Aliases | Cells | Answers added | Answers removed | Boards touched |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | European 2026092403 → draft | 3 | 1 | 130 | 130 | 0 | 111 of 2,000 |
-| Themed 2026092404 → draft | 13 | 0 | 158 | 203 | 0 | 132 of 949 |
+| Themed 2026092404 → draft | 11 | 0 | 133 | 178 | 0 | 107 of 949 |
 
 Every added answer is one of his three records. These numbers must be recalculated from fresh exports before publishing.
 
+How his names resolve in the cells that change (the release's own aliases, before → after):
+
+| Typed | European (130 cells) | Themed (133 cells) |
+| --- | --- | --- |
+| "Nazario", "Ronaldo Nazario", "ნაზარიო" | refused → accepted in all 130 | refused → accepted in all 133 |
+| "Ronaldo" (shared with other footballers called Ronaldo) | (no such alias on his European record) | refused → accepted in 34; accepted → asks for a fuller name in 11 |
+| "რონალდო" (shared likewise, Cristiano Ronaldo among them) | refused → accepted in 121; accepted → asks for a fuller name in 9 | refused → accepted in 35; accepted → asks for a fuller name in 10 |
+
+"Asks for a fuller name" is the resolver's rule for two different footballers who both fit a cell (Real Madrid ×
+La Liga now fits two Ronaldos); it is not a refusal.
+
 ## Not in this batch
 
-- **The two themed records are not merged.** Both now carry the full career, so either name is accepted in every cell
-  he belongs to; the "already used" rule cannot tell they are one person. Merging needs an identity-reconciliation
-  transform (it replaces ids in stored cells), which the additive correction transform deliberately cannot do.
+- **The two themed records are not merged.** "Ronaldo Nazário" now carries the European clubs and the leagues;
+  "Ronaldo" gets the leagues and AC Milan, and deliberately not the Brazilian clubs (another "Ronaldo" record already
+  answers those cells under that name). The "already used" rule cannot tell the two records are one person: after
+  "Ronaldo" in one cell, "Ronaldo Nazário" is still accepted in another. That was already so where both records met
+  (Inter); it now covers more cells. Merging needs an identity-reconciliation transform (it replaces ids in stored
+  cells), which the additive correction transform deliberately cannot do.
 - **The other legends.** The same gap affects the other players who have clubs but no league. The pinned aggregates hold
   season-level league appearances for them; turning those into answers needs reviewed identity links (the legends carry
   no provider id in release evidence) and a decision on that source's reuse status, or a citation per fact as here.

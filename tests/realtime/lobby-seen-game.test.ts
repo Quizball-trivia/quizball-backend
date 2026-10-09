@@ -134,17 +134,19 @@ describe('Ready names the game it was pressed on', () => {
     expect(errorCodes(socket)).toEqual([]);
   });
 
-  it('a game change that slips in between the check and the write (the lock is a lease) takes the Ready back', async () => {
-    // First look, the look under the lock: still the game named. The look after the write: another game.
+  it('an Un-ready sent while the Ready is reading the room also wins', async () => {
+    const socket = socketFor('guest');
+    let letRoomAnswer = (): void => undefined;
+    // The handler's first look answers at once; the look under the lock is held back.
     lobbiesRepo.getById
       .mockResolvedValueOnce(lobby('duel', { duel: 'pistas' }))
-      .mockResolvedValueOnce(lobby('duel', { duel: 'pistas' }))
-      .mockResolvedValue(lobby('room_game', { room: 'name_chain' }));
-    const socket = socketFor('guest');
-    await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
-    expect(lobbiesRepo.updateMemberReady.mock.calls).toEqual([['L', 'guest', true], ['L', 'guest', false]]);
-    expect(errorCodes(socket)).toEqual(['LOBBY_SETTINGS_CHANGED']);
-    expect(lobbiesRepo.countReadyMembers).not.toHaveBeenCalled();
+      .mockImplementationOnce(() => new Promise((resolve) => { letRoomAnswer = () => resolve(lobby('duel', { duel: 'pistas' })); }));
+    const readingReady = setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
+    await vi.waitFor(() => expect(lobbiesRepo.getById).toHaveBeenCalledTimes(2));
+    await setReady(io as never, socket as never, false);
+    letRoomAnswer();
+    await readingReady;
+    expect(lobbiesRepo.updateMemberReady.mock.calls).toEqual([['L', 'guest', false]]);
   });
 
   it('a room that is not waiting has no game to agree on: handled as before', async () => {

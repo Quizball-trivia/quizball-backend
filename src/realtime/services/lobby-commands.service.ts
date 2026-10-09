@@ -514,16 +514,9 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
         const current = await lobbiesRepo.getById(lobbyId);
         // Only a waiting room has a game to agree on; anything else is handled as before.
         stale = current?.status === 'waiting' && !onSeenGame(current, seen);
-        if (!stale) {
-          updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
-          // The lock is a lease and may have run out, or was never ours: a change that slipped in between the check
-          // and the write shows now (it writes the room before it un-readies everybody), and the Ready is taken back.
-          const after = updated ? await lobbiesRepo.getById(lobbyId) : null;
-          if (after?.status === 'waiting' && !onSeenGame(after, seen)) {
-            await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, false);
-            stale = true;
-          }
-        }
+        // Looked at again after the read: an Un-ready sent meanwhile has been written by now.
+        superseded = socket.data.lobbyReadySeq !== readySeq;
+        if (!stale && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
       }
     } finally {
       if (guard.acquired && guard.token) await releaseLock(lockKey, guard.token);

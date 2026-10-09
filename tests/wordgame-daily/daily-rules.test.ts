@@ -58,6 +58,19 @@ describe('played for both, solo', () => {
     expect(shared.project(lost, at + 60_000)).toBe(lost);
   });
 
+  it('a day keeps the clock it was played with: ten seconds before 2026-10-10, twenty from then on', () => {
+    expect([shared.raceMsFor('2026-10-06'), shared.raceMsFor('2026-10-09'), shared.raceMsFor('2026-10-10'), shared.raceMsFor('2026-12-19')]).toEqual([10_000, 10_000, 20_000, 20_000]);
+    const early = shared.next(shared.newState(), 1_000, shared.raceMsFor('2026-10-09'));
+    expect(early.dl).toBe(11_000);
+    // Never more time left than the day's clock gives, whatever the stored deadline says.
+    expect(shared.answer(early, pairs[0], universe, 'orlen', 1_000, shared.raceMsFor('2026-10-09')).state.res[0].left).toBe(100);
+    const late = shared.next(shared.newState(), 1_000, shared.raceMsFor('2026-10-10'));
+    expect(late.dl).toBe(21_000);
+    expect(shared.answer(late, pairs[0], universe, 'orlen', 1_000, shared.raceMsFor('2026-10-10')).state.res[0].left).toBe(200);
+    // Ten pairs found at once: the largest tie-break a run can reach, which the runs table must accept.
+    expect(shared.PAIRS_PER_DAY * (shared.RACE_MS / 100)).toBe(2000);
+  });
+
   it('ten pairs finish the run; score is the pairs found', () => {
     let s = shared.newState();
     for (let i = 0; i < 10; i += 1) {

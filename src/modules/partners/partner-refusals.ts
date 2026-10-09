@@ -46,28 +46,29 @@ function afterResponse(res: Response | undefined, send: () => void): void {
     setImmediate(send);
     return;
   }
-  let sent = false;
   const once = () => {
-    if (sent) return;
-    sent = true;
+    res.off('finish', once);
+    res.off('close', once);
     send();
   };
   res.once('finish', once);
   res.once('close', once);
 }
 
-export function trackPartnerRefusal(refusal: PartnerRefusal, res?: Response, now: number = performance.now()): void {
-  while (sentAt.length > 0 && now - sentAt[0] >= 60_000) sentAt.shift();
-  if (sentAt.length >= REFUSAL_EVENTS_PER_MINUTE) {
-    droppedSinceLastSent += 1;
-    return;
-  }
-  sentAt.push(now);
-  const { slug, environment, userId, ...properties } = refusal;
-  const dropped = droppedSinceLastSent;
-  droppedSinceLastSent = 0;
+export function trackPartnerRefusal(refusal: PartnerRefusal, res?: Response, clock: () => number = () => performance.now()): void {
   afterResponse(res, () => {
     try {
+      // Counted when it is sent, not when it was queued: responses that finish together must not pass the cap together.
+      const now = clock();
+      while (sentAt.length > 0 && now - sentAt[0] >= 60_000) sentAt.shift();
+      if (sentAt.length >= REFUSAL_EVENTS_PER_MINUTE) {
+        droppedSinceLastSent += 1;
+        return;
+      }
+      sentAt.push(now);
+      const { slug, environment, userId, ...properties } = refusal;
+      const dropped = droppedSinceLastSent;
+      droppedSinceLastSent = 0;
       trackEvent('partner_request_refused', userId ?? `partner:${slug}:${environment}`, {
         ...properties,
         partner_slug: slug,

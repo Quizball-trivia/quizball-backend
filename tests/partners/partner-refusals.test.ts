@@ -1,4 +1,5 @@
 import 'express-async-errors';
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -199,26 +200,41 @@ describe('after the response', () => {
 
 describe('event cap', () => {
   const refusal = { slug: 'freecroco', environment: 'test', reason: 'unknown_key', status: 401, caller: 'machine' as const };
-  const sent = async () => { await new Promise((resolve) => setImmediate(resolve)); return analytics.trackEvent.mock.calls.length; };
+  const turn = () => new Promise((resolve) => setImmediate(resolve));
+  const sent = async () => { await turn(); return analytics.trackEvent.mock.calls.length; };
+  const at = (ms: number) => () => ms;
 
   it('sends at most the cap in any 60 seconds and says how many were dropped', async () => {
-    trackPartnerRefusal(refusal, undefined, 1_000);
-    for (let i = 1; i < REFUSAL_EVENTS_PER_MINUTE; i += 1) trackPartnerRefusal(refusal, undefined, 60_000);
-    for (let i = 0; i < 7; i += 1) trackPartnerRefusal(refusal, undefined, 60_500);
+    trackPartnerRefusal(refusal, undefined, at(1_000));
+    for (let i = 1; i < REFUSAL_EVENTS_PER_MINUTE; i += 1) trackPartnerRefusal(refusal, undefined, at(60_000));
+    for (let i = 0; i < 7; i += 1) trackPartnerRefusal(refusal, undefined, at(60_500));
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE);
     // The first event has left the window; the nine sent at 60 s have not, so exactly one more fits.
-    trackPartnerRefusal(refusal, undefined, 61_000);
-    trackPartnerRefusal(refusal, undefined, 61_001);
+    trackPartnerRefusal(refusal, undefined, at(61_000));
+    trackPartnerRefusal(refusal, undefined, at(61_001));
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE + 1);
     expect(analytics.trackEvent.mock.calls.at(-1)?.[2]).toMatchObject({ dropped_before: 7 });
-    trackPartnerRefusal(refusal, undefined, 120_001);
+    trackPartnerRefusal(refusal, undefined, at(120_001));
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE + 2);
     expect(analytics.trackEvent.mock.calls.at(-1)?.[2]).toMatchObject({ dropped_before: 1 });
   });
 
+  it('is counted when the event is sent: responses that finish together cannot pass the cap together', async () => {
+    let now = 1_000;
+    const stalled = Array.from({ length: 2 * REFUSAL_EVENTS_PER_MINUTE }, () => new EventEmitter() as unknown as express.Response);
+    stalled.forEach((res, i) => {
+      if (i === REFUSAL_EVENTS_PER_MINUTE) now = 62_000;
+      trackPartnerRefusal(refusal, res, () => now);
+    });
+    expect(await sent()).toBe(0);
+    for (const res of stalled) (res as unknown as EventEmitter).emit('finish');
+    for (const res of stalled) (res as unknown as EventEmitter).emit('close');
+    expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE);
+  });
+
   it('nothing is sent before the caller has its answer, and a failing analytics client never reaches the caller', async () => {
     analytics.trackEvent.mockImplementationOnce(() => { throw new Error('posthog down'); });
-    expect(() => trackPartnerRefusal(refusal, undefined, 1_000)).not.toThrow();
+    expect(() => trackPartnerRefusal(refusal, undefined, at(1_000))).not.toThrow();
     expect(analytics.trackEvent).not.toHaveBeenCalled();
     expect(await sent()).toBe(1);
   });

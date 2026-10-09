@@ -173,7 +173,7 @@ function logInvalidInput(req: Request, invalid: InvalidInput): void {
     // A player's refused move ("tile already open") is ordinary play; the partner's server sending us a body we
     // refuse, or our own web view sending a malformed one, is an integration fault.
     if (caller && (caller.caller === 'machine' || (invalid.issue !== 'rule' && invalid.issue !== 'refused'))) {
-      trackPartnerRefusal({ ...caller, reason: 'invalid_request', status: STATUS.invalid_request, route, contentType, field: invalid.field, issue: invalid.issue });
+      trackPartnerRefusal({ ...caller, reason: 'invalid_request', status: STATUS.invalid_request, route, contentType, field: invalid.field, issue: invalid.issue }, req.res);
     }
   } catch {
     // Reporting is best effort; the caller still gets the 400.
@@ -185,7 +185,7 @@ function logInvalidInput(req: Request, invalid: InvalidInput): void {
 function trackPartnerFault(req: Request, error: PartnerError, ours: boolean): void {
   try {
     const caller = partnerCaller(req) ?? (ours ? deployPartner(req) : null);
-    if (caller) trackPartnerRefusal({ ...caller, reason: error.code, status: error.status, route: routePattern(req) });
+    if (caller) trackPartnerRefusal({ ...caller, reason: error.code, status: error.status, route: routePattern(req) }, req.res);
   } catch {
     // Reporting is best effort; the caller still gets its answer.
   }

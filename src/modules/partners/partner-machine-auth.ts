@@ -157,7 +157,7 @@ export function machineRateLimiter(
       const limited = new PartnerError('rate_limited', undefined, Math.max(1, Math.ceil(retryMs / 1000)));
       if (machine) {
         const { slug, environment } = machine.config;
-        trackPartnerRefusal({ slug, environment, reason: limited.code, status: limited.status, caller: 'machine', route: routePattern(req) });
+        trackPartnerRefusal({ slug, environment, reason: limited.code, status: limited.status, caller: 'machine', route: routePattern(req) }, res);
       }
       return sendPartnerError(res, limited);
     }
@@ -165,11 +165,11 @@ export function machineRateLimiter(
   };
 }
 
-function authenticateMachine(req: Request, _res: Response, next: NextFunction): void {
+function authenticateMachine(req: Request, res: Response, next: NextFunction): void {
   const config = requirePartnerConfig();
   const ip = resolveTrustedClientIp(req);
   const refused = (error: PartnerError): PartnerError => {
-    trackPartnerRefusal({ slug: config.slug, environment: config.environment, reason: error.code, status: error.status, caller: 'machine', route: routePattern(req) });
+    trackPartnerRefusal({ slug: config.slug, environment: config.environment, reason: error.code, status: error.status, caller: 'machine', route: routePattern(req) }, res);
     return error;
   };
   if (!ipAllowed(config, ip)) {

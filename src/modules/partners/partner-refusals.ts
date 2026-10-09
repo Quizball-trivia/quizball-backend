@@ -3,7 +3,7 @@
  *  allowlisted address, a known key, a signed-in player) or the failure is ours: these URLs are public, and
  *  strangers probing them must neither page us nor fill PostHog. Sending never fails or delays the request. */
 
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { trackEvent } from '../../core/analytics.js';
 import { logger } from '../../core/logger.js';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
@@ -39,7 +39,24 @@ export function resetPartnerRefusalLimit(): void {
   droppedSinceLastSent = 0;
 }
 
-export function trackPartnerRefusal(refusal: PartnerRefusal, now: number = performance.now()): void {
+/** Runs `send` once the response has gone out (or its connection closed): reporting must not add work, or a
+ *  difference in timing, to the answer. */
+function afterResponse(res: Response | undefined, send: () => void): void {
+  if (!res || res.writableFinished || res.destroyed) {
+    setImmediate(send);
+    return;
+  }
+  let sent = false;
+  const once = () => {
+    if (sent) return;
+    sent = true;
+    send();
+  };
+  res.once('finish', once);
+  res.once('close', once);
+}
+
+export function trackPartnerRefusal(refusal: PartnerRefusal, res?: Response, now: number = performance.now()): void {
   while (sentAt.length > 0 && now - sentAt[0] >= 60_000) sentAt.shift();
   if (sentAt.length >= REFUSAL_EVENTS_PER_MINUTE) {
     droppedSinceLastSent += 1;
@@ -49,8 +66,7 @@ export function trackPartnerRefusal(refusal: PartnerRefusal, now: number = perfo
   const { slug, environment, userId, ...properties } = refusal;
   const dropped = droppedSinceLastSent;
   droppedSinceLastSent = 0;
-  // After the response: reporting must not add work, or a difference in timing, to the answer.
-  setImmediate(() => {
+  afterResponse(res, () => {
     try {
       trackEvent('partner_request_refused', userId ?? `partner:${slug}:${environment}`, {
         ...properties,
@@ -72,8 +88,9 @@ function deployConfig(): PartnerConfig | null {
   }
 }
 
-/** The partner admin API is our own staff's; its failures are not the partner integration's. */
-const isAdminRequest = (req: Request): boolean => /^\/partner-admin(\/|$|\?)/.test(req.originalUrl);
+/** The partner admin API is our own staff's; its failures are not the partner integration's. Express matches paths
+ *  without regard to case, so this does too. */
+const isAdminRequest = (req: Request): boolean => /^\/partner-admin(\/|$|\?)/i.test(req.originalUrl);
 
 /** Who a request belongs to: the principal a partner auth step attached, or — for a request refused before one ran
  *  (an unreadable body) — the partner's server when its address or key checks out. Null for anyone else. */

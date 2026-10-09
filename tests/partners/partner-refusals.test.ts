@@ -30,7 +30,11 @@ const useConfig = (value: PartnerConfig | null) => {
 };
 const valid = { playerId: 'player-1', language: 'ka', channel: 'WEB', requestId: 'init-1', username: 'Nika' };
 const player = { slug: 'freecroco', environment: 'test', userId: '11111111-1111-4111-8111-111111111111' } as PartnerPrincipal;
-const events = () => analytics.trackEvent.mock.calls.map(([event, distinctId, properties]) => ({ event, distinctId, ...properties }));
+// Events go out after the response has finished; give that a turn of the event loop before looking.
+const events = async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  return analytics.trackEvent.mock.calls.map(([event, distinctId, properties]) => ({ event, distinctId, ...properties }));
+};
 const machineEvent = { event: 'partner_request_refused', distinctId: 'partner:freecroco:test', partner_slug: 'freecroco', partner_environment: 'test', caller: 'machine' };
 
 function app(): express.Express {
@@ -68,13 +72,13 @@ describe("the partner's server", () => {
     expect((await request(app()).post('/sessions/init').set('x-api-key', KEY).send(valid)).status).toBe(403);
     expect((await request(app()).post('/sessions/init').set('x-api-key', 'x'.repeat(64)).send(valid)).status).toBe(403);
     expect((await request(app()).post('/sessions/init').send(valid)).status).toBe(403);
-    expect(events()).toEqual([{ ...machineEvent, reason: 'ip_not_allowed', status: 403, route: '/sessions/init' }]);
+    expect(await events()).toEqual([{ ...machineEvent, reason: 'ip_not_allowed', status: 403, route: '/sessions/init' }]);
   });
 
   it('a wrong or missing key from a listed address is reported', async () => {
     useConfig(config(HERE));
     expect((await request(app()).post('/sessions/init').set('x-api-key', 'SECRET_WRONG_KEY').send(valid)).status).toBe(401);
-    expect(events()).toEqual([{ ...machineEvent, reason: 'unknown_key', status: 401, route: '/sessions/init' }]);
+    expect(await events()).toEqual([{ ...machineEvent, reason: 'unknown_key', status: 401, route: '/sessions/init' }]);
     expect(JSON.stringify(analytics.trackEvent.mock.calls)).not.toContain('SECRET');
   });
 
@@ -82,7 +86,7 @@ describe("the partner's server", () => {
     useConfig(config(HERE));
     const res = await request(app()).post('/sessions/init').set('x-api-key', KEY).send({ ...valid, language: 'SECRET_LANG' });
     expect(res.status).toBe(400);
-    expect(events()).toEqual([{ ...machineEvent, reason: 'invalid_request', status: 400, route: '/sessions/init', contentType: 'application/json', field: 'language', issue: 'invalid_enum_value' }]);
+    expect(await events()).toEqual([{ ...machineEvent, reason: 'invalid_request', status: 400, route: '/sessions/init', contentType: 'application/json', field: 'language', issue: 'invalid_enum_value' }]);
     expect(JSON.stringify(analytics.trackEvent.mock.calls)).not.toContain('SECRET');
   });
 
@@ -92,7 +96,7 @@ describe("the partner's server", () => {
     expect((await request(app()).post('/machine-crash').set('x-api-key', KEY).send({})).status).toBe(500);
     expect((await request(app()).post('/blocked').set('x-api-key', KEY).send({})).status).toBe(403);
     expect((await request(app()).post('/sessions/init').set('x-api-key', KEY).send(valid)).status).toBe(200);
-    expect(events()).toEqual([
+    expect(await events()).toEqual([
       { ...machineEvent, reason: 'request_conflict', status: 409, route: '/reused' },
       { ...machineEvent, reason: 'internal_error', status: 500, route: '/machine-crash' },
     ]);
@@ -106,7 +110,7 @@ describe("the partner's server", () => {
     a.post('/sessions/init', partnerMachineAuth[0], machineRateLimiter(full, full), (_req, res) => { res.json({}); });
     a.use(partnerErrorHandler);
     expect((await request(a).post('/sessions/init').set('x-api-key', KEY).send(valid)).status).toBe(429);
-    expect(events()).toEqual([{ ...machineEvent, reason: 'rate_limited', status: 429, route: '/sessions/init' }]);
+    expect(await events()).toEqual([{ ...machineEvent, reason: 'rate_limited', status: 429, route: '/sessions/init' }]);
   });
 });
 
@@ -118,7 +122,7 @@ describe('players and unsigned requests', () => {
     expect((await request(app()).post('/games/SECRET_GAME/answer').send({ ...valid, channel: 'TV' })).status).toBe(400);
     expect((await request(app()).post('/games/SECRET_GAME/move').send({})).status).toBe(400);
     expect((await request(app()).post('/games/SECRET_GAME/crash').send({})).status).toBe(500);
-    expect(events()).toEqual([
+    expect(await events()).toEqual([
       { ...playerEvent, reason: 'invalid_request', status: 400, route: '/games/:gameId/answer', contentType: 'application/json', field: 'channel', issue: 'invalid_enum_value' },
       { ...playerEvent, reason: 'internal_error', status: 500, route: '/games/:gameId/crash' },
     ]);
@@ -128,7 +132,7 @@ describe('players and unsigned requests', () => {
   it("a player's request refused by a shared Quizball rule is not reported", async () => {
     useConfig(config(['203.0.113.0/24']));
     expect((await request(app()).post('/games/x/shared').send({})).status).toBe(400);
-    expect(events()).toEqual([]);
+    expect(await events()).toEqual([]);
   });
 
   it("an unreadable body is reported when the address or the key is the partner's, and not for a stranger", async () => {
@@ -140,12 +144,12 @@ describe('players and unsigned requests', () => {
     useConfig(config(['203.0.113.0/24']));
     expect((await broken(app())).status).toBe(400);
     expect((await broken(app(), 'x'.repeat(64))).status).toBe(400);
-    expect(events()).toEqual([]);
+    expect(await events()).toEqual([]);
     expect((await broken(app(), KEY)).status).toBe(400);
-    expect(events()).toEqual([unreadable]);
+    expect(await events()).toEqual([unreadable]);
     useConfig(config(HERE));
     expect((await broken(app())).status).toBe(400);
-    expect(events()).toEqual([unreadable, unreadable]);
+    expect(await events()).toEqual([unreadable, unreadable]);
     expect(JSON.stringify(analytics.trackEvent.mock.calls)).not.toContain('SECRET');
   });
 
@@ -153,10 +157,10 @@ describe('players and unsigned requests', () => {
     useConfig(config(['203.0.113.0/24']));
     const unsigned = { event: 'partner_request_refused', distinctId: 'partner:freecroco:test', partner_slug: 'freecroco', partner_environment: 'test', caller: 'unknown' };
     expect((await request(app()).post('/unsigned').send({})).status).toBe(400);
-    expect(events()).toEqual([]);
+    expect(await events()).toEqual([]);
     expect((await request(app()).post('/sessions/redeem').send({})).status).toBe(500);
     expect((await request(app()).post('/sessions/sign').send({})).status).toBe(503);
-    expect(events()).toEqual([
+    expect(await events()).toEqual([
       { ...unsigned, reason: 'internal_error', status: 500, route: '/sessions/redeem' },
       { ...unsigned, reason: 'maintenance', status: 503, route: '/sessions/sign' },
     ]);
@@ -166,14 +170,30 @@ describe('players and unsigned requests', () => {
     useConfig(config(HERE));
     expect((await request(app()).post('/partner-admin/v1/crash').set('x-api-key', KEY).send({})).status).toBe(500);
     expect((await request(app()).post('/partner-admin/v1/input').set('x-api-key', KEY).send({})).status).toBe(400);
-    expect(events()).toEqual([]);
+    expect((await request(app()).post('/PARTNER-Admin/v1/crash').set('x-api-key', KEY).send({})).status).toBe(500);
+    expect(await events()).toEqual([]);
   });
 
   it('a deploy without a partner reports nothing', async () => {
     useConfig(null);
     expect((await request(app()).post('/sessions/init').set('x-api-key', KEY).send(valid)).status).toBe(503);
     expect((await request(app()).post('/sessions/redeem').send({})).status).toBe(500);
-    expect(events()).toEqual([]);
+    expect(await events()).toEqual([]);
+  });
+});
+
+describe('after the response', () => {
+  it('the event waits for the answer to go out, and is sent once', async () => {
+    useConfig(config(HERE));
+    const a = express();
+    let seenAtFinish = -1;
+    a.use((_req, res, next) => { res.prependOnceListener('finish', () => { seenAtFinish = analytics.trackEvent.mock.calls.length; }); next(); });
+    a.post('/sessions/init', partnerMachineAuth[0], (_req, res) => { res.json({}); });
+    a.use(partnerErrorHandler);
+    expect((await request(a).post('/sessions/init').set('x-api-key', 'wrong').send(valid)).status).toBe(401);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(seenAtFinish).toBe(0);
+    expect(analytics.trackEvent).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -182,23 +202,23 @@ describe('event cap', () => {
   const sent = async () => { await new Promise((resolve) => setImmediate(resolve)); return analytics.trackEvent.mock.calls.length; };
 
   it('sends at most the cap in any 60 seconds and says how many were dropped', async () => {
-    trackPartnerRefusal(refusal, 1_000);
-    for (let i = 1; i < REFUSAL_EVENTS_PER_MINUTE; i += 1) trackPartnerRefusal(refusal, 60_000);
-    for (let i = 0; i < 7; i += 1) trackPartnerRefusal(refusal, 60_500);
+    trackPartnerRefusal(refusal, undefined, 1_000);
+    for (let i = 1; i < REFUSAL_EVENTS_PER_MINUTE; i += 1) trackPartnerRefusal(refusal, undefined, 60_000);
+    for (let i = 0; i < 7; i += 1) trackPartnerRefusal(refusal, undefined, 60_500);
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE);
     // The first event has left the window; the nine sent at 60 s have not, so exactly one more fits.
-    trackPartnerRefusal(refusal, 61_000);
-    trackPartnerRefusal(refusal, 61_001);
+    trackPartnerRefusal(refusal, undefined, 61_000);
+    trackPartnerRefusal(refusal, undefined, 61_001);
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE + 1);
     expect(analytics.trackEvent.mock.calls.at(-1)?.[2]).toMatchObject({ dropped_before: 7 });
-    trackPartnerRefusal(refusal, 120_001);
+    trackPartnerRefusal(refusal, undefined, 120_001);
     expect(await sent()).toBe(REFUSAL_EVENTS_PER_MINUTE + 2);
     expect(analytics.trackEvent.mock.calls.at(-1)?.[2]).toMatchObject({ dropped_before: 1 });
   });
 
   it('nothing is sent before the caller has its answer, and a failing analytics client never reaches the caller', async () => {
     analytics.trackEvent.mockImplementationOnce(() => { throw new Error('posthog down'); });
-    expect(() => trackPartnerRefusal(refusal, 1_000)).not.toThrow();
+    expect(() => trackPartnerRefusal(refusal, undefined, 1_000)).not.toThrow();
     expect(analytics.trackEvent).not.toHaveBeenCalled();
     expect(await sent()).toBe(1);
   });

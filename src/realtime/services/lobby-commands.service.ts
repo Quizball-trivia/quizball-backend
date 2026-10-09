@@ -494,19 +494,29 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     return;
   }
 
-  let updated: boolean;
+  const lockKey = `lock:lobby:${lobbyId}`;
+  let updated = false;
   if (ready && seen) {
-    const outcome = await lobbiesRepo.readyMemberOnGame(lobbyId, socket.data.user.id, seen);
-    if (outcome === 'game_changed') {
+    // Check and write under the room's lock, which a settings change holds from its own readiness count to its
+    // "everyone un-ready": the Ready lands wholly before the change (and may be what refuses it) or wholly after
+    // (and is judged by the new game). No database row locks: the start and finish paths take the room's rows in
+    // opposite orders, and a locking Ready would deadlock with one of them.
+    const guard = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
+    if (!guard.acquired) logger.warn({ lobbyId, userId: socket.data.user.id }, 'Lobby ready: room lock not acquired, checking the game without it');
+    let stale = false;
+    try {
+      const current = await lobbiesRepo.getById(lobbyId);
+      // Only a waiting room has a game to agree on; anything else is handled as before.
+      stale = current?.status === 'waiting' && !onSeenGame(current, seen);
+      if (!stale) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
+    } finally {
+      if (guard.acquired && guard.token) await releaseLock(lockKey, guard.token);
+    }
+    if (stale) {
       logger.info({ lobbyId, userId: socket.data.user.id, seen }, 'Lobby ready refused: pressed on a game the room has left');
       await refuseStaleGame(io, socket, lobbyId);
       return;
     }
-    if (outcome === 'not_waiting') {
-      logger.debug({ lobbyId, userId: socket.data.user.id }, 'Lobby ready ignored: the room is not waiting');
-      return;
-    }
-    updated = outcome === 'ready';
   } else {
     updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready);
   }
@@ -523,7 +533,6 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
   );
   await emitLobbyState(io, lobbyId);
 
-  const lockKey = `lock:lobby:${lobbyId}`;
   const lock = await acquireLock(lockKey, 3000);
   if (!lock.acquired || !lock.token) {
     logger.debug({ lobbyId }, 'Lobby ready check skipped: lock not acquired');

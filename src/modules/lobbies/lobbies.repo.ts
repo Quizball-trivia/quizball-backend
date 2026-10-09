@@ -398,52 +398,6 @@ export const lobbiesRepo = {
     return row !== undefined;
   },
 
-  /**
-   * Readies a member only while the waiting room is still on the game they pressed Ready on. One transaction that
-   * holds the room's row while it writes: a game change is two statements, the room and then everybody's readiness,
-   * and the first of them either waits for this or is seen by it (a single statement would keep judging the room by
-   * the snapshot it started with). Room before members, the order every transaction on the two tables uses. A room
-   * that is not waiting is never locked: its match may be finishing under the same row.
-   */
-  async readyMemberOnGame(
-    lobbyId: string,
-    userId: string,
-    seen: { gameMode: string; duelGame?: string | null; roomGame?: string | null },
-  ): Promise<'ready' | 'game_changed' | 'not_waiting' | 'not_member'> {
-    const seenDuel = seen.duelGame ?? null;
-    const seenRoom = seen.roomGame ?? null;
-    return sql.begin(async (transaction) => {
-      const tx = transaction as unknown as typeof sql;
-      const [room] = await tx<Array<{ id: string }>>`
-        SELECT l.id FROM lobbies l
-        WHERE l.id = ${lobbyId}
-          AND l.status = 'waiting'
-          AND l.game_mode = ${seen.gameMode}
-          AND (${seen.gameMode} <> 'duel' OR l.duel_game IS NOT DISTINCT FROM ${seenDuel})
-          -- A room game that names no game on either side (an older row, an older client) is not a mismatch.
-          AND (${seen.gameMode} <> 'room_game' OR ${seenRoom}::text IS NULL OR l.room_game IS NULL OR l.room_game = ${seenRoom})
-        FOR NO KEY UPDATE
-      `;
-      if (!room) {
-        const [current] = await tx<Array<{ status: string }>>`SELECT status FROM lobbies WHERE id = ${lobbyId}`;
-        return current && current.status === 'waiting' ? 'game_changed' : 'not_waiting';
-      }
-      const [member] = await tx<Array<{ was_ready: boolean }>>`
-        WITH before AS (
-          SELECT is_ready FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
-        )
-        UPDATE lobby_members m SET is_ready = true
-        FROM before
-        WHERE m.lobby_id = ${lobbyId} AND m.user_id = ${userId}
-        RETURNING before.is_ready AS was_ready
-      `;
-      if (!member) return 'not_member';
-      // A real readiness change in a waiting lobby is activity (see updateMemberReady).
-      if (!member.was_ready) await tx`UPDATE lobbies SET updated_at = NOW() WHERE id = ${lobbyId}`;
-      return 'ready';
-    }) as Promise<'ready' | 'game_changed' | 'not_waiting' | 'not_member'>;
-  },
-
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
@@ -483,8 +437,6 @@ export const lobbiesRepo = {
   async setRoomOptions(lobbyId: string, roomGame: RoomGameId, options: Record<string, unknown> | null): Promise<boolean> {
     return sql.begin(async (transaction) => {
       const tx = transaction as unknown as typeof sql;
-      // Room before members, like a match finishing in this room and like readyMemberOnGame: one order, no deadlock.
-      await tx`SELECT id FROM lobbies WHERE id = ${lobbyId} FOR NO KEY UPDATE`;
       await tx`SELECT user_id FROM lobby_members WHERE lobby_id = ${lobbyId} ORDER BY user_id FOR UPDATE`;
       const changed = await tx<Array<{ id: string }>>`
         UPDATE lobbies SET room_options = ${options === null ? null : tx.json(options as never)}, updated_at = NOW()

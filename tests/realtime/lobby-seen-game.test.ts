@@ -10,8 +10,10 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const lobbiesRepo = {
   getById: vi.fn(), listMembersWithUser: vi.fn(), countMembers: vi.fn(), countReadyMembers: vi.fn(),
-  updateMemberReady: vi.fn(), readyMemberOnGame: vi.fn(), setAllReady: vi.fn(),
+  updateMemberReady: vi.fn(), setAllReady: vi.fn(),
 };
+const acquireLobbyLockWithRetry = vi.fn();
+const releaseLock = vi.fn();
 const startDuelMatchFromLobby = vi.fn();
 const emitLobbyState = vi.fn();
 vi.mock('../../src/core/logger.js', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
@@ -28,14 +30,14 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
   },
 }));
 vi.mock('../../src/realtime/services/lobby-lifecycle.helpers.js', () => ({
-  acquireLobbyLockWithRetry: vi.fn().mockResolvedValue({ acquired: true, token: 't' }),
+  acquireLobbyLockWithRetry: (...a: unknown[]) => acquireLobbyLockWithRetry(...a),
   closeLobbyIfEmpty: vi.fn(), isRankedAiLobby: () => false, releaseRankedAiLobbyMemberSafely: vi.fn(),
   resolveLobbyId: (socket: { data: { lobbyId?: string } }, override?: string) => override ?? socket.data.lobbyId ?? null,
 }));
 vi.mock('../../src/realtime/services/lobby-draft-start.service.js', () => ({
   startDraft: vi.fn(), tryAcquireDraftStartGuard: vi.fn().mockResolvedValue(true), releaseDraftStartGuard: vi.fn(),
 }));
-vi.mock('../../src/realtime/locks.js', () => ({ acquireLock: vi.fn().mockResolvedValue({ acquired: true, token: 't' }), releaseLock: vi.fn() }));
+vi.mock('../../src/realtime/locks.js', () => ({ acquireLock: vi.fn().mockResolvedValue({ acquired: true, token: 't' }), releaseLock: (...a: unknown[]) => releaseLock(...a) }));
 vi.mock('../../src/realtime/lobby-utils.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/realtime/lobby-utils.js')>();
   return { ...actual, attachUserSocketsToLobby: vi.fn(), emitLobbyState: (...a: unknown[]) => emitLobbyState(...a), syncFriendlyLobbyModeForMemberCountLocked: vi.fn() };
@@ -64,37 +66,75 @@ beforeEach(() => {
   lobbiesRepo.countMembers.mockResolvedValue(2);
   lobbiesRepo.countReadyMembers.mockResolvedValue(2);
   lobbiesRepo.updateMemberReady.mockResolvedValue(true);
-  lobbiesRepo.readyMemberOnGame.mockResolvedValue('ready');
+  acquireLobbyLockWithRetry.mockResolvedValue({ acquired: true, token: 'guard' });
 });
 
 describe('Ready names the game it was pressed on', () => {
-  it('on the game the room holds: readied, state pushed', async () => {
+  it('on the game the room holds: readied under the room lock, then the state is pushed', async () => {
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
-    expect(lobbiesRepo.readyMemberOnGame).toHaveBeenCalledWith('L', 'guest', { gameMode: 'duel', duelGame: 'pistas' });
-    expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalled();
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
     expect(errorCodes(socket)).toEqual([]);
     expect(emitLobbyState).toHaveBeenCalledTimes(1);
+    // Locked before the write, released after it (the lock a settings change holds while it works).
+    const order = (mock: { mock: { invocationCallOrder: number[] } }) => mock.mock.invocationCallOrder[0];
+    expect(order(acquireLobbyLockWithRetry)).toBeLessThan(order(lobbiesRepo.updateMemberReady));
+    expect(order(lobbiesRepo.updateMemberReady)).toBeLessThan(order(releaseLock));
+    expect(releaseLock).toHaveBeenCalledWith('lock:lobby:L', 'guard');
   });
 
   it('on a game the room has left: refused, nobody is readied, everyone gets the current state', async () => {
-    lobbiesRepo.readyMemberOnGame.mockResolvedValue('game_changed');
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, true, { gameMode: 'room_game', roomGame: 'shared_player' });
     expect(errorCodes(socket)).toEqual(['LOBBY_SETTINGS_CHANGED']);
     expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledWith('lock:lobby:L', 'guard');
     expect(emitLobbyState).toHaveBeenCalledWith(io, 'L');
     // No "everyone is ready" bookkeeping follows a refused Ready.
     expect(lobbiesRepo.countReadyMembers).not.toHaveBeenCalled();
   });
 
-  it('a Ready that arrives while the room is not waiting (its match is running or finishing) is dropped quietly', async () => {
-    lobbiesRepo.readyMemberOnGame.mockResolvedValue('not_waiting');
+  it('the game is judged by the room as it is under the lock, not as it was before', async () => {
+    // The handler's first look still shows the old game; the change lands before the lock is ours.
+    lobbiesRepo.getById.mockResolvedValueOnce(lobby('room_game', { room: 'shared_player' })).mockResolvedValue(lobby('duel', { duel: 'pistas' }));
+    const socket = socketFor('guest');
+    await setReady(io as never, socket as never, true, { gameMode: 'room_game', roomGame: 'shared_player' });
+    expect(errorCodes(socket)).toEqual(['LOBBY_SETTINGS_CHANGED']);
+    expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalled();
+  });
+
+  it('a duel game and a named room game are part of what was seen; an unnamed room game is not a mismatch', async () => {
+    const outcome = async (room: ReturnType<typeof lobby>, seen: Parameters<typeof setReady>[3]) => {
+      lobbiesRepo.getById.mockResolvedValue(room);
+      const socket = socketFor('guest');
+      await setReady(io as never, socket as never, true, seen);
+      return errorCodes(socket);
+    };
+    expect(await outcome(lobby('duel', { duel: 'pistas' }), { gameMode: 'duel', duelGame: 'buscaminas' })).toEqual(['LOBBY_SETTINGS_CHANGED']);
+    expect(await outcome(lobby('room_game', { room: 'name_chain' }), { gameMode: 'room_game', roomGame: 'shared_player' })).toEqual(['LOBBY_SETTINGS_CHANGED']);
+    expect(await outcome(lobby('room_game', { room: 'name_chain' }), { gameMode: 'room_game', roomGame: 'name_chain' })).toEqual([]);
+    expect(await outcome(lobby('room_game', { room: null }), { gameMode: 'room_game', roomGame: 'aproximado' })).toEqual([]);
+    expect(await outcome(lobby('room_game', { room: 'name_chain' }), { gameMode: 'room_game' })).toEqual([]);
+    expect(await outcome(lobby('auction'), { gameMode: 'auction' })).toEqual([]);
+  });
+
+  it('a room that is not waiting has no game to agree on: handled as before', async () => {
+    lobbiesRepo.getById.mockResolvedValue({ ...lobby('duel', { duel: 'pistas' }), status: 'active' });
+    const socket = socketFor('guest');
+    await setReady(io as never, socket as never, true, { gameMode: 'room_game', roomGame: 'shared_player' });
+    expect(errorCodes(socket)).toEqual([]);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
+  });
+
+  it('a busy room lock does not lose the Ready: the game is still checked', async () => {
+    acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
-    expect(errorCodes(socket)).toEqual([]);
-    expect(emitLobbyState).not.toHaveBeenCalled();
-    expect(lobbiesRepo.countReadyMembers).not.toHaveBeenCalled();
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
+    const stale = socketFor('guest');
+    await setReady(io as never, stale as never, true, { gameMode: 'auction' });
+    expect(errorCodes(stale)).toEqual(['LOBBY_SETTINGS_CHANGED']);
+    expect(releaseLock).not.toHaveBeenCalledWith('lock:lobby:L', 'guard');
   });
 
   it('an un-ready is never refused, and a client that names no game is handled as before', async () => {
@@ -103,7 +143,7 @@ describe('Ready names the game it was pressed on', () => {
     expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false);
     await setReady(io as never, socket as never, true);
     expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', true);
-    expect(lobbiesRepo.readyMemberOnGame).not.toHaveBeenCalled();
+    expect(acquireLobbyLockWithRetry).not.toHaveBeenCalled();
     expect(errorCodes(socket)).toEqual([]);
   });
 });

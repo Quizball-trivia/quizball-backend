@@ -90,7 +90,13 @@ export async function abortRankedDraftStartForTickets(
  * callbacks) can distinguish a silent no-op from a started draft. All previous
  * callers ignored the void return, so widening the type is non-breaking.
  */
-export type DraftStartResult = 'started' | 'lobby_missing' | 'lock_busy' | 'already_active' | 'insufficient_categories' | 'guest_rules';
+export type DraftStartResult = 'started' | 'lobby_missing' | 'lock_busy' | 'already_active' | 'insufficient_categories' | 'guest_rules' | 'not_ready';
+
+/** The room is still what the last Ready found: two ready players in a mode that starts on its own. */
+function stillBothReady(lobby: { mode: string; game_mode: string | null }, members: Array<{ is_ready: boolean }>): boolean {
+  const startsOnItsOwn = lobby.mode !== 'friendly' || normalizeFriendlyGameMode(lobby.game_mode) === 'ranked_sim';
+  return startsOnItsOwn && members.length === 2 && members.every((member) => member.is_ready);
+}
 
 export async function startDraft(
   io: QuizballServer,
@@ -104,6 +110,12 @@ export async function startDraft(
      * runs on an already-active lobby (draft-realtime match-creation failure).
      */
     expectWaiting?: boolean;
+    /**
+     * The start that follows the last Ready (with `expectWaiting`): under the lock the room must still be the two
+     * ready players in a mode that starts on its own. The Ready handler decided that before releasing the lock; an
+     * un-ready or a game change can land in between, and would otherwise get a quiz draft it never asked for.
+     */
+    expectBothReady?: boolean;
   }
 ): Promise<DraftStartResult> {
   return withSpan('lobby.start_draft', {
@@ -151,6 +163,10 @@ export async function startDraft(
         if (guestViolation) {
           logger.warn({ lobbyId, code: guestViolation.code }, 'Draft start refused: guest rules violated at activation');
           return 'guest_rules';
+        }
+        if (options.expectBothReady && !stillBothReady(lockedLobby, lockedMembers)) {
+          logger.info({ lobbyId, gameMode: lockedLobby.game_mode, members: lockedMembers.length }, 'Draft start skipped: the room changed after the last Ready');
+          return 'not_ready';
         }
       }
 
@@ -207,6 +223,15 @@ export async function startDraft(
       // still exits with the lobby waiting. A post-CAS write failure throws
       // into caller teardown paths that already handle an activated lobby.
       // The bare (recovery) path keeps writes-then-unconditional-activate.
+      if (options?.expectBothReady) {
+        // Readiness is written outside this lock, and choosing the categories took a moment: look once more right
+        // before the room is activated.
+        const [latestLobby, latestMembers] = await Promise.all([lobbiesRepo.getById(lobbyId), lobbiesRepo.listMembersWithUser(lobbyId)]);
+        if (!latestLobby || !stillBothReady(latestLobby, latestMembers)) {
+          logger.info({ lobbyId }, 'Draft start skipped: a player un-readied or the game changed while it was being prepared');
+          return 'not_ready';
+        }
+      }
       if (options?.expectWaiting) {
         const activation = await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId, {
           requireWaiting: true,

@@ -13,6 +13,13 @@ import type { DuelGameId } from '../modules/duel/duel.types.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
+/** The game a Ready or Start was pressed on (see lobby.schemas seenGameSchema). */
+export interface LobbySeenGame {
+  gameMode: LobbyGameMode;
+  duelGame?: DuelGameId | null;
+  roomGame?: RoomGameId | null;
+}
+
 export type LobbyGameMode =
   | 'friendly_possession'
   | 'friendly_party_quiz'
@@ -1381,7 +1388,7 @@ export interface ClientToServerEvents {
     ack?: (result: LobbyJoinByCodeResult) => void
   ) => void;
   'lobby:leave': (data?: { correlationId?: string }, ack?: (result: LobbyLeaveResult) => void) => void;
-  'lobby:ready': (data: { ready: boolean }) => void;
+  'lobby:ready': (data: { ready: boolean; seen?: LobbySeenGame }) => void;
   'lobby:update_settings': (data: {
     lobbyId?: string;
     gameMode: LobbyGameMode;
@@ -1396,7 +1403,7 @@ export interface ClientToServerEvents {
   }) => void;
   /** Host only, room-game rooms: the game's options (null = back to its defaults). Changing them un-readies everyone. */
   'lobby:room_options': (data: { lobbyId?: string; options: Record<string, unknown> | null }) => void;
-  'lobby:start': (data?: { lobbyId?: string }) => void;
+  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;

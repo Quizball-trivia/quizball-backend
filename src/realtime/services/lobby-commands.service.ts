@@ -1,4 +1,4 @@
-import type { MatchVariant } from '../socket.types.js';
+import type { LobbySeenGame, MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
 import { guestCompatibleInitialMode, normalizedModeForMemberCount, validateGuestLobby } from './lobby-guest-rules.js';
@@ -469,7 +469,22 @@ async function boundLobbyId(socket: QuizballSocket, override?: string): Promise<
   return open.id;
 }
 
-export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean): Promise<void> {
+/** Whether the room is (still) on the game a Ready or Start was pressed on. Mirrors lobbiesRepo.readyMemberOnGame. */
+function onSeenGame(lobby: { mode: string; game_mode: string | null; duel_game?: string | null; room_game?: string | null }, seen: LobbySeenGame): boolean {
+  const gameMode = lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
+  if (gameMode !== seen.gameMode) return false;
+  if (gameMode === 'duel') return (lobby.duel_game ?? null) === (seen.duelGame ?? null);
+  if (gameMode === 'room_game') return !seen.roomGame || !lobby.room_game || lobby.room_game === seen.roomGame;
+  return true;
+}
+
+/** The sender acted on a game the room has left: nothing is done, and everyone's screen is brought up to date. */
+async function refuseStaleGame(io: QuizballServer, socket: QuizballSocket, lobbyId: string): Promise<void> {
+  socket.emit('error', { code: 'LOBBY_SETTINGS_CHANGED', message: 'The game was changed. Check it and try again.' });
+  await emitLobbyState(io, lobbyId);
+}
+
+export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean, seen?: LobbySeenGame): Promise<void> {
   const lobbyId = await boundLobbyId(socket);
   if (!lobbyId) return;
 
@@ -479,7 +494,22 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     return;
   }
 
-  const updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready);
+  let updated: boolean;
+  if (ready && seen) {
+    const outcome = await lobbiesRepo.readyMemberOnGame(lobbyId, socket.data.user.id, seen);
+    if (outcome === 'game_changed') {
+      logger.info({ lobbyId, userId: socket.data.user.id, seen }, 'Lobby ready refused: pressed on a game the room has left');
+      await refuseStaleGame(io, socket, lobbyId);
+      return;
+    }
+    if (outcome === 'not_waiting') {
+      logger.debug({ lobbyId, userId: socket.data.user.id }, 'Lobby ready ignored: the room is not waiting');
+      return;
+    }
+    updated = outcome === 'ready';
+  } else {
+    updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready);
+  }
   if (!updated) {
     logger.warn(
       { lobbyId, userId: socket.data.user.id },
@@ -547,7 +577,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
   if (shouldStartDraft) {
     try {
       logger.info({ lobbyId }, 'Lobby ready -> starting draft');
-      await startDraft(io, lobbyId, { expectWaiting: true });
+      await startDraft(io, lobbyId, { expectWaiting: true, expectBothReady: true });
     } finally {
       await releaseDraftStartGuard(lobbyId);
     }
@@ -814,7 +844,8 @@ export async function updateSettings(
 export async function startFriendlyMatch(
   io: QuizballServer,
   socket: QuizballSocket,
-  lobbyIdOverride?: string
+  lobbyIdOverride?: string,
+  seen?: LobbySeenGame
 ): Promise<void> {
   const lobbyId = await boundLobbyId(socket, lobbyIdOverride);
   if (!lobbyId) {
@@ -838,6 +869,14 @@ export async function startFriendlyMatch(
     return;
   }
 
+  // Ahead of the mode and readiness checks: a host whose screen is behind is told so and sent the room's state,
+  // instead of "not everyone is ready" for a game they are not looking at.
+  if (seen && !onSeenGame(lobby, seen)) {
+    logger.info({ lobbyId, userId: socket.data.user.id, seen }, 'Friendly match start refused: pressed on a game the room has left');
+    await refuseStaleGame(io, socket, lobbyId);
+    return;
+  }
+
   const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
   if (LOBBY_MODES[friendlyMode].hostStart === null) {
     socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
@@ -850,6 +889,15 @@ export async function startFriendlyMatch(
   const isValidFriendlyStart = isValidFriendlyStartShape(friendlyMode, memberCount);
 
   if (!isValidFriendlyStart || !allReady) {
+    // A game change un-readies everyone: when that is why the count fell short, say so (the room was read before
+    // the counts, and may have changed in between).
+    if (seen) {
+      const changedLobby = await lobbiesRepo.getById(lobbyId);
+      if (changedLobby && !onSeenGame(changedLobby, seen)) {
+        await refuseStaleGame(io, socket, lobbyId);
+        return;
+      }
+    }
     socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
     return;
   }
@@ -887,6 +935,12 @@ export async function startFriendlyMatch(
     }
     if (currentLobby.status !== 'waiting') {
       socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby is not ready to start' });
+      return;
+    }
+    // Under the lock a settings change holds too: the host starts the game their screen showed, or nothing.
+    if (seen && !onSeenGame(currentLobby, seen)) {
+      logger.info({ lobbyId, userId: socket.data.user.id, seen }, 'Friendly match start refused: pressed on a game the room has left');
+      await refuseStaleGame(io, socket, lobbyId);
       return;
     }
     const currentFriendlyMode = normalizeFriendlyGameMode(currentLobby.game_mode);

@@ -144,21 +144,33 @@ function schemaField(schema: ZodTypeAny | undefined, path: ReadonlyArray<string 
 /** Zod's failure kind and type names. Its messages quote the input, so they stay out of the logs. */
 function describeIssue(issue: ZodIssue | undefined, schema?: ZodTypeAny): InvalidInput {
   if (!issue) return { field: 'body', issue: 'invalid' };
-  const field = schemaField(schema, issue.path);
-  if (issue.code === 'invalid_type') return { field, issue: issue.code, expected: issue.expected, received: issue.received };
-  if (issue.code === 'invalid_string' && typeof issue.validation === 'string') return { field, issue: `${issue.code}:${issue.validation}` };
-  return { field, issue: issue.code };
+  try {
+    const field = schemaField(schema, issue.path);
+    if (issue.code === 'invalid_type') return { field, issue: issue.code, expected: issue.expected, received: issue.received };
+    if (issue.code === 'invalid_string' && typeof issue.validation === 'string') return { field, issue: `${issue.code}:${issue.validation}` };
+    return { field, issue: issue.code };
+  } catch {
+    // Describing a refusal for the logs must never turn the 400 into a 500.
+    return { field: '?', issue: 'invalid' };
+  }
 }
 
 const LOGGED_CONTENT_TYPES = new Set(['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
 
+/** body-parser's own failure names; any other error can carry a `type` too, so only these are logged. */
+const BODY_PARSER_FAILURES = new Set(['entity.parse.failed', 'entity.too.large', 'charset.unsupported', 'encoding.unsupported', 'request.aborted', 'parameters.too.many']);
+
 function logInvalidInput(req: Request, invalid: InvalidInput): void {
-  // A body sent as an unparsed content type fails as "first field missing", so the type is the useful clue.
-  const mediaType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-  const contentType = mediaType === '' ? 'none' : LOGGED_CONTENT_TYPES.has(mediaType) ? mediaType : 'other';
-  // The route pattern, not the URL: a URL carries caller text (ids, anything at all before a route matches).
-  const route: unknown = (req.route as { path?: unknown } | undefined)?.path;
-  logger.warn({ reason: 'invalid_request', ...(typeof route === 'string' ? { route } : {}), contentType, ...invalid }, 'Partner request refused');
+  try {
+    // A body sent as an unparsed content type fails as "first field missing", so the type is the useful clue.
+    const mediaType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    const contentType = mediaType === '' ? 'none' : LOGGED_CONTENT_TYPES.has(mediaType) ? mediaType : 'other';
+    // The route pattern, not the URL: a URL carries caller text (ids, anything at all before a route matches).
+    const route: unknown = (req.route as { path?: unknown } | undefined)?.path;
+    logger.warn({ reason: 'invalid_request', ...(typeof route === 'string' ? { route } : {}), contentType, ...invalid }, 'Partner request refused');
+  } catch {
+    // Logging is best effort; the caller still gets the 400.
+  }
 }
 
 export function sendPartnerError(res: Response, error: PartnerError): void {
@@ -189,7 +201,8 @@ export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) =
     ? (err as { status?: unknown }).status
     : undefined;
   if (typeof parserStatus === 'number' && parserStatus >= 400 && parserStatus < 500) {
-    logInvalidInput(req, { field: 'body', issue: 'unreadable' });
+    const failure = (err as { type?: unknown }).type;
+    logInvalidInput(req, { field: 'body', issue: typeof failure === 'string' && BODY_PARSER_FAILURES.has(failure) ? failure : 'unreadable' });
     return sendPartnerError(res, new PartnerError('invalid_request', 'The body is not valid JSON'));
   }
   // A shared Quizball middleware refused the request (validation, auth): same status, partner format.

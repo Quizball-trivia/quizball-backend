@@ -484,10 +484,22 @@ describe('a refused partner input is logged by field, never by content', () => {
       { ...base, route, field: 'answers.?', issue: 'invalid_type', expected: 'number', received: 'string' },
       { ...base, route, field: '?', issue: 'custom' },
       { ...base, route, field: 'picks.1.id', issue: 'invalid_type', expected: 'string', received: 'number' },
-      { ...base, field: 'body', issue: 'unreadable' },
+      { ...base, field: 'body', issue: 'entity.parse.failed' },
       { reason: 'invalid_request', route: '/thrown', contentType: 'other', field: '?', issue: 'invalid_type', expected: 'string', received: 'undefined' },
       { ...base, route: '/sessions/init', field: 'requestId', issue: 'invalid_string:regex' },
       { ...base, route: '/rule', field: '?', issue: 'rule' },
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('says how a body could not be read, and names a bad id in the URL without quoting it', async () => {
+    await request(app).post('/sessions/init').send({ ...valid, username: 'x'.repeat(70_000) });
+    await request(app).post('/sessions/init').set('Content-Type', 'application/json; charset=SECRET_CHARSET').send('{}');
+    await request(app).post('/players/%E0%A4%A/answers').send({});
+    expect(refusals()).toEqual([
+      { ...base, field: 'body', issue: 'entity.too.large' },
+      { ...base, field: 'body', issue: 'charset.unsupported' },
+      { ...base, field: 'path', issue: 'encoding' },
     ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
   });

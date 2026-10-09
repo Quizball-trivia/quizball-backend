@@ -1,9 +1,10 @@
 import 'express-async-errors';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { SignJWT } from 'jose';
+import { z } from 'zod';
 
 const auth = vi.hoisted(() => ({
   verifyToken: vi.fn(async (token: string) => {
@@ -43,7 +44,8 @@ import {
 import { logger } from '../../src/core/logger.js';
 import { socketAuthMiddleware } from '../../src/realtime/socket-auth.js';
 import { createClient } from 'redis';
-import { cleanDisplayName, partnerHandle } from '../../src/modules/partners/partner-sessions.service.js';
+import { cleanDisplayName, initBodySchema, partnerHandle } from '../../src/modules/partners/partner-sessions.service.js';
+import { parsePartnerInput, partnerErrorHandler, PartnerError } from '../../src/modules/partners/partner-errors.js';
 import {
   isPartnerToken,
   newLaunchToken,
@@ -430,5 +432,80 @@ describe('sockets refuse partner tokens and partner staff', () => {
     expect(staffNext).toHaveBeenCalledWith(expect.objectContaining({ message: 'Authentication required' }));
     const memberNext = await connect('member');
     expect(memberNext).toHaveBeenCalledWith();
+  });
+});
+
+describe('a refused partner input is logged by field, never by content', () => {
+  const app = express();
+  // Same body parsing as production gives the partner paths (src/app.ts).
+  app.use(express.json({ limit: '64kb' }), express.urlencoded({ extended: false, limit: '64kb' }));
+  app.post('/sessions/init', (req, res) => { res.json(parsePartnerInput(initBodySchema, req.body)); });
+  app.post('/players/:playerId/answers', (req, res) => {
+    res.json(parsePartnerInput(z.object({ answers: z.record(z.number()).optional(), picks: z.array(z.object({ id: z.string() })).default([]) })
+      .superRefine((body, ctx) => { if (body.picks.length > 1) ctx.addIssue({ code: 'custom', path: [body.picks[1].id], message: 'x' }); }), req.body));
+  });
+  app.post('/thrown', (req) => { z.object({ at: z.string().datetime() }).parse(req.body); });
+  app.post('/rule', () => { throw new PartnerError('invalid_request', 'score for SECRET_RULE must be a whole number'); });
+  app.post('/conflict', () => { throw new PartnerError('request_conflict'); });
+  app.use(partnerErrorHandler);
+  const valid = { playerId: 'player-1', language: 'ka', channel: 'WEB', requestId: 'init-1', username: 'Nika' };
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { warn = vi.spyOn(logger, 'warn'); });
+  afterEach(() => { warn.mockRestore(); });
+  const refusals = () => warn.mock.calls.filter((c) => c[1] === 'Partner request refused').map((c) => c[0]);
+  const base = { reason: 'invalid_request', contentType: 'application/json' };
+
+  it('names the field, the failure kind and the content type; the answer to the caller is unchanged', async () => {
+    const res = await request(app).post('/sessions/init').send({ ...valid, language: 'SECRET_LANG', username: 'SECRET_NAME' });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: 'invalid_request', message: "language: Invalid enum value. Expected 'ka' | 'en' | 'ru', received 'SECRET_LANG'" } });
+    expect(refusals()).toEqual([{ ...base, route: '/sessions/init', field: 'language', issue: 'invalid_enum_value' }]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('a form body is parsed like JSON; an unparsed body shows as a missing first field', async () => {
+    expect((await request(app).post('/sessions/init').type('form').send(valid)).status).toBe(200);
+    expect((await request(app).post('/sessions/init').type('text/plain').send(JSON.stringify(valid))).status).toBe(400);
+    expect((await request(app).post('/sessions/init')).status).toBe(400);
+    const missing = { reason: 'invalid_request', route: '/sessions/init', field: 'playerId', issue: 'invalid_type', expected: 'string', received: 'undefined' };
+    expect(refusals()).toEqual([{ ...missing, contentType: 'text/plain' }, { ...missing, contentType: 'none' }]);
+  });
+
+  it('keeps caller text out: record keys, custom issue paths, ids in the URL, content types, unreadable bodies', async () => {
+    await request(app).post('/players/SECRET_PLAYER/answers').send({ answers: { SECRET_KEY: 'x' } });
+    await request(app).post('/players/SECRET_PLAYER/answers').send({ picks: [{ id: 'a' }, { id: 'SECRET_PICK' }] });
+    await request(app).post('/players/SECRET_PLAYER/answers').send({ picks: [{ id: 'a' }, { id: 7 }] });
+    await request(app).post('/SECRET_PATH').set('Content-Type', 'application/json').send('{"playerId": "SECRET_BODY');
+    await request(app).post('/thrown').set('Content-Type', 'application/SECRET_TYPE').send('{}');
+    await request(app).post('/sessions/init').send({ ...valid, requestId: 'SECRET ID' });
+    await request(app).post('/rule').send({});
+    const route = '/players/:playerId/answers';
+    expect(refusals()).toEqual([
+      { ...base, route, field: 'answers.?', issue: 'invalid_type', expected: 'number', received: 'string' },
+      { ...base, route, field: '?', issue: 'custom' },
+      { ...base, route, field: 'picks.1.id', issue: 'invalid_type', expected: 'string', received: 'number' },
+      { ...base, field: 'body', issue: 'entity.parse.failed' },
+      { reason: 'invalid_request', route: '/thrown', contentType: 'other', field: '?', issue: 'invalid_type', expected: 'string', received: 'undefined' },
+      { ...base, route: '/sessions/init', field: 'requestId', issue: 'invalid_string:regex' },
+      { ...base, route: '/rule', field: '?', issue: 'rule' },
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('says how a body could not be read, and names a bad id in the URL without quoting it', async () => {
+    await request(app).post('/sessions/init').send({ ...valid, username: 'x'.repeat(70_000) });
+    await request(app).post('/sessions/init').set('Content-Type', 'application/json; charset=SECRET_CHARSET').send('{}');
+    await request(app).post('/players/%E0%A4%A/answers').send({});
+    expect(refusals()).toEqual([
+      { ...base, field: 'body', issue: 'entity.too.large' },
+      { ...base, field: 'body', issue: 'charset.unsupported' },
+      { ...base, field: 'path', issue: 'encoding' },
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('other refusals are not logged as invalid input', async () => {
+    expect((await request(app).post('/conflict').send({})).status).toBe(409);
+    expect(refusals()).toEqual([]);
   });
 });

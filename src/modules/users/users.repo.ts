@@ -334,7 +334,7 @@ export const usersRepo = {
       // it into a jsonb STRING scalar for the $7::jsonb param (see matches.repo).
       const avatarCustomizationJson = (userData.avatarCustomization ?? null) as Json;
       const phoneNumber = normalizeOptionalText(userData.phoneNumber);
-      const result = await tx.unsafe<User[]>(
+      const insertUser = (q: typeof tx, nickname: string | null) => q.unsafe<User[]>(
         `INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::jsonb, false, false)
          RETURNING *`,
@@ -342,12 +342,23 @@ export const usersRepo = {
           userData.email ?? null,
           phoneNumber,
           phoneNumber ? userData.phoneVerifiedAt ?? null : null,
-          userData.nickname ?? null,
+          nickname,
           userData.country ?? null,
           userData.avatarUrl ?? null,
           avatarCustomizationJson,
         ]
       );
+      // The provider's display name is only a suggestion: when another account already holds it as its nickname, the
+      // account is created without one (onboarding asks for it) instead of failing the sign-in. In a savepoint, so the
+      // refused insert does not poison the transaction.
+      let result: User[];
+      try {
+        result = userData.nickname ? await tx.savepoint((sp) => insertUser(sp as unknown as typeof tx, userData.nickname ?? null)) : await insertUser(tx, null);
+      } catch (error) {
+        if (!userData.nickname || !isNicknameUniqueViolation(error)) throw error;
+        userData = { ...userData, nickname: null };
+        result = await insertUser(tx, null);
+      }
       const user = result[0];
 
       // An OAuth provider's identity.name is the user's real name, not a handle

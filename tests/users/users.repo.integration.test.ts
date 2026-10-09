@@ -138,6 +138,27 @@ describe('usersRepo.findTakenLowerNicknames', () => {
 });
 
 describe('usersRepo.createWithIdentity', () => {
+  it('creates the account without a nickname when the provider name is already somebody else\'s nickname', async ({ skip }) => {
+    if (!dbAvailable) skip();
+
+    const name = `Taken Name ${Date.now()}`;
+    const subjects = [`repo-name-a-${Date.now()}`, `repo-name-b-${Date.now()}`];
+    testIdentitySubjects.push(...subjects);
+    const first = await usersRepo.createWithIdentity({ email: null, nickname: name }, { provider: 'supabase', subject: subjects[0], email: null });
+    // Same display name, another person, different letter case: a new account, not an error and not a merge.
+    const second = await usersRepo.createWithIdentity({ email: null, nickname: name.toUpperCase() }, { provider: 'supabase', subject: subjects[1], email: null });
+    testUserIds.push(first.user.id, second.user.id);
+
+    expect(first).toMatchObject({ created: true, user: { nickname: name } });
+    expect(second.created).toBe(true);
+    expect(second.user.id).not.toBe(first.user.id);
+    expect(second.user.nickname).toBeNull();
+    const history = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM nickname_history WHERE user_id = ${second.user.id}`;
+    expect(history[0].n).toBe(0);
+    const identities = await sql<{ user_id: string }[]>`SELECT user_id FROM user_identities WHERE provider = 'supabase' AND subject = ${subjects[1]}`;
+    expect(identities).toEqual([{ user_id: second.user.id }]);
+  });
+
   it('is idempotent when first-login provisioning races on the same identity', async ({ skip }) => {
     if (!dbAvailable) skip();
 

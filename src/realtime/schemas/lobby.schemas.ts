@@ -49,8 +49,26 @@ export const lobbyLeaveSchema = z.object({
   correlationId: correlationIdSchema,
 });
 
+export const lobbyRoomOptionsSchema = z.object({
+  lobbyId: z.string().uuid().optional(),
+  // The room's game decides what is valid; this only bounds the size.
+  options: z.record(z.union([z.string().max(32), z.number(), z.boolean()])).nullable().refine((o) => o === null || Object.keys(o).length <= 8, 'too many options'),
+});
+
+/**
+ * The game the sender's screen showed when they pressed Ready or Start. Sent by clients that know about it; the
+ * command is refused when the room is on another game by the time it arrives (the state push with the change and
+ * the command crossed on the wire).
+ */
+const seenGameSchema = z.object({
+  gameMode: z.enum(LOBBY_GAME_MODES),
+  duelGame: duelGameSchema.nullable().optional(),
+  roomGame: roomGameSchema.nullable().optional(),
+});
+
 export const lobbyReadySchema = z.object({
   ready: z.boolean(),
+  seen: seenGameSchema.optional(),
 });
 
 export const lobbyUpdateSettingsSchema = z
@@ -96,6 +114,7 @@ export const lobbyUpdateSettingsSchema = z
 
 export const lobbyStartSchema = z.object({
   lobbyId: z.string().uuid().optional(),
+  seen: seenGameSchema.optional(),
 });
 
 export const lobbyChallengeSchema = z.object({

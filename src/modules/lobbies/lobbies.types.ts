@@ -68,6 +68,8 @@ export interface LobbyRow {
   duel_game: DuelGameId | null;
   /** Set exactly when game_mode is 'room_game' (lobbies_room_game_check). */
   room_game: RoomGameId | null;
+  /** What the host chose for the room game (which clubs, how hard); null = the game's defaults. */
+  room_options?: Record<string, unknown> | null;
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;

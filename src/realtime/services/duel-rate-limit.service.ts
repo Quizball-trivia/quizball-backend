@@ -1,6 +1,6 @@
 import { getRedisClient } from '../redis.js';
 
-export type DuelOperation = 'command' | 'sync' | 'start' | 'start_ip';
+export type DuelOperation = 'command' | 'sync' | 'start' | 'start_ip' | 'report';
 
 const RULES: Record<DuelOperation, { limit: number; windowSec: number }> = {
   /** Picks, guesses, passes, ready, forfeit: generous for play, bounded for scripts. */
@@ -11,6 +11,8 @@ const RULES: Record<DuelOperation, { limit: number; windowSec: number }> = {
   start: { limit: 30, windowSec: 3_600 },
   /** ...and per IP bucket, so many guest pairs behind one address cannot start without bound. */
   start_ip: { limit: 120, windowSec: 3_600 },
+  /** "That was right" reports from the word games: a rare tap. */
+  report: { limit: 6, windowSec: 60 },
 };
 
 const local = new Map<string, { count: number; resetAt: number }>();

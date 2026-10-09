@@ -24,6 +24,8 @@ export interface SocketAuthData {
   identity: AuthIdentity;
   currentCountry?: string | null;
   lobbyId?: string;
+  /** Counts this socket's Ready / Un-ready commands: one that waited for the room lock gives way to a later one. */
+  lobbyReadySeq?: number;
   matchId?: string;
   gridMatchId?: string;
   /** The live duel this socket was seen in (connect or a duel:* event); disconnect bookkeeping keys off it. */

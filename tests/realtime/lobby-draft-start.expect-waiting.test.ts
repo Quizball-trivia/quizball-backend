@@ -65,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   acquireLockMock.mockResolvedValue({ acquired: true, token: 't1' });
   lobbiesRepo.getById.mockResolvedValue(WAITING);
+  lobbiesRepo.listMembersWithUser.mockResolvedValue([]);
   lobbiesService.selectRandomCategories.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }]);
   syntheticBotsRepo.activateLobbyForDraftLocked.mockResolvedValue({ activated: true, committedReservation: false });
 });
@@ -110,6 +111,40 @@ describe('startDraft expectWaiting enforcement', () => {
 
     expect(result).toBe('lock_busy');
     expect(lobbiesRepo.clearLobbyCategories).not.toHaveBeenCalled();
+  });
+
+  describe('the start that follows the last Ready (expectBothReady)', () => {
+    const ready = (id: string, isReady = true) => ({ user_id: id, is_ready: isReady, is_guest: false });
+    const rankedSim = { ...WAITING, game_mode: 'ranked_sim' };
+
+    it('starts while the room is still the two ready players on ranked sim', async () => {
+      lobbiesRepo.getById.mockResolvedValue(rankedSim);
+      lobbiesRepo.listMembersWithUser.mockResolvedValue([ready('u1'), ready('u2')]);
+      expect(await startDraft(io, 'lobby-1', { expectWaiting: true, expectBothReady: true })).toBe('started');
+    });
+
+    it('starts nothing when a player un-readies while the categories are being chosen', async () => {
+      lobbiesRepo.getById.mockResolvedValue(rankedSim);
+      lobbiesRepo.listMembersWithUser
+        .mockResolvedValueOnce([ready('u1'), ready('u2')])
+        .mockResolvedValue([ready('u1'), ready('u2', false)]);
+      expect(await startDraft(io, 'lobby-1', { expectWaiting: true, expectBothReady: true })).toBe('not_ready');
+      expect(syntheticBotsRepo.activateLobbyForDraftLocked).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('draft:start', expect.anything());
+    });
+
+    it.each([
+      ['the host changed the game', { ...WAITING, game_mode: 'duel', duel_game: 'pistas' }, [ready('u1'), ready('u2')]],
+      ['a player un-readied', rankedSim, [ready('u1', false), ready('u2')]],
+      ['a player left', rankedSim, [ready('u1')]],
+    ])('starts nothing when %s between the Ready and the lock', async (_what, lockedLobby, members) => {
+      lobbiesRepo.getById.mockResolvedValueOnce(rankedSim).mockResolvedValueOnce(lockedLobby);
+      lobbiesRepo.listMembersWithUser.mockResolvedValue(members);
+      expect(await startDraft(io, 'lobby-1', { expectWaiting: true, expectBothReady: true })).toBe('not_ready');
+      expect(lobbiesRepo.clearLobbyCategories).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('draft:start', expect.anything());
+      expect(releaseLockMock).toHaveBeenCalled();
+    });
   });
 
   it("returns 'started' with the option when the lobby is still waiting under the lock", async () => {

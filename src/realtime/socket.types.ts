@@ -13,6 +13,13 @@ import type { DuelGameId } from '../modules/duel/duel.types.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
+/** The game a Ready or Start was pressed on (see lobby.schemas seenGameSchema). */
+export interface LobbySeenGame {
+  gameMode: LobbyGameMode;
+  duelGame?: DuelGameId | null;
+  roomGame?: RoomGameId | null;
+}
+
 export type LobbyGameMode =
   | 'friendly_possession'
   | 'friendly_party_quiz'
@@ -96,6 +103,8 @@ export interface LobbySettings {
   duelGame: DuelGameId | null;
   /** Set exactly when gameMode is 'room_game'. */
   roomGame: RoomGameId | null;
+  /** The host's choices for the room game (as that game validated them); absent or null = its defaults. */
+  roomOptions?: Record<string, unknown> | null;
   friendlyRandom: boolean;
   friendlyCategoryAId: string | null;
   friendlyCategoryBId: string | null;
@@ -1164,6 +1173,8 @@ export interface LobbyJoinRoomInfo {
   roomState: 'open' | 'in_progress' | 'ended' | 'unknown';
   gameMode: string | null;
   duelGame: string | null;
+  /** The room game of a room-game room, so "start your own" opens the same game. */
+  roomGame: string | null;
   hostNickname: string | null;
 }
 
@@ -1377,7 +1388,7 @@ export interface ClientToServerEvents {
     ack?: (result: LobbyJoinByCodeResult) => void
   ) => void;
   'lobby:leave': (data?: { correlationId?: string }, ack?: (result: LobbyLeaveResult) => void) => void;
-  'lobby:ready': (data: { ready: boolean }) => void;
+  'lobby:ready': (data: { ready: boolean; seen?: LobbySeenGame }) => void;
   'lobby:update_settings': (data: {
     lobbyId?: string;
     gameMode: LobbyGameMode;
@@ -1390,7 +1401,9 @@ export interface ClientToServerEvents {
     friendlyCategoryBId?: string | null;
     isPublic?: boolean;
   }) => void;
-  'lobby:start': (data?: { lobbyId?: string }) => void;
+  /** Host only, room-game rooms: the game's options (null = back to its defaults). Changing them un-readies everyone. */
+  'lobby:room_options': (data: { lobbyId?: string; options: Record<string, unknown> | null }) => void;
+  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
@@ -1411,10 +1424,13 @@ export interface ClientToServerEvents {
   'duel:command': (data: { matchId: string; commandId: string; command: unknown }) => void;
   'duel:resync': (data: { matchId: string; locale?: string }) => void;
   'duel:forfeit': (data: { matchId: string; commandId: string }) => void;
-  'room:ready': (data: { matchId: string; locale?: string }) => void;
+  /** `games`: the room games this client can draw (needed for every game newer than the first). */
+  'room:ready': (data: { matchId: string; locale?: string; games?: string[] }) => void;
   'room:command': (data: { matchId: string; commandId: string; command: unknown }) => void;
-  'room:resync': (data: { matchId: string; locale?: string }) => void;
+  'room:resync': (data: { matchId: string; locale?: string; games?: string[] }) => void;
   'room:leave': (data: { matchId: string; commandId: string }) => void;
+  /** A refused answer the player says was right (word games); stored for review, never answered. */
+  'room:report': (data: { matchId: string; round: number; text: string }) => void;
   /** Where the player stands in their room's match: answered with room:active + room:sitting_out. */
   'room:pointer': () => void;
   'grid:search_start': (data?: FootballGridSearchStartPayload) => void;

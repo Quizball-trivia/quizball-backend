@@ -8,8 +8,9 @@ import {
   lobbyLeaveSchema,
   lobbyReadySchema,
   lobbyStartSchema,
-  lobbyUpdateSettingsSchema,
-} from '../schemas/lobby.schemas.js';
+  lobbyUpdateSettingsSchema, lobbyRoomOptionsSchema } from '../schemas/lobby.schemas.js';
+import { setRoomOptions } from '../services/lobby-room-options.service.js';
+import { allowDuelOperation } from '../services/duel-rate-limit.service.js';
 import { logger } from '../../core/logger.js';
 import { trackLobbyCreated, trackLobbyJoined, trackLobbyLeft } from '../../core/analytics/game-events.js';
 import { lobbyRealtimeService } from '../services/lobby-realtime.service.js';
@@ -154,7 +155,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await lobbyRealtimeService.setReady(io, socket, parsed.data.ready);
+      await lobbyRealtimeService.setReady(io, socket, parsed.data.ready, parsed.data.seen);
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:ready');
       socket.emit('error', { code: 'LOBBY_READY_ERROR', message: 'Failed to update ready state' });
@@ -176,6 +177,25 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
   });
 
+  socket.on('lobby:room_options', async (payload) => {
+    const parsed = lobbyRoomOptionsSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:room_options payload');
+      return;
+    }
+
+    try {
+      if (!(await allowDuelOperation(socket.data.user.id, 'sync', 'room'))) {
+        socket.emit('error', { code: 'RATE_LIMITED', message: 'Too many changes. Please slow down.' });
+        return;
+      }
+      await setRoomOptions(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:room_options');
+      socket.emit('error', { code: 'LOBBY_SETTINGS_ERROR', message: 'Failed to update settings' });
+    }
+  });
+
   socket.on('lobby:start', async (payload) => {
     const parsed = lobbyStartSchema.safeParse(payload ?? {});
     if (!parsed.success) {
@@ -184,7 +204,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await lobbyRealtimeService.startFriendlyMatch(io, socket, parsed.data.lobbyId);
+      await lobbyRealtimeService.startFriendlyMatch(io, socket, parsed.data.lobbyId, parsed.data.seen);
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:start');
       socket.emit('error', { code: 'LOBBY_START_ERROR', message: 'Failed to start match' });

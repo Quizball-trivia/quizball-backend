@@ -14,7 +14,7 @@ type Handler = RequestHandler;
 
 export interface DailyGameRoutes {
   /** Budget names prefix the shared Redis counters (`<name>-address`, `<name>`). */
-  name: 'pistas' | 'ultimo' | 'minuto';
+  name: 'pistas' | 'ultimo' | 'minuto' | 'shared-player' | 'name-chain';
   /** Hourly guest budgets: per address (before the session lookup) and per guest session. */
   guestBudget: { address: number; session: number };
   guestSessionRequired: () => AppError;
@@ -22,6 +22,8 @@ export interface DailyGameRoutes {
   start: Handler;
   /** The game's moves: POST /<path> with the body schema. */
   moves: Array<{ path: string; schema: ZodTypeAny; handler: Handler }>;
+  /** POST /report: a refused answer the player says was right (rare, so a small budget of its own). */
+  report?: { schema: ZodTypeAny; handler: Handler };
   current: Handler;
   boards: Handler;
   review: Handler;
@@ -103,6 +105,7 @@ export function createDailyGameRouter(game: DailyGameRoutes): Router {
 
   router.post('/start', identify, startLimiter, validate({ body: game.schemas.start }), game.start);
   for (const move of game.moves) router.post(`/${move.path}`, identify, playLimiter, validate({ body: move.schema }), move.handler);
+  if (game.report) router.post('/report', identify, limiter(6), validate({ body: game.report.schema }), game.report.handler);
   router.get('/current', varyOnPlayer, identify, readLimiter, validate({ query: game.schemas.dayQuery }), game.current);
   router.get('/boards', publicRead, boardLimiter, game.boards);
   router.get('/review', publicRead, boardLimiter, validate({ query: game.schemas.reviewQuery }), game.review);

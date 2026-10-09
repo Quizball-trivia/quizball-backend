@@ -4,11 +4,11 @@ import type { SharedPlayerItem } from '../room/games/shared-player/shared-player
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
 
 /**
- * "Played for both", solo: ten club pairs a day, ten seconds each, one point per pair found. A wrong answer blocks the
+ * "Played for both", solo: ten club pairs a day, twenty seconds each, one point per pair found. A wrong answer blocks the
  * input for a moment. Pure: time comes in as `now` (the database clock).
  */
 export const PAIRS_PER_DAY = 10;
-export const RACE_MS = 10_000;
+export const RACE_MS = 20_000;
 export const WRONG_LOCK_MS = 1_000;
 const EXAMPLES = 6;
 

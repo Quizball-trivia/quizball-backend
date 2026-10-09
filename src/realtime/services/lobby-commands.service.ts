@@ -485,6 +485,8 @@ async function refuseStaleGame(io: QuizballServer, socket: QuizballSocket, lobby
 }
 
 export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean, seen?: LobbySeenGame): Promise<void> {
+  const readySeq = (socket.data.lobbyReadySeq ?? 0) + 1;
+  socket.data.lobbyReadySeq = readySeq;
   const lobbyId = await boundLobbyId(socket);
   if (!lobbyId) return;
 
@@ -504,13 +506,31 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     const guard = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
     if (!guard.acquired) logger.warn({ lobbyId, userId: socket.data.user.id }, 'Lobby ready: room lock not acquired, checking the game without it');
     let stale = false;
+    let superseded = false;
     try {
-      const current = await lobbiesRepo.getById(lobbyId);
-      // Only a waiting room has a game to agree on; anything else is handled as before.
-      stale = current?.status === 'waiting' && !onSeenGame(current, seen);
-      if (!stale) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
+      // While this waited for the lock the player may have un-readied (written at once): the later command stands.
+      superseded = socket.data.lobbyReadySeq !== readySeq;
+      if (!superseded) {
+        const current = await lobbiesRepo.getById(lobbyId);
+        // Only a waiting room has a game to agree on; anything else is handled as before.
+        stale = current?.status === 'waiting' && !onSeenGame(current, seen);
+        if (!stale) {
+          updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
+          // The lock is a lease and may have run out, or was never ours: a change that slipped in between the check
+          // and the write shows now (it writes the room before it un-readies everybody), and the Ready is taken back.
+          const after = updated ? await lobbiesRepo.getById(lobbyId) : null;
+          if (after?.status === 'waiting' && !onSeenGame(after, seen)) {
+            await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, false);
+            stale = true;
+          }
+        }
+      }
     } finally {
       if (guard.acquired && guard.token) await releaseLock(lockKey, guard.token);
+    }
+    if (superseded) {
+      logger.debug({ lobbyId, userId: socket.data.user.id }, 'Lobby ready dropped: a later ready command from the same player already ran');
+      return;
     }
     if (stale) {
       logger.info({ lobbyId, userId: socket.data.user.id, seen }, 'Lobby ready refused: pressed on a game the room has left');

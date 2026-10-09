@@ -118,6 +118,35 @@ describe('Ready names the game it was pressed on', () => {
     expect(await outcome(lobby('auction'), { gameMode: 'auction' })).toEqual([]);
   });
 
+  it('a Ready that waited for the lock gives way to the same player\'s later Un-ready', async () => {
+    const socket = socketFor('guest');
+    let letReadyIn = (): void => undefined;
+    acquireLobbyLockWithRetry.mockImplementationOnce(() => new Promise((resolve) => { letReadyIn = () => resolve({ acquired: true, token: 'guard' }); }));
+    const waitingReady = setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
+    await setReady(io as never, socket as never, false);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledTimes(1);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false);
+    letReadyIn();
+    await waitingReady;
+    // The older Ready wrote nothing, and gave the lock back.
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledWith('lock:lobby:L', 'guard');
+    expect(errorCodes(socket)).toEqual([]);
+  });
+
+  it('a game change that slips in between the check and the write (the lock is a lease) takes the Ready back', async () => {
+    // First look, the look under the lock: still the game named. The look after the write: another game.
+    lobbiesRepo.getById
+      .mockResolvedValueOnce(lobby('duel', { duel: 'pistas' }))
+      .mockResolvedValueOnce(lobby('duel', { duel: 'pistas' }))
+      .mockResolvedValue(lobby('room_game', { room: 'name_chain' }));
+    const socket = socketFor('guest');
+    await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
+    expect(lobbiesRepo.updateMemberReady.mock.calls).toEqual([['L', 'guest', true], ['L', 'guest', false]]);
+    expect(errorCodes(socket)).toEqual(['LOBBY_SETTINGS_CHANGED']);
+    expect(lobbiesRepo.countReadyMembers).not.toHaveBeenCalled();
+  });
+
   it('a room that is not waiting has no game to agree on: handled as before', async () => {
     lobbiesRepo.getById.mockResolvedValue({ ...lobby('duel', { duel: 'pistas' }), status: 'active' });
     const socket = socketFor('guest');

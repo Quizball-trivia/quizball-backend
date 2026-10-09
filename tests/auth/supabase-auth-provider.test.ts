@@ -20,9 +20,15 @@ function userResponse(id = 'supabase-user-1'): Response {
   });
 }
 
+// The provider under test is the introspection one: a developer's .env (local JWKS, issuer, audience) must not turn
+// it into the JWKS one, so the config module is loaded without reading .env.
+vi.mock('dotenv', () => ({ config: () => ({ parsed: {} }) }));
+
 async function createProvider() {
   vi.resetModules();
   delete process.env.SUPABASE_JWKS_URL;
+  delete process.env.SUPABASE_JWT_ISSUER;
+  delete process.env.SUPABASE_JWT_AUDIENCE;
   const { SupabaseAuthProvider } = await import('../../src/modules/auth/supabase-auth-provider.js');
   return new SupabaseAuthProvider();
 }

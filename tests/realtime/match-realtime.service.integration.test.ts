@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 
+/** The reconnect window match-disconnect.service.ts gives a player who dropped (MATCH_DISCONNECT_GRACE_MS there). */
+const MATCH_DISCONNECT_GRACE_MS = 20_000;
+
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
 const deferPossessionQuestionTimerForPauseMock = vi.fn();
@@ -658,7 +661,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 30000,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects: 2,
       })
     );
@@ -938,7 +941,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       const result = await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old' });
 
       expect(result).toEqual({
-        graceMs: 30_000,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects: 3,
         finalized: false,
       });
@@ -986,7 +989,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           opponentId: 'u1',
-          graceMs: 30_000,
+          graceMs: MATCH_DISCONNECT_GRACE_MS,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1098,7 +1101,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           variant: 'friendly_party_quiz',
-          graceMs: 30000,
+          graceMs: MATCH_DISCONNECT_GRACE_MS,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1168,7 +1171,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 30000,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
       })
     );
   });
@@ -2356,7 +2359,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const rejoinPayload = (socket.emit as ReturnType<typeof vi.fn>).mock.calls.find(
       ([event]) => event === 'match:rejoin_available'
     )?.[1] as { graceMs?: number } | undefined;
-    expect(rejoinPayload?.graceMs).toBeLessThanOrEqual(30_000);
+    expect(rejoinPayload?.graceMs).toBeLessThanOrEqual(MATCH_DISCONNECT_GRACE_MS);
     expect(socket.emit).not.toHaveBeenCalledWith('match:start', expect.anything());
     expect(socket.join).not.toHaveBeenCalledWith('match:m1');
     expect(socket.data.matchId).toBeUndefined();
@@ -2406,7 +2409,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const opponentDisconnectedPayload = (socket.emit as ReturnType<typeof vi.fn>).mock.calls.find(
       ([event]) => event === 'match:opponent_disconnected'
     )?.[1] as { graceMs?: number } | undefined;
-    expect(opponentDisconnectedPayload?.graceMs).toBeLessThanOrEqual(30_000);
+    expect(opponentDisconnectedPayload?.graceMs).toBeLessThanOrEqual(MATCH_DISCONNECT_GRACE_MS);
     expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
     expect(sendMatchQuestionMock).not.toHaveBeenCalled();
   });
@@ -2593,7 +2596,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const opponentDisconnectedPayload = userRoomEmit.mock.calls.find(
       ([event]) => event === 'match:opponent_disconnected'
     )?.[1] as { graceMs?: number } | undefined;
-    expect(opponentDisconnectedPayload?.graceMs).toBeLessThanOrEqual(30_000);
+    expect(opponentDisconnectedPayload?.graceMs).toBeLessThanOrEqual(MATCH_DISCONNECT_GRACE_MS);
     expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
     expect(sendMatchQuestionMock).not.toHaveBeenCalled();
   });
@@ -2651,7 +2654,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(roomEvents).toContainEqual({
       room: 'user:u1',
       event: 'match:rejoin_available',
-      payload: expect.objectContaining({ matchId: 'm1', graceMs: 30_000 }),
+      payload: expect.objectContaining({ matchId: 'm1', graceMs: MATCH_DISCONNECT_GRACE_MS }),
     });
     expect(roomEvents).toContainEqual({
       room: 'user:u2',
@@ -2756,7 +2759,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 30000,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects: 2,
       })
     );
@@ -2790,7 +2793,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 30000,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects: 2,
       })
     );

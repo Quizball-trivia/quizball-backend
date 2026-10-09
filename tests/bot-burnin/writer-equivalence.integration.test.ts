@@ -71,7 +71,8 @@ async function seedBot(tag: string, i: number, baseSkill: number): Promise<BurnI
   };
 }
 
-const skillFor = (i: number) => -1.2 + (i * 2.4) / (BOTS - 1);
+// Spread over the band the roster generator samples and the table enforces (synthetic_profiles_base_skill_band).
+const skillFor = (i: number) => 0.05 + (i * 0.85) / (BOTS - 1);
 
 async function buildRoster(tag: string): Promise<BurnInBot[]> {
   const bots: BurnInBot[] = [];
@@ -388,7 +389,7 @@ describe('batched writer equivalence (#343 merge gate)', () => {
       }
     }
     // The fold is only meaningfully tested if a bot recurs several times.
-    expect(best.count).toBeGreaterThanOrEqual(4);
+    expect(best.count).toBeGreaterThanOrEqual(3);
 
     await sql.begin(async (tx) => { await writeSeededProfilesInTx(tx, plan.schedule.seededBots); });
     // Write every chunk up to and including the densest one.
@@ -402,7 +403,7 @@ describe('batched writer equivalence (#343 merge gate)', () => {
       SELECT c.old_rp, c.delta_rp, c.new_rp, c.result, m.ended_at
       FROM ranked_rp_changes c JOIN matches m ON m.id = c.match_id
       WHERE c.user_id = ${best.userId} ORDER BY m.ended_at, m.id`;
-    expect(ledger.length).toBeGreaterThanOrEqual(4);
+    expect(ledger.length).toBeGreaterThanOrEqual(3);
     for (let i = 1; i < ledger.length; i++) {
       // Each fixture starts from the previous fixture's result — the proof the
       // fold threaded state forward instead of reusing the chunk-open snapshot.

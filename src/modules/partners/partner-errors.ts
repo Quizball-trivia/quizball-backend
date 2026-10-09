@@ -3,6 +3,7 @@ import { ZodArray, ZodDefault, ZodEffects, ZodError, ZodNullable, ZodObject, Zod
 import { AppError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { isTransientDatabaseError } from '../../http/middleware/error-handler.js';
+import { deployPartner, partnerCaller, routePattern, trackPartnerRefusal } from './partner-refusals.js';
 
 /** Stable codes on the wire (external contract §3, internal API §1–2). */
 export type PartnerErrorCode =
@@ -166,10 +167,27 @@ function logInvalidInput(req: Request, invalid: InvalidInput): void {
     const mediaType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
     const contentType = mediaType === '' ? 'none' : LOGGED_CONTENT_TYPES.has(mediaType) ? mediaType : 'other';
     // The route pattern, not the URL: a URL carries caller text (ids, anything at all before a route matches).
-    const route: unknown = (req.route as { path?: unknown } | undefined)?.path;
-    logger.warn({ reason: 'invalid_request', ...(typeof route === 'string' ? { route } : {}), contentType, ...invalid }, 'Partner request refused');
+    const route = routePattern(req);
+    logger.warn({ reason: 'invalid_request', ...(route ? { route } : {}), contentType, ...invalid }, 'Partner request refused');
+    const caller = partnerCaller(req);
+    // A player's refused move ("tile already open") is ordinary play; the partner's server sending us a body we
+    // refuse, or our own web view sending a malformed one, is an integration fault.
+    if (caller && (caller.caller === 'machine' || (invalid.issue !== 'rule' && invalid.issue !== 'refused'))) {
+      trackPartnerRefusal({ ...caller, reason: 'invalid_request', status: STATUS.invalid_request, route, contentType, field: invalid.field, issue: invalid.issue }, req.res);
+    }
   } catch {
-    // Logging is best effort; the caller still gets the 400.
+    // Reporting is best effort; the caller still gets the 400.
+  }
+}
+
+/** A partner request we failed (5xx), or a fault of the partner's server worth knowing about. `ours` also reports a
+ *  request nobody signed, under the deploy's partner — a deploy with no partner configured reports nothing. */
+function trackPartnerFault(req: Request, error: PartnerError, ours: boolean): void {
+  try {
+    const caller = partnerCaller(req) ?? (ours ? deployPartner(req) : null);
+    if (caller) trackPartnerRefusal({ ...caller, reason: error.code, status: error.status, route: routePattern(req) }, req.res);
+  } catch {
+    // Reporting is best effort; the caller still gets its answer.
   }
 }
 
@@ -185,6 +203,9 @@ export function sendPartnerError(res: Response, error: PartnerError): void {
 export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof PartnerError) {
     if (err.code === 'invalid_request') logInvalidInput(req, err.invalidInput ?? { field: '?', issue: 'rule' });
+    else if (err.status >= 500) trackPartnerFault(req, err, true);
+    // The partner's server reusing a requestId breaks that launch without anyone noticing.
+    else if (req.partnerMachine && (err.code === 'request_conflict' || err.code === 'request_used')) trackPartnerFault(req, err, false);
     return sendPartnerError(res, err);
   }
   if (err instanceof ZodError) {
@@ -218,10 +239,14 @@ export const partnerErrorHandler: ErrorRequestHandler = (err, req, res, _next) =
   }
   if (isTransientDatabaseError(err)) {
     logger.warn({ err, path: req.path }, 'Partner request: transient database failure');
-    return sendPartnerError(res, new PartnerError('maintenance', undefined, 1));
+    const unavailable = new PartnerError('maintenance', undefined, 1);
+    trackPartnerFault(req, unavailable, true);
+    return sendPartnerError(res, unavailable);
   }
   logger.error({ err, path: req.path }, 'Partner request failed');
-  sendPartnerError(res, new PartnerError('internal_error'));
+  const failed = new PartnerError('internal_error');
+  trackPartnerFault(req, failed, true);
+  sendPartnerError(res, failed);
 };
 
 export function parsePartnerInput<T>(schema: ZodType<T>, value: unknown): T {

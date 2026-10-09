@@ -1,16 +1,18 @@
 /** Machine class (partner's server → us): source IP allowlist first, then the x-api-key, then a per-key rate limit.
  *  A refused caller never reaches a handler. */
 
-import { timingSafeEqual } from 'node:crypto';
-import { BlockList, isIP } from 'node:net';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { ZodError } from 'zod';
 import { logger } from '../../core/logger.js';
 import type { RedisClientType } from 'redis';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { getRedisClient } from '../../realtime/redis.js';
-import { getFreecrocoConfig, sha256Hex, type PartnerConfig } from './partner-config.js';
+import { getFreecrocoConfig, type PartnerConfig } from './partner-config.js';
+import { ipAllowed, matchApiKey } from './partner-credentials.js';
 import { PartnerError, sendPartnerError } from './partner-errors.js';
+import { routePattern, trackPartnerRefusal } from './partner-refusals.js';
+
+export { ipAllowed, matchApiKey };
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -36,53 +38,6 @@ export function requirePartnerConfig(): PartnerConfig {
   }
   if (!config) throw new PartnerError('maintenance', 'Partner integration is not configured', 60);
   return config;
-}
-
-const allowLists = new WeakMap<PartnerConfig, (ip: string | undefined) => boolean>();
-
-/** Exactly `address` or `address/prefix`; anything else allows nothing (a lenient parse once read `a.b.c.d/` as /0). */
-function addBlock(list: BlockList, value: string): boolean {
-  const match = /^([0-9A-Fa-f.:]+)(?:\/(0|[1-9][0-9]{0,2}))?$/.exec(value);
-  if (!match) return false;
-  const family = isIP(match[1]);
-  if (!family) return false;
-  const type = family === 4 ? 'ipv4' : 'ipv6';
-  if (match[2] === undefined) {
-    list.addAddress(match[1], type);
-    return true;
-  }
-  const prefix = Number(match[2]);
-  if (prefix > (family === 4 ? 32 : 128)) return false;
-  list.addSubnet(match[1], prefix, type);
-  return true;
-}
-
-export function ipAllowed(config: PartnerConfig, ip: string | undefined): boolean {
-  let check = allowLists.get(config);
-  if (!check) {
-    const list = new BlockList();
-    for (const cidr of config.allowedCidrs) {
-      if (!addBlock(list, cidr)) logger.error({ cidr }, 'Partner allowlist entry is not an IP or CIDR; ignored');
-    }
-    check = (address) => {
-      if (!address) return false;
-      const family = isIP(address);
-      return family !== 0 && list.check(address, family === 6 ? 'ipv6' : 'ipv4');
-    };
-    allowLists.set(config, check);
-  }
-  return check(ip);
-}
-
-/** The configured key hash the presented key matches, compared in constant time against every configured key. */
-export function matchApiKey(config: PartnerConfig, presented: unknown): string | null {
-  if (typeof presented !== 'string' || presented.length === 0 || presented.length > 512) return null;
-  const candidate = Buffer.from(sha256Hex(presented), 'hex');
-  let matched: string | null = null;
-  for (const hash of config.inboundKeySha256) {
-    if (timingSafeEqual(candidate, Buffer.from(hash, 'hex')) && matched === null) matched = hash;
-  }
-  return matched;
 }
 
 /** Contract §2: 50 requests per second per key, bursts up to 100. */
@@ -198,22 +153,35 @@ export function machineRateLimiter(
     const localDecision: [boolean, number] = sharedDecision[0] ? await fallback.take(key, ratePerSecond, burst) : [true, 0];
     const allowed = sharedDecision[0] && localDecision[0];
     const retryMs = Math.max(sharedDecision[1], localDecision[1]);
-    if (!allowed) return sendPartnerError(res, new PartnerError('rate_limited', undefined, Math.max(1, Math.ceil(retryMs / 1000))));
+    if (!allowed) {
+      const limited = new PartnerError('rate_limited', undefined, Math.max(1, Math.ceil(retryMs / 1000)));
+      if (machine) {
+        const { slug, environment } = machine.config;
+        trackPartnerRefusal({ slug, environment, reason: limited.code, status: limited.status, caller: 'machine', route: routePattern(req) }, res);
+      }
+      return sendPartnerError(res, limited);
+    }
     next();
   };
 }
 
-function authenticateMachine(req: Request, _res: Response, next: NextFunction): void {
+function authenticateMachine(req: Request, res: Response, next: NextFunction): void {
   const config = requirePartnerConfig();
   const ip = resolveTrustedClientIp(req);
+  const refused = (error: PartnerError): PartnerError => {
+    trackPartnerRefusal({ slug: config.slug, environment: config.environment, reason: error.code, status: error.status, caller: 'machine', route: routePattern(req) }, res);
+    return error;
+  };
   if (!ipAllowed(config, ip)) {
     logger.warn({ reason: 'ip_not_allowed', ip, path: req.path }, 'Partner machine request refused');
+    // A valid key from an unlisted address is the partner on a new or mistyped address; without one it is a stranger.
+    if (matchApiKey(config, req.headers['x-api-key'])) throw refused(new PartnerError('ip_not_allowed'));
     throw new PartnerError('ip_not_allowed');
   }
   const keyHash = matchApiKey(config, req.headers['x-api-key']);
   if (!keyHash) {
     logger.warn({ reason: 'unknown_key', ip, path: req.path }, 'Partner machine request refused');
-    throw new PartnerError('unknown_key');
+    throw refused(new PartnerError('unknown_key'));
   }
   req.partnerMachine = { config, keyHash };
   next();

@@ -77,8 +77,8 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
     /** Opens the first pair, or the next one after a settled pair. */
     next(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {
       // The last pair's clock ran out before this `next`: the run is finished by the clock; record that.
-      return core.mutate(player, runId, version, (s, _day, now, stored) =>
-        (s.done && !stored.done ? { state: s, settledAt: rules.settledAt(stored, s) } : { state: rules.next(s, now) }));
+      return core.mutate(player, runId, version, (s, day, now, stored) =>
+        (s.done && !stored.done ? { state: s, settledAt: rules.settledAt(stored, s) } : { state: rules.next(s, now, rules.raceMsFor(day.day)) }));
     },
 
     answer(player: DailyPlayer, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
@@ -87,7 +87,7 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
         if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
         const pair = day.pairs[s.r];
         if (!pair) throw contentChanged();
-        const out = rules.answer(s, pair, day.universe, text, now);
+        const out = rules.answer(s, pair, day.universe, text, now, rules.raceMsFor(day.day));
         return { state: out.state, extra: { result: out.result } };
       });
     },

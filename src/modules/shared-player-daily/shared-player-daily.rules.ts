@@ -4,11 +4,18 @@ import type { SharedPlayerItem } from '../room/games/shared-player/shared-player
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
 
 /**
- * "Played for both", solo: ten club pairs a day, ten seconds each, one point per pair found. A wrong answer blocks the
+ * "Played for both", solo: ten club pairs a day, twenty seconds each, one point per pair found. A wrong answer blocks the
  * input for a moment. Pure: time comes in as `now` (the database clock).
  */
 export const PAIRS_PER_DAY = 10;
-export const RACE_MS = 10_000;
+export const RACE_MS = 20_000;
+/**
+ * The first days gave ten seconds. A day keeps the clock it was played with: its board ranks by the time left, and
+ * that only compares between runs of one length.
+ */
+const FIRST_RACE_MS = 10_000;
+export const LONG_RACE_FROM = '2026-10-10';
+export const raceMsFor = (day: string): number => (day >= LONG_RACE_FROM ? RACE_MS : FIRST_RACE_MS);
 export const WRONG_LOCK_MS = 1_000;
 const EXAMPLES = 6;
 
@@ -51,22 +58,22 @@ export function project(s: RunState, now: number): RunState {
 }
 
 /** Opens the next pair: the first one, or the one after a settled pair. Its clubs are shown from here. */
-export function next(s: RunState, now: number): RunState {
+export function next(s: RunState, now: number, raceMs: number = RACE_MS): RunState {
   if (s.done) throw rejected('run_done');
   if (s.open) throw rejected('pair_open');
   const started = s.end !== null;
-  return { ...s, r: started ? s.r + 1 : s.r, open: true, dl: now + RACE_MS, lock: 0, att: 0, last: null, end: null };
+  return { ...s, r: started ? s.r + 1 : s.r, open: true, dl: now + raceMs, lock: 0, att: 0, last: null, end: null };
 }
 
 /** One typed answer against the (already projected) run. */
-export function answer(s: RunState, pair: SharedPlayerItem, universe: Universe, text: string, now: number): { state: RunState; result: AnswerResult } {
+export function answer(s: RunState, pair: SharedPlayerItem, universe: Universe, text: string, now: number, raceMs: number = RACE_MS): { state: RunState; result: AnswerResult } {
   if (s.done) throw rejected('run_done');
   if (!s.open || s.dl === null) throw rejected('pair_closed');
   if (now < s.lock) return { state: s, result: 'locked' };
   const shown = text.trim().slice(0, 60);
   const pid = universe.pickAmong(text, pair.accepted);
   if (pid === null) return { state: { ...s, att: s.att + 1, lock: now + WRONG_LOCK_MS, last: { n: s.att, kind: 'wrong', text: shown } }, result: 'wrong' };
-  const left = Math.max(0, Math.min(RACE_MS / 100, Math.round((s.dl - now) / 100)));
+  const left = Math.max(0, Math.min(raceMs / 100, Math.round((s.dl - now) / 100)));
   return { state: { ...settle(s, pid, left), att: s.att + 1, last: { n: s.att, kind: 'ok', text: universe.player(pid)?.name ?? shown } }, result: 'ok' };
 }
 
@@ -131,7 +138,7 @@ export function publicState(
     day,
     pair: s.r,
     totalPairs: PAIRS_PER_DAY,
-    raceMs: RACE_MS,
+    raceMs: raceMsFor(day),
     clubs: started && current ? [clubView(current.a), clubView(current.b)] : null,
     open: s.open,
     deadline: s.open && s.dl !== null ? new Date(s.dl).toISOString() : null,

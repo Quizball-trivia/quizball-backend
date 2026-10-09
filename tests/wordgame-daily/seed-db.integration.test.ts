@@ -51,6 +51,17 @@ describe.skipIf(!url)('word game days seed on real Postgres', () => {
     expect(await seed(stored)).toMatchObject({ unchanged: 3 });
   });
 
+  it('the runs table takes the largest tie-break a twenty-second day can produce, and nothing above it', async () => {
+    await seedDays(db.sql, { game: 'shared_player', release: RELEASE, days: [day('2026-10-06', 1, 'cap')] }, { dryRun: false, allowCorrection: false });
+    const player = async () => (await db.sql<Array<{ id: string }>>`
+      INSERT INTO users (id, nickname) VALUES (gen_random_uuid(), ${`cap-${Math.random().toString(36).slice(2, 10)}`}) RETURNING id`)[0].id;
+    const finished = async (speed: number) => db.sql`
+      INSERT INTO shared_player_runs (id, user_id, day, ranked, content_version, state, state_version, done, score, speed, completed_at, closes_at)
+      VALUES (gen_random_uuid(), ${await player()}, '2026-10-06', false, 1, '{}'::jsonb, 0, true, 10, ${speed}, now(), now())`;
+    await expect(finished(2000)).resolves.toBeDefined();
+    await expect(finished(2001)).rejects.toThrow(/chk_shared_player_runs_speed/);
+  });
+
   it('refuses a daily pair that is also a room pair, whatever its id', async () => {
     const room = pair('room-item', 'd9-south-0', 'd9-north-0');
     await db.sql`INSERT INTO room_pool (game, item_id, difficulty, fingerprint, payload, tags) VALUES ('shared_player', 'room-item', 'easy', 'fp-seed-room-item', ${db.sql.json(room as never)}, ${['mixed']})`;

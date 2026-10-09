@@ -36,13 +36,20 @@ export const contentHash = (content: unknown): number => parseInt(createHash('sh
 
 const dayNumberFrom = (start: string, day: string): number => Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1;
 
-/** Validates a days file: contiguous days from the game's first content day, every day a valid pack of one release. */
-export function parseDaysFile(raw: unknown): { game: WordgameDaily; release: string; days: SeedDay[] } {
+const releaseOf = (day: SeedDay): string => (day.content as { release: string }).release;
+
+/**
+ * Validates a days file: contiguous days from the game's first content day, every day a valid pack. A day names the
+ * footballer release that judges it, so a file may hold more than one: played days stay on theirs (re-pointing them
+ * would be a correction that unranks their runs) while later days move to a newer one. The process holds two releases
+ * at a time (footballers.service MAX_HELD); `releases` is in order of first use.
+ */
+export function parseDaysFile(raw: unknown): { game: WordgameDaily; releases: string[]; days: SeedDay[] } {
   const parsed = fileSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid days file: ${parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')} ${i.code}`).join('; ')}`);
   const { game } = parsed.data;
   const config = GAMES[game];
-  const releases = new Set<string>();
+  const releases: string[] = [];
   const pairIds = new Set<string>();
   const days = parsed.data.days.map((d, i): SeedDay => {
     const expected = addDays(config.contentStart, i);
@@ -51,7 +58,8 @@ export function parseDaysFile(raw: unknown): { game: WordgameDaily; release: str
     const content = config.schema.safeParse(d.content);
     // The issue path names the field; its message could quote content, so only the path is printed.
     if (!content.success) throw new Error(`${d.day}: invalid content (${content.error.issues.slice(0, 4).map((issue) => issue.path.join('.') || 'shape').join(', ')})`);
-    releases.add((content.data as { release: string }).release);
+    const release = (content.data as { release: string }).release;
+    if (!releases.includes(release)) releases.push(release);
     if (game === 'shared_player') {
       const pairs = (content.data as z.infer<typeof sharedPlayerPackSchema>).pairs;
       const clubs = new Map<string, number>();
@@ -70,8 +78,7 @@ export function parseDaysFile(raw: unknown): { game: WordgameDaily; release: str
     }
     return { day: d.day, number: d.number, contentVersion: contentHash(content.data), content: content.data as Record<string, unknown> };
   });
-  if (releases.size !== 1) throw new Error(`A days file must be of one footballer release (found ${releases.size})`);
-  return { game, release: [...releases][0], days };
+  return { game, releases, days };
 }
 
 /** A pair of clubs whatever its order or its id. */
@@ -84,7 +91,7 @@ export interface SeedOutcome { fresh: number; unchanged: number; corrected: numb
  * accepted footballer the release does not know, a daily pair that is also a room pair (a room reveal would hand out a
  * daily answer), and a changed day that already has runs unless `allowCorrection` (its ranked runs are then unranked).
  */
-export async function seedDays(sql: Sql, input: { game: WordgameDaily; release: string; days: readonly SeedDay[] }, opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedOutcome> {
+export async function seedDays(sql: Sql, input: { game: WordgameDaily; days: readonly SeedDay[] }, opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedOutcome> {
   const config = GAMES[input.game];
   return sql.begin(async (transaction) => {
     const tx = transaction as unknown as Sql;
@@ -94,8 +101,10 @@ export async function seedDays(sql: Sql, input: { game: WordgameDaily; release: 
     await tx`SET LOCAL idle_in_transaction_session_timeout = '120s'`;
     await tx`SELECT pg_advisory_xact_lock(hashtext(${WORDGAMES_CONTENT_LOCK}))`;
     await tx`LOCK TABLE ${tx.unsafe(config.days)} IN SHARE ROW EXCLUSIVE MODE`;
-    const [release] = await tx<Array<{ id: string }>>`SELECT id FROM wordgame_releases WHERE id = ${input.release}`;
-    if (!release) throw new Error(`Footballer release ${input.release} is not seeded here; run wordgames-seed-release first`);
+    const releases = [...new Set(input.days.map(releaseOf))];
+    const seeded = new Set((await tx<Array<{ id: string }>>`SELECT id FROM wordgame_releases WHERE id = ANY(${tx.array(releases)}::text[])`).map((r) => r.id));
+    const missing = releases.filter((id) => !seeded.has(id));
+    if (missing.length > 0) throw new Error(`Footballer release ${missing.join(', ')} is not seeded here; run wordgames-seed-release first`);
     if (input.game === 'shared_player') {
       const pairs = input.days.flatMap((d) => (d.content as z.infer<typeof sharedPlayerPackSchema>).pairs);
       // By id and by the two clubs: the same pair under another id would leak just the same.
@@ -114,15 +123,18 @@ export async function seedDays(sql: Sql, input: { game: WordgameDaily; release: 
           OR least(p.pair->'a'->>'key', p.pair->'b'->>'key') || '|' || greatest(p.pair->'a'->>'key', p.pair->'b'->>'key') = ANY(${tx.array(pairs.map((p) => clubPairKey(p.a.key, p.b.key)))}::text[])
         )`;
       if (inOtherDays > 0) throw new Error(`${inOtherDays} pair(s) are already on a stored day outside this file; refused`);
-      const accepted = [...new Set(pairs.flatMap((p) => p.accepted))];
-      let unknown = 0;
-      for (let i = 0; i < accepted.length; i += 5_000) {
-        const [{ n }] = await tx<Array<{ n: number }>>`
-          SELECT count(*)::int AS n FROM unnest(${tx.array(accepted.slice(i, i + 5_000))}::text[]) AS a(pid)
-          WHERE NOT EXISTS (SELECT 1 FROM wordgame_players p WHERE p.release_id = ${input.release} AND p.pid = a.pid)`;
-        unknown += n;
+      // Every day is judged by its own release: its accepted footballers must be in that one.
+      for (const release of releases) {
+        const accepted = [...new Set(input.days.filter((d) => releaseOf(d) === release).flatMap((d) => (d.content as z.infer<typeof sharedPlayerPackSchema>).pairs).flatMap((p) => p.accepted))];
+        let unknown = 0;
+        for (let i = 0; i < accepted.length; i += 5_000) {
+          const [{ n }] = await tx<Array<{ n: number }>>`
+            SELECT count(*)::int AS n FROM unnest(${tx.array(accepted.slice(i, i + 5_000))}::text[]) AS a(pid)
+            WHERE NOT EXISTS (SELECT 1 FROM wordgame_players p WHERE p.release_id = ${release} AND p.pid = a.pid)`;
+          unknown += n;
+        }
+        if (unknown > 0) throw new Error(`${unknown} accepted footballers are not in release ${release}; nothing written`);
       }
-      if (unknown > 0) throw new Error(`${unknown} accepted footballers are not in release ${input.release}; nothing written`);
     }
     const stored = new Map((await tx<Array<{ day: string; contentVersion: string }>>`
       SELECT day::text AS day, content_version AS "contentVersion" FROM ${tx.unsafe(config.days)}`).map((r) => [r.day, Number(r.contentVersion)]));

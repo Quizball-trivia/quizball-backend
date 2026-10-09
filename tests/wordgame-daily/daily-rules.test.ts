@@ -196,13 +196,24 @@ describe('days file', () => {
 
   it('accepts contiguous days of one release and versions each by its content', () => {
     const parsed = parseDaysFile(days(3, pack));
-    expect(parsed).toMatchObject({ game: 'shared_player', release: 'rel-1' });
+    expect(parsed).toMatchObject({ game: 'shared_player', releases: ['rel-1'] });
     expect(parsed.days.map((d) => d.contentVersion)).toEqual(parsed.days.map((d) => contentHash(d.content)));
     expect(new Set(parsed.days.map((d) => d.contentVersion)).size).toBe(3);
     expect(parseDaysFile(days(2, (i) => ({ release: 'rel-1', seed: i + 1 }), 'name_chain')).days).toHaveLength(2);
   });
 
-  it('refuses a gap, a wrong number, a pair on two days, a club three times a day, two releases, and never quotes content', () => {
+  it('lets days change footballer release, each day being of one', () => {
+    const packOf = (release: string) => (i: number) => ({ release, pairs: Array.from({ length: 10 }, (_, n) => ({ ...pair(i * 10 + n), release })) });
+    const moved = parseDaysFile(days(4, (i) => packOf(i < 2 ? 'rel-1' : 'rel-2')(i)));
+    expect(moved.releases).toEqual(['rel-1', 'rel-2']);
+    expect(moved.days.map((d) => (d.content as { release: string }).release)).toEqual(['rel-1', 'rel-1', 'rel-2', 'rel-2']);
+    expect(parseDaysFile(days(3, (i) => ({ release: i < 1 ? 'rel-1' : 'rel-2', seed: i + 1 }), 'name_chain')).releases).toEqual(['rel-1', 'rel-2']);
+    // A day is still of one release: a pair of another one inside it is refused.
+    const mixed = days(1, pack); (mixed.days[0].content as ReturnType<typeof pack>).pairs[3] = { ...pair(3), release: 'rel-2' } as never;
+    expect(() => parseDaysFile(mixed)).toThrow(/invalid content/);
+  });
+
+  it('refuses a gap, a wrong number, a pair on two days, a club three times a day, and never quotes content', () => {
     const gap = days(2, pack); gap.days[1].day = addDays(CONTENT_START, 2);
     expect(() => parseDaysFile(gap)).toThrow(/contiguous/);
     const number = days(2, pack); number.days[1].number = 9;
@@ -215,7 +226,6 @@ describe('days file', () => {
     expect(() => parseDaysFile(renamed)).toThrow(/more than one day/);
     const crowded = pack(0); crowded.pairs[1] = { ...crowded.pairs[1], a: crowded.pairs[0].a }; crowded.pairs[2] = { ...crowded.pairs[2], a: crowded.pairs[0].a };
     expect(() => parseDaysFile(days(1, () => crowded))).toThrow(/more than 2 times/);
-    expect(() => parseDaysFile(days(2, (i) => ({ release: `rel-${i}`, seed: 1 }), 'name_chain'))).toThrow(/one footballer release/);
     let message = '';
     try { parseDaysFile(days(1, () => ({ release: 'rel-1', pairs: [{ ...pair(0), accepted: ['Tarin Orlen'] }] }))); } catch (error) { message = (error as Error).message; }
     expect(message).toMatch(/invalid content/);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   fitGridDifficultyModel,
   gridDifficultyBand,
+  gridDifficultyCellKey,
   predictGridCellRate,
   scoreGridBoard,
   type GridDifficultyBoardInput,
@@ -145,5 +146,14 @@ describe('Football Tic Tac Toe board difficulty', () => {
     expect(summary.byLabel.easy.move).toBe(1);
     expect(summary.byLabel.easy.keep).toBe(1);
     expect(summary.byLabel.easy.suggested.easy).toBe(1);
+  });
+});
+
+describe('gridDifficultyCellKey', () => {
+  it('finds a square\'s history on the same board with its rows and columns reordered or swapped', () => {
+    const key = gridDifficultyCellKey('sum', 'club:one', 'country:aa');
+    expect(gridDifficultyCellKey('sum', 'country:aa', 'club:one')).toBe(key);
+    expect(gridDifficultyCellKey('sum', 'club:one', 'country:bb')).not.toBe(key);
+    expect(gridDifficultyCellKey('other', 'club:one', 'country:aa')).not.toBe(key);
   });
 });

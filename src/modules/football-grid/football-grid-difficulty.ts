@@ -229,3 +229,13 @@ export function scoreGridBoard(model: GridDifficultyModel, board: GridDifficulty
     cells,
   };
 }
+
+/**
+ * Where a square's play history is kept: the board's content checksum and the two criteria that cross there. The
+ * checksum is the same for a board whose rows or columns were reordered or swapped, so a square's position is not
+ * part of the key.
+ */
+export function gridDifficultyCellKey(checksum: string, rowKey: string, colKey: string): string {
+  const [first, second] = rowKey < colKey ? [rowKey, colKey] : [colKey, rowKey];
+  return `${checksum}:${first}|${second}`;
+}

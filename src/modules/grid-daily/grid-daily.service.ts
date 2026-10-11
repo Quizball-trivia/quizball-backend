@@ -19,7 +19,7 @@ export type LeaderboardResponse = DailyLeaderboardResponse<LeaderboardEntry>;
 
 type Repo = Pick<GridDailyRepo,
   'withTx' | 'lockDay' | 'dayVersion' | 'insertRun' | 'lockOwnRun' | 'runDay' | 'lockRun' | 'getRun' | 'saveState' | 'unrankClosedRun' | 'rebaseRun'
-  | 'isClosed' | 'rankOf' | 'leaderboard'>;
+  | 'isClosed' | 'rankOf' | 'leaderboard' | 'clock'>;
 
 export interface GridDailyDeps {
   repo: Repo;
@@ -53,7 +53,7 @@ export function createGridDailyService(deps: GridDailyDeps) {
       completion: (s) => (s.done ? { score: rules.score(s), stat: rules.speed(s) } : null),
       publicState: (s, run, day, _now, extra) => rules.publicState(s, run.day, day, extra),
     },
-    { calendar: gridDailyCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS },
+    { calendar: gridDailyCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS, clock: 'database' },
   );
 
   async function withBoard<T extends DailyRunResponse<PublicRunState>>(response: T): Promise<T & { board: FootballGridBoardView | null; serverNow: number }> {

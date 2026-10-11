@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 class FakeRedis {
@@ -249,6 +249,47 @@ describe('footballGridMatchmakingService session fencing', () => {
     expect(state.heartbeatPairing).toHaveBeenCalledOnce();
     expect(state.emitMatchFound).toHaveBeenCalledOnce();
     expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toEqual([]);
+  });
+
+  describe('two people matched together', () => {
+    const experienceOf = async (finished: Record<string, number>) => {
+      const { footballGridRepo } = await import('../../src/modules/football-grid/index.js');
+      vi.mocked(footballGridRepo.getPlayerExperience).mockImplementation(async (userId: string) => (
+        { finished: finished[userId] ?? 0, wins: 0, losses: 0 }
+      ));
+    };
+    const setRules = async (enabled: boolean) => {
+      const { config } = await import('../../src/core/config.js');
+      (config as { FOOTBALL_GRID_RULES_ENABLED?: boolean }).FOOTBALL_GRID_RULES_ENABLED = enabled;
+    };
+    const pair = async () => {
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale: 'en', theme: 'european' });
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en', theme: 'european' });
+      expect(state.createMatch).toHaveBeenCalledOnce();
+      return (state.createMatch.mock.calls[0] as unknown as [{ settings?: { answerMode: string } }])[0].settings;
+    };
+
+    afterEach(async () => {
+      await setRules(false);
+      await experienceOf({});
+    });
+
+    it('lets two newcomers pick from four', async () => {
+      await setRules(true);
+      await experienceOf({ 'user-a': 0, 'user-b': 2 });
+      expect(await pair()).toMatchObject({ answerMode: 'choice' });
+    });
+
+    it('keeps the standard rules when one of them is experienced', async () => {
+      await setRules(true);
+      await experienceOf({ 'user-a': 0, 'user-b': 3 });
+      expect(await pair()).toBeUndefined();
+    });
+
+    it('keeps the standard rules while the rules flag is off', async () => {
+      await experienceOf({ 'user-a': 0, 'user-b': 0 });
+      expect(await pair()).toBeUndefined();
+    });
   });
 
   it('keeps a search queued when another replica is draining matchmaking', async () => {

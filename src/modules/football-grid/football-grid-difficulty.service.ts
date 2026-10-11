@@ -2,10 +2,12 @@ import { config } from '../../core/config.js';
 import { BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../../realtime/locks.js';
+import { getRedisClient } from '../../realtime/redis.js';
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import {
   fitGridDifficultyModel,
+  gridDifficultyCellKey,
   scoreGridBoard,
   type GridDifficultyBoardInput,
   type GridDifficultyBoardScore,
@@ -174,7 +176,7 @@ export const footballGridDifficultyService = {
     const model = fitGridDifficultyModel(counts);
     const countsByCell = new Map<string, { answers: number; correct: number }>();
     for (const count of counts) {
-      const key = `${count.checksum}:${count.cellIndex}`;
+      const key = gridDifficultyCellKey(count.checksum, count.rowKey, count.colKey);
       const totals = countsByCell.get(key) ?? { answers: 0, correct: 0 };
       totals.answers += count.answers;
       totals.correct += count.correct;
@@ -183,7 +185,7 @@ export const footballGridDifficultyService = {
     const boards = new Map<string, GridDifficultyBoardInput>();
     for (const row of await loadLiveBoardCells()) {
       const board = boards.get(row.board_id) ?? { boardId: row.board_id, label: row.label, cells: [] };
-      const totals = countsByCell.get(`${row.checksum}:${row.cell_index}`);
+      const totals = countsByCell.get(gridDifficultyCellKey(row.checksum, row.row_key, row.col_key));
       board.cells.push({
         cellIndex: row.cell_index,
         rowKey: row.row_key,
@@ -315,6 +317,8 @@ export const footballGridDifficultyService = {
    */
   async runNightly(): Promise<'done' | 'skipped'> {
     if (!config.FOOTBALL_GRID_CONTENT_ENABLED) return 'skipped';
+    // Without Redis the lock is only this process's own, and every replica would run the whole scoring at once.
+    if (!getRedisClient()?.isOpen) return 'skipped';
     const lock = await acquireLock(NIGHTLY_LOCK_KEY, NIGHTLY_LOCK_TTL_MS);
     if (!lock.acquired || !lock.token) return 'skipped';
     const heartbeat = startLockHeartbeat(NIGHTLY_LOCK_KEY, lock.token, NIGHTLY_LOCK_TTL_MS);

@@ -402,6 +402,14 @@ async function searchesStillExclusivelyQueued(searches: QueuedGridSearch[]): Pro
 }
 
 async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: QueuedGridSearch): Promise<HumanPairStart | null> {
+  // Two newcomers who meet each other get the same help a newcomer gets against a bot; one newcomer alone does
+  // not change the rules for an experienced opponent.
+  const settings = config.FOOTBALL_GRID_RULES_ENABLED && (await Promise.all([
+    footballGridRepo.getPlayerExperience(a.userId),
+    footballGridRepo.getPlayerExperience(b.userId),
+  ])).every((experience) => experience.finished < FOOTBALL_GRID_STARTER_GAMES)
+    ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const }
+    : undefined;
   const paired = await userSessionGuardService.withUserSessionLocks(
     [a.userId, b.userId],
     async () => {
@@ -436,6 +444,7 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
                 { userId: b.userId, seat: 2 },
               ],
               openerUserId,
+              settings,
             })
           ))).state;
         } catch (error) {

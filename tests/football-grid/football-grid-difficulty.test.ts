@@ -3,6 +3,7 @@ import {
   fitGridDifficultyModel,
   gridDifficultyBand,
   gridDifficultyCellKey,
+  gridLabelStillFits,
   predictGridCellRate,
   scoreGridBoard,
   type GridDifficultyBoardInput,
@@ -155,5 +156,18 @@ describe('gridDifficultyCellKey', () => {
     expect(gridDifficultyCellKey('sum', 'country:aa', 'club:one')).toBe(key);
     expect(gridDifficultyCellKey('sum', 'club:one', 'country:bb')).not.toBe(key);
     expect(gridDifficultyCellKey('other', 'club:one', 'country:aa')).not.toBe(key);
+  });
+});
+
+describe('gridLabelStillFits', () => {
+  it('keeps a normal board whose weakest square is only just over the easy line', () => {
+    expect(gridLabelStillFits('normal', 0.8, 0.351)).toBe(true);
+    expect(gridLabelStillFits('normal', 0.8, 0.369)).toBe(true);
+    expect(gridLabelStillFits('normal', 0.8, 0.38)).toBe(false);
+  });
+
+  it('keeps an easy board whose weakest square is only just under it', () => {
+    expect(gridLabelStillFits('easy', 0.8, 0.34)).toBe(true);
+    expect(gridLabelStillFits('easy', 0.8, 0.32)).toBe(false);
   });
 });

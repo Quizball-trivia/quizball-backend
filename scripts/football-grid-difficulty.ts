@@ -49,8 +49,8 @@ function parseArgs(argv: string[]): Args {
 }
 
 function readCounts(file: string): GridDifficultyCellCount[] {
-  const [header, ...lines] = readFileSync(resolve(file), 'utf8').trim().split('\n');
-  const columns = header.split(',');
+  const [header, ...lines] = readFileSync(resolve(file), 'utf8').split(/\r?\n/).filter((line) => line.trim() !== '');
+  const columns = (header ?? '').split(',').map((column) => column.trim());
   const at = (name: string): number => {
     const index = columns.indexOf(name);
     if (index < 0) throw new Error(`${file}: missing column ${name}`);
@@ -60,17 +60,23 @@ function readCounts(file: string): GridDifficultyCellCount[] {
     checksum: at('canonical_checksum'), cell: at('cell_index'), rowKey: at('row_key'), rowFamily: at('row_family'),
     colKey: at('col_key'), colFamily: at('col_family'), answers: at('n'), correct: at('c'),
   };
-  return lines.map((line) => {
-    const cells = line.split(',');
+  return lines.map((line, row) => {
+    const cells = line.split(',').map((cell) => cell.trim());
+    // A blank or broken number would become NaN and spoil every rate computed from the file.
+    const count = (position: number, name: string): number => {
+      const value = Number(cells[position]);
+      if (cells[position] === '' || !Number.isInteger(value) || value < 0) throw new Error(`Counts file row ${row + 2}: ${name} is not a whole number`);
+      return value;
+    };
     return {
       checksum: cells[index.checksum],
-      cellIndex: Number(cells[index.cell]),
+      cellIndex: count(index.cell, 'cell_index'),
       rowKey: cells[index.rowKey],
       rowFamily: cells[index.rowFamily],
       colKey: cells[index.colKey],
       colFamily: cells[index.colFamily],
-      answers: Number(cells[index.answers]),
-      correct: Number(cells[index.correct]),
+      answers: count(index.answers, 'n'),
+      correct: count(index.correct, 'c'),
     };
   });
 }

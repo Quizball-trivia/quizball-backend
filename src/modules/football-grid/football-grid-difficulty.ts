@@ -176,14 +176,15 @@ export function gridDifficultyBand(score: number, weakestCellRate: number): Foot
   return score >= GRID_DIFFICULTY_NORMAL_MIN ? 'normal' : 'hard';
 }
 
-function labelStillFits(label: FootballGridDifficulty, score: number, weakestCellRate: number): boolean {
+/** A label is kept while the board is within the margin of its band, on every edge, so a few answers do not flip it. */
+export function gridLabelStillFits(label: FootballGridDifficulty, score: number, weakestCellRate: number): boolean {
   const margin = GRID_DIFFICULTY_KEEP_MARGIN;
   if (label === 'easy') {
     return score >= GRID_DIFFICULTY_EASY_MIN - margin && weakestCellRate >= GRID_DIFFICULTY_EASY_WEAKEST_MIN - margin;
   }
   if (label === 'normal') {
     return score >= GRID_DIFFICULTY_NORMAL_MIN - margin
-      && (score < GRID_DIFFICULTY_EASY_MIN + margin || weakestCellRate < GRID_DIFFICULTY_EASY_WEAKEST_MIN);
+      && (score < GRID_DIFFICULTY_EASY_MIN + margin || weakestCellRate < GRID_DIFFICULTY_EASY_WEAKEST_MIN + margin);
   }
   return score < GRID_DIFFICULTY_NORMAL_MIN + margin;
 }
@@ -212,7 +213,7 @@ export function scoreGridBoard(model: GridDifficultyModel, board: GridDifficulty
     cell: 0, answers: 0, correct: 0, predicted: predictedRate, rate: predictedRate,
   });
   const suggested = gridDifficultyBand(score, weakest.rate);
-  const fits = labelStillFits(board.label, score, weakest.rate);
+  const fits = gridLabelStillFits(board.label, score, weakest.rate);
   return {
     boardId: board.boardId,
     label: board.label,

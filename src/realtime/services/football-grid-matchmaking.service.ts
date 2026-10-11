@@ -622,7 +622,12 @@ async function startBotPair(
   if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return null;
   // Guests get a synthetic unplaced profile here (no ranked row is created).
   const humanProfile = await rankedService.ensureProfile(search.userId);
-  const experience = await footballGridRepo.getPlayerExperience(search.userId);
+  // A failed read must not cost the player their fallback match: they are then paired as someone with games
+  // behind them (no newcomer help; their ranked level, or the ladder's start without one).
+  const experience = await footballGridRepo.getPlayerExperience(search.userId).catch((error: unknown) => {
+    logger.warn({ error, userId: search.userId }, 'Football Grid experience read failed; pairing a bot without it');
+    return { finished: Number.POSITIVE_INFINITY, wins: 0, losses: 0 };
+  });
   const targetRp = footballGridBotTargetRp({
     rankedTargetRp: selectionTargetRpForHuman(humanProfile),
     placed: !needsPlacement(humanProfile),

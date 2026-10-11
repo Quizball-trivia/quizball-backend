@@ -365,7 +365,10 @@ export const footballGridDifficultyService = {
       `UPDATE football_grid_board_difficulty d
           SET applied = d.suggested, applied_by = $1, applied_at = now()
          FROM football_grid_boards b
+         JOIN football_grid_content_releases r ON r.id = b.release_id
         WHERE b.id = d.board_id
+          -- The same boards the admin list shows: a board taken out of play keeps its row but is not relabelled.
+          AND ${LIVE_BOARD_SQL}
           AND d.verdict IN ('move', 'retire')
           AND d.suggested IS DISTINCT FROM COALESCE(d.applied, b.difficulty)
           AND ($2::uuid[] IS NULL OR d.board_id = ANY($2::uuid[]))

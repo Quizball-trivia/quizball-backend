@@ -588,6 +588,11 @@ afterEach(async () => {
          AND bot_tier = ANY(${[...runtimeGovernorTiers]}::text[])
     `;
   }
+  // Published content is append-only. Retire the report-only fixture instead
+  // of leaving its single corrected cell selectable by later match fixtures.
+  await db`UPDATE football_grid_content_releases SET status = 'retired'
+            WHERE id = ${CORRECTION_RELEASE_ID} AND status = 'published'
+              AND EXISTS (SELECT 1 FROM football_grid_boards WHERE id = ${CORRECTION_BOARD_ID})`;
   runtimeMatchIds.length = 0;
   runtimeSeriesIds.length = 0;
   runtimeLobbyIds.length = 0;
@@ -707,6 +712,41 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       : uncapped;
     expect(Number(audits[0].effective_accuracy)).toBeCloseTo(expectedEffective, 6);
     expect(Number(audits[0].pinned_strength_adjustment)).toBe(-0.075);
+  });
+
+  it('recovers only eligible unobserved bot matches in stable order without losing older retries', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    await seedBotGovernorTier({ tier: 'Captain' });
+    const first = await createV2BotMatch('Captain');
+    const second = await createV2BotMatch('Captain');
+    const guest = await createV2BotMatch('Captain');
+    const observed = await createV2BotMatch('Captain');
+    for (const match of [first, second, guest, observed]) {
+      await forceCompetitiveBotWin(match);
+      await db`UPDATE football_grid_settlement_outbox
+                  SET status = 'completed', completed_at = '2002-01-01T00:00:00Z'
+                WHERE match_id = ${match.matchId}`;
+    }
+    await db`UPDATE users SET is_guest = true WHERE id = ${guest.humanUserId}`;
+    await db`UPDATE football_grid_settlement_outbox
+                SET completed_at = '2001-01-01T00:00:00Z'
+              WHERE match_id IN (${guest.matchId}, ${observed.matchId})`;
+    await footballGridBotGovernorService.observeCompletedMatch(observed.matchId);
+
+    const expected = [first.matchId, second.matchId].sort();
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(1)).toEqual(expected.slice(0, 1));
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(20)).toEqual(expected);
+    await footballGridBotGovernorService.observeCompletedMatch(expected[0]);
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(20)).toEqual(expected.slice(1));
+    await footballGridBotGovernorService.observeCompletedMatch(expected[1]);
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(20)).toEqual([]);
+
+    // Eligibility may change after a previous recovery pass. Do not use a
+    // timestamp cursor that permanently skips older completed settlements.
+    await db`UPDATE users SET is_guest = false WHERE id = ${guest.humanUserId}`;
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(20)).toEqual([guest.matchId]);
+    await footballGridBotGovernorService.observeCompletedMatch(guest.matchId);
+    expect(await footballGridBotGovernorService.listUnobservedCompletedMatchIds(20)).toEqual([]);
   });
 
   it('folds concurrent same-tier settlements once each and ignores replays', async (context) => {

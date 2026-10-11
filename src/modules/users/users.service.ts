@@ -594,6 +594,18 @@ export const usersService = {
   },
 
   /**
+   * Admin: guest-inclusive user total for the CMS dashboard. Read-only.
+   */
+  async getUserTotalForAdmin(): Promise<{
+    registered: number;
+    guestsPlayed: number;
+    converters: number;
+    total: number;
+  }> {
+    return usersRepo.getUserTotal();
+  },
+
+  /**
    * Admin: set or grant a user's XP and/or RP. Final values are clamped to >= 0.
    * XP is a safe single-column write (level recomputes on read); RP also updates
    * the stored tier via tierFromRp. Every adjustment is recorded in

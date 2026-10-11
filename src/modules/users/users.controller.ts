@@ -180,6 +180,15 @@ export const usersController = {
   },
 
   /**
+   * GET /api/v1/admin/stats/user-total
+   * Admin: guest-inclusive user total for the CMS dashboard. Read-only.
+   */
+  async userTotal(_req: Request, res: Response): Promise<void> {
+    const result = await usersService.getUserTotalForAdmin();
+    res.json(result);
+  },
+
+  /**
    * PATCH /api/v1/admin/users/:userId/progression
    * Admin: set or grant a user's XP and/or RP.
    */

@@ -12,13 +12,17 @@
  * - Run this only once every backend replica runs a release that leaves daily boards out of online play (the one
  *   that added grid_daily_days). A replica on older code would still deal them.
  * - A match may have picked a board in the moment before its day was stored. So a day is first written as
- *   reserved (`board.reserved`): online play already leaves the board alone, the daily game does not serve it
- *   yet. The script then waits for every database transaction that began before that write to end, drops any
- *   reserved day whose board a live match is using (it was never shown, so the board goes back to online play)
- *   and only then publishes the rest. A run that dies in between leaves reserved days; the next run finishes them.
+ *   reserved (`board.reserved`, this run's own token): online play already leaves the board alone, the daily
+ *   game does not serve it yet. The script then waits for every database transaction that began before that
+ *   write to end, drops any reserved day whose board a live match is using (it was never shown, so the board
+ *   goes back to online play) and only then publishes the rest. A run that dies in between leaves reserved days;
+ *   the next run takes them over and finishes them. Two runs at once cannot publish each other's days: every
+ *   change names the token the day was checked under.
+ * The wait needs to see every session of the database (a superuser or a member of pg_read_all_stats); with a
+ * lesser role the script stops before publishing anything.
  */
 import 'dotenv/config';
-import { createHash } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 import { addDays, CONTENT_START, dayNumber, LAST_DAY } from '../src/modules/grid-daily/grid-daily.days.js';
@@ -46,10 +50,11 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-/** A positive 32-bit hash of the day's content, like every daily game's content version. */
-function contentVersion(boardId: string): number {
-  return createHash('sha256').update(`grid-daily:${boardId}`).digest().readUInt32BE(0) || 1;
-}
+/**
+ * A day's content version: positive, 32 bits, and new whenever the day gets a board. Random rather than derived
+ * from the board, because the version is public and must not let anyone work out which board a day holds.
+ */
+const contentVersion = (): number => randomInt(1, 2 ** 32);
 
 /** How long to wait for transactions that began before the reservation; they are match starts, seconds long. */
 const BARRIER_TIMEOUT_MS = 180_000;
@@ -69,11 +74,12 @@ async function main(): Promise<void> {
       if (day > LAST_DAY) break;
       wanted.push(day);
     }
-    const reserveMissing = () => sql.begin(async (tx) => {
+    const token = randomUUID();
+    const reserveMissing = (alsoDays: string[] = []) => sql.begin(async (tx) => {
       const taken = await tx<Array<{ day: string; board_id: string; checksum: string | null }>>`
         SELECT day::text AS day, board->>'boardId' AS board_id, board->>'checksum' AS checksum FROM grid_daily_days`;
       const seeded = new Set(taken.map((row) => row.day));
-      const missing = wanted.filter((day) => !seeded.has(day));
+      const missing = [...new Set([...wanted, ...alsoDays])].filter((day) => !seeded.has(day));
       const candidates = await tx<Array<{ id: string; checksum: string }>>`
         SELECT pool.id, pool.checksum
           FROM (
@@ -112,20 +118,23 @@ async function main(): Promise<void> {
         for (const [index, day] of missing.entries()) {
           await tx`
             INSERT INTO grid_daily_days (day, number, content_version, board)
-            VALUES (${day}, ${dayNumber(day)}, ${contentVersion(candidates[index].id)}, ${tx.json({ boardId: candidates[index].id, checksum: candidates[index].checksum, reserved: true })})
+            VALUES (${day}, ${dayNumber(day)}, ${contentVersion()}, ${tx.json({ boardId: candidates[index].id, checksum: candidates[index].checksum, reserved: token })})
             ON CONFLICT (day) DO NOTHING`;
         }
       }
       return { fresh: missing.length, kept: wanted.length - missing.length };
     });
 
-    /** Every transaction of this database user that began before `since` has ended (match starts among them). */
+    /** Every transaction in this database that began before `since` has ended (match starts among them). */
     const waitForEarlierTransactions = async (since: string): Promise<void> => {
+      const [sight] = await sql<Array<{ full: boolean }>>`
+        SELECT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER') AS full`;
+      if (!sight?.full) throw new Error('This database role cannot see other sessions, so it cannot tell when earlier match starts have ended; nothing was published (the days stay reserved)');
       const deadline = Date.now() + BARRIER_TIMEOUT_MS;
       for (;;) {
         const [row] = await sql<Array<{ open: number }>>`
           SELECT count(*)::int AS open FROM pg_stat_activity
-           WHERE datname = current_database() AND usename = current_user AND pid <> pg_backend_pid()
+           WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()
              AND xact_start IS NOT NULL AND xact_start < ${since}::timestamptz`;
         if ((row?.open ?? 0) === 0) return;
         if (Date.now() >= deadline) throw new Error('Older database transactions are still open, so the reserved days were not published; run the script again');
@@ -133,11 +142,15 @@ async function main(): Promise<void> {
       }
     };
 
-    /** Publishes the reserved days no live match stands on; drops the others. Returns how many were dropped. */
-    const settleReserved = async (): Promise<{ published: number; dropped: number }> => {
+    /** Publishes the reserved days no live match stands on; drops the others and says which days they were. */
+    const settleReserved = async (): Promise<{ published: number; dropped: string[] }> => {
+      // Days another run left reserved become this run's: from here only this token can change them, and the
+      // wait below starts after the takeover, so whatever is published was checked under it.
       const reserved = await sql<Array<{ day: string; checksum: string | null }>>`
-        SELECT day::text AS day, board->>'checksum' AS checksum FROM grid_daily_days WHERE board->>'reserved' = 'true'`;
-      if (reserved.length === 0) return { published: 0, dropped: 0 };
+        UPDATE grid_daily_days SET board = jsonb_set(board, '{reserved}', to_jsonb(${token}::text))
+         WHERE jsonb_exists(board, 'reserved')
+        RETURNING day::text AS day, board->>'checksum' AS checksum`;
+      if (reserved.length === 0) return { published: 0, dropped: [] };
       const [{ since }] = await sql<Array<{ since: string }>>`SELECT clock_timestamp()::text AS since`;
       await waitForEarlierTransactions(since);
       const live = await sql<Array<{ checksum: string }>>`
@@ -148,13 +161,14 @@ async function main(): Promise<void> {
            AND mb.canonical_checksum = ANY(${sql.array(reserved.flatMap((row) => (row.checksum ? [row.checksum] : [])))}::text[])`;
       const clashing = reserved.filter((row) => live.some((match) => match.checksum === row.checksum)).map((row) => row.day);
       const clean = reserved.filter((row) => !clashing.includes(row.day)).map((row) => row.day);
-      // Only ever a reserved row: a published day is never taken back.
-      const dropped = await sql`
-        DELETE FROM grid_daily_days WHERE day = ANY(${sql.array(clashing)}::date[]) AND board->>'reserved' = 'true' RETURNING day`;
+      // Only ever a row still reserved under this run's token: a published day is never taken back, and a day
+      // another run has taken over is left to it.
+      const dropped = await sql<Array<{ day: string }>>`
+        DELETE FROM grid_daily_days WHERE day = ANY(${sql.array(clashing)}::date[]) AND board->>'reserved' = ${token} RETURNING day::text AS day`;
       const published = await sql`
         UPDATE grid_daily_days SET board = board - 'reserved'
-         WHERE day = ANY(${sql.array(clean)}::date[]) AND board->>'reserved' = 'true' RETURNING day`;
-      return { published: published.length, dropped: dropped.length };
+         WHERE day = ANY(${sql.array(clean)}::date[]) AND board->>'reserved' = ${token} RETURNING day`;
+      return { published: published.length, dropped: dropped.map((row) => row.day) };
     };
 
     const first = await reserveMissing();
@@ -163,10 +177,11 @@ async function main(): Promise<void> {
     for (let pass = 1; args.write; pass += 1) {
       const settled = await settleReserved();
       published += settled.published;
-      if (settled.dropped === 0) break;
-      if (pass >= MAX_PASSES) throw new Error(`${settled.dropped} days are still without a board because live matches kept using the ones picked; run the script again`);
-      replaced += settled.dropped;
-      await reserveMissing();
+      if (settled.dropped.length === 0) break;
+      if (pass >= MAX_PASSES) throw new Error(`${settled.dropped.length} days are still without a board because live matches kept using the ones picked; run the script again`);
+      replaced += settled.dropped.length;
+      // A dropped day may lie outside this run's range (taken over from an earlier run): it still gets a board.
+      await reserveMissing(settled.dropped);
     }
     console.log(`Daily grid days ${wanted[0]} to ${wanted[wanted.length - 1]} -> ${target.label}`);
     console.log(`${args.write ? `Written: ${published} published` : `Dry run (add --write): ${first.fresh} to add`}, ${first.kept} already there and left as they are.`);

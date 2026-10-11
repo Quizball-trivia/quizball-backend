@@ -58,12 +58,13 @@ describe('daily grid rules', () => {
     expect(speed(slow)).toBe(0);
   });
 
-  it('needs a kick-off before anything else, and a second one changes nothing', () => {
+  it('needs a kick-off before anything else, and refuses a second one', () => {
     expect(() => fill(newState(), 0, footballer('a'), 1_000)).toThrow('not_started');
     expect(() => miss(newState(), 0, 1_000)).toThrow('not_started');
     expect(() => finish(newState(), 1_000)).toThrow('not_started');
     const once = kickOff(newState(), 1_000);
-    expect(kickOff(once, 9_000).t0).toBe(1_000);
+    expect(once.t0).toBe(1_000);
+    expect(() => kickOff(once, 9_000)).toThrow('already_started');
     expect(() => kickOff(finish(once, 2_000), 3_000)).toThrow('run_done');
   });
 
@@ -85,7 +86,7 @@ describe('isReservedDay', () => {
     const { isReservedDay, indexDay } = await import('../../src/modules/grid-daily/grid-daily.content.js');
     const board = { boardId: '11111111-1111-4111-8111-111111111111', checksum: 'c'.repeat(64) };
     const row = { day: '2026-10-12', number: 6, contentVersion: 7 };
-    expect(isReservedDay({ board: { ...board, reserved: true } })).toBe(true);
+    expect(isReservedDay({ board: { ...board, reserved: 'run-token' } })).toBe(true);
     expect(isReservedDay({ board })).toBe(false);
     expect(indexDay({ ...row, board })).toMatchObject({ day: '2026-10-12', boardId: board.boardId });
   });

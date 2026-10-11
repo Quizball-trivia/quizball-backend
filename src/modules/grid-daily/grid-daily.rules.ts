@@ -22,11 +22,13 @@ export function speed(s: RunState): number {
 
 /**
  * The player kicks off: from here the board is shown and the clock runs, so nobody studies the squares before
- * their time starts. A second kick-off changes nothing.
+ * their time starts. A second kick-off is refused: it must not write, or it would outdate a guess on its way
+ * from another tab.
  */
 export function kickOff(s: RunState, now: number): RunState {
   if (s.done) throw rejected('run_done');
-  return s.t0 === null ? pack({ ...s, t0: now }) : s;
+  if (s.t0 !== null) throw rejected('already_started');
+  return pack({ ...s, t0: now });
 }
 
 function assertOpen(s: RunState, cellIndex: number): void {

@@ -58,9 +58,15 @@ export function createGridDailyService(deps: GridDailyDeps) {
 
   async function withBoard<T extends DailyRunResponse<PublicRunState>>(response: T): Promise<T & { board: FootballGridBoardView | null; serverNow: number }> {
     // The squares stay hidden until the player kicks off: the clock and the first look at the board start together.
+    // That covers the board's id too, which someone may know from an online game.
     const shown = response.state.startedAt !== null || response.state.done;
-    // The same clock the run's start and finish are stamped with, so the web's timer cannot disagree with them.
-    return { ...response, board: shown && response.state.boardId ? await deps.board(response.state.boardId) : null, serverNow: response.state.serverNow };
+    return {
+      ...response,
+      state: shown ? response.state : { ...response.state, boardId: null },
+      board: shown && response.state.boardId ? await deps.board(response.state.boardId) : null,
+      // The same clock the run's start and finish are stamped with, so the web's timer cannot disagree with them.
+      serverNow: response.state.serverNow,
+    };
   }
 
   return {

@@ -17,7 +17,7 @@ const boardSchema = z.object({ boardId: z.string().uuid(), checksum: z.string().
 
 /** Reserved by the seed script and not yet published: online play leaves the board alone, the daily game does not serve it. */
 export function isReservedDay(row: Pick<GridDailyDayRow, 'board'>): boolean {
-  return typeof row.board === 'object' && row.board !== null && (row.board as { reserved?: unknown }).reserved === true;
+  return typeof row.board === 'object' && row.board !== null && 'reserved' in row.board;
 }
 
 /** A stored day in serving form; null when the row is malformed. */

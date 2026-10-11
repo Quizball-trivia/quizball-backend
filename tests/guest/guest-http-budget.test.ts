@@ -49,4 +49,15 @@ describe('guest HTTP rollout gate and shared budgets', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 503 }));
     expect(state.counts.size).toBe(0);
   });
+  it.each(['disconnected', 'error'])('lets a read marked for it through when Redis is %s, and still limits it when Redis counts', async mode => {
+    state.open = mode !== 'disconnected'; state.fail = mode === 'error';
+    const next = vi.fn() as NextFunction;
+    await guestHttpBudget('play-popularity', 2, () => 'address', 'allow')(req, res(), next);
+    expect(next).toHaveBeenCalledWith();
+    state.open = true; state.fail = false;
+    const limited = guestHttpBudget('play-popularity', 2, () => 'address', 'allow');
+    for (let i = 0; i < 2; i += 1) await limited(req, res(), vi.fn());
+    const third = vi.fn(); await limited(req, res(), third);
+    expect(third).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 429 }));
+  });
 });

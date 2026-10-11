@@ -17,11 +17,21 @@ export function guestHttpBudget(
   name: 'mint' | 'standings' | 'play-popularity' | 'stat-sniper-board' | 'ip' | 'principal' | 'buscaminas-address' | 'buscaminas' | 'pistas-address' | 'pistas' | 'ultimo-address' | 'ultimo' | 'minuto-address' | 'minuto' | 'shared-player-address' | 'shared-player' | 'name-chain-address' | 'name-chain' | 'grid-daily-address' | 'grid-daily',
   limit: number,
   subject: (req: Request) => string,
+  /**
+   * What to do when the counter cannot be reached. 'refuse' (the default) for anything that writes or costs;
+   * 'allow' only for a read that is already served from a copy the replica holds, where refusing would hide
+   * that copy for no protection.
+   */
+  whenUncounted: 'refuse' | 'allow' = 'refuse',
 ): RequestHandler {
+  const uncounted = (next: (error?: unknown) => void): void => {
+    if (whenUncounted === 'allow') next();
+    else next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+  };
   return async (req, res, next) => {
     const redis = getRedisClient();
     if (!redis?.isOpen) {
-      next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+      uncounted(next);
       return;
     }
     const windowSeconds = 3600;
@@ -42,7 +52,7 @@ export function guestHttpBudget(
         next(new RateLimitError());
       } else next();
     } catch {
-      next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+      uncounted(next);
     }
   };
 }

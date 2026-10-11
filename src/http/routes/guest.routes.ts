@@ -24,7 +24,8 @@ export function ipBucket(req: Request): string {
 export { ipv6Prefix64 };
 const mintLimiter = guestHttpBudget('mint', 30, ipBucket);
 const standingsLimiter = guestHttpBudget('standings', 300, ipBucket);
-const playPopularityLimiter = guestHttpBudget('play-popularity', 300, ipBucket);
+// Served from the replica's own copy: an unreachable counter must not hide it.
+const playPopularityLimiter = guestHttpBudget('play-popularity', 300, ipBucket, 'allow');
 // Its own budget: the page board and the in-game board refresh together while a guest plays.
 const statSniperBoardLimiter = guestHttpBudget('stat-sniper-board', 600, ipBucket);
 const guestIpLimiter = guestHttpBudget('ip', 600, ipBucket);

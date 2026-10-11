@@ -977,6 +977,11 @@ export const footballGridRealtimeService = {
     }
   },
 
+  async handleOptionsRequest(socket: QuizballSocket, input: { matchId: string; cellIndex: number }): Promise<void> {
+    const result = await footballGridService.getOptions({ ...input, userId: socket.data.user.id });
+    socket.emit('grid:options', { matchId: input.matchId, cellIndex: input.cellIndex, ...result });
+  },
+
   async handleReport(socket: QuizballSocket, attemptId: string): Promise<void> {
     const reportId = await footballGridService.reportMissingAnswer(attemptId, socket.data.user.id);
     const analyticsFacts = await footballGridRepo.getMissingAnswerAnalyticsFacts(

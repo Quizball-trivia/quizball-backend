@@ -7,6 +7,7 @@ import {
   footballGridService,
   FOOTBALL_GRID_HANDOFF_MS,
 } from '../../modules/football-grid/index.js';
+import { footballGridRoomRules } from '../../modules/football-grid/football-grid.settings.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbyChallengeInvitationsRepo } from '../../modules/lobbies/lobby-challenge-invitations.repo.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -18,7 +19,7 @@ import { transitionFootballGridSocket } from '../football-grid-socket-transition
 export async function startFootballGridMatchFromLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  input: { lobbyId: string; isPublic: boolean; inviteCode: string | null },
+  input: { lobbyId: string; isPublic: boolean; inviteCode: string | null; roomOptions?: Record<string, unknown> | null },
 ): Promise<void> {
   if (!config.FOOTBALL_GRID_LOBBY_ENABLED || !config.FOOTBALL_GRID_CONTENT_ENABLED) {
     socket.emit('error', { code: 'GRID_UNAVAILABLE', message: 'Football Tic Tac Toe lobbies are temporarily unavailable' });
@@ -39,7 +40,11 @@ export async function startFootballGridMatchFromLobby(
   let seriesId: string | null = null;
   let createdState: Awaited<ReturnType<typeof footballGridService.createMatch>>['state'];
   try {
-    seriesId = await footballGridRepo.createSeries({ origin, lobbyId: input.lobbyId });
+    // Options stored while the rules were switched on are not played once they are switched off.
+    const rules = footballGridRoomRules(config.FOOTBALL_GRID_RULES_ENABLED ? input.roomOptions : null);
+    seriesId = await footballGridRepo.createSeries({
+      origin, lobbyId: input.lobbyId, format: rules.format, settings: rules.settings,
+    });
     await footballGridRepo.createPairing({
       pairingToken,
       searchAId: input.lobbyId,

@@ -2,10 +2,24 @@ export type FootballGridLocale = 'en' | 'ka' | 'es' | 'tr';
 export type FootballGridDifficulty = 'easy' | 'normal' | 'hard';
 export type FootballGridOrigin = 'random' | 'challenge' | 'private' | 'public' | 'code';
 
-export type FootballGridSeriesFormat = 'single' | 'bo3';
+export type FootballGridSeriesFormat = 'single' | 'bo3' | 'bo5' | 'bo7';
 
-/** Board difficulty mix for a pairing: 'gentle' = mostly easy (default), 'balanced' = leans normal. */
-export type FootballGridDifficultyProfile = 'gentle' | 'balanced';
+/**
+ * Board difficulty mix for a pairing: 'starter' = easy boards only (a player's first games), 'gentle' = mostly
+ * easy (default), 'balanced' = leans normal.
+ */
+export type FootballGridDifficultyProfile = 'starter' | 'gentle' | 'balanced';
+
+export type FootballGridAnswerMode = 'type' | 'choice';
+
+/** The rules one series plays by. Ranked and random games use the defaults; a friend room's host may change them. */
+export interface FootballGridSettings {
+  turnMs: number;
+  /** 'choice': the player to move may ask for four footballers to pick from instead of typing a name. */
+  answerMode: FootballGridAnswerMode;
+  /** Only boards of this difficulty; null = the usual mix for the players. */
+  boardDifficulty: FootballGridDifficulty | null;
+}
 
 /** Best-of-N progress, attached to state and completion payloads. */
 export interface FootballGridSeriesInfo {
@@ -13,7 +27,7 @@ export interface FootballGridSeriesInfo {
   format: FootballGridSeriesFormat;
   /** 1-based index of the game this state belongs to. */
   gameIndex: number;
-  /** Games needed to take the series (2 for bo3). */
+  /** Games needed to take the series (2 for bo3, 3 for bo5, 4 for bo7). */
   targetWins: number;
   wins: Record<string, number>;
   draws: number;
@@ -147,6 +161,7 @@ export interface FootballGridState {
   reconnectDeadlineAt: string | null;
   completionReason: FootballGridCompletionReason | null;
   drawOffer: FootballGridDrawOffer | null;
+  settings: FootballGridSettings;
 }
 
 export interface FootballGridAliasRecord {

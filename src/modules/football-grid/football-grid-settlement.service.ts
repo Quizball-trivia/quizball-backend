@@ -543,7 +543,7 @@ async function readSeriesOutcome(
     [matchId],
   );
   const series = rows[0];
-  if (!series || series.format !== 'bo3') return null;
+  if (!series || series.format === 'single') return null;
   // closed_at marks a finished series even while a rematch window keeps the
   // row in 'rematch_pending'.
   if (!series.closed_at && series.current_match_id === matchId) {

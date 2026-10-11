@@ -249,6 +249,13 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Rolling-deploy gate: a replica of the previous release plays every series as best of 3 with 40-second typed
+  // turns. Turn this on only once every replica runs a release that knows a series' own rules (rounds, turn time,
+  // pick-from-four); until then rooms keep the standard game and newcomers type.
+  FOOTBALL_GRID_RULES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   // Rolling-deploy gate: ship code/migration with v1, then flip to 2 only once
   // every replica understands the immutable v2 policy and private audit schema.
   FOOTBALL_GRID_BOT_MODEL_VERSION: z.coerce.number().int().min(1).max(2).default(1),

@@ -17,6 +17,8 @@ import {
   footballGridAdminReportsQuerySchema,
   footballGridAdminPlayerSearchSchema,
   footballGridAdminProposalCheckQuerySchema,
+  footballGridAdminDifficultyQuerySchema,
+  footballGridAdminDifficultyApplySchema,
 } from '../../modules/football-grid/index.js';
 
 const router = Router();
@@ -33,6 +35,9 @@ router.put('/missing-answer-reports/:reportId/proposal', validate({ params: foot
 router.patch('/missing-answer-reports/:reportId', validate({ params: footballGridAdminReportParamsSchema, body: footballGridAdminReportDecisionSchema }), footballGridAdminController.decideReport);
 router.get('/content/quarantines', validate({ query: footballGridAdminQuarantinesQuerySchema }), footballGridAdminController.listQuarantines);
 router.post('/content/quarantines', validate({ body: footballGridAdminQuarantineSchema }), footballGridAdminController.quarantineContent);
+router.get('/difficulty', validate({ query: footballGridAdminDifficultyQuerySchema }), footballGridAdminController.listDifficulty);
+router.post('/difficulty/recompute', footballGridAdminController.recomputeDifficulty);
+router.post('/difficulty/apply', validate({ body: footballGridAdminDifficultyApplySchema }), footballGridAdminController.applyDifficulty);
 router.post('/players/:playerId/names', validate({ params: footballGridAdminPlayerParamsSchema, body: footballGridAdminRenamePlayerSchema }), footballGridAdminController.renamePlayer);
 
 export const adminFootballGridRoutes = router;

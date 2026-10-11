@@ -105,7 +105,7 @@ export const footballGridTypeaheadController = {
       return;
     }
     res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Cache-Control', 'public, max-age=300');
     res.json(cached.payload);
   },
 };

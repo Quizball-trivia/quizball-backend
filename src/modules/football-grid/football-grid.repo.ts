@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import type {
+  FootballGridDifficulty,
   FootballGridDifficultyProfile,
+  FootballGridSettings,
   FootballGridSeriesAdvance,
   FootballGridSeriesFormat,
   FootballGridSeriesInfo,
@@ -20,6 +22,15 @@ import {
 } from './football-grid.engine.js';
 import { footballGridBotGovernorService } from './football-grid-bot-governor.service.js';
 import { parseFootballGridBotStrengthAdjustment } from './football-grid-bot-governor.js';
+import {
+  DEFAULT_FOOTBALL_GRID_SETTINGS,
+  FOOTBALL_GRID_STARTER_GAMES,
+  FOOTBALL_GRID_STARTER_MIN_SCORE,
+  footballGridSeriesMaxGames,
+  footballGridSeriesTargetWins,
+  parseFootballGridSettings,
+  storedFootballGridSettings,
+} from './football-grid.settings.js';
 
 type SqlExecutor = Pick<typeof sql, 'unsafe'> | Pick<TransactionSql, 'unsafe'>;
 
@@ -64,6 +75,7 @@ interface GridMatchRow {
   reconnect_deadline_at: string | null;
   completion_reason: FootballGridState['completionReason'];
   draw_offer: FootballGridState['drawOffer'];
+  settings: unknown;
   database_now?: string;
 }
 
@@ -124,6 +136,8 @@ export interface FootballGridCommandInboxRow {
   cell_index: number | null;
   locale: 'en' | 'ka' | 'es' | 'tr' | null;
   submitted_text: string | null;
+  /** Pick-from-four: the footballer picked; null for a typed answer (and on rows of an older release). */
+  option_player_id?: string | null;
   payload_hash: string;
   admitted_at: string;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
@@ -415,6 +429,7 @@ async function loadStateRecordWithExecutor(
     reconnectDeadlineAt: match.reconnect_deadline_at,
     completionReason: match.completion_reason,
     drawOffer: match.draw_offer ?? null,
+    settings: parseFootballGridSettings(match.settings),
   };
   return { state, databaseNowMs };
 }
@@ -861,6 +876,7 @@ export const footballGridRepo = {
     lobbyId: string | null;
     format?: FootballGridSeriesFormat;
     theme?: string | null;
+    settings?: FootballGridSettings;
   }): Promise<string> {
     return this.runInTransaction(async (tx) => {
       if (input.lobbyId) {
@@ -870,9 +886,12 @@ export const footballGridRepo = {
         if (!lobby || lobby.status === 'closed') throw new Error('GRID_LOBBY_START_STALE');
       }
       const rows = await tx.unsafe<Array<{ id: string }>>(
-        `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
-         VALUES ($1, $2, 1, $3, $4) RETURNING id`,
-        [input.origin, input.lobbyId, input.format ?? 'bo3', input.theme ?? null],
+        `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme, settings)
+         VALUES ($1, $2, 1, $3, $4, $5::jsonb) RETURNING id`,
+        [
+          input.origin, input.lobbyId, input.format ?? 'bo3', input.theme ?? null,
+          sql.json(storedFootballGridSettings(input.settings ?? DEFAULT_FOOTBALL_GRID_SETTINGS) as Json),
+        ],
       );
       return rows[0].id;
     });
@@ -910,7 +929,7 @@ export const footballGridRepo = {
       seriesId: row.id,
       format: row.format,
       gameIndex: row.rematch_index + 1,
-      targetWins: row.format === 'bo3' ? 2 : 1,
+      targetWins: footballGridSeriesTargetWins(row.format),
       wins,
       draws: row.draws,
       winnerUserId: row.winner_user_id,
@@ -1027,8 +1046,8 @@ export const footballGridRepo = {
       if (winnerSeat === 1) seat1Wins += 1;
       else if (winnerSeat === 2) seat2Wins += 1;
       else draws += 1;
-      const target = series.format === 'bo3' ? 2 : 1;
-      const maxGames = series.format === 'bo3' ? 3 : 1;
+      const target = footballGridSeriesTargetWins(series.format);
+      const maxGames = footballGridSeriesMaxGames(series.format);
       const decided = seat1Wins >= target || seat2Wins >= target || series.game_index >= maxGames;
       if (decided) {
         await tx.unsafe(
@@ -1683,14 +1702,41 @@ export const footballGridRepo = {
   },
 
   /**
-   * Which difficulty mix a pair of players should get. Everyone starts on
-   * mostly easy boards; a player who has won at least three of their last
-   * five finished games moves to a balanced mix.
+   * A player's record over their last ten matchmade games (against a person or a bot) that they saw through.
+   * Friend rooms and games the player walked away from do not count: neither may be used to talk the bot down.
+   */
+  async getPlayerExperience(userId: string): Promise<{ finished: number; wins: number; losses: number }> {
+    const rows = await sql<Array<{ finished: number; wins: number; losses: number }>>`
+      SELECT count(*)::int AS finished,
+             (count(*) FILTER (WHERE recent.winner_user_id = ${userId}))::int AS wins,
+             (count(*) FILTER (WHERE recent.winner_user_id IS NOT NULL AND recent.winner_user_id <> ${userId}))::int AS losses
+        FROM (
+          SELECT gm.winner_user_id, gm.status
+            -- match_players has the index that starts with the user; the grid's own participants table does not.
+            FROM match_players mp
+            JOIN football_grid_matches gm ON gm.match_id = mp.match_id
+           WHERE mp.user_id = ${userId} AND gm.origin = 'random'
+             AND gm.phase = 'terminal' AND gm.status IN ('completed', 'forfeited')
+             -- A game the player walked away from is left out altogether: it must not push wins out of the ten.
+             AND NOT (gm.status = 'forfeited' AND gm.winner_user_id IS DISTINCT FROM ${userId})
+           ORDER BY gm.ended_at DESC NULLS LAST
+           LIMIT 10
+        ) recent
+    `;
+    return rows[0] ?? { finished: 0, wins: 0, losses: 0 };
+  },
+
+  /**
+   * Which difficulty mix a pair of players should get. A player's first three
+   * finished games are on easy boards only; after that boards are mostly
+   * easy, and a player who has won at least three of their last five
+   * finished games moves to a balanced mix.
    */
   async difficultyProfileForUsers(tx: TransactionSql, humanUserIds: string[]): Promise<FootballGridDifficultyProfile> {
     if (humanUserIds.length === 0) return 'gentle';
-    const rows = await tx.unsafe<Array<{ user_id: string; recent_wins: number }>>(
+    const rows = await tx.unsafe<Array<{ user_id: string; recent_wins: number; finished: number }>>(
       `SELECT p.user_id,
+              count(*) AS finished,
               count(*) FILTER (WHERE m.winner_user_id = p.user_id) AS recent_wins
          FROM (
            SELECT gm.match_id, gm.ended_at, mp.user_id,
@@ -1705,6 +1751,8 @@ export const footballGridRepo = {
         GROUP BY p.user_id`,
       [humanUserIds],
     );
+    const finishedByUser = new Map(rows.map((row) => [row.user_id, Number(row.finished)]));
+    if (humanUserIds.some((userId) => (finishedByUser.get(userId) ?? 0) < FOOTBALL_GRID_STARTER_GAMES)) return 'starter';
     return rows.some((row) => Number(row.recent_wins) >= 3) ? 'balanced' : 'gentle';
   },
 
@@ -1713,11 +1761,14 @@ export const footballGridRepo = {
     humanUserIds: string[],
     theme = 'european',
     excludeBoardIds: string[] = [],
-    profile: FootballGridDifficultyProfile = 'gentle',
+    profile: FootballGridDifficultyProfile | FootballGridDifficulty = 'gentle',
   ): Promise<string | null> {
     // Weighted random by difficulty (Efraimidis–Spirakis keys): a 'gentle'
     // profile makes easy boards the usual draw, hard ones rare; 'balanced'
-    // leans normal. Recently exposed boards still sort last.
+    // leans normal. 'starter' and a named difficulty draw from that label
+    // only. Recently exposed boards still sort last. The label is the one a
+    // reviewer applied from real play when there is one, else the content's.
+    const only = profile === 'starter' ? 'easy' : profile === 'easy' || profile === 'normal' || profile === 'hard' ? profile : null;
     const weights = profile === 'balanced'
       ? { easy: 2, normal: 6, hard: 2 }
       : { easy: 10, normal: 3, hard: 0.5 };
@@ -1725,9 +1776,17 @@ export const footballGridRepo = {
       `SELECT b.id
          FROM football_grid_boards b
          JOIN football_grid_content_releases r ON r.id = b.release_id
+         LEFT JOIN football_grid_board_difficulty d ON d.board_id = b.id
         WHERE r.status = 'published'
           AND b.theme = $2
           AND NOT (b.id = ANY($3::uuid[]))
+          AND ($7::text IS NULL OR COALESCE(d.applied, b.difficulty) = $7)
+          -- A daily grid's board is public: everyone plays it and its answers are shown once the day closes.
+          -- Matched by content, so the same board republished in a later release (a new id) stays out too.
+          AND NOT EXISTS (
+            SELECT 1 FROM grid_daily_days g
+             WHERE g.board->>'boardId' = b.id::text OR g.board->>'checksum' = b.canonical_checksum
+          )
           AND NOT EXISTS (
             SELECT 1
               FROM football_grid_content_quarantines q
@@ -1753,9 +1812,14 @@ export const footballGridRepo = {
             SELECT max(e.played_at) FROM football_grid_board_exposures e
              WHERE e.board_id = b.id AND e.user_id = ANY($1::uuid[])
           ) ASC NULLS FIRST,
-          -ln(random()) / CASE b.difficulty WHEN 'easy' THEN $4::float8 WHEN 'hard' THEN $6::float8 ELSE $5::float8 END
+          -- A newcomer gets the clearly easy boards first, not the ones just over the line.
+          ($8::boolean AND COALESCE(d.score, 0) < $9::float8) ASC,
+          -ln(random()) / CASE COALESCE(d.applied, b.difficulty) WHEN 'easy' THEN $4::float8 WHEN 'hard' THEN $6::float8 ELSE $5::float8 END
         LIMIT 1`,
-      [humanUserIds, theme, excludeBoardIds, weights.easy, weights.normal, weights.hard],
+      [
+        humanUserIds, theme, excludeBoardIds, weights.easy, weights.normal, weights.hard, only,
+        profile === 'starter', FOOTBALL_GRID_STARTER_MIN_SCORE,
+      ],
     );
     return rows[0]?.id ?? null;
   },
@@ -1778,6 +1842,8 @@ export const footballGridRepo = {
     botConfigVersion?: number | null;
     botRngSeed?: number | null;
     wrongAnswerVisibility?: boolean;
+    /** Rules for a series this match starts; a game of an existing series plays by that series' rules. */
+    settings?: FootballGridSettings;
     afterCreateInTx?: (tx: TransactionSql, matchId: string) => Promise<void>;
   }): Promise<{ state: FootballGridState; created: boolean }> {
     return this.runInTransaction(async (tx) => {
@@ -1827,18 +1893,22 @@ export const footballGridRepo = {
       // own best-of-3 here; lobby starts and series continuations pass one in.
       let seriesId = input.seriesId ?? null;
       let seriesFormat = input.seriesFormat ?? 'bo3';
+      let settings = input.settings ?? DEFAULT_FOOTBALL_GRID_SETTINGS;
       let rematchIndex = input.rematchIndex ?? 0;
       if (seriesId) {
         const [previous] = await tx.unsafe<Array<{
           closed_at: string | null; status: string; current_match_id: string | null;
           next_pairing_token: string | null; format: FootballGridSeriesFormat; theme: string | null;
+          settings: unknown;
         }>>(
-          `SELECT closed_at, status, current_match_id, next_pairing_token, format, theme
+          `SELECT closed_at, status, current_match_id, next_pairing_token, format, theme, settings
              FROM football_grid_series WHERE id = $1 FOR UPDATE`,
           [seriesId],
         );
         if (!previous) throw new Error('SERIES_CLOSED');
         theme = input.theme ?? previous.theme ?? 'european';
+        // Every game of a series, and a rematch of it, plays by the rules the series was created with.
+        settings = parseFootballGridSettings(previous.settings);
         if (previous.closed_at) {
           // A rematch is a NEW series, not another board in the finished one.
           // Reusing the old ID reset game_index but not rematch_index, making
@@ -1867,9 +1937,9 @@ export const footballGridRepo = {
           if (!lobby || lobby.status === 'closed') throw new Error('GRID_LOBBY_START_STALE');
         }
         const created = await tx.unsafe<Array<{ id: string }>>(
-          `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme)
-           VALUES ($1, $2, 1, $4, $3) RETURNING id`,
-          [input.origin, input.lobbyId, theme, seriesFormat],
+          `INSERT INTO football_grid_series (origin, lobby_id, next_opener_seat, format, theme, settings)
+           VALUES ($1, $2, 1, $4, $3, $5::jsonb) RETURNING id`,
+          [input.origin, input.lobbyId, theme, seriesFormat, sql.json(storedFootballGridSettings(settings) as Json)],
         );
         seriesId = created[0].id;
       }
@@ -1877,19 +1947,26 @@ export const footballGridRepo = {
         `SELECT board_id FROM football_grid_matches WHERE series_id = $1`,
         [seriesId],
       )).map((row) => row.board_id);
-      const profile = await this.difficultyProfileForUsers(tx, humanUserIds);
-      let boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme, usedBoardIds, profile);
+      const profile = settings.boardDifficulty ?? await this.difficultyProfileForUsers(tx, humanUserIds);
+      // 'starter' and a room's chosen difficulty draw from one label only; a pack with no board of that label
+      // left still deals a board, from the usual mix.
+      const narrow = profile !== 'gentle' && profile !== 'balanced';
+      const pick = async (pack: string, exclude: string[]): Promise<string | null> => (
+        await this.selectBoardIdForUsers(tx, humanUserIds, pack, exclude, profile)
+          ?? (narrow ? await this.selectBoardIdForUsers(tx, humanUserIds, pack, exclude, 'gentle') : null)
+      );
+      let boardId = await pick(theme, usedBoardIds);
       if (!boardId && theme !== 'european') {
         // A pack whose boards are not yet published (or got quarantined) must
         // not strand two matched players: serve the European mix instead.
-        boardId = await this.selectBoardIdForUsers(tx, humanUserIds, 'european', usedBoardIds, profile);
+        boardId = await pick('european', usedBoardIds);
         // Persist the pack the match actually plays, not the one requested.
         theme = 'european';
       }
       // A series that exhausted its pack falls back to any board rather than
       // failing — which can repeat a board already played in this series.
       // Only reachable for tiny packs (a bo3 needs three boards).
-      if (!boardId && usedBoardIds.length > 0) boardId = await this.selectBoardIdForUsers(tx, humanUserIds, theme, [], profile);
+      if (!boardId && usedBoardIds.length > 0) boardId = await pick(theme, []);
       if (!boardId) throw new Error('No published Football Grid board is available');
       const boards = await tx.unsafe<GridBoardRow[]>(
         `SELECT id, version, release_id, row_criteria, column_criteria, canonical_checksum
@@ -1939,10 +2016,10 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment, theme
+           bot_strength_adjustment, theme, settings
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb
          )`,
         [
           matchId,
@@ -1967,6 +2044,7 @@ export const footballGridRepo = {
           input.botRngSeed ?? null,
           botStrengthAdjustment,
           theme,
+          sql.json(storedFootballGridSettings(settings) as Json),
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -2353,6 +2431,7 @@ export const footballGridRepo = {
     cellIndex?: number | null;
     locale?: 'en' | 'ka' | 'es' | 'tr' | null;
     submittedText?: string | null;
+    optionPlayerId?: string | null;
     payloadHash: string;
     processingFence?: string;
   }): Promise<FootballGridCommandInboxRow> {
@@ -2396,13 +2475,14 @@ export const footballGridRepo = {
          INSERT INTO football_grid_command_inbox (
            match_id, actor_user_id, command_id, expected_state_version,
            turn_number, command_type, cell_index, locale, submitted_text, payload_hash,
-           status, processing_fence, processing_lease_until, retry_count
+           status, processing_fence, processing_lease_until, retry_count, option_player_id
          )
          SELECT $1,$2,$3,$4,gm.turn_number,$5,$6,$7,$8,$9,
                 CASE WHEN $10::uuid IS NULL THEN 'pending' ELSE 'processing' END,
                 $10,
                 CASE WHEN $10::uuid IS NULL THEN null ELSE now() + interval '30 seconds' END,
-                CASE WHEN $10::uuid IS NULL THEN 0 ELSE 1 END
+                CASE WHEN $10::uuid IS NULL THEN 0 ELSE 1 END,
+                $11::uuid
            FROM locked_match gm
            JOIN decision d ON d.error_code IS NULL
           WHERE NOT EXISTS (SELECT 1 FROM existing)
@@ -2437,6 +2517,7 @@ export const footballGridRepo = {
         input.submittedText ?? null,
         input.payloadHash,
         input.processingFence ?? null,
+        input.optionPlayerId ?? null,
       ],
     );
     const result = rows[0];
@@ -2622,18 +2703,67 @@ export const footballGridRepo = {
     });
   },
 
+  /** A board as players see it, without a match. */
+  getBoardView(boardId: string): Promise<FootballGridBoardView> {
+    return loadBoard(sql, boardId);
+  },
+
+  /** A live board for play outside a match (same phone, daily): no players, so nothing to avoid repeating. */
+  selectSoloBoardId(input: {
+    theme: string;
+    profile: FootballGridDifficultyProfile | FootballGridDifficulty;
+    excludeBoardIds: string[];
+  }): Promise<string | null> {
+    return this.runInTransaction((tx) => this.selectBoardIdForUsers(tx, [], input.theme, input.excludeBoardIds, input.profile));
+  },
+
+  /**
+   * Every answer of a board with its release; null for a board that was never published. A retired release still
+   * answers: a daily grid or a same-phone game dealt before the retirement keeps the board it was given.
+   */
+  async getBoardAnswersByBoard(boardId: string): Promise<{
+    aliasReleaseId: string;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null }>;
+  } | null> {
+    const rows = await sql<Array<{
+      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null;
+    }>>`
+      SELECT b.release_id, a.cell_index, a.football_player_id,
+             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en, a.player_name_ka
+        FROM football_grid_boards b
+        JOIN football_grid_content_releases r ON r.id = b.release_id AND r.status IN ('published', 'retired')
+        JOIN football_grid_board_answers a ON a.board_id = b.id
+        JOIN football_players fp ON fp.id = a.football_player_id
+       WHERE b.id = ${boardId}
+    `;
+    if (!rows[0]) return null;
+    return {
+      aliasReleaseId: rows[0].release_id,
+      answers: rows.map((row) => ({
+        cellIndex: row.cell_index,
+        footballPlayerId: row.football_player_id,
+        playerNameEn: row.player_name_en,
+        playerNameKa: row.player_name_ka,
+      })),
+    };
+  },
+
   async getBoardAnswerContext(matchId: string): Promise<{
     aliasReleaseId: string;
+    boardId: string;
+    settings: FootballGridSettings;
     answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
+      board_id: string;
+      settings: unknown;
       cell_index: number;
       football_player_id: string;
       player_name_en: string;
       player_name_ka: string | null;
     }>>`
-      SELECT gm.alias_release_id, a.cell_index, a.football_player_id,
+      SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
              -- fp.name is what the reveal shows; board rows can carry NULL or
              -- abbreviated display names, so name forms come from the canonical name.
              COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
@@ -2646,6 +2776,8 @@ export const footballGridRepo = {
     if (!answerRows[0]) throw new Error('Football Grid board answers not found');
     return {
       aliasReleaseId: answerRows[0].alias_release_id,
+      boardId: answerRows[0].board_id,
+      settings: parseFootballGridSettings(answerRows[0].settings),
       answers: answerRows.map((row) => ({
         cellIndex: row.cell_index,
         footballPlayerId: row.football_player_id,

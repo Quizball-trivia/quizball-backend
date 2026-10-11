@@ -27,7 +27,12 @@ import {
   FOOTBALL_GRID_HANDOFF_MS,
   type FootballGridState,
 } from '../../modules/football-grid/index.js';
-import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { needsPlacement, rankedService, selectionTargetRpForHuman } from '../../modules/ranked/ranked.service.js';
+import {
+  DEFAULT_FOOTBALL_GRID_SETTINGS,
+  FOOTBALL_GRID_STARTER_GAMES,
+  footballGridBotTargetRp,
+} from '../../modules/football-grid/football-grid.settings.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotSelectionService } from '../../modules/synthetic-bots/synthetic-bot-selection.service.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
@@ -397,6 +402,20 @@ async function searchesStillExclusivelyQueued(searches: QueuedGridSearch[]): Pro
 }
 
 async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: QueuedGridSearch): Promise<HumanPairStart | null> {
+  // Two newcomers who meet each other get the same help a newcomer gets against a bot; one newcomer alone does
+  // not change the rules for an experienced opponent.
+  // A failed read only costs the pair that help: pairs are started side by side and one must not fail the others.
+  const bothNewcomers = config.FOOTBALL_GRID_RULES_ENABLED && await Promise.all([
+    footballGridRepo.getPlayerExperience(a.userId),
+    footballGridRepo.getPlayerExperience(b.userId),
+  ]).then(
+    (experiences) => experiences.every((experience) => experience.finished < FOOTBALL_GRID_STARTER_GAMES),
+    (error: unknown) => {
+      logger.warn({ error, userIds: [a.userId, b.userId] }, 'Football Grid newcomer check failed; pairing with the standard rules');
+      return false;
+    },
+  );
+  const settings = bothNewcomers ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const } : undefined;
   const paired = await userSessionGuardService.withUserSessionLocks(
     [a.userId, b.userId],
     async () => {
@@ -431,6 +450,7 @@ async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: Queued
                 { userId: b.userId, seat: 2 },
               ],
               openerUserId,
+              settings,
             })
           ))).state;
         } catch (error) {
@@ -602,6 +622,21 @@ async function startBotPair(
   if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return null;
   // Guests get a synthetic unplaced profile here (no ranked row is created).
   const humanProfile = await rankedService.ensureProfile(search.userId);
+  // A failed read must not cost the player their fallback match: they are then paired as someone with games
+  // behind them (no newcomer help; their ranked level, or the ladder's start without one).
+  const experience = await footballGridRepo.getPlayerExperience(search.userId).catch((error: unknown) => {
+    logger.warn({ error, userId: search.userId }, 'Football Grid experience read failed; pairing a bot without it');
+    return { finished: Number.POSITIVE_INFINITY, wins: 0, losses: 0 };
+  });
+  const targetRp = footballGridBotTargetRp({
+    rankedTargetRp: selectionTargetRpForHuman(humanProfile),
+    placed: !needsPlacement(humanProfile),
+    experience,
+  });
+  // A newcomer may pick each answer from four footballers until they have finished a few games.
+  const settings = config.FOOTBALL_GRID_RULES_ENABLED && experience.finished < FOOTBALL_GRID_STARTER_GAMES
+    ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const }
+    : undefined;
   const paired = await userSessionGuardService.withUserSessionLocks([search.userId], async () => {
     if (requireQueued) {
       if (!await searchesStillExclusivelyQueued([search])) return null;
@@ -617,6 +652,7 @@ async function startBotPair(
       humanUserId: search.userId,
       humanProfile,
       lobbyId: search.searchId,
+      targetRp,
     });
     if (!selected) return null;
     const pairingToken = randomUUID();
@@ -659,6 +695,7 @@ async function startBotPair(
             botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
             botConfigVersion: 1,
             botRngSeed: seed,
+            settings,
             afterCreateInTx: async (tx, matchId) => {
               const transferred = await reservationService.transferInTx(tx, {
                 botUserId: selected.bot.user_id,

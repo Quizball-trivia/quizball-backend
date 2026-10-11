@@ -35,6 +35,13 @@ export const footballGridSubmitAnswerSchema = footballGridVersionedCommandSchema
   cellIndex: z.number().int().min(0).max(8),
   text: z.string().trim().min(1).max(160),
   locale: z.enum(['en', 'ka', 'es', 'tr']),
+  /** Pick-from-four: the footballer picked. Ignored in a match that is typed only. */
+  optionPlayerId: z.string().uuid().optional(),
+});
+
+export const footballGridOptionsRequestSchema = z.object({
+  matchId,
+  cellIndex: z.number().int().min(0).max(8),
 });
 
 export const footballGridDrawRespondSchema = footballGridVersionedCommandSchema.extend({

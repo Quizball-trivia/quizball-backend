@@ -1,4 +1,6 @@
+import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
+import { footballGridRoomOptionsSchema } from '../../modules/football-grid/football-grid.settings.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { currentRoomEngine } from '../../modules/room/room.registry.js';
 import { isRoomGame } from '../../modules/room/room.types.js';
@@ -37,6 +39,26 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
     }
     if (lobby.status !== 'waiting') {
       socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
+      return;
+    }
+    if (lobby.game_mode === 'football_grid') {
+      if (!config.FOOTBALL_GRID_RULES_ENABLED) {
+        socket.emit('error', { code: 'INVALID_SETTINGS', message: 'This room has no game options' });
+        return;
+      }
+      const parsed = payload.options === null ? null : footballGridRoomOptionsSchema.safeParse(payload.options);
+      if (parsed && !parsed.success) {
+        socket.emit('error', { code: 'INVALID_SETTINGS', message: 'These options are not offered for this game' });
+        return;
+      }
+      const next = parsed ? (parsed.data as Record<string, unknown>) : null;
+      if (JSON.stringify(next) === JSON.stringify(lobby.room_options ?? null)) return;
+      if (!(await lobbiesRepo.setFootballGridOptions(lobbyId, next))) {
+        socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
+        return;
+      }
+      logger.debug({ lobbyId, userId: socket.data.user.id }, 'Football Grid room options updated');
+      await emitLobbyState(io, lobbyId);
       return;
     }
     if (lobby.game_mode !== 'room_game' || !isRoomGame(lobby.room_game)) {

@@ -129,6 +129,7 @@ vi.mock('../../src/modules/football-grid/index.js', () => ({
   FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     getActiveMatchIdForUser: vi.fn(async () => null),
+    getPlayerExperience: vi.fn(async () => ({ finished: 0, wins: 0, losses: 0 })),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>
       new Map(opponentIds.map((opponentId) => [opponentId, 0]))),
     createPairing: (...args: unknown[]) => state.createPairing(...args),
@@ -146,7 +147,11 @@ vi.mock('../../src/realtime/services/football-grid-realtime.service.js', () => (
     emitMatchFound: (...args: unknown[]) => state.emitMatchFound(...args),
   },
 }));
-vi.mock('../../src/modules/ranked/ranked.service.js', () => ({ rankedService: { ensureProfile: vi.fn() } }));
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: { ensureProfile: vi.fn() },
+  needsPlacement: () => true,
+  selectionTargetRpForHuman: () => 1900,
+}));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
   reservationService: { isEnabled: () => false, abortLobby: vi.fn(), transferInTx: vi.fn() },
 }));

@@ -71,6 +71,18 @@ export const footballGridAdminQuarantinesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
+export const footballGridAdminDifficultyQuerySchema = z.object({
+  verdict: z.enum(['keep', 'move', 'retire']).optional(),
+  basis: z.enum(['measured', 'predicted']).optional(),
+  theme: z.string().trim().min(2).max(32).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+export const footballGridAdminDifficultyApplySchema = z.object({
+  boardIds: z.array(z.string().uuid()).min(1).max(2_000).optional(),
+  basis: z.enum(['measured', 'predicted']).optional(),
+});
+
 export const footballGridAdminPlayerParamsSchema = z.object({ playerId: z.string().uuid() });
 export const footballGridAdminRenamePlayerSchema = z.object({
   nameEn: z.string().trim().min(1).max(120).optional(),

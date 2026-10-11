@@ -1000,6 +1000,7 @@ export async function startFriendlyMatch(
           lobbyId,
           isPublic: currentLobby.is_public,
           inviteCode: currentLobby.invite_code,
+          roomOptions: currentLobby.room_options ?? null,
         });
       } catch (error) {
         logger.warn({ lobbyId, error }, 'Failed to create Football Grid lobby match');

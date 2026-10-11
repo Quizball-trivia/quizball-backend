@@ -27,7 +27,12 @@ import {
   FOOTBALL_GRID_HANDOFF_MS,
   type FootballGridState,
 } from '../../modules/football-grid/index.js';
-import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { needsPlacement, rankedService, selectionTargetRpForHuman } from '../../modules/ranked/ranked.service.js';
+import {
+  DEFAULT_FOOTBALL_GRID_SETTINGS,
+  FOOTBALL_GRID_STARTER_GAMES,
+  footballGridBotTargetRp,
+} from '../../modules/football-grid/football-grid.settings.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { syntheticBotSelectionService } from '../../modules/synthetic-bots/synthetic-bot-selection.service.js';
 import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
@@ -602,6 +607,16 @@ async function startBotPair(
   if (!config.FOOTBALL_GRID_BOTS_ENABLED || !reservationService.isEnabled()) return null;
   // Guests get a synthetic unplaced profile here (no ranked row is created).
   const humanProfile = await rankedService.ensureProfile(search.userId);
+  const experience = await footballGridRepo.getPlayerExperience(search.userId);
+  const targetRp = footballGridBotTargetRp({
+    rankedTargetRp: selectionTargetRpForHuman(humanProfile),
+    placed: !needsPlacement(humanProfile),
+    experience,
+  });
+  // A newcomer may pick each answer from four footballers until they have finished a few games.
+  const settings = config.FOOTBALL_GRID_RULES_ENABLED && experience.finished < FOOTBALL_GRID_STARTER_GAMES
+    ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const }
+    : undefined;
   const paired = await userSessionGuardService.withUserSessionLocks([search.userId], async () => {
     if (requireQueued) {
       if (!await searchesStillExclusivelyQueued([search])) return null;
@@ -617,6 +632,7 @@ async function startBotPair(
       humanUserId: search.userId,
       humanProfile,
       lobbyId: search.searchId,
+      targetRp,
     });
     if (!selected) return null;
     const pairingToken = randomUUID();
@@ -659,6 +675,7 @@ async function startBotPair(
             botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
             botConfigVersion: 1,
             botRngSeed: seed,
+            settings,
             afterCreateInTx: async (tx, matchId) => {
               const transferred = await reservationService.transferInTx(tx, {
                 botUserId: selected.bot.user_id,

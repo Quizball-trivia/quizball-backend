@@ -76,6 +76,7 @@ const state = vi.hoisted(() => ({
   lobbyConflictUserId: null as string | null,
   activeSessionUserId: null as string | null,
   activeMatchByUser: new Map<string, string>(),
+  experience: { finished: 0, wins: 0, losses: 0 },
   stalePairings: [] as Array<Record<string, unknown>>,
   markPairingFailed: vi.fn(),
   createPairing: vi.fn(),
@@ -96,7 +97,7 @@ const state = vi.hoisted(() => ({
   matchmakingLockHeld: false,
 }));
 
-const flags = vi.hoisted(() => ({ guestBotMatches: true, provisioning: true, rateLimited: false, delayMs: 0 }));
+const flags = vi.hoisted(() => ({ guestBotMatches: true, provisioning: true, rateLimited: false, delayMs: 0, rules: true }));
 vi.mock('../../src/core/config.js', () => ({
   config: {
     GUEST_LOBBIES_RECONNECT_ENABLED: true,
@@ -107,6 +108,7 @@ vi.mock('../../src/core/config.js', () => ({
     FOOTBALL_GRID_BOT_FALLBACK_MS: 30_000,
     FOOTBALL_GRID_MM_SWEEP_MS: 750,
     FOOTBALL_GRID_BOT_MODEL_VERSION: 2,
+    get FOOTBALL_GRID_RULES_ENABLED() { return flags.rules; },
     get GUEST_BOT_MATCHES_ENABLED() { return flags.guestBotMatches; },
     get GUEST_BOT_MATCH_DELAY_MIN_MS() { return flags.delayMs; },
     get GUEST_BOT_MATCH_DELAY_MAX_MS() { return flags.delayMs; },
@@ -141,6 +143,7 @@ vi.mock('../../src/modules/football-grid/index.js', () => ({
   FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     getActiveMatchIdForUser: vi.fn(async (userId: string) => state.activeMatchByUser.get(userId) ?? null),
+    getPlayerExperience: vi.fn(async () => state.experience),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>
       new Map(opponentIds.map((opponentId) => [opponentId, 0]))),
     createPairing: (...args: unknown[]) => state.createPairing(...args),
@@ -159,7 +162,11 @@ vi.mock('../../src/realtime/services/football-grid-realtime.service.js', () => (
     emitMatchFound: (...args: unknown[]) => state.emitMatchFound(...args),
   },
 }));
-vi.mock('../../src/modules/ranked/ranked.service.js', () => ({ rankedService: { ensureProfile: vi.fn() } }));
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: { ensureProfile: vi.fn() },
+  needsPlacement: () => true,
+  selectionTargetRpForHuman: () => 1900,
+}));
 const reservation = vi.hoisted(() => ({ abortLobby: vi.fn(async () => {}), transferInTx: vi.fn(async () => true) }));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
   reservationService: { isEnabled: () => true, abortLobby: reservation.abortLobby, transferInTx: reservation.transferInTx },
@@ -237,6 +244,7 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     flags.provisioning = true;
     flags.rateLimited = false;
     flags.delayMs = 0;
+    flags.rules = true;
     vi.useRealTimers();
     state.redis = new FakeRedis();
     state.lobbyConflictUserId = null;
@@ -339,6 +347,30 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     await Promise.all([older, newer]);
     expect(state.createMatch).toHaveBeenCalledTimes(1);
     expect(state.emitMatchFound).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a newcomer an easy bot and four answers to pick from, and a regular neither', async () => {
+    const { syntheticBotSelectionService } = await import('../../src/modules/synthetic-bots/synthetic-bot-selection.service.js');
+    state.experience = { finished: 0, wins: 0, losses: 0 };
+    await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-10'), { locale: 'en', theme: 'european' });
+    expect(syntheticBotSelectionService.selectAndReserve).toHaveBeenLastCalledWith(expect.objectContaining({ targetRp: 450 }));
+    expect(state.createMatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({ answerMode: 'choice', turnMs: 40_000 }),
+    }));
+
+    state.experience = { finished: 6, wins: 5, losses: 1 };
+    await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-11'), { locale: 'en', theme: 'european' });
+    expect(syntheticBotSelectionService.selectAndReserve).toHaveBeenLastCalledWith(expect.objectContaining({ targetRp: 1850 }));
+    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ settings: undefined });
+  });
+
+  it('keeps a newcomer on typed answers while the rules switch is off, and still gives the easy bot', async () => {
+    const { syntheticBotSelectionService } = await import('../../src/modules/synthetic-bots/synthetic-bot-selection.service.js');
+    flags.rules = false;
+    state.experience = { finished: 0, wins: 0, losses: 0 };
+    await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-12'), { locale: 'en', theme: 'european' });
+    expect(syntheticBotSelectionService.selectAndReserve).toHaveBeenLastCalledWith(expect.objectContaining({ targetRp: 450 }));
+    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ settings: undefined });
   });
 
   it('re-delivers the match a concurrent start created during the wait instead of failing', async () => {

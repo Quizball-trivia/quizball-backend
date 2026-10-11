@@ -358,6 +358,8 @@ export const syntheticBotSelectionService = {
     excludeBotUserIds?: readonly string[];
     /** Ranked-only: use a persistent bot outside the RP ceiling instead of legacy AI. */
     allowOutOfBandFallback?: boolean;
+    /** Pair by this RP instead of the human's ranked standing (a game with its own measure of skill). */
+    targetRp?: number;
   }): Promise<SelectedPersistentBot | null> {
     const rankedPersistentOnly = params.allowOutOfBandFallback === true;
     if (!rankedPersistentOnly && !reservationService.isEnabled()) {
@@ -367,7 +369,7 @@ export const syntheticBotSelectionService = {
 
     const now = new Date();
     const rosterDay = currentRosterDay(now);
-    const targetRp = selectionTargetRpForHuman(params.humanProfile);
+    const targetRp = params.targetRp ?? selectionTargetRpForHuman(params.humanProfile);
     const unavailableOutcome = rankedPersistentOnly ? 'unavailable' : 'ephemeral_fallback';
 
     const [eligible, recentState, tuning] = await Promise.all([

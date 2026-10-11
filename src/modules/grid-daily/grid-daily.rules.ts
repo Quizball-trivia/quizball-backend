@@ -14,14 +14,24 @@ const pack = (s: RunState): RunState => ({ v: 1, cells: s.cells.map(copyCell), l
 
 export const score = (s: RunState): number => s.cells.filter(Boolean).length;
 
-/** Seconds left of the hour, measured from the first guess to the finish; 0 for a run never guessed in. */
+/** Seconds left of the hour, measured from the kick-off to the finish; 0 for a run that never kicked off. */
 export function speed(s: RunState): number {
   if (s.t0 === null || s.t1 === null) return 0;
   return Math.max(0, SPEED_CAP_SECONDS - Math.floor(Math.max(0, s.t1 - s.t0) / 1_000));
 }
 
+/**
+ * The player kicks off: from here the board is shown and the clock runs, so nobody studies the squares before
+ * their time starts. A second kick-off changes nothing.
+ */
+export function kickOff(s: RunState, now: number): RunState {
+  if (s.done) throw rejected('run_done');
+  return s.t0 === null ? pack({ ...s, t0: now }) : s;
+}
+
 function assertOpen(s: RunState, cellIndex: number): void {
   if (s.done) throw rejected('run_done');
+  if (s.t0 === null) throw rejected('not_started');
   if (!Number.isInteger(cellIndex) || cellIndex < 0 || cellIndex >= CELLS) throw rejected('bad_cell');
   if (s.cells[cellIndex]) throw rejected('cell_filled');
 }
@@ -30,7 +40,7 @@ function assertOpen(s: RunState, cellIndex: number): void {
 function spend(s: RunState, now: number): RunState {
   const left = s.left - 1;
   const done = left <= 0 || score(s) >= CELLS;
-  return pack({ ...s, left, t0: s.t0 ?? now, t1: done ? now : null, done });
+  return pack({ ...s, left, t1: done ? now : null, done });
 }
 
 /** The named footballer fits the cell. No footballer fills two cells. */
@@ -50,7 +60,8 @@ export function miss(s: RunState, cellIndex: number, now: number): RunState {
 /** The player stops with guesses left. */
 export function finish(s: RunState, now: number): RunState {
   if (s.done) throw rejected('run_done');
-  return pack({ ...s, t0: s.t0 ?? now, t1: now, done: true });
+  if (s.t0 === null) throw rejected('not_started');
+  return pack({ ...s, t1: now, done: true });
 }
 
 /** A correction moved the run onto another board: nothing filled on the old one carries over. */
@@ -60,7 +71,7 @@ export function publicState(
   s: RunState,
   day: string,
   content: { number: number; boardId: string } | null,
-  extra: { ranked: boolean; rank?: number },
+  extra: { ranked: boolean; rank?: number; serverNow: number },
 ): PublicRunState {
   return {
     day,
@@ -75,6 +86,7 @@ export function publicState(
     score: score(s),
     speed: speed(s),
     ranked: extra.ranked,
+    serverNow: extra.serverNow,
     ...(extra.rank !== undefined && { rank: extra.rank }),
   };
 }

@@ -5,7 +5,7 @@ import { footballGridRepo } from '../football-grid/football-grid.repo.js';
 import { footballGridSoloService, type FootballGridSoloVerdict } from '../football-grid/football-grid-solo.service.js';
 import type { FootballGridBoardView } from '../football-grid/football-grid.types.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, REVIEW_SAMPLES_PER_CELL } from './grid-daily.constants.js';
-import { createContentStore, type ContentIndex, type IndexedDay } from './grid-daily.content.js';
+import { createContentStore, isReservedDay, type ContentIndex, type IndexedDay } from './grid-daily.content.js';
 import { gridDailyCalendar, RANKED_START } from './grid-daily.days.js';
 import { gridDailyRepo, type GridDailyRepo } from './grid-daily.repo.js';
 import * as rules from './grid-daily.rules.js';
@@ -51,13 +51,16 @@ export function createGridDailyService(deps: GridDailyDeps) {
       project: (s) => s,
       rebase: rules.rebase,
       completion: (s) => (s.done ? { score: rules.score(s), stat: rules.speed(s) } : null),
-      publicState: (s, run, day, _now, extra) => rules.publicState(s, run.day, day, extra),
+      publicState: (s, run, day, now, extra) => rules.publicState(s, run.day, day, { ...extra, serverNow: now }),
     },
     { calendar: gridDailyCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS, clock: 'database' },
   );
 
   async function withBoard<T extends DailyRunResponse<PublicRunState>>(response: T): Promise<T & { board: FootballGridBoardView | null; serverNow: number }> {
-    return { ...response, board: response.state.boardId ? await deps.board(response.state.boardId) : null, serverNow: deps.now().getTime() };
+    // The squares stay hidden until the player kicks off: the clock and the first look at the board start together.
+    const shown = response.state.startedAt !== null || response.state.done;
+    // The same clock the run's start and finish are stamped with, so the web's timer cannot disagree with them.
+    return { ...response, board: shown && response.state.boardId ? await deps.board(response.state.boardId) : null, serverNow: response.state.serverNow };
   }
 
   return {
@@ -75,6 +78,7 @@ export function createGridDailyService(deps: GridDailyDeps) {
       if (!current.run || !('state' in current) || current.run.id !== input.runId || current.run.version !== input.version) throw staleState();
       const state = current.state;
       if (state.done) throw rejected('run_done');
+      if (state.startedAt === null) throw rejected('not_started');
       if (state.cells[input.cellIndex]) throw rejected('cell_filled');
       const boardId = state.boardId;
       if (!boardId) throw contentChanged();
@@ -90,6 +94,11 @@ export function createGridDailyService(deps: GridDailyDeps) {
         return { state: verdict.outcome === 'correct' ? rules.fill(s, input.cellIndex, verdict.player, now) : rules.miss(s, input.cellIndex, now) };
       });
       return { ...(await withBoard(response)), outcome: verdict.outcome };
+    },
+
+    /** Shows the board and starts the clock. */
+    async kickOff(player: Player, runId: string, version: number): Promise<RunResponse> {
+      return withBoard(await core.mutate(player, runId, version, (s, _day, now) => ({ state: rules.kickOff(s, now) })));
     },
 
     async finish(player: Player, runId: string, version: number): Promise<RunResponse> {
@@ -117,7 +126,11 @@ export function createGridDailyService(deps: GridDailyDeps) {
 export type GridDailyService = ReturnType<typeof createGridDailyService>;
 
 export const gridDailyContent = createContentStore(
-  { fingerprint: () => gridDailyRepo.daysFingerprint(), load: () => gridDailyRepo.loadDays() },
+  {
+    fingerprint: () => gridDailyRepo.daysFingerprint(),
+    // A day the seed script has reserved but not yet published is not served (see scripts/grid-daily-seed-days.ts).
+    load: async () => (await gridDailyRepo.loadDays()).filter((row) => !isReservedDay(row)),
+  },
   { refreshMs: CONTENT_REFRESH_MS, now: () => Date.now(), log: logger },
 );
 

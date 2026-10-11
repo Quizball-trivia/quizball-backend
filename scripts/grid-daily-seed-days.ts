@@ -11,8 +11,11 @@
  * A closed day's answers are public, so a daily board must never be dealt online. Two things follow:
  * - Run this only once every backend replica runs a release that leaves daily boards out of online play (the one
  *   that added grid_daily_days). A replica on older code would still deal them.
- * - A match can pick a board in the moment before its day is stored. After writing, the script waits, looks for a
- *   live match on any board it just took, and gives such a day another board (unless someone already played it).
+ * - A match may have picked a board in the moment before its day was stored. So a day is first written as
+ *   reserved (`board.reserved`): online play already leaves the board alone, the daily game does not serve it
+ *   yet. The script then waits for every database transaction that began before that write to end, drops any
+ *   reserved day whose board a live match is using (it was never shown, so the board goes back to online play)
+ *   and only then publishes the rest. A run that dies in between leaves reserved days; the next run finishes them.
  */
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
@@ -48,8 +51,9 @@ function contentVersion(boardId: string): number {
   return createHash('sha256').update(`grid-daily:${boardId}`).digest().readUInt32BE(0) || 1;
 }
 
-/** Longer than any online board selection takes to commit its match. */
-const SETTLE_MS = 6_000;
+/** How long to wait for transactions that began before the reservation; they are match starts, seconds long. */
+const BARRIER_TIMEOUT_MS = 180_000;
+const BARRIER_POLL_MS = 2_000;
 const MAX_PASSES = 3;
 
 async function main(): Promise<void> {
@@ -65,7 +69,7 @@ async function main(): Promise<void> {
       if (day > LAST_DAY) break;
       wanted.push(day);
     }
-    const seedMissing = () => sql.begin(async (tx) => {
+    const reserveMissing = () => sql.begin(async (tx) => {
       const taken = await tx<Array<{ day: string; board_id: string; checksum: string | null }>>`
         SELECT day::text AS day, board->>'boardId' AS board_id, board->>'checksum' AS checksum FROM grid_daily_days`;
       const seeded = new Set(taken.map((row) => row.day));
@@ -104,54 +108,69 @@ async function main(): Promise<void> {
       if (candidates.length < missing.length) {
         throw new Error(`Only ${candidates.length} boards score ${args.minScore} or more for ${missing.length} days; run the board checker with --write, or lower --min-score`);
       }
-      const written: Array<{ day: string; checksum: string }> = [];
       if (args.write) {
         for (const [index, day] of missing.entries()) {
-          const rows = await tx`
+          await tx`
             INSERT INTO grid_daily_days (day, number, content_version, board)
-            VALUES (${day}, ${dayNumber(day)}, ${contentVersion(candidates[index].id)}, ${tx.json({ boardId: candidates[index].id, checksum: candidates[index].checksum })})
-            ON CONFLICT (day) DO NOTHING
-            RETURNING day`;
-          if (rows.length > 0) written.push({ day, checksum: candidates[index].checksum });
+            VALUES (${day}, ${dayNumber(day)}, ${contentVersion(candidates[index].id)}, ${tx.json({ boardId: candidates[index].id, checksum: candidates[index].checksum, reserved: true })})
+            ON CONFLICT (day) DO NOTHING`;
         }
       }
-      return { fresh: missing.length, kept: wanted.length - missing.length, written };
+      return { fresh: missing.length, kept: wanted.length - missing.length };
     });
 
-    /** Days just written whose board a live match turned out to be using; they are cleared for another board. */
-    const clearClashes = async (written: Array<{ day: string; checksum: string }>): Promise<{ cleared: number; left: number }> => {
-      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    /** Every transaction of this database user that began before `since` has ended (match starts among them). */
+    const waitForEarlierTransactions = async (since: string): Promise<void> => {
+      const deadline = Date.now() + BARRIER_TIMEOUT_MS;
+      for (;;) {
+        const [row] = await sql<Array<{ open: number }>>`
+          SELECT count(*)::int AS open FROM pg_stat_activity
+           WHERE datname = current_database() AND usename = current_user AND pid <> pg_backend_pid()
+             AND xact_start IS NOT NULL AND xact_start < ${since}::timestamptz`;
+        if ((row?.open ?? 0) === 0) return;
+        if (Date.now() >= deadline) throw new Error('Older database transactions are still open, so the reserved days were not published; run the script again');
+        await new Promise((resolve) => setTimeout(resolve, BARRIER_POLL_MS));
+      }
+    };
+
+    /** Publishes the reserved days no live match stands on; drops the others. Returns how many were dropped. */
+    const settleReserved = async (): Promise<{ published: number; dropped: number }> => {
+      const reserved = await sql<Array<{ day: string; checksum: string | null }>>`
+        SELECT day::text AS day, board->>'checksum' AS checksum FROM grid_daily_days WHERE board->>'reserved' = 'true'`;
+      if (reserved.length === 0) return { published: 0, dropped: 0 };
+      const [{ since }] = await sql<Array<{ since: string }>>`SELECT clock_timestamp()::text AS since`;
+      await waitForEarlierTransactions(since);
       const live = await sql<Array<{ checksum: string }>>`
         SELECT DISTINCT mb.canonical_checksum AS checksum
           FROM football_grid_matches m
           JOIN football_grid_boards mb ON mb.id = m.board_id
-         WHERE m.phase <> 'terminal' AND mb.canonical_checksum = ANY(${sql.array(written.map((row) => row.checksum))}::text[])`;
-      const clashing = written.filter((row) => live.some((match) => match.checksum === row.checksum)).map((row) => row.day);
-      if (clashing.length === 0) return { cleared: 0, left: 0 };
-      const cleared = await sql`
-        DELETE FROM grid_daily_days d
-         WHERE d.day = ANY(${sql.array(clashing)}::date[])
-           AND NOT EXISTS (SELECT 1 FROM grid_daily_runs r WHERE r.day = d.day)
-        RETURNING d.day`;
-      return { cleared: cleared.length, left: clashing.length - cleared.length };
+         WHERE m.phase <> 'terminal'
+           AND mb.canonical_checksum = ANY(${sql.array(reserved.flatMap((row) => (row.checksum ? [row.checksum] : [])))}::text[])`;
+      const clashing = reserved.filter((row) => live.some((match) => match.checksum === row.checksum)).map((row) => row.day);
+      const clean = reserved.filter((row) => !clashing.includes(row.day)).map((row) => row.day);
+      // Only ever a reserved row: a published day is never taken back.
+      const dropped = await sql`
+        DELETE FROM grid_daily_days WHERE day = ANY(${sql.array(clashing)}::date[]) AND board->>'reserved' = 'true' RETURNING day`;
+      const published = await sql`
+        UPDATE grid_daily_days SET board = board - 'reserved'
+         WHERE day = ANY(${sql.array(clean)}::date[]) AND board->>'reserved' = 'true' RETURNING day`;
+      return { published: published.length, dropped: dropped.length };
     };
 
-    let outcome = await seedMissing();
-    const first = outcome;
-    let reseeded = 0;
-    let leftOnLiveBoards = 0;
-    for (let pass = 1; args.write && outcome.written.length > 0; pass += 1) {
-      const clash = await clearClashes(outcome.written);
-      leftOnLiveBoards += clash.left;
-      if (clash.cleared === 0) break;
-      if (pass >= MAX_PASSES) throw new Error(`${clash.cleared} days were cleared because their board was in a live match and are still empty; run the script again`);
-      reseeded += clash.cleared;
-      outcome = await seedMissing();
+    const first = await reserveMissing();
+    let published = 0;
+    let replaced = 0;
+    for (let pass = 1; args.write; pass += 1) {
+      const settled = await settleReserved();
+      published += settled.published;
+      if (settled.dropped === 0) break;
+      if (pass >= MAX_PASSES) throw new Error(`${settled.dropped} days are still without a board because live matches kept using the ones picked; run the script again`);
+      replaced += settled.dropped;
+      await reserveMissing();
     }
     console.log(`Daily grid days ${wanted[0]} to ${wanted[wanted.length - 1]} -> ${target.label}`);
-    console.log(`${args.write ? 'Written' : 'Dry run (add --write)'}: ${first.fresh} new, ${first.kept} already seeded and left as they are.`);
-    if (reseeded > 0) console.log(`${reseeded} of the new days were given another board because the first one was in a live match.`);
-    if (leftOnLiveBoards > 0) console.log(`WARNING: ${leftOnLiveBoards} new days kept a board that is in a live match, because someone had already played the day.`);
+    console.log(`${args.write ? `Written: ${published} published` : `Dry run (add --write): ${first.fresh} to add`}, ${first.kept} already there and left as they are.`);
+    if (replaced > 0) console.log(`${replaced} picks were replaced because a live match was using that board.`);
   } finally {
     await sql.end({ timeout: 5 });
   }

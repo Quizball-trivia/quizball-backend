@@ -15,6 +15,11 @@ export type ContentIndex = ReadonlyMap<string, IndexedDay>;
 // the same content a new id; days seeded before it was recorded simply lack it.
 const boardSchema = z.object({ boardId: z.string().uuid(), checksum: z.string().min(32).max(128).optional() });
 
+/** Reserved by the seed script and not yet published: online play leaves the board alone, the daily game does not serve it. */
+export function isReservedDay(row: Pick<GridDailyDayRow, 'board'>): boolean {
+  return typeof row.board === 'object' && row.board !== null && (row.board as { reserved?: unknown }).reserved === true;
+}
+
 /** A stored day in serving form; null when the row is malformed. */
 export function indexDay(row: GridDailyDayRow): IndexedDay | null {
   const board = boardSchema.safeParse(row.board);

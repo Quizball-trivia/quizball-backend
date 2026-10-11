@@ -20,6 +20,10 @@ export const gridDailyController = {
     const body = req.validated.body as GuessRequest;
     res.json(await gridDailyService.guess(playerOf(req), body));
   },
+  async kickOff(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as MoveRequest;
+    res.json(await gridDailyService.kickOff(playerOf(req), body.runId, body.version));
+  },
   async finish(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as MoveRequest;
     res.json(await gridDailyService.finish(playerOf(req), body.runId, body.version));

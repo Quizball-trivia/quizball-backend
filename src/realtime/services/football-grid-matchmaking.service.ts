@@ -404,12 +404,18 @@ async function searchesStillExclusivelyQueued(searches: QueuedGridSearch[]): Pro
 async function startHumanPair(io: QuizballServer, a: QueuedGridSearch, b: QueuedGridSearch): Promise<HumanPairStart | null> {
   // Two newcomers who meet each other get the same help a newcomer gets against a bot; one newcomer alone does
   // not change the rules for an experienced opponent.
-  const settings = config.FOOTBALL_GRID_RULES_ENABLED && (await Promise.all([
+  // A failed read only costs the pair that help: pairs are started side by side and one must not fail the others.
+  const bothNewcomers = config.FOOTBALL_GRID_RULES_ENABLED && await Promise.all([
     footballGridRepo.getPlayerExperience(a.userId),
     footballGridRepo.getPlayerExperience(b.userId),
-  ])).every((experience) => experience.finished < FOOTBALL_GRID_STARTER_GAMES)
-    ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const }
-    : undefined;
+  ]).then(
+    (experiences) => experiences.every((experience) => experience.finished < FOOTBALL_GRID_STARTER_GAMES),
+    (error: unknown) => {
+      logger.warn({ error, userIds: [a.userId, b.userId] }, 'Football Grid newcomer check failed; pairing with the standard rules');
+      return false;
+    },
+  );
+  const settings = bothNewcomers ? { ...DEFAULT_FOOTBALL_GRID_SETTINGS, answerMode: 'choice' as const } : undefined;
   const paired = await userSessionGuardService.withUserSessionLocks(
     [a.userId, b.userId],
     async () => {

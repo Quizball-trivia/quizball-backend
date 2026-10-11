@@ -286,6 +286,14 @@ describe('footballGridMatchmakingService session fencing', () => {
       expect(await pair()).toBeUndefined();
     });
 
+    it('still pairs them, with the standard rules, when the newcomer check fails', async () => {
+      await setRules(true);
+      const { footballGridRepo } = await import('../../src/modules/football-grid/index.js');
+      vi.mocked(footballGridRepo.getPlayerExperience).mockRejectedValue(new Error('read failed'));
+      expect(await pair()).toBeUndefined();
+      expect(state.emitMatchFound).toHaveBeenCalledOnce();
+    });
+
     it('keeps the standard rules while the rules flag is off', async () => {
       await experienceOf({ 'user-a': 0, 'user-b': 0 });
       expect(await pair()).toBeUndefined();

@@ -43,6 +43,8 @@ export interface PublicRunState {
   speed: number;
   ranked: boolean;
   rank?: number;
+  /** The clock `startedAt` and `finishedAt` are stamped with, at the moment of this answer. */
+  serverNow: number;
 }
 
 export interface GridDailyRunRow {

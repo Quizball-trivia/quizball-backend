@@ -74,6 +74,14 @@ async function main(): Promise<void> {
       if (day > LAST_DAY) break;
       wanted.push(day);
     }
+    if (args.write) {
+      // Checked before anything is written: a run that cannot do the wait must not take days over from one that can.
+      // USAGE, not MEMBER: a membership that is not inherited does not give the visibility.
+      const [sight] = await sql<Array<{ full: boolean }>>`
+        SELECT COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)
+               OR pg_has_role(current_user, 'pg_read_all_stats', 'USAGE') AS full`;
+      if (!sight?.full) throw new Error('This database role cannot see other sessions (it needs pg_read_all_stats), so it cannot tell when earlier match starts have ended; nothing was written');
+    }
     const token = randomUUID();
     const reserveMissing = (alsoDays: string[] = []) => sql.begin(async (tx) => {
       const taken = await tx<Array<{ day: string; board_id: string; checksum: string | null }>>`
@@ -127,17 +135,20 @@ async function main(): Promise<void> {
 
     /** Every transaction in this database that began before `since` has ended (match starts among them). */
     const waitForEarlierTransactions = async (since: string): Promise<void> => {
-      const [sight] = await sql<Array<{ full: boolean }>>`
-        SELECT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER') AS full`;
-      if (!sight?.full) throw new Error('This database role cannot see other sessions, so it cannot tell when earlier match starts have ended; nothing was published (the days stay reserved)');
       const deadline = Date.now() + BARRIER_TIMEOUT_MS;
+      let told = false;
       for (;;) {
-        const [row] = await sql<Array<{ open: number }>>`
-          SELECT count(*)::int AS open FROM pg_stat_activity
+        const [row] = await sql<Array<{ open: number; oldest_seconds: number | null; who: string | null }>>`
+          SELECT count(*)::int AS open,
+                 round(extract(epoch FROM clock_timestamp() - min(xact_start)))::int AS oldest_seconds,
+                 string_agg(DISTINCT usename || ' (' || COALESCE(state, '?') || ', pid ' || pid || ')', ', ') AS who
+            FROM pg_stat_activity
            WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()
              AND xact_start IS NOT NULL AND xact_start < ${since}::timestamptz`;
         if ((row?.open ?? 0) === 0) return;
-        if (Date.now() >= deadline) throw new Error('Older database transactions are still open, so the reserved days were not published; run the script again');
+        const blockers = `${row.open} open, the oldest for ${row.oldest_seconds ?? '?'} s: ${row.who ?? 'unknown'}`;
+        if (Date.now() >= deadline) throw new Error(`Older database transactions are still open (${blockers}), so the reserved days were not published; run the script again once they have ended`);
+        if (!told) { console.log(`Waiting for earlier database transactions to end (${blockers})...`); told = true; }
         await new Promise((resolve) => setTimeout(resolve, BARRIER_POLL_MS));
       }
     };

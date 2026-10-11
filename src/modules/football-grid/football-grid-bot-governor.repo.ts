@@ -112,34 +112,42 @@ export const footballGridBotGovernorRepo = {
 
   async listUnobservedCompletedMatchIds(limit: number): Promise<string[]> {
     const rows = await sql<Array<{ match_id: string }>>`
-      SELECT settlement.match_id
-        FROM football_grid_settlement_outbox settlement
-        JOIN football_grid_matches gm ON gm.match_id = settlement.match_id
-        JOIN matches m ON m.id = settlement.match_id
-       WHERE settlement.status = 'completed'
-         AND m.status = 'completed'
-         AND gm.bot_model_version = 2
-         AND gm.bot_config_version = 1
-         AND gm.bot_strength_adjustment IS NOT NULL
-         AND gm.completion_reason IN ('line', 'board_full', 'board_dead', 'draw_agreed', 'turn_limit')
-         AND EXISTS (
+      -- Materialize the anti-join first. When recovery is caught up, no player
+      -- or user eligibility checks should run over already observed history.
+      WITH unobserved AS MATERIALIZED (
+        SELECT settlement.match_id, settlement.completed_at, gm.bot_user_id
+          FROM football_grid_settlement_outbox settlement
+          JOIN football_grid_matches gm ON gm.match_id = settlement.match_id
+         WHERE settlement.status = 'completed'
+           AND gm.bot_model_version = 2
+           AND gm.bot_config_version = 1
+           AND gm.bot_strength_adjustment IS NOT NULL
+           AND gm.completion_reason IN ('line', 'board_full', 'board_dead', 'draw_agreed', 'turn_limit')
+           AND NOT EXISTS (
+             SELECT 1 FROM football_grid_bot_governor_observations observation
+              WHERE observation.match_id = settlement.match_id
+           )
+      ), member_matches AS MATERIALIZED (
+        SELECT unobserved.*
+          FROM unobserved
+         WHERE EXISTS (
+             SELECT 1 FROM football_grid_participants human
+               JOIN users human_user ON human_user.id = human.user_id AND human_user.is_guest = false
+              WHERE human.match_id = unobserved.match_id AND human.is_bot = false
+           )
+      )
+      SELECT member_matches.match_id
+        FROM member_matches
+        JOIN matches m ON m.id = member_matches.match_id AND m.status = 'completed'
+       WHERE EXISTS (
            SELECT 1 FROM football_grid_participants bot
-            WHERE bot.match_id = gm.match_id
-              AND bot.user_id = gm.bot_user_id
+            WHERE bot.match_id = member_matches.match_id
+              AND bot.user_id = member_matches.bot_user_id
               AND bot.is_bot = true
          )
-         AND EXISTS (
-           SELECT 1 FROM football_grid_participants human
-             JOIN users human_user ON human_user.id = human.user_id AND human_user.is_guest = false
-            WHERE human.match_id = gm.match_id AND human.is_bot = false
-         )
          AND (SELECT count(*) FROM football_grid_participants participants
-               WHERE participants.match_id = gm.match_id) = 2
-         AND NOT EXISTS (
-           SELECT 1 FROM football_grid_bot_governor_observations observation
-            WHERE observation.match_id = settlement.match_id
-         )
-       ORDER BY settlement.completed_at, settlement.match_id
+               WHERE participants.match_id = member_matches.match_id) = 2
+       ORDER BY member_matches.completed_at, member_matches.match_id
        LIMIT ${limit}
     `;
     return rows.map((row) => row.match_id);

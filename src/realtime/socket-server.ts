@@ -6,6 +6,7 @@ import { duelRealtimeService } from './services/duel-realtime.service.js';
 import { footballGridRealtimeService } from './services/football-grid-realtime.service.js';
 import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
 import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
+import { footballGridDifficultyService } from '../modules/football-grid/football-grid-difficulty.service.js';
 import { lobbyJanitorService } from './services/lobby-janitor.service.js';
 import { footballGridMatchmakingService } from './services/football-grid-matchmaking.service.js';
 import { footballGridRematchService } from './services/football-grid-rematch.service.js';
@@ -715,6 +716,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   startReservationSweeper();
   footballGridSettlementService.start();
   footballGridMaintenanceService.start();
+  footballGridDifficultyService.startNightly();
   lobbyJanitorService.start(io);
   footballGridPresenceService.startNodeHeartbeat();
   footballGridRematchService.startRecovery(io);

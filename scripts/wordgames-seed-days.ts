@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     throw new Error(`${args.file}: unreadable or not JSON`);
   }
   const input = parseDaysFile(raw);
-  console.log(`${input.game} days: ${input.days.length} (${input.days[0].day} to ${input.days[input.days.length - 1].day}), release ${input.release} -> ${target.label}`);
+  console.log(`${input.game} days: ${input.days.length} (${input.days[0].day} to ${input.days[input.days.length - 1].day}), release ${input.releases.join(' then ')} -> ${target.label}`);
   const sql = postgres(process.env.DATABASE_URL!, {
     max: 1, prepare: false, connect_timeout: 15, onnotice: () => undefined, ssl: target.kind === 'local' ? false : 'require',
   });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 class FakeRedis {
@@ -129,6 +129,7 @@ vi.mock('../../src/modules/football-grid/index.js', () => ({
   FOOTBALL_GRID_HANDOFF_MS: 30_000,
   footballGridRepo: {
     getActiveMatchIdForUser: vi.fn(async () => null),
+    getPlayerExperience: vi.fn(async () => ({ finished: 0, wins: 0, losses: 0 })),
     countRecentPairingsForCandidates: vi.fn(async (_userId: string, opponentIds: string[]) =>
       new Map(opponentIds.map((opponentId) => [opponentId, 0]))),
     createPairing: (...args: unknown[]) => state.createPairing(...args),
@@ -146,7 +147,11 @@ vi.mock('../../src/realtime/services/football-grid-realtime.service.js', () => (
     emitMatchFound: (...args: unknown[]) => state.emitMatchFound(...args),
   },
 }));
-vi.mock('../../src/modules/ranked/ranked.service.js', () => ({ rankedService: { ensureProfile: vi.fn() } }));
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: { ensureProfile: vi.fn() },
+  needsPlacement: () => true,
+  selectionTargetRpForHuman: () => 1900,
+}));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
   reservationService: { isEnabled: () => false, abortLobby: vi.fn(), transferInTx: vi.fn() },
 }));
@@ -244,6 +249,55 @@ describe('footballGridMatchmakingService session fencing', () => {
     expect(state.heartbeatPairing).toHaveBeenCalledOnce();
     expect(state.emitMatchFound).toHaveBeenCalledOnce();
     expect(await state.redis!.zRange('football_grid:mm:queue', 0, 10)).toEqual([]);
+  });
+
+  describe('two people matched together', () => {
+    const experienceOf = async (finished: Record<string, number>) => {
+      const { footballGridRepo } = await import('../../src/modules/football-grid/index.js');
+      vi.mocked(footballGridRepo.getPlayerExperience).mockImplementation(async (userId: string) => (
+        { finished: finished[userId] ?? 0, wins: 0, losses: 0 }
+      ));
+    };
+    const setRules = async (enabled: boolean) => {
+      const { config } = await import('../../src/core/config.js');
+      (config as { FOOTBALL_GRID_RULES_ENABLED?: boolean }).FOOTBALL_GRID_RULES_ENABLED = enabled;
+    };
+    const pair = async () => {
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-a'), { locale: 'en', theme: 'european' });
+      await footballGridMatchmakingService.handleSearchStart(io, socket('user-b'), { locale: 'en', theme: 'european' });
+      expect(state.createMatch).toHaveBeenCalledOnce();
+      return (state.createMatch.mock.calls[0] as unknown as [{ settings?: { answerMode: string } }])[0].settings;
+    };
+
+    afterEach(async () => {
+      await setRules(false);
+      await experienceOf({});
+    });
+
+    it('lets two newcomers pick from four', async () => {
+      await setRules(true);
+      await experienceOf({ 'user-a': 0, 'user-b': 2 });
+      expect(await pair()).toMatchObject({ answerMode: 'choice' });
+    });
+
+    it('keeps the standard rules when one of them is experienced', async () => {
+      await setRules(true);
+      await experienceOf({ 'user-a': 0, 'user-b': 3 });
+      expect(await pair()).toBeUndefined();
+    });
+
+    it('still pairs them, with the standard rules, when the newcomer check fails', async () => {
+      await setRules(true);
+      const { footballGridRepo } = await import('../../src/modules/football-grid/index.js');
+      vi.mocked(footballGridRepo.getPlayerExperience).mockRejectedValue(new Error('read failed'));
+      expect(await pair()).toBeUndefined();
+      expect(state.emitMatchFound).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the standard rules while the rules flag is off', async () => {
+      await experienceOf({ 'user-a': 0, 'user-b': 0 });
+      expect(await pair()).toBeUndefined();
+    });
   });
 
   it('keeps a search queued when another replica is draining matchmaking', async () => {

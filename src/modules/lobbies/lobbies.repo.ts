@@ -315,7 +315,9 @@ export const lobbiesRepo = {
         game_mode = ${settings.gameMode},
         duel_game = ${settings.duelGame},
         -- A room's options belong to its game: another game (or mode) starts from that game's defaults.
-        room_options = CASE WHEN room_game IS NOT DISTINCT FROM ${settings.roomGame} THEN room_options ELSE NULL END,
+        room_options = CASE
+          WHEN room_game IS NOT DISTINCT FROM ${settings.roomGame} AND game_mode IS NOT DISTINCT FROM ${settings.gameMode}
+          THEN room_options ELSE NULL END,
         room_game = ${settings.roomGame},
         friendly_random = ${settings.friendlyRandom},
         friendly_category_a_id = ${settings.friendlyCategoryAId},
@@ -441,6 +443,22 @@ export const lobbiesRepo = {
       const changed = await tx<Array<{ id: string }>>`
         UPDATE lobbies SET room_options = ${options === null ? null : tx.json(options as never)}, updated_at = NOW()
         WHERE id = ${lobbyId} AND status = 'waiting' AND game_mode = 'room_game' AND room_game = ${roomGame}
+        RETURNING id
+      `;
+      if (changed.length !== 1) return false;
+      await tx`UPDATE lobby_members SET is_ready = false WHERE lobby_id = ${lobbyId}`;
+      return true;
+    }) as Promise<boolean>;
+  },
+
+  /** The same for a Tic Tac Toe room, whose options are its rules (rounds, turn time, answers, difficulty). */
+  async setFootballGridOptions(lobbyId: string, options: Record<string, unknown> | null): Promise<boolean> {
+    return sql.begin(async (transaction) => {
+      const tx = transaction as unknown as typeof sql;
+      await tx`SELECT user_id FROM lobby_members WHERE lobby_id = ${lobbyId} ORDER BY user_id FOR UPDATE`;
+      const changed = await tx<Array<{ id: string }>>`
+        UPDATE lobbies SET room_options = ${options === null ? null : tx.json(options as never)}, updated_at = NOW()
+        WHERE id = ${lobbyId} AND status = 'waiting' AND game_mode = 'football_grid'
         RETURNING id
       `;
       if (changed.length !== 1) return false;

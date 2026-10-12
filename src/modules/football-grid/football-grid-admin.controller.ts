@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { footballGridAdminService } from './football-grid-admin.service.js';
+import { footballGridDifficultyService } from './football-grid-difficulty.service.js';
 import type { FootballGridAdminReportProposal } from './football-grid-admin.schemas.js';
 
 export const footballGridAdminController = {
@@ -74,6 +75,23 @@ export const footballGridAdminController = {
   async listQuarantines(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as { releaseId?: string; boardId?: string; limit: number };
     res.json({ quarantines: await footballGridAdminService.listQuarantines(query) });
+  },
+  /** The board checker: stored scores by label and verdict, and the boards whose label does not fit. */
+  async listDifficulty(req: Request, res: Response): Promise<void> {
+    const query = req.validated.query as { verdict?: 'keep' | 'move' | 'retire'; basis?: 'measured' | 'predicted'; theme?: string; limit: number };
+    const [summary, boards] = await Promise.all([
+      footballGridDifficultyService.storedSummary(),
+      footballGridDifficultyService.listBoards(query),
+    ]);
+    res.json({ summary, boards });
+  },
+  async recomputeDifficulty(_req: Request, res: Response): Promise<void> {
+    const { summary } = await footballGridDifficultyService.recompute({ write: true });
+    res.json({ summary });
+  },
+  async applyDifficulty(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as { boardIds?: string[]; basis?: 'measured' | 'predicted' };
+    res.json(await footballGridDifficultyService.applySuggested({ ...body, actor: `user:${req.user!.id}` }));
   },
   async renamePlayer(req: Request, res: Response): Promise<void> {
     const { playerId } = req.validated.params as { playerId: string };

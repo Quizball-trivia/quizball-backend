@@ -27,7 +27,13 @@ import {
   FOOTBALL_GRID_RECONNECT_MS,
   FootballGridRuleError,
 } from './football-grid.engine.js';
-import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import {
+  buildFootballGridOptions,
+  footballGridMatchOptionSeed,
+  getFootballGridBoardPlayers,
+  type FootballGridOption,
+} from './football-grid-options.js';
 import { footballGridRepo, type FootballGridCommandInboxRow } from './football-grid.repo.js';
 import type {
   FootballGridAliasRecord,
@@ -35,6 +41,7 @@ import type {
   FootballGridResolvedAnswer,
   FootballGridState,
   FootballGridSeriesFormat,
+  FootballGridSettings,
 } from './football-grid.types.js';
 
 export interface FootballGridCommandResult {
@@ -46,6 +53,8 @@ export interface FootballGridCommandResult {
 }
 
 type FootballGridBoardAnswerContent = {
+  boardId: string;
+  settings: FootballGridSettings;
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
@@ -101,7 +110,7 @@ export function resetFootballGridAliasCache(releaseId?: string): void {
   else aliasReleaseCache.clear();
 }
 
-async function getAliasesByPlayerForRelease(
+export async function getAliasesByPlayerForRelease(
   releaseId: string,
 ): Promise<Map<string, FootballGridAliasRecord[]>> {
   const now = Date.now();
@@ -156,6 +165,8 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa });
   }
   const value: FootballGridBoardAnswerContent = {
+    boardId: context.boardId,
+    settings: context.settings,
     aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
     validPlayerIdsByCell,
     boardPlayerIds,
@@ -172,6 +183,49 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   });
   trimBoardAnswerCache();
   return value;
+}
+
+/** The four options this turn offers for a cell; the same call always returns the same four. */
+async function turnOptions(
+  matchId: string,
+  boardId: string,
+  turnNumber: number,
+  cellIndex: number,
+): Promise<FootballGridOption[] | null> {
+  const [players, usedPlayerIds] = await Promise.all([
+    getFootballGridBoardPlayers(boardId),
+    footballGridRepo.getClaimedPlayerIds(matchId),
+  ]);
+  return buildFootballGridOptions({
+    players,
+    cellIndex,
+    usedPlayerIds: new Set(usedPlayerIds),
+    seed: footballGridMatchOptionSeed(matchId, turnNumber, cellIndex),
+  });
+}
+
+/** A picked option names its footballer outright, so there is nothing to resolve: it is in the cell or it is not. */
+export function resolvePickedOption(
+  playerId: string,
+  cellPlayerIds: readonly string[],
+  submittedText: string,
+): FootballGridResolvedAnswer {
+  const correct = cellPlayerIds.includes(playerId);
+  return {
+    outcome: correct ? 'correct' : 'wrong',
+    playerId: correct ? playerId : null,
+    aliasId: null,
+    normalizedInput: normalizeFootballGridAnswer(submittedText),
+    diagnostics: {
+      version: 1,
+      reason: correct ? 'accepted' : 'recognized_not_in_cell',
+      method: 'exact',
+      candidatePlayerIds: [playerId],
+      candidateCount: 1,
+      candidatesTruncated: false,
+      cellCandidateCount: correct ? 1 : 0,
+    },
+  };
 }
 
 function commandPayloadHash(payload: Record<string, unknown>): string {
@@ -282,7 +336,10 @@ async function processInbox(
       const content = await getBoardAnswerContent(leased.match_id);
       const resolverStartedAt = performance.now();
       const cellPlayerIds = content.validPlayerIdsByCell.get(leased.cell_index) ?? [];
-      resolution = resolveFootballGridAnswer({
+      // A pick names its footballer by id, so there is nothing to interpret. Only a match that offers options
+      // takes one; anywhere else the name is resolved like any typed answer.
+      const pickedPlayerId = content.settings.answerMode === 'choice' ? leased.option_player_id ?? null : null;
+      resolution = pickedPlayerId ? resolvePickedOption(pickedPlayerId, cellPlayerIds, leased.submitted_text) : resolveFootballGridAnswer({
         submittedText: leased.submitted_text,
         aliases: content.aliases,
         validPlayerIds: cellPlayerIds,
@@ -402,6 +459,8 @@ export const footballGridService = {
     botModelVersion?: number | null;
     botConfigVersion?: number | null;
     botRngSeed?: number | null;
+    /** Rules for a series this match starts (ignored for a game of an existing series). */
+    settings?: FootballGridSettings;
     afterCreateInTx?: (tx: TransactionSql, matchId: string) => Promise<void>;
   }): Promise<{ state: FootballGridState; created: boolean }> {
     try {
@@ -517,6 +576,7 @@ export const footballGridService = {
     cellIndex: number;
     text: string;
     locale: 'en' | 'ka' | 'es' | 'tr';
+    optionPlayerId?: string;
   }): Promise<FootballGridCommandResult> {
     try {
       const processingFence = randomUUID();
@@ -529,12 +589,15 @@ export const footballGridService = {
         cellIndex: input.cellIndex,
         locale: input.locale,
         submittedText: input.text,
+        optionPlayerId: input.optionPlayerId ?? null,
         payloadHash: commandPayloadHash({
           matchId: input.matchId,
           cellIndex: input.cellIndex,
           text: input.text,
           locale: input.locale,
           expectedStateVersion: input.expectedStateVersion,
+          // Absent for a typed answer, so its hash is what earlier releases computed.
+          ...(input.optionPlayerId && { optionPlayerId: input.optionPlayerId }),
         }),
         processingFence,
       });
@@ -565,6 +628,35 @@ export const footballGridService = {
     } catch (error) {
       throw toDomainError(error);
     }
+  },
+
+  /**
+   * Four footballers to pick from for a cell, for the player to move in a match that offers them. Picking one is
+   * an ordinary answer with that footballer's name.
+   */
+  async getOptions(input: {
+    matchId: string;
+    userId: string;
+    cellIndex: number;
+  }): Promise<{ turnNumber: number; stateVersion: number; options: FootballGridOption[] | null }> {
+    const state = await currentOrThrow(input.matchId);
+    if (!state.players.some((player) => player.userId === input.userId)) {
+      throw new AuthorizationError('Not a Football Grid participant');
+    }
+    if (state.settings.answerMode !== 'choice') {
+      throw new ConflictError('This match is played by typing the answer', { gridCode: 'OPTIONS_NOT_OFFERED' });
+    }
+    if (state.phase !== 'turn' || state.currentPlayerUserId !== input.userId) {
+      throw new ConflictError('It is not this player\'s turn', { gridCode: 'NOT_YOUR_TURN' });
+    }
+    if (state.claims.some((claim) => claim.cellIndex === input.cellIndex)) {
+      throw new ConflictError('Cell is already occupied', { gridCode: 'CELL_OCCUPIED' });
+    }
+    return {
+      turnNumber: state.turnNumber,
+      stateVersion: state.stateVersion,
+      options: await turnOptions(input.matchId, state.board.boardId, state.turnNumber, input.cellIndex),
+    };
   },
 
   /** Proposes a draw; the offer lapses at the end of the current turn. */

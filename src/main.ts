@@ -22,6 +22,7 @@ import { startUltimoReadinessCheck } from './modules/ultimo/index.js';
 import { startSharedPlayerDailyReadinessCheck } from './modules/shared-player-daily/shared-player-daily.service.js';
 import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/name-chain-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
+import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -111,6 +112,7 @@ startUltimoReadinessCheck();
 startSharedPlayerDailyReadinessCheck();
 startNameChainDailyReadinessCheck();
 startMinutoReadinessCheck();
+startGridDailyReadinessCheck();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

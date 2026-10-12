@@ -3,10 +3,13 @@ import type {
   FootballGridClaimState,
   FootballGridCompletionReason,
   FootballGridResolutionOutcome,
+  FootballGridSettings,
   FootballGridState,
 } from './football-grid.types.js';
+import { DEFAULT_FOOTBALL_GRID_SETTINGS, FOOTBALL_GRID_DEFAULT_TURN_MS } from './football-grid.settings.js';
 
-export const FOOTBALL_GRID_TURN_MS = 40_000;
+/** The standard turn; a friend room may play 20 or 60 seconds (state.settings.turnMs). */
+export const FOOTBALL_GRID_TURN_MS = FOOTBALL_GRID_DEFAULT_TURN_MS;
 // 5s: long enough for the pre-match showdown + board build-in animation the
 // web client plays during this phase (owner request 2026-08-27).
 // 5 s kickoff gate + 3 s board reveal on the client before the first turn.
@@ -73,6 +76,10 @@ function cloneState(state: FootballGridState): FootballGridState {
   };
 }
 
+function turnMs(state: FootballGridState): number {
+  return state.settings?.turnMs ?? FOOTBALL_GRID_TURN_MS;
+}
+
 function assertParticipant(state: FootballGridState, userId: string): void {
   if (!state.players.some((player) => player.userId === userId)) {
     throw new FootballGridRuleError('NOT_PARTICIPANT', 'User is not a match participant');
@@ -118,9 +125,9 @@ function advanceTurn(state: FootballGridState, actorUserId: string, nowMs: numbe
   }
   state.turnNumber += 1;
   state.currentPlayerUserId = otherPlayerId(state, actorUserId);
-  state.turnDeadlineAt = iso(nowMs + FOOTBALL_GRID_TURN_MS);
+  state.turnDeadlineAt = iso(nowMs + turnMs(state));
   state.phaseDeadlineAt = state.turnDeadlineAt;
-  state.turnRemainingMs = FOOTBALL_GRID_TURN_MS;
+  state.turnRemainingMs = turnMs(state);
   // An unanswered draw offer lapses with the turn it was made on.
   // An ignored offer lapses with the same lock as a declined one, so the
   // off-turn player cannot re-offer every turn.
@@ -165,6 +172,7 @@ export function createFootballGridState(input: {
   openerUserId: string;
   nowMs: number;
   wrongAnswerVisibility?: boolean;
+  settings?: FootballGridSettings;
 }): FootballGridState {
   if (input.players.length !== 2 || new Set(input.players.map((player) => player.userId)).size !== 2) {
     throw new FootballGridRuleError('INVALID_STATE', 'Football Grid requires exactly two unique players');
@@ -205,6 +213,7 @@ export function createFootballGridState(input: {
     reconnectDeadlineAt: null,
     completionReason: null,
     drawOffer: null,
+    settings: input.settings ?? DEFAULT_FOOTBALL_GRID_SETTINGS,
   };
 }
 
@@ -273,9 +282,9 @@ export function startTurnAfterCountdown(
   state.status = 'active';
   state.phase = 'turn';
   state.currentPlayerUserId = state.openerUserId;
-  state.turnDeadlineAt = iso(nowMs + FOOTBALL_GRID_TURN_MS);
+  state.turnDeadlineAt = iso(nowMs + turnMs(state));
   state.phaseDeadlineAt = state.turnDeadlineAt;
-  state.turnRemainingMs = FOOTBALL_GRID_TURN_MS;
+  state.turnRemainingMs = turnMs(state);
   state.stateVersion += 1;
   return state;
 }
@@ -515,7 +524,7 @@ export function resumeAfterReconnect(inputState: FootballGridState, nowMs: numbe
     throw new FootballGridRuleError('INVALID_STATE', 'Match is not paused');
   }
   const state = cloneState(inputState);
-  const remainingMs = Math.max(1, state.turnRemainingMs ?? FOOTBALL_GRID_TURN_MS);
+  const remainingMs = Math.max(1, state.turnRemainingMs ?? turnMs(state));
   if (state.pausedFromPhase === 'countdown') {
     state.status = 'countdown';
     state.phase = 'countdown';

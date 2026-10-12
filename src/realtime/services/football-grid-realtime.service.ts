@@ -440,19 +440,20 @@ async function publishServiceInterruptionIfNeeded(io: QuizballServer, matchId: s
 
 /**
  * What the client learns about the other seat. A guest playing a bot ("Play now"
- * from the public page) sees an anonymous guest-style opponent — deterministic
- * per match so reloads agree — never the bot's roster identity or RP.
+ * from the public page) sees an anonymous guest-style opponent, never the bot's
+ * roster identity or RP. The name follows the pair of players: every game of a
+ * series, a rematch and a reload show the same opponent, with nothing to look up.
  */
 export function opponentIdentity(input: {
   opponent: { userId: string; isBot?: boolean };
   opponentUser: { nickname: string | null; avatar_url: string | null; avatar_customization: unknown } | undefined;
-  matchId: string;
+  viewerUserId: string;
   viewerIsGuest: boolean;
   rp: number | undefined;
 }): OpponentInfo {
-  const { opponent, opponentUser, matchId, viewerIsGuest, rp } = input;
+  const { opponent, opponentUser, viewerUserId, viewerIsGuest, rp } = input;
   if (viewerIsGuest && opponent.isBot) {
-    const seed = `grid-bot:${matchId}`;
+    const seed = `grid-bot:${opponent.userId}:${viewerUserId}`;
     return {
       id: opponent.userId,
       username: guestNameCandidates(seed, 1)[0],
@@ -668,7 +669,7 @@ export const footballGridRealtimeService = {
         opponent: opponentIdentity({
           opponent,
           opponentUser,
-          matchId: state.matchId,
+          viewerUserId: player.userId,
           viewerIsGuest: users.get(player.userId)?.is_guest === true,
           rp: rpByUserId.get(opponent.userId),
         }),
@@ -920,7 +921,7 @@ export const footballGridRealtimeService = {
         opponent: opponentIdentity({
           opponent,
           opponentUser,
-          matchId,
+          viewerUserId: socket.data.user.id,
           viewerIsGuest: socket.data.user.is_guest === true,
           rp: profile?.rp,
         }),
@@ -975,6 +976,11 @@ export const footballGridRealtimeService = {
       socket.data.gridMatchId = undefined;
       socket.data.matchId = undefined;
     }
+  },
+
+  async handleOptionsRequest(socket: QuizballSocket, input: { matchId: string; cellIndex: number }): Promise<void> {
+    const result = await footballGridService.getOptions({ ...input, userId: socket.data.user.id });
+    socket.emit('grid:options', { matchId: input.matchId, cellIndex: input.cellIndex, ...result });
   },
 
   async handleReport(socket: QuizballSocket, attemptId: string): Promise<void> {

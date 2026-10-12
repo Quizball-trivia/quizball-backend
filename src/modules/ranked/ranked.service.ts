@@ -150,7 +150,7 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
   return null;
 }
 
-function needsPlacement(profile: RankedProfileRow): boolean {
+export function needsPlacement(profile: RankedProfileRow): boolean {
   return profile.placement_status !== 'placed' || profile.placement_played < profile.placement_required;
 }
 

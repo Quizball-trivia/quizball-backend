@@ -17,6 +17,14 @@ describe('opponentIdentity', () => {
     expect(opponentIdentity({ opponent: bot, opponentUser: botUser, matchId: 'm-2', viewerIsGuest: true, rp: 1 }).username).not.toBe(shown.username);
   });
 
+  it('keeps the same guest-style bot for every game of a series, whatever the game\'s own id', () => {
+    const game = (matchId: string, seriesId?: string | null) => opponentIdentity({ opponent: bot, opponentUser: botUser, matchId, seriesId, viewerIsGuest: true, rp: 1 });
+    expect(game('m-1', 's-1')).toEqual(game('m-2', 's-1'));
+    expect(game('m-1', 's-1').username).toBe(guestNameCandidates('grid-bot:s-1', 1)[0]);
+    expect(game('m-1', 's-2').username).not.toBe(game('m-1', 's-1').username);
+    expect(game('m-1', null).username).toBe(guestNameCandidates('grid-bot:m-1', 1)[0]);
+  });
+
   it('keeps the real identity for members and for human opponents of guests', () => {
     expect(opponentIdentity({ opponent: bot, opponentUser: botUser, matchId: 'm-1', viewerIsGuest: false, rp: 1234 }))
       .toEqual({ id: 'bot-1', username: 'lukaberidze', avatarUrl: 'https://img/bot.png', avatarCustomization: { jersey: 'jersey_red' }, rp: 1234 });

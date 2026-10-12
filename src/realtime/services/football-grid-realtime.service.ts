@@ -441,18 +441,20 @@ async function publishServiceInterruptionIfNeeded(io: QuizballServer, matchId: s
 /**
  * What the client learns about the other seat. A guest playing a bot ("Play now"
  * from the public page) sees an anonymous guest-style opponent — deterministic
- * per match so reloads agree — never the bot's roster identity or RP.
+ * per series so reloads and the next game of a best-of-N agree — never the
+ * bot's roster identity or RP.
  */
 export function opponentIdentity(input: {
   opponent: { userId: string; isBot?: boolean };
   opponentUser: { nickname: string | null; avatar_url: string | null; avatar_customization: unknown } | undefined;
   matchId: string;
+  seriesId?: string | null;
   viewerIsGuest: boolean;
   rp: number | undefined;
 }): OpponentInfo {
-  const { opponent, opponentUser, matchId, viewerIsGuest, rp } = input;
+  const { opponent, opponentUser, matchId, seriesId, viewerIsGuest, rp } = input;
   if (viewerIsGuest && opponent.isBot) {
-    const seed = `grid-bot:${matchId}`;
+    const seed = `grid-bot:${seriesId ?? matchId}`;
     return {
       id: opponent.userId,
       username: guestNameCandidates(seed, 1)[0],
@@ -669,6 +671,7 @@ export const footballGridRealtimeService = {
           opponent,
           opponentUser,
           matchId: state.matchId,
+          seriesId: series?.seriesId,
           viewerIsGuest: users.get(player.userId)?.is_guest === true,
           rp: rpByUserId.get(opponent.userId),
         }),
@@ -921,6 +924,7 @@ export const footballGridRealtimeService = {
           opponent,
           opponentUser,
           matchId,
+          seriesId: series?.seriesId,
           viewerIsGuest: socket.data.user.is_guest === true,
           rp: profile?.rp,
         }),

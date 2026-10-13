@@ -481,6 +481,49 @@ export const usersRepo = {
     return new Map(shown.map((user) => [user.id, user]));
   },
 
+  /**
+   * Admin: guest-inclusive user total for the CMS dashboard.
+   * Registered accounts PLUS guest journeys that played at least one tracked
+   * game, MINUS played journeys that later linked to an account (no
+   * double-counting converters, whether new signups or existing members).
+   * Single statement so the three components share one snapshot.
+   */
+  async getUserTotal(): Promise<{
+    registered: number;
+    guestsPlayed: number;
+    converters: number;
+    total: number;
+  }> {
+    const [row] = await sql<
+      { registered: number; guests_played: number; converters: number; total: number }[]
+    >`
+      SELECT
+        r.registered,
+        g.played AS guests_played,
+        g.converters,
+        r.registered + g.played - g.converters AS total
+      FROM (
+        SELECT count(*) FILTER (
+          WHERE NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted
+            AND u.deleted_at IS NULL AND NOT u.is_guest
+        )::int AS registered
+        FROM users u
+      ) r
+      CROSS JOIN (
+        SELECT
+          count(*) FILTER (WHERE first_play_at IS NOT NULL)::int AS played,
+          count(*) FILTER (WHERE first_play_at IS NOT NULL AND linked_user_id IS NOT NULL)::int AS converters
+        FROM guest_journeys
+      ) g
+    `;
+    return {
+      registered: row.registered,
+      guestsPlayed: row.guests_played,
+      converters: row.converters,
+      total: row.total,
+    };
+  },
+
   async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{
     id: string;
   nickname: string | null;

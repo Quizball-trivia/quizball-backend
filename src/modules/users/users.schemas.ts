@@ -342,6 +342,20 @@ export const adminUsersListResponseSchema = z.object({
 export type AdminUsersListResponse = z.infer<typeof adminUsersListResponseSchema>;
 
 /**
+ * Admin: guest-inclusive user total for the CMS dashboard.
+ * total = registered + guestsPlayed - converters (played journeys later
+ * linked to an account, new or existing, counted once).
+ */
+export const adminUserTotalResponseSchema = z.object({
+  registered: z.number().int().nonnegative(),
+  guestsPlayed: z.number().int().nonnegative(),
+  converters: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
+export type AdminUserTotalResponse = z.infer<typeof adminUserTotalResponseSchema>;
+
+/**
  * Admin: set/grant progression (XP and/or RP).
  * Each field is optional; mode 'set' assigns an absolute value, 'delta' adds
  * (or subtracts) from the current value. At least one of xp/rp must be present.

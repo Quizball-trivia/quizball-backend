@@ -11,6 +11,7 @@ import {
   adminSetProgressionBodySchema,
   adminUsersListQuerySchema,
   adminUsersListResponseSchema,
+  adminUserTotalResponseSchema,
   publicProfileResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
@@ -219,6 +220,24 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Search results', schema: userSearchResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  // Appended last so the generated document only gains entries (no reordering).
+  const adminUserTotalResponseOpenApiSchema = adminUserTotalResponseSchema.openapi('AdminUserTotalResponse');
+  registry.register('AdminUserTotalResponse', adminUserTotalResponseOpenApiSchema);
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/stats/user-total',
+    summary: 'Guest-inclusive user total for the CMS dashboard',
+    description: 'Requires admin role. total = registered + guestsPlayed - converters. Read-only.',
+    tags: ['Admin Users'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'User total', schema: adminUserTotalResponseOpenApiSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Insufficient permissions', schema: errorResponseSchema },
     },
   });
 }

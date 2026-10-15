@@ -1162,6 +1162,7 @@ export type LobbyCreateResult =
       ok: false;
       code:
         | 'CAPABILITY_REQUIRED'
+        | 'GAME_NEEDS_RELOAD'
         | 'LOBBY_GUEST_LIMIT'
         | 'LOBBY_MODE_REQUIRES_ACCOUNT'
         | 'RATE_LIMITED'
@@ -1202,6 +1203,7 @@ export type LobbyJoinByCodeResult =
       ok: false;
       code:
         | 'CAPABILITY_REQUIRED'
+        | 'GAME_NEEDS_RELOAD'
         | 'LOBBY_GUEST_LIMIT'
         | 'LOBBY_MODE_REQUIRES_ACCOUNT'
         | 'RATE_LIMITED'

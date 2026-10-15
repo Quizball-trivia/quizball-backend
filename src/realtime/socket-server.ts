@@ -1,3 +1,4 @@
+import { joinLegacyRooms } from './client-games.js';
 import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
 import { registerDuelHandlers } from './handlers/duel.handler.js';
 import { registerRoomHandlers } from './handlers/room.handler.js';
@@ -760,6 +761,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     socketRuntimeTracker.connected();
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
+    // Before any lobby or match is bound: a tab that cannot draw a gated game never hears of one.
+    joinLegacyRooms(socket);
     // Before any handler: a partner socket may send only the ranked events, and nothing until it is admitted.
     const partnerAdmission = socket.data.partner ? connectPartnerSocket(io, socket) : null;
 

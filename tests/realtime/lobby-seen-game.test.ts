@@ -49,7 +49,7 @@ const { setReady, startFriendlyMatch } = await import('../../src/realtime/servic
 const { config } = await import('../../src/core/config.js');
 (config as unknown as { DUEL_GAMES_ENABLED: string[] }).DUEL_GAMES_ENABLED = ['buscaminas', 'pistas'];
 
-const socketFor = (id: string) => ({ id: `s-${id}`, data: { user: { id, is_guest: false }, lobbyId: 'L' }, emit: vi.fn(), join: vi.fn() });
+const socketFor = (id: string, games?: string[]) => ({ id: `s-${id}`, data: { user: { id, is_guest: false }, lobbyId: 'L', games }, emit: vi.fn(), join: vi.fn() });
 const io = { to: vi.fn(() => ({ emit: vi.fn() })), in: vi.fn(() => ({ fetchSockets: async () => [] })) };
 const member = (id: string) => ({ lobby_id: 'L', user_id: id, is_ready: true, joined_at: '2026-01-01', nickname: id, avatar_url: null, avatar_customization: null, favorite_club: null, is_guest: false });
 const lobby = (gameMode: string | null, game: { duel?: string; room?: string | null } = {}) => ({
@@ -157,24 +157,33 @@ describe('Ready names the game it was pressed on', () => {
     expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
   });
 
-  it('a busy room lock does not lose the Ready: the game is still checked', async () => {
+  it('a busy room lock does not lose the Ready of a current page: the game is still checked', async () => {
     acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
-    const socket = socketFor('guest');
+    const socket = socketFor('guest', ['tenable']);
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
     expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
-    const stale = socketFor('guest');
+    const stale = socketFor('guest', ['tenable']);
     await setReady(io as never, stale as never, true, { gameMode: 'auction' });
     expect(errorCodes(stale)).toEqual(['LOBBY_SETTINGS_CHANGED']);
     expect(releaseLock).not.toHaveBeenCalledWith('lock:lobby:L', 'guard');
   });
 
-  it('an un-ready is never refused, and a client that names no game is handled as before', async () => {
+  it('a busy room lock refuses (retryable) a Ready from a page that cannot draw every game', async () => {
+    acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
+    const old = socketFor('guest', []);
+    await setReady(io as never, old as never, true);
+    expect(errorCodes(old)).toEqual(['LOBBY_SETTINGS_LOCKED']);
+    expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalledWith('L', 'guest', true);
+  });
+
+  it('an un-ready is never refused, and a client that names no game is checked under the lock and accepted', async () => {
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, false, { gameMode: 'room_game', roomGame: 'shared_player' });
     expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false);
     await setReady(io as never, socket as never, true);
     expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', true);
-    expect(acquireLobbyLockWithRetry).not.toHaveBeenCalled();
+    // The room's current game is re-read under the lock (it may have switched to one this tab cannot draw).
+    expect(acquireLobbyLockWithRetry).toHaveBeenCalledTimes(1);
     expect(errorCodes(socket)).toEqual([]);
   });
 });

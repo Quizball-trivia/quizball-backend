@@ -264,7 +264,7 @@ const sessionGuardMock = vi.hoisted(() => ({
 }));
 
 const contentServiceMock = vi.hoisted(() => ({
-  assertPublishedAuctionContentAvailable: vi.fn(),
+  assertPublishedAuctionContentAvailable: vi.fn(),  resolveContentLocale: vi.fn(async (locale: string) => locale),
 }));
 
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {

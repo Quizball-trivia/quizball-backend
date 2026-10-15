@@ -48,6 +48,19 @@ export interface CampaignQuizRow {
   es_score_cta: string | null;
   es_footer_banner_text: string | null;
   es_footer_button_label: string | null;
+  ru_title: string | null;
+  ru_h1: string | null;
+  ru_seo_title: string | null;
+  ru_meta_description: string | null;
+  ru_breadcrumb_label: string | null;
+  ru_lede: string | null;
+  ru_about_heading: string | null;
+  ru_about_blocks: CampaignQuizAboutBlock[] | null;
+  ru_hero_image_alt: string | null;
+  ru_og_image_alt: string | null;
+  ru_score_cta: string | null;
+  ru_footer_banner_text: string | null;
+  ru_footer_button_label: string | null;
   scheduled_publish_at: string | null;
   published_at: string | null;
   unpublished_at: string | null;
@@ -79,6 +92,8 @@ export interface CampaignQuizRelatedRow {
   hero_image_alt: string | null;
   es_breadcrumb_label: string | null;
   es_hero_image_alt: string | null;
+  ru_breadcrumb_label: string | null;
+  ru_hero_image_alt: string | null;
 }
 
 export interface CampaignQuizHubRow {
@@ -97,6 +112,11 @@ export interface CampaignQuizHubRow {
   es_hero_image_alt: string | null;
   es_seo_title: string | null;
   es_meta_description: string | null;
+  ru_h1: string | null;
+  ru_breadcrumb_label: string | null;
+  ru_hero_image_alt: string | null;
+  ru_seo_title: string | null;
+  ru_meta_description: string | null;
 }
 
 export interface AdminCampaignQuizRevisionRow {
@@ -392,7 +412,12 @@ export const campaignQuizzesRepo = {
         es_breadcrumb_label,
         es_hero_image_alt,
         es_seo_title,
-        es_meta_description
+        es_meta_description,
+        ru_h1,
+        ru_breadcrumb_label,
+        ru_hero_image_alt,
+        ru_seo_title,
+        ru_meta_description
       FROM campaign_quizzes
       WHERE ${publicWindowSql()}
       ORDER BY page_category, is_hub_pinned DESC, hub_order, published_at, slug
@@ -441,7 +466,9 @@ export const campaignQuizzesRepo = {
         related.hero_image_url,
         related.hero_image_alt,
         related.es_breadcrumb_label,
-        related.es_hero_image_alt
+        related.es_hero_image_alt,
+        related.ru_breadcrumb_label,
+        related.ru_hero_image_alt
       FROM campaign_quiz_related_pages relation
       JOIN campaign_quizzes related ON related.slug = relation.related_slug
       WHERE relation.quiz_slug = ${slug}

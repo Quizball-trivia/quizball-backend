@@ -22,9 +22,8 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { POOLER_SAFE, requireStagingTarget, STAGING_REF } from './staging-target.js';
 
-const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_REF = 'lfbwhxvwubzeqkztghok';
 const MODEL = 'gpt-6-luna';
 const SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), '.snapshots', 'campaign-quizzes-ru.json');
 
@@ -39,18 +38,9 @@ const CONCURRENCY = Number(opt('concurrency', '3'));
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-let local = false;
-{
-  let host = '';
-  try { host = new URL(dbUrl).hostname; } catch { console.error('ABORT: DATABASE_URL is not a valid URL'); process.exit(1); }
-  local = host === 'localhost' || host === '127.0.0.1';
-  if (dbUrl.includes(PROD_REF) || !(local || dbUrl.includes(STAGING_REF))) {
-    console.error(`ABORT: DATABASE_URL must target the staging project ${STAGING_REF} or localhost, never ${PROD_REF}`);
-    process.exit(1);
-  }
-}
+const local = requireStagingTarget(dbUrl, { allowLocal: true }) === 'local';
 const target = local ? 'LOCAL' : `STAGING ${STAGING_REF}`;
-const sql = postgres(dbUrl, { ssl: local ? false : 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: local ? false : 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
 const TEXT_FIELDS = [
   'title', 'h1', 'seo_title', 'meta_description', 'breadcrumb_label', 'lede', 'about_heading',

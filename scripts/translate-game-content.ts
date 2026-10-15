@@ -11,6 +11,7 @@
  * Usage:
  *   npx tsx scripts/translate-game-content.ts count  [--tables=pistas_days,…] [--env-file=.env]
  *   npx tsx scripts/translate-game-content.ts sample [--tables=…] [--limit=20]          # live model call, no writes
+ *   npx tsx scripts/translate-game-content.ts cache  [--tables=…] [--batch=100] [--concurrency=4]  # translate + validate as apply would, no writes
  *   npx tsx scripts/translate-game-content.ts apply  [--tables=…] [--batch=100] [--concurrency=4]
  *   npx tsx scripts/translate-game-content.ts verify [--tables=…]                        # full content validation of the stored rows, no writes
  */
@@ -37,10 +38,9 @@ import { parseDayFile as parseUltimoDay } from '../src/modules/ultimo/ultimo.see
 import { parseDayFile as parseMinutoDay } from '../src/modules/minuto/minuto.seed.js';
 import { parsePoolFile } from '../src/modules/duel/duel.seed.js';
 import type { DuelGameId } from '../src/modules/duel/duel.types.js';
+import { POOLER_SAFE, requireStagingTarget, STAGING_REF } from './staging-target.js';
 
-const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_REF = 'lfbwhxvwubzeqkztghok';
-const MODES = ['count', 'sample', 'apply', 'verify'] as const;
+const MODES = ['count', 'sample', 'cache', 'apply', 'verify'] as const;
 const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!(MODES as readonly string[]).includes(modeArg)) { console.error(`ABORT: mode must be one of ${MODES.join(' | ')}`); process.exit(1); }
 const mode = modeArg as (typeof MODES)[number];
@@ -55,13 +55,8 @@ const MODEL = 'gpt-6-luna';
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-{
-  let host = '', user = '';
-  try { const u = new URL(dbUrl); host = u.hostname; user = decodeURIComponent(u.username); } catch { console.error('ABORT: DATABASE_URL is not a valid URL'); process.exit(1); }
-  const targetsStaging = host.startsWith(`db.${STAGING_REF}.`) || user.endsWith(`.${STAGING_REF}`) || user === `postgres.${STAGING_REF}`;
-  if (!targetsStaging || dbUrl.includes(PROD_REF)) { console.error(`ABORT: DATABASE_URL must target the staging project ${STAGING_REF}, never ${PROD_REF}`); process.exit(1); }
-}
-const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+requireStagingTarget(dbUrl);
+const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
 /** Where the text lives, the row key, and the longest Russian text each table's schema accepts. */
 type Row = Record<string, unknown> & { updated_text: string | null };
@@ -204,7 +199,7 @@ async function main() {
 
   mkdirSync('scripts/.snapshots', { recursive: true });
   for (const { spec, rows } of loaded) {
-    const snapshot: Row[] = []; let filled = 0, accepted = 0, updated = 0, skipped = 0, invalid = 0;
+    const snapshot: Row[] = []; const invalidKeys: string[] = []; let filled = 0, accepted = 0, updated = 0, skipped = 0, invalid = 0;
     for (const row of rows) {
       const before = JSON.stringify(spec.columns.map((c) => row[c]));
       let changed = 0;
@@ -216,8 +211,9 @@ async function main() {
       const pistas = spec.pistasAnswers?.(row) ? addPistasAccepted(row[spec.columns[0]]) : null;
       const added = (pistas?.added ?? 0) + (spec.passChainAliases ? addPassChainAlias(row) : 0);
       if (!changed && !added) continue;
-      if (!spec.validate(row) && !dropOverlong(row, spec) && !(pistas && repairPistas(row, spec, pistas))) { invalid += 1; continue; }
+      if (!spec.validate(row) && !dropOverlong(row, spec) && !(pistas && repairPistas(row, spec, pistas))) { invalid += 1; invalidKeys.push(spec.key.map((k) => row[k]).join('/')); continue; }
       accepted += added;
+      if (mode === 'cache') { updated += 1; filled += changed; continue; }
       snapshot.push({ ...row, ...Object.fromEntries(spec.columns.map((c, i) => [c, JSON.parse(before)[i]])) });
       const sets = [
         ...spec.columns.map((c) => sql`${sql(c)} = ${sql.json(row[c] as never)}`),
@@ -232,7 +228,7 @@ async function main() {
     }
     const snap = `scripts/.snapshots/game-content-ru-${spec.table}-${Date.now()}.json`;
     if (snapshot.length) writeFileSync(snap, JSON.stringify(snapshot));
-    console.log(`${spec.table}: filled ${filled} slots in ${updated} rows (pistas accepted +${accepted}, skipped as edited meanwhile: ${skipped}, left unchanged as invalid: ${invalid})${snapshot.length ? `; snapshot ${snap}` : ''}`);
+    console.log(`${spec.table}: ${mode === 'cache' ? 'would fill' : 'filled'} ${filled} slots in ${updated} rows (pistas accepted +${accepted}, skipped as edited meanwhile: ${skipped}, left unchanged as invalid: ${invalid}${invalid ? ` (${invalidKeys.slice(0, 8).join(', ')})` : ''})${snapshot.length ? `; snapshot ${snap}` : ''}`);
   }
 }
 

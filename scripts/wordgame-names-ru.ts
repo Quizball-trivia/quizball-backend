@@ -10,9 +10,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import postgres from 'postgres';
+import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
-const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_REF = 'lfbwhxvwubzeqkztghok';
 const MODEL = 'gpt-6-luna';
 const OUT = path.resolve('scripts/.snapshots/wordgame-names-ru.json');
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
@@ -23,8 +22,8 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
   if (!Number.isInteger(value) || value < 1) { console.error(`ABORT: --${name} must be a positive integer`); process.exit(1); }
 }
 const dbUrl = readFileSync(opt('env-file', '.env'), 'utf8').match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-if (!dbUrl.includes(STAGING_REF) || dbUrl.includes(PROD_REF)) { console.error(`ABORT: DATABASE_URL must be the staging project ${STAGING_REF}`); process.exit(1); }
-const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+requireStagingTarget(dbUrl);
+const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
 type Entry = { full: string; short: string };
 const CYRILLIC = /\p{Script=Cyrillic}/u;

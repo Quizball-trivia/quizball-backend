@@ -18,13 +18,13 @@ import path from 'node:path';
 import process from 'node:process';
 import 'dotenv/config';
 import postgres from 'postgres';
+import { stagingTarget } from './staging-target.js';
 
 type Family = 'club' | 'country' | 'league' | 'manager' | 'teammate' | 'trophy_award' | 'wildcard';
 type Row = { id: string; criterion_key: string; family: Family; label_en: string; release_version: number };
 type Fixture = { version: 1; model: string; labels: Record<string, { en: string; ru: string }> };
 
 const FIXTURE_PATH = path.resolve('scripts/football-grid-label-ru.json');
-const PROJECT_REFS = { staging: 'nsdfiprfmhdqhbfxfwpv', production: 'lfbwhxvwubzeqkztghok' } as const;
 const MODEL = 'gpt-6-luna';
 const BATCH = 80;
 
@@ -177,7 +177,7 @@ async function main() {
   if (argValue('target') !== undefined && argValue('target') !== 'staging') throw new Error('Staging only: production goes through the reviewed release manifest');
   const databaseUrl = process.env.GRID_ALIASES_DATABASE_URL ?? process.env.GRID_LABELS_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('Set DATABASE_URL');
-  if (!databaseUrl.includes(PROJECT_REFS.staging) || databaseUrl.includes(PROJECT_REFS.production)) throw new Error(`Database target mismatch: expected staging ${PROJECT_REFS.staging}`);
+  stagingTarget(databaseUrl);
   const sql = postgres(databaseUrl, { max: 2, prepare: false, idle_timeout: 10 });
   try {
     if (hasArg('build')) await build(sql);

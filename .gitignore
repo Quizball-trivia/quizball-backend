@@ -142,3 +142,13 @@ node_modules
 
 # Russian campaign quiz pages (code only; the translation snapshot stays in scripts/.snapshots).
 !scripts/campaign-quizzes-ru.ts
+# Russian locale scripts (staging only) and their shared target check.
+!scripts/staging-target.ts
+!scripts/clue-cards-ru.ts
+!scripts/football-grid-aliases-ru.ts
+!scripts/football-grid-label-ru.json
+!scripts/football-grid-label-ru.ts
+!scripts/squad-spin-ru.ts
+!scripts/translate-game-content.ts
+!scripts/wordgame-names-ru.ts
+!scripts/wordgame-ru-names-seed.ts

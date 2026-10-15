@@ -15,9 +15,8 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import postgres from 'postgres';
 import { normalizeAnswer } from '../src/modules/pistas/pistas.normalize.js';
+import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
-const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_REF = 'lfbwhxvwubzeqkztghok';
 const MODEL = 'gpt-6-luna';
 const OUT = path.resolve('scripts/.snapshots/clue-cards-ru.json');
 const NAMES = path.resolve(`scripts/.snapshots/translation-cache-ru-${MODEL}.json`);
@@ -25,8 +24,15 @@ const BATCH = 40;
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
 const has = (name: string) => process.argv.includes(`--${name}`);
 const dbUrl = readFileSync(opt('env-file', '.env'), 'utf8').match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-if (!dbUrl.includes(STAGING_REF) || dbUrl.includes(PROD_REF)) { console.error(`ABORT: DATABASE_URL must be the staging project ${STAGING_REF}`); process.exit(1); }
-const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+requireStagingTarget(dbUrl);
+const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+
+/** A dropped pooler connection is retried (the next query reconnects); reads only. */
+async function withRetry<T>(read: () => Promise<T>, tries = 4): Promise<T> {
+  for (let i = 1; ; i += 1) {
+    try { return await read(); } catch (error) { if (i >= tries || !/CONNECTION_CLOSED|ECONNRESET/.test(String(error))) throw error; }
+  }
+}
 
 type Card = { id: string; player: string; clue_1: string; clue_2: string; clue_3: string };
 type Clues = { clue_1: string; clue_2: string; clue_3: string };
@@ -106,10 +112,19 @@ async function build() {
 
 async function apply(dryRun: boolean) {
   const done = load();
-  const sources = await sql.begin('read only', (tx) => tx<Array<Record<string, unknown>>>`
-    SELECT c.* FROM player_clue_cards c
-     WHERE c.locale = 'en' AND c.status = 'published'
-       AND NOT EXISTS (SELECT 1 FROM player_clue_cards r WHERE r.locale = 'ru' AND r.card_family_id = c.card_family_id AND r.variant_key IS NOT DISTINCT FROM c.variant_key)`) as Array<Record<string, unknown>>;
+  // In pages, retried: one large result through the pooler can drop the connection.
+  const sources: Array<Record<string, unknown>> = [];
+  for (let after = '00000000-0000-0000-0000-000000000000'; ;) {
+    const from = after;
+    const page = await withRetry(() => sql.begin('read only', (tx) => tx<Array<Record<string, unknown>>>`
+      SELECT c.* FROM player_clue_cards c
+       WHERE c.locale = 'en' AND c.status = 'published' AND c.id > ${from}::uuid
+         AND NOT EXISTS (SELECT 1 FROM player_clue_cards r WHERE r.locale = 'ru' AND r.card_family_id = c.card_family_id AND r.variant_key IS NOT DISTINCT FROM c.variant_key)
+       ORDER BY c.id LIMIT 200`) as Promise<Array<Record<string, unknown>>>);
+    sources.push(...page);
+    if (page.length < 200) break;
+    after = String(page[page.length - 1].id);
+  }
   const rows = sources.flatMap((source) => {
     const clues = done[String(source.id)];
     if (!clues) return [];

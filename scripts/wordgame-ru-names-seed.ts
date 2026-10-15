@@ -15,9 +15,8 @@ import path from 'node:path';
 import postgres from 'postgres';
 import { normalizeNameCyrillic } from '../src/modules/footballers/footballers.text.js';
 import { START_MIN_FAME } from '../src/modules/room/games/name-chain/name-chain.core.js';
+import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
-const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_REF = 'lfbwhxvwubzeqkztghok';
 const ARTIFACT = path.resolve('scripts/.snapshots/wordgame-names-ru.json');
 const MIN_RELEASE_COVERAGE = 0.99;
 const PAGE = 10_000;
@@ -31,8 +30,8 @@ async function withRetry<T>(read: () => Promise<T>, tries = 4): Promise<T> {
 const opt = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const has = (name: string) => process.argv.includes(`--${name}`);
 const dbUrl = readFileSync(opt('env-file') ?? '.env', 'utf8').match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-if (!dbUrl.includes(STAGING_REF) || dbUrl.includes(PROD_REF)) { console.error(`ABORT: DATABASE_URL must be the staging project ${STAGING_REF}`); process.exit(1); }
-const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 30, onnotice: () => undefined });
+requireStagingTarget(dbUrl);
+const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 30, onnotice: () => undefined });
 
 type Entry = { full: string; short: string };
 type Row = { pid: string; name_ru: string; game_name_ru: string; fame: number };

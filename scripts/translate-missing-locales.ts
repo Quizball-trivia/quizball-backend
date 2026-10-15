@@ -55,7 +55,7 @@ assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
 const API_KEY = envVar('OPENROUTER_API_KEY');
 const MODEL = opt('model', '') || (PROVIDER === 'codex' ? 'gpt-6-luna' : envVar('OPENROUTER_MODEL') ?? 'google/gemini-3-flash-preview');
 // Model calls can run for an hour with no queries: drop the idle connection ourselves rather than write to one the pooler closed.
-const sql = postgres(dbUrl, { ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
+const sql = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
 const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }

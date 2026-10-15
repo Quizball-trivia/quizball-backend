@@ -135,7 +135,8 @@ function snapshotOf(goal = makeGoal()) {
 function makeSession(overrides: Record<string, unknown> = {}) {
   return {
     id: 'session-1',
-    user_id: USER,
+    user_id: USER.userId,
+    guest_id: null,
     goal_id: 'goal-1',
     goal_snapshot: snapshotOf(),
     state: 'active',

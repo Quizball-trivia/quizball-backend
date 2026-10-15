@@ -1,7 +1,15 @@
-import { firstLetter, lastLetter, normalizeName, surnameOf, typoBudget, TYPO_MIN_LENGTH, withinEdits, withinOneEdit } from './footballers.text.js';
+import {
+  firstLetter, firstLetterCyrillic, lastLetter, lastLetterCyrillic, normalizeName, normalizeNameCyrillic, surnameOf, surnameOfCyrillic, typoBudget,
+  TYPO_MIN_LENGTH, withinEdits, withinOneEdit,
+} from './footballers.text.js';
 
-/** Bumped whenever a change here could judge the same text differently: content pins the version it was built for. */
-export const MATCHER_VERSION = 1;
+/**
+ * Bumped whenever a change here could judge the same text differently: content pins the version it was built for.
+ * 1: Latin names only. 2: also each footballer's Russian name, read with Russian letters (`Universe.cyrillic`).
+ */
+export const MATCHER_VERSION = 2;
+/** Releases this build can load: a release is judged with exactly the matcher it was built for. */
+export const SUPPORTED_MATCHER_VERSIONS: readonly number[] = [1, 2];
 
 export interface UniversePlayer {
   /** Durable id: the same footballer keeps it from one release to the next. */
@@ -12,6 +20,9 @@ export interface UniversePlayer {
   /** Orders namesakes: the best known is tried first. */
   fame: number;
   aliases: string[];
+  /** Matcher 2: the Russian name and the Russian name the footballer is known by (both or neither). */
+  nameRu?: string | null;
+  gameRu?: string | null;
 }
 
 /**
@@ -36,9 +47,31 @@ export interface Universe {
    * footballer who is not among them.
    */
   pickAmong(text: string, among: readonly string[]): string | null;
+  /**
+   * Matcher 2: the same footballers (same ids) under their Russian names, read with Russian letters: names, starts, the next
+   * letter (the "cities" rule) and typo forgiveness are all Cyrillic. Footballers without a Russian name are not in it.
+   */
+  cyrillic?: Universe;
 }
 
-export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[]): Universe {
+interface Alphabet {
+  normalize(raw: string): string;
+  first(name: string): string;
+  last(name: string): string;
+  surname(name: string): string;
+}
+const LATIN: Alphabet = { normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf };
+const CYRILLIC: Alphabet = { normalize: normalizeNameCyrillic, first: firstLetterCyrillic, last: lastLetterCyrillic, surname: surnameOfCyrillic };
+
+export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[], matcherVersion = 1): Universe {
+  const latin = buildIndexed(releaseId, rows, LATIN);
+  if (matcherVersion < 2) return latin;
+  const russian = rows.flatMap((p) => (p.nameRu && p.gameRu ? [{ pid: p.pid, name: p.nameRu, game: p.gameRu, fame: p.fame, aliases: [] }] : []));
+  return { ...latin, cyrillic: buildIndexed(releaseId, russian, CYRILLIC) };
+}
+
+function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphabet: Alphabet): Universe {
+  const { normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf } = alphabet;
   // Best known first, ties by id: the order (and so every "best known" pick) depends only on the release.
   const players = [...rows].sort((a, b) => b.fame - a.fame || (a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0));
   const indexOf = new Map(players.map((p, i) => [p.pid, i]));

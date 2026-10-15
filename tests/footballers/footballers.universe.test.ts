@@ -92,3 +92,42 @@ describe('generous answers among a few footballers', () => {
     expect(u.pickAmong('Orlen', ['gone'])).toBeNull();
   });
 });
+
+describe('Russian names (matcher 2)', () => {
+  // Invented footballers only, with invented Russian forms.
+  const RU = (pid: string, name: string, game: string, fame: number, nameRu: string, gameRu: string): UniversePlayer => ({ pid, name, game, fame, aliases: [], nameRu, gameRu });
+  const rows = [
+    RU('r-orlen', 'Tarin Orlen', 'Orlen', 80, 'Тарин Орлен', 'Орлен'), RU('r-nesto', 'Nesto', 'Nesto', 40, 'Несто', 'Несто'),
+    RU('r-bely', 'Ilya Bely', 'Bely', 60, 'Илья Белый', 'Белый'), RU('r-kai', 'Kai Hagen', 'Hagen', 30, 'Кай Хаген', 'Хаген'),
+    P('p-latin', 'Emir Kosel', 'Kosel', 70),
+  ];
+  const v2 = buildUniverse('test-release-2', rows, 2);
+  const cy = v2.cyrillic!;
+
+  it('keeps the Latin universe exactly as matcher 1 builds it', () => {
+    const v1 = buildUniverse('test-release-2', rows);
+    expect(v1.cyrillic).toBeUndefined();
+    expect(v2.resolve('orlen')).toEqual(v1.resolve('orlen'));
+    expect(v2.last('r-bely')).toBe(v1.last('r-bely'));
+    expect(v2.resolve('Орлен')).toEqual([]);
+  });
+
+  it('reads Russian names with Russian letters and the "cities" rule', () => {
+    expect(cy.resolve('ОРЛЕН')).toEqual(['r-orlen']);
+    expect(cy.resolve('тарин орлен')).toEqual(['r-orlen']);
+    expect(cy.player('r-orlen')?.name).toBe('Тарин Орлен');
+    expect(cy.last('r-orlen')).toBe('Н');
+    // Белый ends in ы, which passes on the letter before it.
+    expect(cy.last('r-bely')).toBe('Л');
+    // й is и, so Кай starts on К and Илья on И.
+    expect(cy.starts('r-bely')).toContain('И');
+    expect(cy.starting('Х')).toEqual(['r-kai']);
+    expect(cy.player('p-latin')).toBeUndefined();
+  });
+
+  it('forgives a typo on long Russian names and picks among a pair by Russian name', () => {
+    expect(cy.resolve('тарин орлин')).toEqual(['r-orlen']);
+    expect(cy.pickAmong('несто', ['r-nesto', 'r-orlen'])).toBe('r-nesto');
+    expect(cy.pickAmong('хаген', ['r-orlen'])).toBeNull();
+  });
+});

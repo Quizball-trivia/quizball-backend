@@ -16,11 +16,11 @@ export const footballersRepo = {
     const players: UniversePlayer[] = [];
     let after = '';
     for (;;) {
-      const page = await sql<Array<{ pid: string; name: string; game_name: string; fame: number; aliases: string[] }>>`
-        SELECT pid, name, game_name, fame, aliases FROM wordgame_players
+      const page = await sql<Array<{ pid: string; name: string; game_name: string; fame: number; aliases: string[]; name_ru: string | null; game_name_ru: string | null }>>`
+        SELECT pid, name, game_name, fame, aliases, name_ru, game_name_ru FROM wordgame_players
         WHERE release_id = ${releaseId} AND pid > ${after} ORDER BY pid LIMIT ${PAGE}
       `;
-      for (const row of page) players.push({ pid: row.pid, name: row.name, game: row.game_name, fame: row.fame, aliases: row.aliases });
+      for (const row of page) players.push({ pid: row.pid, name: row.name, game: row.game_name, fame: row.fame, aliases: row.aliases, nameRu: row.name_ru, gameRu: row.game_name_ru });
       if (page.length < PAGE) return players;
       after = page[page.length - 1].pid;
     }

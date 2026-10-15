@@ -263,7 +263,8 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
     },
 
     /** The member's board row; null until the ranked run is finished or when the account is not board-visible. Same eligibility as the other public boards. */
-    async rankOf(userId: string, day: string, tx?: TransactionSql): Promise<Entry | null> {
+    /** With `partition`, only a run on that board (a run on the other one has no place on it). */
+    async rankOf(userId: string, day: string, tx?: TransactionSql, partition?: string): Promise<Entry | null> {
       const q = tx ? exec(tx) : sql;
       const [row] = await q<RawEntry[]>`
       SELECT
@@ -289,6 +290,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       JOIN users u ON u.id = me.user_id
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE me.user_id = ${userId} AND me.day = ${day} AND me.ranked AND me.done
+        ${opts.boardPartition && partition !== undefined ? q`AND ${q.unsafe(partitionOf('me'))} = ${partition}` : q``}
         AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
         AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
     `;

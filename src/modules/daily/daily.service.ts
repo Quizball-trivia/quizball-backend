@@ -40,7 +40,7 @@ export interface DailyServiceRepo<State, Row extends DailyRunRowBase<State>, Ent
   unrankClosedRun(tx: TransactionSql, id: string): Promise<Row | null>;
   rebaseRun(tx: TransactionSql, id: string, contentVersion: number, state: State): Promise<Row | null>;
   isClosed(closesAt: Date): Promise<boolean>;
-  rankOf(userId: string, day: string, tx?: TransactionSql): Promise<Entry | null>;
+  rankOf(userId: string, day: string, tx?: TransactionSql, partition?: string): Promise<Entry | null>;
   leaderboard(day: string, limit: number, partition?: string): Promise<{ players: number; top: Entry[] }>;
 }
 
@@ -362,7 +362,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
       partitionsSeen.add(partition ?? '');
       const cached = await leaderboards.get(boardKey(day, partition));
-      const me = userId ? await deps.repo.rankOf(userId, day) : null;
+      const me = userId ? await deps.repo.rankOf(userId, day, undefined, rules.boardPartition ? partition ?? '' : undefined) : null;
       return { day, players: cached.players, top: cached.top, me };
     },
   };

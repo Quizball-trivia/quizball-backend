@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstLetter, lastLetter, normalizeName, surnameOf, withinEdits, withinOneEdit } from '../../src/modules/footballers/footballers.text.js';
+import { firstLetter, lastLetter, lastLetterCyrillic, normalizeName, normalizeNameCyrillic, surnameOf, withinEdits, withinOneEdit } from '../../src/modules/footballers/footballers.text.js';
 import { buildUniverse, type UniversePlayer } from '../../src/modules/footballers/footballers.universe.js';
 
 // Invented footballers only: the repository is public.
@@ -123,6 +123,17 @@ describe('Russian names (matcher 2)', () => {
     expect(cy.starts('r-bely')).toContain('И');
     expect(cy.starting('Х')).toEqual(['r-kai']);
     expect(cy.player('p-latin')).toBeUndefined();
+  });
+
+  it('reads decomposed й and ё like the composed letters, and skips several closing letters', () => {
+    const decomposed = 'Кеи\u0306н Пе\u0308тр';
+    expect(normalizeNameCyrillic(decomposed)).toBe(normalizeNameCyrillic('Кейн Пётр'));
+    expect(lastLetterCyrillic('Цой')).toBe('О');
+    expect(lastLetterCyrillic('Пуйоль')).toBe('Л');
+    expect(lastLetterCyrillic('Белый')).toBe('Л');
+    expect(lastLetterCyrillic('Белы\u0306')).toBe('Л');
+    expect(cy.alphabet).not.toContain('Й');
+    expect(v2.alphabet[0]).toBe('A');
   });
 
   it('forgives a typo on long Russian names and picks among a pair by Russian name', () => {

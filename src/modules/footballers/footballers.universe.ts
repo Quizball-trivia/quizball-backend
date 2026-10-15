@@ -32,6 +32,8 @@ export interface UniversePlayer {
 export interface Universe {
   releaseId: string;
   size: number;
+  /** The letters names can start with, in order: Latin A–Z, or the Russian alphabet without й, ь, ъ and ы. */
+  alphabet: readonly string[];
   player(pid: string): UniversePlayer | undefined;
   /** The letters a footballer can answer: the first of the full name, of the name they are known by and of the surname. */
   starts(pid: string): readonly string[];
@@ -55,13 +57,14 @@ export interface Universe {
 }
 
 interface Alphabet {
+  letters: readonly string[];
   normalize(raw: string): string;
   first(name: string): string;
   last(name: string): string;
   surname(name: string): string;
 }
-const LATIN: Alphabet = { normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf };
-const CYRILLIC: Alphabet = { normalize: normalizeNameCyrillic, first: firstLetterCyrillic, last: lastLetterCyrillic, surname: surnameOfCyrillic };
+const LATIN: Alphabet = { letters: [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'], normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf };
+const CYRILLIC: Alphabet = { letters: [...'АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ'], normalize: normalizeNameCyrillic, first: firstLetterCyrillic, last: lastLetterCyrillic, surname: surnameOfCyrillic };
 
 export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[], matcherVersion = 1): Universe {
   const latin = buildIndexed(releaseId, rows, LATIN);
@@ -154,6 +157,7 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
   return {
     releaseId,
     size: players.length,
+    alphabet: alphabet.letters,
     player: (pid) => { const i = indexOf.get(pid); return i === undefined ? undefined : players[i]; },
     starts: (pid) => { const i = indexOf.get(pid); return i === undefined ? [] : starts[i]; },
     last: (pid) => { const i = indexOf.get(pid); return i === undefined ? '' : lasts[i]; },

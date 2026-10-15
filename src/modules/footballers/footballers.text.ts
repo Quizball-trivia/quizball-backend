@@ -22,11 +22,14 @@ export const lastLetter = (name: string): string => lettersOf(name).slice(-1).to
  * compared in Cyrillic letters and digits only.
  */
 export function normalizeNameCyrillic(raw: string): string {
-  return raw.toLowerCase().replace(/ё/g, 'е').replace(/й/g, 'и').replace(/[^а-я0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return raw.normalize('NFC').toLowerCase().replace(/ё/g, 'е').replace(/й/g, 'и').replace(/[^а-я0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** True when the text is written in Cyrillic (any Cyrillic letter): it is then read with the Russian names. */
 export const isCyrillicText = (text: string): boolean => /\p{Script=Cyrillic}/u.test(text);
+
+/** The compared form of a typed name in the alphabet it was typed in (reports keep Russian text too). */
+export const normalizeTyped = (text: string): string => (isCyrillicText(text) ? normalizeNameCyrillic(text) : normalizeName(text));
 
 const cyrillicLettersOf = (name: string): string => normalizeNameCyrillic(name).replace(/[^а-я]/g, '');
 
@@ -36,7 +39,7 @@ export const firstLetterCyrillic = (name: string): string => cyrillicLettersOf(n
  * before ("Белый" → Л). Read before й is folded into и.
  */
 export function lastLetterCyrillic(name: string): string {
-  const letters = name.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яй]/g, '').replace(/[йьъы]+$/, '');
+  const letters = name.normalize('NFC').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яй]/g, '').replace(/[йьъы]+$/, '');
   return letters.slice(-1).toUpperCase();
 }
 

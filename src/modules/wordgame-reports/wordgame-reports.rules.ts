@@ -1,4 +1,4 @@
-import { normalizeName } from '../footballers/footballers.text.js';
+import { normalizeTyped } from '../footballers/footballers.text.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 
 /** Pure: what a "that was right" report is about, decided by the same matcher that refused the text. */
@@ -12,12 +12,12 @@ export interface Refusal { release: string; subject: string | null; resolvedPid:
  * the name.
  */
 export function refusedForPair(universe: Universe, pair: { a: { key: string }; b: { key: string }; accepted: readonly string[] }, text: string): Refusal | null {
-  if (!normalizeName(text) || universe.pickAmong(text, pair.accepted) !== null) return null;
+  if (!normalizeTyped(text) || universe.pickAmong(text, pair.accepted) !== null) return null;
   return { release: universe.releaseId, subject: [pair.a.key, pair.b.key].sort().join('|'), resolvedPid: universe.resolve(text)[0] ?? null };
 }
 
 /** The name chain: a text the release does not know as a footballer. Null when it does (the refusal was about the letter or a repeat). */
 export function refusedName(universe: Universe, text: string): Refusal | null {
-  if (!normalizeName(text) || universe.resolve(text).length > 0) return null;
+  if (!normalizeTyped(text) || universe.resolve(text).length > 0) return null;
   return { release: universe.releaseId, subject: null, resolvedPid: null };
 }

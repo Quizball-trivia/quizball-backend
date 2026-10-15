@@ -45,7 +45,7 @@ function startPool(universe: Universe, bucket: StartBucket | null, minFame: numb
   if (!pool) {
     const seen = new Set<string>();
     pool = [];
-    for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    for (const letter of universe.alphabet) {
       for (const pid of universe.starting(letter)) {
         if (seen.has(pid)) continue;
         seen.add(pid);

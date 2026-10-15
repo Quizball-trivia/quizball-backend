@@ -16,7 +16,9 @@ const PAGE = 20_000;
 const ACTIVE_TTL_MS = 60_000;
 /** Versions held per process; an older one is loaded again when a run that froze it moves. */
 const MAX_HELD = 2;
-const held = new Map<string, Promise<ScopableIndex>>();
+/** Loaded versions, least recently used first. Loads in flight are kept apart so eviction never duplicates one. */
+const held = new Map<string, ScopableIndex>();
+const loading = new Map<string, Promise<ScopableIndex>>();
 let active: { version: string | null; checkedAt: number } = { version: null, checkedAt: 0 };
 
 async function loadRows(version: string): Promise<UniversePlayer[]> {
@@ -44,24 +46,34 @@ async function load(version: string): Promise<ScopableIndex> {
   return index;
 }
 
+/** The version if this process already holds it: lets a caller under a transaction avoid a database read. */
+export function heldRussianIndex(version: string): ScopableIndex | undefined {
+  const index = held.get(version);
+  if (index) {
+    held.delete(version);
+    held.set(version, index);
+  }
+  return index;
+}
+
 /** One version, loaded once per process (a failed load is not remembered); concurrent callers share the load. */
 export function russianIndex(version: string): Promise<ScopableIndex> {
-  const cached = held.get(version);
-  if (cached) {
-    held.delete(version);
-    held.set(version, cached);
-    return cached;
-  }
-  const loading = load(version).catch((error) => {
-    held.delete(version);
-    throw error;
+  const ready = heldRussianIndex(version);
+  if (ready) return Promise.resolve(ready);
+  const pending = loading.get(version);
+  if (pending) return pending;
+  const started = load(version).then((index) => {
+    held.set(version, index);
+    for (const id of held.keys()) {
+      if (held.size <= MAX_HELD) break;
+      held.delete(id);
+    }
+    return index;
+  }).finally(() => {
+    if (loading.get(version) === started) loading.delete(version);
   });
-  held.set(version, loading);
-  for (const id of held.keys()) {
-    if (held.size <= MAX_HELD) break;
-    held.delete(id);
-  }
-  return loading;
+  loading.set(version, started);
+  return started;
 }
 
 /** The version new runs and rooms freeze; null while Russian names are not switched on. */
@@ -72,11 +84,12 @@ export async function activeRussianVersion(now = Date.now()): Promise<string | n
   return active.version;
 }
 
-const views = new WeakMap<Universe, Map<ScopableIndex, Universe>>();
+// Weak on both keys: an evicted version is freed even while a release that was viewed through it stays cached.
+const views = new WeakMap<Universe, WeakMap<ScopableIndex, Universe>>();
 /** The release's footballers under their Russian names (only those the release has). */
 export function russianView(universe: Universe, index: ScopableIndex): Universe {
   let byIndex = views.get(universe);
-  if (!byIndex) views.set(universe, (byIndex = new Map()));
+  if (!byIndex) views.set(universe, (byIndex = new WeakMap()));
   let view = byIndex.get(index);
   if (!view) byIndex.set(index, (view = index.scoped(universe.releaseId, (pid) => universe.player(pid) !== undefined)));
   return view;
@@ -114,5 +127,6 @@ export function judgingUniverse(universe: Universe, russian: Universe | null, al
 /** Tests only. */
 export function forgetRussian(): void {
   held.clear();
+  loading.clear();
   active = { version: null, checkedAt: 0 };
 }

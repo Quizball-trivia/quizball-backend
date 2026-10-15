@@ -50,12 +50,39 @@ export interface DailyStartContext {
   russianVersion?: string | null;
 }
 
+/**
+ * Thrown by `dayFor` when what a run froze is not in this process: the call loads it outside any transaction (a load
+ * under the run lock, with a transaction slot held, can starve the pool when many runs move at once) and runs again.
+ */
+export class LoadFirst extends Error {
+  constructor(readonly load: () => Promise<unknown>) {
+    super('load_first');
+  }
+}
+
+/** Runs `call`; after a LoadFirst it loads, then runs it once more. Evicted again meanwhile: the client re-syncs. */
+async function loadingFirst<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (!(error instanceof LoadFirst)) throw error;
+    await error.load();
+  }
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof LoadFirst) throw staleState();
+    throw error;
+  }
+}
+
 /** What makes one daily game: its run state machine and what a player may see of it. */
 export interface DailyRules<State, Day, Public> {
   newState(context?: DailyStartContext): State;
   /**
    * The day as this run sees it (e.g. with the names the run froze at its start), awaited after the row is read and used for
-   * the move and for what the player is shown. Games without per-run content leave it out.
+   * the move and for what the player is shown. It runs under the run's transaction, so it never reads the database: what
+   * it lacks in memory it asks for with `LoadFirst`. Games without per-run content leave it out.
    */
   dayFor?(day: Day, state: State): Promise<Day>;
   /**
@@ -209,7 +236,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     if (player.kind === 'guest' && !(calendar.isClosedDay(dayId, now) && (await closedByDatabase(dayId)))) throw signInForToday();
     if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
     const live = dayId === calendar.rankedDay(now);
-    return settled(await deps.repo.withTx(async (tx) => {
+    return settled(await loadingFirst(() => deps.repo.withTx(async (tx) => {
       await lockServedDay(tx, day);
       const inserted = await deps.repo.insertRun(tx, {
         id: randomUUID(), player, day: dayId, ranked: live && player.kind === 'member', contentVersion: day.contentVersion,
@@ -232,7 +259,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
         row = rebased;
       }
       return respond(row, day, at, tx);
-    }));
+    })));
   }
 
   async function mutate<Extra extends object = object>(player: DailyPlayer, runId: string, version: number, step: DailyStep<State, Day, Extra>): Promise<RunResponse<Public> & Partial<Extra>> {
@@ -240,7 +267,7 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     // Read before waiting on the row lock; the UPDATE itself re-checks the ranked cutoff at statement time.
     const now = deps.now();
     const today = calendar.rankedDay(now);
-    const response = await deps.repo.withTx(async (tx) => {
+    const response = await loadingFirst(() => deps.repo.withTx(async (tx) => {
       const dayId = await deps.repo.runDay(tx, runId);
       if (!dayId) throw new NotFoundError('Run not found');
       const day = content.get(dayId);
@@ -263,9 +290,30 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       }, out.settledAt != null ? new Date(out.settledAt) : undefined);
       if (!saved) throw await rejectedWrite(tx, row.day, row.content_version);
       return { ...(await respond(saved, day, at, tx)), ...out.extra } as RunResponse<Public> & Partial<Extra>;
-    });
+    }));
     settled(response);
     return response;
+  }
+
+  async function current(player: DailyPlayer, dayId: string | undefined): Promise<RunResponse<Public> | { run: null }> {
+    const content = await deps.content();
+    const target = dayId ?? releaseDay(deps.now());
+    const row = await deps.repo.getRun(player, target);
+    if (!row) return { run: null };
+    const day = content.get(target) ?? null;
+    if (row.content_version !== day?.contentVersion) return { run: null };
+    const at = await nowMs();
+    if (rules.project(row.state, at) === row.state) return respond(row, day, at);
+    // The clock settled something since the last write: record it (locked like a move), so what this read shows
+    // (a finished run included) is what the board has.
+    return deps.repo.withTx(async (tx) => {
+      await lockServedDay(tx, day);
+      const locked = await deps.repo.lockRun(tx, row.id);
+      if (!locked) return respond(row, day, at);
+      const saved = await recordOrUnrank(tx, locked, await nowMs(tx));
+      if (saved !== locked && rules.completion(saved.state) && saved.ranked) forgetBoard(saved.day, saved.state);
+      return respond(saved, day, await nowMs(tx), tx);
+    });
   }
 
   return {
@@ -273,25 +321,8 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     mutate,
 
     /** The player's run of `dayId` (default: today); none until /start created it, or while /start must move it onto corrected content. */
-    async current(player: DailyPlayer, dayId: string | undefined): Promise<RunResponse<Public> | { run: null }> {
-      const content = await deps.content();
-      const target = dayId ?? releaseDay(deps.now());
-      const row = await deps.repo.getRun(player, target);
-      if (!row) return { run: null };
-      const day = content.get(target) ?? null;
-      if (row.content_version !== day?.contentVersion) return { run: null };
-      const at = await nowMs();
-      if (rules.project(row.state, at) === row.state) return respond(row, day, at);
-      // The clock settled something since the last write: record it (locked like a move), so what this read shows
-      // (a finished run included) is what the board has.
-      return deps.repo.withTx(async (tx) => {
-        await lockServedDay(tx, day);
-        const locked = await deps.repo.lockRun(tx, row.id);
-        if (!locked) return respond(row, day, at);
-        const saved = await recordOrUnrank(tx, locked, await nowMs(tx));
-        if (saved !== locked && rules.completion(saved.state) && saved.ranked) forgetBoard(saved.day, saved.state);
-        return respond(saved, day, await nowMs(tx), tx);
-      });
+    current(player: DailyPlayer, dayId: string | undefined): Promise<RunResponse<Public> | { run: null }> {
+      return loadingFirst(() => current(player, dayId));
     },
 
     /**

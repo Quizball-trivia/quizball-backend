@@ -2,8 +2,8 @@ import { logger } from '../../core/logger.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
-import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
-import { activeRussianVersion, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
+import { createDailyService, LoadFirst, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
+import { activeRussianVersion, heldRussianIndex, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { nameChainPackSchema } from '../room/games/name-chain/name-chain.engine.js';
 import { draw, pickStart } from '../room/games/name-chain/name-chain.core.js';
@@ -35,9 +35,12 @@ export const nameChainDailyRepo = createDailyRunsRepo<rules.RunState, NameChainR
 );
 
 /** The day as one run sees it: with the Russian names it froze, on the letters it plays with. */
-async function dayForRun(day: ServedDay, s: rules.RunState): Promise<ServedDay> {
+async function dayForRun(day: ServedDay, s: rules.RunState, outsideTx = false): Promise<ServedDay> {
   if (!s.ov) return day;
-  const russian = russianView(day.universe, await russianIndex(s.ov));
+  // Under a run's transaction only what this process holds; a report or review (no transaction) may load.
+  const index = heldRussianIndex(s.ov) ?? (outsideTx ? await russianIndex(s.ov) : undefined);
+  if (!index) { const version = s.ov; throw new LoadFirst(() => russianIndex(version)); }
+  const russian = russianView(day.universe, index);
   return { ...day, universe: judgingUniverse(day.universe, russian, s.al === 'cy' ? 'cyrillic' : 'latin') };
 }
 
@@ -82,7 +85,9 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
   return {
     /** A run freezes the Russian names switched on now (Latin runs too: a name typed in Cyrillic is read with them). */
     async start(dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> {
-      const russianVersion = await activeRussianVersion().catch(() => null);
+      const active = await activeRussianVersion().catch(() => null);
+      // Loaded here, before the run's transaction; a version that cannot be loaded now is not frozen.
+      const russianVersion = active && (await russianIndex(active).then(() => active, () => null));
       return core.start(dayId, player, clientContentVersion, { locale, russianVersion });
     },
 
@@ -117,7 +122,7 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
       const run = await deps.repo.getRun(player, dayId);
       if (!run || run.content_version !== served.contentVersion || (run.state.ch.length === 0 && run.state.n.length === 0)) return;
       // Judged as the run was: with the names it froze.
-      const day = await dayForRun(served, run.state);
+      const day = await dayForRun(served, run.state, true);
       const refusal = refusedName(day.universe, text);
       if (!refusal) return;
       await deps.reports.file({
@@ -137,7 +142,7 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const closed = await core.closedDay(dayId);
       const version = locale === 'ru' ? await activeRussianVersion().catch(() => null) : null;
-      const day = version ? await dayForRun(closed, { ...rules.newState({ locale, russianVersion: version }) }) : closed;
+      const day = version ? await dayForRun(closed, { ...rules.newState({ locale, russianVersion: version }) }, true) : closed;
       const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));
       const name = pid ? day.universe.player(pid)?.name ?? null : null;
       return { day: dayId, starts: name ? [name] : [] };

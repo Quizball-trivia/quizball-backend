@@ -14,14 +14,25 @@ if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return count`;
 
 export function guestHttpBudget(
-  name: 'mint' | 'standings' | 'stat-sniper-board' | 'ip' | 'principal' | 'buscaminas-address' | 'buscaminas' | 'pistas-address' | 'pistas' | 'ultimo-address' | 'ultimo' | 'minuto-address' | 'minuto' | 'shared-player-address' | 'shared-player' | 'name-chain-address' | 'name-chain' | 'grid-daily-address' | 'grid-daily' | 'ggt-address' | 'ggt-start-address' | 'ggt',
+  name: 'mint' | 'standings' | 'play-popularity' | 'stat-sniper-board' | 'ip' | 'principal' | 'buscaminas-address' | 'buscaminas' | 'pistas-address' | 'pistas' | 'ultimo-address' | 'ultimo' | 'minuto-address' | 'minuto' | 'shared-player-address' | 'shared-player' | 'name-chain-address' | 'name-chain' | 'grid-daily-address' | 'grid-daily' | 'ggt-address' | 'ggt-start-address' | 'ggt',
   limit: number,
   subject: (req: Request) => string,
+  /**
+   * What to do when the counter cannot be reached. 'refuse' (the default) for anything that writes or costs;
+   * 'allow' only for a read that is already served from a copy the replica holds, where refusing would hide
+   * that copy for no protection.
+   */
+  whenUncounted: 'refuse' | 'allow' = 'refuse',
 ): RequestHandler {
+  const uncounted = (next: (error?: unknown) => void): void => {
+    if (whenUncounted === 'allow') next();
+    else next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+  };
   return async (req, res, next) => {
     const redis = getRedisClient();
-    if (!redis?.isOpen) {
-      next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+    // A reconnecting client is still open but queues commands: a read with a copy to serve does not wait on it.
+    if (!redis?.isOpen || (whenUncounted === 'allow' && !redis.isReady)) {
+      uncounted(next);
       return;
     }
     const windowSeconds = 3600;
@@ -42,7 +53,7 @@ export function guestHttpBudget(
         next(new RateLimitError());
       } else next();
     } catch {
-      next(new AppError('Guest play is temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR));
+      uncounted(next);
     }
   };
 }

@@ -316,7 +316,7 @@ async function notifyProgressionChange(
       body: {
         en: `You received ${summary}.`,
         ka: `მიიღე ${partsKa.join(' და ')}.`,
-        ru: `Ты получил ${summary}.`,
+        ru: `Тебе начислено ${parts.join(' и ')}.`,
       },
       data: { xpDelta: change.xpDelta, rpDelta: change.rpDelta, reason: change.reason },
     });

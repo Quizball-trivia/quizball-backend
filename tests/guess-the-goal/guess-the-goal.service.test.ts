@@ -20,7 +20,7 @@ const countSessionsStartedTodayMock = vi.fn();
 
 vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
   guessTheGoalRepo: {
-    acquireUserStartLock: vi.fn(),
+    acquireStartLock: vi.fn(),
     getPublishedGoal: (...a: unknown[]) => getPublishedGoalMock(...a),
     pickNextGoal: (...a: unknown[]) => pickNextGoalMock(...a),
     hasSeenGoal: (...a: unknown[]) => hasSeenGoalMock(...a),
@@ -66,7 +66,8 @@ vi.mock('../../src/db/index.js', () => ({
 
 import { guessTheGoalService } from '../../src/modules/guess-the-goal/guess-the-goal.service.js';
 
-const USER = 'user-1';
+const USER = { kind: 'member', userId: 'user-1' } as const;
+const GUEST = { kind: 'guest', guestId: 'guest-1' } as const;
 
 function makeGoal(overrides: Record<string, unknown> = {}) {
   return {
@@ -276,7 +277,7 @@ describe('guess', () => {
     expect(outcome.awards.wallet_coins).toBe(500);
     expect(outcome.awards.total_xp).toBe(1000);
     expect(outcome.bonus?.options.every((o) => !('is_correct' in o))).toBe(true);
-    expect(addCoinsInTxMock).toHaveBeenCalledWith({}, USER, 25);
+    expect(addCoinsInTxMock).toHaveBeenCalledWith({}, USER.userId, 25);
   });
 
   it('a late correct guess still pays full points (no time decay)', async () => {
@@ -329,7 +330,7 @@ describe('guess', () => {
     expect(outcome.awards.coins).toBe(10);
     expect(outcome.awards.daily_cap_reached).toBe(true);
     expect(outcome.awards.xp).toBe(50);
-    expect(addCoinsInTxMock).toHaveBeenCalledWith({}, USER, 10);
+    expect(addCoinsInTxMock).toHaveBeenCalledWith({}, USER.userId, 10);
   });
 
   it('retrying the same option replays the stored outcome without paying twice', async () => {
@@ -437,5 +438,68 @@ describe('answerBonus', () => {
     expect(outcome.bonus_points).toBe(0);
     expect(outcome.correct_option_id).toBe('a');
     expect(addCoinsInTxMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('guests', () => {
+  it('a guest\'s correct guess scores but writes no solves row and grants nothing', async () => {
+    getOpenSessionForUpdateMock.mockResolvedValue(makeSession({ user_id: null, guest_id: 'guest-1' }));
+
+    const outcome = await guessTheGoalService.guess(GUEST, 'session-1', 'a');
+
+    expect(outcome.correct).toBe(true);
+    expect(outcome.points).toBe(100);
+    expect(outcome.awards).toMatchObject({ first_solve: false, coins: 0, xp: 0 });
+    expect(insertSolveMock).not.toHaveBeenCalled();
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
+    expect(grantXpInTxMock).not.toHaveBeenCalled();
+    expect(updateSessionMock).toHaveBeenCalledWith(
+      {},
+      'session-1',
+      expect.objectContaining({ first_solve: false, coins_awarded: 0, xp_awarded: 0 })
+    );
+  });
+
+  it('a guest\'s correct bonus grants nothing', async () => {
+    getOpenSessionForUpdateMock.mockResolvedValue(
+      makeSession({ user_id: null, guest_id: 'guest-1', state: 'guessed', guess_correct: true })
+    );
+
+    const outcome = await guessTheGoalService.answerBonus(GUEST, 'session-1', 'a');
+
+    expect(outcome.correct).toBe(true);
+    expect(outcome.awards).toMatchObject({ coins: 0, xp: 0 });
+    expect(grantXpInTxMock).not.toHaveBeenCalled();
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
+  });
+
+  it('a guest\'s stats read no wallet ledger and promise no coins', async () => {
+    countSolvedMock.mockResolvedValue(1);
+    countPublishedMock.mockResolvedValue(5);
+    countSessionsStartedTodayMock.mockResolvedValue(2);
+
+    const stats = await guessTheGoalService.getStats(GUEST);
+
+    expect(coinsGrantedTodayMock).not.toHaveBeenCalled();
+    expect(stats).toMatchObject({ solved: 1, total: 5, coins_today: 0, goals_today: 2, daily_max_coins: 0 });
+  });
+
+  it('a guest start is scoped to the guest: lock, daily count, pick and insert', async () => {
+    getSessionByNonceMock.mockResolvedValue(null);
+    countSessionsStartedTodayMock.mockResolvedValue(0);
+    getOpenSessionForUpdateMock.mockResolvedValue(null);
+    pickNextGoalMock.mockResolvedValue(makeGoal());
+    hasSeenGoalMock.mockResolvedValue(false);
+    insertSessionMock.mockImplementation(async (_tx: unknown, data: { goalSnapshot: unknown }) =>
+      makeSession({ user_id: null, guest_id: 'guest-1', goal_snapshot: data.goalSnapshot }));
+    countSolvedMock.mockResolvedValue(0);
+    countPublishedMock.mockResolvedValue(5);
+
+    await guessTheGoalService.startSession(GUEST, 'g1');
+
+    expect(countSessionsStartedTodayMock).toHaveBeenCalledWith({}, GUEST, expect.any(String));
+    expect(pickNextGoalMock).toHaveBeenCalledWith({}, GUEST);
+    expect(insertSessionMock).toHaveBeenCalledWith({}, expect.objectContaining({ player: GUEST }));
+    expect(countSolvedMock).toHaveBeenCalledWith(GUEST);
   });
 });

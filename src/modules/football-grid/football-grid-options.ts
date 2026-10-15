@@ -137,7 +137,7 @@ export function buildFootballGridOptions(input: {
   const sharesCategory = (cellIndex: number): boolean =>
     cellIndex !== input.cellIndex && (Math.floor(cellIndex / 3) === row || cellIndex % 3 === column);
   // Two options never share a label in either script: a player must be able to tell the four apart.
-  const labels = (player: FootballGridBoardPlayer): string[] => [nameKey(player.name), ...(player.nameKa ? [nameKey(player.nameKa)] : [])];
+  const labels = (player: FootballGridBoardPlayer): string[] => [nameKey(player.name), ...(player.nameKa ? [nameKey(player.nameKa)] : []), ...(player.nameRu ? [nameKey(player.nameRu)] : [])];
   const takenNames = new Set(labels(correct));
   const takenIds = new Set([correct.playerId]);
   const collect = (cells: number[]): FootballGridBoardPlayer[] => {

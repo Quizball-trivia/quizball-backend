@@ -44,7 +44,7 @@ export const nameChainDailyController = {
   /** Members see their own row in `me`; guests are never on the board. */
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
-    const board = await nameChainDailyService.leaderboard(query.day, req.user?.id ?? null, query.alphabet);
+    const board = await nameChainDailyService.leaderboard(query.day, req.user?.id ?? null, query.locale);
     const anonymous = !req.headers.authorization && !req.cookies?.qb_access_token;
     res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
     res.json(board);

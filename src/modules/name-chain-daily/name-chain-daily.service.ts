@@ -143,8 +143,9 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
       return { day: dayId, starts: name ? [name] : [] };
     },
 
-    leaderboard: (dayId: string | undefined, userId: string | null, alphabet?: 'latin' | 'cyrillic'): Promise<LeaderboardResponse> =>
-      core.leaderboard(dayId, userId, alphabet === 'cyrillic' ? 'cy' : ''),
+    /** Russian players see the Russian-letter board (their runs play Russian letters once Russian names are on). */
+    leaderboard: (dayId: string | undefined, userId: string | null, locale?: string): Promise<LeaderboardResponse> =>
+      core.leaderboard(dayId, userId, locale === 'ru' ? 'cy' : ''),
 
     /** One pass of the settling sweep: chains whose clock ran out with nobody coming back are ended (and the run finished, on the last one). */
     async settleOverdue(): Promise<number> {

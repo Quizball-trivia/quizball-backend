@@ -37,6 +37,9 @@ const EFFORT = opt('effort', '');
 const BATCH = Number(opt('batch', '40'));
 const CONCURRENCY = Number(opt('concurrency', '1'));
 const CHUNK_ROWS = Number(opt('chunk-rows', '300'));
+for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRENCY, 'chunk-rows': CHUNK_ROWS })) {
+  if (!Number.isInteger(value) || value < 1) { console.error(`ABORT: --${name} must be a positive integer`); process.exit(1); }
+}
 
 const env = readFileSync('.env', 'utf8');
 const envVar = (k: string) => env.match(new RegExp(`^${k}\\s*=\\s*"?([^"\\n]+)"?`, 'm'))?.[1];

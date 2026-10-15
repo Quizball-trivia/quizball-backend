@@ -5,7 +5,7 @@ import { sharedPlayerDailyService } from './shared-player-daily.service.js';
 export const sharedPlayerDailyController = {
   async start(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as StartRequest;
-    res.json(await sharedPlayerDailyService.start(body.day, playerOf(req), body.contentVersion));
+    res.json(await sharedPlayerDailyService.start(body.day, playerOf(req), body.contentVersion, body.locale));
   },
   async next(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as MoveRequest;
@@ -32,8 +32,8 @@ export const sharedPlayerDailyController = {
   },
   /** Only closed days are served, and a closed day only changes through a (rare) correction. */
   async review(req: Request, res: Response): Promise<void> {
-    const { day } = req.validated.query as ReviewQuery;
-    const review = await sharedPlayerDailyService.review(day);
+    const { day, locale } = req.validated.query as ReviewQuery;
+    const review = await sharedPlayerDailyService.review(day, locale);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.json(review);
   },

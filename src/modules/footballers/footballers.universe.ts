@@ -3,13 +3,8 @@ import {
   TYPO_MIN_LENGTH, withinEdits, withinOneEdit,
 } from './footballers.text.js';
 
-/**
- * Bumped whenever a change here could judge the same text differently: content pins the version it was built for.
- * 1: Latin names only. 2: also each footballer's Russian name, read with Russian letters (`Universe.cyrillic`).
- */
-export const MATCHER_VERSION = 2;
-/** Releases this build can load: a release is judged with exactly the matcher it was built for. */
-export const SUPPORTED_MATCHER_VERSIONS: readonly number[] = [1, 2];
+/** Bumped whenever a change here could judge the same text differently: content pins the version it was built for. */
+export const MATCHER_VERSION = 1;
 
 export interface UniversePlayer {
   /** Durable id: the same footballer keeps it from one release to the next. */
@@ -20,9 +15,6 @@ export interface UniversePlayer {
   /** Orders namesakes: the best known is tried first. */
   fame: number;
   aliases: string[];
-  /** Matcher 2: the Russian name and the Russian name the footballer is known by (both or neither). */
-  nameRu?: string | null;
-  gameRu?: string | null;
 }
 
 /**
@@ -49,11 +41,6 @@ export interface Universe {
    * footballer who is not among them.
    */
   pickAmong(text: string, among: readonly string[]): string | null;
-  /**
-   * Matcher 2: the same footballers (same ids) under their Russian names, read with Russian letters: names, starts, the next
-   * letter (the "cities" rule) and typo forgiveness are all Cyrillic. Footballers without a Russian name are not in it.
-   */
-  cyrillic?: Universe;
 }
 
 interface Alphabet {
@@ -66,14 +53,27 @@ interface Alphabet {
 const LATIN: Alphabet = { letters: [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'], normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf };
 const CYRILLIC: Alphabet = { letters: [...'АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ'], normalize: normalizeNameCyrillic, first: firstLetterCyrillic, last: lastLetterCyrillic, surname: surnameOfCyrillic };
 
-export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[], matcherVersion = 1): Universe {
-  const latin = buildIndexed(releaseId, rows, LATIN);
-  if (matcherVersion < 2) return latin;
-  const russian = rows.flatMap((p) => (p.nameRu && p.gameRu ? [{ pid: p.pid, name: p.nameRu, game: p.gameRu, fame: p.fame, aliases: [] }] : []));
-  return { ...latin, cyrillic: buildIndexed(releaseId, russian, CYRILLIC) };
+export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[]): Universe {
+  return buildIndexed(releaseId, rows, LATIN);
 }
 
-function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphabet: Alphabet): Universe {
+/**
+ * One index of names in some alphabet, with views restricted to a set of footballers: membership is applied inside every
+ * matching step (an exact hit, the typo veto, the typo search, the letters), never by filtering results afterwards.
+ */
+export interface ScopableIndex extends Universe {
+  scoped(releaseId: string, member: (pid: string) => boolean): Universe;
+}
+
+/**
+ * The Russian names of one overlay version, indexed once and shared by every release: Russian letters (the "cities" rule),
+ * Russian names, Cyrillic typo forgiveness. A release reads it through `scoped`.
+ */
+export function buildRussianIndex(version: string, rows: readonly UniversePlayer[]): ScopableIndex {
+  return buildIndexed(version, rows, CYRILLIC);
+}
+
+function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphabet: Alphabet): ScopableIndex {
   const { normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf } = alphabet;
   // Best known first, ties by id: the order (and so every "best known" pick) depends only on the release.
   const players = [...rows].sort((a, b) => b.fame - a.fame || (a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0));
@@ -116,25 +116,28 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
     else fullByLength.set(key.length, [[key, i]]);
   });
 
-  const resolve = (text: string): string[] => {
+  type Member = ((pid: string) => boolean) | null;
+  const isIn = (member: Member, i: number) => member === null || member(players[i].pid);
+
+  const resolveIn = (text: string, member: Member): string[] => {
     const key = normalizeName(text);
     if (!key) return [];
-    const hit = exact.get(key);
-    if (hit) return hit.map(pidOf);
+    const hit = exact.get(key)?.filter((i) => isIn(member, i));
+    if (hit?.length) return hit.map(pidOf);
     if (key.length < TYPO_MIN_LENGTH) return [];
     const found = new Set<number>();
     for (const length of [key.length - 1, key.length, key.length + 1]) {
-      for (const [candidate, player] of fullByLength.get(length) ?? []) if (withinOneEdit(key, candidate)) found.add(player);
+      for (const [candidate, player] of fullByLength.get(length) ?? []) if (isIn(member, player) && withinOneEdit(key, candidate)) found.add(player);
     }
     return [...found].sort((a, b) => a - b).map(pidOf);
   };
 
-  const pickAmong = (text: string, among: readonly string[]): string | null => {
+  const pickAmongIn = (text: string, among: readonly string[], member: Member): string | null => {
     const key = normalizeName(text);
     if (key.length < 2) return null;
     const candidates = among.flatMap((pid) => {
       const i = indexOf.get(pid);
-      if (i === undefined) return [];
+      if (i === undefined || !isIn(member, i)) return [];
       const whole = [players[i].name, players[i].game, ...players[i].aliases].map(normalizeName).filter(Boolean);
       return [{ i, whole, words: whole.flatMap((n) => n.split(' ')).filter((w) => w.length >= 2) }];
     }).sort((a, b) => a.i - b.i);
@@ -146,7 +149,7 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
     ];
     for (const [tier, fits] of tiers.entries()) {
       // Typos are only forgiven when the text is not, as typed, some other footballer's name.
-      if (tier === 2 && exact.has(key)) return null;
+      if (tier === 2 && (exact.get(key)?.some((i) => isIn(member, i)) ?? false)) return null;
       // A word two of them share names the best known of them.
       const hit = candidates.find(fits);
       if (hit) return players[hit.i].pid;
@@ -154,15 +157,26 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
     return null;
   };
 
-  return {
-    releaseId,
-    size: players.length,
-    alphabet: alphabet.letters,
-    player: (pid) => { const i = indexOf.get(pid); return i === undefined ? undefined : players[i]; },
-    starts: (pid) => { const i = indexOf.get(pid); return i === undefined ? [] : starts[i]; },
-    last: (pid) => { const i = indexOf.get(pid); return i === undefined ? '' : lasts[i]; },
-    resolve,
-    starting: (letter) => byLetter.get(letter) ?? [],
-    pickAmong,
+  const view = (id: string, member: Member): Universe => {
+    const at = (pid: string) => { const i = indexOf.get(pid); return i === undefined || !isIn(member, i) ? undefined : i; };
+    const letters = new Map<string, readonly string[]>();
+    return {
+      releaseId: id,
+      size: member === null ? players.length : players.reduce((n, p) => n + (member(p.pid) ? 1 : 0), 0),
+      alphabet: alphabet.letters,
+      player: (pid) => { const i = at(pid); return i === undefined ? undefined : players[i]; },
+      starts: (pid) => { const i = at(pid); return i === undefined ? [] : starts[i]; },
+      last: (pid) => { const i = at(pid); return i === undefined ? '' : lasts[i]; },
+      resolve: (text) => resolveIn(text, member),
+      starting: (letter) => {
+        if (member === null) return byLetter.get(letter) ?? [];
+        let list = letters.get(letter);
+        if (!list) letters.set(letter, (list = (byLetter.get(letter) ?? []).filter(member)));
+        return list;
+      },
+      pickAmong: (text, among) => pickAmongIn(text, among, member),
+    };
   };
+
+  return { ...view(releaseId, null), scoped: (id, member) => view(id, member) };
 }

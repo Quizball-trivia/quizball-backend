@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
+import { activeRussianVersion } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
@@ -52,7 +53,8 @@ const unlessUnsupported = <T>(work: Promise<T | null>): Promise<T | null> => wor
   throw error;
 });
 
-const hydrated = async (engine: AnyRoomEngine, content: unknown): Promise<unknown> => (engine.hydrate ? engine.hydrate(content) : content);
+const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown): Promise<unknown> =>
+  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null) : content);
 
 /** A schema error can quote the content (an answer): callers and logs only ever get a code. */
 function parseContent(engine: AnyRoomEngine, raw: unknown): unknown {
@@ -131,7 +133,7 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
     if (isLive(row.status)) await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
     return null;
   }
-  return { row, seats, content: await hydrated(engine, content), engine };
+  return { row, seats, content: await hydrated(engine, content, row.state), engine };
 }
 
 /**
@@ -220,7 +222,11 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const admitted = ready.sort((a, b) => a.slot - b.slot).map((s, seat) => ({ userId: s.user_id, seat }));
   await roomRepo.admit(tx, l.row.id, admitted);
   const nowMs = l.row.now.getTime();
-  let state = l.engine.start(admitted.length, l.content, nowMs);
+  const localeOf = new Map(ready.map((s) => [s.user_id, s.locale]));
+  const russianVersion = await activeRussianVersion().catch(() => null);
+  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
+  // What the match froze (its Russian names) is attached before anything reads it.
+  l = { ...l, content: await hydrated(l.engine, l.content, state) };
   // Admitted but without a socket right now: away from the start, with its own absence window.
   const away = ready.filter((s) => !s.connected);
   if (away.length > 0) {
@@ -526,7 +532,7 @@ export const roomService = {
     const state = row.state as EngineState | null;
     const engine = roomEngineFor(row.game, row.engine_version);
     const parsed = state && engine ? await contentOf(undefined, row, engine) : null;
-    const content = parsed !== null && engine ? await hydrated(engine, parsed) : null;
+    const content = parsed !== null && engine ? await hydrated(engine, parsed, state) : null;
     for (const userId of recipients) {
       const snapshot = projectSnapshot(row, seats, state, content, engine, userId, localeOverride);
       if (snapshot) snapshots.set(userId, snapshot);
@@ -563,7 +569,7 @@ export const roomService = {
     const engine = roomEngineFor(found.game, found.engine_version);
     const content = engine?.refusal ? engine.parseContent(found.content) : null;
     if (!engine?.refusal || content === null) return null;
-    const refusal = engine.refusal(found.state as EngineState, await hydrated(engine, content), round, text);
+    const refusal = engine.refusal(found.state as EngineState, await hydrated(engine, content, found.state), round, text);
     return refusal && { ...refusal, game: found.game };
   },
 };

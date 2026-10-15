@@ -5,7 +5,7 @@ import { nameChainDailyService } from './name-chain-daily.service.js';
 export const nameChainDailyController = {
   async start(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as StartRequest;
-    res.json(await nameChainDailyService.start(body.day, playerOf(req), body.contentVersion));
+    res.json(await nameChainDailyService.start(body.day, playerOf(req), body.contentVersion, body.locale));
   },
   async next(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as MoveRequest;
@@ -36,15 +36,15 @@ export const nameChainDailyController = {
   },
   /** Only closed days are served, and a closed day only changes through a (rare) correction. */
   async review(req: Request, res: Response): Promise<void> {
-    const { day } = req.validated.query as ReviewQuery;
-    const review = await nameChainDailyService.review(day);
+    const { day, locale } = req.validated.query as ReviewQuery;
+    const review = await nameChainDailyService.review(day, locale);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.json(review);
   },
   /** Members see their own row in `me`; guests are never on the board. */
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
-    const board = await nameChainDailyService.leaderboard(query.day, req.user?.id ?? null);
+    const board = await nameChainDailyService.leaderboard(query.day, req.user?.id ?? null, query.alphabet);
     const anonymous = !req.headers.authorization && !req.cookies?.qb_access_token;
     res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
     res.json(board);

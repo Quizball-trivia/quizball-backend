@@ -15,7 +15,9 @@ const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
 
 export const ANSWER_MAX_LENGTH = 60;
 // Content versions are content hashes: positive integers up to 2^32.
-export const startSchema = z.object({ day: daySchema, contentVersion: z.number().int().min(1).max(2 ** 32).optional() });
+/** The interface language decides how a word game is played in Russian; anything else plays as before. */
+const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional();
+export const startSchema = z.object({ day: daySchema, contentVersion: z.number().int().min(1).max(2 ** 32).optional(), locale: localeSchema });
 export type StartRequest = z.infer<typeof startSchema>;
 /** Every move names the run and the version the client last saw; the server row decides. */
 export const moveSchema = z.object({ runId: z.string().uuid(), version: z.number().int().min(0).max(2 ** 31 - 1) });
@@ -28,9 +30,9 @@ export const pairReportSchema = z.object({ day: daySchema, pair: z.number().int(
 export type PairReportRequest = z.infer<typeof pairReportSchema>;
 export const nameReportSchema = z.object({ day: daySchema, text: reportText });
 export type NameReportRequest = z.infer<typeof nameReportSchema>;
-export const dayQuerySchema = z.object({ day: daySchema.optional() });
+export const dayQuerySchema = z.object({ day: daySchema.optional(), alphabet: z.enum(['latin', 'cyrillic']).optional() });
 export type DayQuery = z.infer<typeof dayQuerySchema>;
-export const reviewQuerySchema = z.object({ day: daySchema });
+export const reviewQuerySchema = z.object({ day: daySchema, locale: localeSchema });
 export type ReviewQuery = z.infer<typeof reviewQuerySchema>;
 
 /** Set by the routes' identity middleware: a member session, else a guest session. */

@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { judgingUniverse } from '../../../footballers/footballers.russian.js';
 import type { Universe } from '../../../footballers/footballers.universe.js';
-import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
+import type { RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomStartContext } from '../../room.engine.js';
 import { draw, examplesOn, judge, letterExhausted, pickStart, type Verdict } from './name-chain.core.js';
 
 /**
@@ -25,7 +26,8 @@ const EXAMPLES = 5;
 export const nameChainPackSchema = z.object({ release: z.string().min(3).max(40), seed: z.number().int().min(0).max(0xffffffff) }).strict();
 export type NameChainPack = z.infer<typeof nameChainPackSchema>;
 /** The stored pack, plus (in memory only) the footballers of its release. */
-export interface NameChainContent { pack: NameChainPack; universe: Universe | null }
+/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian names. */
+export interface NameChainContent { pack: NameChainPack; universe: Universe | null; russian?: Universe | null }
 
 export const nameChainCommandSchema = z.discriminatedUnion('type', [
   z.object({
@@ -71,6 +73,10 @@ export interface NameChainState extends RoomEngineState {
   roundsWon: number;
   /** Seats that left while the match was still open: they rank below everyone who stayed. */
   quit: boolean[];
+  /** The Russian names frozen when the gate closed. Absent: Latin text only. */
+  ov?: string;
+  /** Russian letters (every admitted player plays in Russian). Absent: Latin letters. */
+  al?: 'cy';
 }
 
 export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdrawn' | 'stale_attempt' | 'invalid';
@@ -78,16 +84,27 @@ export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdr
 const fill = <T>(seats: number, value: T): T[] => Array.from({ length: seats }, () => value);
 const bump = (list: readonly number[], seat: number, by: number): number[] => list.map((v, i) => (i === seat ? v + by : v));
 const ended = (s: NameChainState) => s.phase === 'over' || s.phase === 'cancelled';
-const universeOf = (content: NameChainContent): Universe => {
+/** What the match judges with: its release, read with the Russian names and letters it froze. */
+export const judgingFor = (s: NameChainState, content: NameChainContent): Universe => universeOf(content, s);
+
+const universeOf = (content: NameChainContent, s: NameChainState): Universe => {
   if (!content.universe) throw new Error('name_chain content is not hydrated');
-  return content.universe;
+  if (s.ov && !content.russian) throw new Error('name_chain Russian names are not hydrated');
+  return judgingUniverse(content.universe, s.ov ? content.russian ?? null : null, s.al === 'cy' ? 'cyrillic' : 'latin');
 };
 
-export function startMatch(seats: number, now: number): NameChainState {
+/**
+ * `context`: the Russian names switched on when the gate closed (frozen for the match: Cyrillic text is read with them) and the
+ * admitted seats' languages. Russian letters only when every admitted player plays in Russian; anyone else keeps Latin letters.
+ */
+export function startMatch(seats: number, now: number, context?: RoomStartContext): NameChainState {
   if (seats < 2 || seats > 6) throw new Error('A room match needs 2 to 6 admitted seats');
+  const ov = context?.russianVersion ?? undefined;
+  const russianTable = ov !== undefined && (context?.locales.length ?? 0) > 0 && context!.locales.every((l) => l === 'ru');
   return {
     phase: 'intro', round: 0, deadline: now + INTRO_MS, status: fill(seats, 'in'), points: fill(seats, 0), alive: fill(seats, true), chain: [], used: [],
     letter: '', turn: 0, epoch: 0, attempts: 0, answers: fill(seats, 0), last: null, ended: null, roundWinner: null, draws: 0, roundsWon: 0, quit: fill(seats, false),
+    ...(ov ? { ov } : {}), ...(russianTable ? { al: 'cy' as const } : {}),
   };
 }
 
@@ -107,7 +124,7 @@ function nextAlive(alive: readonly boolean[], seat: number): number {
 }
 
 function beginRound(s: NameChainState, content: NameChainContent, round: number, now: number): NameChainState {
-  const universe = universeOf(content);
+  const universe = universeOf(content, s);
   const start = pickStart(universe, new Set(s.used), ROOM_START_BUCKET, draw(content.pack.seed, s.draws));
   // Nobody left to start from (it would take a match of thousands of names): the table decides.
   if (start === null) return { ...s, phase: 'over' };
@@ -189,7 +206,7 @@ export function applyCommand(s: NameChainState, content: NameChainContent, seat:
   if (command.attempt !== s.attempts) return { state: s, error: 'stale_attempt' };
   const text = command.text.trim();
   if (!text) return { state: s, error: 'invalid' };
-  const universe = universeOf(content);
+  const universe = universeOf(content, s);
   const used = new Set(s.used);
   const judged = judge(universe, used, s.letter, text);
   const feedback: Feedback = { epoch: s.epoch, attempt: command.attempt, seat, kind: judged.verdict, text, pid: judged.pid };
@@ -229,7 +246,7 @@ export function standings(s: NameChainState): RoomEngineStanding[] {
 
 /** What a seat sees. The chain and every typed answer are public: there is nothing here to hide but the next letter's answers. */
 export function viewOf(s: NameChainState, content: NameChainContent, seat: number) {
-  const universe = universeOf(content);
+  const universe = universeOf(content, s);
   const nameOf = (pid: string | null) => (pid === null ? null : universe.player(pid)?.name ?? null);
   const over = ended(s);
   const last = s.last && {

@@ -3,6 +3,7 @@ import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
+import { activeRussianVersion, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { nameChainPackSchema } from '../room/games/name-chain/name-chain.engine.js';
 import { draw, pickStart } from '../room/games/name-chain/name-chain.core.js';
@@ -30,8 +31,15 @@ export interface ReviewResponse { day: string; starts: string[] }
 
 /** The kit's runs repo for name_chain_runs / name_chain_days; equal scores rank by the longest chain. */
 export const nameChainDailyRepo = createDailyRunsRepo<rules.RunState, NameChainRunRow, LeaderboardEntry, NameChainDayRow>(
-  { runs: 'name_chain_runs', days: 'name_chain_days', payload: 'chain', stat: 'longest' }, { statTiebreak: true, openClockIndex: true },
+  { runs: 'name_chain_runs', days: 'name_chain_days', payload: 'chain', stat: 'longest' }, { statTiebreak: true, openClockIndex: true, boardPartition: 'al' },
 );
+
+/** The day as one run sees it: with the Russian names it froze, on the letters it plays with. */
+async function dayForRun(day: ServedDay, s: rules.RunState): Promise<ServedDay> {
+  if (!s.ov) return day;
+  const russian = russianView(day.universe, await russianIndex(s.ov));
+  return { ...day, universe: judgingUniverse(day.universe, russian, s.al === 'cy' ? 'cyrillic' : 'latin') };
+}
 
 /** A stored day in serving form; null when the row is malformed. */
 export function indexDay(row: NameChainDayRow): IndexedDay | null {
@@ -64,12 +72,19 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
       completion: (s) => (s.done ? { score: rules.score(s), stat: rules.longest(s) } : null),
       publicState: (s, run, day, now, extra) => rules.publicState(s, run.day, day?.universe ?? null, now, extra),
       settledAt: rules.settledAt,
+      dayFor: dayForRun,
+      // Russian-letter runs play a different chain: they rank on their own board.
+      boardPartition: (s) => s.al ?? '',
     },
     { calendar: nameChainCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS, clock: 'database' },
   );
 
   return {
-    start: (dayId: string, player: DailyPlayer, clientContentVersion?: number): Promise<RunResponse> => core.start(dayId, player, clientContentVersion),
+    /** A run freezes the Russian names switched on now (Latin runs too: a name typed in Cyrillic is read with them). */
+    async start(dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> {
+      const russianVersion = await activeRussianVersion().catch(() => null);
+      return core.start(dayId, player, clientContentVersion, { locale, russianVersion });
+    },
 
     /** Starts the first chain, or the next one after a chain ended. */
     next(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {
@@ -97,12 +112,14 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
      * chain. Answers nothing; a name the release knows (refused for its letter or as a repeat) is dropped.
      */
     async report(player: DailyPlayer, dayId: string, text: string): Promise<void> {
-      const day = (await deps.content()).get(dayId);
-      if (!day) return;
+      const served = (await deps.content()).get(dayId);
+      if (!served) return;
+      const run = await deps.repo.getRun(player, dayId);
+      if (!run || run.content_version !== served.contentVersion || (run.state.ch.length === 0 && run.state.n.length === 0)) return;
+      // Judged as the run was: with the names it froze.
+      const day = await dayForRun(served, run.state);
       const refusal = refusedName(day.universe, text);
       if (!refusal) return;
-      const run = await deps.repo.getRun(player, dayId);
-      if (!run || run.content_version !== day.contentVersion || (run.state.ch.length === 0 && run.state.n.length === 0)) return;
       await deps.reports.file({
         game: 'name_chain', source: 'daily', contextId: run.id, round: 0,
         reporter: player.kind === 'member' ? { userId: player.userId } : { guestId: player.guestId },
@@ -117,14 +134,17 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
      * name that depends on what each player had already used, so they are not part of the day's review. Anything else
      * is the same 404 as a missing day.
      */
-    async review(dayId: string): Promise<ReviewResponse> {
-      const day = await core.closedDay(dayId);
+    async review(dayId: string, locale?: string): Promise<ReviewResponse> {
+      const closed = await core.closedDay(dayId);
+      const version = locale === 'ru' ? await activeRussianVersion().catch(() => null) : null;
+      const day = version ? await dayForRun(closed, { ...rules.newState({ locale, russianVersion: version }) }) : closed;
       const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));
       const name = pid ? day.universe.player(pid)?.name ?? null : null;
       return { day: dayId, starts: name ? [name] : [] };
     },
 
-    leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => core.leaderboard(dayId, userId),
+    leaderboard: (dayId: string | undefined, userId: string | null, alphabet?: 'latin' | 'cyrillic'): Promise<LeaderboardResponse> =>
+      core.leaderboard(dayId, userId, alphabet === 'cyrillic' ? 'cy' : ''),
 
     /** One pass of the settling sweep: chains whose clock ran out with nobody coming back are ended (and the run finished, on the last one). */
     async settleOverdue(): Promise<number> {

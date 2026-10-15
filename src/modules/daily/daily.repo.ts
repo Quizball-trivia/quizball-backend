@@ -65,14 +65,18 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
    * openClockIndex: the runs table has an index of open clocks, ((state->>'dl')::float8) WHERE NOT done AND
    * state->>'open' = 'true'; the settle sweep then reads only the clocks that ran out, however many unfinished runs
    * the table has collected.
+   * boardPartition: a state key whose value splits the board (runs only rank against runs of the same value; a missing
+   * key is the empty partition). Name Chain splits by alphabet.
    */
-  opts: { statTiebreak?: boolean; openClockIndex?: boolean } = {},
+  opts: { statTiebreak?: boolean; openClockIndex?: boolean; boardPartition?: string } = {},
 ) {
   for (const name of Object.values(t)) if (!/^[a-z_]+$/.test(name)) throw new Error(`Bad table config: ${name}`);
   const RUNS = t.runs;
   const DAYS = t.days;
   const STAT = t.stat;
   const tiebreak = opts.statTiebreak === true;
+  if (opts.boardPartition !== undefined && !/^[a-z]+$/.test(opts.boardPartition)) throw new Error(`Bad board partition: ${opts.boardPartition}`);
+  const partitionOf = (alias: string) => `coalesce(${alias}.state->>'${opts.boardPartition}', '')`;
   const RUN_COLUMNS = `id, user_id, guest_id, day::text AS day, ranked, content_version, state, state_version, done, score, ${t.stat},
   completed_at, closes_at, clock_timestamp() >= closes_at AS closed`;
 
@@ -266,6 +270,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
         1 + (
           SELECT count(*) FROM ${q.unsafe(RUNS)} o JOIN users ou ON ou.id = o.user_id
           WHERE o.day = me.day AND o.ranked AND o.done
+            ${q.unsafe(opts.boardPartition ? `AND ${partitionOf('o')} = ${partitionOf('me')}` : '')}
             AND ou.is_ai = false AND ou.is_guest = false AND ou.is_seed = false AND ou.is_deleted = false
             AND ou.deleted_at IS NULL AND ou.pending_deletion_at IS NULL
             AND (o.score > me.score OR (o.score = me.score AND ${tiebreak
@@ -291,12 +296,13 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
     },
 
     /** Top ranked, finished runs and the player count from one snapshot. Guest and unranked runs never appear. */
-    async leaderboard(day: string, limit: number): Promise<{ players: number; top: Entry[] }> {
+    async leaderboard(day: string, limit: number, partition = ''): Promise<{ players: number; top: Entry[] }> {
       const rows = await withStatementTimeout((tx) => exec(tx)<Array<RawEntry & { players: number }>>`
       WITH eligible AS MATERIALIZED (
         SELECT r.id, r.user_id, r.score, r.${exec(tx).unsafe(t.stat)}, r.completed_at
         FROM ${exec(tx).unsafe(RUNS)} r JOIN users u ON u.id = r.user_id
         WHERE r.day = ${day} AND r.ranked AND r.done
+          ${opts.boardPartition ? exec(tx)`AND ${exec(tx).unsafe(partitionOf('r'))} = ${partition}` : exec(tx)``}
           AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
           AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       ), leaders AS (

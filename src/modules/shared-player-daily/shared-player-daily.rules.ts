@@ -2,6 +2,7 @@ import { rejected } from '../daily/daily.errors.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import type { SharedPlayerItem } from '../room/games/shared-player/shared-player.engine.js';
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
+import type { DailyStartContext } from '../daily/daily.service.js';
 
 /**
  * "Played for both", solo: ten club pairs a day, twenty seconds each, one point per pair found. A wrong answer blocks the
@@ -39,12 +40,20 @@ export interface RunState {
   end: PairEnd | null;
   res: PairResult[];
   done: boolean;
+  /** The Russian names version frozen at start: a name typed in Cyrillic is read with it. Absent: Latin text only. */
+  ov?: string;
+  /** Started in Russian: footballers are shown under their Russian names. */
+  ru?: true;
 }
 
 export type AnswerResult = 'ok' | 'wrong' | 'locked' | 'late';
 
-export function newState(): RunState {
-  return { v: 1, r: 0, open: false, dl: null, lock: 0, att: 0, last: null, end: null, res: [], done: false };
+export function newState(context?: DailyStartContext): RunState {
+  const ov = context?.russianVersion ?? undefined;
+  return {
+    v: 1, r: 0, open: false, dl: null, lock: 0, att: 0, last: null, end: null, res: [], done: false,
+    ...(ov ? { ov } : {}), ...(ov && context?.locale === 'ru' ? { ru: true as const } : {}),
+  };
 }
 
 function settle(s: RunState, pid: string | null, left: number): RunState {
@@ -78,7 +87,7 @@ export function answer(s: RunState, pair: SharedPlayerItem, universe: Universe, 
 }
 
 /** A correction moves an unfinished run onto new content from scratch (the kit also unranks it). */
-export const rebase = (_s: RunState): RunState => newState();
+export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ov ? { ov: s.ov } : {}), ...(s.ru ? { ru: s.ru } : {}) });
 
 /** When `project` settled the pair by time: the instant its clock (with the grace) ran out. */
 export const settledAt = (stored: RunState, projected: RunState): number | null =>

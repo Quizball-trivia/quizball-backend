@@ -1,6 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { footballersRepo } from './footballers.repo.js';
-import { buildUniverse, SUPPORTED_MATCHER_VERSIONS, type Universe } from './footballers.universe.js';
+import { buildUniverse, MATCHER_VERSION, type Universe } from './footballers.universe.js';
 
 export class FootballersError extends Error {
   constructor(readonly code: string) {
@@ -16,11 +16,11 @@ async function load(releaseId: string): Promise<Universe> {
   const started = Date.now();
   const release = await footballersRepo.release(releaseId);
   if (!release) throw new FootballersError('wordgame_release_missing');
-  // Content names the matcher it was checked with: it is judged with exactly that one, never a newer one.
-  if (!SUPPORTED_MATCHER_VERSIONS.includes(release.matcher_version)) throw new FootballersError('wordgame_release_matcher');
+  // Content names the matcher it was checked with: a different matcher could judge the same text differently.
+  if (release.matcher_version !== MATCHER_VERSION) throw new FootballersError('wordgame_release_matcher');
   const players = await footballersRepo.players(releaseId);
   if (players.length !== release.players) throw new FootballersError('wordgame_release_incomplete');
-  const universe = buildUniverse(releaseId, players, release.matcher_version);
+  const universe = buildUniverse(releaseId, players);
   logger.info({ releaseId, players: universe.size, ms: Date.now() - started }, 'Word game release loaded');
   return universe;
 }

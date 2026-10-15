@@ -53,12 +53,21 @@ const GEORGIAN_TO_LATIN: Record<string, string> = {
 /** Same folding as the web matcher (frontend src/features/mini-games/lib/matching.ts): Georgian → Latin, Turkish ı. */
 export function normalizeCardName(value: string): string {
   let out = '';
-  for (const ch of value) out += GEORGIAN_TO_LATIN[ch] ?? ch;
+  for (const ch of value.toLowerCase()) out += GEORGIAN_TO_LATIN[ch] ?? ch;
   return normalizeAnswer(out.replace(/ı/g, 'i').replace(/İ/g, 'i'));
 }
 
+const CYRILLIC = /\p{Script=Cyrillic}/u;
+
+export function isCyrillic(value: string): boolean {
+  return CYRILLIC.test(value);
+}
+
 // Name particles shared by many players: a guess of "de" or "van" must never name de Jong or van Dijk.
-const PARTICLES = new Set(['van', 'von', 'der', 'den', 'dos', 'das', 'del', 'della', 'ben', 'bin', 'jr', 'junior', 'mac']);
+const PARTICLES = new Set([
+  'van', 'von', 'der', 'den', 'dos', 'das', 'del', 'della', 'ben', 'bin', 'jr', 'junior', 'mac',
+  'ван', 'фон', 'дер', 'ден', 'дос', 'дас', 'дель', 'делла', 'бен', 'бин', 'мак', 'джуниор', 'младший',
+]);
 
 /**
  * Server-side version of the web's typo-tolerant name check, stricter where a prize is at stake: a single surname or
@@ -68,7 +77,10 @@ export function matchesCardName(input: string, accepted: string[]): boolean {
   const guess = normalizeCardName(input);
   if (!guess) return false;
   const allowed = guess.length < 5 ? 1 : guess.length > 8 ? 3 : 2;
+  // A Cyrillic guess is checked only against the card's Russian aliases: transliterated, "Мане" is one edit from Kane.
+  const cyrillic = isCyrillic(input);
   for (const answer of accepted) {
+    if (isCyrillic(answer) !== cyrillic) continue;
     const full = normalizeCardName(answer);
     if (!full) continue;
     if (guess === full) return true;

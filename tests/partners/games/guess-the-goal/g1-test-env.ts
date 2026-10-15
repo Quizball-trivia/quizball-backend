@@ -26,6 +26,7 @@ const MIGRATIONS = [
   '20261005121001_partner_core_validate.sql',
   '20261005130000_partner_delivery.sql',
   '20261006100000_partner_g1_guess_the_goal_card_detective.sql',
+  '20261015120000_guess_the_goal_guest_sessions.sql',
 ].map((f) => join(__dirname, '../../../../supabase/migrations', f));
 
 const FIXTURE = `
@@ -33,7 +34,7 @@ const FIXTURE = `
     partner_plays, partner_quota_days, partner_audit, partner_limit_overrides, partner_games, partner_config_versions,
     partner_sessions, partner_players, partner_operator_memberships, guess_the_goal_sessions, goal_choreographies,
     daily_card_detective_sets, daily_fifa_card_sets, daily_challenge_configs, fifa_cards, audit_logs, ranked_profiles,
-    users CASCADE;
+    guest_sessions, users CASCADE;
   DROP FUNCTION IF EXISTS refill_tickets_global();
   CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text, nickname text, country text, avatar_url text,
@@ -54,6 +55,7 @@ const FIXTURE = `
   CREATE TABLE audit_logs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid REFERENCES users(id) ON DELETE SET NULL,
     action text NOT NULL, entity_type text NOT NULL, entity_id uuid, metadata jsonb, created_at timestamptz NOT NULL DEFAULT now());
+  CREATE TABLE guest_sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
   CREATE TABLE goal_choreographies (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), slug text NOT NULL UNIQUE, status text NOT NULL, difficulty text NOT NULL,
     title jsonb NOT NULL, options jsonb NOT NULL, fun_fact jsonb, bonus jsonb, players jsonb NOT NULL, steps jsonb NOT NULL,

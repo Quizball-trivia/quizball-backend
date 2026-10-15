@@ -9,6 +9,7 @@ import { AuthenticationError } from '../../core/errors.js';
 import { GUEST_TOKEN_HEADER, GUEST_TOKEN_SHAPE, createGuestSessionSchema, guestAuthMiddleware, guestController } from '../../modules/guest/index.js';
 import { completeDailyChallengeBodySchema, dailyChallengeLocaleQuerySchema, dailyChallengeParamSchema, passChainLinkBodySchema } from '../../modules/daily-challenges/index.js';
 import { publicStandingsService } from '../../modules/public/public-standings.service.js';
+import { playPopularityService } from '../../modules/public/play-popularity.service.js';
 
 /**
  * Public play without an account. Budgets, in order: an aggregate per-address
@@ -23,6 +24,8 @@ export function ipBucket(req: Request): string {
 export { ipv6Prefix64 };
 const mintLimiter = guestHttpBudget('mint', 30, ipBucket);
 const standingsLimiter = guestHttpBudget('standings', 300, ipBucket);
+// Served from the replica's own copy: an unreachable counter must not hide it.
+const playPopularityLimiter = guestHttpBudget('play-popularity', 300, ipBucket, 'allow');
 // Its own budget: the page board and the in-game board refresh together while a guest plays.
 const statSniperBoardLimiter = guestHttpBudget('stat-sniper-board', 600, ipBucket);
 const guestIpLimiter = guestHttpBudget('ip', 600, ipBucket);
@@ -36,6 +39,12 @@ function requireTokenShape(req: Request, _res: unknown, next: (error?: unknown) 
 }
 
 const router = Router();
+// Counts per game for the Play page's order: the same for every visitor and for members' pages too, so it is not
+// behind the guest-play switch below.
+router.get('/play-popularity', playPopularityLimiter, async (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json(await playPopularityService.get());
+});
 router.use(requireGuestHttpEnabled);
 router.post('/session', mintLimiter, validate({ body: createGuestSessionSchema }), guestController.createSession);
 router.get('/standings', standingsLimiter, async (_req, res) => { res.json(await publicStandingsService.get()); });

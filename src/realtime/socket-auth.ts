@@ -1,3 +1,4 @@
+import { declaredGames } from './client-games.js';
 import type { Socket } from 'socket.io';
 import { detectCountryFromHeaders } from '../core/geo.js';
 import { getAuthProvider } from '../modules/auth/index.js';
@@ -24,6 +25,8 @@ export interface SocketAuthData {
   identity: AuthIdentity;
   currentCountry?: string | null;
   lobbyId?: string;
+  /** Room games this tab can draw (handshake `auth.games`); see client-games.ts. */
+  games?: string[];
   /** Counts this socket's Ready / Un-ready commands: one that waited for the room lock gives way to a later one. */
   lobbyReadySeq?: number;
   matchId?: string;
@@ -182,6 +185,7 @@ export async function socketAuthMiddleware(
         user,
         identity,
         currentCountry: detectedCountry ?? cached?.country ?? user.country ?? null,
+        games: declaredGames(socket.handshake.auth?.games),
       };
       socket.data = { ...(socket.data ?? {}), ...data };
 

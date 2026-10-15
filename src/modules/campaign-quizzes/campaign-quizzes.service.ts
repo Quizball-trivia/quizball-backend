@@ -75,7 +75,19 @@ type CampaignPayload = Extract<
   ParsedQuestionPayload,
   { type: 'mcq_single' | 'true_false' | 'clue_chain' | 'career_path' }
 >;
-type CampaignLocale = 'en' | 'ka' | 'es';
+type CampaignLocale = 'en' | 'ka' | 'es' | 'ru';
+
+/** The es_* / ru_* page column for a translated edition; null means "use the English column". */
+function editionText<T>(locale: CampaignLocale, es: T | null, ru: T | null): T | null {
+  if (locale === 'es') return es;
+  if (locale === 'ru') return ru;
+  return null;
+}
+
+const CORRECT_ANSWER_PREFIX: Partial<Record<CampaignLocale, string>> = {
+  es: 'Respuesta correcta',
+  ru: 'Правильный ответ',
+};
 const CAMPAIGN_QUIZ_QUESTION_LIMIT = 10;
 const CAMPAIGN_QUIZ_DIFFICULTY_LIMITS = { easy: 4, medium: 3, hard: 3 } as const;
 
@@ -261,29 +273,28 @@ function toPageContent(
   locale: CampaignLocale = 'en',
 ): CampaignQuizPageContentResponse | null {
   if (!hasManagedContent(quiz)) return null;
-  const spanish = locale === 'es';
-  const aboutBlocks = spanish && quiz.es_about_blocks?.length
-    ? quiz.es_about_blocks
-    : quiz.about_blocks;
+  const tr = <T>(es: T | null, ru: T | null) => editionText(locale, es, ru);
+  const translatedBlocks = tr(quiz.es_about_blocks, quiz.ru_about_blocks);
+  const aboutBlocks = translatedBlocks?.length ? translatedBlocks : quiz.about_blocks;
   return {
     category: quiz.page_category,
-    h1: spanish ? quiz.es_h1 ?? quiz.h1 : quiz.h1,
-    lede: interpolateCount(spanish ? quiz.es_lede ?? quiz.lede : quiz.lede, count),
-    about_heading: spanish ? quiz.es_about_heading ?? quiz.about_heading ?? '' : quiz.about_heading ?? '',
+    h1: tr(quiz.es_h1, quiz.ru_h1) ?? quiz.h1,
+    lede: interpolateCount(tr(quiz.es_lede, quiz.ru_lede) ?? quiz.lede, count),
+    about_heading: tr(quiz.es_about_heading, quiz.ru_about_heading) ?? quiz.about_heading ?? '',
     about_blocks: aboutBlocks.map((block) => ({
       ...block,
       text: interpolateCount(block.text, count),
     })),
-    score_cta: interpolateCount(spanish ? quiz.es_score_cta ?? quiz.score_cta : quiz.score_cta, count),
-    footer_banner_text: spanish ? quiz.es_footer_banner_text ?? quiz.footer_banner_text ?? '' : quiz.footer_banner_text ?? '',
-    footer_button_label: spanish ? quiz.es_footer_button_label ?? quiz.footer_button_label : quiz.footer_button_label,
+    score_cta: interpolateCount(tr(quiz.es_score_cta, quiz.ru_score_cta) ?? quiz.score_cta, count),
+    footer_banner_text: tr(quiz.es_footer_banner_text, quiz.ru_footer_banner_text) ?? quiz.footer_banner_text ?? '',
+    footer_button_label: tr(quiz.es_footer_button_label, quiz.ru_footer_button_label) ?? quiz.footer_button_label,
     hero_image_url: publicCampaignQuizImageUrl(quiz.hero_image_url),
-    hero_image_alt: spanish ? quiz.es_hero_image_alt ?? quiz.hero_image_alt ?? '' : quiz.hero_image_alt ?? '',
-    seo_title: spanish ? quiz.es_seo_title ?? quiz.seo_title : quiz.seo_title,
-    meta_description: interpolateCount(spanish ? quiz.es_meta_description ?? quiz.meta_description : quiz.meta_description, count),
+    hero_image_alt: tr(quiz.es_hero_image_alt, quiz.ru_hero_image_alt) ?? quiz.hero_image_alt ?? '',
+    seo_title: tr(quiz.es_seo_title, quiz.ru_seo_title) ?? quiz.seo_title,
+    meta_description: interpolateCount(tr(quiz.es_meta_description, quiz.ru_meta_description) ?? quiz.meta_description, count),
     og_image_url: publicCampaignQuizImageUrl(quiz.og_image_url),
-    og_image_alt: spanish ? quiz.es_og_image_alt ?? quiz.og_image_alt : quiz.og_image_alt,
-    breadcrumb_label: spanish ? quiz.es_breadcrumb_label ?? quiz.breadcrumb_label : quiz.breadcrumb_label,
+    og_image_alt: tr(quiz.es_og_image_alt, quiz.ru_og_image_alt) ?? quiz.og_image_alt,
+    breadcrumb_label: tr(quiz.es_breadcrumb_label, quiz.ru_breadcrumb_label) ?? quiz.breadcrumb_label,
     locale_mode: quiz.locale_mode,
     ka_seo_title: quiz.ka_seo_title,
     ka_meta_description: quiz.ka_meta_description
@@ -293,9 +304,9 @@ function toPageContent(
     ka_lede: quiz.ka_lede ? interpolateCount(quiz.ka_lede, count) : null,
     related_pages: related.map((page) => ({
       slug: page.slug,
-      breadcrumb_label: spanish ? page.es_breadcrumb_label ?? page.breadcrumb_label : page.breadcrumb_label,
+      breadcrumb_label: tr(page.es_breadcrumb_label, page.ru_breadcrumb_label) ?? page.breadcrumb_label,
       hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-      hero_image_alt: spanish ? page.es_hero_image_alt ?? page.hero_image_alt ?? '' : page.hero_image_alt ?? '',
+      hero_image_alt: tr(page.es_hero_image_alt, page.ru_hero_image_alt) ?? page.hero_image_alt ?? '',
     })),
     updated_at: quiz.updated_at,
   };
@@ -511,15 +522,18 @@ export const campaignQuizzesService = {
         if (locale === 'es') {
           return Boolean(page.es_h1 && page.es_seo_title && page.es_meta_description);
         }
+        if (locale === 'ru') {
+          return Boolean(page.ru_h1 && page.ru_seo_title && page.ru_meta_description);
+        }
         return true;
       })
       .map((page) => ({
         slug: page.slug,
         category: page.page_category,
-        h1: locale === 'es' ? page.es_h1 ?? page.h1 : page.h1,
-        breadcrumb_label: locale === 'es' ? page.es_breadcrumb_label ?? page.breadcrumb_label : page.breadcrumb_label,
+        h1: editionText(locale, page.es_h1, page.ru_h1) ?? page.h1,
+        breadcrumb_label: editionText(locale, page.es_breadcrumb_label, page.ru_breadcrumb_label) ?? page.breadcrumb_label,
         hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-        hero_image_alt: locale === 'es' ? page.es_hero_image_alt ?? page.hero_image_alt ?? '' : page.hero_image_alt ?? '',
+        hero_image_alt: editionText(locale, page.es_hero_image_alt, page.ru_hero_image_alt) ?? page.hero_image_alt ?? '',
         locale_mode: page.locale_mode,
         updated_at: page.updated_at,
       }));
@@ -564,7 +578,7 @@ export const campaignQuizzesService = {
 
     return {
       slug: quiz.slug,
-      title: locale === 'es' ? quiz.es_title ?? quiz.title : quiz.title,
+      title: editionText(locale, quiz.es_title, quiz.ru_title) ?? quiz.title,
       total_questions: questions.length,
       difficulty_counts: {
         easy: questions.filter((question) => question.difficulty === 'easy').length,
@@ -604,9 +618,7 @@ export const campaignQuizzesService = {
       correct_option_id: correct.id,
       explanation: localizedText(row.explanation, locale)
         ?? (generated
-          ? locale === 'es'
-            ? `Respuesta correcta: ${generated}.`
-            : `Correct answer: ${generated}.`
+          ? `${CORRECT_ANSWER_PREFIX[locale] ?? 'Correct answer'}: ${generated}.`
           : null),
     };
   },

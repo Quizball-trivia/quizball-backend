@@ -16,6 +16,39 @@ const SPANISH_SOURCE_SLUGS: Record<string, string> = {
   'seleccion-espanola': 'spain',
 };
 
+/** Russian public slugs (/ru/futbolnaya-viktorina/<slug>) → CMS slug; mirrors the web's RUSSIAN_PUBLIC_SLUGS. */
+const RUSSIAN_SOURCE_SLUGS: Record<string, string> = {
+  'ugaday-futbolista': 'guess-the-player',
+  'ugaday-futbolista-po-karere': 'career-path',
+  'ugaday-klub-po-embleme': 'club-badges',
+  'viktorina-apl': 'premier-league',
+  'viktorina-arsenal': 'arsenal',
+  'viktorina-aston-villa': 'aston-villa',
+  'viktorina-barselona': 'barcelona',
+  'viktorina-bornmut': 'bournemouth',
+  'viktorina-brayton': 'brighton',
+  'viktorina-brentford': 'brentford',
+  'viktorina-chelsi': 'chelsea',
+  'viktorina-everton': 'everton',
+  'viktorina-fulkhem': 'fulham',
+  'viktorina-ipsvich-taun': 'ipswich-town',
+  'viktorina-khall-siti': 'hull-city',
+  'viktorina-koventri-siti': 'coventry-city',
+  'viktorina-kristal-pelas': 'crystal-palace',
+  'viktorina-la-liga': 'la-liga',
+  'viktorina-lids-yunayted': 'leeds-united',
+  'viktorina-liverpul': 'liverpool',
+  'viktorina-manchester-siti': 'manchester-city',
+  'viktorina-manchester-yunayted': 'manchester-united',
+  'viktorina-nottingem-forest': 'nottingham-forest',
+  'viktorina-nyukasl-yunayted': 'newcastle-united',
+  'viktorina-real-madrid': 'real-madrid',
+  'viktorina-sanderlend': 'sunderland',
+  'viktorina-sbornaya-argentiny': 'argentina',
+  'viktorina-sbornaya-ispanii': 'spain',
+  'viktorina-tottenkhem': 'tottenham',
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 const cachedMetrics = new Map<
   number,
@@ -100,8 +133,11 @@ export function campaignQuizSlugFromPageUrl(
     if (englishOrGeorgian?.[1]) return englishOrGeorgian[1];
 
     const spanish = url.pathname.match(/^\/es\/quiz-de-futbol\/([a-z0-9-]+)\/?$/);
-    if (!spanish?.[1]) return null;
-    return SPANISH_SOURCE_SLUGS[spanish[1]] ?? spanish[1];
+    if (spanish?.[1]) return SPANISH_SOURCE_SLUGS[spanish[1]] ?? spanish[1];
+
+    const russian = url.pathname.match(/^\/ru\/futbolnaya-viktorina\/([a-z0-9-]+)\/?$/);
+    if (!russian?.[1]) return null;
+    return RUSSIAN_SOURCE_SLUGS[russian[1]] ?? russian[1];
   } catch {
     return null;
   }

@@ -16,6 +16,7 @@ export interface FootballGridBoardPlayer {
   playerId: string;
   name: string;
   nameKa: string | null;
+  nameRu: string | null;
   imageUrl: string | null;
 }
 
@@ -23,6 +24,7 @@ export interface FootballGridOption {
   playerId: string;
   name: string;
   nameKa: string | null;
+  nameRu: string | null;
   imageUrl: string | null;
 }
 
@@ -33,12 +35,18 @@ const boardPlayersCache = new Map<string, { expiresAt: number; value: Promise<Fo
 
 async function loadBoardPlayers(boardId: string): Promise<FootballGridBoardPlayers> {
   const rows = await sql<Array<{
-    cell_index: number; football_player_id: string; name: string; name_ka: string | null; image_url: string | null;
+    cell_index: number; football_player_id: string; name: string; name_ka: string | null; name_ru: string | null; image_url: string | null;
   }>>`
     SELECT a.cell_index, a.football_player_id,
            COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS name,
-           a.player_name_ka AS name_ka, fp.image_url
+           a.player_name_ka AS name_ka,
+           (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ru,
+           fp.image_url
       FROM football_grid_board_answers a
+      JOIN football_grid_boards b ON b.id = a.board_id
       JOIN football_players fp ON fp.id = a.football_player_id
      WHERE a.board_id = ${boardId}
      ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
@@ -52,6 +60,7 @@ async function loadBoardPlayers(boardId: string): Promise<FootballGridBoardPlaye
       playerId: row.football_player_id,
       name: row.name,
       nameKa: row.name_ka,
+      nameRu: row.name_ru,
       imageUrl: row.image_url,
     });
     byCell.set(row.cell_index, cell);
@@ -166,6 +175,7 @@ export function buildFootballGridOptions(input: {
     playerId: player.playerId,
     name: player.name,
     nameKa: player.nameKa,
+    nameRu: player.nameRu,
     imageUrl: player.imageUrl,
   }));
 }

@@ -27,7 +27,7 @@ export const PACK_PAIRS = 10;
 const EXAMPLES = 6;
 const MAX_TEXT = 60;
 
-const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60) }).strict();
+const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60), ru: z.string().min(1).max(60).optional() }).strict();
 const clubSchema = z.object({ key: z.string().min(1).max(64), label: localized, crest: z.string().min(1).max(200) }).strict();
 
 /** One private pool pair. `accepted` (footballer ids, the reviewed examples first) never reaches a client before the reveal. */
@@ -206,7 +206,7 @@ export function standings(s: SharedPlayerState): RoomEngineStanding[] {
 }
 
 type ClubView = { key: string; name: string; crest: string };
-const clubView = (club: SharedPlayerItem['a'], locale: RoomLocale): ClubView => ({ key: club.key, name: club.label[locale], crest: club.crest });
+const clubView = (club: SharedPlayerItem['a'], locale: RoomLocale): ClubView => ({ key: club.key, name: club.label[locale] ?? club.label.en, crest: club.crest });
 
 /** What `seat` sees. Before a round's reveal: no clubs during the countdown, never an accepted name, never another seat's answer. */
 export function viewOf(s: SharedPlayerState, content: SharedPlayerContent, seat: number, locale: RoomLocale) {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
-  DUEL_LOCALES, other, reject,
-  type DuelCtx, type DuelEngine, type DuelLocale, type EngineOutcome, type LocalizedText, type Scores, type Seat, type Step,
+  other, reject,
+  textFor, type DuelCtx, type DuelEngine, type EngineOutcome, type Scores, type Seat, type Step,
 } from '../duel.types.js';
 
 export const BM_ROUNDS = 10;
@@ -18,7 +18,7 @@ export const BM_TIMEOUT_FORFEIT = 2;
 type Difficulty = keyof typeof BM_POINTS;
 
 const text = z.string().trim().min(1).max(200);
-const localized = z.object({ es: text, en: text, ka: text, tr: text });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional() });
 
 /** One pool item: a category with 16 cards, 12 of which fit (`ok`). */
 export const buscaminasRoundSchema = z.object({
@@ -93,7 +93,6 @@ function settle(s: BuscaminasDuelState, result: BuscaminasRoundResult): Step<Bus
   };
 }
 
-const textFor = (value: LocalizedText, locale: DuelLocale): string => value[locale] ?? value.es;
 
 export const buscaminasDuelEngine: DuelEngine<BuscaminasDuelContent, BuscaminasDuelState, BuscaminasCommand> = {
   game: 'buscaminas',
@@ -168,4 +167,3 @@ export const buscaminasDuelEngine: DuelEngine<BuscaminasDuelContent, BuscaminasD
   scores: (s) => s.scores,
 };
 
-export const BUSCAMINAS_DUEL_LOCALES = DUEL_LOCALES;

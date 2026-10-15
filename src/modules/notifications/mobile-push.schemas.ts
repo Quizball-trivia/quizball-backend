@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const pushLocaleSchema = z.enum(['en','ka','es','tr']);
+export const pushLocaleSchema = z.enum(['en','ka','es','tr','ru']);
 export const pushTimezoneSchema = z.string().max(100).refine(value => {
   try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
 }, 'A valid IANA timezone is required');

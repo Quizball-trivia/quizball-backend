@@ -6,7 +6,7 @@ export type RoomGameId = (typeof ROOM_GAMES)[number];
 export const ROOM_PACK_WANTED = { easy: 3, medium: 4, hard: 3 } as const;
 export const isRoomGame = (value: unknown): value is RoomGameId => ROOM_GAMES.includes(value as RoomGameId);
 
-export const ROOM_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
+export const ROOM_LOCALES = ['es', 'en', 'ka', 'tr', 'ru'] as const;
 export type RoomLocale = (typeof ROOM_LOCALES)[number];
 export const asRoomLocale = (value: unknown): RoomLocale | undefined =>
   (ROOM_LOCALES as readonly string[]).includes(value as string) ? (value as RoomLocale) : undefined;
@@ -17,7 +17,10 @@ export const LIVE_ROOM_STATUSES: readonly RoomStatus[] = ['ready', 'active'];
 export interface RoomStanding { seat: number; userId: string; points: number; roundWins: number; place: number; withdrawn: boolean }
 export interface RoomResult { reason: 'score' | 'cancelled'; standings: RoomStanding[] }
 
-const localized = z.object({ es: z.string().min(1).max(200), en: z.string().min(1).max(200), ka: z.string().min(1).max(200), tr: z.string().min(1).max(200) }).strict();
+/** es/en/ka/tr are required; ru is optional until every pool item carries it. */
+const localized = z.object({ es: z.string().min(1).max(200), en: z.string().min(1).max(200), ka: z.string().min(1).max(200), tr: z.string().min(1).max(200), ru: z.string().min(1).max(200).optional() }).strict();
+export type RoomLocalizedText = z.infer<typeof localized>;
+export const roomText = (value: RoomLocalizedText, locale: RoomLocale): string => value[locale] ?? value.en;
 
 /** One private pool question. The value and the exact window never reach a client before that question's reveal. */
 export const aproximadoItemSchema = z.object({

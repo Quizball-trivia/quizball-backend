@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { matchAnswer, turnMsFor, ultimoCategorySchema, UL_ANSWER_MAX_LENGTH, UL_MAX_MISSES, type UltimoCategory } from '../../ultimo/ultimo.match.js';
 import {
   other, reject,
-  type DuelCtx, type DuelEngine, type DuelLocale, type EngineOutcome, type LocalizedText, type Scores, type Seat, type Step,
+  textFor, type DuelCtx, type DuelEngine, type EngineOutcome, type Scores, type Seat, type Step,
 } from '../duel.types.js';
 
 export const UL_CATEGORIES = 5;
@@ -70,7 +70,6 @@ function settle(s: UltimoDuelState, winner: Seat | null, reason: UltimoEnd, roun
   return { state: { ...s, phase: over ? 'over' : 'catEnd', scores, results }, phase: over ? null : { ms: UL_CAT_END_MS } };
 }
 
-const textFor = (value: LocalizedText, locale: DuelLocale): string => value[locale] ?? value.es;
 
 export const ultimoDuelEngine: DuelEngine<UltimoDuelContent, UltimoDuelState, UltimoCommand> = {
   game: 'ultimo',

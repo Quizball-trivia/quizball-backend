@@ -121,6 +121,7 @@ interface GridCriterionRow {
   label_ka: string;
   label_es: string | null;
   label_tr: string | null;
+  label_ru: string | null;
   asset_key: string | null;
   difficulty: FootballGridCriterionView['difficulty'];
 }
@@ -134,7 +135,7 @@ export interface FootballGridCommandInboxRow {
   turn_number: number;
   command_type: 'answer' | 'pass' | 'forfeit';
   cell_index: number | null;
-  locale: 'en' | 'ka' | 'es' | 'tr' | null;
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | null;
   submitted_text: string | null;
   /** Pick-from-four: the footballer picked; null for a typed answer (and on rows of an older release). */
   option_player_id?: string | null;
@@ -261,6 +262,7 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView {
     labelKa: row.label_ka,
     labelEs: row.label_es,
     labelTr: row.label_tr,
+    labelRu: row.label_ru,
     assetKey: row.asset_key,
     difficulty: row.difficulty,
   };
@@ -292,7 +294,7 @@ async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promis
   if (!board) throw new Error(`Football Grid board not found: ${boardId}`);
   const criterionIds = [...board.row_criteria, ...board.column_criteria];
   const criteria = await executor.unsafe<GridCriterionRow[]>(
-    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, asset_key, difficulty
+    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, asset_key, difficulty
        FROM football_grid_criteria
       WHERE id = ANY($1::uuid[])`,
     [criterionIds],
@@ -2246,7 +2248,7 @@ export const footballGridRepo = {
         claimantUserId: string;
         turnNumber: number;
         aliasId: string | null;
-        locale: 'en' | 'ka' | 'es' | 'tr';
+        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
       };
       pendingCommandId?: string;
     },
@@ -2429,7 +2431,7 @@ export const footballGridRepo = {
     expectedStateVersion: number;
     commandType: 'answer' | 'pass' | 'forfeit';
     cellIndex?: number | null;
-    locale?: 'en' | 'ka' | 'es' | 'tr' | null;
+    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | null;
     submittedText?: string | null;
     optionPlayerId?: string | null;
     payloadHash: string;
@@ -2723,13 +2725,17 @@ export const footballGridRepo = {
    */
   async getBoardAnswersByBoard(boardId: string): Promise<{
     aliasReleaseId: string;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
   } | null> {
     const rows = await sql<Array<{
-      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null;
+      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null; player_name_ru: string | null;
     }>>`
       SELECT b.release_id, a.cell_index, a.football_player_id,
-             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en, a.player_name_ka
+             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en, a.player_name_ka,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
         FROM football_grid_boards b
         JOIN football_grid_content_releases r ON r.id = b.release_id AND r.status IN ('published', 'retired')
         JOIN football_grid_board_answers a ON a.board_id = b.id
@@ -2744,6 +2750,7 @@ export const footballGridRepo = {
         footballPlayerId: row.football_player_id,
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
+        playerNameRu: row.player_name_ru,
       })),
     };
   },
@@ -2752,7 +2759,7 @@ export const footballGridRepo = {
     aliasReleaseId: string;
     boardId: string;
     settings: FootballGridSettings;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
@@ -2762,12 +2769,17 @@ export const footballGridRepo = {
       football_player_id: string;
       player_name_en: string;
       player_name_ka: string | null;
+      player_name_ru: string | null;
     }>>`
       SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
              -- fp.name is what the reveal shows; board rows can carry NULL or
              -- abbreviated display names, so name forms come from the canonical name.
              COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
-             a.player_name_ka
+             a.player_name_ka,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
@@ -2783,6 +2795,7 @@ export const footballGridRepo = {
         footballPlayerId: row.football_player_id,
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
+        playerNameRu: row.player_name_ru,
       })),
     };
   },
@@ -2793,7 +2806,7 @@ export const footballGridRepo = {
       football_player_id: string;
       alias: string;
       normalized_alias: string;
-      locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
+      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
       SELECT id, football_player_id, alias, normalized_alias,

@@ -15,7 +15,8 @@ export interface PublicCard {
 export interface PublicRound {
   id: string;
   difficulty: BuscaminasDifficulty;
-  prompt: Record<BuscaminasLocale, string>;
+  /** es/en/ka/tr are required; ru is optional until every day carries it. */
+  prompt: Record<BuscaminasLocale, string> & { ru?: string };
   cards: PublicCard[];
 }
 

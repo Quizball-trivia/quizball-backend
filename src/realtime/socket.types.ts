@@ -700,7 +700,7 @@ export interface AuctionStartAiMatchPayload {
 }
 
 export interface FootballGridSearchStartPayload {
-  locale?: 'en' | 'ka' | 'es' | 'tr';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru';
 }
 
 export interface FootballGridVersionedCommandPayload {
@@ -712,7 +712,7 @@ export interface FootballGridVersionedCommandPayload {
 export interface FootballGridSubmitAnswerPayload extends FootballGridVersionedCommandPayload {
   cellIndex: number;
   text: string;
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   optionPlayerId?: string;
 }
 
@@ -765,7 +765,7 @@ export interface FootballGridOptionsPayload {
   cellIndex: number;
   turnNumber: number;
   stateVersion: number;
-  options: Array<{ playerId: string; name: string; nameKa: string | null; imageUrl: string | null }> | null;
+  options: Array<{ playerId: string; name: string; nameKa: string | null; nameRu: string | null; imageUrl: string | null }> | null;
 }
 
 export interface FootballGridTurnResolvedPayload extends FootballGridStatePayload {

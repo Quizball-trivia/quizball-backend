@@ -1,5 +1,5 @@
 -- Tenable joins the room games, room_matches only (one table per migration, see 20261008120100). Added NOT VALID, validated in
--- 20261015120140, swapped for the old check in its own migration.
+-- 20261016120140, swapped for the old check in its own migration.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 

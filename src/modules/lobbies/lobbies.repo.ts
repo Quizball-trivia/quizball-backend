@@ -503,6 +503,8 @@ export const lobbiesRepo = {
   async listPublicLobbies(params: {
     limit: number;
     joinableOnly: boolean;
+    /** Room games the page cannot draw: their rooms are left out before the limit. */
+    hideRoomGames?: readonly string[];
   }): Promise<Array<{
     lobby_id: string;
     invite_code: string;
@@ -556,6 +558,7 @@ export const lobbiesRepo = {
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
+        AND (l.room_game IS NULL OR l.room_game <> ALL(${sql.array([...(params.hideRoomGames ?? [])])}::text[]))
       GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
       HAVING (
         ${params.joinableOnly}::boolean = false

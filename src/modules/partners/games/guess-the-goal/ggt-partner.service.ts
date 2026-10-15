@@ -22,7 +22,7 @@ import {
 } from '../../../guess-the-goal/guess-the-goal.service.js';
 import { buildTimings, revealedMovesAt } from '../../../guess-the-goal/guess-the-goal.timing.js';
 import { GGT_FULL_POINTS_SECONDS, GGT_GRACE_MS } from '../../../guess-the-goal/guess-the-goal.constants.js';
-import type { GgtSessionRow, GoalChoreographyRow, I18nText } from '../../../guess-the-goal/guess-the-goal.types.js';
+import { ggtMember, type GgtSessionRow, type GoalChoreographyRow, type I18nText } from '../../../guess-the-goal/guess-the-goal.types.js';
 
 export const PARTNER_GGT_POINTS = 100;
 export const PARTNER_GGT_SEEN_POINTS = 40;
@@ -384,18 +384,18 @@ export const partnerGuessTheGoalService = {
       }
       if (play.state !== 'started') throw new PartnerError('play_not_active');
 
-      await guessTheGoalRepo.acquireUserStartLock(t, partner.userId);
+      await guessTheGoalRepo.acquireStartLock(t, ggtMember(partner.userId));
       // A start racing this one (different nonce) already holds the open goal.
-      if (await guessTheGoalRepo.getOpenSessionForUpdate(t, partner.userId)) {
+      if (await guessTheGoalRepo.getOpenSessionForUpdate(t, ggtMember(partner.userId))) {
         throw new PartnerError('request_conflict', 'A goal is already in progress');
       }
       const goal = await pickGoal(tx, partner.userId);
       // Rolls the reservation back with it: no goal, no play used.
       if (!goal) throw new PartnerError('game_not_available');
-      const seen = await guessTheGoalRepo.hasSeenGoal(t, partner.userId, goal.id);
+      const seen = await guessTheGoalRepo.hasSeenGoal(t, ggtMember(partner.userId), goal.id);
       const basePoints = seen ? PARTNER_GGT_SEEN_POINTS : PARTNER_GGT_POINTS;
       const session = await guessTheGoalRepo.insertSession(t, {
-        userId: partner.userId,
+        player: ggtMember(partner.userId),
         goalId: goal.id,
         goalSnapshot: buildSnapshot(goal),
         maxPoints: basePoints,

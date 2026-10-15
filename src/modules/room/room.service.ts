@@ -98,6 +98,39 @@ async function contentOf(tx: TransactionSql | undefined, row: Pick<RoomMatchRow,
   return content;
 }
 
+/** Cache entries that are already hydrated (hydrate is idempotent; this only saves the call). */
+const hydratedContent = new WeakSet<object>();
+const markHydrated = (id: string, content: unknown): void => {
+  if (!content || typeof content !== 'object' || !contentCache.has(id)) return;
+  contentCache.set(id, content);
+  hydratedContent.add(content);
+};
+
+/**
+ * Hydrates a live match's content before any transaction: a hydrate may read other tables (a footballer or Tenable
+ * directory), and doing that under the match lock, with a transaction slot held, can starve the pool when many matches
+ * load cold at once. Once per match per replica; the locked load then finds the content ready. A failure stops the
+ * call before its transaction with a retryable error (every caller retries: commands, the timer and recovery poll,
+ * presence), never falling back to the cold load under the lock.
+ */
+async function prepare(matchId: string): Promise<void> {
+  const cached = contentCache.get(matchId);
+  if (cached && typeof cached === 'object' && hydratedContent.has(cached)) return;
+  try {
+    const row = await roomRepo.getMatch(matchId);
+    if (!row || !isLive(row.status)) return;
+    const engine = roomEngineFor(row.game, row.engine_version);
+    if (!engine) return;
+    const parsed = await contentOf(undefined, row, engine);
+    // With the match's state: a match that froze Russian names loads them here, outside the lock.
+    if (parsed !== null) markHydrated(row.id, await hydrated(engine, parsed, row.state));
+  } catch (error) {
+    if (error instanceof RoomError) throw error;
+    logger.warn({ err: error, matchId }, 'Room content could not be prepared before the lock');
+    throw new RoomError('room_content_unavailable', 503);
+  }
+}
+
 const effectsOf = (row: RoomMatchRow, seats: RoomSeatRow[], status: RoomStatus, timer: RoomEffects['timer']): RoomEffects => ({
   matchId: row.id, lobbyId: row.lobby_id, userIds: seats.map((s) => s.user_id), status, timer,
   finished: status === 'completed' || status === 'cancelled',
@@ -133,7 +166,9 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
     if (isLive(row.status)) await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
     return null;
   }
-  return { row, seats, content: await hydrated(engine, content, row.state), engine };
+  const ready = await hydrated(engine, content, row.state);
+  if (isLive(row.status)) markHydrated(row.id, ready);
+  return { row, seats, content: ready, engine };
 }
 
 /**
@@ -343,6 +378,7 @@ export const roomService = {
 
   /** A seat's screen is up. When every seat is, the gate closes early and the match starts. */
   async ready(matchId: string, userId: string, locale: RoomLocale, clientGames?: readonly string[]): Promise<RoomEffects | null> {
+    await prepare(matchId);
     return roomRepo.withTx(async (tx) => {
       const l = await load(tx, matchId);
       if (!l) return null;
@@ -372,6 +408,7 @@ export const roomService = {
    * status, the clock catch-up (a command after a deadline meets the state that followed it), then the rules.
    */
   async command(matchId: string, userId: string, commandId: string, raw: unknown): Promise<{ result: RoomCommandResult; effects: RoomEffects | null }> {
+    await prepare(matchId);
     const hash = stableHash(raw);
     return roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, matchId);
@@ -417,6 +454,7 @@ export const roomService = {
 
   /** Leave the match on purpose: at the gate the seat simply drops out; from then on it is withdrawn (final). */
   async leave(matchId: string, userId: string): Promise<RoomEffects | null> {
+    await prepare(matchId);
     return roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, matchId);
       if (!loaded) return null;
@@ -449,6 +487,7 @@ export const roomService = {
   async absent(userId: string, fence: PresenceFence | null = null): Promise<RoomEffects | null> {
     const live = await roomRepo.liveMatchForUser(userId);
     if (!live || (fence && fence.matchId !== live.id)) return null;
+    await prepare(live.id);
     return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, live.id);
       if (!loaded) return null;
@@ -480,6 +519,7 @@ export const roomService = {
   async present(userId: string, clientGames?: readonly string[]): Promise<RoomEffects | null> {
     const live = await roomRepo.liveMatchForUser(userId);
     if (!live) return null;
+    await prepare(live.id);
     return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const loaded = await load(tx, live.id);
       if (!loaded) return null;
@@ -497,6 +537,7 @@ export const roomService = {
 
   /** The match deadline ran out (timer or recovery poll). An old phase token, or a deadline not yet due, changes nothing. */
   async expire(matchId: string, token: number | null): Promise<RoomEffects | null> {
+    await prepare(matchId);
     return unlessUnsupported(roomRepo.withTx(async (tx) => {
       const l = await load(tx, matchId);
       if (!l || (l.row.status !== 'ready' && l.row.status !== 'active') || !l.row.phase_deadline_at) return null;

@@ -21,6 +21,7 @@ import { startPistasReadinessCheck } from './modules/pistas/index.js';
 import { startUltimoReadinessCheck } from './modules/ultimo/index.js';
 import { startSharedPlayerDailyReadinessCheck } from './modules/shared-player-daily/shared-player-daily.service.js';
 import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/name-chain-daily.service.js';
+import { startTenableDailyReadinessCheck } from './modules/tenable-daily/tenable-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
 import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { createServer } from 'http';
@@ -111,6 +112,7 @@ startPistasReadinessCheck();
 startUltimoReadinessCheck();
 startSharedPlayerDailyReadinessCheck();
 startNameChainDailyReadinessCheck();
+startTenableDailyReadinessCheck();
 startMinutoReadinessCheck();
 startGridDailyReadinessCheck();
 

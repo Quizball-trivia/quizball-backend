@@ -85,9 +85,15 @@ export interface GoalSnapshot {
 
 export type GgtSessionState = 'active' | 'guessed' | 'complete' | 'abandoned';
 
+/** Who plays: a member, or a guest session (no rewards, no solves rows). */
+export type GgtPlayer = { kind: 'member'; userId: string } | { kind: 'guest'; guestId: string };
+
+export const ggtMember = (userId: string): GgtPlayer => ({ kind: 'member', userId });
+
 export interface GgtSessionRow {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  guest_id: string | null;
   goal_id: string;
   goal_snapshot: GoalSnapshot;
   state: GgtSessionState;

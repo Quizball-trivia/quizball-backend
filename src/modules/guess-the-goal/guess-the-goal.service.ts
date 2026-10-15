@@ -25,6 +25,7 @@ import type {
   ChoreographyStep,
   GoalChoreographyRow,
   GoalSnapshot,
+  GgtPlayer,
   GgtSessionRow,
   I18nText,
 } from './guess-the-goal.types.js';
@@ -202,9 +203,12 @@ function elapsedSeconds(session: GgtSessionRow, at: Date): number {
   return Math.max(0, (at.getTime() - new Date(session.started_at).getTime() - GGT_GRACE_MS) / 1000);
 }
 
+const playerOfSession = (session: GgtSessionRow): GgtPlayer =>
+  session.user_id ? { kind: 'member', userId: session.user_id } : { kind: 'guest', guestId: session.guest_id! };
+
 async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
   const [solved, total] = await Promise.all([
-    guessTheGoalRepo.countSolved(session.user_id),
+    guessTheGoalRepo.countSolved(playerOfSession(session)),
     guessTheGoalRepo.countPublished(),
   ]);
   const snapshot = session.goal_snapshot;
@@ -347,15 +351,15 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
 }
 
 export const guessTheGoalService = {
-  async startSession(userId: string, clientNonce: string | null): Promise<PublicSession> {
+  async startSession(player: GgtPlayer, clientNonce: string | null): Promise<PublicSession> {
     const session = await sql.begin(async (tx) => {
       // Serialize per-user starts: without this, two parallel starts race the
       // nonce lookup and the abandon step (one could abandon the other's
       // freshly created session and still 201 both).
-      await guessTheGoalRepo.acquireUserStartLock(tx, userId);
+      await guessTheGoalRepo.acquireStartLock(tx, player);
 
       if (clientNonce) {
-        const existing = await guessTheGoalRepo.getSessionByNonce(tx, userId, clientNonce);
+        const existing = await guessTheGoalRepo.getSessionByNonce(tx, player, clientNonce);
         if (existing) {
           if (existing.state === 'active' || existing.state === 'guessed') return existing;
           // Nonce exists but the session already finished — treat the retry
@@ -369,7 +373,7 @@ export const guessTheGoalService = {
       // cannot both pass the count.
       const startedToday = await guessTheGoalRepo.countSessionsStartedToday(
         tx,
-        userId,
+        player,
         GGT_DAY_TIMEZONE
       );
       if (startedToday >= GGT_DAILY_GOAL_LIMIT) {
@@ -380,7 +384,7 @@ export const guessTheGoalService = {
         });
       }
 
-      const open = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
+      const open = await guessTheGoalRepo.getOpenSessionForUpdate(tx, player);
       if (open) {
         // Starting a new goal forfeits the previous one (including a pending
         // bonus — base rewards were already settled at guess time). Scouting
@@ -388,14 +392,14 @@ export const guessTheGoalService = {
         await guessTheGoalRepo.abandonSession(tx, open.id);
       }
 
-      const goal = await guessTheGoalRepo.pickNextGoal(tx, userId);
+      const goal = await guessTheGoalRepo.pickNextGoal(tx, player);
       if (!goal) throw new NotFoundError('No goals available');
 
-      const seen = await guessTheGoalRepo.hasSeenGoal(tx, userId, goal.id);
+      const seen = await guessTheGoalRepo.hasSeenGoal(tx, player, goal.id);
       const maxPoints = seen ? GGT_MIN_POINTS : GGT_MAX_POINTS;
 
       return guessTheGoalRepo.insertSession(tx, {
-        userId,
+        player,
         goalId: goal.id,
         goalSnapshot: buildSnapshot(goal),
         maxPoints,
@@ -406,19 +410,19 @@ export const guessTheGoalService = {
     return toPublicSession(session);
   },
 
-  async getCurrent(userId: string): Promise<PublicSession> {
-    const session = await guessTheGoalRepo.getOpenSession(userId);
+  async getCurrent(player: GgtPlayer): Promise<PublicSession> {
+    const session = await guessTheGoalRepo.getOpenSession(player);
     if (!session) throw new NotFoundError('No active session');
     return toPublicSession(session);
   },
 
-  async guess(userId: string, sessionId: string, optionId: string): Promise<GuessOutcome> {
+  async guess(player: GgtPlayer, sessionId: string, optionId: string): Promise<GuessOutcome> {
     return sql.begin(async (tx) => {
-      const session = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
+      const session = await guessTheGoalRepo.getOpenSessionForUpdate(tx, player);
       if (!session || session.id !== sessionId) {
         // The session may have completed on a previous attempt whose response
         // was lost — replay the stored result instead of stranding the client.
-        const finished = await guessTheGoalRepo.getFinishedSession(tx, userId, sessionId);
+        const finished = await guessTheGoalRepo.getFinishedSession(tx, player, sessionId);
         if (finished && finished.guess_option_id === optionId) return replayGuessOutcome(finished);
         if (finished) throw new ConflictError('Session already guessed with a different option');
         throw new NotFoundError('No such active session');
@@ -451,15 +455,16 @@ export const guessTheGoalService = {
       const nextState: 'guessed' | 'complete' = hasBonus ? 'guessed' : 'complete';
 
       let awards = NO_AWARDS;
-      if (correct) {
+      // Guests earn nothing and keep no solves rows (their correct sessions are their solves).
+      if (correct && player.kind === 'member') {
         const won = await guessTheGoalRepo.insertSolve(tx, {
-          userId,
+          userId: player.userId,
           goalId: session.goal_id,
           sessionId: session.id,
         });
         if (won) {
           awards = await grantRewards(tx, {
-            userId,
+            userId: player.userId,
             goalId: session.goal_id,
             sessionId: session.id,
             points,
@@ -498,11 +503,11 @@ export const guessTheGoalService = {
     });
   },
 
-  async answerBonus(userId: string, sessionId: string, optionId: string): Promise<BonusOutcome> {
+  async answerBonus(player: GgtPlayer, sessionId: string, optionId: string): Promise<BonusOutcome> {
     return sql.begin(async (tx) => {
-      const session = await guessTheGoalRepo.getOpenSessionForUpdate(tx, userId);
+      const session = await guessTheGoalRepo.getOpenSessionForUpdate(tx, player);
       if (!session || session.id !== sessionId) {
-        const finished = await guessTheGoalRepo.getFinishedSession(tx, userId, sessionId);
+        const finished = await guessTheGoalRepo.getFinishedSession(tx, player, sessionId);
         if (finished?.bonus_option_id === optionId && finished.goal_snapshot.bonus) {
           return {
             correct: finished.bonus_correct ?? false,
@@ -541,9 +546,9 @@ export const guessTheGoalService = {
       const bonusPoints = correct ? GGT_BONUS_POINTS : 0;
 
       let awards = NO_AWARDS;
-      if (correct && session.first_solve) {
+      if (correct && session.first_solve && player.kind === 'member') {
         awards = await grantRewards(tx, {
-          userId,
+          userId: player.userId,
           goalId: session.goal_id,
           sessionId: session.id,
           points: bonusPoints,
@@ -570,7 +575,7 @@ export const guessTheGoalService = {
    *  the route is role-gated. */
   async resetTodayForUser(userId: string): Promise<number> {
     return sql.begin(async (tx) => {
-      await guessTheGoalRepo.acquireUserStartLock(tx, userId);
+      await guessTheGoalRepo.acquireStartLock(tx, { kind: 'member', userId });
       return guessTheGoalRepo.deleteTodaySessions(tx, userId, GGT_DAY_TIMEZONE);
     });
   },
@@ -609,7 +614,7 @@ export const guessTheGoalService = {
     return { goals: rows };
   },
 
-  async getStats(userId: string): Promise<{
+  async getStats(player: GgtPlayer): Promise<{
     solved: number;
     total: number;
     pool_exhausted: boolean;
@@ -623,10 +628,10 @@ export const guessTheGoalService = {
     daily_max_coins: number;
   }> {
     const [solved, total, coinsToday, goalsToday] = await Promise.all([
-      guessTheGoalRepo.countSolved(userId),
+      guessTheGoalRepo.countSolved(player),
       guessTheGoalRepo.countPublished(),
-      sql.begin((tx) => guessTheGoalRepo.coinsGrantedToday(tx, userId)),
-      sql.begin((tx) => guessTheGoalRepo.countSessionsStartedToday(tx, userId, GGT_DAY_TIMEZONE)),
+      player.kind === 'member' ? sql.begin((tx) => guessTheGoalRepo.coinsGrantedToday(tx, player.userId)) : 0,
+      sql.begin((tx) => guessTheGoalRepo.countSessionsStartedToday(tx, player, GGT_DAY_TIMEZONE)),
     ]);
     return {
       solved,
@@ -645,7 +650,7 @@ export const guessTheGoalService = {
       // a cleared pool contributes 0. goals_today is added back so the day's
       // ceiling doesn't shrink as it is being earned (slight overestimate when
       // today's sessions were replays or misses — acceptable for a hub label).
-      daily_max_coins: Math.min(
+      daily_max_coins: player.kind === 'guest' ? 0 : Math.min(
         GGT_DAILY_COIN_CAP,
         Math.min(GGT_DAILY_GOAL_LIMIT, Math.max(0, total - solved) + goalsToday)
           * (Math.floor(GGT_MAX_POINTS * GGT_COINS_PER_POINT)
@@ -659,7 +664,7 @@ export const guessTheGoalService = {
    *  per-goal rows would leak a stable ordering, and their titles ARE the
    *  answers. One repeatable-read transaction keeps cards and earnings from
    *  straddling a concurrent solve. */
-  async getGallery(userId: string): Promise<{
+  async getGallery(player: GgtPlayer): Promise<{
     solved: number;
     total: number;
     pool_exhausted: boolean;
@@ -689,11 +694,11 @@ export const guessTheGoalService = {
       'isolation level repeatable read read only',
       (tx) =>
         Promise.all([
-          guessTheGoalRepo.solvedGalleryRows(tx, userId),
-          guessTheGoalRepo.unsolvedCounts(tx, userId),
-          guessTheGoalRepo.lifetimeEarnings(tx, userId),
-          guessTheGoalRepo.coinsGrantedToday(tx, userId),
-          guessTheGoalRepo.countSessionsStartedToday(tx, userId, GGT_DAY_TIMEZONE),
+          guessTheGoalRepo.solvedGalleryRows(tx, player),
+          guessTheGoalRepo.unsolvedCounts(tx, player),
+          player.kind === 'member' ? guessTheGoalRepo.lifetimeEarnings(tx, player.userId) : { coins: 0, xp: 0 },
+          player.kind === 'member' ? guessTheGoalRepo.coinsGrantedToday(tx, player.userId) : 0,
+          guessTheGoalRepo.countSessionsStartedToday(tx, player, GGT_DAY_TIMEZONE),
         ])
     )) as [
       Awaited<ReturnType<typeof guessTheGoalRepo.solvedGalleryRows>>,

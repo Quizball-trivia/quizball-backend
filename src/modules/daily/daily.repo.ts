@@ -297,6 +297,20 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       return row ? toEntry(row) : null;
     },
 
+    /**
+     * The value of `key` most runs of a day froze in their state, among those whose `where` key has `whereValue` (e.g.
+     * the Russian names version of the day's Cyrillic runs); null when none did. A closed day's runs no longer change.
+     */
+    async commonStateValue(day: string, key: string, where?: { key: string; value: string }): Promise<string | null> {
+      for (const k of [key, where?.key]) if (k !== undefined && !/^[a-z]+$/.test(k)) throw new Error(`Bad state key: ${k}`);
+      const [row] = await sql<Array<{ value: string }>>`
+        SELECT state->>${key} AS value FROM ${sql.unsafe(RUNS)}
+        WHERE day = ${day} AND state ? ${key} ${where ? sql`AND state->>${where.key} = ${where.value}` : sql``}
+        GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1
+      `;
+      return row?.value ?? null;
+    },
+
     /** Top ranked, finished runs and the player count from one snapshot. Guest and unranked runs never appear. */
     async leaderboard(day: string, limit: number, partition = ''): Promise<{ players: number; top: Entry[] }> {
       const rows = await withStatementTimeout((tx) => exec(tx)<Array<RawEntry & { players: number }>>`

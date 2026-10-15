@@ -141,7 +141,10 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
      */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const closed = await core.closedDay(dayId);
-      const version = locale === 'ru' ? await activeRussianVersion().catch(() => null) : null;
+      // The names the day's Russian runs played with (a later version could change the start or a spelling); else today's.
+      const version = locale === 'ru'
+        ? (await deps.repo.commonStateValue(dayId, 'ov', { key: 'al', value: 'cy' }).catch(() => null)) ?? (await activeRussianVersion().catch(() => null))
+        : null;
       const day = version ? await dayForRun(closed, { ...rules.newState({ locale, russianVersion: version }) }, true) : closed;
       const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));
       const name = pid ? day.universe.player(pid)?.name ?? null : null;

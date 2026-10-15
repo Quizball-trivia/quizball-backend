@@ -135,7 +135,10 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
     /** Every pair of a day the database clock has closed, with a few of its answers; anything else is the same 404 as a missing day. */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const closed = await core.closedDay(dayId);
-      const version = locale === 'ru' ? await activeRussianVersion().catch(() => null) : null;
+      // The names the day's Russian runs played with (a later version could change the start or a spelling); else today's.
+      const version = locale === 'ru'
+        ? (await deps.repo.commonStateValue(dayId, 'ov', { key: 'ru', value: 'true' }).catch(() => null)) ?? (await activeRussianVersion().catch(() => null))
+        : null;
       const day = version ? await dayForRun(closed, { ov: version, ru: true }, true) : closed;
       const shown = rules.publicState({ ...rules.newState(), res: day.pairs.map(() => ({ pid: null, left: 0 })), done: true }, dayId, day.pairs, day.universe, 0, { ranked: false, disclose: true });
       return { day: dayId, pairs: shown.results };

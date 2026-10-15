@@ -49,6 +49,7 @@ export interface SquadSpinCriterionRow {
   criterion_key: string;
   label_en: string;
   label_ka: string;
+  label_ru: string | null;
   asset_key: string | null;
 }
 
@@ -56,6 +57,7 @@ export interface SquadSpinPlayerRow {
   id: string;
   name_en: string;
   name_ka: string | null;
+  name_ru: string | null;
   image_url: string | null;
   position_group: SquadSpinPosition;
   nationality_code: string | null;

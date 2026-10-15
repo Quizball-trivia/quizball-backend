@@ -114,7 +114,20 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
   });
 }
 
+const russianAvailability = { checkedAt: 0, usable: false };
+/** Russian clue cards are optional: a Russian player is dealt English cards until Russian ones are published. */
+async function resolveContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
+  if (locale !== 'ru') return locale;
+  if (Date.now() - russianAvailability.checkedAt > 60_000) {
+    const availability = await auctionContentRepo.getPublishedCardAvailability('ru');
+    russianAvailability.checkedAt = Date.now();
+    russianAvailability.usable = availability.usable_count > 0;
+  }
+  return russianAvailability.usable ? 'ru' : 'en';
+}
+
 export const auctionContentService = {
+  resolveContentLocale,
   async getPublishedCardCount(locale: AuctionContentLocale): Promise<number> {
     return auctionContentRepo.getPublishedCardCount(locale);
   },
@@ -472,7 +485,7 @@ async function localizedClueSteps(
 }
 
 function isAuctionContentLocale(value: string): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
 }
 
 export type { AuctionContentLocale };

@@ -68,10 +68,12 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
   desc: {
     en: 'highest to lowest',
     ka: 'მაღლიდან დაბლისკენ',
+    ru: 'от большего к меньшему',
   },
   asc: {
     en: 'lowest to highest',
     ka: 'დაბლიდან მაღლისკენ',
+    ru: 'от меньшего к большему',
   },
 } as const satisfies Record<'asc' | 'desc', Record<string, string>>;
 

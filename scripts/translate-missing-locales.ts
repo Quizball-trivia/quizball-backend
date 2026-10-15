@@ -41,7 +41,7 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
   if (!Number.isInteger(value) || value < 1) { console.error(`ABORT: --${name} must be a positive integer`); process.exit(1); }
 }
 
-const env = readFileSync('.env', 'utf8');
+const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const envVar = (k: string) => env.match(new RegExp(`^${k}\\s*=\\s*"?([^"\\n]+)"?`, 'm'))?.[1];
 /** Strict target check: the staging project must be the connection's user or host, and the prod ref must not appear anywhere. */
 function assertStagingUrl(url: string, prodRef: string, stagingRef: string): void {
@@ -139,24 +139,24 @@ const loadCache = (locale: string) => new Map<string, string>(existsSync(cacheFi
 
 async function main() {
   console.log(`STAGING ${STAGING_REF} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
-  const rows = await sql<Array<{ id: string; type: string; prompt: Json; payload: Json; updated_at: string }>>`
-    SELECT q.id, q.type, q.prompt, qp.payload, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+  // Quiz Page questions are included: their curated English stays untouched, and the write uses the CMS trigger's
+  // transaction-local guard, as the audited Spanish import does.
+  const rows = await sql<Array<{ id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string }>>`
+    SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
     WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
-      -- Quiz Page questions are curated in the CMS (a trigger refuses direct writes); leave them to it.
-      AND NOT EXISTS (SELECT 1 FROM campaign_quiz_manual_questions m WHERE m.question_id = q.id)
       ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
     ORDER BY q.type, q.id`;
   // Work items: one per (row, node, locale) with an empty slot.
   type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };
   const items: Item[] = [];
-  for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
+  for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload), ...nodes(r.explanation)].entries()) for (const l of LOCALES) {
     if (empty(n[l])) items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
   }
   // recheck-copies: slots that equal their English (copied earlier, or never localised) go to the model, which returns
   // proper nouns unchanged and translates everything else. Existing values stay intact until a translation succeeds.
   if (mode === 'recheck-copies') {
     items.length = 0;
-    for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload)].entries()) for (const l of LOCALES) {
+    for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload), ...nodes(r.explanation)].entries()) for (const l of LOCALES) {
       if (l === 'ka' || l === 'ru' || typeof n[l] !== 'string' || n[l] !== n.en) continue;
       items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
     }
@@ -214,22 +214,22 @@ async function main() {
     const chunkIds = rowOrder.slice(c, c + CHUNK_ROWS);
     // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
     const fresh = new Map((await sql<typeof rows>`
-      SELECT q.id, q.type, q.prompt, qp.payload, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+      SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
       WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
     const chunk: Item[] = [];
     for (const w of work.filter((x) => fresh.has(x.row.id))) {
       const row = fresh.get(w.row.id)!;
       const idx = Number(w.key.split('#')[1]);
-      const node = [...nodes(row.prompt), ...nodes(row.payload)][idx];
+      const node = [...nodes(row.prompt), ...nodes(row.payload), ...nodes(row.explanation)][idx];
       if (!node || node.en !== w.en || (mode !== 'recheck-copies' && !empty(node[w.locale]))) continue;
       chunk.push({ ...w, row, node });
     }
     const touched = new Map<string, typeof rows[number]>();
-    const snapshot: Array<{ id: string; prompt: Json; payload: Json }> = [];
+    const snapshot: Array<{ id: string; prompt: Json; payload: Json; explanation: Json }> = [];
     for (const b of chunk) {
       const t = cache.get(b.locale)!.get(b.en);
       if (!t) { failed += 1; continue; }
-      if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)) }); }
+      if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
       if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; filled += 1; }
     }
     if (touched.size === 0) continue;
@@ -237,9 +237,10 @@ async function main() {
     const snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
     writeFileSync(snapFile, JSON.stringify(snapshot));
     await sql.begin(async (tx) => {
+      await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
       for (const r of touched.values()) {
         // Optimistic: skip a row someone edited while its chunk was being translated.
-        const done = await tx`UPDATE questions SET prompt = ${tx.json(r.prompt as never)}, updated_at = now() WHERE id = ${r.id} AND updated_at::text = ${r.updated_at}`;
+        const done = await tx`UPDATE questions SET prompt = ${tx.json(r.prompt as never)}, explanation = ${r.explanation === null ? null : tx.json(r.explanation as never)}, updated_at = now() WHERE id = ${r.id} AND updated_at::text = ${r.updated_at}`;
         if (done.count === 0) { skipped += 1; continue; }
         await tx`UPDATE question_payloads SET payload = ${tx.json(r.payload as never)} WHERE question_id = ${r.id}`;
         updated += 1;

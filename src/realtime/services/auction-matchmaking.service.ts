@@ -179,8 +179,9 @@ export const auctionMatchmakingService = {
   async handleSearchStart(
     io: QuizballServer,
     socket: QuizballSocket,
-    input: AuctionSearchStartServiceInput
+    rawInput: AuctionSearchStartServiceInput
   ): Promise<void> {
+    const input = { ...rawInput, locale: await auctionContentService.resolveContentLocale(rawInput.locale) };
     if (socket.data.user) assertCapability(socket.data.user, 'queueEntry');
     const user = socket.data.user;
     if (!user?.id) {
@@ -1574,7 +1575,7 @@ function searchKey(searchId: string): string {
 }
 
 function isAuctionLocale(value: string | undefined): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
 }
 
 function isFormationName(value: string | undefined): value is FormationName {

@@ -439,8 +439,8 @@ async function notifyWalletChange(
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა' },
-      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.` },
+      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён' },
+      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Тебе начислено ${parts.join(' и ')}.` },
       data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
     });
   } catch (err) {

@@ -264,7 +264,9 @@ const sessionGuardMock = vi.hoisted(() => ({
 }));
 
 const contentServiceMock = vi.hoisted(() => ({
-  assertPublishedAuctionContentAvailable: vi.fn(),  resolveContentLocale: vi.fn(async (locale: string) => locale),
+  assertPublishedAuctionContentAvailable: vi.fn(),
+  resolveContentLocale: vi.fn(async (locale: string) => locale),
+  forgetContentLocale: vi.fn(),
 }));
 
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
@@ -362,6 +364,7 @@ describe('auctionMatchmakingService', () => {
     lockMock.acquireLock.mockResolvedValue({ acquired: true, token: 'lock-token' });
     lockMock.releaseLock.mockResolvedValue(undefined);
     contentServiceMock.assertPublishedAuctionContentAvailable.mockResolvedValue(undefined);
+    contentServiceMock.resolveContentLocale.mockReset().mockImplementation(async (locale: string) => locale);
   });
 
   afterEach(() => {
@@ -413,6 +416,29 @@ describe('auctionMatchmakingService', () => {
     expect(lockMock.releaseLock.mock.invocationCallOrder[0]).toBeLessThan(
       startMatchMock.startAuctionMatchForHumans.mock.invocationCallOrder[0],
     );
+  });
+
+  it('resolves the card language again at the start: Russian cards unpublished after queueing mean English cards', async () => {
+    const { io } = createIo();
+    contentServiceMock.resolveContentLocale
+      .mockResolvedValueOnce('ru').mockResolvedValueOnce('ru').mockResolvedValueOnce('ru')
+      .mockResolvedValue('en');
+
+    for (const id of ['u1', 'u2', 'u3']) await auctionMatchmakingService.handleSearchStart(io, socket(id), { locale: 'ru' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledWith(io, expect.objectContaining({ locale: 'en' }), expect.anything());
+  });
+
+  it('a Russian deal that finds no cards drops the cached availability, so the retry reads it again', async () => {
+    const { io } = createIo();
+    contentServiceMock.resolveContentLocale.mockResolvedValue('ru');
+    startMatchMock.startAuctionMatchForHumans.mockRejectedValueOnce(new AuctionContentUnavailableError());
+
+    for (const id of ['u1', 'u2', 'u3']) await auctionMatchmakingService.handleSearchStart(io, socket(id), { locale: 'ru' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(contentServiceMock.forgetContentLocale).toHaveBeenCalledTimes(1);
   });
 
   it('uses the durable claim token as the idempotent match id', async () => {

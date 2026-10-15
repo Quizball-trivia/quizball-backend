@@ -16,6 +16,7 @@ import {
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
+import { AuctionContentUnavailableError, AuctionStartingPriceUnavailableError } from '../../modules/auction/auction.errors.js';
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
@@ -710,7 +711,10 @@ async function startClaimedGroup(
       : {}),
   }));
 
+  // Resolved again at the start, not when queued: Russian cards unpublished meanwhile mean English cards, retries included.
+  let locale: AuctionContentLocale = oldest.locale;
   try {
+    locale = await auctionContentService.resolveContentLocale(oldest.locale);
     // Match humans from one shared queue, regardless of their UI language,
     // just like ranked matchmaking. Auction state currently has one shared
     // content locale, so the oldest search deterministically chooses the card
@@ -718,7 +722,7 @@ async function startClaimedGroup(
     const match = await startAuctionMatchForHumans(io, {
       humanPlayers: humans,
       formation: oldest.formation,
-      locale: oldest.locale,
+      locale,
     }, {
       context: {
         createId: (kind) => kind === 'match' ? claim.matchId : randomUUID(),
@@ -729,7 +733,7 @@ async function startClaimedGroup(
           prepared.matchId,
           humans,
           botPlayerSummaries(prepared.seats),
-          oldest.locale,
+          locale,
           prepared.formation,
         );
       },
@@ -752,7 +756,7 @@ async function startClaimedGroup(
         claimToken: claim.claimToken,
         humanUserIds: humans.map((human) => human.userId),
         botCount: botPlayers.length,
-        locale: oldest.locale,
+        locale,
       },
       'Auction matchmaking started match'
     );
@@ -774,6 +778,9 @@ async function startClaimedGroup(
     // retries exhausted) must NOT eject users from the queue — the searches
     // were already claimed, so REQUEUE them with a fresh fill timer and only
     // give up (with a client-visible error) after repeated failures.
+    if (locale === 'ru' && (error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) {
+      auctionContentService.forgetContentLocale();
+    }
     const { requeued, dropped } = await requeueFailedClaim(claim, null);
 
     const payload = toAuctionErrorPayload(error, {

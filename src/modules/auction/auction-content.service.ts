@@ -128,6 +128,10 @@ async function resolveContentLocale(locale: AuctionContentLocale): Promise<Aucti
 
 export const auctionContentService = {
   resolveContentLocale,
+  /** A Russian deal found no content (cards were unpublished): the next resolution reads availability again. */
+  forgetContentLocale(): void {
+    russianAvailability.checkedAt = 0;
+  },
   async getPublishedCardCount(locale: AuctionContentLocale): Promise<number> {
     return auctionContentRepo.getPublishedCardCount(locale);
   },

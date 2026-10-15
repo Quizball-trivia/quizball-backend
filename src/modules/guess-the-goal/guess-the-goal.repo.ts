@@ -1,16 +1,28 @@
 import { sql, type TransactionSql } from '../../db/index.js';
-import type { GoalChoreographyRow, GgtSessionRow } from './guess-the-goal.types.js';
+import type { GoalChoreographyRow, GgtPlayer, GgtSessionRow } from './guess-the-goal.types.js';
 import { GGT_REWARD_EVENT, GGT_XP_SOURCE } from './guess-the-goal.constants.js';
 
 /** postgres.js TransactionSql loses its call signature through the type
  *  re-export; the repo-wide convention is to cast (see tuning.repo.ts). */
 const exec = (tx: TransactionSql): typeof sql => tx as unknown as typeof sql;
 
+const ownedBy = (q: typeof sql, player: GgtPlayer) =>
+  player.kind === 'member' ? q`user_id = ${player.userId}` : q`guest_id = ${player.guestId}`;
+
+/** Goals the player has solved: a member's solves rows; a guest has none, so its correct sessions. */
+const solvedGoalIds = (q: typeof sql, player: GgtPlayer) =>
+  player.kind === 'member'
+    ? q`SELECT goal_id FROM guess_the_goal_solves WHERE user_id = ${player.userId}`
+    : q`SELECT goal_id FROM guess_the_goal_sessions WHERE guest_id = ${player.guestId} AND guess_correct`;
+
+const startLockKey = (player: GgtPlayer) =>
+  player.kind === 'member' ? 'ggt:' + player.userId : 'ggt:guest:' + player.guestId;
+
 export const guessTheGoalRepo = {
   /** Serialize all session-starting work for one user (advisory xact lock):
    *  parallel starts otherwise race the nonce check and the abandon step. */
-  async acquireUserStartLock(tx: TransactionSql, userId: string): Promise<void> {
-    await exec(tx)`SELECT pg_advisory_xact_lock(hashtextextended(${'ggt:' + userId}, 0))`;
+  async acquireStartLock(tx: TransactionSql, player: GgtPlayer): Promise<void> {
+    await exec(tx)`SELECT pg_advisory_xact_lock(hashtextextended(${startLockKey(player)}, 0))`;
   },
 
   /**
@@ -24,13 +36,14 @@ export const guessTheGoalRepo = {
    */
   async countSessionsStartedToday(
     tx: TransactionSql,
-    userId: string,
+    player: GgtPlayer,
     timezone: string
   ): Promise<number> {
-    const [row] = await exec(tx)<{ n: number }[]>`
+    const q = exec(tx);
+    const [row] = await q<{ n: number }[]>`
       SELECT count(*)::int AS n
         FROM guess_the_goal_sessions
-       WHERE user_id = ${userId}
+       WHERE ${ownedBy(q, player)}
          AND (started_at AT TIME ZONE ${timezone})::date
              = (now() AT TIME ZONE ${timezone})::date
     `;
@@ -88,26 +101,23 @@ export const guessTheGoalRepo = {
    * as broken. Falls back to any published goal when the user has solved the
    * whole pool (replay for fun, no rewards).
    */
-  async pickNextGoal(tx: TransactionSql, userId: string): Promise<GoalChoreographyRow | null> {
-    const [lastServed] = await exec(tx)<Array<{ goal_id: string }>>`
+  async pickNextGoal(tx: TransactionSql, player: GgtPlayer): Promise<GoalChoreographyRow | null> {
+    const q = exec(tx);
+    const [lastServed] = await q<Array<{ goal_id: string }>>`
       SELECT goal_id FROM guess_the_goal_sessions
-      WHERE user_id = ${userId}
+      WHERE ${ownedBy(q, player)}
       ORDER BY started_at DESC
       LIMIT 1
     `;
     const lastGoalId = lastServed?.goal_id ?? null;
-    const [row] = await exec(tx)<GoalChoreographyRow[]>`
+    const [row] = await q<GoalChoreographyRow[]>`
       SELECT g.* FROM goal_choreographies g
       WHERE g.status = 'published'
-        AND NOT EXISTS (
-          SELECT 1 FROM guess_the_goal_solves s
-          WHERE s.user_id = ${userId} AND s.goal_id = g.id
-        )
+        AND g.id NOT IN (${solvedGoalIds(q, player)})
         AND (${lastGoalId}::uuid IS NULL OR g.id <> ${lastGoalId}::uuid)
       ORDER BY
-        EXISTS (
-          SELECT 1 FROM guess_the_goal_sessions ss
-          WHERE ss.user_id = ${userId} AND ss.goal_id = g.id
+        g.id IN (
+          SELECT ss.goal_id FROM guess_the_goal_sessions ss WHERE ${ownedBy(q, player)}
         ) ASC,
         -- Curated onboarding: the famous five come first for everyone, then
         -- the pool randomizes. Applies within the never-seen tier, so a
@@ -119,18 +129,15 @@ export const guessTheGoalRepo = {
     if (row) return row;
     // Single-goal pool (or the only unsolved goal was just served): allow the
     // repeat rather than stall the kick-off.
-    const [unsolvedRepeat] = await exec(tx)<GoalChoreographyRow[]>`
+    const [unsolvedRepeat] = await q<GoalChoreographyRow[]>`
       SELECT g.* FROM goal_choreographies g
       WHERE g.status = 'published'
-        AND NOT EXISTS (
-          SELECT 1 FROM guess_the_goal_solves s
-          WHERE s.user_id = ${userId} AND s.goal_id = g.id
-        )
+        AND g.id NOT IN (${solvedGoalIds(q, player)})
       ORDER BY random()
       LIMIT 1
     `;
     if (unsolvedRepeat) return unsolvedRepeat;
-    const [fallback] = await exec(tx)<GoalChoreographyRow[]>`
+    const [fallback] = await q<GoalChoreographyRow[]>`
       SELECT * FROM goal_choreographies
       WHERE status = 'published'
       ORDER BY random()
@@ -139,11 +146,12 @@ export const guessTheGoalRepo = {
     return fallback ?? null;
   },
 
-  async hasSeenGoal(tx: TransactionSql, userId: string, goalId: string): Promise<boolean> {
-    const [row] = await exec(tx)<Array<{ seen: boolean }>>`
+  async hasSeenGoal(tx: TransactionSql, player: GgtPlayer, goalId: string): Promise<boolean> {
+    const q = exec(tx);
+    const [row] = await q<Array<{ seen: boolean }>>`
       SELECT EXISTS (
         SELECT 1 FROM guess_the_goal_sessions
-        WHERE user_id = ${userId} AND goal_id = ${goalId}
+        WHERE ${ownedBy(q, player)} AND goal_id = ${goalId}
       ) AS seen
     `;
     return row?.seen ?? false;
@@ -161,12 +169,13 @@ export const guessTheGoalRepo = {
 
   async getSessionByNonce(
     tx: TransactionSql,
-    userId: string,
+    player: GgtPlayer,
     clientNonce: string
   ): Promise<GgtSessionRow | null> {
-    const [row] = await exec(tx)<GgtSessionRow[]>`
+    const q = exec(tx);
+    const [row] = await q<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
-      WHERE user_id = ${userId} AND client_nonce = ${clientNonce}
+      WHERE ${ownedBy(q, player)} AND client_nonce = ${clientNonce}
     `;
     return row ?? null;
   },
@@ -174,31 +183,33 @@ export const guessTheGoalRepo = {
   /** Finished (guessed/complete) session lookup — mutation-retry replay. */
   async getFinishedSession(
     tx: TransactionSql,
-    userId: string,
+    player: GgtPlayer,
     sessionId: string
   ): Promise<GgtSessionRow | null> {
-    const [row] = await exec(tx)<GgtSessionRow[]>`
+    const q = exec(tx);
+    const [row] = await q<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
-      WHERE id = ${sessionId} AND user_id = ${userId} AND state IN ('guessed', 'complete')
+      WHERE id = ${sessionId} AND ${ownedBy(q, player)} AND state IN ('guessed', 'complete')
     `;
     return row ?? null;
   },
 
-  async getOpenSession(userId: string): Promise<GgtSessionRow | null> {
+  async getOpenSession(player: GgtPlayer): Promise<GgtSessionRow | null> {
     const [row] = await sql<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
-      WHERE user_id = ${userId} AND state IN ('active', 'guessed')
+      WHERE ${ownedBy(sql, player)} AND state IN ('active', 'guessed')
     `;
     return row ?? null;
   },
 
   async getOpenSessionForUpdate(
     tx: TransactionSql,
-    userId: string
+    player: GgtPlayer
   ): Promise<GgtSessionRow | null> {
-    const [row] = await exec(tx)<GgtSessionRow[]>`
+    const q = exec(tx);
+    const [row] = await q<GgtSessionRow[]>`
       SELECT * FROM guess_the_goal_sessions
-      WHERE user_id = ${userId} AND state IN ('active', 'guessed')
+      WHERE ${ownedBy(q, player)} AND state IN ('active', 'guessed')
       FOR UPDATE
     `;
     return row ?? null;
@@ -215,17 +226,19 @@ export const guessTheGoalRepo = {
   async insertSession(
     tx: TransactionSql,
     data: {
-      userId: string;
+      player: GgtPlayer;
       goalId: string;
       goalSnapshot: unknown;
       maxPoints: number;
       clientNonce: string | null;
     }
   ): Promise<GgtSessionRow> {
+    const userId = data.player.kind === 'member' ? data.player.userId : null;
+    const guestId = data.player.kind === 'guest' ? data.player.guestId : null;
     const [row] = await exec(tx)<GgtSessionRow[]>`
-      INSERT INTO guess_the_goal_sessions (user_id, goal_id, goal_snapshot, max_points, client_nonce)
+      INSERT INTO guess_the_goal_sessions (user_id, guest_id, goal_id, goal_snapshot, max_points, client_nonce)
       VALUES (
-        ${data.userId}, ${data.goalId}, ${sql.json(data.goalSnapshot as never)},
+        ${userId}, ${guestId}, ${data.goalId}, ${sql.json(data.goalSnapshot as never)},
         ${data.maxPoints}, ${data.clientNonce}
       )
       RETURNING *
@@ -266,7 +279,7 @@ export const guessTheGoalRepo = {
    *  after the fact, and a live read would hand out a new, unplayed answer). */
   async solvedGalleryRows(
     tx: TransactionSql,
-    userId: string
+    player: GgtPlayer
   ): Promise<
     Array<{
       difficulty: string;
@@ -285,16 +298,23 @@ export const guessTheGoalRepo = {
     // Board data comes from the LIVE choreography, not the frozen session
     // snapshot: solved goals have nothing left to hide, and content fixes
     // should reach the collection immediately.
-    return exec(tx)`
+    const q = exec(tx);
+    // A guest has no solves rows: its first correct session of each goal stands in for one.
+    const solves = player.kind === 'member'
+      ? q`SELECT goal_id, session_id, solved_at FROM guess_the_goal_solves WHERE user_id = ${player.userId}`
+      : q`SELECT DISTINCT ON (goal_id) goal_id, id AS session_id, guessed_at AS solved_at
+            FROM guess_the_goal_sessions
+           WHERE guest_id = ${player.guestId} AND guess_correct
+           ORDER BY goal_id, guessed_at`;
+    return q`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
              COALESCE(g.mirrored_url, sess.goal_snapshot->>'mirrored_url', sess.goal_snapshot->>'video_url') AS video_url,
              g.players, g.steps, g.clip_start_s, g.clip_end_s,
              s.solved_at, sess.points, sess.bonus_correct
-      FROM guess_the_goal_solves s
+      FROM (${solves}) s
       JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
       JOIN guess_the_goal_sessions sess ON sess.id = s.session_id
-      WHERE s.user_id = ${userId}
       ORDER BY s.solved_at
     ` as unknown as Promise<
       Array<{
@@ -315,12 +335,12 @@ export const guessTheGoalRepo = {
 
   /** Unsolved goals as per-difficulty COUNTS only — even redacted rows leak a
    *  stable global ordering, so unplayed goals never get individual entries. */
-  async unsolvedCounts(tx: TransactionSql, userId: string): Promise<Record<string, number>> {
-    const rows = await exec(tx)<Array<{ difficulty: string; count: number | string }>>`
+  async unsolvedCounts(tx: TransactionSql, player: GgtPlayer): Promise<Record<string, number>> {
+    const q = exec(tx);
+    const rows = await q<Array<{ difficulty: string; count: number | string }>>`
       SELECT g.difficulty, COUNT(*) AS count
       FROM goal_choreographies g
-      LEFT JOIN guess_the_goal_solves s ON s.goal_id = g.id AND s.user_id = ${userId}
-      WHERE g.status = 'published' AND s.user_id IS NULL
+      WHERE g.status = 'published' AND g.id NOT IN (${solvedGoalIds(q, player)})
       GROUP BY g.difficulty
     `;
     return Object.fromEntries(rows.map((r) => [r.difficulty, Number(r.count)]));
@@ -355,12 +375,11 @@ export const guessTheGoalRepo = {
 
   /** Solved count over CURRENTLY PUBLISHED goals so progress can never read
    *  as 40/37 after content is archived. */
-  async countSolved(userId: string): Promise<number> {
+  async countSolved(player: GgtPlayer): Promise<number> {
     const [row] = await sql<Array<{ count: number | string }>>`
       SELECT COUNT(*) AS count
-      FROM guess_the_goal_solves s
-      JOIN goal_choreographies g ON g.id = s.goal_id AND g.status = 'published'
-      WHERE s.user_id = ${userId}
+      FROM goal_choreographies g
+      WHERE g.status = 'published' AND g.id IN (${solvedGoalIds(sql, player)})
     `;
     return Number(row?.count ?? 0);
   },

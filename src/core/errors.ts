@@ -40,6 +40,7 @@ export const ErrorCode = {
   PISTAS_SIGN_IN_FOR_TODAY: 'sign_in_for_today',
   /** Pistas futboleras: neither a member session nor a guest session was sent. */
   PISTAS_GUEST_SESSION_REQUIRED: 'guest_session_required',
+  GGT_GUEST_SESSION_REQUIRED: 'guest_session_required',
   /** The caller's account kind (a guest) cannot do this; the client opens the sign-up dialog. */
   CAPABILITY_REQUIRED: 'CAPABILITY_REQUIRED',
 } as const;

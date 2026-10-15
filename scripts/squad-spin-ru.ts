@@ -3,7 +3,7 @@
 // Russian labels and player names for Squad Spin (squad_spin_criteria.label_ru, squad_spin_players.name_ru).
 //   npx tsx scripts/squad-spin-ru.ts --build [--env-file=.env]    # translate (GPT-6 Luna via the Codex CLI, shared name cache)
 //   npx tsx scripts/squad-spin-ru.ts [--env-file=.env]            # dry run of --apply
-//   npx tsx scripts/squad-spin-ru.ts --apply [--env-file=.env]    # fill the empty Russian columns (needs migration 20261015120300)
+//   npx tsx scripts/squad-spin-ru.ts --apply [--env-file=.env]    # fill the empty Russian columns (needs migration 20261016130300)
 // Staging only. Translations live in the gitignored scripts/.snapshots/squad-spin-ru.json ({ labels, names } keyed by English),
 // player names fall back to the shared cache that the grid and Pass Chain names came from, so one player is spelled one way.
 

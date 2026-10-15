@@ -12,7 +12,7 @@
  *       Dry run: compares the snapshot with the database (read only) and prints what --apply would write.
  *   npx tsx scripts/campaign-quizzes-ru.ts --apply [--overwrite] [--env-file=.env]
  *       Writes ru_* for every page whose English source still matches the snapshot. A page with a different
- *       non-empty ru_* value is skipped unless --overwrite. Needs migration 20261015140000 on the target.
+ *       non-empty ru_* value is skipped unless --overwrite. Needs migration 20261016130500 on the target.
  *
  * Targets: staging (nsdfiprfmhdqhbfxfwpv) or a localhost database. Production is refused.
  */
@@ -267,7 +267,7 @@ async function applyOrDryRun() {
     `;
     const present = new Set(columns.map((c) => c.column_name));
     const absent = RU_COLUMNS.filter((c) => !present.has(c));
-    if (absent.length) throw new Error(`the target has no ${absent.join(', ')}; apply migration 20261015140000 first`);
+    if (absent.length) throw new Error(`the target has no ${absent.join(', ')}; apply migration 20261016130500 first`);
 
     const slugs = Object.keys(snapshot.pages).filter((s) => !ONLY.size || ONLY.has(s));
     const rows = await tx.unsafe(

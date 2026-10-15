@@ -9,7 +9,7 @@
 // A Russian clue that names the player (any accepted Russian or English form) is refused, like the generator's own check.
 
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -35,7 +35,10 @@ async function withRetry<T>(read: () => Promise<T>, tries = 4): Promise<T> {
 }
 
 type Card = { id: string; player: string; clue_1: string; clue_2: string; clue_3: string };
-type Clues = { clue_1: string; clue_2: string; clue_3: string };
+/** `src`: a fingerprint of the English clues it was translated from; an edited card is translated again, never applied stale. */
+type Clues = { clue_1: string; clue_2: string; clue_3: string; src?: string };
+const sourceOf = (c: { clue_1: unknown; clue_2: unknown; clue_3: unknown }) =>
+  createHash('sha256').update(JSON.stringify([c.clue_1, c.clue_2, c.clue_3])).digest('hex').slice(0, 16);
 const load = (): Record<string, Clues> => (existsSync(OUT) ? JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, Clues> : {});
 const ruNames = (): Record<string, string> => (existsSync(NAMES) ? JSON.parse(readFileSync(NAMES, 'utf8')) as Record<string, string> : {});
 
@@ -75,7 +78,7 @@ ${JSON.stringify(Object.fromEntries(cards.map((c, i) => [String(i), { clue_1: c.
         const t = parsed[String(i)];
         const clues = [t?.clue_1, t?.clue_2, t?.clue_3].map((c) => c?.trim() ?? '');
         if (clues.some((c) => !c || c.length > 400) || clues.some((c) => namesPlayer(c, card.player, names[card.player]))) return;
-        found[card.id] = { clue_1: clues[0], clue_2: clues[1], clue_3: clues[2] };
+        found[card.id] = { clue_1: clues[0], clue_2: clues[1], clue_3: clues[2], src: sourceOf(card) };
       });
       resolve(found);
     });
@@ -94,7 +97,11 @@ async function englishCards(): Promise<Card[]> {
 async function build() {
   const cards = await englishCards();
   const done = load();
-  const todo = cards.filter((c) => !done[c.id]);
+  // Translations from before fingerprints were all built on 2026-10-15 from the English as it is now: stamp them once.
+  let stamped = 0;
+  for (const c of cards) if (done[c.id] && !done[c.id].src) { done[c.id].src = sourceOf(c); stamped += 1; }
+  if (stamped) writeFileSync(OUT, JSON.stringify(done));
+  const todo = cards.filter((c) => done[c.id]?.src !== sourceOf(c));
   console.log(`published English cards ${cards.length}, translated ${cards.length - todo.length}, to translate ${todo.length}`);
   for (let i = 0; i < todo.length; i += BATCH) {
     const batch = todo.slice(i, i + BATCH);
@@ -125,18 +132,28 @@ async function apply(dryRun: boolean) {
     if (page.length < 200) break;
     after = String(page[page.length - 1].id);
   }
+  const sourceIds: string[] = [];
   const rows = sources.flatMap((source) => {
     const clues = done[String(source.id)];
-    if (!clues) return [];
+    if (!clues || clues.src !== sourceOf(source as Clues)) return [];
+    const { src: _src, ...text } = clues;
+    sourceIds.push(String(source.id));
     return [{
-      ...source, id: randomUUID(), locale: 'ru', ...clues, source: 'imported', generation_provider: 'codex', generation_model: MODEL,
+      ...source, id: randomUUID(), locale: 'ru', ...text, source: 'imported', generation_provider: 'codex', generation_model: MODEL,
       review_notes: `Russian translation of ${String(source.id)}`, rejection_reason: null, created_at: undefined, updated_at: undefined,
     }];
   });
-  console.log(JSON.stringify({ mode: dryRun ? 'dry-run' : 'apply', englishWithoutRussian: sources.length, rows: rows.length, untranslated: sources.length - rows.length }));
+  console.log(JSON.stringify({ mode: dryRun ? 'dry-run' : 'apply', englishWithoutRussian: sources.length, rows: rows.length, untranslatedOrEdited: sources.length - rows.length }));
   if (dryRun || rows.length === 0) return;
   const columns = Object.keys(rows[0]).filter((k) => rows[0][k as keyof typeof rows[0]] !== undefined);
   await sql.begin(async (tx) => {
+    // The sources as they are now, locked: a card edited or unpublished since the read stops the whole import.
+    const ids = sourceIds;
+    const now = await tx<Array<{ id: string; clue_1: string; clue_2: string; clue_3: string; status: string }>>`
+      SELECT id::text, clue_1, clue_2, clue_3, status FROM player_clue_cards WHERE id = ANY(${ids}::uuid[]) FOR SHARE`;
+    const current = new Map(now.map((r) => [r.id, r]));
+    const changed = ids.filter((id) => { const r = current.get(id); return !r || r.status !== 'published' || sourceOf(r) !== done[id]?.src; });
+    if (changed.length) throw new Error(`${changed.length} English cards changed since the read (e.g. ${changed.slice(0, 3).join(', ')}): run --build, then --apply again`);
     for (let i = 0; i < rows.length; i += 200) {
       await tx`INSERT INTO player_clue_cards ${tx(rows.slice(i, i + 200) as never, columns as never)}`;
     }

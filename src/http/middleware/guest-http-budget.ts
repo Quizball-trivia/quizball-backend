@@ -30,7 +30,8 @@ export function guestHttpBudget(
   };
   return async (req, res, next) => {
     const redis = getRedisClient();
-    if (!redis?.isOpen) {
+    // A reconnecting client is still open but queues commands: a read with a copy to serve does not wait on it.
+    if (!redis?.isOpen || (whenUncounted === 'allow' && !redis.isReady)) {
       uncounted(next);
       return;
     }

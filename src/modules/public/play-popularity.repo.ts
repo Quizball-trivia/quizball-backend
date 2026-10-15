@@ -30,9 +30,14 @@ export const playPopularityRepo = {
           UNION ALL SELECT 'free-kicks', user_id, NULL, created_at FROM free_kicks_rounds WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'road-to-goal', user_id, NULL, created_at FROM road_to_goal_rounds WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'squad-spin', user_id, NULL, created_at FROM squad_spin_rounds WHERE created_at > now() - interval '7 days'
+        ), linked AS (
+          -- A guest who later signed in is counted as that member, not as a second player.
+          SELECT p.game, COALESCE(p.user_id, g.linked_user_id) AS user_id, p.guest_id, p.at
+            FROM plays p
+            LEFT JOIN guest_sessions g ON p.user_id IS NULL AND g.id = p.guest_id
         ), real AS (
           SELECT p.game, COALESCE(p.user_id, p.guest_id) AS who, p.at
-            FROM plays p
+            FROM linked p
             LEFT JOIN users u ON u.id = p.user_id
            WHERE p.user_id IS NULL OR (u.is_ai = false AND u.is_seed = false AND u.is_deleted = false)
         )

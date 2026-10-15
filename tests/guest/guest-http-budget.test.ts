@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 
-const state = vi.hoisted(() => ({ enabled: false, open: true, counts: new Map<string, number>(), fail: false }));
+const state = vi.hoisted(() => ({ enabled: false, open: true, ready: true, counts: new Map<string, number>(), fail: false }));
 vi.mock('../../src/core/config.js', () => ({ config: { get GUEST_HTTP_ENABLED() { return state.enabled; } } }));
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => ({
   get isOpen() { return state.open; },
+  get isReady() { return state.open && state.ready; },
   eval: async (_script: string, input: { keys: string[]; arguments: string[] }) => {
     if (state.fail) throw new Error('Redis unavailable');
     expect(input.arguments).toEqual(['3605']);
@@ -17,7 +18,7 @@ vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => ({
 import { guestHttpBudget, requireGuestHttpEnabled } from '../../src/http/middleware/guest-http-budget.js';
 
 describe('guest HTTP rollout gate and shared budgets', () => {
-  beforeEach(() => { state.enabled = false; state.open = true; state.fail = false; state.counts.clear(); });
+  beforeEach(() => { state.enabled = false; state.open = true; state.ready = true; state.fail = false; state.counts.clear(); });
   const req = {} as Request;
   const res = () => ({ setHeader: vi.fn() }) as unknown as Response;
   it('blocks disabled guest HTTP before any budget or downstream work', () => {
@@ -49,12 +50,12 @@ describe('guest HTTP rollout gate and shared budgets', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 503 }));
     expect(state.counts.size).toBe(0);
   });
-  it.each(['disconnected', 'error'])('lets a read marked for it through when Redis is %s, and still limits it when Redis counts', async mode => {
-    state.open = mode !== 'disconnected'; state.fail = mode === 'error';
+  it.each(['disconnected', 'reconnecting', 'error'])('lets a read marked for it through when Redis is %s, and still limits it when Redis counts', async mode => {
+    state.open = mode !== 'disconnected'; state.ready = mode !== 'reconnecting'; state.fail = mode === 'error';
     const next = vi.fn() as NextFunction;
     await guestHttpBudget('play-popularity', 2, () => 'address', 'allow')(req, res(), next);
     expect(next).toHaveBeenCalledWith();
-    state.open = true; state.fail = false;
+    state.open = true; state.ready = true; state.fail = false;
     const limited = guestHttpBudget('play-popularity', 2, () => 'address', 'allow');
     for (let i = 0; i < 2; i += 1) await limited(req, res(), vi.fn());
     const third = vi.fn(); await limited(req, res(), third);

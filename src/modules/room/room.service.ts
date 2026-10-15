@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
-import { activeRussianVersion } from '../footballers/footballers.russian.js';
+import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
@@ -106,6 +106,12 @@ const markHydrated = (id: string, content: unknown): void => {
   hydratedContent.add(content);
 };
 
+/** The Russian names a match starting now would freeze, loaded before the lock; a failure only means it freezes none. */
+async function warmRussian(): Promise<void> {
+  const active = await activeRussianVersion().catch(() => null);
+  if (active) await russianIndex(active).catch(() => undefined);
+}
+
 /**
  * Hydrates a live match's content before any transaction: a hydrate may read other tables (a footballer or Tenable
  * directory), and doing that under the match lock, with a transaction slot held, can starve the pool when many matches
@@ -114,6 +120,7 @@ const markHydrated = (id: string, content: unknown): void => {
  * presence), never falling back to the cold load under the lock.
  */
 async function prepare(matchId: string): Promise<void> {
+  await warmRussian();
   const cached = contentCache.get(matchId);
   if (cached && typeof cached === 'object' && hydratedContent.has(cached)) return;
   try {
@@ -257,8 +264,10 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const admitted = ready.sort((a, b) => a.slot - b.slot).map((s, seat) => ({ userId: s.user_id, seat }));
   await roomRepo.admit(tx, l.row.id, admitted);
   const nowMs = l.row.now.getTime();
-  const localeOf = new Map(ready.map((s) => [s.user_id, s.locale]));
-  const russianVersion = await activeRussianVersion().catch(() => null);
+  const localeOf = await roomRepo.lockSeatLocales(tx, l.row.id);
+  // Only a version this process holds (prepare warmed it): nothing is loaded under the match lock.
+  const active = knownActiveRussianVersion();
+  const russianVersion = active && heldRussianIndex(active) ? active : null;
   let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
   // What the match froze (its Russian names) is attached before anything reads it.
   l = { ...l, content: await hydrated(l.engine, l.content, state) };

@@ -84,6 +84,11 @@ export async function activeRussianVersion(now = Date.now()): Promise<string | n
   return active.version;
 }
 
+/** The active version as last read, without reading: for callers under a transaction (they warmed it before). */
+export function knownActiveRussianVersion(): string | null {
+  return active.version;
+}
+
 // Weak on both keys: an evicted version is freed even while a release that was viewed through it stays cached.
 const views = new WeakMap<Universe, WeakMap<ScopableIndex, Universe>>();
 /** The release's footballers under their Russian names (only those the release has). */

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
 
 /**
@@ -16,6 +16,7 @@ if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:(5432|5436)\/quizball_room_test_
 const { roomService } = await import('../../src/modules/room/room.service.js');
 const { footballersService } = await import('../../src/modules/footballers/footballers.service.js');
 const { MATCHER_VERSION } = await import('../../src/modules/footballers/footballers.universe.js');
+const { forgetRussian } = await import('../../src/modules/footballers/footballers.russian.js');
 
 // Invented footballers and clubs only: the repository is public.
 const RELEASE = 'it-sp-release';
@@ -252,5 +253,53 @@ describe.skipIf(!url)('played for both on the room runtime (real Postgres)', () 
     expect(await roomService.refusal(r.matchId, r.ids[1], 1, 'Joan Marvelo')).toBeNull();
     expect(await roomService.refusal(r.matchId, await user(), 0, 'Joan Marvelo')).toBeNull();
     expect(await roomService.refusal(randomUUID(), r.ids[1], 0, 'Joan Marvelo')).toBeNull();
+  });
+  describe('Russian names', () => {
+    const RU = [['p-orlen', 'Тарин Орлен'], ['p-kosel', 'Эмир Косель'], ['p-ravin', 'Даго Равин'], ['p-brando', 'Стефано Брандолини'], ['p-out', 'Жоан Марвело']] as const;
+    async function version(id: string, names: ReadonlyArray<readonly [string, string]>, active: boolean) {
+      if (active) await db.sql`UPDATE wordgame_ru_versions SET active = false WHERE active`;
+      await db.sql`INSERT INTO wordgame_ru_versions (version, fingerprint, players, active) VALUES (${id}, ${`fp-${id}`}, ${names.length}, ${active})`;
+      for (const [pid, name] of names) {
+        await db.sql`INSERT INTO wordgame_ru_names (version, pid, name_ru, game_name_ru, fame) VALUES (${id}, ${pid}, ${name}, ${name.split(' ').pop()!}, 50)`;
+      }
+    }
+    const clear = async () => {
+      await db.sql`DELETE FROM wordgame_ru_names WHERE version LIKE 'it-ru-%'`;
+      await db.sql`DELETE FROM wordgame_ru_versions WHERE version LIKE 'it-ru-%'`;
+      forgetRussian();
+    };
+    beforeEach(clear);
+    afterAll(clear);
+
+    async function racingIn(locales: readonly string[]) {
+      const r = await create(locales.length);
+      for (const [i, id] of r.ids.entries()) await roomService.ready(r.matchId, id, locales[i] as never, GAMES);
+      await runOut(r.matchId);
+      expect((await matchRow(r.matchId)).state.phase).toBe('race');
+      return r;
+    }
+
+    it('a match freezes the active names at its start, loaded before the lock, and takes a Cyrillic answer', async () => {
+      await version('it-ru-1', RU, true);
+      const r = await racingIn(['ru', 'ru']);
+      expect((await matchRow(r.matchId)).state.ov).toBe('it-ru-1');
+      expect((await answer(r.matchId, r.ids[1], 'Брандолини')).result).toEqual({ ok: true });
+      expect((await matchRow(r.matchId)).state.phase).toBe('settle');
+    });
+
+    it('another version switched on mid-match changes nothing for it', async () => {
+      await version('it-ru-1', RU, true);
+      const r = await racingIn(['ru', 'en']);
+      await version('it-ru-2', RU.map(([pid, name]) => [pid, pid === 'p-brando' ? 'Стефан Брандо' : name] as const), true);
+      forgetRussian();
+      expect((await answer(r.matchId, r.ids[1], 'Брандолини')).result).toEqual({ ok: true });
+      expect((await matchRow(r.matchId)).state).toMatchObject({ ov: 'it-ru-1', phase: 'settle' });
+    });
+
+    it('nothing switched on: nothing frozen, and Latin answers work as before', async () => {
+      const r = await racingIn(['ru', 'ru']);
+      expect((await matchRow(r.matchId)).state.ov).toBeUndefined();
+      expect((await answer(r.matchId, r.ids[0], 'Orlen')).result).toEqual({ ok: true });
+    });
   });
 });

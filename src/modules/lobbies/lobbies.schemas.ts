@@ -7,6 +7,8 @@ import { LOBBY_GAME_MODES } from './lobby-modes.js';
 export const listPublicLobbiesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
   joinableOnly: z.coerce.boolean().optional().default(false),
+  /** Room games the page can draw (comma-separated); rooms of a gated game are listed only to pages that declare it. */
+  games: z.string().max(200).optional(),
 });
 
 export const publicLobbyResponseSchema = z.object({

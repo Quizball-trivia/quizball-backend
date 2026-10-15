@@ -1,10 +1,10 @@
 import { transferHostIfNeeded, removeUserFromLobbySockets, emitClosedLobbyStateForMode } from './lobby-membership.helpers.js';
+import { emitLobbyState } from '../lobby-utils.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import type { LobbyWithJoinedAt } from '../../modules/lobbies/lobbies.types.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
@@ -733,13 +733,6 @@ async function cleanupStaleOrphanActiveMatch(
     },
     'Session guard abandoned stale orphan active match'
   );
-}
-
-async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
-  const state = await lobbiesService.buildLobbyState(lobby);
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
 }
 
 async function removeUserFromLobby(

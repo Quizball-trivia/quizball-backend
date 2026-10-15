@@ -1,3 +1,4 @@
+import { declares, toCapable } from '../client-games.js';
 import { gameplayDbTaskLimiter, SocketDbTaskOverloadedError } from '../socket-db-task-limiter.js';
 import { logger } from '../../core/logger.js';
 import { anyRoomGameEnabled } from '../../modules/room/room.config.js';
@@ -81,7 +82,9 @@ function scheduleAbsenceCheck(io: QuizballServer, userId: string, fence: Presenc
       if (waitMs > 50) return scheduleAbsenceCheck(io, userId, fence, waitMs, recheck, retry);
       const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => null);
       if (sockets === null) return again();
-      if (sockets.length > 0) return;
+      // Only a tab that can draw the match keeps the seat present (an older tab of the same player cannot play it).
+      const game = sockets.length > 0 ? (await roomService.livePointerFor(userId)).live?.game ?? null : null;
+      if (sockets.some((s) => declares(s.data, game))) return;
       const effects = await roomService.absent(userId, fence);
       if (effects) return deliver(io, effects);
       const current = await roomService.presenceGeneration(userId);
@@ -112,7 +115,7 @@ async function sweepPresence(io: QuizballServer): Promise<void> {
   for (const seat of page) {
     if (pendingAbsence.has(seat.user_id)) continue;
     const sockets = await io.in(`user:${seat.user_id}`).fetchSockets().catch(() => null);
-    if (sockets === null || sockets.length > 0) continue;
+    if (sockets === null || sockets.some((s) => declares(s.data, seat.game))) continue;
     await markDisconnect(seat.user_id);
     scheduleAbsenceCheck(io, seat.user_id, { matchId: seat.match_id, gen: seat.presence_gen }, DISCONNECT_DEBOUNCE_MS, 0);
   }
@@ -128,7 +131,7 @@ const roomsMayBeLive = (): boolean => anyRoomGameEnabled() || liveRoomsMayExist;
 
 async function emitSnapshot(io: QuizballServer, matchId: string, userId: string, locale?: RoomLocale): Promise<void> {
   const snapshot = await roomService.snapshot(matchId, userId, locale);
-  if (snapshot) io.to(`user:${userId}`).emit('room:state', snapshot as unknown as RoomStatePayload);
+  if (snapshot) toCapable(io, `user:${userId}`, snapshot.game).emit('room:state', snapshot as unknown as RoomStatePayload);
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
@@ -159,7 +162,7 @@ async function broadcastState(io: QuizballServer, effects: RoomEffects): Promise
   await stateDeliveries.run(effects.matchId, async () => {
     const snapshots = await roomService.snapshots(effects.matchId, effects.userIds);
     for (const [userId, snapshot] of snapshots) {
-      io.to(`user:${userId}`).emit('room:state', snapshot as unknown as RoomStatePayload);
+      toCapable(io, `user:${userId}`, snapshot.game).emit('room:state', snapshot as unknown as RoomStatePayload);
     }
   }).catch((error) => {
     logger.warn({ error, matchId: effects.matchId }, 'Room state delivery failed; the client resyncs');
@@ -186,8 +189,11 @@ async function emitPointer(socket: QuizballSocket, attempt = 0, then?: (live: Li
     if (revisionOf(userId) !== rev || pruneEpoch !== epoch) continue;
     socket.data.roomChecked = true;
     socket.data.roomMatchId = live?.id;
-    socket.emit('room:active', live ? { matchId: live.id, game: live.game, lobbyId: live.lobby_id } : null, { asOf });
-    socket.emit('room:sitting_out', out?.lobby_id ? { matchId: out.id, lobbyId: out.lobby_id, reason: out.left ? 'left' : 'out' } : null, { asOf });
+    // A tab that cannot draw the live match's game is told there is none (the user's newer tabs get it).
+    const drawable = live && declares(socket.data, live.game) ? live : null;
+    socket.emit('room:active', drawable ? { matchId: drawable.id, game: drawable.game, lobbyId: drawable.lobby_id } : null, { asOf });
+    const outDrawable = out?.lobby_id && declares(socket.data, out.game) ? out : null;
+    socket.emit('room:sitting_out', outDrawable ? { matchId: outDrawable.id, lobbyId: outDrawable.lobby_id!, reason: outDrawable.left ? 'left' : 'out' } : null, { asOf });
     if (then) await then(live);
     return live;
   }
@@ -228,7 +234,7 @@ export const roomRealtimeService = {
   async announce(io: QuizballServer, effects: RoomEffects, game: RoomGameId): Promise<void> {
     bumpUsers(effects.userIds);
     for (const userId of effects.userIds) {
-      io.to(`user:${userId}`).emit('room:found', { matchId: effects.matchId, game, lobbyId: effects.lobbyId, startedAt: effects.startedAtMs });
+      toCapable(io, `user:${userId}`, game).emit('room:found', { matchId: effects.matchId, game, lobbyId: effects.lobbyId, startedAt: effects.startedAtMs });
     }
     await deliver(io, effects);
   },
@@ -247,12 +253,14 @@ export const roomRealtimeService = {
   },
 
   async handleResync(io: QuizballServer, socket: QuizballSocket, data: { matchId: string; locale?: string; games?: string[] }): Promise<void> {
+    const pointer = await roomService.livePointerFor(socket.data.user.id);
+    if (pointer.live?.id === data.matchId && !declares(socket.data, pointer.live.game)) throw new RoomError('room_not_found', 404);
     const locale = asRoomLocale(data.locale);
     if (locale) await roomService.setLocale(data.matchId, socket.data.user.id, locale);
     // A screen asking for the state is a player who is here: a missed connect must not leave the seat away.
     await deliver(io, await roomService.present(socket.data.user.id, data.games));
     const snapshot = await roomService.snapshot(data.matchId, socket.data.user.id, locale);
-    if (!snapshot) throw new RoomError('room_not_found', 404);
+    if (!snapshot || !declares(socket.data, snapshot.game)) throw new RoomError('room_not_found', 404);
     bindIfLive(socket, snapshot);
     socket.emit('room:state', snapshot as unknown as RoomStatePayload);
   },
@@ -268,7 +276,7 @@ export const roomRealtimeService = {
   async handleReport(socket: QuizballSocket, data: { matchId: string; round: number; text: string }): Promise<void> {
     const userId = socket.data.user.id;
     const refusal = await roomService.refusal(data.matchId, userId, data.round, data.text);
-    if (!refusal || (refusal.game !== 'shared_player' && refusal.game !== 'name_chain')) return;
+    if (!refusal || (refusal.game !== 'shared_player' && refusal.game !== 'name_chain' && refusal.game !== 'tenable')) return;
     await wordgameReportsService.file({ game: refusal.game, source: 'room', contextId: data.matchId, round: data.round, reporter: { userId } }, refusal, data.text);
   },
 

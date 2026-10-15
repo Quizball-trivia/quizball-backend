@@ -22,6 +22,7 @@ const HUMAN_PAIR_DAILY_LIMIT = 3;
 const BOT_MATCH_DAILY_LIMIT = 5;
 const WORKER_INTERVAL_MS = 5_000;
 const WORKER_BATCH_SIZE = 20;
+const GOVERNOR_IDLE_INTERVAL_MS = 60_000;
 
 interface SettlementRow {
   outbox_id: string;
@@ -64,6 +65,7 @@ export interface FootballGridRewardResult {
 
 let workerTimer: NodeJS.Timeout | null = null;
 let workerRunning = false;
+let nextGovernorScanAt = 0;
 
 function isForfeitReason(reason: string | null): boolean {
   return reason === 'forfeit' || reason === 'no_action_timeouts' || reason === 'disconnect_timeout';
@@ -617,16 +619,21 @@ async function processPending(): Promise<void> {
        LIMIT ${WORKER_BATCH_SIZE}
     `;
     for (const row of rows) await footballGridSettlementService.settleMatch(row.match_id);
-    await processGovernorBacklog();
+    await processGovernorBacklog(rows.length > 0);
   } finally {
     workerRunning = false;
   }
 }
 
-async function processGovernorBacklog(): Promise<void> {
+async function processGovernorBacklog(settledPendingWork: boolean): Promise<void> {
+  // Rewards still retry every five seconds. Only an empty calibration backlog
+  // backs off; newly settled work bypasses the delay and failures retry promptly.
+  if (!settledPendingWork && Date.now() < nextGovernorScanAt) return;
+  nextGovernorScanAt = 0;
   try {
     const matchIds = await footballGridBotGovernorService
       .listUnobservedCompletedMatchIds(WORKER_BATCH_SIZE);
+    if (matchIds.length === 0) nextGovernorScanAt = Date.now() + GOVERNOR_IDLE_INTERVAL_MS;
     for (const matchId of matchIds) await processGovernorMatch(matchId);
   } catch (error) {
     logger.error({ error }, 'Football Grid bot governor recovery scan failed');

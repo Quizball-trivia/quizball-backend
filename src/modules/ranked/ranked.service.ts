@@ -1,5 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { deleteJsonCacheKeys, getOrLoadJson } from '../../core/json-cache.js';
+import { boardCacheScope, GLOBAL_BOARD, type BoardFilter } from '../leaderboards/board-filter.js';
+import { userRankCacheKey as rankCacheKeys } from '../leaderboards/rank-cache.js';
 import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
@@ -60,9 +62,12 @@ const LIVE_LEADERBOARD_CACHE_TTL_SECONDS = 5;
 // so the post-match response is still fresh.
 const USER_RANK_CACHE_TTL_SECONDS = 300;
 
-function userRankCacheKey(userId: string, country?: string | null): string {
-  const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
-  return `ranked:user-rank:v2:${scope}:${userId}`;
+// Club keys are not invalidated after a match (settlement does not know the
+// player's club), so they live only briefly.
+const CLUB_USER_RANK_CACHE_TTL_SECONDS = 15;
+
+function userRankCacheKey(userId: string, filter: BoardFilter = GLOBAL_BOARD): string {
+  return rankCacheKeys.ranked(userId, filter);
 }
 
 async function invalidateUserRankCaches(
@@ -70,7 +75,7 @@ async function invalidateUserRankCaches(
 ): Promise<void> {
   await deleteJsonCacheKeys(users.flatMap(({ userId, country }) => [
     userRankCacheKey(userId),
-    ...(country ? [userRankCacheKey(userId, country)] : []),
+    ...(country ? [userRankCacheKey(userId, { kind: 'country', country })] : []),
   ]));
 }
 
@@ -830,11 +835,10 @@ export const rankedService = {
     };
   },
 
-  async getLeaderboard(limit: number, offset: number, country?: string) {
-    const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
-    const key = `ranked:leaderboard:v1:${scope}:${limit}:${offset}`;
+  async getLeaderboard(limit: number, offset: number, filter: BoardFilter = GLOBAL_BOARD) {
+    const key = `ranked:leaderboard:v2:${boardCacheScope(filter)}:${limit}:${offset}`;
     return getOrLoadJson(key, LIVE_LEADERBOARD_CACHE_TTL_SECONDS, () =>
-      rankedRepo.listLeaderboard(limit, offset, country)
+      rankedRepo.listLeaderboard(limit, offset, filter)
     );
   },
 
@@ -842,19 +846,24 @@ export const rankedService = {
     return rankedRepo.listSeasons();
   },
 
-  async getArchivedLeaderboard(batchId: string, limit: number, offset: number, country?: string) {
-    return rankedRepo.listArchivedLeaderboard(batchId, limit, offset, country);
+  async getArchivedLeaderboard(batchId: string, limit: number, offset: number, filter: BoardFilter = GLOBAL_BOARD) {
+    return rankedRepo.listArchivedLeaderboard(batchId, limit, offset, filter);
   },
 
-  async getArchivedUserRank(batchId: string, userId: string, country?: string) {
-    return rankedRepo.getArchivedUserRank(batchId, userId, country);
+  async getArchivedUserRank(batchId: string, userId: string, filter: BoardFilter = GLOBAL_BOARD) {
+    return rankedRepo.getArchivedUserRank(batchId, userId, filter);
   },
 
-  async getUserRank(userId: string, country?: string) {
+  async getUserRank(userId: string, filter: BoardFilter = GLOBAL_BOARD) {
     return getOrLoadJson(
-      userRankCacheKey(userId, country),
-      USER_RANK_CACHE_TTL_SECONDS,
-      () => rankedRepo.getUserRank(userId, country)
+      userRankCacheKey(userId, filter),
+      filter.kind === 'club' ? CLUB_USER_RANK_CACHE_TTL_SECONDS : USER_RANK_CACHE_TTL_SECONDS,
+      async () => {
+        const rank = await rankedRepo.getUserRank(userId, filter);
+        if (!rank) return null;
+        const above = rank.rank > 1 ? await rankedRepo.getNextAbove(userId, filter) : null;
+        return { ...rank, nextAbove: above };
+      }
     );
   },
 

@@ -15102,12 +15102,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           },
           {
@@ -15283,12 +15302,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           },
           {
@@ -15368,6 +15406,30 @@
                     "total": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "nextTarget": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "username": {
+                          "type": "string"
+                        },
+                        "rank": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "gap": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        }
+                      },
+                      "required": [
+                        "username",
+                        "rank",
+                        "gap"
+                      ]
                     }
                   },
                   "required": [
@@ -15380,7 +15442,8 @@
                     "rank",
                     "trend",
                     "trendValue",
-                    "total"
+                    "total",
+                    "nextTarget"
                   ]
                 }
               }
@@ -28636,12 +28699,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           },
           {
@@ -28782,12 +28864,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           }
         ],
@@ -28834,6 +28935,30 @@
                     "total": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "nextTarget": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "username": {
+                          "type": "string"
+                        },
+                        "rank": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "gap": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        }
+                      },
+                      "required": [
+                        "username",
+                        "rank",
+                        "gap"
+                      ]
                     }
                   },
                   "required": [
@@ -28844,7 +28969,8 @@
                     "country",
                     "tier",
                     "rank",
-                    "total"
+                    "total",
+                    "nextTarget"
                   ]
                 }
               }
@@ -29766,12 +29892,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           },
           {
@@ -29912,12 +30057,31 @@
               "type": "string",
               "enum": [
                 "global",
-                "country"
+                "country",
+                "club"
               ],
               "default": "global"
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$"
+            },
+            "required": false,
+            "name": "country",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+            },
+            "required": false,
+            "name": "club",
             "in": "query"
           }
         ],
@@ -29964,6 +30128,30 @@
                     "total": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "nextTarget": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "username": {
+                          "type": "string"
+                        },
+                        "rank": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "gap": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        }
+                      },
+                      "required": [
+                        "username",
+                        "rank",
+                        "gap"
+                      ]
                     }
                   },
                   "required": [
@@ -29974,7 +30162,8 @@
                     "country",
                     "tier",
                     "rank",
-                    "total"
+                    "total",
+                    "nextTarget"
                   ]
                 }
               }

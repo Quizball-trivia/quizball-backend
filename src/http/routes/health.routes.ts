@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { hostname } from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
+import { assertWritableTransaction } from '../../db/read-only-recovery.js';
 import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
@@ -67,8 +68,10 @@ router.get('/health', (_req: Request, res: Response) => {
 /**
  * GET /health/db
  * Readiness check that actually exercises the DB pool: acquires a connection
- * and runs SELECT 1 with a tight timeout. Returns 503 if the pool is exhausted
- * or the DB is unreachable — this is what surfaces the 2026-06-09 incident
+ * and checks transaction writability with a tight timeout. Returns 503 if this
+ * pooled transaction is read-only, the pool is exhausted or the DB is unreachable.
+ * This samples one session, not a guarantee about every pooled backend. It also
+ * surfaces the 2026-06-09 incident
  * (when /health stayed green but every DB endpoint hung).
  */
 router.get('/health/db', async (_req: Request, res: Response) => {
@@ -79,7 +82,10 @@ router.get('/health/db', async (_req: Request, res: Response) => {
     // unlike a Promise.race that only abandons the wait). 5s overall ceiling as
     // a backstop for the connection-acquire phase.
     await withStatementTimeout(async (tx) => {
-      await tx.unsafe('SELECT 1');
+      const [row] = await tx.unsafe<Array<{ read_only: string }>>(
+        "SELECT current_setting('transaction_read_only') AS read_only",
+      );
+      assertWritableTransaction(row?.read_only);
     }, 2000);
     res.json({
       ok: true,

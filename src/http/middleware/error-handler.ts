@@ -17,6 +17,7 @@ function redactValues(obj: Record<string, unknown> | undefined): string[] {
 }
 
 const TRANSIENT_DATABASE_ERROR_CODES = new Set([
+  '25006', // Read-only pool session: writes are temporarily unavailable.
   'DB_OVERLOADED',
   'CONNECTION_CLOSED',
   'CONNECTION_DESTROYED',
@@ -29,7 +30,7 @@ const TRANSIENT_DATABASE_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
-/** Network and pool failures are availability failures, not application bugs. */
+/** Network, pool and read-only failures are availability failures. */
 export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
   if (!error || depth > 3 || typeof error !== 'object') return false;
   const candidate = error as {

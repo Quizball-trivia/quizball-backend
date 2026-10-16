@@ -132,20 +132,12 @@ async function resolveContentLocale(locale: AuctionContentLocale): Promise<Aucti
 }
 
 /**
- * The language a match about to start deals in: as `resolveContentLocale`, but a Russian pool that went away since it
- * was cached is read again (English then stands in) instead of failing the start.
+ * The language a match about to start deals in: as `resolveContentLocale`, with the Russian pool counted afresh (the
+ * same 95% rule), so a pool that shrank since it was cached deals English instead of failing or thinning the match.
  */
 async function playableContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
-  const resolved = await resolveContentLocale(locale);
-  if (resolved !== 'ru') return resolved;
-  try {
-    await assertPublishedAuctionContentAvailable('ru');
-    return 'ru';
-  } catch (error) {
-    if (!(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
-    russianAvailability.checkedAt = 0;
-    return resolveContentLocale('ru');
-  }
+  if (locale === 'ru') russianAvailability.checkedAt = 0;
+  return resolveContentLocale(locale);
 }
 
 export const auctionContentService = {

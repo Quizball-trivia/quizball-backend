@@ -81,14 +81,14 @@ describe('auctionContentService', () => {
     expect(await auctionContentService.resolveContentLocale('es')).toBe('es');
   });
 
-  it('a match about to start reads a vanished Russian pool again and deals English', async () => {
+  it('a match about to start counts the Russian pool afresh: one that shrank below the share deals English', async () => {
     let russian = 1_400;
     (auctionContentRepo.getPublishedCardAvailability as Mock).mockImplementation(async (locale: string) => ({
       base_count: 0, missing_price_count: 0, usable_count: locale === 'ru' ? russian : 1_400,
     }));
     auctionContentService.forgetContentLocale();
     expect(await auctionContentService.playableContentLocale('ru')).toBe('ru');
-    russian = 0;
+    russian = 1;
     expect(await auctionContentService.playableContentLocale('ru')).toBe('en');
     expect(await auctionContentService.playableContentLocale('tr')).toBe('tr');
   });

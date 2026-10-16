@@ -125,11 +125,12 @@ async function prepare(matchId: string): Promise<void> {
   if (cached && typeof cached === 'object' && hydratedContent.has(cached)) return;
   try {
     const row = await roomRepo.getMatch(matchId);
-    if (!row || !isLive(row.status)) return;
+    if (!row) return;
     const engine = roomEngineFor(row.game, row.engine_version);
     if (!engine) return;
     const parsed = await contentOf(undefined, row, engine);
-    // With the match's state: a match that froze Russian names loads them here, outside the lock.
+    // With the match's state: a match that froze Russian names loads them here, outside the lock. An ended match is
+    // loaded too (a replayed command reads it under the lock) but not kept.
     if (parsed !== null) markHydrated(row.id, await hydrated(engine, parsed, row.state));
   } catch (error) {
     if (error instanceof RoomError) throw error;
@@ -175,8 +176,7 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
   }
   let ready: unknown;
   try {
-    // Only a live match is held to "nothing read under the lock" (its pre-load ran); an ended one is never prepared.
-    ready = await hydrated(engine, content, row.state, isLive(row.status));
+    ready = await hydrated(engine, content, row.state, true);
   } catch (error) {
     // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
     contentCache.delete(row.id);

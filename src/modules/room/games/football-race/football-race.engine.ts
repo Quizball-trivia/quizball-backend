@@ -251,8 +251,8 @@ export function afterOutage(s: FootballRaceState, now: number): FootballRaceStat
 
 /**
  * Seat changes that arrive together. A seat that leaves retires its nation for the rest of the race (and is given one
- * at once if the draft reaches it); fewer than two left ends the match: a result once a pick was shown, otherwise
- * cancelled. An away seat keeps its seat: its clock runs and a missing pick is drawn for it. When every seat that is
+ * at once if the draft reaches it); fewer than two left ends the match: the one left wins once every nation is drafted
+ * (the race is on screen); during the draft, or with nobody left, it is cancelled. An away seat keeps its seat: its clock runs and a missing pick is drawn for it. When every seat that is
  * in has picked (after any change), the next tick closes the window at once.
  */
 export function seatsChanged(s: FootballRaceState, changes: readonly RoomSeatChange[], now: number): FootballRaceState {
@@ -266,9 +266,9 @@ export function seatsChanged(s: FootballRaceState, changes: readonly RoomSeatCha
     if (change === 'leave') { left = true; quit[seat] = true; }
   }
   let next: FootballRaceState = { ...s, status, quit };
-  if (left && status.filter((st) => st !== 'withdrawn').length < 2) {
-    const shown = s.rounds.some((r) => r.length > 0) || s.revealed.length > 0;
-    return shown ? finish(next, 'left', now) : { ...next, phase: 'cancelled', deadline: now };
+  const remaining = status.filter((st) => st !== 'withdrawn').length;
+  if (left && remaining < 2) {
+    return s.phase === 'draft' || remaining === 0 ? { ...next, phase: 'cancelled', deadline: now } : finish(next, 'left', now);
   }
   if (next.phase === 'draft' && status[next.draftOrder[next.draftTurn]] === 'withdrawn') next = { ...next, deadline: now };
   if (next.phase === 'pick' && next.picks.every((p, i) => p !== null || status[i] !== 'in')) next = { ...next, deadline: now };

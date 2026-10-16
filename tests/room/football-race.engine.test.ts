@@ -111,6 +111,11 @@ describe('draft', () => {
 });
 
 describe('race', () => {
+  const toIntro = (seats: number) => {
+    const c = content();
+    const s0 = startMatch(seats, c, 0);
+    return draftAll(s0, c, s0.draftOrder.map((_, seat) => s0.racers[seat]));
+  };
   const setup = (seats: number) => {
     const c = content();
     const s0 = startMatch(seats, c, 0);
@@ -222,9 +227,17 @@ describe('race', () => {
     expect(s.reveal!.find((r) => r.seat === 2)?.auto).toBe(true);
   });
 
-  it('cancels when a player leaves before any pick was shown, and ends with a result after one was', () => {
+  it('cancels when a player leaves during the draft, and gives the race to whoever stays once it is drafted', () => {
+    const drafting = startMatch(2, content(), 0);
+    expect(seatsChanged(drafting, [{ seat: 1, change: 'leave' }], 10).phase).toBe('cancelled');
     const { s: s0 } = setup(2);
-    expect(seatsChanged(s0, [{ seat: 1, change: 'leave' }], 10).phase).toBe('cancelled');
+    expect(seatsChanged(s0, [{ seat: 1, change: 'leave' }], 10)).toMatchObject({ phase: 'over', winners: [0], endedBy: 'left' });
+    const intro = toIntro(2);
+    expect(intro.phase).toBe('intro');
+    expect(seatsChanged(intro, [{ seat: 0, change: 'leave' }], 10)).toMatchObject({ phase: 'over', winners: [1], endedBy: 'left' });
+    // Everyone leaving together crowns nobody.
+    expect(seatsChanged(intro, [{ seat: 0, change: 'leave' }, { seat: 1, change: 'leave' }], 10).phase).toBe('cancelled');
+    expect(seatsChanged(s0, [{ seat: 0, change: 'leave' }, { seat: 1, change: 'leave' }], 10).phase).toBe('cancelled');
     const c = content();
     const { s: s1, nationOfSeat } = setup(2);
     let s = applyCommand(s1, c, 0, { type: 'pick', round: 0, stat: stat(nationOfSeat(0), 0) }, s1.deadline - 2000).state;

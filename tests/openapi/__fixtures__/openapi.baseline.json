@@ -14782,6 +14782,15 @@
             "required": false,
             "name": "joinableOnly",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "games",
+            "in": "query"
           }
         ],
         "responses": {
@@ -14817,6 +14826,27 @@
                               "ranked_sim",
                               "duel",
                               "room_game"
+                            ]
+                          },
+                          "duelGame": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "buscaminas",
+                              "pistas",
+                              "ultimo",
+                              "minuto"
+                            ]
+                          },
+                          "roomGame": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "aproximado",
+                              "shared_player",
+                              "name_chain",
+                              "tenable",
+                              "football_race"
                             ]
                           },
                           "isPublic": {
@@ -14921,25 +14951,6 @@
                               "avatarUrl",
                               "avatarCustomization"
                             ]
-                          },
-                          "duelGame": {
-                            "type": "string",
-                            "nullable": true,
-                            "enum": [
-                              "buscaminas",
-                              "pistas",
-                              "ultimo",
-                              "minuto"
-                            ]
-                          },
-                          "roomGame": {
-                            "type": "string",
-                            "enum": [
-                              "aproximado",
-                              "shared_player",
-                              "name_chain"
-                            ],
-                            "nullable": true
                           }
                         },
                         "required": [

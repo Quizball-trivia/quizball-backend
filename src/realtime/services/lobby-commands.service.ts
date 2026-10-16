@@ -1,3 +1,4 @@
+import { declares, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
 import type { LobbySeenGame, MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
@@ -91,6 +92,9 @@ export async function createLobby(
     : null;
   if (unavailable) {
     return { ok: false, code: unavailable.code, message: unavailable.message, retryable: false, correlationId };
+  }
+  if (payload.gameMode === 'room_game' && !declares(socket.data, payload.roomGame)) {
+    return { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
   }
   const duelGame = payload.gameMode === 'duel' && isDuelGame(payload.duelGame) ? payload.duelGame : null;
   const roomGame = payload.gameMode === 'room_game' && isRoomGame(payload.roomGame) ? payload.roomGame : null;
@@ -212,14 +216,16 @@ const ROOM_INFO_CODES = new Set(['LOBBY_NOT_FOUND', 'LOBBY_FULL', 'LOBBY_MODE_RE
 const ROOM_INFO_DEADLINE_MS = 1_000;
 const UNKNOWN_ROOM: LobbyJoinRoomInfo = { roomState: 'unknown', gameMode: null, duelGame: null, roomGame: null, hostNickname: null };
 
-async function describeInviteRoomBounded(inviteCode: string): Promise<LobbyJoinRoomInfo> {
+async function describeInviteRoomBounded(inviteCode: string, games: readonly string[] | undefined): Promise<LobbyJoinRoomInfo> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<LobbyJoinRoomInfo>((resolve) => {
     timer = setTimeout(() => resolve(UNKNOWN_ROOM), ROOM_INFO_DEADLINE_MS);
     timer.unref?.();
   });
   try {
-    return await Promise.race([describeInviteRoom(inviteCode), deadline]);
+    const room = await Promise.race([describeInviteRoom(inviteCode), deadline]);
+    // Never name a game this tab cannot draw.
+    return declares({ games }, room.roomGame) ? room : { ...room, roomGame: null, gameMode: null };
   } finally {
     clearTimeout(timer);
   }
@@ -358,6 +364,12 @@ export async function joinByCode(
           return;
         }
 
+        // A room playing a game this tab cannot draw: refused before anything is sent about it.
+        if (!declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game : null)) {
+          socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, meta: { inviteCode: normalizedCode } });
+          result = { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
+          return;
+        }
         const members = await lobbiesRepo.listMembersWithUser(lobby.id);
         const alreadyMember = members.some((member) => member.user_id === userId);
         const capacity = maxMembersForFriendlyGameMode(
@@ -450,7 +462,7 @@ export async function joinByCode(
   // Why the room could not be used, looked up after every lock is released and bounded: a slow lookup never holds a
   // lobby or delays the refusal past a short deadline.
   if (!final.ok && ROOM_INFO_CODES.has(final.code)) {
-    return { ...final, room: await describeInviteRoomBounded(normalizedCode) };
+    return { ...final, room: await describeInviteRoomBounded(normalizedCode, socket.data.games) };
   }
   return final;
 }
@@ -464,7 +476,7 @@ async function boundLobbyId(socket: QuizballSocket, override?: string): Promise<
   const id = resolveLobbyId(socket, override);
   if (id) return id;
   const open = await lobbiesRepo.findWaitingLobbyForUser(socket.data.user.id);
-  if (!open) return undefined;
+  if (!open || !declares(socket.data, open.game_mode === 'room_game' ? open.room_game : null)) return undefined;
   socket.data.lobbyId = open.id;
   await socket.join(`lobby:${open.id}`);
   logger.info({ lobbyId: open.id, userId: socket.data.user.id }, 'Lobby binding recovered for a room command');
@@ -477,6 +489,16 @@ function onSeenGame(lobby: { mode: string; game_mode: string | null; duel_game?:
   if (gameMode !== seen.gameMode) return false;
   if (gameMode === 'duel') return (lobby.duel_game ?? null) === (seen.duelGame ?? null);
   if (gameMode === 'room_game') return !seen.roomGame || !lobby.room_game || lobby.room_game === seen.roomGame;
+  return true;
+}
+
+/**
+ * A tab that cannot draw the room's current game is an old page still bound to it (from before a switch): it is shown
+ * an older game, so none of its room controls are taken.
+ */
+function refusedOldTab(socket: QuizballSocket, lobby: { game_mode: string | null; room_game?: string | null }): boolean {
+  if (declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null)) return false;
+  socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
   return true;
 }
 
@@ -497,17 +519,27 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     logger.warn({ lobbyId }, 'Lobby ready update ignored: lobby not found');
     return;
   }
+  if (refusedOldTab(socket, lobby)) return;
 
   const lockKey = `lock:lobby:${lobbyId}`;
   let updated = false;
-  if (ready && seen) {
+  // Every Ready, with or without the game it was pressed on (older pages send none): a Ready is never written for a
+  // game the tab cannot draw, even when the room switched while this one waited.
+  if (ready) {
     // Check and write under the room's lock, which a settings change holds from its own readiness count to its
     // "everyone un-ready": the Ready lands wholly before the change (and may be what refuses it) or wholly after
     // (and is judged by the new game). No database row locks: the start and finish paths take the room's rows in
     // opposite orders, and a locking Ready would deadlock with one of them.
     const guard = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
+    // Without the lock the check and the write are best effort (accepted for current pages). A page that cannot draw
+    // every game could be readied for one it cannot show if a switch lands in between: it retries instead.
+    if (!guard.acquired && !GATED_ROOM_GAMES.every((game) => declares(socket.data, game))) {
+      socket.emit('error', { code: 'LOBBY_SETTINGS_LOCKED', message: 'Lobby settings update is busy. Please retry.' });
+      return;
+    }
     if (!guard.acquired) logger.warn({ lobbyId, userId: socket.data.user.id }, 'Lobby ready: room lock not acquired, checking the game without it');
     let stale = false;
+    let incapable = false;
     let superseded = false;
     try {
       // While this waited for the lock the player may have un-readied (written at once): the later command stands.
@@ -515,16 +547,21 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
       if (!superseded) {
         const current = await lobbiesRepo.getById(lobbyId);
         // Only a waiting room has a game to agree on; anything else is handled as before.
-        stale = current?.status === 'waiting' && !onSeenGame(current, seen);
+        stale = current?.status === 'waiting' && seen !== undefined && !onSeenGame(current, seen);
+        incapable = !!current && !declares(socket.data, current.game_mode === 'room_game' ? current.room_game ?? null : null);
         // Looked at again after the read: an Un-ready sent meanwhile has been written by now.
         superseded = socket.data.lobbyReadySeq !== readySeq;
-        if (!stale && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
+        if (!stale && !incapable && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
       }
     } finally {
       if (guard.acquired && guard.token) await releaseLock(lockKey, guard.token);
     }
     if (superseded) {
       logger.debug({ lobbyId, userId: socket.data.user.id }, 'Lobby ready dropped: a later ready command from the same player already ran');
+      return;
+    }
+    if (incapable) {
+      socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
       return;
     }
     if (stale) {
@@ -643,6 +680,20 @@ export async function updateSettings(
     socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
     return;
   }
+  if (refusedOldTab(socket, lobby)) return;
+
+  // A gated game (client-games.ts) only for a room whose every online member has a tab that can draw it. The
+  // cross-replica socket lookup can take seconds, so it runs before the room lock; under the lock the member list it
+  // checked must still be the room's (a join in between refuses the switch).
+  let checkedMembers: string | null = null;
+  if (payload.gameMode === 'room_game' && isGated(payload.roomGame) && payload.roomGame !== lobby.room_game) {
+    const memberIds = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((member) => member.user_id).sort();
+    if (!declares(socket.data, payload.roomGame) || !(await membersCanDraw(io, memberIds, payload.roomGame))) {
+      socket.emit('error', { code: 'ROOM_GAME_UNAVAILABLE', message: MEMBERS_NEED_RELOAD_MESSAGE });
+      return;
+    }
+    checkedMembers = memberIds.join(',');
+  }
 
   const lockKey = `lock:lobby:${lobbyId}`;
   const lock = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
@@ -674,6 +725,8 @@ export async function updateSettings(
       socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
       return;
     }
+    // Another tab of the host may have switched the room to a game this tab cannot draw while it waited.
+    if (refusedOldTab(socket, lockedLobby)) return;
     const lobby = lockedLobby;
     const lockedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
     const memberCount = lockedMembers.length;
@@ -741,6 +794,14 @@ export async function updateSettings(
     if (unavailable) {
       socket.emit('error', { code: unavailable.code, message: unavailable.message });
       return;
+    }
+    // The gated-game check above ran outside the lock: it holds only for the same members (and the same target game).
+    if (nextSettings.gameMode === 'room_game' && nextSettings.roomGame !== currentSettings.roomGame && isGated(nextSettings.roomGame)) {
+      const members = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((member) => member.user_id).sort().join(',');
+      if (checkedMembers === null || checkedMembers !== members || payload.roomGame !== nextSettings.roomGame) {
+        socket.emit('error', { code: 'ROOM_GAME_UNAVAILABLE', message: MEMBERS_NEED_RELOAD_MESSAGE });
+        return;
+      }
     }
     const nextModeCaps = LOBBY_MODES[nextSettings.gameMode];
     const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode, nextSettings.roomGame);
@@ -887,6 +948,7 @@ export async function startFriendlyMatch(
     socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can start the match' });
     return;
   }
+  if (refusedOldTab(socket, lobby)) return;
 
   if (lobby.status !== 'waiting') {
     socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby is not ready to start' });

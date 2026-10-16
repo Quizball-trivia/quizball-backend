@@ -195,9 +195,9 @@ export const roomRepo = {
   },
 
   /** A live match of this user's room in which the user no longer plays (left it, withdrawn, or left out at the gate). */
-  async sittingOutMatchForUser(userId: string): Promise<{ id: string; lobby_id: string | null; left: boolean } | null> {
-    const [row] = await sql<Array<{ id: string; lobby_id: string | null; left: boolean }>>`
-      SELECT m.id, m.lobby_id, s.left_at IS NOT NULL AS left FROM room_seats s JOIN room_matches m ON m.id = s.match_id
+  async sittingOutMatchForUser(userId: string): Promise<{ id: string; game: RoomGameId; lobby_id: string | null; left: boolean } | null> {
+    const [row] = await sql<Array<{ id: string; game: RoomGameId; lobby_id: string | null; left: boolean }>>`
+      SELECT m.id, m.game, m.lobby_id, s.left_at IS NOT NULL AS left FROM room_seats s JOIN room_matches m ON m.id = s.match_id
       WHERE s.user_id = ${userId} AND NOT s.active AND m.status IN ('ready', 'active')
         AND EXISTS (SELECT 1 FROM lobby_members lm WHERE lm.lobby_id = m.lobby_id AND lm.user_id = ${userId})
       ORDER BY m.created_at DESC LIMIT 1
@@ -326,9 +326,9 @@ export const roomRepo = {
   async connectedLiveSeats(
     limit: number,
     after: { userId: string; matchId: string } | null = null,
-  ): Promise<Array<{ user_id: string; match_id: string; presence_gen: number }>> {
-    return sql<Array<{ user_id: string; match_id: string; presence_gen: number }>>`
-      SELECT s.user_id, s.match_id, s.presence_gen FROM room_seats s JOIN room_matches m ON m.id = s.match_id
+  ): Promise<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId }>> {
+    return sql<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId }>>`
+      SELECT s.user_id, s.match_id, s.presence_gen, m.game FROM room_seats s JOIN room_matches m ON m.id = s.match_id
       WHERE m.status IN ('ready', 'active') AND s.active AND s.connected
         ${after ? sql`AND (s.user_id, s.match_id) > (${after.userId}::uuid, ${after.matchId}::uuid)` : sql``}
       ORDER BY s.user_id, s.match_id

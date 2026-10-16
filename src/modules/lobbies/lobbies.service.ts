@@ -331,7 +331,7 @@ export const lobbiesService = {
     }));
   },
 
-  async listPublicLobbies(params: { limit: number; joinableOnly: boolean }) {
+  async listPublicLobbies(params: { limit: number; joinableOnly: boolean; hideRoomGames?: readonly string[] }) {
     const rows = await lobbiesRepo.listPublicLobbies(params);
     return rows.map((row) => ({
       lobbyId: row.lobby_id,

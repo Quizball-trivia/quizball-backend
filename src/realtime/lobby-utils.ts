@@ -1,3 +1,4 @@
+import { declares, toCapable } from './client-games.js';
 import crypto from 'crypto';
 
 import type { QuizballServer } from './socket-server.js';
@@ -191,8 +192,9 @@ export async function emitLobbyState(
   });
 
   const memberRooms = [...memberUserIds].map((userId) => `user:${userId}`);
+  const game = lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null;
   for (const room of memberRooms) {
-    io.to(room).emit('lobby:state', state);
+    toCapable(io, room, game).emit('lobby:state', state);
   }
   logger.debug(
     {
@@ -215,7 +217,11 @@ export async function attachUserSocketsToLobby(
   lobbyId: string
 ): Promise<void> {
   const sockets = await io.in(`user:${userId}`).fetchSockets();
+  const lobby = sockets.length > 0 ? await lobbiesRepo.getById(lobbyId) : null;
+  const game = lobby?.game_mode === 'room_game' ? lobby.room_game ?? null : null;
   sockets.forEach((socket) => {
+    // A tab that cannot draw the room's game is not bound to it (the user's other, newer tabs are).
+    if (!declares(socket.data, game)) return;
     if (socket.data.user.id !== userId) {
       socket.leave(`user:${userId}`);
       logger.warn(

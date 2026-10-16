@@ -182,7 +182,7 @@ export const auctionMatchmakingService = {
     socket: QuizballSocket,
     rawInput: AuctionSearchStartServiceInput
   ): Promise<void> {
-    const input = { ...rawInput, locale: await auctionContentService.resolveContentLocale(rawInput.locale) };
+    const input = { ...rawInput };
     if (socket.data.user) assertCapability(socket.data.user, 'queueEntry');
     const user = socket.data.user;
     if (!user?.id) {
@@ -236,6 +236,8 @@ export const auctionMatchmakingService = {
     }
 
     try {
+      // Resolved only once the guards pass: a refused request reads nothing, and a failure answers as a content error.
+      input.locale = await auctionContentService.resolveContentLocale(rawInput.locale);
       try {
         await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
       } catch (error) {

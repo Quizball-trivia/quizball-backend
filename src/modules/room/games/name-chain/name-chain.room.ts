@@ -32,10 +32,10 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
     return { itemIds: [items[0].id], content: { release: items[0].release, seed: randomInt(0, 0x100000000) } };
   },
 
-  async hydrate(content, state, context) {
+  async hydrate(content, state, tx) {
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian names is judged with exactly them.
-    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, context?.underLock ?? false) : null;
+    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;
     return { pack: content.pack, universe, russian };
   },
 

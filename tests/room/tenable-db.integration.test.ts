@@ -90,6 +90,9 @@ describe.skipIf(!url)('Tenable room on a cold replica (real Postgres)', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     await db.sql`UPDATE tenable_entities SET release_id = ${RELEASE} WHERE release_id = 'it-tenable-away'`;
     await db.sql`DELETE FROM tenable_entity_releases WHERE id = 'it-tenable-away'`;
+    // The failure is remembered briefly (an incident is not multiplied by traffic); after that the names load again.
+    const { FAILED_RETRY_MS } = await import('../../src/modules/tenable/tenable.directories.js');
+    await new Promise((resolve) => setTimeout(resolve, FAILED_RETRY_MS + 100));
     for (const id of ids) await cold.ready(created.matchId, id, 'en', GAMES);
     const [row] = await db.sql<Array<{ status: string }>>`SELECT status FROM room_matches WHERE id = ${created.matchId}`;
     expect(row.status).toBe('active');

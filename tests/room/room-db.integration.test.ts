@@ -795,6 +795,10 @@ describe.skipIf(!url)('room runtime on real Postgres', () => {
       const picks: string[] = [];
       for (let n = 0; n < 20; n += 1) picks.push((await roomRepo.pickPool('aproximado', ids, { easy: 1 }))[0].item_id);
       expect(new Set(picks)).toEqual(new Set([fresh]));
+      // Without players (a game that skips history) both items stay possible.
+      const anyPicks = new Set<string>();
+      for (let n = 0; n < 40; n += 1) anyPicks.add((await roomRepo.pickPool('aproximado', [], { easy: 1 }))[0].item_id);
+      expect(anyPicks.size).toBe(items.length);
     } finally {
       await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${enabled})) WHERE game = 'aproximado'`;
     }

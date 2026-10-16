@@ -2,6 +2,7 @@ import { guestTokenHash, linkGuestInTx } from '../guest/guest-journey.repo.js';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json, User } from '../../db/types.js';
 import type { AvatarCustomization } from './avatar-customization.js';
+import { parseClientPlatform, type ClientPlatform } from '../../core/client-platform.js';
 
 /** Free nickname changes before the cooldown applies. */
 export const NICKNAME_FREE_CHANGES = 2;
@@ -34,6 +35,7 @@ function isNicknameUniqueViolation(error: unknown): boolean {
 }
 
 export interface CreateUserData {
+  signupPlatform?: ClientPlatform;
   email?: string | null;
   phoneNumber?: string | null;
   phoneVerifiedAt?: string | null;
@@ -384,6 +386,14 @@ export const usersRepo = {
       );
 
       if (identityResult.length > 0) {
+        // Immutable signup source, committed with the winning user insert.
+        // Existing identities and retries never overwrite it. Missing legacy
+        // client declarations stay unknown; a later app login is not a signup.
+        await tx.unsafe(
+          `INSERT INTO user_signup_attribution (user_id, platform)
+           VALUES ($1, $2)`,
+          [user.id, parseClientPlatform(userData.signupPlatform)]
+        );
         const hash = guestTokenHash(guestToken);
         if (hash) await linkGuestInTx(tx, hash, user.id, true);
         return { user, created: true };

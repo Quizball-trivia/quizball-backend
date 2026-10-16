@@ -858,6 +858,23 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
     vi.clearAllMocks();
   });
 
+  it.each(['android', 'ios', 'web'] as const)('passes %s source to the atomic account insert and canonical signup event', async (clientPlatform) => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue(null);
+    createWithIdentityMock.mockResolvedValue({ user: MOCK_USER, created: true });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase', subject: 'platform-sub', email: 'target@example.com', claims: {},
+    }, undefined, { accountCreation: { method: 'google', clientPlatform } });
+    expect(createWithIdentityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signupPlatform: clientPlatform }), expect.any(Object),
+    );
+    expect(trackAccountCreatedMock).toHaveBeenCalledTimes(1);
+    expect(trackAccountCreatedMock).toHaveBeenCalledWith(
+      MOCK_USER, 'google', undefined, undefined, clientPlatform,
+    );
+  });
+
   it('normalizes blank identity phone numbers before creating a new user', async () => {
     getCachedUserMock.mockReturnValue(null);
     getByProviderSubjectMock.mockResolvedValue(null);
@@ -887,6 +904,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       'email',
       undefined,
       undefined,
+      'unknown',
     );
   });
 
@@ -937,6 +955,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       'google',
       attribution,
       undefined,
+      'unknown',
     );
   });
 
@@ -966,6 +985,7 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
       'google',
       undefined,
       utm,
+      'unknown',
     );
   });
 

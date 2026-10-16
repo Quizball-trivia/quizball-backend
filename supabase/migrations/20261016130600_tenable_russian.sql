@@ -61,6 +61,16 @@ CREATE TRIGGER tenable_ru_names_immutable BEFORE INSERT OR UPDATE OR DELETE ON p
   FOR EACH ROW EXECUTE FUNCTION public.tenable_ru_names_immutable();
 REVOKE ALL ON FUNCTION public.tenable_ru_names_immutable() FROM PUBLIC, anon, authenticated;
 
+-- A set's row never changes: its creation time decides which transaction may add names to it.
+CREATE OR REPLACE FUNCTION public.tenable_ru_name_sets_immutable() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+  RAISE EXCEPTION 'Tenable Russian name sets never change';
+END $$;
+DROP TRIGGER IF EXISTS tenable_ru_name_sets_immutable ON public.tenable_ru_name_sets;
+CREATE TRIGGER tenable_ru_name_sets_immutable BEFORE UPDATE ON public.tenable_ru_name_sets
+  FOR EACH ROW EXECUTE FUNCTION public.tenable_ru_name_sets_immutable();
+REVOKE ALL ON FUNCTION public.tenable_ru_name_sets_immutable() FROM PUBLIC, anon, authenticated;
+
 -- Russian title and note of a list, display only, outside the list itself (a stored list's hash is its content
 -- version: rewriting it would be a correction). `src` is a hash of the English title and note it was translated from:
 -- a list corrected in English shows English until it is translated again.

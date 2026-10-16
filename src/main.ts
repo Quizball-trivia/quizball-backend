@@ -23,6 +23,9 @@ import { startSharedPlayerDailyReadinessCheck } from './modules/shared-player-da
 import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/name-chain-daily.service.js';
 import { startTenableDailyReadinessCheck } from './modules/tenable-daily/tenable-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
+import { startFootballRaceReadinessCheck } from './modules/football-race/index.js';
+import { warmRaceTournaments } from './modules/room/games/football-race/football-race.releases.js';
+import { isRoomGameEnabled } from './modules/room/room.config.js';
 import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
@@ -114,6 +117,14 @@ startSharedPlayerDailyReadinessCheck();
 startNameChainDailyReadinessCheck();
 startTenableDailyReadinessCheck();
 startMinutoReadinessCheck();
+startFootballRaceReadinessCheck();
+// A room match must never wait on a cold release load under its lock: load the enabled release at boot.
+if (isRoomGameEnabled('football_race')) {
+  void warmRaceTournaments().then(
+    (n) => logger.info({ tournaments: n }, 'Football Horserace release loaded'),
+    (error: unknown) => logger.warn({ err: error }, 'Football Horserace release could not be loaded at boot'),
+  );
+}
 startGridDailyReadinessCheck();
 
 const dbWatchdog = new DbWatchdog({

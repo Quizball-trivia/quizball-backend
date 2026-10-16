@@ -89,10 +89,10 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
 
   deal: (pick, options) => dealSharedPlayer(pick, options),
 
-  async hydrate(content, state, context) {
+  async hydrate(content, state, tx) {
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian names is judged with exactly them.
-    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, context?.underLock ?? false) : null;
+    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;
     return { pack: content.pack, universe, russian };
   },
 

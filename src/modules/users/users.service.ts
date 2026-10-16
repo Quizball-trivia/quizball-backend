@@ -400,6 +400,7 @@ export const usersService = {
     opts?: {
       onUserCreated?: (user: User) => void;
       accountCreation?: {
+        clientPlatform?: import('../../core/client-platform.js').ClientPlatform;
         guestToken?: string;
         utm?: import('../../core/utm-attribution.js').UtmAttribution | null;
         method?: string;
@@ -493,6 +494,7 @@ export const usersService = {
       {
         email: identity.email,
         phoneNumber,
+        signupPlatform: opts?.accountCreation?.clientPlatform,
         phoneVerifiedAt: phoneNumber
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
@@ -525,6 +527,7 @@ export const usersService = {
         opts?.accountCreation?.method ?? resolveIdentityAuthMethod(identity),
         opts?.accountCreation?.attribution,
         opts?.accountCreation?.utm,
+        opts?.accountCreation?.clientPlatform ?? 'unknown',
       );
       opts?.onUserCreated?.(newUser);
     }

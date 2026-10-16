@@ -27,7 +27,12 @@ const RUSSIAN: Record<CountedUnit, [string, string, string]> = {
   seasons: ['сезон', 'сезона', 'сезонов'],
 };
 
-const number = (value: number, locale: TenableLocale) => new Intl.NumberFormat(locale === 'en' ? 'en-GB' : locale, { maximumFractionDigits: 1 }).format(value);
+const formats = new Map<TenableLocale, Intl.NumberFormat>();
+const number = (value: number, locale: TenableLocale) => {
+  let format = formats.get(locale);
+  if (!format) formats.set(locale, (format = new Intl.NumberFormat(locale === 'en' ? 'en-GB' : locale, { maximumFractionDigits: 1 })));
+  return format.format(value);
+};
 
 export function formatFigure(figure: { value: number; unit: FigureUnit }, locale: TenableLocale): string {
   const { value, unit } = figure;

@@ -266,6 +266,7 @@ const sessionGuardMock = vi.hoisted(() => ({
 const contentServiceMock = vi.hoisted(() => ({
   assertPublishedAuctionContentAvailable: vi.fn(),
   resolveContentLocale: vi.fn(async (locale: string) => locale),
+  playableContentLocale: vi.fn(async (locale: string) => locale),
   forgetContentLocale: vi.fn(),
 }));
 
@@ -365,6 +366,7 @@ describe('auctionMatchmakingService', () => {
     lockMock.releaseLock.mockResolvedValue(undefined);
     contentServiceMock.assertPublishedAuctionContentAvailable.mockResolvedValue(undefined);
     contentServiceMock.resolveContentLocale.mockReset().mockImplementation(async (locale: string) => locale);
+    contentServiceMock.playableContentLocale.mockReset().mockImplementation(async (locale: string) => locale);
   });
 
   afterEach(() => {
@@ -418,11 +420,10 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('resolves the card language again at the start: Russian cards unpublished after queueing mean English cards', async () => {
+  it('counts the Russian cards afresh at the start: Russian cards unpublished after queueing mean English cards', async () => {
     const { io } = createIo();
-    contentServiceMock.resolveContentLocale
-      .mockResolvedValueOnce('ru').mockResolvedValueOnce('ru').mockResolvedValueOnce('ru')
-      .mockResolvedValue('en');
+    contentServiceMock.resolveContentLocale.mockResolvedValue('ru');
+    contentServiceMock.playableContentLocale.mockResolvedValue('en');
 
     for (const id of ['u1', 'u2', 'u3']) await auctionMatchmakingService.handleSearchStart(io, socket(id), { locale: 'ru' });
     await vi.advanceTimersByTimeAsync(0);
@@ -433,6 +434,7 @@ describe('auctionMatchmakingService', () => {
   it('a Russian deal that finds no cards drops the cached availability, so the retry reads it again', async () => {
     const { io } = createIo();
     contentServiceMock.resolveContentLocale.mockResolvedValue('ru');
+    contentServiceMock.playableContentLocale.mockResolvedValue('ru');
     startMatchMock.startAuctionMatchForHumans.mockRejectedValueOnce(new AuctionContentUnavailableError());
 
     for (const id of ['u1', 'u2', 'u3']) await auctionMatchmakingService.handleSearchStart(io, socket(id), { locale: 'ru' });

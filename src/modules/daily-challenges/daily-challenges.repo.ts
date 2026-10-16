@@ -1,4 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { retryRolledBackReadOnlyTransaction } from '../../db/read-only-recovery.js';
+import { logger } from '../../core/logger.js';
 import type { Json } from '../../db/types.js';
 import { selectDailyFifaCardIds, type FifaCardCandidate } from './fifa-card-selection.js';
 import { progressionRepo, type GrantXpInput, type GrantXpResult } from '../progression/progression.repo.js';
@@ -65,7 +67,7 @@ export interface DailyChallengesTransactionRepo {
 
 export const dailyChallengesRepo = {
   runInTransaction<T>(callback: (txRepo: DailyChallengesTransactionRepo) => Promise<T>): Promise<T> {
-    return sql.begin((tx) => callback({
+    return retryRolledBackReadOnlyTransaction(() => sql.begin((tx) => callback({
       getCompletionForUserOnDay: (userId, challengeType, challengeDay) =>
         dailyChallengesRepo.getCompletionForUserOnDayInTx(tx, userId, challengeType, challengeDay),
       createCompletion: (input) => dailyChallengesRepo.createCompletionInTx(tx, input),
@@ -77,7 +79,9 @@ export const dailyChallengesRepo = {
         dailyChallengesRepo.createStreakBonusAwardInTx(tx, userId, challengeDay, coinsAwarded),
       createCardOutcomes: (completionId, outcomes) =>
         dailyChallengesRepo.createCardOutcomesInTx(tx, completionId, outcomes),
-    })) as Promise<T>;
+    })) as Promise<T>, () => {
+      logger.warn({ code: '25006', operation: 'daily_completion' }, 'Retrying rolled-back read-only daily completion');
+    });
   },
 
   async listConfigs(activeOnly = false): Promise<DailyChallengeConfigRow[]> {

@@ -34,5 +34,18 @@ CREATE TRIGGER wordgame_ru_names_immutable BEFORE INSERT OR UPDATE OR DELETE ON 
   FOR EACH ROW EXECUTE FUNCTION public.wordgame_ru_names_immutable();
 REVOKE ALL ON FUNCTION public.wordgame_ru_names_immutable() FROM PUBLIC, anon, authenticated;
 
+-- A set's row never changes but for `active`: its creation time decides which transaction may add names to it.
+CREATE OR REPLACE FUNCTION public.wordgame_ru_versions_fixed() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+  IF (NEW.version, NEW.fingerprint, NEW.players, NEW.created_at) IS DISTINCT FROM (OLD.version, OLD.fingerprint, OLD.players, OLD.created_at) THEN
+    RAISE EXCEPTION 'Word game Russian name versions never change (only active does)';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS wordgame_ru_versions_fixed ON public.wordgame_ru_versions;
+CREATE TRIGGER wordgame_ru_versions_fixed BEFORE UPDATE ON public.wordgame_ru_versions
+  FOR EACH ROW EXECUTE FUNCTION public.wordgame_ru_versions_fixed();
+REVOKE ALL ON FUNCTION public.wordgame_ru_versions_fixed() FROM PUBLIC, anon, authenticated;
+
 ALTER TABLE public.wordgame_ru_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.wordgame_ru_names ENABLE ROW LEVEL SECURITY;

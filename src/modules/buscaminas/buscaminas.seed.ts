@@ -238,6 +238,10 @@ export function resolveSeedTarget(databaseUrl: string | undefined, target: SeedT
     throw new Error('DATABASE_URL is not a valid URL');
   }
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') throw new Error('DATABASE_URL must be a postgres:// URL');
+  // postgres.js sends unknown query parameters in the startup packet, so `?user=postgres.<other ref>` would reach another
+  // project than the one checked below. Only the SSL mode may ride along.
+  const extra = [...url.searchParams.keys()].filter((key) => key !== 'sslmode');
+  if (extra.length > 0) throw new Error(`DATABASE_URL may not carry connection parameters (${extra.join(', ')}); only sslmode is allowed`);
   if (LOCAL_HOSTS.has(url.hostname)) {
     if (target) throw new Error(`--target ${target} was given but DATABASE_URL is a local database (${url.hostname})`);
     return { kind: 'local', label: `local ${url.hostname}:${url.port || '5432'}${url.pathname}` };

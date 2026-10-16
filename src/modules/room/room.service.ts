@@ -5,7 +5,7 @@ import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from
 import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
-import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
+import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
 export const ROOM_READY_MS = 20_000;
@@ -53,8 +53,8 @@ const unlessUnsupported = <T>(work: Promise<T | null>): Promise<T | null> => wor
   throw error;
 });
 
-const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown, underLock = false): Promise<unknown> =>
-  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null, { underLock }) : content);
+const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown, tx?: TransactionSql): Promise<unknown> =>
+  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null, tx) : content);
 
 /** A schema error can quote the content (an answer): callers and logs only ever get a code. */
 function parseContent(engine: AnyRoomEngine, raw: unknown): unknown {
@@ -176,7 +176,7 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
   }
   let ready: unknown;
   try {
-    ready = await hydrated(engine, content, row.state, true);
+    ready = await hydrated(engine, content, row.state, tx);
   } catch (error) {
     // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
     contentCache.delete(row.id);
@@ -279,7 +279,8 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const russianVersion = active && heldRussianIndex(active) ? active : null;
   let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
   // What the match froze (its Russian names) is attached before anything reads it.
-  l = { ...l, content: await hydrated(l.engine, l.content, state, true) };
+  l = { ...l, content: await hydrated(l.engine, l.content, state, tx) };
+  markHydrated(l.row.id, l.content);
   // Admitted but without a socket right now: away from the start, with its own absence window.
   const away = ready.filter((s) => !s.connected);
   if (away.length > 0) {
@@ -369,11 +370,11 @@ export const roomService = {
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
   async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
-    if (input.players.length < 2 || input.players.length > ROOM_MAX_SEATS) throw new RoomError('room_needs_players');
+    if (input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
-    const dealt = await engine.deal((wanted, tag) => roomRepo.pickPool(input.game, input.players.map((p) => p.userId), wanted, tag ?? null), options);
+    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : input.players.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);

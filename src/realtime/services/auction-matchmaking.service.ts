@@ -723,7 +723,7 @@ async function startClaimedGroup(
   // Resolved again at the start, not when queued: Russian cards unpublished meanwhile mean English cards, retries included.
   let locale: AuctionContentLocale = oldest.locale;
   try {
-    locale = await auctionContentService.resolveContentLocale(oldest.locale);
+    locale = await auctionContentService.playableContentLocale(oldest.locale);
     // Match humans from one shared queue, regardless of their UI language,
     // just like ranked matchmaking. Auction state currently has one shared
     // content locale, so the oldest search deterministically chooses the card

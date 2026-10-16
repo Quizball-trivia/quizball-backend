@@ -83,28 +83,28 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
   // arrive best known first, so the first few of each are the answer (the same as rank() below, built in one pass).
   const shortShown = new Map<string, number[]>();
   const shortOther = new Map<string, number[]>();
-  const shortPrefixes = (keys: Iterable<string>) => {
-    const out = new Set<string>();
-    for (const key of keys) for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) out.add(key.slice(0, n));
-    return out;
-  };
+  // The last entity each short prefix was counted for, per kind: no per-entity sets on a 100k-name release.
+  const lastShown = new Map<string, number>();
+  const lastOther = new Map<string, number>();
   const keepTop = (map: Map<string, number[]>, prefix: string, i: number) => {
     const top = map.get(prefix);
     if (!top) map.set(prefix, [i]);
     else if (top.length < SUGGEST_LIMIT) top.push(i);
   };
+  const other = new Set<string>();
   all.forEach((e, i) => {
-    const other = new Set<string>();
+    other.clear();
     const own = [normalizeName(e.name), normalizeName(e.known)];
     const whole = new Set([...own, ...e.aliases.map(normalizeName)].filter(Boolean));
     for (const key of whole) {
-      typoKeys.push([compact(key), i]);
+      const joined = compact(key);
+      typoKeys.push([joined, i]);
       // A name of several words identifies outright; a single word (a known name like "Vega", an alias, a surname)
       // always goes through the dominance rule, whichever way the release happened to classify it.
       if (key.includes(' ')) {
-        other.add(key).add(compact(key));
+        other.add(key).add(joined);
         put(names, key, i);
-        put(names, compact(key), i);
+        put(names, joined, i);
       }
     }
     // One word identifies only as a surname or a one-word name, never as a first name or a particle.
@@ -115,11 +115,28 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
       }
     }
     const visible = visibleKeys(own);
-    for (const key of visible) if (!other.has(key)) put(shownOnly, key, i);
-    const first = shortPrefixes(visible);
-    for (const prefix of first) keepTop(shortShown, prefix, i);
-    for (const prefix of shortPrefixes(other)) if (!first.has(prefix)) keepTop(shortOther, prefix, i);
+    for (const key of visible) {
+      if (!other.has(key)) put(shownOnly, key, i);
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i) continue;
+        lastShown.set(prefix, i);
+        keepTop(shortShown, prefix, i);
+      }
+    }
+    for (const key of other) {
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i || lastOther.get(prefix) === i) continue;
+        lastOther.set(prefix, i);
+        keepTop(shortOther, prefix, i);
+      }
+    }
   });
+  // Build-only state shares the scope the returned functions keep alive.
+  lastShown.clear();
+  lastOther.clear();
+  other.clear();
   // Typo search is bucketed by first letter and length: a typo in the first letter is not forgiven (the suggestions
   // cover it), and one lookup compares a few thousand keys at most instead of the whole release.
   const typoBuckets = new Map<string, Array<[string, number]>>();
@@ -129,6 +146,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (bucket) bucket.push(entry);
     else typoBuckets.set(bucketKey, [entry]);
   }
+  typoKeys.length = 0;
 
   /** One holder, or the dominant one of several, or ambiguous. Indices are best known first. */
   const decide = (holders: readonly number[]): Identity => {

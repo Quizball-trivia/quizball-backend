@@ -236,7 +236,16 @@ export const auctionMatchmakingService = {
     }
 
     try {
-      await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      try {
+        await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      } catch (error) {
+        // Russian cards went away since availability was cached: read it again; English stands in when they are gone.
+        if (input.locale !== 'ru' || !(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
+        auctionContentService.forgetContentLocale();
+        input.locale = await auctionContentService.resolveContentLocale('ru');
+        if (input.locale === 'ru') throw error;
+        await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      }
     } catch (error) {
       emitAuctionError(socket, toAuctionErrorPayload(error, {
         fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,

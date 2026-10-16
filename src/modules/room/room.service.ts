@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
-import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, russianIndex } from '../footballers/footballers.russian.js';
+import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
@@ -53,8 +53,8 @@ const unlessUnsupported = <T>(work: Promise<T | null>): Promise<T | null> => wor
   throw error;
 });
 
-const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown): Promise<unknown> =>
-  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null) : content);
+const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown, underLock = false): Promise<unknown> =>
+  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null, { underLock }) : content);
 
 /** A schema error can quote the content (an answer): callers and logs only ever get a code. */
 function parseContent(engine: AnyRoomEngine, raw: unknown): unknown {
@@ -173,7 +173,15 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
     if (isLive(row.status)) await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
     return null;
   }
-  const ready = await hydrated(engine, content, row.state);
+  let ready: unknown;
+  try {
+    ready = await hydrated(engine, content, row.state, true);
+  } catch (error) {
+    // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
+    contentCache.delete(row.id);
+    if (error instanceof RoomContentUnavailable) throw new RoomError('room_content_unavailable', 503);
+    throw error;
+  }
   if (isLive(row.status)) markHydrated(row.id, ready);
   return { row, seats, content: ready, engine };
 }
@@ -270,7 +278,7 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const russianVersion = active && heldRussianIndex(active) ? active : null;
   let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
   // What the match froze (its Russian names) is attached before anything reads it.
-  l = { ...l, content: await hydrated(l.engine, l.content, state) };
+  l = { ...l, content: await hydrated(l.engine, l.content, state, true) };
   // Admitted but without a socket right now: away from the start, with its own absence window.
   const away = ready.filter((s) => !s.connected);
   if (away.length > 0) {

@@ -84,6 +84,24 @@ export async function activeRussianVersion(now = Date.now()): Promise<string | n
   return active.version;
 }
 
+/**
+ * A room's Russian names for its hydrator: the view it already holds, else the version from memory, else (only before
+ * the match lock) a load. Under the lock a version not in memory is a retryable refusal, never a database read.
+ */
+export async function roomRussianView(universe: Universe, held: Universe | null | undefined, version: string, underLock: boolean): Promise<Universe> {
+  if (held) return held;
+  const index = heldRussianIndex(version) ?? (underLock ? null : await russianIndex(version));
+  if (!index) throw new RoomContentUnavailable();
+  return russianView(universe, index);
+}
+
+/** Thrown by `roomRussianView` under the match lock; the room service answers it as a retryable 503. */
+export class RoomContentUnavailable extends Error {
+  constructor() {
+    super('room_content_unavailable');
+  }
+}
+
 /** The active version as last read, without reading: for callers under a transaction (they warmed it before). */
 export function knownActiveRussianVersion(): string | null {
   return active.version;

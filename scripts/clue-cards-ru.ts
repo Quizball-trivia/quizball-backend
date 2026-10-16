@@ -97,10 +97,7 @@ async function englishCards(): Promise<Card[]> {
 async function build() {
   const cards = await englishCards();
   const done = load();
-  // Translations from before fingerprints were all built on 2026-10-15 from the English as it is now: stamp them once.
-  let stamped = 0;
-  for (const c of cards) if (done[c.id] && !done[c.id].src) { done[c.id].src = sourceOf(c); stamped += 1; }
-  if (stamped) writeFileSync(OUT, JSON.stringify(done));
+  // A translation without a source fingerprint cannot prove which English it came from: it is made again.
   const todo = cards.filter((c) => done[c.id]?.src !== sourceOf(c));
   console.log(`published English cards ${cards.length}, translated ${cards.length - todo.length}, to translate ${todo.length}`);
   for (let i = 0; i < todo.length; i += BATCH) {

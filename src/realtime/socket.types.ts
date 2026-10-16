@@ -1417,7 +1417,7 @@ export interface ClientToServerEvents {
   }) => void;
   /** Host only, room-game rooms: the game's options (null = back to its defaults). Changing them un-readies everyone. */
   'lobby:room_options': (data: { lobbyId?: string; options: Record<string, unknown> | null }) => void;
-  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame }) => void;
+  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame; locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;

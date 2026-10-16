@@ -1125,6 +1125,21 @@ describe('auctionMatchmakingService', () => {
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
   });
 
+  it('a new Russian search whose cached availability is stale reads it again and plays English cards', async () => {
+    const { io } = createIo();
+    const firstSocket = socket('u1', 'One');
+    contentServiceMock.resolveContentLocale.mockResolvedValueOnce('ru').mockResolvedValueOnce('en');
+    contentServiceMock.assertPublishedAuctionContentAvailable.mockImplementation(async (locale: string) => {
+      if (locale === 'ru') throw new AuctionContentUnavailableError({ locale: 'ru' });
+    });
+
+    await auctionMatchmakingService.handleSearchStart(io, firstSocket, { locale: 'ru' });
+
+    expect(contentServiceMock.forgetContentLocale).toHaveBeenCalled();
+    expect(contentServiceMock.assertPublishedAuctionContentAvailable).toHaveBeenLastCalledWith('en');
+    expect(firstSocket.emit).not.toHaveBeenCalledWith('auction:error', expect.anything());
+  });
+
   it('kill switch: a queued search never fills into a match while AUCTION_ENABLED is off', async () => {
     const { config } = await import('../../src/core/config.js');
     const { io, roomEmit } = createIo();

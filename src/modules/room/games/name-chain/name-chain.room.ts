@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { z } from 'zod';
-import { russianIndex, russianView } from '../../../footballers/footballers.russian.js';
+import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine } from '../../room.engine.js';
 import { refusedName } from '../../../wordgame-reports/wordgame-reports.rules.js';
@@ -32,10 +32,10 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
     return { itemIds: [items[0].id], content: { release: items[0].release, seed: randomInt(0, 0x100000000) } };
   },
 
-  async hydrate(content, state) {
+  async hydrate(content, state, context) {
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian names is judged with exactly them.
-    const russian = state?.ov ? russianView(universe, await russianIndex(state.ov)) : null;
+    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, context?.underLock ?? false) : null;
     return { pack: content.pack, universe, russian };
   },
 

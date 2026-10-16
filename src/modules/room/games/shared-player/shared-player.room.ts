@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { russianIndex, russianView } from '../../../footballers/footballers.russian.js';
+import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine, RoomPoolPick } from '../../room.engine.js';
 import { refusedForPair } from '../../../wordgame-reports/wordgame-reports.rules.js';
@@ -89,10 +89,10 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
 
   deal: (pick, options) => dealSharedPlayer(pick, options),
 
-  async hydrate(content, state) {
+  async hydrate(content, state, context) {
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian names is judged with exactly them.
-    const russian = state?.ov ? russianView(universe, await russianIndex(state.ov)) : null;
+    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, context?.underLock ?? false) : null;
     return { pack: content.pack, universe, russian };
   },
 

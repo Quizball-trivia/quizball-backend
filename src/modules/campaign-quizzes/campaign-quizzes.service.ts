@@ -513,20 +513,20 @@ async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaig
   };
 }
 
+type EditionFields = Pick<CampaignQuizRow, 'locale_mode' | 'es_h1' | 'es_seo_title' | 'es_meta_description' | 'ru_h1' | 'ru_seo_title' | 'ru_meta_description'>;
+/** A language edition exists when its page copy does; the hub lists a page and its page offers a language by this rule. */
+function hasEdition(page: EditionFields, locale: CampaignLocale): boolean {
+  if (locale === 'ka') return page.locale_mode === 'en_ka';
+  if (locale === 'es') return Boolean(page.es_h1 && page.es_seo_title && page.es_meta_description);
+  if (locale === 'ru') return Boolean(page.ru_h1 && page.ru_seo_title && page.ru_meta_description);
+  return true;
+}
+
 export const campaignQuizzesService = {
   async listPublished(locale: CampaignLocale): Promise<CampaignQuizHubPageResponse[]> {
     const pages = await campaignQuizzesRepo.listPublishedPages();
     return pages
-      .filter((page) => {
-        if (locale === 'ka') return page.locale_mode === 'en_ka';
-        if (locale === 'es') {
-          return Boolean(page.es_h1 && page.es_seo_title && page.es_meta_description);
-        }
-        if (locale === 'ru') {
-          return Boolean(page.ru_h1 && page.ru_seo_title && page.ru_meta_description);
-        }
-        return true;
-      })
+      .filter((page) => hasEdition(page, locale))
       .map((page) => ({
         slug: page.slug,
         category: page.page_category,
@@ -588,6 +588,7 @@ export const campaignQuizzesService = {
       questions,
       rating: normalizeRating(rating),
       page: toPageContent(quiz, related, questions.length, locale),
+      editions: { ka: hasEdition(quiz, 'ka'), es: hasEdition(quiz, 'es'), ru: hasEdition(quiz, 'ru') },
     };
   },
 

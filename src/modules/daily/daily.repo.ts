@@ -306,6 +306,8 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
       const [row] = await sql<Array<{ value: string }>>`
         SELECT state->>${key} AS value FROM ${sql.unsafe(RUNS)}
         WHERE day = ${day} AND state ? ${key} ${where ? sql`AND state->>${where.key} = ${where.value}` : sql``}
+          -- Only runs started while the day was live: archive plays after it closed never change the answer.
+          AND created_at < closes_at
         GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1
       `;
       return row?.value ?? null;

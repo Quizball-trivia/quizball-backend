@@ -4,7 +4,7 @@ import '../setup.js';
 const db = vi.hoisted(() => ({ sql: vi.fn(), failNext: new Set<string>(), gate: new Map<string, Promise<void>>() }));
 vi.mock('../../src/db/index.js', () => ({ sql: db.sql }));
 
-import { forgetRussian, heldRussianIndex, russianIndex } from '../../src/modules/footballers/footballers.russian.js';
+import { forgetRussian, heldRussianIndex, RoomContentUnavailable, roomRussianView, russianIndex } from '../../src/modules/footballers/footballers.russian.js';
 
 // The two reads a version load makes: its row count, then its names (one page).
 db.sql.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -57,5 +57,18 @@ describe('word game Russian names: the per-process cache', () => {
     expect(heldRussianIndex('a')).toBeUndefined();
     const index = await russianIndex('a');
     expect(index.resolve('Месси')).toEqual(['p-a']);
+  });
+
+  it('a room hydrating under its match lock never reads the database: a held view is reused, a missing version refuses', async () => {
+    const universe = { releaseId: 'rel', player: () => ({ pid: 'p-a' }) } as never;
+    const view = { releaseId: 'rel' } as never;
+    expect(await roomRussianView(universe, view, 'a', true)).toBe(view);
+    await expect(roomRussianView(universe, null, 'a', true)).rejects.toBeInstanceOf(RoomContentUnavailable);
+    expect(loadsOf('a')).toBe(0);
+    await roomRussianView(universe, null, 'a', false);
+    expect(loadsOf('a')).toBe(1);
+    db.sql.mockClear();
+    await roomRussianView(universe, null, 'a', true);
+    expect(db.sql).not.toHaveBeenCalled();
   });
 });

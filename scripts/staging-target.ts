@@ -11,14 +11,21 @@ export type Target = 'staging' | 'local';
 export function stagingTarget(url: string, options: { allowLocal?: boolean } = {}): Target {
   let host = '';
   let user = '';
+  let params: string[] = [];
+  let decoded = '';
   try {
     const parsed = new URL(url);
     host = parsed.hostname;
     user = decodeURIComponent(parsed.username);
+    params = [...parsed.searchParams.keys()];
+    decoded = decodeURIComponent(url).toLowerCase();
   } catch {
     throw new Error('DATABASE_URL is not a valid URL');
   }
-  if (url.includes(PROD_REF)) throw new Error(`DATABASE_URL names the production project ${PROD_REF}`);
+  if (decoded.includes(PROD_REF)) throw new Error(`DATABASE_URL names the production project ${PROD_REF}`);
+  // A query parameter can override the user, host or database the driver connects with: only TLS mode is allowed.
+  const unexpected = params.filter((p) => p !== 'sslmode');
+  if (unexpected.length > 0) throw new Error(`DATABASE_URL may not carry connection parameters (${unexpected.join(', ')})`);
   if (options.allowLocal && (host === '127.0.0.1' || host === 'localhost')) return 'local';
   const direct = host === `db.${STAGING_REF}.supabase.co`;
   const pooler = host.endsWith('.pooler.supabase.com') && user === `postgres.${STAGING_REF}`;

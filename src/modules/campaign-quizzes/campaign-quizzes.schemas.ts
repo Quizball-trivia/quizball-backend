@@ -271,6 +271,8 @@ export interface CampaignQuizResponse {
   questions: CampaignQuizQuestionResponse[];
   rating: CampaignQuizRatingResponse;
   page: CampaignQuizPageContentResponse | null;
+  /** Which language editions the page has (the catalog's rule); a missing edition is served in English. */
+  editions: { ka: boolean; es: boolean; ru: boolean };
 }
 
 export interface CampaignQuizAnswerResponse {

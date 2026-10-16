@@ -37,9 +37,11 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   /**
    * Attaches what the rules need besides the stored pack (the footballers of its release). In memory only; called on
    * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt. `state` is
-   * the stored state when there is one (what the match froze at its start, e.g. Russian names).
+   * the stored state when there is one (what the match froze at its start, e.g. Russian names). `underLock`: the match
+   * row is locked, so nothing may be read from the database; what is not in memory is a retryable
+   * `room_content_unavailable` (the next call hydrates before the lock).
    */
-  hydrate?(content: Content, state: State | null): Promise<Content>;
+  hydrate?(content: Content, state: State | null, context?: { underLock: boolean }): Promise<Content>;
   start(seats: number, content: Content, nowMs: number, context?: RoomStartContext): State;
   /** Moves the game's own clock up to `nowMs`, one boundary per call. */
   tick(state: State, content: Content, nowMs: number): State;

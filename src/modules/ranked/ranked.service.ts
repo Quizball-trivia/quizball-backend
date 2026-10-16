@@ -858,13 +858,19 @@ export const rankedService = {
     return getOrLoadJson(
       userRankCacheKey(userId, filter),
       filter.kind === 'club' ? CLUB_USER_RANK_CACHE_TTL_SECONDS : USER_RANK_CACHE_TTL_SECONDS,
-      async () => {
-        const rank = await rankedRepo.getUserRank(userId, filter);
-        if (!rank) return null;
-        const above = rank.rank > 1 ? await rankedRepo.getNextAbove(userId, filter) : null;
-        return { ...rank, nextAbove: above };
-      }
-    );
+      () => rankedRepo.getUserRank(userId, filter)
+    ).then(async (rank) => {
+      if (!rank) return null;
+      // The board refreshes every few seconds; the player to pass must keep up with it.
+      const above = rank.rank > 1
+        ? await getOrLoadJson(
+          `ranked:next-above:v1:${boardCacheScope(filter)}:${userId}`,
+          LIVE_LEADERBOARD_CACHE_TTL_SECONDS,
+          () => rankedRepo.getNextAbove(userId, filter)
+        )
+        : null;
+      return { ...rank, nextAbove: above };
+    });
   },
 
   tierFromRp,

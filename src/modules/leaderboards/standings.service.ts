@@ -1,3 +1,4 @@
+import { normalizeSupportedCountryCode } from '../../core/country.js';
 import { getOrLoadJson } from '../../core/json-cache.js';
 import { standingsRepo, type StandingRow, type StandingsKind, type StandingsMode } from './standings.repo.js';
 
@@ -18,9 +19,11 @@ export interface ViewerStanding {
 
 export const standingsService = {
   async list(mode: StandingsMode, kind: StandingsKind): Promise<StandingRow[]> {
-    return getOrLoadJson(`leaderboard:standings:v1:${mode}:${kind}`, STANDINGS_CACHE_TTL_SECONDS, () =>
+    const rows = await getOrLoadJson(`leaderboard:standings:v1:${mode}:${kind}`, STANDINGS_CACHE_TTL_SECONDS, () =>
       standingsRepo.list(mode, kind),
     );
+    // Legacy country values have no board to open, so they stay out of the table.
+    return kind === 'country' ? rows.filter((row) => normalizeSupportedCountryCode(row.key) === row.key) : rows;
   },
 
   /** Never cached with the shared rows: it is about one viewer. */

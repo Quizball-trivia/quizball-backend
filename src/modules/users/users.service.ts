@@ -1,4 +1,5 @@
 import type { User } from '../../db/types.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import { isPartnerOrStaff } from './account-kind.js';
 import {
   isUserAccountInactive,
@@ -43,6 +44,9 @@ import {
 import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
 import { trackAccountCreated } from '../../core/analytics.js';
 import type { CampaignAttribution } from '../../core/campaign-attribution.js';
+import { leaderboardClubs } from '../leaderboards/leaderboard-clubs.js';
+import { invalidateAffiliationRanks } from '../leaderboards/rank-cache.js';
+import type { BoardFilter } from '../leaderboards/board-filter.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
 import { guestKitFor, guestNameCandidates } from '../guest/guest-identity.js';
 
@@ -126,11 +130,24 @@ function isPgUniqueViolation(error: unknown): error is { code: string } {
  *  - case/whitespace-only edits (`nika` -> `NIKA`), so nobody burns a free
  *    change fixing their own capitalization.
  */
-async function applyNicknameChange(
+interface PreparedNicknameChange {
+  params: {
+    userId: string;
+    oldNickname: string | null;
+    newNickname: string;
+    changedBy: 'signup' | 'user';
+    counted: boolean;
+  };
+  isCaseOnly: boolean;
+  isSignupPass: boolean;
+}
+
+/** Everything the rename needs to know, read before any transaction opens. */
+async function prepareNicknameChange(
   id: string,
   currentUser: User,
-  change: { from: string | null; to: string }
-): Promise<User> {
+  change: { from: string | null; to: string },
+): Promise<PreparedNicknameChange> {
   const isCaseOnly =
     change.from !== null && change.from.toLowerCase() === change.to.toLowerCase();
 
@@ -145,32 +162,56 @@ async function applyNicknameChange(
       ? null
       : change.from;
 
-  const counted = !isSignupPass && !isCaseOnly;
+  return {
+    params: {
+      userId: id,
+      oldNickname: publishableFrom,
+      newNickname: change.to,
+      changedBy: isSignupPass ? 'signup' : 'user',
+      counted: !isSignupPass && !isCaseOnly,
+    },
+    isCaseOnly,
+    isSignupPass,
+  };
+}
 
-  const updated = await usersRepo.changeNicknameInTx({
-    userId: id,
-    oldNickname: publishableFrom,
-    newNickname: change.to,
-    changedBy: isSignupPass ? 'signup' : 'user',
-    counted,
-  });
+/** The rename quota refused inside a caller's transaction; reported after it rolls back. */
+class NicknameQuotaRefusedError extends Error {}
+
+async function nicknameCooldownError(id: string): Promise<AppError> {
+  const quota = await usersRepo.getNicknameQuota(id);
+  const remainingSeconds = quota.nextChangeAt
+    ? Math.max(0, Math.ceil((Date.parse(quota.nextChangeAt) - Date.now()) / 1000))
+    : 0;
+  return new AppError(
+    `You can change your nickname ${NICKNAME_FREE_CHANGES} times, then once every ${NICKNAME_COOLDOWN_DAYS} days.`,
+    400,
+    ErrorCode.NICKNAME_CHANGE_COOLDOWN,
+    {
+      field: 'nickname',
+      changeCount: quota.countedChanges,
+      nextAvailableAt: quota.nextChangeAt,
+      remainingSeconds,
+    }
+  );
+}
+
+async function applyNicknameChange(
+  id: string,
+  currentUser: User,
+  change: { from: string | null; to: string },
+  prepared?: PreparedNicknameChange,
+  tx?: TransactionSql
+): Promise<User> {
+  const { params, isCaseOnly, isSignupPass } = prepared ?? (await prepareNicknameChange(id, currentUser, change));
+  const counted = params.counted;
+
+  const updated = await usersRepo.changeNicknameInTx({ ...params, tx });
 
   if (!updated) {
-    const quota = await usersRepo.getNicknameQuota(id);
-    const remainingSeconds = quota.nextChangeAt
-      ? Math.max(0, Math.ceil((Date.parse(quota.nextChangeAt) - Date.now()) / 1000))
-      : 0;
-    throw new AppError(
-      `You can change your nickname ${NICKNAME_FREE_CHANGES} times, then once every ${NICKNAME_COOLDOWN_DAYS} days.`,
-      400,
-      ErrorCode.NICKNAME_CHANGE_COOLDOWN,
-      {
-        field: 'nickname',
-        changeCount: quota.countedChanges,
-        nextAvailableAt: quota.nextChangeAt,
-        remainingSeconds,
-      }
-    );
+    // Inside a caller's transaction no other connection may be used; the caller reports it.
+    if (tx) throw new NicknameQuotaRefusedError();
+    throw await nicknameCooldownError(id);
   }
 
   logger.info(
@@ -329,6 +370,63 @@ async function notifyProgressionChange(
  * Contains ALL business logic for user operations.
  * NO Express types (req/res). NO direct Prisma calls.
  */
+/** The write found the 30-day country/club lock closed (another request switched first). */
+class AffiliationLockedError extends Error {}
+
+// Country and club boards score a player's current country/club, so moving
+// between two of them moves every point; one switch per 30 days each. Setting
+// one for the first time is not a switch.
+const AFFILIATION_SWITCH_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function affiliationSwitches(
+  current: User,
+  next: { favoriteClub?: string | null; country?: string | null },
+): Promise<{ club: boolean; country: boolean }> {
+  const club = typeof next.favoriteClub === 'string'
+    && !!current.favorite_club?.trim()
+    && !(await sameClub(current.favorite_club, next.favoriteClub));
+  const country = typeof next.country === 'string'
+    && !!current.country
+    && current.country !== next.country;
+
+  const now = Date.now();
+  const blocked = (changedAt: string | null) =>
+    changedAt !== null && now - Date.parse(changedAt) < AFFILIATION_SWITCH_COOLDOWN_MS;
+  if (club && blocked(current.club_changed_at)) {
+    throw new ConflictError('Your club can change once every 30 days', {
+      field: 'favoriteClub',
+      reason: 'affiliation_cooldown',
+      retryAt: new Date(Date.parse(current.club_changed_at!) + AFFILIATION_SWITCH_COOLDOWN_MS).toISOString(),
+    });
+  }
+  if (country && blocked(current.country_changed_at)) {
+    throw new ConflictError('Your country can change once every 30 days', {
+      field: 'country',
+      reason: 'affiliation_cooldown',
+      retryAt: new Date(Date.parse(current.country_changed_at!) + AFFILIATION_SWITCH_COOLDOWN_MS).toISOString(),
+    });
+  }
+  return { club, country };
+}
+
+/** The country and club boards these profiles belong to. */
+async function affiliationBoards(users: User[]): Promise<BoardFilter[]> {
+  const boards: BoardFilter[] = [];
+  for (const user of users) {
+    if (user.country) boards.push({ kind: 'country', country: user.country });
+    const club = await leaderboardClubs.resolve(user.favorite_club);
+    if (club) boards.push({ kind: 'club', club });
+  }
+  return boards;
+}
+
+/** "Real Madrid" and "Real Madrid CF" are the same club; unknown names compare as text. */
+async function sameClub(a: string, b: string): Promise<boolean> {
+  const [left, right] = await Promise.all([leaderboardClubs.resolve(a), leaderboardClubs.resolve(b)]);
+  if (left && right) return left === right;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 export const usersService = {
   /**
    * Guest provisioning (friend lobbies). Unlike getOrCreateFromIdentity it never
@@ -773,7 +871,7 @@ export const usersService = {
   ): Promise<User> {
     await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
 
-    const updateData: typeof data = { ...data };
+    const updateData: Pick<UpdateUserData, keyof typeof data | 'enforceAffiliationLock'> = { ...data };
     let nicknameChange: { from: string | null; to: string } | null = null;
     let currentUser: User | null = null;
 
@@ -786,6 +884,16 @@ export const usersService = {
         });
       }
       updateData.country = country;
+    }
+
+    if (updateData.favoriteClub !== undefined || updateData.country !== undefined) {
+      currentUser = await usersRepo.getById(id);
+      if (!currentUser) {
+        throw new NotFoundError('User not found');
+      }
+      // Early, readable refusal; the write itself re-decides against the locked row.
+      await affiliationSwitches(currentUser, updateData);
+      updateData.enforceAffiliationLock = true;
     }
 
     if (typeof data.nickname === 'string') {
@@ -826,33 +934,64 @@ export const usersService = {
       }
     }
 
-    // Rename first: it is the only step that can still reject (cooldown). Doing
-    // it before the other fields are written means a rejection leaves the whole
-    // request unapplied, instead of committing `country` and then throwing 400
-    // with a stale cache.
+    // Rename first: it can still reject (cooldown). Doing it before the other
+    // fields are written means a rejection leaves the whole request unapplied,
+    // instead of committing `country` and then throwing 400 with a stale cache.
+    // When the request also moves country/club, whose lock can refuse at write
+    // time, both land in one transaction so a refusal rolls the rename back too.
     let user: User | null = null;
-    if (nicknameChange) {
-      try {
-        user = await applyNicknameChange(id, currentUser!, nicknameChange);
-      } catch (error) {
-        // isNicknameTaken above is a check-then-act, so two users racing for the
-        // same name both pass it and the loser trips uq_users_lower_nickname_real.
-        // Report that as the conflict it is, not a 500.
-        if (isPgUniqueViolation(error)) {
-          throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+    const hasFields = Object.values(updateData).some((value) => value !== undefined);
+    const renameWithAffiliation = nicknameChange !== null && updateData.enforceAffiliationLock === true && hasFields;
+    try {
+      if (renameWithAffiliation) {
+        const prepared = await prepareNicknameChange(id, currentUser!, nicknameChange!);
+        user = await sql.begin(async (tx) => {
+          await applyNicknameChange(id, currentUser!, nicknameChange!, prepared, tx);
+          const updated = await usersRepo.update(id, updateData, tx);
+          if (!updated) throw new AffiliationLockedError();
+          return updated;
+        });
+      } else {
+        if (nicknameChange) user = await applyNicknameChange(id, currentUser!, nicknameChange);
+        if (hasFields) {
+          const updated = await usersRepo.update(id, updateData);
+          if (!updated && updateData.enforceAffiliationLock) throw new AffiliationLockedError();
+          user = updated;
         }
-        throw error;
       }
+    } catch (error) {
+      if (error instanceof NicknameQuotaRefusedError) throw await nicknameCooldownError(id);
+      if (error instanceof AffiliationLockedError) {
+        // Another request switched first; report its lock like the early check does.
+        const latest = await usersRepo.getById(id);
+        if (latest) await affiliationSwitches(latest, updateData);
+        throw new ConflictError('Your club or country can change once every 30 days', {
+          field: updateData.favoriteClub !== undefined ? 'favoriteClub' : 'country',
+          reason: 'affiliation_cooldown',
+        });
+      }
+      // isNicknameTaken above is a check-then-act, so two users racing for the
+      // same name both pass it and the loser trips uq_users_lower_nickname_real.
+      // Report that as the conflict it is, not a 500.
+      if (isPgUniqueViolation(error)) {
+        throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+      }
+      throw error;
     }
-
-    if (Object.values(updateData).some((value) => value !== undefined)) {
-      user = await usersRepo.update(id, updateData);
-    } else if (!user) {
+    if (!user) {
       user = currentUser ?? (await usersRepo.getById(id));
     }
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    if (currentUser && (currentUser.country !== user.country || currentUser.favorite_club !== user.favorite_club)) {
+      try {
+        await invalidateAffiliationRanks(id, await affiliationBoards([currentUser, user]));
+      } catch (err) {
+        logger.warn({ err, userId: id }, 'Board rank cache invalidation failed (non-fatal)');
+      }
     }
 
     // Update cache with new user data (best-effort — don't fail the write).
@@ -900,7 +1039,7 @@ export const usersService = {
           ? statsService.getHeadToHead(viewerUserId, targetUserId)
           : Promise.resolve(null),
         rankedRepo.getUserRank(targetUserId),
-        user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
+        user.country ? rankedRepo.getUserRank(targetUserId, { kind: 'country', country: user.country }) : Promise.resolve(null),
         // Banned accounts expose no rename history (inactive/pending-deletion
         // users already 404 above).
         isUserBanned(user) ? Promise.resolve([]) : usersRepo.getPublicNicknameHistory(targetUserId),

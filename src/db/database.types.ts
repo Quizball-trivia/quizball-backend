@@ -3020,8 +3020,10 @@ export type Database = {
           ban_metadata: Json | null
           ban_reason: string | null
           banned_at: string | null
+          club_changed_at: string | null
           coins: number
           country: string | null
+          country_changed_at: string | null
           created_at: string
           deleted_at: string | null
           deletion_requested_at: string | null
@@ -3056,8 +3058,10 @@ export type Database = {
           ban_metadata?: Json | null
           ban_reason?: string | null
           banned_at?: string | null
+          club_changed_at?: string | null
           coins?: number
           country?: string | null
+          country_changed_at?: string | null
           created_at?: string
           deleted_at?: string | null
           deletion_requested_at?: string | null
@@ -3092,8 +3096,10 @@ export type Database = {
           ban_metadata?: Json | null
           ban_reason?: string | null
           banned_at?: string | null
+          club_changed_at?: string | null
           coins?: number
           country?: string | null
+          country_changed_at?: string | null
           created_at?: string
           deleted_at?: string | null
           deletion_requested_at?: string | null

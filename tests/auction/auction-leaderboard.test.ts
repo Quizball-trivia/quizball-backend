@@ -109,7 +109,7 @@ describe('auction leaderboard repo', () => {
   });
 
   it('scopes to a country when one is supplied', async () => {
-    await auctionLeaderboardRepo.listLeaderboard(50, 0, 'GE');
+    await auctionLeaderboardRepo.listLeaderboard(50, 0, { kind: 'country', country: 'GE' });
     expect(dbMocks.sql.taggedCalls[0]?.text).toMatch(/AND u\.country = /);
   });
 

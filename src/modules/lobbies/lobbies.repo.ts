@@ -11,6 +11,7 @@ import {
 } from '../../db/sql-fragments.js';
 import type { DuelGameId } from '../duel/duel.types.js';
 import { FRIENDLY_LOBBY_MAX_MEMBERS, lobbyCapacityByMode } from './lobby-modes.js';
+import { ROOM_GAME_MAX_SEATS } from '../room/room.types.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -559,9 +560,10 @@ export const lobbiesRepo = {
       GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
       HAVING (
         ${params.joinableOnly}::boolean = false
-        OR COUNT(lm.user_id) < COALESCE(
-          (${sql.json(lobbyCapacityByMode())}::jsonb ->> l.game_mode)::int,
-          ${FRIENDLY_LOBBY_MAX_MEMBERS}
+        OR COUNT(lm.user_id) < LEAST(
+          COALESCE((${sql.json(lobbyCapacityByMode())}::jsonb ->> l.game_mode)::int, ${FRIENDLY_LOBBY_MAX_MEMBERS}),
+          -- A room game with its own seat cap (Football Horserace: 4).
+          COALESCE((${sql.json({ ...ROOM_GAME_MAX_SEATS })}::jsonb ->> l.room_game)::int, ${FRIENDLY_LOBBY_MAX_MEMBERS})
         )
       )
       ORDER BY l.created_at DESC

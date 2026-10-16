@@ -343,7 +343,7 @@ export const lobbiesService = {
       isPublic: row.is_public,
       createdAt: row.created_at,
       memberCount: row.member_count,
-      maxMembers: lobbyCapacityForGameMode(row.game_mode ?? 'friendly_possession'),
+      maxMembers: lobbyCapacityForGameMode(row.game_mode ?? 'friendly_possession', row.room_game),
       host: {
         id: row.host_user_id,
         username: row.host_nickname ?? 'Player',

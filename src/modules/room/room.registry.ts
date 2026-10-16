@@ -1,4 +1,5 @@
 import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
+import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
 import { sharedPlayerRoomEngine } from './games/shared-player/shared-player.room.js';
 import type { AnyRoomEngine } from './room.engine.js';
@@ -9,12 +10,14 @@ const CURRENT: Record<RoomGameId, AnyRoomEngine> = {
   aproximado: aproximadoRoomEngine as unknown as AnyRoomEngine,
   shared_player: sharedPlayerRoomEngine as unknown as AnyRoomEngine,
   name_chain: nameChainRoomEngine as unknown as AnyRoomEngine,
+  football_race: footballRaceRoomEngine as unknown as AnyRoomEngine,
 };
 
 const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   aproximado: { [aproximadoRoomEngine.version]: aproximadoRoomEngine as unknown as AnyRoomEngine },
   shared_player: { [sharedPlayerRoomEngine.version]: sharedPlayerRoomEngine as unknown as AnyRoomEngine },
   name_chain: { [nameChainRoomEngine.version]: nameChainRoomEngine as unknown as AnyRoomEngine },
+  football_race: { [footballRaceRoomEngine.version]: footballRaceRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**

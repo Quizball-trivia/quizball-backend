@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'football_race'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
+/** Room games that seat fewer than the runtime's six (Football Horserace: past four the race stops being fair). */
+export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4 };
+/** Seats a room of this game may hold: its own cap, never more than `ceiling`. */
+export const roomGameSeats = (game: unknown, ceiling: number): number =>
+  Math.min(ceiling, (typeof game === 'string' ? ROOM_GAME_MAX_SEATS[game as RoomGameId] : undefined) ?? ceiling);
 /** Questions per difficulty in one match: the pool needs at least this many of each. */
 export const ROOM_PACK_WANTED = { easy: 3, medium: 4, hard: 3 } as const;
 export const isRoomGame = (value: unknown): value is RoomGameId => ROOM_GAMES.includes(value as RoomGameId);

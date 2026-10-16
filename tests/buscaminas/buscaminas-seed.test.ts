@@ -125,6 +125,16 @@ describe('buscaminas seed: host guard', () => {
     expect(resolveSeedTarget(`postgresql://postgres:pw@db.${PROJECT_REFS.production}.supabase.co:5432/postgres`, 'production').kind).toBe('production');
   });
 
+  it('refuses connection parameters in the URL that could send the driver somewhere else (only sslmode is allowed)', () => {
+    const staging = pooler(PROJECT_REFS.staging);
+    const errorOf = (url: string) => { try { resolveSeedTarget(url, 'staging'); return ''; } catch (e) { return (e as Error).message; } };
+    for (const extra of [`user=postgres.${PROJECT_REFS.production}`, 'database=other', 'host=db.example.com', 'options=-c%20search_path%3Dx']) {
+      expect(errorOf(`${staging}${staging.includes('?') ? '&' : '?'}${extra}`)).toMatch(/may not carry connection parameters/);
+    }
+    expect(resolveSeedTarget(`${staging}?sslmode=require`, 'staging').kind).toBe('staging');
+    expect(() => resolveSeedTarget('postgresql://postgres:pw@127.0.0.1:5432/db?user=x', undefined)).toThrow(/may not carry connection parameters/);
+  });
+
   it('trusts a postgres.<ref> user only on a Supabase pooler host; a direct host must agree with it', () => {
     const staging = PROJECT_REFS.staging;
     const errorOf = (url: string, target?: 'staging' | 'production') => { try { resolveSeedTarget(url, target); return ''; } catch (e) { return (e as Error).message; } };

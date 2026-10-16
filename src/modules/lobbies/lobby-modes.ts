@@ -1,6 +1,7 @@
 import { config } from '../../core/config.js';
 import { isDuelGameEnabled } from '../duel/duel.config.js';
 import { isRoomGameEnabled } from '../room/room.config.js';
+import { roomGameSeats } from '../room/room.types.js';
 import type { LobbyGameMode } from '../../realtime/socket.types.js';
 
 export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
@@ -115,9 +116,10 @@ export function lobbyModeUnavailable(mode: LobbyGameMode, game?: unknown) {
   return LOBBY_MODES[mode].unavailable(game);
 }
 
-export function isValidHostStartShape(mode: LobbyGameMode, memberCount: number): boolean {
+export function isValidHostStartShape(mode: LobbyGameMode, memberCount: number, roomGame?: unknown): boolean {
   const shape = LOBBY_MODES[mode].hostStart;
-  return shape !== null && memberCount >= shape.min && memberCount <= shape.max;
+  const max = shape && mode === 'room_game' ? roomGameSeats(roomGame, shape.max) : shape?.max ?? 0;
+  return shape !== null && memberCount >= shape.min && memberCount <= max;
 }
 
 /** The mode a room is actually in for a member count (join/leave/settings normalization). */

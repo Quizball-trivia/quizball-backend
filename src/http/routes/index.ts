@@ -53,6 +53,7 @@ import { ultimoRoutes } from './ultimo.routes.js';
 import { sharedPlayerDailyRoutes } from './shared-player-daily.routes.js';
 import { nameChainDailyRoutes } from './name-chain-daily.routes.js';
 import { minutoRoutes } from './minuto.routes.js';
+import { footballRaceRoutes } from './football-race.routes.js';
 import { gridDailyRoutes } from './grid-daily.routes.js';
 
 import { squadSpinRoutes } from './squad-spin.routes.js';
@@ -130,6 +131,7 @@ router.use('/api/v1/ultimo', ultimoRoutes);
 router.use('/api/v1/shared-player', sharedPlayerDailyRoutes);
 router.use('/api/v1/name-chain', nameChainDailyRoutes);
 router.use('/api/v1/minuto', minutoRoutes);
+router.use('/api/v1/football-race', footballRaceRoutes);
 router.use('/api/v1/grid-daily', gridDailyRoutes);
 
 router.use('/api/v1/squad-spin', squadSpinRoutes);

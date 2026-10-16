@@ -10,7 +10,7 @@ type SayRequest = z.infer<typeof sayRequestSchema>;
 export const tenableDailyController = {
   async start(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as StartRequest;
-    res.json(await tenableDailyService.start(body.day, playerOf(req), body.contentVersion));
+    res.json(await tenableDailyService.start(body.day, playerOf(req), body.contentVersion, body.locale));
   },
   async say(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as SayRequest;
@@ -37,8 +37,8 @@ export const tenableDailyController = {
   },
   /** Only closed days are served, and a closed day only changes through a (rare) correction. */
   async review(req: Request, res: Response): Promise<void> {
-    const { day } = req.validated.query as ReviewQuery;
-    const review = await tenableDailyService.review(day);
+    const { day, locale } = req.validated.query as ReviewQuery;
+    const review = await tenableDailyService.review(day, locale);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.json(review);
   },

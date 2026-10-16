@@ -151,4 +151,7 @@ node_modules
 !scripts/squad-spin-ru.ts
 !scripts/translate-game-content.ts
 !scripts/wordgame-names-ru.ts
+!scripts/tenable-names-ru.ts
+!scripts/tenable-titles-ru.ts
+!scripts/tenable-ru-seed.ts
 !scripts/wordgame-ru-names-seed.ts

@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
-import { normalizeName } from '../../../footballers/footballers.text.js';
-import { tenableListSchema, type TenableLocale } from '../../../tenable/tenable.content.js';
+import { normalizeTyped } from '../../../footballers/footballers.text.js';
+import { TENABLE_LOCALES, tenableListSchema, type TenableLocale } from '../../../tenable/tenable.content.js';
 import { tenableDirectories } from '../../../tenable/tenable.directories.js';
 import { judge } from '../../../tenable/tenable.identify.js';
 import type { RoomEngine } from '../../room.engine.js';
@@ -51,14 +51,14 @@ export const tenableRoomEngine: RoomEngine<TenableContent, TenableState, Tenable
   apply: (state, content, seat, command, nowMs) => applyCommand(state, content, seat, command, nowMs),
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
-  view: (state, content, seat, locale) => viewOf(state, content, seat, locale as TenableLocale),
+  view: (state, content, seat, locale) => viewOf(state, content, seat, (TENABLE_LOCALES as readonly string[]).includes(locale) ? locale as TenableLocale : 'en'),
 
   /**
    * A refused text is reportable only once its list is revealed (never as a way to test answers), and only when the
    * list would not accept it now. The subject is the list; the resolved id is who the text was read as.
    */
   refusal(state, content, round, text) {
-    if (!Number.isInteger(round) || round < 0 || round >= LISTS || !listRevealed(state, round) || !content.directories || !normalizeName(text)) return null;
+    if (!Number.isInteger(round) || round < 0 || round >= LISTS || !listRevealed(state, round) || !content.directories || !normalizeTyped(text)) return null;
     const list = content.pack.lists[round];
     const directory = content.directories[round];
     const verdict = judge(directory, list.slots.map((s) => s.eid), new Set(), text);

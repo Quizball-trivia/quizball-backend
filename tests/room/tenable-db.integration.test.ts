@@ -41,6 +41,7 @@ describe.skipIf(!url)('Tenable room on a cold replica (real Postgres)', () => {
   });
   afterAll(async () => {
     await db.sql`DELETE FROM room_pool WHERE game = 'tenable'`;
+    await db.sql`DELETE FROM tenable_list_ru WHERE list_id LIKE 'it-tenable-%'`;
     await db.sql`DELETE FROM tenable_entity_releases WHERE id = ${RELEASE}`;
     await db.sql.end({ timeout: 5 });
   });
@@ -92,6 +93,51 @@ describe.skipIf(!url)('Tenable room on a cold replica (real Postgres)', () => {
     for (const id of ids) await cold.ready(created.matchId, id, 'en', GAMES);
     const [row] = await db.sql<Array<{ status: string }>>`SELECT status FROM room_matches WHERE id = ${created.matchId}`;
     expect(row.status).toBe('active');
+  });
+
+  it('a release with Russian names: a Cyrillic answer is judged, a Russian seat sees Russian names and titles', { timeout: 30_000 }, async () => {
+    await db.sql`DELETE FROM tenable_list_ru WHERE list_id LIKE 'it-tenable-%'`;
+    await db.sql`INSERT INTO tenable_ru_name_sets (version, fingerprint, entities) VALUES ('it-ru-names', 'fp', ${CLUBS.length}) ON CONFLICT DO NOTHING`;
+    await db.sql`DELETE FROM tenable_ru_names WHERE version = 'it-ru-names'`;
+    for (const [i, c] of CLUBS.entries()) {
+      await db.sql`INSERT INTO tenable_ru_names (version, kind, eid, name_ru, known_ru) VALUES ('it-ru-names', 'club', ${c.eid}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`})`;
+    }
+    await db.sql`INSERT INTO tenable_ru_releases (kind, release_id, names_version) VALUES ('club', ${RELEASE}, 'it-ru-names') ON CONFLICT DO NOTHING`;
+    const { russianTextSource } = await import('../../src/modules/tenable/tenable.text.js');
+    for (const tier of ['easy', 'medium', 'hard']) {
+      await db.sql`INSERT INTO tenable_list_ru (list_id, src, title, note) VALUES (${`it-tenable-${tier}`}, ${russianTextSource(list(tier) as never)}, ${`Список ${tier}`}, null)`;
+    }
+    vi.resetModules();
+    const { roomService } = await import('../../src/modules/room/room.service.js');
+    const { refreshRussianText } = await import('../../src/modules/tenable/tenable.text.js');
+    await refreshRussianText();
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      ids.push((await db.sql<Array<{ id: string }>>`
+        INSERT INTO users (id, nickname, is_guest) VALUES (${randomUUID()}, ${`t-${randomUUID().slice(0, 8)}`}, false) RETURNING id`)[0].id);
+    }
+    const [lobby] = await db.sql<Array<{ id: string }>>`
+      INSERT INTO lobbies (mode, host_user_id, status, invite_code, game_mode, room_game)
+      VALUES ('friendly', ${ids[0]}, 'waiting', ${randomUUID().slice(0, 6).toUpperCase()}, 'room_game', 'tenable') RETURNING id`;
+    for (const id of ids) await db.sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${id}, true)`;
+    const created = await roomService.createFromLobby({ lobbyId: lobby.id, game: 'tenable', players: ids.map((userId) => ({ userId, isGuest: false })) });
+    await roomService.ready(created.matchId, ids[0], 'ru', GAMES);
+    await roomService.ready(created.matchId, ids[1], 'en', GAMES);
+    await new Promise((r) => setTimeout(r, 3_200));
+    const [row] = await db.sql<Array<{ phase_token: number }>>`SELECT phase_token FROM room_matches WHERE id = ${created.matchId}`;
+    await roomService.expire(created.matchId, row.phase_token);
+    type View = { turn: number; epoch: number; attempt: number; mySeat: number; current: { title: string }; slots: Array<{ name: string | null }> };
+    const views = await roomService.snapshots(created.matchId, ids);
+    const mover = ids.find((id) => (views.get(id)!.view as View).mySeat === (views.get(id)!.view as View).turn)!;
+    const before = views.get(mover)!.view as View;
+    const out = await roomService.command(created.matchId, mover, randomUUID(), { type: 'answer', epoch: before.epoch, attempt: before.attempt, text: 'нортгеит роверс а' });
+    expect(out.result).toMatchObject({ ok: true });
+    const ru = (await roomService.snapshot(created.matchId, ids[0]))!.view as View;
+    const en = (await roomService.snapshot(created.matchId, ids[1]))!.view as View;
+    expect(ru.slots[0].name).toBe('Нортгейт Роверс А');
+    expect(en.slots[0].name).toBe('Northgate Rovers A');
+    expect(ru.current.title).toBe('Список easy');
+    expect(en.current.title).toBe('easy');
   });
 
   it('a supersede chain seeded in any order leaves only its newest list in the pool', async () => {

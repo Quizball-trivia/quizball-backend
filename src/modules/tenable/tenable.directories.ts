@@ -1,6 +1,7 @@
 import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
-import { buildDirectory, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
 
 const PAGE = 20_000;
 
@@ -29,11 +30,18 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
 /** Enough for a deploy window (old and new release) of each of the four kinds. */
 const MAX_HELD = 8;
 const held = new Map<string, Promise<Directory>>();
+/**
+ * Whether each release this process has loaded had Russian names, kept for the life of the process (it outlives the
+ * LRU): a release evicted and loaded again keeps the first answer, so every day and match on this replica reads a
+ * Cyrillic answer the same way until the next restart, even when a pin is written in between.
+ */
+const pins = new Map<string, Promise<RussianPin | null>>();
 
 export const tenableDirectories = {
   /**
    * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load is not
-   * remembered. An empty release is refused: a list judged against nothing would mark every answer unknown.
+   * remembered. An empty release is refused: a list judged against nothing would mark every answer unknown. Russian
+   * names written for a release after this process loaded it are read after its next restart.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -47,8 +55,18 @@ export const tenableDirectories = {
       const started = Date.now();
       const entities = await rows(kind, releaseId);
       if (entities.length === 0) throw new Error(`tenable_release_empty:${key}`);
-      const directory = buildDirectory(kind, releaseId, entities);
-      logger.info({ kind, releaseId, entities: directory.size, ms: Date.now() - started }, 'Tenable directory loaded');
+      const latin = buildDirectory(kind, releaseId, entities);
+      // The lookup itself is kept (two loads in flight share one answer); a failed one is not.
+      let lookup = pins.get(key);
+      if (!lookup) {
+        const started = russianPinOf(sql, kind, releaseId);
+        pins.set(key, (lookup = started));
+        started.catch(() => { if (pins.get(key) === started) pins.delete(key); });
+      }
+      const pin = await lookup;
+      const russian = pin ? await russianRows(sql, kind, releaseId, entities, pin) : null;
+      const directory = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic')) : latin;
+      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), ms: Date.now() - started }, 'Tenable directory loaded');
       return directory;
     })();
     held.set(key, loading);
@@ -71,5 +89,6 @@ export const tenableDirectories = {
   /** Tests only. */
   clear(): void {
     held.clear();
+    pins.clear();
   },
 };

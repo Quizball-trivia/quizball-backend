@@ -29,11 +29,15 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
 /** Enough for a deploy window (old and new release) of each of the four kinds. */
 const MAX_HELD = 8;
 const held = new Map<string, Promise<Directory>>();
+/** A failed load is answered with its error for this long before the database is asked again (an incident is not multiplied by traffic). */
+export const FAILED_RETRY_MS = 5_000;
+const failed = new Map<string, { until: number; error: unknown }>();
 
 export const tenableDirectories = {
   /**
-   * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load is not
-   * remembered. An empty release is refused: a list judged against nothing would mark every answer unknown.
+   * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load is
+   * remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against nothing would mark every
+   * answer unknown.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -43,6 +47,9 @@ export const tenableDirectories = {
       held.set(key, cached);
       return cached;
     }
+    const failure = failed.get(key);
+    if (failure && failure.until > Date.now()) return Promise.reject(failure.error);
+    failed.delete(key);
     const loading = (async () => {
       const started = Date.now();
       const entities = await rows(kind, releaseId);
@@ -52,7 +59,11 @@ export const tenableDirectories = {
       return directory;
     })();
     held.set(key, loading);
-    loading.catch(() => { if (held.get(key) === loading) held.delete(key); });
+    loading.catch((error: unknown) => {
+      if (held.get(key) !== loading) return;
+      held.delete(key);
+      failed.set(key, { until: Date.now() + FAILED_RETRY_MS, error });
+    });
     while (held.size > MAX_HELD) held.delete(held.keys().next().value!);
     return loading;
   },
@@ -71,5 +82,6 @@ export const tenableDirectories = {
   /** Tests only. */
   clear(): void {
     held.clear();
+    failed.clear();
   },
 };

@@ -16,6 +16,7 @@ import {
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
+import { AuctionContentUnavailableError, AuctionStartingPriceUnavailableError } from '../../modules/auction/auction.errors.js';
 import type { AuctionPlayer, FormationName } from '../../modules/auction/auction.types.js';
 import { FORMATION_BY_NAME } from '../../modules/auction/auction.constants.js';
 import {
@@ -179,8 +180,9 @@ export const auctionMatchmakingService = {
   async handleSearchStart(
     io: QuizballServer,
     socket: QuizballSocket,
-    input: AuctionSearchStartServiceInput
+    rawInput: AuctionSearchStartServiceInput
   ): Promise<void> {
+    const input = { ...rawInput, locale: await auctionContentService.resolveContentLocale(rawInput.locale) };
     if (socket.data.user) assertCapability(socket.data.user, 'queueEntry');
     const user = socket.data.user;
     if (!user?.id) {
@@ -234,7 +236,16 @@ export const auctionMatchmakingService = {
     }
 
     try {
-      await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      try {
+        await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      } catch (error) {
+        // Russian cards went away since availability was cached: read it again; English stands in when they are gone.
+        if (input.locale !== 'ru' || !(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
+        auctionContentService.forgetContentLocale();
+        input.locale = await auctionContentService.resolveContentLocale('ru');
+        if (input.locale === 'ru') throw error;
+        await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
+      }
     } catch (error) {
       emitAuctionError(socket, toAuctionErrorPayload(error, {
         fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
@@ -709,7 +720,10 @@ async function startClaimedGroup(
       : {}),
   }));
 
+  // Resolved again at the start, not when queued: Russian cards unpublished meanwhile mean English cards, retries included.
+  let locale: AuctionContentLocale = oldest.locale;
   try {
+    locale = await auctionContentService.playableContentLocale(oldest.locale);
     // Match humans from one shared queue, regardless of their UI language,
     // just like ranked matchmaking. Auction state currently has one shared
     // content locale, so the oldest search deterministically chooses the card
@@ -717,7 +731,7 @@ async function startClaimedGroup(
     const match = await startAuctionMatchForHumans(io, {
       humanPlayers: humans,
       formation: oldest.formation,
-      locale: oldest.locale,
+      locale,
     }, {
       context: {
         createId: (kind) => kind === 'match' ? claim.matchId : randomUUID(),
@@ -728,7 +742,7 @@ async function startClaimedGroup(
           prepared.matchId,
           humans,
           botPlayerSummaries(prepared.seats),
-          oldest.locale,
+          locale,
           prepared.formation,
         );
       },
@@ -751,7 +765,7 @@ async function startClaimedGroup(
         claimToken: claim.claimToken,
         humanUserIds: humans.map((human) => human.userId),
         botCount: botPlayers.length,
-        locale: oldest.locale,
+        locale,
       },
       'Auction matchmaking started match'
     );
@@ -773,6 +787,9 @@ async function startClaimedGroup(
     // retries exhausted) must NOT eject users from the queue — the searches
     // were already claimed, so REQUEUE them with a fresh fill timer and only
     // give up (with a client-visible error) after repeated failures.
+    if (locale === 'ru' && (error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) {
+      auctionContentService.forgetContentLocale();
+    }
     const { requeued, dropped } = await requeueFailedClaim(claim, null);
 
     const payload = toAuctionErrorPayload(error, {
@@ -1574,7 +1591,7 @@ function searchKey(searchId: string): string {
 }
 
 function isAuctionLocale(value: string | undefined): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
 }
 
 function isFormationName(value: string | undefined): value is FormationName {

@@ -1,4 +1,4 @@
-import { normalizeName, surnameOf, typoBudget, withinEdits } from '../footballers/footballers.text.js';
+import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic, surnameOf as surnameOfLatin, surnameOfCyrillic, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
  * Who a typed text means, decided against every entity of one kind and never against a hidden list: every verdict a
@@ -30,6 +30,15 @@ export const DOMINANT_MIN_FAME = 40;
 export const DOMINANT_RATIO = 0.5;
 /** Words that never identify anyone on their own. */
 const PARTICLES = new Set(['de', 'da', 'do', 'dos', 'das', 'del', 'della', 'di', 'van', 'von', 'der', 'den', 'el', 'al', 'la', 'le', 'los', 'las', 'bin', 'ben', 'mac', 'mc', 'st', 'y', 'e', 'fc', 'cf', 'sc', 'ac', 'cd', 'club']);
+/** The same words as Russian media write them (in the compared form: й is и). */
+const PARTICLES_CYRILLIC = new Set(['де', 'да', 'ду', 'дус', 'дас', 'дель', 'делла', 'ди', 'ван', 'фон', 'дер', 'ден', 'эль', 'аль', 'ла', 'ле', 'лос', 'лас', 'бин', 'бен', 'мак', 'сент', 'и', 'фк', 'ск', 'клуб', 'сборная']);
+
+/** How names are compared: the Latin alphabet (every list's own names), or Cyrillic (a release's Russian names). */
+export type DirectoryAlphabet = 'latin' | 'cyrillic';
+const ALPHABETS = {
+  latin: { normalize: normalizeLatin, surname: surnameOfLatin, particles: PARTICLES },
+  cyrillic: { normalize: normalizeNameCyrillic, surname: surnameOfCyrillic, particles: PARTICLES_CYRILLIC },
+} as const;
 const MIN_WORD = 3;
 export const SUGGEST_MIN = 2;
 export const SUGGEST_MAX = 40;
@@ -45,22 +54,25 @@ export interface Directory {
   entity(eid: string): TenableEntity | undefined;
   identify(text: string): Identity;
   suggest(query: string, limit?: number): Suggestion[];
+  /** The release under its Russian names (every entity of it), when the release has them. */
+  russian?: Directory;
 }
 
 const compact = (key: string) => key.replace(/ /g, '');
 
 /** What a suggestion shows, from the normalised name and known name: whole, compact and word by word. */
-function visibleKeys(own: readonly string[]): Set<string> {
+function visibleKeys(own: readonly string[], particles: ReadonlySet<string>): Set<string> {
   const keys = new Set<string>();
   for (const name of own) {
     if (!name) continue;
     keys.add(name).add(compact(name));
-    for (const word of name.split(' ')) if (!PARTICLES.has(word)) keys.add(word);
+    for (const word of name.split(' ')) if (!particles.has(word)) keys.add(word);
   }
   return keys;
 }
 
-export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[]): Directory {
+export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[], alphabet: DirectoryAlphabet = 'latin'): Directory {
+  const { normalize: normalizeName, surname: surnameOf, particles } = ALPHABETS[alphabet];
   // Best known first, ties by id: every "best known" decision depends on the release only.
   const all = [...rows].sort((a, b) => b.fame - a.fame || (a.eid < b.eid ? -1 : a.eid > b.eid ? 1 : 0));
   const byEid = new Map(all.map((e, i) => [e.eid, i]));
@@ -109,12 +121,12 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     }
     // One word identifies only as a surname or a one-word name, never as a first name or a particle.
     for (const word of new Set([surnameOf(own[0]), ...[...whole].filter((k) => !k.includes(' '))])) {
-      if (word.length >= MIN_WORD && !PARTICLES.has(word)) {
+      if (word.length >= MIN_WORD && !particles.has(word)) {
         other.add(word);
         put(words, word, i);
       }
     }
-    const visible = visibleKeys(own);
+    const visible = visibleKeys(own, particles);
     for (const key of visible) {
       if (!other.has(key)) put(shownOnly, key, i);
       for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
@@ -165,7 +177,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
       const exact = names.get(key);
       if (exact) return decide(exact);
     } else {
-      if (PARTICLES.has(key) || key.length < MIN_WORD) return { kind: 'unknown' };
+      if (particles.has(key) || key.length < MIN_WORD) return { kind: 'unknown' };
       const holders = words.get(key) ?? names.get(key);
       if (holders) return decide(holders);
     }
@@ -218,7 +230,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     const rest: number[] = [];
     for (const i of [...found].sort((a, b) => a - b)) {
       if (first.length >= max) break;
-      const shown = [...visibleKeys([normalizeName(all[i].name), normalizeName(all[i].known)])].some((k) => k.startsWith(q));
+      const shown = [...visibleKeys([normalizeName(all[i].name), normalizeName(all[i].known)], particles)].some((k) => k.startsWith(q));
       if (shown) first.push(i);
       else if (rest.length < max) rest.push(i);
     }
@@ -241,6 +253,25 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     identify,
     suggest,
   };
+}
+
+/**
+ * The release with its Russian names: a text written in Cyrillic is read (and suggested) with the Russian names, any
+ * other text exactly as before. Ids are the same in both, so `entity` and a picked id stay the release's own.
+ */
+export function withRussian(latin: Directory, russian: Directory): Directory {
+  if (russian.kind !== latin.kind || russian.releaseId !== latin.releaseId || russian.size !== latin.size) throw new Error('Russian names do not match the release');
+  return {
+    ...latin,
+    identify: (text) => (isCyrillicText(text) ? russian.identify(text) : latin.identify(text)),
+    suggest: (query, limit) => (isCyrillicText(query) ? russian.suggest(query, limit) : latin.suggest(query, limit)),
+    russian,
+  };
+}
+
+/** The name to show for an entity: its Russian name to a Russian player when the release has one. */
+export function displayName(directory: Directory, eid: string, russian: boolean): string | null {
+  return (russian ? directory.russian?.entity(eid)?.name : undefined) ?? directory.entity(eid)?.name ?? null;
 }
 
 export type Verdict =

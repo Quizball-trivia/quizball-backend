@@ -1,6 +1,4 @@
-import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
-import { NotFoundError } from '../../core/errors.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { compare } from '../room/games/football-race/football-race.rules.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './football-race.constants.js';
@@ -23,8 +21,6 @@ export interface FootballRaceDeps {
   content: () => Promise<ContentIndex>;
   contentStale: () => void;
   now: () => Date;
-  /** The daily is reachable only once launched (FOOTBALL_RACE_DAILY_ENABLED); off, every call is the 404 of a missing day. */
-  enabled: () => boolean;
 }
 
 /**
@@ -49,26 +45,23 @@ export function createFootballRaceService(deps: FootballRaceDeps) {
     },
     { calendar: footballRaceCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS },
   );
-  const gate = () => { if (!deps.enabled()) throw new NotFoundError('Day not found'); };
 
   return {
-    start: (dayId: string, player: Player, clientContentVersion?: number): Promise<RunResponse> => { gate(); return core.start(dayId, player, clientContentVersion); },
+    start: (dayId: string, player: Player, clientContentVersion?: number): Promise<RunResponse> => { return core.start(dayId, player, clientContentVersion); },
     pick(player: Player, runId: string, version: number, stat: string): Promise<RunResponse> {
-      gate();
       return core.mutate(player, runId, version, (s, day) => ({ state: rules.pick(s, day.race, stat) }));
     },
-    current: (player: Player, dayId: string | undefined) => { gate(); return core.current(player, dayId); },
-    boards: (): Promise<BoardsResponse> => { gate(); return core.boards(); },
+    current: (player: Player, dayId: string | undefined) => { return core.current(player, dayId); },
+    boards: (): Promise<BoardsResponse> => { return core.boards(); },
     /** Who led each stat of a day the database clock has closed; anything else is the same 404 as a missing day. */
     async review(dayId: string): Promise<ReviewResponse> {
-      gate();
       const day = await core.closedDay(dayId);
       const { racers, data } = day.race;
       const metricOf = new Map(data.metrics.map((m) => [m.id, m]));
       const leaders = Object.fromEntries(data.stats.map((x) => [x.id, compare(x, metricOf.get(x.metric)!, racers)?.leaders ?? []]));
       return { day: dayId, tournament: { id: data.tournament.id, label: data.tournament.label }, racers, leaders };
     },
-    leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => { gate(); return core.leaderboard(dayId, userId); },
+    leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => { return core.leaderboard(dayId, userId); },
   };
 }
 
@@ -82,12 +75,10 @@ export const footballRaceService = createFootballRaceService({
   content: () => footballRaceContent.get(),
   contentStale: () => footballRaceContent.invalidate(),
   now: () => new Date(),
-  enabled: () => config.FOOTBALL_RACE_DAILY_ENABLED,
 });
 
 /** Called once at boot; never blocks startup and never throws. */
 export function startFootballRaceReadinessCheck(): void {
-  if (!config.FOOTBALL_RACE_DAILY_ENABLED) return;
   void footballRaceContent.get().then(
     (index) => {
       if (index.size === 0) logger.warn('No Football Horserace days loaded (football_race_days is empty)');

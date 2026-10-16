@@ -110,10 +110,10 @@ describe('Tic Tac Toe leaderboard repo', () => {
   });
 
   it('applies country scope to list and rank queries', async () => {
-    await footballGridLeaderboardRepo.listLeaderboard(50, 0, 'GE');
+    await footballGridLeaderboardRepo.listLeaderboard(50, 0, { kind: 'country', country: 'GE' });
     expect(dbMocks.sql.taggedCalls[0]?.text).toMatch(/AND u\.country = /);
     dbMocks.sql.taggedResults.push([]);
-    await footballGridLeaderboardRepo.getUserRank(USER_ID, 'GE');
+    await footballGridLeaderboardRepo.getUserRank(USER_ID, { kind: 'country', country: 'GE' });
     expect(dbMocks.sql.taggedCalls[1]?.text).toMatch(/AND u\.country = /);
   });
 
@@ -130,7 +130,7 @@ describe('Tic Tac Toe leaderboard repo', () => {
     usersRepoMock.getById.mockResolvedValue({ id: USER_ID, country: ' ge ' });
     const res = await request(createApp()).get('/api/v1/football-grid/leaderboard?scope=country');
     expect(res.status).toBe(200);
-    expect(list).toHaveBeenCalledWith(50, 0, 'GE');
+    expect(list).toHaveBeenCalledWith(50, 0, { kind: 'country', country: 'GE' });
   });
 });
 

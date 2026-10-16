@@ -27,7 +27,6 @@ const list = (tier: string) => ({
 
 describe.skipIf(!url)('Tenable room on a cold replica (real Postgres)', () => {
   beforeAll(async () => {
-    process.env.ROOM_GAMES_ENABLED = 'aproximado,tenable';
     db.sql = postgres(url!, { max: 1, onnotice: () => undefined });
     await db.sql`DELETE FROM room_pool WHERE game = 'tenable'`;
     await db.sql`DELETE FROM tenable_entity_releases WHERE id IN (${RELEASE}, 'it-tenable-away')`;

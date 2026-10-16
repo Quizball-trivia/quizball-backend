@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { boardQueryFields } from '../leaderboards/board-filter.js';
+import { nextTargetSchema } from '../leaderboards/board-response.js';
 
 export const rankedTierSchema = z.enum([
   'Academy',
@@ -30,7 +32,7 @@ export const rankedProfileResponseSchema = z.object({
 export type RankedProfileResponse = z.infer<typeof rankedProfileResponseSchema>;
 
 export const rankedLeaderboardQuerySchema = z.object({
-  scope: z.enum(['global', 'country']).optional().default('global'),
+  ...boardQueryFields,
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   offset: z.coerce.number().int().min(0).max(10_000).optional().default(0),
   season: z.string().uuid().optional(),
@@ -40,6 +42,8 @@ export type RankedLeaderboardQuery = z.infer<typeof rankedLeaderboardQuerySchema
 
 export const rankedUserRankQuerySchema = rankedLeaderboardQuerySchema.pick({
   scope: true,
+  country: true,
+  club: true,
   season: true,
 });
 
@@ -64,6 +68,7 @@ export const rankedLeaderboardResponseSchema = z.object({
 
 export const rankedUserRankResponseSchema = rankedLeaderboardEntryResponseSchema.extend({
   total: z.number().int().nonnegative(),
+  nextTarget: nextTargetSchema,
 }).nullable();
 
 export const rankedSeasonsResponseSchema = z.object({

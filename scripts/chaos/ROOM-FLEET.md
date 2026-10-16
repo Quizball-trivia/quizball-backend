@@ -22,7 +22,7 @@ Use a dedicated Postgres instance/database and Redis instance. A normal local DB
 npx tsx scripts/chaos/room-local-fixtures.ts --database postgresql://postgres@127.0.0.1:5436/quizball_load_local --api http://127.0.0.1:8050 --users 1200 --auth-port 8062 --out /absolute/private/artifacts
 ```
 
-Keep the fixture running. Launch a **separate** backend with a clean environment from a private working directory (so dotenv does not read the repository's staging environment). Set `NODE_ENV=local`, `PORT=8050`, the dedicated `DATABASE_URL` and `REDIS_URL`, `SUPABASE_URL=http://127.0.0.1:8062`, a dummy local anon key, `SUPABASE_JWKS_URL=http://127.0.0.1:8062/jwks`, `SUPABASE_JWT_ISSUER=http://127.0.0.1:8062/auth/v1`, `SUPABASE_JWT_AUDIENCE=authenticated`, and `ROOM_GAMES_ENABLED=aproximado`. Leave external analytics/mail credentials absent. Record pool/queue limits; use the release's defaults first.
+Keep the fixture running. Launch a **separate** backend with a clean environment from a private working directory (so dotenv does not read the repository's staging environment). Set `NODE_ENV=local`, `PORT=8050`, the dedicated `DATABASE_URL` and `REDIS_URL`, `SUPABASE_URL=http://127.0.0.1:8062`, a dummy local anon key, `SUPABASE_JWKS_URL=http://127.0.0.1:8062/jwks`, `SUPABASE_JWT_ISSUER=http://127.0.0.1:8062/auth/v1`, `SUPABASE_JWT_AUDIENCE=authenticated`. Leave external analytics/mail credentials absent. Record pool/queue limits; use the release's defaults first.
 
 Keep the Mac awake with its lid open. A machine sleep invalidates latency/timer measurements. Do not classify a suspended generator/backend as a server capacity limit.
 

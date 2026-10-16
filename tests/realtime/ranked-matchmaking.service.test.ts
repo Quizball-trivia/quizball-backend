@@ -49,7 +49,7 @@ let redisMock: FakeRedis;
 vi.mock('../../src/core/config.js', () => ({
   config: {
     RANKED_HUMAN_QUEUE_ENABLED: true,
-    ROOM_GAMES_ENABLED: [],
+    ROOM_GAMES_DISABLED: [],
   },
 }));
 

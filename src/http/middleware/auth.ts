@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import { CLIENT_PLATFORM_HEADER, parseClientPlatform } from '../../core/client-platform.js';
 import { AuthenticationError, AuthorizationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { detectCountryFromRequest } from '../../core/geo.js';
@@ -80,6 +81,7 @@ export async function authenticateRequest(req: Request, token: string): Promise<
   const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
   const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry, {
     accountCreation: {
+      clientPlatform: parseClientPlatform(req.headers[CLIENT_PLATFORM_HEADER]),
       ...(typeof req.headers['x-guest-token'] === 'string' ? { guestToken: req.headers['x-guest-token'] } : {}),
       attribution,
       utm,

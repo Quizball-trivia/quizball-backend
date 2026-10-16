@@ -1,6 +1,8 @@
 import type { AuthSession } from './auth.schemas.js';
 
 export interface AuthRequestContext {
+  /** Analytics-only source of a new account, not the user's later devices. */
+  clientPlatform?: import('../../core/client-platform.js').ClientPlatform;
   guestToken?: string;
   /** Trusted end-user address selected by our ingress, never raw caller XFF. */
   clientIp?: string;

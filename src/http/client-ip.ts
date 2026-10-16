@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { config } from '../core/config.js';
 import { UTM_ATTRIBUTION_HEADER, parseUtmAttribution } from '../core/utm-attribution.js';
 import type { AuthRequestContext } from '../modules/auth/auth.client.js';
+import { CLIENT_PLATFORM_HEADER, parseClientPlatform } from '../core/client-platform.js';
 
 type HeaderValue = string | string[] | undefined;
 
@@ -47,8 +48,9 @@ export function authRequestContext(req: Pick<Request, 'headers' | 'socket'>): Au
   // have to ride along here — the /users/me middleware only sees an account
   // that already exists.
   const utm = parseUtmAttribution(req.headers[UTM_ATTRIBUTION_HEADER]);
+  const clientPlatform = parseClientPlatform(req.headers[CLIENT_PLATFORM_HEADER]);
   const rawGuest = req.headers['x-guest-token'];
   const guestToken = typeof rawGuest === 'string' && /^[a-f0-9]{64}$/.test(rawGuest) ? rawGuest : undefined;
-  if (!clientIp && !utm && !guestToken) return undefined;
-  return { ...(guestToken ? { guestToken } : {}), ...(clientIp ? { clientIp } : {}), ...(utm ? { utm } : {}) };
+  if (!clientIp && !utm && !guestToken && clientPlatform === 'unknown') return undefined;
+  return { ...(clientPlatform !== 'unknown' ? { clientPlatform } : {}), ...(guestToken ? { guestToken } : {}), ...(clientIp ? { clientIp } : {}), ...(utm ? { utm } : {}) };
 }

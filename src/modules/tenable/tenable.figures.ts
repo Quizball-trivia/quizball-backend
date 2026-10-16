@@ -12,7 +12,12 @@ const WORDS: Record<Exclude<FigureUnit, 'eur_m' | 'year' | 'none'>, Record<Tenab
   seasons: { en: ['season', 'seasons'], es: ['temporada', 'temporadas'], tr: ['sezon', 'sezon'], ka: ['სეზონი', 'სეზონი'] },
 };
 
-const number = (value: number, locale: TenableLocale) => new Intl.NumberFormat(locale === 'en' ? 'en-GB' : locale, { maximumFractionDigits: 1 }).format(value);
+const formats = new Map<TenableLocale, Intl.NumberFormat>();
+const number = (value: number, locale: TenableLocale) => {
+  let format = formats.get(locale);
+  if (!format) formats.set(locale, (format = new Intl.NumberFormat(locale === 'en' ? 'en-GB' : locale, { maximumFractionDigits: 1 })));
+  return format.format(value);
+};
 
 export function formatFigure(figure: { value: number; unit: FigureUnit }, locale: TenableLocale): string {
   const { value, unit } = figure;

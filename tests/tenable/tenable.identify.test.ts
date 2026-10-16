@@ -125,6 +125,15 @@ describe('suggest', () => {
     expect(many.suggest('saro')[0].eid).toBe('p-29');
   });
 
+  it('a short prefix gives the best known first, whether a full name or only a surname matches', () => {
+    const rows = [...Array.from({ length: 12 }, (_, i) => E(`p-s${i}`, `Saro Vintel ${i}`, `Vintel ${i}`, 10 + i)), E('p-sarm', 'Pedro Sarmiento', 'Sarmiento', 99)];
+    const d = buildDirectory('player', 'rel-s', rows);
+    for (const q of ['sa', 'sar', 'sarm']) expect(d.suggest(q)[0].eid).toBe('p-sarm');
+    expect(d.suggest('sa')).toHaveLength(8);
+    expect(d.suggest('sa').map((s) => s.eid)).toEqual(['p-sarm', 'p-s11', 'p-s10', 'p-s9', 'p-s8', 'p-s7', 'p-s6', 'p-s5']);
+    expect(d.suggest('sa', 3)).toHaveLength(3);
+  });
+
   it('refuses a release with a duplicate id', () => {
     expect(() => buildDirectory('player', 'r', [ROWS[0], ROWS[0]])).toThrow();
   });

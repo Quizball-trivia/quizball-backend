@@ -52,8 +52,14 @@ export function withDirectories(days: () => Promise<ReadonlyMap<string, IndexedD
     const index = await days();
     if (hydrated?.from === index) return hydrated.index;
     const out = new Map<string, ServedDay>();
+    // One load per (kind, release), not one per day: most days share a release, and a failing one must not be asked
+    // for again by every day on every request.
+    const loads = new Map<string, Promise<Directory | null>>();
     for (const [id, day] of index) {
-      const directory = await load(day.list.kind, day.list.release).catch(() => null);
+      const key = `${day.list.kind}:${day.list.release}`;
+      let loading = loads.get(key);
+      if (!loading) loads.set(key, (loading = load(day.list.kind, day.list.release).catch(() => null)));
+      const directory = await loading;
       if (directory) out.set(id, { ...day, directory });
     }
     if (out.size === index.size) hydrated = { from: index, index: out };

@@ -35,6 +35,8 @@ export const SUGGEST_MIN = 2;
 export const SUGGEST_MAX = 40;
 export const SUGGEST_LIMIT = 8;
 const IDENTITY_CACHE = 5_000;
+/** Queries up to this long are answered from a table built with the directory (a short prefix matches thousands of names). */
+const SHORT_PREFIX = 3;
 
 export interface Directory {
   kind: EntityKind;
@@ -55,11 +57,19 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
 
   const names = new Map<string, number[]>();
   const words = new Map<string, number[]>();
+  // The best known holders of every short prefix: entities arrive best known first, so the first few are the answer.
+  const shortTop = new Map<string, number[]>();
   const put = (map: Map<string, number[]>, key: string, i: number) => {
     if (!key) return;
     const list = map.get(key);
     if (!list) map.set(key, [i]);
     else if (!list.includes(i)) list.push(i);
+    for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+      const prefix = key.slice(0, n);
+      const top = shortTop.get(prefix);
+      if (!top) shortTop.set(prefix, [i]);
+      else if (top.length < SUGGEST_LIMIT && !top.includes(i)) top.push(i);
+    }
   };
   const typoKeys: Array<[string, number]> = [];
   all.forEach((e, i) => {
@@ -147,6 +157,9 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
   const suggest = (query: string, limit = SUGGEST_LIMIT): Suggestion[] => {
     const q = normalizeName(query.slice(0, SUGGEST_MAX));
     if (q.length < SUGGEST_MIN) return [];
+    const max = Math.max(0, Math.min(limit, SUGGEST_LIMIT));
+    const toSuggestion = (i: number) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier });
+    if (q.length <= SHORT_PREFIX) return (shortTop.get(q) ?? []).slice(0, max).map(toSuggestion);
     let lo = 0;
     let hi = prefixKeys.length;
     while (lo < hi) {
@@ -156,8 +169,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     }
     const found = new Set<number>();
     for (let i = lo; i < prefixKeys.length && prefixKeys[i].startsWith(q); i += 1) for (const h of holdersOf(prefixKeys[i])) found.add(h);
-    return [...found].sort((a, b) => a - b).slice(0, Math.max(0, Math.min(limit, SUGGEST_LIMIT)))
-      .map((i) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier }));
+    return [...found].sort((a, b) => a - b).slice(0, max).map(toSuggestion);
   };
 
   return {

@@ -52,7 +52,8 @@ export const footballRaceRoomEngine: RoomEngine<FootballRaceContent, FootballRac
       const item = items.find((i) => i.tournament === tournament)!;
       const data = await loadRaceTournament(item.release, item.tournament);
       let fair = true;
-      for (let n = 2; n <= wanted && fair; n += 1) fair = dealRace(data, n, seed)?.fair === true;
+      // Largest group first: it is the count a small tournament fails, so an unfair one is dropped after one scan.
+      for (let n = wanted; n >= 2 && fair; n -= 1) fair = dealRace(data, n, seed)?.fair === true;
       if (fair) return { itemIds: [item.id], content: { release: item.release, tournament: item.tournament, seed } };
     }
     return null;

@@ -189,7 +189,9 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     if (player.kind === 'guest' && !(calendar.isClosedDay(dayId, now) && (await closedByDatabase(dayId)))) throw signInForToday();
     if (clientContentVersion !== undefined && clientContentVersion !== day.contentVersion) throw otherContent();
     const live = dayId === calendar.rankedDay(now);
-    return settled(await deps.repo.withTx(async (tx) => {
+    // Only a run this request finished changes the board: reopening one finished earlier keeps the cached board.
+    let finishedHere = false;
+    const response = await deps.repo.withTx(async (tx) => {
       await lockServedDay(tx, day);
       const inserted = await deps.repo.insertRun(tx, {
         id: randomUUID(), player, day: dayId, ranked: live && player.kind === 'member', contentVersion: day.contentVersion,
@@ -201,7 +203,11 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
       // What the clock settled before the day closed is recorded first, so a run finished in time keeps its rank;
       // what it settled after (the database clock decides, even when this request began before midnight) as practice.
       const at = await nowMs(tx);
-      if (row.content_version === day.contentVersion) row = await recordOrUnrank(tx, row, at);
+      if (row.content_version === day.contentVersion) {
+        const before = row;
+        row = await recordOrUnrank(tx, row, at);
+        finishedHere = row !== before && !before.done && row.done;
+      }
       // The ranked window closed before this run was finished: it goes on as practice, off the board.
       if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id)) ?? row;
       // A correction (which unranked the day's runs) replaced the content: an unfinished run moves onto it;
@@ -212,7 +218,9 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
         row = rebased;
       }
       return respond(row, day, at, tx);
-    }));
+    });
+    if (finishedHere && response.state.ranked) leaderboards.delete(response.state.day);
+    return response;
   }
 
   async function mutate<Extra extends object = object>(player: DailyPlayer, runId: string, version: number, step: DailyStep<State, Day, Extra>): Promise<RunResponse<Public> & Partial<Extra>> {

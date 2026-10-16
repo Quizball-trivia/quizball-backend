@@ -1,3 +1,4 @@
+import type { TransactionSql } from '../../db/index.js';
 import type { z } from 'zod';
 import type { RoomPoolItem } from './room.repo.js';
 import type { RoomGameId, RoomLocale } from './room.types.js';
@@ -19,7 +20,8 @@ export interface RoomEngineStanding { seat: number; points: number; roundWins: n
  * engine owns the game. `tick`, `afterOutage` and `seatsChanged` return the state they were given when nothing changes.
  */
 /** Items per difficulty from the game's pool, of one tag when given. */
-export type RoomPoolPick = (wanted: Record<string, number>, tag?: string) => Promise<RoomPoolItem[]>;
+/** `history: false`: skip the players' recent matches (a game that takes the whole pool, where that order changes nothing). */
+export type RoomPoolPick = (wanted: Record<string, number>, tag?: string, opts?: { history: boolean }) => Promise<RoomPoolItem[]>;
 
 export interface RoomEngine<Content, State extends RoomEngineState, Command, Options = null> {
   game: RoomGameId;
@@ -29,13 +31,17 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   parseContent(raw: unknown): Content | null;
   /** Validates a room's options (what the host chose: which clubs, how hard); undefined when they are not this game's. */
   parseOptions(raw: unknown): Options | undefined;
-  /** Picks a match's content from the private pool; null when the pool cannot fill a pack. */
-  deal(pick: RoomPoolPick, options: Options): Promise<{ itemIds: string[]; content: unknown } | null>;
+  /**
+   * Picks a match's content from the private pool; null when the pool cannot fill a pack. `seats`: the room's members
+   * at creation (the ready gate may admit fewer).
+   */
+  deal(pick: RoomPoolPick, options: Options, seats: number): Promise<{ itemIds: string[]; content: unknown } | null>;
   /**
    * Attaches what the rules need besides the stored pack (the footballers of its release). In memory only; called on
-   * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt.
+   * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt. `tx`:
+   * the transaction holding the match lock, for a cold read (a second connection under the lock could wait on a full pool).
    */
-  hydrate?(content: Content): Promise<Content>;
+  hydrate?(content: Content, tx?: TransactionSql): Promise<Content>;
   start(seats: number, content: Content, nowMs: number): State;
   /** Moves the game's own clock up to `nowMs`, one boundary per call. */
   tick(state: State, content: Content, nowMs: number): State;

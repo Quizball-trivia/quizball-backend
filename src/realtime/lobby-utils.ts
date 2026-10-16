@@ -77,8 +77,8 @@ export function normalizeFriendlyGameMode(
  * grow past 2 — it just auto-promotes to party quiz when it does. Auction is
  * hard-capped at its 3 seats.
  */
-export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
-  return lobbyCapacityForGameMode(gameMode);
+export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode, roomGame?: unknown): number {
+  return lobbyCapacityForGameMode(gameMode, roomGame);
 }
 
 /**
@@ -86,8 +86,8 @@ export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
  * satisfy to switch into it. Possession is strictly a 2-player duel, so unlike
  * `maxMembersForFriendlyGameMode` it does not inherit the party ceiling.
  */
-export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
-  return playableMembersForGameMode(gameMode);
+export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode, roomGame?: unknown): number {
+  return playableMembersForGameMode(gameMode, roomGame);
 }
 
 export function orderLobbyMembersByJoinTime<T extends { joined_at: string | Date; user_id: string }>(

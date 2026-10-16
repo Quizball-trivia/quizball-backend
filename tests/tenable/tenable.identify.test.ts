@@ -148,6 +148,10 @@ describe('suggest', () => {
     expect(d.suggest('sp', 2).map((s) => s.eid)).toEqual(['c-spo', 'c-hay']);
     expect(d.suggest('spurt').map((s) => s.eid)).toEqual(['c-tot']);
     expect(d.suggest('tot').map((s) => s.eid)).toEqual(['c-tot']);
+    // A particle of the shown name ("Club", "FC") is not a shown word: only the alias puts Beta Club under "cl".
+    const p = buildDirectory('club', 'rel-p', [E('c-beta', 'Beta Club', 'Beta Club', 90, ['Clubbeta']), E('c-cla', 'Clarin FC', 'Clarin FC', 10)]);
+    expect(p.suggest('cl').map((s) => s.eid)).toEqual(['c-cla', 'c-beta']);
+    expect(p.suggest('club').map((s) => s.eid)).toEqual(['c-beta']);
   });
 
   it('matches a plain search for every short and longer prefix: shown-name matches first, then alias-only, by fame', () => {

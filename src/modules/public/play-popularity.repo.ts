@@ -22,6 +22,7 @@ export const playPopularityRepo = {
           UNION ALL SELECT 'minuto', user_id, guest_id, created_at FROM minuto_runs WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'shared-player', user_id, guest_id, created_at FROM shared_player_runs WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'name-chain', user_id, guest_id, created_at FROM name_chain_runs WHERE created_at > now() - interval '7 days'
+          UNION ALL SELECT 'tenable', user_id, guest_id, created_at FROM tenable_runs WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'buscaminas', user_id, guest_id, created_at FROM buscaminas_runs WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'pistas', user_id, guest_id, created_at FROM pistas_runs WHERE created_at > now() - interval '7 days'
           UNION ALL SELECT 'ultimo', user_id, guest_id, created_at FROM ultimo_runs WHERE created_at > now() - interval '7 days'

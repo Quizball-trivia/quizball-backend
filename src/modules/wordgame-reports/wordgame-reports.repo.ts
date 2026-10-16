@@ -1,7 +1,7 @@
 import { sql } from '../../db/index.js';
 
 export interface WordgameReport {
-  game: 'shared_player' | 'name_chain';
+  game: 'shared_player' | 'name_chain' | 'tenable';
   source: 'daily' | 'room';
   /** The daily run or the room match the reporter played. */
   contextId: string;

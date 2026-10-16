@@ -1,6 +1,5 @@
 import { rejected } from '../daily/daily.errors.js';
 import { compare } from '../room/games/football-race/football-race.rules.js';
-import { withRussian, withRussianKeywords } from '../room/games/football-race/football-race.russian.js';
 import { MAX_PICKS, RIVAL_HEAD_START, SOLO_TARGET } from './football-race.constants.js';
 import type { DayRace, PickResult, PublicRunState, RunState } from './football-race.types.js';
 
@@ -63,16 +62,16 @@ export function publicState(s: RunState, dayId: string, day: DayRace | null, ext
     day: dayId,
     release: d?.release ?? '',
     cutoff: d?.cutoff ?? '',
-    source: d ? withRussian(d.source) : { en: '', es: '' },
-    tournament: d ? { id: d.tournament.id, label: withRussian(d.tournament.label) } : { id: '', label: { en: '', es: '' } },
-    racers: (day?.racers ?? []).map((id) => { const n = nationOf.get(id)!; return { id, code: n.code, flag: n.flag, name: withRussian(n.name) }; }),
+    source: d?.source ?? { en: '', es: '' },
+    tournament: d ? { id: d.tournament.id, label: d.tournament.label } : { id: '', label: { en: '', es: '' } },
+    racers: (day?.racers ?? []).map((id) => { const n = nationOf.get(id)!; return { id, code: n.code, flag: n.flag, name: n.name }; }),
     target: SOLO_TARGET,
     positions: positions(s),
-    eras: (d?.scopes ?? []).map((x) => ({ id: x.id, label: withRussian(x.label) })),
-    families: (d?.families ?? []).map((f) => ({ id: f.id, label: withRussian(f.label) })),
-    metrics: (d?.metrics ?? []).map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: withRussian(m.label), keywords: withRussianKeywords(m.label, m.keywords) })),
+    eras: (d?.scopes ?? []).map((x) => ({ id: x.id, label: x.label })),
+    families: (d?.families ?? []).map((f) => ({ id: f.id, label: f.label })),
+    metrics: (d?.metrics ?? []).map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: m.label, keywords: m.keywords })),
     stats: (d?.stats ?? []).map((x) => ({ id: x.id, scope: x.scope, metric: x.metric, family: metricOf.get(x.metric)?.family ?? '', unwanted: metricOf.get(x.metric)?.unwanted ?? false })),
-    results: s.res.map((r) => ({ ...r, details: (day?.racers ?? []).map((id) => { const line = statOf.get(r.stat)?.details?.[id]; return line ? withRussian(line) : null; }) })),
+    results: s.res.map((r) => ({ ...r, details: (day?.racers ?? []).map((id) => statOf.get(r.stat)?.details?.[id] ?? null) })),
     done: s.done,
     result: result(s),
     picks: s.res.length,

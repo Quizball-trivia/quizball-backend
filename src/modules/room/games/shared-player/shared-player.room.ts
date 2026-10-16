@@ -1,10 +1,9 @@
 import { z } from 'zod';
-import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine, RoomPoolPick } from '../../room.engine.js';
 import { refusedForPair } from '../../../wordgame-reports/wordgame-reports.rules.js';
 import {
-  afterOutage, judgingOf, PACK_PAIRS, seatsChanged, sharedPlayerCommandSchema, sharedPlayerItemSchema, sharedPlayerPackSchema, standings, startMatch, submitAnswer, tick, viewOf,
+  afterOutage, PACK_PAIRS, seatsChanged, sharedPlayerCommandSchema, sharedPlayerItemSchema, sharedPlayerPackSchema, standings, startMatch, submitAnswer, tick, viewOf,
   type SharedPlayerCommand, type SharedPlayerContent, type SharedPlayerItem, type SharedPlayerState,
 } from './shared-player.engine.js';
 
@@ -89,14 +88,11 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
 
   deal: (pick, options) => dealSharedPlayer(pick, options),
 
-  async hydrate(content, state, tx) {
-    const universe = content.universe ?? await footballersService.universe(content.pack.release);
-    // A match that froze Russian names is judged with exactly them.
-    const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;
-    return { pack: content.pack, universe, russian };
+  async hydrate(content) {
+    return content.universe ? content : { pack: content.pack, universe: await footballersService.universe(content.pack.release) };
   },
 
-  start: (seats, _content, nowMs, context) => startMatch(seats, nowMs, context),
+  start: (seats, _content, nowMs) => startMatch(seats, nowMs),
   tick: (state, _content, nowMs) => tick(state, nowMs),
   afterOutage: (state, _content, nowMs) => afterOutage(state, nowMs),
   seatsChanged: (state, changes) => seatsChanged(state, changes),
@@ -109,6 +105,6 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
   refusal(state, content, round, text) {
     const pair = content.pack.pairs[round];
     if (!pair || !content.universe || round >= state.results.length) return null;
-    return refusedForPair(judgingOf(state, content), pair, text);
+    return refusedForPair(content.universe, pair, text);
   },
 };

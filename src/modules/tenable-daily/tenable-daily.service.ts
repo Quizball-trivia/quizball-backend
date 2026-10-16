@@ -6,8 +6,7 @@ import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { tenableListSchema, type TenableList } from '../tenable/tenable.content.js';
 import { tenableDirectories } from '../tenable/tenable.directories.js';
-import { displayName, judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
-import { refreshRussianText, withRussianText } from '../tenable/tenable.text.js';
+import { judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { RANKED_START, tenableCalendar } from './tenable-daily.days.js';
@@ -90,7 +89,7 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
   );
 
   return {
-    start: (dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> => core.start(dayId, player, clientContentVersion, { locale }),
+    start: (dayId: string, player: DailyPlayer, clientContentVersion?: number): Promise<RunResponse> => core.start(dayId, player, clientContentVersion),
 
     /** One answer. A finished run is never judged again (a retry gets the current state through the version check). */
     say(player: DailyPlayer, runId: string, version: number, text: string, pick: string | null): Promise<RunResponse> {
@@ -122,13 +121,13 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
     current: (player: DailyPlayer, dayId: string | undefined) => core.current(player, dayId),
     boards: (): Promise<BoardsResponse> => core.boards(),
 
-    /** A closed day's whole list (names in Russian for a Russian page); anything else is the same 404 as a missing day. */
-    async review(dayId: string, locale?: string): Promise<ReviewResponse> {
+    /** A closed day's whole list; anything else is the same 404 as a missing day. */
+    async review(dayId: string): Promise<ReviewResponse> {
       const day = await core.closedDay(dayId);
       return {
         day: dayId,
-        list: withRussianText(day.list).title,
-        slots: day.list.slots.map((slot, i) => ({ rank: i + 1, name: displayName(day.directory, slot.eid, locale === 'ru') ?? '?', figure: slot.figure })),
+        list: day.list.title,
+        slots: day.list.slots.map((slot, i) => ({ rank: i + 1, name: day.directory.entity(slot.eid)?.name ?? '?', figure: slot.figure })),
       };
     },
 
@@ -175,7 +174,6 @@ export function oneAtATime<T>(fn: () => Promise<T>): () => Promise<T> | null {
  * lock) waits on a cold load, and nothing in use is ever evicted.
  */
 export function startTenableDailyReadinessCheck(): void {
-  void refreshRussianText();
   const keep = async () => {
     const index = await tenableDailyContent.get();
     const rooms = await tenableRoomPairs();

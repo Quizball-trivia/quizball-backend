@@ -1,7 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { compare } from '../room/games/football-race/football-race.rules.js';
-import { withRussian } from '../room/games/football-race/football-race.russian.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './football-race.constants.js';
 import { createContentStore, type ContentIndex, type IndexedDay } from './football-race.content.js';
 import { footballRaceCalendar, RANKED_START } from './football-race.days.js';
@@ -60,7 +59,7 @@ export function createFootballRaceService(deps: FootballRaceDeps) {
       const { racers, data } = day.race;
       const metricOf = new Map(data.metrics.map((m) => [m.id, m]));
       const leaders = Object.fromEntries(data.stats.map((x) => [x.id, compare(x, metricOf.get(x.metric)!, racers)?.leaders ?? []]));
-      return { day: dayId, tournament: { id: data.tournament.id, label: withRussian(data.tournament.label) }, racers, leaders };
+      return { day: dayId, tournament: { id: data.tournament.id, label: data.tournament.label }, racers, leaders };
     },
     leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => { return core.leaderboard(dayId, userId); },
   };

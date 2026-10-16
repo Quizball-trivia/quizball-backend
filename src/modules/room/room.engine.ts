@@ -14,9 +14,6 @@ export interface RoomEngineState {
 
 export interface RoomEngineStanding { seat: number; points: number; roundWins: number; place: number }
 
-/** What a match may freeze when the gate closes: the admitted seats' languages and the Russian names switched on then. */
-export interface RoomStartContext { locales: readonly RoomLocale[]; russianVersion: string | null }
-
 /**
  * A room game's rules, pure: no I/O, time comes in as `nowMs` (the database clock read under the match lock). The
  * runtime owns the ready gate, presence and absence windows, idempotency, the phase token and the lifecycle; the
@@ -41,13 +38,11 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   deal(pick: RoomPoolPick, options: Options, seats: number): Promise<{ itemIds: string[]; content: unknown } | null>;
   /**
    * Attaches what the rules need besides the stored pack (the footballers of its release). In memory only; called on
-   * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt. `state` is
-   * the stored state when there is one (what the match froze at its start, e.g. Russian names). `tx`: the transaction
-   * holding the match lock, for a cold read (a second connection under the lock could wait on a full pool); under it, what
-   * is only in memory and missing is a retryable `room_content_unavailable` (the next call hydrates before the lock).
+   * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt. `tx`:
+   * the transaction holding the match lock, for a cold read (a second connection under the lock could wait on a full pool).
    */
-  hydrate?(content: Content, state: State | null, tx?: TransactionSql): Promise<Content>;
-  start(seats: number, content: Content, nowMs: number, context?: RoomStartContext): State;
+  hydrate?(content: Content, tx?: TransactionSql): Promise<Content>;
+  start(seats: number, content: Content, nowMs: number): State;
   /** Moves the game's own clock up to `nowMs`, one boundary per call. */
   tick(state: State, content: Content, nowMs: number): State;
   /** The server was not running when a deadline passed: an open phase gets a fresh window, nobody is charged. */

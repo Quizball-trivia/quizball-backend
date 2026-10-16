@@ -2,7 +2,6 @@ import { z } from 'zod';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
 import { compare, dealRace, l10n, MAX_SEATS, rng, targetFor, type L10n, type RaceTournamentData } from './football-race.rules.js';
-import { withRussianKeywords } from './football-race.russian.js';
 
 /**
  * Football Horserace as a room game (2–4 seats), pure: time comes in as `now` (the database clock read under the match
@@ -338,7 +337,7 @@ export function viewOf(s: FootballRaceState, c: FootballRaceContent, seat: numbe
     cutoff: data.cutoff,
     eras: data.scopes.map((x) => ({ id: x.id, label: l10n(x.label, locale) })),
     families: data.families.map((f) => ({ id: f.id, label: l10n(f.label, locale) })),
-    metrics: data.metrics.map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: l10n(m.label, locale), keywords: locale === 'ru' ? withRussianKeywords(m.label, m.keywords) : m.keywords })),
+    metrics: data.metrics.map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: l10n(m.label, locale), keywords: m.keywords })),
     // Public facts only: the stats already shown, the one on the reveal card (its id is out), this seat's own pick, and
     // those that still split the nations racing (statuses are public). Later picks in the reveal are listed (or not) like
     // any stat nobody picked.

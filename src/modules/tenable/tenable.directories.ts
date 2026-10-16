@@ -1,7 +1,6 @@
 import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
-import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
-import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
+import { buildDirectory, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 
 const PAGE = 20_000;
 
@@ -45,18 +44,12 @@ function evict(): void {
 /** A failed load is answered with its error for this long before the database is asked again (an incident is not multiplied by traffic). */
 export const FAILED_RETRY_MS = 5_000;
 const failed = new Map<string, { until: number; error: unknown }>();
-/**
- * Whether each release this process has loaded had Russian names, kept for the life of the process (it outlives
- * eviction): a release evicted and loaded again keeps the first answer, so every day and match on this replica reads a
- * Cyrillic answer the same way until the next restart, even when a Russian pin is written in between.
- */
-const russianPins = new Map<string, Promise<RussianPin | null>>();
 
 export const tenableDirectories = {
   /**
    * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load is
    * remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against nothing would mark every
-   * answer unknown. Russian names written for a release after this process loaded it are read after its next restart.
+   * answer unknown.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -74,19 +67,9 @@ export const tenableDirectories = {
       const entities = await rows(kind, releaseId);
       if (entities.length === 0) throw new Error(`tenable_release_empty:${key}`);
       const fetched = Date.now();
-      const latin = buildDirectory(kind, releaseId, entities);
-      // The lookup itself is kept (two loads in flight share one answer); a failed one is not.
-      let lookup = russianPins.get(key);
-      if (!lookup) {
-        const asked = russianPinOf(sql, kind, releaseId);
-        russianPins.set(key, (lookup = asked));
-        asked.catch(() => { if (russianPins.get(key) === asked) russianPins.delete(key); });
-      }
-      const pin = await lookup;
-      const russian = pin ? await russianRows(sql, kind, releaseId, entities, pin) : null;
-      const directory = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic')) : latin;
+      const directory = buildDirectory(kind, releaseId, entities);
       const done = Date.now();
-      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
+      logger.info({ kind, releaseId, entities: directory.size, ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;
     })();
     held.set(key, loading);
@@ -121,6 +104,5 @@ export const tenableDirectories = {
     held.clear();
     failed.clear();
     pinned = new Set();
-    russianPins.clear();
   },
 };

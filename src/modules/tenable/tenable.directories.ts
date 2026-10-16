@@ -26,9 +26,21 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
   }
 }
 
-/** Enough for a deploy window (old and new release) of each of the four kinds. */
-const MAX_HELD = 8;
+/** Directories nothing in use names (an old release looked up, a match that just ended): at most this many are kept. */
+export const MAX_EXTRA = 4;
 const held = new Map<string, Promise<Directory>>();
+/** What served days, enabled room lists and live matches name: never evicted (see the keeper in tenable-daily.service). */
+let pinned = new Set<string>();
+/** Least recently used first, pinned ones skipped. */
+function evict(): void {
+  let extra = [...held.keys()].filter((key) => !pinned.has(key)).length;
+  for (const key of held.keys()) {
+    if (extra <= MAX_EXTRA) return;
+    if (pinned.has(key)) continue;
+    held.delete(key);
+    extra -= 1;
+  }
+}
 /** A failed load is answered with its error for this long before the database is asked again (an incident is not multiplied by traffic). */
 export const FAILED_RETRY_MS = 5_000;
 const failed = new Map<string, { until: number; error: unknown }>();
@@ -64,8 +76,14 @@ export const tenableDirectories = {
       held.delete(key);
       failed.set(key, { until: Date.now() + FAILED_RETRY_MS, error });
     });
-    while (held.size > MAX_HELD) held.delete(held.keys().next().value!);
+    evict();
     return loading;
+  },
+
+  /** The (kind, release) pairs in use now; the previous set's pairs become ordinary extras. */
+  pin(pairs: ReadonlyArray<{ kind: EntityKind; release: string }>): void {
+    pinned = new Set(pairs.map((p) => `${p.kind}:${p.release}`));
+    evict();
   },
 
   /** Loads what served days and live matches pin, before they need it (boot, enable): gameplay never waits on a cold load. */
@@ -83,5 +101,6 @@ export const tenableDirectories = {
   clear(): void {
     held.clear();
     failed.clear();
+    pinned = new Set();
   },
 };

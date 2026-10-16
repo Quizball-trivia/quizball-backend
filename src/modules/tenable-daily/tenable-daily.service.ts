@@ -143,23 +143,55 @@ export const tenableDailyService = createTenableDailyService({
   reports: wordgameReportsService,
 });
 
+/** Enabled room lists, and every list of a live match (its list may have left the pool since it was dealt). */
+export function tenableRoomPairs(): Promise<Array<{ kind: EntityKind; release: string }>> {
+  return sql<Array<{ kind: EntityKind; release: string }>>`
+    SELECT DISTINCT payload->>'kind' AS kind, payload->>'release' AS release FROM room_pool WHERE game = 'tenable' AND enabled
+    UNION
+    SELECT DISTINCT l->>'kind', l->>'release'
+    FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'lists') l
+    WHERE m.game = 'tenable' AND m.status IN ('ready', 'active')`;
+}
+
+/** How often each replica re-reads what is in use: a list seeded or dealt since is loaded before anyone needs it. */
+const KEEPER_MS = 60_000;
+const MAX_PINNED_PLAYER_RELEASES = 2;
+
+/** `fn`, but a call while one is still running is skipped (null): a slow run must not finish after a newer one. */
+export function oneAtATime<T>(fn: () => Promise<T>): () => Promise<T> | null {
+  let running: Promise<T> | null = null;
+  return () => {
+    if (running) return null;
+    const current = fn().finally(() => { running = null; });
+    running = current;
+    return current;
+  };
+}
+
 /**
- * Called once at boot; never blocks startup and never throws. Loads the days and warms every directory a served day,
- * an enabled room list or a live match names, so neither a daily answer nor a room's first move waits on a cold load (a room
- * hydrates under its match lock).
+ * Called once at boot; never blocks startup and never throws. Pins and warms every directory a served day, an enabled room
+ * list or a live match names, then again every KEEPER_MS: neither a daily answer nor a room's deal (inside the lobby
+ * lock) waits on a cold load, and nothing in use is ever evicted.
  */
 export function startTenableDailyReadinessCheck(): void {
-  void (async () => {
+  const keep = async () => {
     const index = await tenableDailyContent.get();
-    // Enabled room lists, and every list of a live match (its list may have left the pool since it was dealt).
-    const pool = await sql<Array<{ kind: EntityKind; release: string }>>`
-      SELECT DISTINCT payload->>'kind' AS kind, payload->>'release' AS release FROM room_pool WHERE game = 'tenable' AND enabled
-      UNION
-      SELECT DISTINCT l->>'kind', l->>'release'
-      FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'lists') l
-      WHERE m.game = 'tenable' AND m.status IN ('ready', 'active')`;
-    await tenableDirectories.warm([...[...index.values()].map((d) => ({ kind: d.list.kind, release: d.list.release })), ...pool]);
-    if (index.size === 0) logger.warn('No Tenable days loaded (tenable_days is empty)');
-    logger.info({ days: index.size, roomReleases: pool.length }, 'Tenable content loaded');
-  })().catch((error: unknown) => logger.warn({ err: error }, 'Tenable content could not be loaded at boot'));
+    const rooms = await tenableRoomPairs();
+    const pairs = [...[...index.values()].map((d) => ({ kind: d.list.kind, release: d.list.release })), ...rooms];
+    tenableDirectories.pin(pairs);
+    const players = new Set(pairs.filter((p) => p.kind === 'player').map((p) => p.release));
+    // A footballer release is ~75 MB per replica and served days keep theirs for good: more than two is a memory decision.
+    if (players.size > MAX_PINNED_PLAYER_RELEASES) logger.warn({ releases: [...players] }, 'Tenable keeps more footballer releases loaded than budgeted');
+    await tenableDirectories.warm(pairs);
+    return { days: index.size, roomReleases: rooms.length };
+  };
+  // One run at a time: a slow run finishing after a newer one would pin what was in use before it.
+  const run = oneAtATime(keep);
+  void run()
+    ?.then(({ days, roomReleases }) => {
+      if (days === 0) logger.warn('No Tenable days loaded (tenable_days is empty)');
+      logger.info({ days, roomReleases }, 'Tenable content loaded');
+    })
+    .catch((error: unknown) => logger.warn({ err: error }, 'Tenable content could not be loaded at boot'));
+  setInterval(() => { void run()?.catch((error: unknown) => logger.warn({ err: error }, 'Tenable directory keeper failed')); }, KEEPER_MS).unref();
 }

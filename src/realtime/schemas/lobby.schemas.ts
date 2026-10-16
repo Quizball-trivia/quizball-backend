@@ -115,6 +115,8 @@ export const lobbyUpdateSettingsSchema = z
 export const lobbyStartSchema = z.object({
   lobbyId: z.string().uuid().optional(),
   seen: seenGameSchema.optional(),
+  /** The host's interface language: a friendly Auction deals its cards in it (English when it has none). */
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional(),
 });
 
 export const lobbyChallengeSchema = z.object({

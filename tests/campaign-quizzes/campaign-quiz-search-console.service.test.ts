@@ -32,6 +32,21 @@ describe('campaignQuizSearchConsoleService', () => {
     )).toBe('club-badges');
   });
 
+  it('maps localized Russian campaign URLs to the CMS slug', () => {
+    const origin = 'https://quizball.io';
+
+    expect(campaignQuizSlugFromPageUrl(
+      'https://quizball.io/ru/futbolnaya-viktorina/ugaday-futbolista-po-karere',
+      origin,
+    )).toBe('career-path');
+    expect(campaignQuizSlugFromPageUrl(
+      'https://quizball.io/ru/futbolnaya-viktorina/viktorina-manchester-yunayted/',
+      origin,
+    )).toBe('manchester-united');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/ru/football-quiz/arsenal', origin))
+      .toBeNull();
+  });
+
   it('ignores unrelated paths and foreign origins', () => {
     const origin = 'https://quizball.io';
 

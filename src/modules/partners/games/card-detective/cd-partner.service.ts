@@ -23,6 +23,7 @@ import {
   CD_START_POINTS,
   CD_WRONG_GUESS_COST,
   freeCluesFor,
+  isCyrillic,
   matchesCardName,
   type CdClueKey,
   type CdStatKey,
@@ -118,7 +119,10 @@ export interface CdPlayState {
 const ROW_COLUMNS = ['play_id', 'player_id', 'cards', 'current_index', 'version', 'idle_deadline', 'settled_at'];
 
 function displayName(card: CardSnapshot, language: string): string {
-  return language === 'ka' && card.nameKa ? card.nameKa : card.name;
+  if (language === 'ka' && card.nameKa) return card.nameKa;
+  // fifa_cards has no name_ru column; the first Russian alias in `accepted` is the Russian name.
+  if (language === 'ru') return card.accepted.find(isCyrillic) ?? card.name;
+  return card.name;
 }
 
 function cluesOf(card: CardSnapshot, open: CdClueKey[]): CdClues {

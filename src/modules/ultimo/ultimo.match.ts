@@ -3,10 +3,11 @@ import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 
 export const ULTIMO_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
 export type UltimoLocale = (typeof ULTIMO_LOCALES)[number];
-export type LocalizedText = Record<UltimoLocale, string>;
+/** es/en/ka/tr are required; ru is optional until every category carries it. */
+export type LocalizedText = Record<UltimoLocale, string> & { ru?: string };
 
 const text = z.string().trim().min(1).max(200);
-const localized = z.object({ es: text, en: text, ka: text, tr: text });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional() });
 /** An answer name must be typeable in the answer box (UL_ANSWER_MAX_LENGTH). */
 const name = z.string().trim().min(1).max(60);
 
@@ -21,7 +22,7 @@ export const ultimoCategorySchema = z.object({
   hint: localized,
   answers: z.array(z.object({
     id: z.string().min(1).max(80),
-    display: z.object({ es: name, en: name, ka: name, tr: name }),
+    display: z.object({ es: name, en: name, ka: name, tr: name, ru: name.optional() }),
     aliases: z.array(name).max(40),
   })).min(8).max(60),
 }).superRefine((category, ctx) => {
@@ -162,4 +163,4 @@ export const UL_MAX_MISSES = 3;
 export const UL_ANSWER_MAX_LENGTH = 60;
 export const turnMsFor = (said: number): number => Math.max(UL_TURN_MIN_MS, UL_TURN_START_MS - UL_TURN_STEP_MS * Math.floor(said / 2));
 
-export const copyText = (t: LocalizedText): LocalizedText => ({ es: t.es, en: t.en, ka: t.ka, tr: t.tr });
+export const copyText = (t: LocalizedText): LocalizedText => ({ es: t.es, en: t.en, ka: t.ka, tr: t.tr, ...(t.ru ? { ru: t.ru } : {}) });

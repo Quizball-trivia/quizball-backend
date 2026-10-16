@@ -3,7 +3,7 @@ import type { Json } from '../../db/types.js';
 import { POSITION_GROUPS } from './auction.constants.js';
 import type { PositionGroup } from './auction.types.js';
 
-export type AuctionContentLocale = 'en' | 'ka' | 'es' | 'tr';
+export type AuctionContentLocale = 'en' | 'ka' | 'es' | 'tr' | 'ru';
 export type AuctionContentDifficulty = 'easy' | 'medium' | 'hard';
 
 /**
@@ -442,7 +442,7 @@ export const auctionContentRepo = {
       SELECT *
       FROM player_clue_card_content_view
       WHERE ${publishedEligiblePredicate}
-        AND locale IN ('en', 'ka', 'es', 'tr')
+        AND locale IN ('en', 'ka', 'es', 'tr', 'ru')
         AND clue_card_id = ${clueCardId}
       LIMIT 1
     `;

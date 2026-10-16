@@ -26,7 +26,7 @@ const TYPO_MIN_LENGTH = 5;
 export function resolveSquadSpinAnswer(
   submittedText: string,
   aliases: SquadSpinAliasRow[],
-  players: Array<{ id: string; name_en: string; name_ka?: string | null }>,
+  players: Array<{ id: string; name_en: string; name_ka?: string | null; name_ru?: string | null }>,
 ): { playerId: string | null; normalizedInput: string } {
   const normalizedInput = normalizeFootballGridAnswer(submittedText);
   if (!normalizedInput) return { playerId: null, normalizedInput };
@@ -36,6 +36,7 @@ export function resolveSquadSpinAnswer(
     ...players.flatMap((player) => [
       ...nameSuffixForms(player.name_en).map((text) => ({ playerId: player.id, text })),
       ...(player.name_ka ? nameSuffixForms(player.name_ka).map((text) => ({ playerId: player.id, text })) : []),
+      ...(player.name_ru ? nameSuffixForms(player.name_ru).map((text) => ({ playerId: player.id, text })) : []),
     ]),
   ];
 

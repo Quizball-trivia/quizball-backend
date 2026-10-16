@@ -34,6 +34,22 @@ describe('Card Detective partner rules', () => {
     expect(matchesCardName('მესი', ['Messi'])).toBe(true);
   });
 
+  it('matches a Cyrillic guess only against the Russian aliases', () => {
+    const kane = ['Harry Kane', 'H. Kane', 'Kane', 'Гарри Кейн', 'Кейн'];
+    expect(matchesCardName('Кейн', kane)).toBe(true);
+    expect(matchesCardName('гарри кейн', kane)).toBe(true);
+    expect(matchesCardName('Кеин', kane)).toBe(true);
+    expect(matchesCardName('Мане', kane)).toBe(false);
+    expect(matchesCardName('Kane', kane)).toBe(true);
+    expect(matchesCardName('Mane', kane)).toBe(true);
+    expect(matchesCardName('Месси', ['Lionel Messi', 'Messi'])).toBe(false);
+    expect(matchesCardName('Холанд', ['Erling Haaland', 'Эрлинг Холанд', 'Холанд', 'Холанн'])).toBe(true);
+    expect(matchesCardName('Холан', ['Erling Haaland', 'Эрлинг Холанд', 'Холанд', 'Холанн'])).toBe(true);
+    expect(matchesCardName('ван', ['Virgil van Dijk', 'Вирджил ван Дейк', 'ван Дейк'])).toBe(false);
+    expect(matchesCardName('Дейк', ['Virgil van Dijk', 'Вирджил ван Дейк', 'ван Дейк'])).toBe(true);
+    expect(matchesCardName('ᲙᲔᲘᲜᲘ', ['Harry Kane', 'ჰარი კეინი'])).toBe(true);
+  });
+
   it('refuses fragments, particles and short near-misses', () => {
     expect(matchesCardName('rovic', ['Testo Müllerovic'])).toBe(false);
     expect(matchesCardName('de', ['Frenk de Jongsma'])).toBe(false);

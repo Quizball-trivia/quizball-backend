@@ -124,9 +124,10 @@ export const auctionRealtimeService = {
   async handleStartAiMatch(
     io: QuizballServer,
     socket: QuizballSocket,
-    input: AuctionStartAiMatchServiceInput,
+    rawInput: AuctionStartAiMatchServiceInput,
     options: AuctionStartAiMatchOptions = {}
   ): Promise<void> {
+    const input = { ...rawInput, locale: await auctionContentService.resolveContentLocale(rawInput.locale) };
     const user = socket.data.user;
     if (user) assertCapability(user, 'queueEntry');
     if (!user?.id) {
@@ -180,9 +181,10 @@ class AuctionPracticeStartAbandonedError extends Error {
 async function handleStartPracticeMatch(
   io: QuizballServer,
   socket: QuizballSocket,
-  input: AuctionStartAiMatchServiceInput,
+  rawInput: AuctionStartAiMatchServiceInput,
   options: AuctionStartAiMatchOptions = {}
 ): Promise<void> {
+  const input = { ...rawInput, locale: await auctionContentService.resolveContentLocale(rawInput.locale) };
   const user = socket.data.user;
   if (!user?.id) {
     emitAuctionError(socket, { code: ErrorCode.AUTHENTICATION_ERROR, message: 'Authentication required' });

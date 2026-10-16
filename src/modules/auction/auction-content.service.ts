@@ -114,7 +114,39 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
   });
 }
 
+const russianAvailability = { checkedAt: 0, usable: false };
+/**
+ * Russian deals need almost the whole English pool in Russian: a match keeps its language for every later draw (per
+ * position, without repeats), so a thin Russian pool would end matches early instead of falling back.
+ */
+export const RUSSIAN_POOL_SHARE = 0.95;
+/** Russian clue cards are optional: a Russian player is dealt English cards until the Russian pool is complete. */
+async function resolveContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
+  if (locale !== 'ru') return locale;
+  if (Date.now() - russianAvailability.checkedAt > 60_000) {
+    const [ru, en] = await Promise.all([auctionContentRepo.getPublishedCardAvailability('ru'), auctionContentRepo.getPublishedCardAvailability('en')]);
+    russianAvailability.checkedAt = Date.now();
+    russianAvailability.usable = ru.usable_count > 0 && ru.usable_count >= en.usable_count * RUSSIAN_POOL_SHARE;
+  }
+  return russianAvailability.usable ? 'ru' : 'en';
+}
+
+/**
+ * The language a match about to start deals in: as `resolveContentLocale`, with the Russian pool counted afresh (the
+ * same 95% rule), so a pool that shrank since it was cached deals English instead of failing or thinning the match.
+ */
+async function playableContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
+  if (locale === 'ru') russianAvailability.checkedAt = 0;
+  return resolveContentLocale(locale);
+}
+
 export const auctionContentService = {
+  resolveContentLocale,
+  playableContentLocale,
+  /** A Russian deal found no content (cards were unpublished): the next resolution reads availability again. */
+  forgetContentLocale(): void {
+    russianAvailability.checkedAt = 0;
+  },
   async getPublishedCardCount(locale: AuctionContentLocale): Promise<number> {
     return auctionContentRepo.getPublishedCardCount(locale);
   },
@@ -472,7 +504,7 @@ async function localizedClueSteps(
 }
 
 function isAuctionContentLocale(value: string): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
 }
 
 export type { AuctionContentLocale };

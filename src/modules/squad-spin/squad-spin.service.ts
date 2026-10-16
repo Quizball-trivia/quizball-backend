@@ -35,9 +35,10 @@ export interface ReelView {
   key: string;
   label_en: string;
   label_ka: string;
+  label_ru: string | null;
   asset_key: string | null;
 }
-export interface PlayerView { id: string; name_en: string; name_ka: string | null; image_url: string | null }
+export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; image_url: string | null }
 
 /** Public round state — never contains the seed or the answer set while active. */
 export interface SquadSpinPublicState {
@@ -72,17 +73,17 @@ export interface SquadSpinAnswerResult {
   state: SquadSpinPublicState;
 }
 
-const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string }> = {
-  GK: { en: 'Goalkeeper', ka: 'მეკარე' },
-  DEF: { en: 'Defender', ka: 'მცველი' },
-  MID: { en: 'Midfielder', ka: 'ნახევარმცველი' },
-  FWD: { en: 'Forward', ka: 'თავდამსხმელი' },
+const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: string }> = {
+  GK: { en: 'Goalkeeper', ka: 'მეკარე', ru: 'Вратарь' },
+  DEF: { en: 'Defender', ka: 'მცველი', ru: 'Защитник' },
+  MID: { en: 'Midfielder', ka: 'ნახევარმცველი', ru: 'Полузащитник' },
+  FWD: { en: 'Forward', ka: 'თავდამსხმელი', ru: 'Нападающий' },
 };
 
 const stepsOf = (row: SquadSpinRoundRow) => row.steps_bp as unknown as StepsSnapshot;
 const questionExpired = (row: SquadSpinRoundRow) => row.phase === 'question' && row.question_deadline_at != null && new Date(row.question_deadline_at).getTime() <= Date.now();
 const decisionExpired = (row: SquadSpinRoundRow) => row.phase === 'decision' && row.decision_deadline_at != null && new Date(row.decision_deadline_at).getTime() <= Date.now();
-const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, image_url: p.image_url });
+const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, image_url: p.image_url });
 
 async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<ReelView[]> {
   const criteria = await squadSpinRepo.getCriteriaByIds([combo.club_id, combo.nation_id, ...combo.extra_ids], tx);
@@ -90,9 +91,9 @@ async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<
   const view = (id: string): ReelView => {
     const c = byId.get(id);
     if (!c) throw new AppError('Squad Spin combo references unknown criterion', 500);
-    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, asset_key: c.asset_key };
+    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, label_ru: c.label_ru, asset_key: c.asset_key };
   };
-  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, asset_key: null };
+  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, label_ru: POSITION_LABELS[combo.position_group].ru, asset_key: null };
   return [view(combo.club_id), position, view(combo.nation_id), ...combo.extra_ids.map(view)];
 }
 

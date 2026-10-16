@@ -44,6 +44,7 @@ export function contentHash(rounds: readonly StoredRound[]): number {
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+const presentLocales = (t: LocalizedText): Array<keyof LocalizedText> => (t.ru ? [...PISTAS_LOCALES, 'ru'] : [...PISTAS_LOCALES]);
 
 /** Validates one day file and keeps exactly the stored fields (`source` and any unknown field are dropped). */
 export function parseDayFile(label: string, raw: unknown): SeedDay {
@@ -60,7 +61,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
   const text = (value: unknown, where: string): LocalizedText => {
     const v = (value ?? {}) as Record<string, unknown>;
     for (const locale of PISTAS_LOCALES) if (!nonEmpty(v[locale])) fail(`${where}.${locale} missing`);
-    return { es: (v.es as string).trim(), en: (v.en as string).trim(), ka: (v.ka as string).trim(), tr: (v.tr as string).trim() };
+    if (v.ru !== undefined && !nonEmpty(v.ru)) fail(`${where}.ru must be a non-empty string when present`);
+    return { es: (v.es as string).trim(), en: (v.en as string).trim(), ka: (v.ka as string).trim(), tr: (v.tr as string).trim(), ...(v.ru !== undefined ? { ru: (v.ru as string).trim() } : {}) };
   };
 
   const ids = new Set<string>();
@@ -81,8 +83,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
       return (a as string).trim();
     });
     const acceptedForms = new Set(accepted.map(normalizeAnswer));
-    for (const locale of PISTAS_LOCALES) {
-      if (!acceptedForms.has(normalizeAnswer(display[locale]))) fail(`${at}: answer.display.${locale} does not normalise into answer.accepted`);
+    for (const locale of presentLocales(display)) {
+      if (!acceptedForms.has(normalizeAnswer(display[locale]!))) fail(`${at}: answer.display.${locale} does not normalise into answer.accepted`);
     }
     const key = normalizeAnswer(display.en);
     const repeat = answers.indexOf(key);
@@ -96,8 +98,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
       const icon = clue.icon ?? null;
       if (icon !== null && (typeof icon !== 'string' || !ICON.test(icon))) fail(`${where}: icon must be null or an icon id (${ICON.source})`);
       const clueText = text(clue.text, `${where}: text`);
-      for (const locale of PISTAS_LOCALES) {
-        const words = normalizeAnswer(clueText[locale]);
+      for (const locale of presentLocales(clueText)) {
+        const words = normalizeAnswer(clueText[locale]!);
         if ([...acceptedForms].some((form) => containsWords(words, form))) fail(`${where}: text.${locale} names an accepted answer`);
       }
       return { kind: clue.kind as ClueKind, icon: icon as string | null, text: clueText };

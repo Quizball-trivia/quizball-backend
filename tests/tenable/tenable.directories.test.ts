@@ -5,6 +5,9 @@ vi.mock('../../src/db/index.js', () => ({
   sql: () => { db.calls += 1; return db.fail ? Promise.reject(new Error('db down')) : Promise.resolve([{ eid: 'n1', name: 'Northgate', known: 'Northgate', fame: 50, aliases: [], qualifier: null }]); },
 }));
 
+// Releases without Russian names here: the counts are of entity reads (tenable.directories-russian.test.ts covers the rest).
+vi.mock('../../src/modules/tenable/tenable.russian.js', () => ({ russianPinOf: async () => null, russianRows: async () => null }));
+
 const { tenableDirectories, FAILED_RETRY_MS, MAX_EXTRA } = await import('../../src/modules/tenable/tenable.directories.js');
 const { withDirectories, oneAtATime } = await import('../../src/modules/tenable-daily/tenable-daily.service.js');
 

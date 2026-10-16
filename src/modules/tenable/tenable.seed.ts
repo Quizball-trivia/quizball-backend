@@ -5,7 +5,8 @@ import { addDays } from '../daily/daily.calendar.js';
 import { canonical } from '../pistas/pistas.seed.js';
 import { CONTENT_START } from '../tenable-daily/tenable-daily.days.js';
 import { listProblems, tenableListSchema, type TenableList } from './tenable.content.js';
-import { buildDirectory, TENABLE_MATCHER_VERSION, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { russianPinOf, russianRows } from './tenable.russian.js';
+import { buildDirectory, TENABLE_MATCHER_VERSION, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 
 /**
  * Seeding of Football Tenable's lists: the solo days (tenable_days) and the room pool (room_pool, game 'tenable'),
@@ -69,7 +70,10 @@ async function loadDirectory(tx: Sql, kind: EntityKind, release: string): Promis
         WHERE p.release_id = ${release}`
     : await tx<TenableEntity[]>`SELECT eid, name, known, fame, aliases, qualifier FROM tenable_entities WHERE release_id = ${release} AND kind = ${kind}`;
   if (rows.length === 0) throw new Error(`Release ${release} has no ${kind} entities here; seed the release first`);
-  return buildDirectory(kind, release, rows);
+  const latin = buildDirectory(kind, release, rows);
+  const pin = await russianPinOf(tx, kind, release);
+  const russian = pin ? await russianRows(tx, kind, release, rows, pin) : null;
+  return russian ? withRussian(latin, buildDirectory(kind, release, russian, 'cyrillic')) : latin;
 }
 
 /** Every list against its directory (reachable slots), in the target database's own releases. */
@@ -79,7 +83,9 @@ async function checkPlayable(tx: Sql, lists: readonly SeedList[]): Promise<void>
   for (const list of lists) {
     const key = `${list.kind}:${list.release}`;
     if (!directories.has(key)) directories.set(key, await loadDirectory(tx, list.kind, list.release));
-    const problems = listProblems(list, directories.get(key)!);
+    const directory = directories.get(key)!;
+    // A release with Russian names keeps every list playable in Cyrillic too.
+    const problems = [...listProblems(list, directory), ...(directory.russian ? listProblems(list, directory.russian).map((p) => `in Russian: ${p}`) : [])];
     // Problems name slot numbers and entity ids, never names.
     if (problems.length > 0) failures.push(`${list.id}: ${problems.slice(0, 3).join('; ')}`);
   }

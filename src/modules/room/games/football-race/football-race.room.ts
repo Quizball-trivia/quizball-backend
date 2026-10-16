@@ -59,7 +59,7 @@ export const footballRaceRoomEngine: RoomEngine<FootballRaceContent, FootballRac
     return null;
   },
 
-  async hydrate(content, tx) {
+  async hydrate(content, _state, tx) {
     return content.data ? content : { pack: content.pack, data: await loadRaceTournament(content.pack.release, content.pack.tournament, tx) };
   },
 

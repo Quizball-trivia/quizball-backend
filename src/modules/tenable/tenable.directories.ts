@@ -66,8 +66,10 @@ export const tenableDirectories = {
       const started = Date.now();
       const entities = await rows(kind, releaseId);
       if (entities.length === 0) throw new Error(`tenable_release_empty:${key}`);
+      const fetched = Date.now();
       const directory = buildDirectory(kind, releaseId, entities);
-      logger.info({ kind, releaseId, entities: directory.size, ms: Date.now() - started }, 'Tenable directory loaded');
+      const done = Date.now();
+      logger.info({ kind, releaseId, entities: directory.size, ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;
     })();
     held.set(key, loading);

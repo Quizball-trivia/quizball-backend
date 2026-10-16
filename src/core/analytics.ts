@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import { logger } from './logger.js';
 import { sql } from '../db/index.js';
+import { parseClientPlatform, type ClientPlatform } from './client-platform.js';
 import {
   campaignAttributionProperties,
   type CampaignAttribution,
@@ -276,12 +277,15 @@ export function trackAccountCreated(
   method: string,
   attribution?: CampaignAttribution | null,
   utm?: UtmAttribution | null,
+  clientPlatform: ClientPlatform = 'unknown',
 ): void {
   identifyUserProfile(user);
 
   trackEvent('account_created', user.id, {
     method,
     is_new_user: true,
+    signup_platform: parseClientPlatform(clientPlatform),
+    signup_attribution_version: 1,
     ...(attribution ? campaignAttributionProperties(attribution) : {}),
     ...(utm ? utmAttributionProperties(utm) : {}),
   });

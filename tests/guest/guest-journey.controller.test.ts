@@ -20,4 +20,10 @@ describe('guest link member authentication boundary', () => {
   it('rejects arbitrary steps and invalid retry identifiers', () => {
     expect(journeyActivitySchema.safeParse({ event_id: 'fake', step: 'converted', mode: 'ranked' }).success).toBe(false);
   });
+  it.each([['android', 'android'], ['ios', 'ios'], ['web', 'web'], ['fabricated', 'unknown'], [undefined, 'unknown']])('records only an explicit supported platform: %s', async (header, expected) => {
+    m.hasCountry.mockResolvedValue(true);
+    await guestJourneyController.activity({ headers: { 'x-quizball-platform': header }, guest: { id: 'guest' },
+      validated: { body: { event_id: 'offline-id', step: 'play_started', mode: 'auction' } } } as never, res() as never);
+    expect(m.activity).toHaveBeenCalledWith('guest', null, 'offline-id', 'play_started', 'auction', expected);
+  });
 });

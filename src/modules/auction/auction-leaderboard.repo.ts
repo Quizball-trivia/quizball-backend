@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { boardFilterSql, GLOBAL_BOARD, type BoardFilter } from '../leaderboards/board-filter.js';
 import type {
   AuctionLeaderboardEntry,
   AuctionUserRankResult,
@@ -17,9 +18,9 @@ export const auctionLeaderboardRepo = {
   async listLeaderboard(
     limit: number,
     offset: number,
-    country?: string
+    filter: BoardFilter = GLOBAL_BOARD
   ): Promise<AuctionLeaderboardEntry[]> {
-    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+    const countryFilter = boardFilterSql(filter);
     return sql<AuctionLeaderboardEntry[]>`
       SELECT
         u.id AS "userId",
@@ -38,7 +39,7 @@ export const auctionLeaderboardRepo = {
         AND u.pending_deletion_at IS NULL
         AND u.auction_points > 0
         ${countryFilter}
-      ORDER BY u.auction_points DESC, u.updated_at ASC
+      ORDER BY u.auction_points DESC, u.updated_at ASC, u.id ASC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -53,8 +54,8 @@ export const auctionLeaderboardRepo = {
    * listLeaderboard — including the updated_at tiebreaker — so a user's reported
    * rank always matches the row they occupy on the paged list.
    */
-  async getUserRank(userId: string, country?: string): Promise<AuctionUserRankResult | null> {
-    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+  async getUserRank(userId: string, filter: BoardFilter = GLOBAL_BOARD): Promise<AuctionUserRankResult | null> {
+    const countryFilter = boardFilterSql(filter);
     const [result] = await sql<AuctionUserRankResult[]>`
       WITH target AS (
         SELECT u.id, u.auction_points, u.updated_at, u.country,
@@ -85,6 +86,7 @@ export const auctionLeaderboardRepo = {
            AND (
              u.auction_points > target.auction_points
              OR (u.auction_points = target.auction_points AND u.updated_at < target.updated_at)
+             OR (u.auction_points = target.auction_points AND u.updated_at = target.updated_at AND u.id < target.id)
            )
         ) AS rank,
         (SELECT COUNT(*)::int
@@ -100,5 +102,32 @@ export const auctionLeaderboardRepo = {
       FROM target
     `;
     return result ?? null;
+  },
+
+  /** The player directly above `userId` on the board, under the list's ordering. */
+  async getNextAbove(userId: string, filter: BoardFilter = GLOBAL_BOARD): Promise<{ username: string; points: number } | null> {
+    const boardFilter = boardFilterSql(filter);
+    const [row] = await sql<{ username: string; points: number }[]>`
+      WITH target AS (
+        SELECT id, auction_points, updated_at FROM users WHERE id = ${userId}
+      )
+      SELECT COALESCE(u.nickname, 'Player') AS username, u.auction_points AS points
+      FROM users u, target
+      WHERE u.is_ai = false AND u.is_guest = false
+        AND u.is_seed = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND u.auction_points > 0
+        ${boardFilter}
+        AND (
+          u.auction_points > target.auction_points
+          OR (u.auction_points = target.auction_points AND u.updated_at < target.updated_at)
+          OR (u.auction_points = target.auction_points AND u.updated_at = target.updated_at AND u.id < target.id)
+        )
+      ORDER BY u.auction_points ASC, u.updated_at DESC, u.id DESC
+      LIMIT 1
+    `;
+    return row ?? null;
   },
 };

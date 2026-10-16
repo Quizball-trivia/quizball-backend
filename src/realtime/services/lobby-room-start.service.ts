@@ -1,6 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { roomService, ROOM_MAX_SEATS } from '../../modules/room/room.service.js';
+import { roomGameSeats } from '../../modules/room/room.types.js';
 import { RoomError, type RoomGameId } from '../../modules/room/room.types.js';
 import { emitLobbyState, orderLobbyMembersByJoinTime } from '../lobby-utils.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -21,7 +22,7 @@ export async function startRoomMatchFromLobby(
   input: { lobbyId: string; roomGame: RoomGameId; options?: Record<string, unknown> | null },
 ): Promise<void> {
   const members = orderLobbyMembersByJoinTime(await lobbiesRepo.listMembersWithUser(input.lobbyId));
-  if (members.length < 2 || members.length > ROOM_MAX_SEATS || members.some((m) => m.is_ai)) throw new RoomError('room_needs_players');
+  if (members.length < 2 || members.length > roomGameSeats(input.roomGame, ROOM_MAX_SEATS) || members.some((m) => m.is_ai)) throw new RoomError('room_needs_players');
   if (!(await allowDuelOperation(socketIpBucket(socket), 'start_ip', 'room'))) throw new RoomError('rate_limited', 429);
   for (const member of members) {
     if (!(await allowDuelOperation(member.user_id, 'start', 'room'))) throw new RoomError('rate_limited', 429);

@@ -166,6 +166,14 @@ export const roomRepo = {
     return rows.map((r) => ({ ...r, avatar_customization: parseStoredAvatarCustomization(r.avatar_customization) }));
   },
 
+  /** The seats' languages as of now, row-locked: a language change waits for the start, or the start sees it. */
+  async lockSeatLocales(tx: TransactionSql, id: string): Promise<Map<string, RoomLocale>> {
+    const rows = await exec(tx)<Array<{ user_id: string; locale: RoomLocale }>>`
+      SELECT user_id, locale FROM room_seats WHERE match_id = ${id} ORDER BY slot FOR UPDATE
+    `;
+    return new Map(rows.map((r) => [r.user_id, r.locale]));
+  },
+
   async markReady(tx: TransactionSql, id: string, userId: string, locale: RoomLocale): Promise<void> {
     await exec(tx)`UPDATE room_seats SET ready_at = COALESCE(ready_at, clock_timestamp()), locale = ${locale} WHERE match_id = ${id} AND user_id = ${userId}`;
   },

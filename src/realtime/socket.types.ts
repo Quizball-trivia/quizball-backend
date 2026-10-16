@@ -696,11 +696,11 @@ export interface WarmupScoresPayload {
 
 export interface AuctionStartAiMatchPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es' | 'tr';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru';
 }
 
 export interface FootballGridSearchStartPayload {
-  locale?: 'en' | 'ka' | 'es' | 'tr';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru';
 }
 
 export interface FootballGridVersionedCommandPayload {
@@ -712,7 +712,7 @@ export interface FootballGridVersionedCommandPayload {
 export interface FootballGridSubmitAnswerPayload extends FootballGridVersionedCommandPayload {
   cellIndex: number;
   text: string;
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   optionPlayerId?: string;
 }
 
@@ -765,7 +765,7 @@ export interface FootballGridOptionsPayload {
   cellIndex: number;
   turnNumber: number;
   stateVersion: number;
-  options: Array<{ playerId: string; name: string; nameKa: string | null; imageUrl: string | null }> | null;
+  options: Array<{ playerId: string; name: string; nameKa: string | null; nameRu: string | null; imageUrl: string | null }> | null;
 }
 
 export interface FootballGridTurnResolvedPayload extends FootballGridStatePayload {
@@ -808,7 +808,7 @@ export interface FootballGridRematchStatePayload {
 
 export interface AuctionSearchStartPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es' | 'tr';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru';
 }
 
 export interface AuctionBidPayload {
@@ -836,7 +836,7 @@ export interface AuctionUiReadyPayload {
 
 export interface AuctionSearchStartedPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -846,7 +846,7 @@ export interface AuctionSearchStartedPayload {
 
 export interface AuctionSearchStatusPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -883,7 +883,7 @@ export interface AuctionMatchFoundPayload {
    * count while it is filling; identities become authoritative at match
    * creation time. */
   botPlayers: AuctionMatchBotSummary[];
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   formation: FormationName;
   /** Server clock used by clients to compensate for local clock skew. */
   serverNow: string;
@@ -898,7 +898,7 @@ export interface AuctionMatchFoundPayload {
 
 export interface AuctionMatchStartedPayload {
   matchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
   state: PublicAuctionMatchState;
   serverNow?: string;
 }
@@ -1417,7 +1417,7 @@ export interface ClientToServerEvents {
   }) => void;
   /** Host only, room-game rooms: the game's options (null = back to its defaults). Changing them un-readies everyone. */
   'lobby:room_options': (data: { lobbyId?: string; options: Record<string, unknown> | null }) => void;
-  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame }) => void;
+  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame; locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;

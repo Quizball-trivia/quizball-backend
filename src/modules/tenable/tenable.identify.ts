@@ -1,4 +1,4 @@
-import { normalizeName, surnameOf, typoBudget, withinEdits } from '../footballers/footballers.text.js';
+import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic, surnameOf as surnameOfLatin, surnameOfCyrillic, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
  * Who a typed text means, decided against every entity of one kind and never against a hidden list: every verdict a
@@ -30,11 +30,22 @@ export const DOMINANT_MIN_FAME = 40;
 export const DOMINANT_RATIO = 0.5;
 /** Words that never identify anyone on their own. */
 const PARTICLES = new Set(['de', 'da', 'do', 'dos', 'das', 'del', 'della', 'di', 'van', 'von', 'der', 'den', 'el', 'al', 'la', 'le', 'los', 'las', 'bin', 'ben', 'mac', 'mc', 'st', 'y', 'e', 'fc', 'cf', 'sc', 'ac', 'cd', 'club']);
+/** The same words as Russian media write them (in the compared form: й is и). */
+const PARTICLES_CYRILLIC = new Set(['де', 'да', 'ду', 'дус', 'дас', 'дель', 'делла', 'ди', 'ван', 'фон', 'дер', 'ден', 'эль', 'аль', 'ла', 'ле', 'лос', 'лас', 'бин', 'бен', 'мак', 'сент', 'и', 'фк', 'ск', 'клуб', 'сборная']);
+
+/** How names are compared: the Latin alphabet (every list's own names), or Cyrillic (a release's Russian names). */
+export type DirectoryAlphabet = 'latin' | 'cyrillic';
+const ALPHABETS = {
+  latin: { normalize: normalizeLatin, surname: surnameOfLatin, particles: PARTICLES },
+  cyrillic: { normalize: normalizeNameCyrillic, surname: surnameOfCyrillic, particles: PARTICLES_CYRILLIC },
+} as const;
 const MIN_WORD = 3;
 export const SUGGEST_MIN = 2;
 export const SUGGEST_MAX = 40;
 export const SUGGEST_LIMIT = 8;
 const IDENTITY_CACHE = 5_000;
+/** Queries up to this long are answered from a table built with the directory (a short prefix matches thousands of names). */
+const SHORT_PREFIX = 3;
 
 export interface Directory {
   kind: EntityKind;
@@ -43,11 +54,25 @@ export interface Directory {
   entity(eid: string): TenableEntity | undefined;
   identify(text: string): Identity;
   suggest(query: string, limit?: number): Suggestion[];
+  /** The release under its Russian names (every entity of it), when the release has them. */
+  russian?: Directory;
 }
 
 const compact = (key: string) => key.replace(/ /g, '');
 
-export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[]): Directory {
+/** What a suggestion shows, from the normalised name and known name: whole, compact and word by word. */
+function visibleKeys(own: readonly string[], particles: ReadonlySet<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const name of own) {
+    if (!name) continue;
+    keys.add(name).add(compact(name));
+    for (const word of name.split(' ')) if (!particles.has(word)) keys.add(word);
+  }
+  return keys;
+}
+
+export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[], alphabet: DirectoryAlphabet = 'latin'): Directory {
+  const { normalize: normalizeName, surname: surnameOf, particles } = ALPHABETS[alphabet];
   // Best known first, ties by id: every "best known" decision depends on the release only.
   const all = [...rows].sort((a, b) => b.fame - a.fame || (a.eid < b.eid ? -1 : a.eid > b.eid ? 1 : 0));
   const byEid = new Map(all.map((e, i) => [e.eid, i]));
@@ -55,29 +80,75 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
 
   const names = new Map<string, number[]>();
   const words = new Map<string, number[]>();
+  // Words of the shown name that identify no one (a first name, a middle word): found by suggestions only.
+  const shownOnly = new Map<string, number[]>();
+  // Entities are added in index order, so a repeat of the same key for one entity is always the last holder.
   const put = (map: Map<string, number[]>, key: string, i: number) => {
     if (!key) return;
     const list = map.get(key);
     if (!list) map.set(key, [i]);
-    else if (!list.includes(i)) list.push(i);
+    else if (list[list.length - 1] !== i) list.push(i);
   };
   const typoKeys: Array<[string, number]> = [];
+  // Suggestions matching the shown name come before ones found only through an alias or another spelling ("sp":
+  // Sporting before Tottenham's "Spurs"). The best known holders of every short prefix, the two kinds apart: entities
+  // arrive best known first, so the first few of each are the answer (the same as rank() below, built in one pass).
+  const shortShown = new Map<string, number[]>();
+  const shortOther = new Map<string, number[]>();
+  // The last entity each short prefix was counted for, per kind: no per-entity sets on a 100k-name release.
+  const lastShown = new Map<string, number>();
+  const lastOther = new Map<string, number>();
+  const keepTop = (map: Map<string, number[]>, prefix: string, i: number) => {
+    const top = map.get(prefix);
+    if (!top) map.set(prefix, [i]);
+    else if (top.length < SUGGEST_LIMIT) top.push(i);
+  };
+  const other = new Set<string>();
   all.forEach((e, i) => {
-    const whole = new Set([e.name, e.known, ...e.aliases].map(normalizeName).filter(Boolean));
+    other.clear();
+    const own = [normalizeName(e.name), normalizeName(e.known)];
+    const whole = new Set([...own, ...e.aliases.map(normalizeName)].filter(Boolean));
     for (const key of whole) {
-      typoKeys.push([compact(key), i]);
+      const joined = compact(key);
+      typoKeys.push([joined, i]);
       // A name of several words identifies outright; a single word (a known name like "Vega", an alias, a surname)
       // always goes through the dominance rule, whichever way the release happened to classify it.
       if (key.includes(' ')) {
+        other.add(key).add(joined);
         put(names, key, i);
-        put(names, compact(key), i);
+        put(names, joined, i);
       }
     }
     // One word identifies only as a surname or a one-word name, never as a first name or a particle.
-    for (const word of new Set([surnameOf(e.name), ...[...whole].filter((k) => !k.includes(' '))])) {
-      if (word.length >= MIN_WORD && !PARTICLES.has(word)) put(words, word, i);
+    for (const word of new Set([surnameOf(own[0]), ...[...whole].filter((k) => !k.includes(' '))])) {
+      if (word.length >= MIN_WORD && !particles.has(word)) {
+        other.add(word);
+        put(words, word, i);
+      }
+    }
+    const visible = visibleKeys(own, particles);
+    for (const key of visible) {
+      if (!other.has(key)) put(shownOnly, key, i);
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i) continue;
+        lastShown.set(prefix, i);
+        keepTop(shortShown, prefix, i);
+      }
+    }
+    for (const key of other) {
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i || lastOther.get(prefix) === i) continue;
+        lastOther.set(prefix, i);
+        keepTop(shortOther, prefix, i);
+      }
     }
   });
+  // Build-only state shares the scope the returned functions keep alive.
+  lastShown.clear();
+  lastOther.clear();
+  other.clear();
   // Typo search is bucketed by first letter and length: a typo in the first letter is not forgiven (the suggestions
   // cover it), and one lookup compares a few thousand keys at most instead of the whole release.
   const typoBuckets = new Map<string, Array<[string, number]>>();
@@ -87,6 +158,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (bucket) bucket.push(entry);
     else typoBuckets.set(bucketKey, [entry]);
   }
+  typoKeys.length = 0;
 
   /** One holder, or the dominant one of several, or ambiguous. Indices are best known first. */
   const decide = (holders: readonly number[]): Identity => {
@@ -105,7 +177,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
       const exact = names.get(key);
       if (exact) return decide(exact);
     } else {
-      if (PARTICLES.has(key) || key.length < MIN_WORD) return { kind: 'unknown' };
+      if (particles.has(key) || key.length < MIN_WORD) return { kind: 'unknown' };
       const holders = words.get(key) ?? names.get(key);
       if (holders) return decide(holders);
     }
@@ -141,12 +213,10 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return found;
   };
 
-  // Prefix search: every name key (whole names, compact forms and identifying words), sorted once.
-  const prefixKeys = [...new Set([...names.keys(), ...words.keys()])].sort();
-  const holdersOf = (k: string) => [...(names.get(k) ?? []), ...(words.get(k) ?? [])];
-  const suggest = (query: string, limit = SUGGEST_LIMIT): Suggestion[] => {
-    const q = normalizeName(query.slice(0, SUGGEST_MAX));
-    if (q.length < SUGGEST_MIN) return [];
+  // Prefix search: every key (whole names, compact forms, identifying words, shown-only words), sorted once.
+  const prefixKeys = [...new Set([...names.keys(), ...words.keys(), ...shownOnly.keys()])].sort();
+  const holdersOf = (k: string) => [...(names.get(k) ?? []), ...(words.get(k) ?? []), ...(shownOnly.get(k) ?? [])];
+  const rank = (q: string, max: number): number[] => {
     let lo = 0;
     let hi = prefixKeys.length;
     while (lo < hi) {
@@ -156,8 +226,23 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     }
     const found = new Set<number>();
     for (let i = lo; i < prefixKeys.length && prefixKeys[i].startsWith(q); i += 1) for (const h of holdersOf(prefixKeys[i])) found.add(h);
-    return [...found].sort((a, b) => a - b).slice(0, Math.max(0, Math.min(limit, SUGGEST_LIMIT)))
-      .map((i) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier }));
+    const first: number[] = [];
+    const rest: number[] = [];
+    for (const i of [...found].sort((a, b) => a - b)) {
+      if (first.length >= max) break;
+      const shown = [...visibleKeys([normalizeName(all[i].name), normalizeName(all[i].known)], particles)].some((k) => k.startsWith(q));
+      if (shown) first.push(i);
+      else if (rest.length < max) rest.push(i);
+    }
+    return [...first, ...rest].slice(0, max);
+  };
+  const shortTop = (q: string) => [...(shortShown.get(q) ?? []), ...(shortOther.get(q) ?? [])].slice(0, SUGGEST_LIMIT);
+  const suggest = (query: string, limit = SUGGEST_LIMIT): Suggestion[] => {
+    const q = normalizeName(query.slice(0, SUGGEST_MAX));
+    if (q.length < SUGGEST_MIN) return [];
+    const max = Math.max(0, Math.min(limit, SUGGEST_LIMIT));
+    const top = q.length <= SHORT_PREFIX ? shortTop(q).slice(0, max) : rank(q, max);
+    return top.map((i) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier }));
   };
 
   return {
@@ -168,6 +253,25 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     identify,
     suggest,
   };
+}
+
+/**
+ * The release with its Russian names: a text written in Cyrillic is read (and suggested) with the Russian names, any
+ * other text exactly as before. Ids are the same in both, so `entity` and a picked id stay the release's own.
+ */
+export function withRussian(latin: Directory, russian: Directory): Directory {
+  if (russian.kind !== latin.kind || russian.releaseId !== latin.releaseId || russian.size !== latin.size) throw new Error('Russian names do not match the release');
+  return {
+    ...latin,
+    identify: (text) => (isCyrillicText(text) ? russian.identify(text) : latin.identify(text)),
+    suggest: (query, limit) => (isCyrillicText(query) ? russian.suggest(query, limit) : latin.suggest(query, limit)),
+    russian,
+  };
+}
+
+/** The name to show for an entity: its Russian name to a Russian player when the release has one. */
+export function displayName(directory: Directory, eid: string, russian: boolean): string | null {
+  return (russian ? directory.russian?.entity(eid)?.name : undefined) ?? directory.entity(eid)?.name ?? null;
 }
 
 export type Verdict =

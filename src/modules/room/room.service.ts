@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
+import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
-import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus } from './room.types.js';
+import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
 export const ROOM_READY_MS = 20_000;
@@ -52,7 +53,8 @@ const unlessUnsupported = <T>(work: Promise<T | null>): Promise<T | null> => wor
   throw error;
 });
 
-const hydrated = async (engine: AnyRoomEngine, content: unknown): Promise<unknown> => (engine.hydrate ? engine.hydrate(content) : content);
+const hydrated = async (engine: AnyRoomEngine, content: unknown, state: unknown, tx?: TransactionSql): Promise<unknown> =>
+  (engine.hydrate ? engine.hydrate(content, (state ?? null) as EngineState | null, tx) : content);
 
 /** A schema error can quote the content (an answer): callers and logs only ever get a code. */
 function parseContent(engine: AnyRoomEngine, raw: unknown): unknown {
@@ -104,6 +106,12 @@ const markHydrated = (id: string, content: unknown): void => {
   hydratedContent.add(content);
 };
 
+/** The Russian names a match starting now would freeze, loaded before the lock; a failure only means it freezes none. */
+async function warmRussian(): Promise<void> {
+  const active = await activeRussianVersion().catch(() => null);
+  if (active) await russianIndex(active).catch(() => undefined);
+}
+
 /**
  * Hydrates a live match's content before any transaction: a hydrate may read other tables (a footballer or Tenable
  * directory), and doing that under the match lock, with a transaction slot held, can starve the pool when many matches
@@ -112,15 +120,18 @@ const markHydrated = (id: string, content: unknown): void => {
  * presence), never falling back to the cold load under the lock.
  */
 async function prepare(matchId: string): Promise<void> {
+  await warmRussian();
   const cached = contentCache.get(matchId);
   if (cached && typeof cached === 'object' && hydratedContent.has(cached)) return;
   try {
     const row = await roomRepo.getMatch(matchId);
-    if (!row || !isLive(row.status)) return;
+    if (!row) return;
     const engine = roomEngineFor(row.game, row.engine_version);
     if (!engine) return;
     const parsed = await contentOf(undefined, row, engine);
-    if (parsed !== null) markHydrated(row.id, await hydrated(engine, parsed));
+    // With the match's state: a match that froze Russian names loads them here, outside the lock. An ended match is
+    // loaded too (a replayed command reads it under the lock) but not kept.
+    if (parsed !== null) markHydrated(row.id, await hydrated(engine, parsed, row.state));
   } catch (error) {
     if (error instanceof RoomError) throw error;
     logger.warn({ err: error, matchId }, 'Room content could not be prepared before the lock');
@@ -163,7 +174,15 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
     if (isLive(row.status)) await roomRepo.finish(tx, row, { status: 'cancelled', state: row.state, result: cancelledResult() });
     return null;
   }
-  const ready = await hydrated(engine, content);
+  let ready: unknown;
+  try {
+    ready = await hydrated(engine, content, row.state, tx);
+  } catch (error) {
+    // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
+    contentCache.delete(row.id);
+    if (error instanceof RoomContentUnavailable) throw new RoomError('room_content_unavailable', 503);
+    throw error;
+  }
   if (isLive(row.status)) markHydrated(row.id, ready);
   return { row, seats, content: ready, engine };
 }
@@ -254,7 +273,14 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const admitted = ready.sort((a, b) => a.slot - b.slot).map((s, seat) => ({ userId: s.user_id, seat }));
   await roomRepo.admit(tx, l.row.id, admitted);
   const nowMs = l.row.now.getTime();
-  let state = l.engine.start(admitted.length, l.content, nowMs);
+  const localeOf = await roomRepo.lockSeatLocales(tx, l.row.id);
+  // Only a version this process holds (prepare warmed it): nothing is loaded under the match lock.
+  const active = knownActiveRussianVersion();
+  const russianVersion = active && heldRussianIndex(active) ? active : null;
+  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
+  // What the match froze (its Russian names) is attached before anything reads it.
+  l = { ...l, content: await hydrated(l.engine, l.content, state, tx) };
+  markHydrated(l.row.id, l.content);
   // Admitted but without a socket right now: away from the start, with its own absence window.
   const away = ready.filter((s) => !s.connected);
   if (away.length > 0) {
@@ -344,11 +370,11 @@ export const roomService = {
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
   async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
-    if (input.players.length < 2 || input.players.length > ROOM_MAX_SEATS) throw new RoomError('room_needs_players');
+    if (input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
-    const dealt = await engine.deal((wanted, tag) => roomRepo.pickPool(input.game, input.players.map((p) => p.userId), wanted, tag ?? null), options);
+    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : input.players.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);
@@ -566,7 +592,7 @@ export const roomService = {
     const state = row.state as EngineState | null;
     const engine = roomEngineFor(row.game, row.engine_version);
     const parsed = state && engine ? await contentOf(undefined, row, engine) : null;
-    const content = parsed !== null && engine ? await hydrated(engine, parsed) : null;
+    const content = parsed !== null && engine ? await hydrated(engine, parsed, state) : null;
     for (const userId of recipients) {
       const snapshot = projectSnapshot(row, seats, state, content, engine, userId, localeOverride);
       if (snapshot) snapshots.set(userId, snapshot);
@@ -603,7 +629,7 @@ export const roomService = {
     const engine = roomEngineFor(found.game, found.engine_version);
     const content = engine?.refusal ? engine.parseContent(found.content) : null;
     if (!engine?.refusal || content === null) return null;
-    const refusal = engine.refusal(found.state as EngineState, await hydrated(engine, content), round, text);
+    const refusal = engine.refusal(found.state as EngineState, await hydrated(engine, content, found.state), round, text);
     return refusal && { ...refusal, game: found.game };
   },
 };

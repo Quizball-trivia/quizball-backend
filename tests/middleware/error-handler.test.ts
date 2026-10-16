@@ -60,6 +60,20 @@ describe('Error Handler Middleware', () => {
       });
     });
 
+    app.get('/read-only-error', (_req: Request, _res: Response) => {
+      throw Object.assign(new Error('cannot INSERT INTO private_table'), { code: '25006' });
+    });
+
+    app.get('/wrapped-read-only-error', (_req: Request, _res: Response) => {
+      throw new AppError('private query failed', 500, ErrorCode.INTERNAL_ERROR, {
+        cause: { code: '25006' },
+      });
+    });
+
+    app.get('/database-permission-error', (_req: Request, _res: Response) => {
+      throw Object.assign(new Error('permission denied'), { code: '42501' });
+    });
+
     app.get('/rate-limit-error', (_req: Request, _res: Response) => {
       throw new RateLimitError('Authentication is busy', {
         source: 'application_auth_bulkhead',
@@ -196,6 +210,27 @@ describe('Error Handler Middleware', () => {
         details: { source: 'application_auth_bulkhead' },
         request_id: 'auth-busy-1',
       });
+    });
+
+    it.each(['/read-only-error', '/wrapped-read-only-error'])
+      ('returns safe retryable 503 for a read-only database failure (%s)', async (path) => {
+        const response = await request(app).get(path).set('X-Request-ID', 'db-read-only');
+        expect(response.status).toBe(503);
+        expect(response.headers['retry-after']).toBe('1');
+        expect(response.body).toEqual({
+          code: 'DB_OVERLOADED',
+          message: 'Database temporarily unavailable',
+          details: null,
+          request_id: 'db-read-only',
+        });
+        expect(response.text).not.toContain('private');
+      });
+
+    it('does not mislabel database permission bugs as retryable', async () => {
+      const response = await request(app).get('/database-permission-error');
+      expect(response.status).toBe(500);
+      expect(response.body.code).toBe('INTERNAL_ERROR');
+      expect(response.headers['retry-after']).toBeUndefined();
     });
   });
 

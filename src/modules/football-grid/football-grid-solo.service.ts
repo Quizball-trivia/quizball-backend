@@ -23,7 +23,7 @@ interface SoloBoardContent {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
-  namesById: Map<string, { nameEn: string; nameKa: string | null }>;
+  namesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>;
 }
 
 const contentCache = new Map<string, { expiresAt: number; value: Promise<SoloBoardContent> }>();
@@ -33,12 +33,12 @@ async function loadContent(boardId: string): Promise<SoloBoardContent> {
   if (!context) throw new NotFoundError('Football Grid board not found');
   const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
   const validPlayerIdsByCell = new Map<number, string[]>();
-  const namesById = new Map<string, { nameEn: string; nameKa: string | null }>();
+  const namesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>();
   for (const answer of context.answers) {
     const cell = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
     cell.push(answer.footballPlayerId);
     validPlayerIdsByCell.set(answer.cellIndex, cell);
-    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa });
+    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
   }
   const boardPlayerIds = [...namesById.keys()];
   return {
@@ -93,6 +93,7 @@ export interface FootballGridSoloPlayer {
   playerId: string;
   name: string;
   nameKa: string | null;
+  nameRu: string | null;
   imageUrl: string | null;
 }
 
@@ -148,7 +149,7 @@ export const footballGridSoloService = {
         usedPlayerIds: [],
         validPlayerNames: cellPlayerIds.flatMap((id) => {
           const names = content.namesById.get(id);
-          return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa }] : [];
+          return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
         }),
       });
       outcome = resolved.outcome;
@@ -165,6 +166,7 @@ export const footballGridSoloService = {
         playerId,
         name: shown?.name ?? names?.nameEn ?? '',
         nameKa: shown?.nameKa ?? names?.nameKa ?? null,
+        nameRu: shown?.nameRu ?? names?.nameRu ?? null,
         imageUrl: shown?.imageUrl ?? null,
       },
     };
@@ -196,7 +198,7 @@ export const footballGridSoloService = {
     return Array.from({ length: 9 }, (_, cellIndex) => ({
       cellIndex,
       players: (players.get(cellIndex) ?? []).slice(0, perCell).map((player) => ({
-        playerId: player.playerId, name: player.name, nameKa: player.nameKa, imageUrl: player.imageUrl,
+        playerId: player.playerId, name: player.name, nameKa: player.nameKa, nameRu: player.nameRu, imageUrl: player.imageUrl,
       })),
     }));
   },

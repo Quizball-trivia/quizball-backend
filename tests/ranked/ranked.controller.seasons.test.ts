@@ -73,7 +73,7 @@ describe('rankedController season reads', () => {
       scope: 'global', limit: 25, offset: 10, season: BATCH_ID,
     }), res);
 
-    expect(rankedService.getArchivedLeaderboard).toHaveBeenCalledWith(BATCH_ID, 25, 10, undefined);
+    expect(rankedService.getArchivedLeaderboard).toHaveBeenCalledWith(BATCH_ID, 25, 10, { kind: 'global' });
     expect(rankedService.getLeaderboard).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({ entries: [] });
   });
@@ -91,7 +91,7 @@ describe('rankedController season reads', () => {
 
     await rankedController.getUserRank(request({ scope: 'country', season: BATCH_ID }), res);
 
-    expect(rankedService.getArchivedUserRank).toHaveBeenCalledWith(BATCH_ID, USER_ID, 'GE');
+    expect(rankedService.getArchivedUserRank).toHaveBeenCalledWith(BATCH_ID, USER_ID, { kind: 'country', country: 'GE' });
     expect(rankedService.ensureProfile).not.toHaveBeenCalled();
     expect(rankedService.getUserRank).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith(null);

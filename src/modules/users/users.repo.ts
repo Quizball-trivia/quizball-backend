@@ -2,6 +2,7 @@ import { guestTokenHash, linkGuestInTx } from '../guest/guest-journey.repo.js';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json, User } from '../../db/types.js';
 import type { AvatarCustomization } from './avatar-customization.js';
+import { parseClientPlatform, type ClientPlatform } from '../../core/client-platform.js';
 
 /** Free nickname changes before the cooldown applies. */
 export const NICKNAME_FREE_CHANGES = 2;
@@ -34,6 +35,7 @@ function isNicknameUniqueViolation(error: unknown): boolean {
 }
 
 export interface CreateUserData {
+  signupPlatform?: ClientPlatform;
   email?: string | null;
   phoneNumber?: string | null;
   phoneVerifiedAt?: string | null;
@@ -61,6 +63,12 @@ export interface UpdateUserData {
   favoriteClub?: string | null;
   preferredLanguage?: string | null;
   onboardingComplete?: boolean;
+  /**
+   * Profile edits: a switch to a different club (or country) lands only while
+   * its 30-day lock is open, and stamps club_changed_at / country_changed_at.
+   * Decided against the locked row, so a stale request cannot slip through.
+   */
+  enforceAffiliationLock?: boolean;
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
@@ -384,6 +392,14 @@ export const usersRepo = {
       );
 
       if (identityResult.length > 0) {
+        // Immutable signup source, committed with the winning user insert.
+        // Existing identities and retries never overwrite it. Missing legacy
+        // client declarations stay unknown; a later app login is not a signup.
+        await tx.unsafe(
+          `INSERT INTO user_signup_attribution (user_id, platform)
+           VALUES ($1, $2)`,
+          [user.id, parseClientPlatform(userData.signupPlatform)]
+        );
         const hash = guestTokenHash(guestToken);
         if (hash) await linkGuestInTx(tx, hash, user.id, true);
         return { user, created: true };
@@ -782,7 +798,8 @@ export const usersRepo = {
     return result.count > 0;
   },
 
-  async update(id: string, data: UpdateUserData): Promise<User | null> {
+  async update(id: string, data: UpdateUserData, tx?: TransactionSql): Promise<User | null> {
+    const db = tx ? (tx as unknown as typeof sql) : sql;
     const phoneNumber = normalizeOptionalText(data.phoneNumber);
     const phoneVerifiedAt =
       data.phoneNumber !== undefined && !phoneNumber
@@ -790,9 +807,7 @@ export const usersRepo = {
         : data.phoneVerifiedAt ?? null;
     // Use CASE to only update fields that are explicitly provided (not undefined)
     // undefined = keep existing, null = set to null, value = set to value
-    const [user] = await sql<User[]>`
-      UPDATE users
-      SET
+    const assignments = db`
         nickname = CASE WHEN ${data.nickname !== undefined} THEN ${data.nickname ?? null} ELSE nickname END,
         country = CASE WHEN ${data.country !== undefined} THEN ${data.country ?? null} ELSE country END,
         phone_number = CASE WHEN ${data.phoneNumber !== undefined} THEN ${phoneNumber} ELSE phone_number END,
@@ -802,13 +817,59 @@ export const usersRepo = {
           ELSE phone_verified_at
         END,
         avatar_url = CASE WHEN ${data.avatarUrl !== undefined} THEN ${data.avatarUrl ?? null} ELSE avatar_url END,
-        avatar_customization = CASE WHEN ${data.avatarCustomization !== undefined} THEN ${sql.json((data.avatarCustomization ?? null) as Json)}::jsonb ELSE avatar_customization END,
+        avatar_customization = CASE WHEN ${data.avatarCustomization !== undefined} THEN ${db.json((data.avatarCustomization ?? null) as Json)}::jsonb ELSE avatar_customization END,
         favorite_club = CASE WHEN ${data.favoriteClub !== undefined} THEN ${data.favoriteClub ?? null} ELSE favorite_club END,
         preferred_language = CASE WHEN ${data.preferredLanguage !== undefined} THEN ${data.preferredLanguage ?? null} ELSE preferred_language END,
         onboarding_complete = CASE WHEN ${data.onboardingComplete !== undefined} THEN ${data.onboardingComplete ?? false} ELSE onboarding_complete END,
         updated_at = NOW()
-      WHERE id = ${id}
-      RETURNING *
+    `;
+
+    if (!data.enforceAffiliationLock) {
+      const [user] = await db<User[]>`
+        UPDATE users
+        SET ${assignments}
+        WHERE id = ${id}
+        RETURNING *
+      `;
+      return user ?? null;
+    }
+
+    // Moving between two different countries/clubs is a switch; setting one for
+    // the first time or resubmitting the same (any spelling of a club) is not.
+    const newClub = data.favoriteClub ?? null;
+    const [user] = await db<User[]>`
+      WITH current_row AS (
+        SELECT id, country AS old_country, favorite_club AS old_club,
+               club_changed_at AS old_club_changed_at, country_changed_at AS old_country_changed_at
+        FROM users
+        WHERE id = ${id}
+        FOR UPDATE
+      ), flags AS (
+        SELECT
+          id AS flag_id, old_club_changed_at, old_country_changed_at,
+          (${data.country !== undefined} AND old_country IS NOT NULL
+            AND old_country IS DISTINCT FROM ${data.country ?? null}::text) AS country_switch,
+          (${data.favoriteClub !== undefined} AND NULLIF(btrim(old_club), '') IS NOT NULL
+            AND COALESCE(
+              (SELECT club_id FROM leaderboard_club_aliases WHERE alias = lower(btrim(old_club))),
+              lower(btrim(old_club))
+            ) IS DISTINCT FROM COALESCE(
+              (SELECT club_id FROM leaderboard_club_aliases WHERE alias = lower(btrim(${newClub}::text))),
+              lower(btrim(${newClub}::text))
+            )) AS club_switch
+        FROM current_row
+      )
+      UPDATE users
+      SET ${assignments},
+        club_changed_at = CASE WHEN flags.club_switch THEN NOW() ELSE club_changed_at END,
+        country_changed_at = CASE WHEN flags.country_switch THEN NOW() ELSE country_changed_at END
+      FROM flags
+      WHERE users.id = flags.flag_id
+        AND (NOT flags.club_switch OR flags.old_club_changed_at IS NULL
+             OR flags.old_club_changed_at < NOW() - INTERVAL '30 days')
+        AND (NOT flags.country_switch OR flags.old_country_changed_at IS NULL
+             OR flags.old_country_changed_at < NOW() - INTERVAL '30 days')
+      RETURNING users.*
     `;
     return user ?? null;
   },

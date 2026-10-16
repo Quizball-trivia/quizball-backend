@@ -52,3 +52,11 @@ export function pickI18nText(field: Record<string, string> | string | null | und
   logger.warn({ field }, 'pickI18nText could not extract valid text');
   return '';
 }
+
+/** The Russian noun form for a count: 1 монета, 2 монеты, 5 монет; 11–14 always take the many form. */
+export function russianPlural(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n);
+  if (abs % 100 >= 11 && abs % 100 <= 14) return many;
+  if (abs % 10 === 1) return one;
+  return abs % 10 >= 2 && abs % 10 <= 4 ? few : many;
+}

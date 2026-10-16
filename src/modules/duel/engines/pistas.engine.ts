@@ -3,7 +3,7 @@ import { isAcceptedGuess, normalizeAnswer } from '../../pistas/pistas.normalize.
 import { CLUE_KINDS } from '../../pistas/pistas.types.js';
 import {
   other, reject,
-  type DuelCtx, type DuelEngine, type DuelLocale, type EngineOutcome, type LocalizedText, type Scores, type Seat, type Step,
+  textFor, type DuelCtx, type DuelEngine, type EngineOutcome, type Scores, type Seat, type Step,
 } from '../duel.types.js';
 
 export const PD_ROUNDS = 10;
@@ -21,7 +21,7 @@ export const PD_GUESS_MAX = 60;
 const pointsAt = (clue: number): number => PD_CLUES + 1 - clue;
 
 const text = z.string().trim().min(1).max(400);
-const localized = z.object({ es: text, en: text, ka: text, tr: text });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional() });
 
 /** One pool item: a hidden player with 10 clues; `accepted` is normalised when parsed. */
 export const pistasRoundSchema = z.object({
@@ -115,7 +115,6 @@ const withIdle = (s: PistasDuelState, seat: Seat, value: number): [number, numbe
   return idle;
 };
 
-const textFor = (value: LocalizedText, locale: DuelLocale): string => value[locale] ?? value.es;
 
 export const pistasDuelEngine: DuelEngine<PistasDuelContent, PistasDuelState, PistasCommand> = {
   game: 'pistas',

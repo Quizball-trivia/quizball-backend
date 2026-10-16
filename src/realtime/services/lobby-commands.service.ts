@@ -33,6 +33,8 @@ import {
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
 import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
+import { auctionContentService } from '../../modules/auction/auction-content.service.js';
+import type { AuctionContentLocale } from '../../modules/auction/auction-content.repo.js';
 import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.service.js';
 import { startDuelMatchFromLobby } from './lobby-duel-start.service.js';
 import { isDuelGame } from '../../modules/duel/duel.config.js';
@@ -62,9 +64,10 @@ import { removeUserFromLobbySockets, transferHostIfNeeded } from './lobby-member
 /** Whether a friendly lobby's member count is a legal host-start shape for the mode (lobby-modes.ts). */
 function isValidFriendlyStartShape(
   friendlyMode: ReturnType<typeof normalizeFriendlyGameMode>,
-  memberCount: number
+  memberCount: number,
+  roomGame?: unknown,
 ): boolean {
-  return isValidHostStartShape(friendlyMode, memberCount);
+  return isValidHostStartShape(friendlyMode, memberCount, roomGame);
 }
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
@@ -372,7 +375,8 @@ export async function joinByCode(
         const members = await lobbiesRepo.listMembersWithUser(lobby.id);
         const alreadyMember = members.some((member) => member.user_id === userId);
         const capacity = maxMembersForFriendlyGameMode(
-          normalizeFriendlyGameMode(lobby.game_mode)
+          normalizeFriendlyGameMode(lobby.game_mode),
+          lobby.room_game,
         );
         // Guest rooms: check the membership AND the mode the room would normalize
         // into after this join (an already-present guest rejoining is exempt).
@@ -605,7 +609,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
       const friendlyMode = normalizeFriendlyGameMode(lockedLobby.game_mode);
       const allReady = memberCount > 0 && readyCount === memberCount;
 
-      if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount)) {
+      if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount, lockedLobby.room_game)) {
         logger.debug({ lobbyId, gameMode: friendlyMode }, 'Lobby ready -> waiting for host start (friendly)');
         return;
       }
@@ -802,7 +806,7 @@ export async function updateSettings(
       }
     }
     const nextModeCaps = LOBBY_MODES[nextSettings.gameMode];
-    const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
+    const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode, nextSettings.roomGame);
     if (!nextModeCaps.promotesToPartyQuiz && memberCount > requestedCapacity) {
       socket.emit('error', {
         code: 'LOBBY_MODE_CAPACITY',
@@ -928,7 +932,8 @@ export async function startFriendlyMatch(
   io: QuizballServer,
   socket: QuizballSocket,
   lobbyIdOverride?: string,
-  seen?: LobbySeenGame
+  seen?: LobbySeenGame,
+  locale?: AuctionContentLocale
 ): Promise<void> {
   const lobbyId = await boundLobbyId(socket, lobbyIdOverride);
   if (!lobbyId) {
@@ -970,7 +975,7 @@ export async function startFriendlyMatch(
   const memberCount = await lobbiesRepo.countMembers(lobbyId);
   const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
   const allReady = memberCount > 0 && readyCount === memberCount;
-  const isValidFriendlyStart = isValidFriendlyStartShape(friendlyMode, memberCount);
+  const isValidFriendlyStart = isValidFriendlyStartShape(friendlyMode, memberCount, lobby.room_game);
 
   if (!isValidFriendlyStart || !allReady) {
     // A game change un-readies everyone: when that is why the count fell short, say so (the room was read before
@@ -1036,7 +1041,7 @@ export async function startFriendlyMatch(
     const currentMemberCount = currentMembers.length;
     const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
-    const currentValidStart = isValidFriendlyStartShape(currentFriendlyMode, currentMemberCount);
+    const currentValidStart = isValidFriendlyStartShape(currentFriendlyMode, currentMemberCount, currentLobby.room_game);
     if (!currentValidStart || !currentAllReady) {
       socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
       return;
@@ -1053,6 +1058,7 @@ export async function startFriendlyMatch(
       await startAuctionMatchFromLobby(io, socket, {
         lobbyId,
         hostUserId: currentLobby.host_user_id,
+        locale: await auctionContentService.playableContentLocale(locale ?? 'en').catch((): AuctionContentLocale => 'en'),
       });
       return;
     }

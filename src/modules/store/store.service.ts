@@ -3,6 +3,7 @@ import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { config } from '../../core/config.js';
 import { AppError, BadRequestError, ErrorCode, ExternalServiceError, NotFoundError } from '../../core/errors.js';
+import { russianPlural } from '../../core/i18n.js';
 import { logger } from '../../core/logger.js';
 import { getRequestId } from '../../core/request-context.js';
 import { usersRepo } from '../users/users.repo.js';
@@ -426,21 +427,24 @@ async function notifyWalletChange(
 ): Promise<void> {
   const parts: string[] = [];
   const partsKa: string[] = [];
+  const partsRu: string[] = [];
   if (change.coinsDelta !== 0) {
     parts.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} coins`);
     partsKa.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} მონეტა`);
+    partsRu.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${russianPlural(change.coinsDelta, 'монета', 'монеты', 'монет')}`);
   }
   if (change.ticketsDelta !== 0) {
     parts.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} tickets`);
     partsKa.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ბილეთი`);
+    partsRu.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${russianPlural(change.ticketsDelta, 'билет', 'билета', 'билетов')}`);
   }
   if (parts.length === 0) return;
 
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა' },
-      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.` },
+      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён' },
+      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.` },
       data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
     });
   } catch (err) {

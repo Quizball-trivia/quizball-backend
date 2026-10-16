@@ -7,7 +7,7 @@ export function newState(): RunState {
 }
 
 const copyCell = (cell: GridDailyCell | null): GridDailyCell | null =>
-  cell ? { playerId: cell.playerId, name: cell.name, nameKa: cell.nameKa, imageUrl: cell.imageUrl } : null;
+  cell ? { playerId: cell.playerId, name: cell.name, nameKa: cell.nameKa, nameRu: cell.nameRu ?? null, imageUrl: cell.imageUrl } : null;
 
 /** Only the known fields. */
 const pack = (s: RunState): RunState => ({ v: 1, cells: s.cells.map(copyCell), left: s.left, t0: s.t0, t1: s.t1, done: s.done });

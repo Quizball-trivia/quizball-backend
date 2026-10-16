@@ -35,16 +35,21 @@ const question = {
   id: '6c6b8d10-8b8e-4d12-9a10-000000000001',
   display_order: 1,
   difficulty: 'easy' as const,
-  prompt: { en: 'Who managed Liverpool?', es: '¿Quién entrenó al Liverpool?' },
+  prompt: {
+    en: 'Who managed Liverpool?',
+    es: '¿Quién entrenó al Liverpool?',
+    ru: 'Кто тренировал «Ливерпуль»?',
+  },
   explanation: {
     en: 'Jürgen Klopp managed Liverpool.',
     es: 'Jürgen Klopp entrenó al Liverpool.',
+    ru: 'Юрген Клопп тренировал «Ливерпуль».',
   },
   payload: {
     type: 'mcq_single',
     options: [
       { id: 'a', text: { en: 'Rafael Benítez', es: 'Rafael Benítez' }, is_correct: false },
-      { id: 'b', text: { en: 'Jürgen Klopp', es: 'Jürgen Klopp' }, is_correct: true },
+      { id: 'b', text: { en: 'Jürgen Klopp', es: 'Jürgen Klopp', ru: 'Юрген Клопп' }, is_correct: true },
       { id: 'c', text: { en: 'Brendan Rodgers' }, is_correct: false },
       { id: 'd', text: { en: 'Steven Gerrard' }, is_correct: false },
     ],
@@ -91,6 +96,19 @@ const quizRow = {
   es_score_cta: null,
   es_footer_banner_text: null,
   es_footer_button_label: null,
+  ru_title: 'Викторина по «Ливерпулю»',
+  ru_h1: 'Викторина по «Ливерпулю»',
+  ru_seo_title: 'Викторина по «Ливерпулю» | QuizBall',
+  ru_meta_description: 'Бесплатная викторина по «Ливерпулю».',
+  ru_breadcrumb_label: 'Викторина по «Ливерпулю»',
+  ru_lede: null,
+  ru_about_heading: null,
+  ru_about_blocks: null,
+  ru_hero_image_alt: null,
+  ru_og_image_alt: null,
+  ru_score_cta: null,
+  ru_footer_banner_text: null,
+  ru_footer_button_label: null,
   scheduled_publish_at: null,
   published_at: new Date().toISOString(),
   unpublished_at: null,
@@ -461,6 +479,12 @@ describe('campaignQuizzesService', () => {
     });
   });
 
+  it('says which language editions the page has: a missing edition is served in English, never as its own page', async () => {
+    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: true });
+    vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue({ ...quizRow, ru_seo_title: null });
+    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: false });
+  });
+
   it('lists only campaign pages with publishable Spanish SEO content', async () => {
     vi.mocked(campaignQuizzesRepo.listPublishedPages).mockResolvedValue([
       {
@@ -472,6 +496,8 @@ describe('campaignQuizzesService', () => {
         es_hero_image_alt: 'Ilustración del Liverpool',
         es_seo_title: 'Quiz del Liverpool | QuizBall',
         es_meta_description: 'Quiz del Liverpool gratis.',
+        ru_h1: null, ru_breadcrumb_label: null, ru_hero_image_alt: null,
+        ru_seo_title: null, ru_meta_description: null,
       },
       {
         slug: 'untranslated', page_category: 'team', h1: 'English only',
@@ -480,6 +506,8 @@ describe('campaignQuizzesService', () => {
         updated_at: new Date().toISOString(), hub_order: 2, is_hub_pinned: false,
         es_h1: null, es_breadcrumb_label: null, es_hero_image_alt: null,
         es_seo_title: null, es_meta_description: null,
+        ru_h1: null, ru_breadcrumb_label: null, ru_hero_image_alt: null,
+        ru_seo_title: null, ru_meta_description: null,
       },
     ]);
 
@@ -525,6 +553,124 @@ describe('campaignQuizzesService', () => {
       footer_button_label: 'Jugar ahora',
       seo_title: 'Quiz del Liverpool | QuizBall',
       og_image_alt: 'Vista previa del quiz del Liverpool',
+    });
+  });
+
+  it('serves Russian prompts, options and explanations when requested', async () => {
+    const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru');
+
+    expect(quiz.title).toBe('Викторина по «Ливерпулю»');
+    expect(quiz.questions[0].prompt).toBe('Кто тренировал «Ливерпуль»?');
+    expect(quiz.questions[0].options.map((option) => option.text)).toEqual([
+      'Rafael Benítez',
+      'Юрген Клопп',
+      'Brendan Rodgers',
+      'Steven Gerrard',
+    ]);
+    await expect(
+      campaignQuizzesService.answer('liverpool', question.id, 'a', undefined, 'ru'),
+    ).resolves.toMatchObject({
+      explanation: 'Юрген Клопп тренировал «Ливерпуль».',
+    });
+  });
+
+  it('lists only campaign pages with publishable Russian SEO content', async () => {
+    const base = {
+      page_category: 'team' as const, hero_image_url: null, locale_mode: 'en_only' as const,
+      updated_at: new Date().toISOString(), is_hub_pinned: false,
+      es_h1: 'Quiz', es_breadcrumb_label: 'Quiz', es_hero_image_alt: null,
+      es_seo_title: 'Quiz | QuizBall', es_meta_description: 'Quiz gratis.',
+    };
+    vi.mocked(campaignQuizzesRepo.listPublishedPages).mockResolvedValue([
+      {
+        ...base, slug: 'liverpool', h1: 'Liverpool Quiz', breadcrumb_label: 'Liverpool Quiz',
+        hero_image_alt: 'Liverpool artwork', hub_order: 1,
+        ru_h1: 'Викторина по «Ливерпулю»', ru_breadcrumb_label: 'Викторина по «Ливерпулю»',
+        ru_hero_image_alt: null,
+        ru_seo_title: 'Викторина по «Ливерпулю» | QuizBall',
+        ru_meta_description: 'Бесплатная викторина по «Ливерпулю».',
+      },
+      {
+        ...base, slug: 'spanish-only', h1: 'Spanish only', breadcrumb_label: 'Spanish only',
+        hero_image_alt: '', hub_order: 2,
+        ru_h1: 'Только заголовок', ru_breadcrumb_label: null, ru_hero_image_alt: null,
+        ru_seo_title: null, ru_meta_description: null,
+      },
+    ]);
+
+    await expect(campaignQuizzesService.listPublished('ru')).resolves.toEqual([
+      expect.objectContaining({
+        slug: 'liverpool',
+        h1: 'Викторина по «Ливерпулю»',
+        breadcrumb_label: 'Викторина по «Ливерпулю»',
+        hero_image_alt: 'Liverpool artwork',
+      }),
+    ]);
+  });
+
+  it('returns Russian campaign-page fields and falls back to English per field', async () => {
+    vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue({
+      ...quizRow,
+      lede: 'English lede with {count} questions',
+      about_heading: 'English heading',
+      about_blocks: [{ id: 'intro', type: 'paragraph', text: 'English body' }],
+      score_cta: 'You scored {score}.',
+      footer_banner_text: 'Play ranked.',
+      hero_image_url: 'categories/liverpool-v2.webp',
+      hero_image_alt: 'Liverpool artwork',
+      meta_description: 'English meta',
+      og_image_alt: 'Liverpool quiz preview',
+      es_lede: 'Introducción en español',
+      ru_lede: '{count} проверенных вопросов о «Ливерпуле»',
+      ru_about_blocks: [{ id: 'intro', type: 'paragraph', text: 'Текст на русском: {count}' }],
+      ru_score_cta: 'Ты набрал {score} из {total}.',
+      ru_og_image_alt: 'Превью викторины по «Ливерпулю»',
+    });
+
+    const quiz = await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru');
+    expect(quiz.page).toMatchObject({
+      h1: 'Викторина по «Ливерпулю»',
+      lede: '1 проверенных вопросов о «Ливерпуле»',
+      about_heading: 'English heading',
+      about_blocks: [{ text: 'Текст на русском: 1' }],
+      score_cta: 'Ты набрал {score} из {total}.',
+      footer_banner_text: 'Play ranked.',
+      footer_button_label: 'Play Ranked',
+      hero_image_alt: 'Liverpool artwork',
+      seo_title: 'Викторина по «Ливерпулю» | QuizBall',
+      meta_description: 'Бесплатная викторина по «Ливерпулю».',
+      og_image_alt: 'Превью викторины по «Ливерпулю»',
+      breadcrumb_label: 'Викторина по «Ливерпулю»',
+    });
+  });
+
+  it('labels a generated Russian answer when the question has no explanation', async () => {
+    const careerRows = ['Луис Суарес', 'Фернандо Торрес', 'Мохамед Салах', 'Садио Мане'].map(
+      (answer, index) => ({
+        ...question,
+        id: `6c6b8d10-8b8e-4d12-9a91-00000000000${index + 1}`,
+        display_order: index + 1,
+        prompt: { en: 'Name the player', ru: 'Назови футболиста' },
+        explanation: null,
+        payload: {
+          type: 'career_path' as const,
+          clubs: [{ en: 'Ajax', ru: 'Аякс' }, { en: 'Liverpool', ru: 'Ливерпуль' }],
+          display_answer: { en: `Player ${index + 1}`, ru: answer },
+          accepted_answers: [answer],
+        },
+      }),
+    );
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue(careerRows);
+
+    const quiz = await campaignQuizzesService.getQuiz('career-path', undefined, 'ru');
+    expect(quiz.questions[0].details).toEqual(['Аякс', 'Ливерпуль']);
+    const correct = quiz.questions[0].options.find((option) => option.text === 'Луис Суарес');
+    await expect(
+      campaignQuizzesService.answer('career-path', careerRows[0].id, correct?.id ?? '', undefined, 'ru'),
+    ).resolves.toEqual({
+      correct: true,
+      correct_option_id: correct?.id,
+      explanation: 'Правильный ответ: Луис Суарес.',
     });
   });
 

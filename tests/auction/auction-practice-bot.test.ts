@@ -3,7 +3,7 @@ vi.hoisted(() => { process.env.GUEST_LOBBIES_PROVISIONING_ENABLED = 'true'; proc
 import '../setup.js';
 
 const auctionContentServiceMock = vi.hoisted(() => ({
-  assertPublishedAuctionContentAvailable: vi.fn(),
+  assertPublishedAuctionContentAvailable: vi.fn(),  resolveContentLocale: vi.fn(async (locale: string) => locale),
   getRandomPublishedAuctionCard: vi.fn(),
   getSeasonSnapshots: vi.fn(async () => []),
   recordSeenClueCards: vi.fn(async () => {}),

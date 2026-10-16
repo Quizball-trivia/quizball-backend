@@ -7,7 +7,7 @@ import type { RoomGameId } from '../modules/room/room.types.js';
  * are not listed. A tab that does not declare a gated game sits in its `caps:no-<game>` room, and every lobby or match
  * broadcast of that game skips that room: one adapter broadcast, the same on every replica.
  */
-export const GATED_ROOM_GAMES: readonly RoomGameId[] = ['tenable'];
+export const GATED_ROOM_GAMES: readonly RoomGameId[] = ['tenable', 'football_race'];
 
 const MAX_DECLARED = 16;
 export const legacyRoom = (game: string) => `caps:no-${game}`;

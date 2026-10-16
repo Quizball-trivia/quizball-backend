@@ -21,9 +21,9 @@ export interface PushPayload {
   token_encrypted: string; locale: 'en'|'ka'|'es'|'tr'; title: Record<string,string>; body: Record<string,string>;
   route: string; user_id: string; category: 'daily'|'new_games'|'test'; expires_at: Date;
 }
-const reminderTitle = { en: 'Your daily games are ready', ka: 'დღის თამაშები გელოდება', es: 'Tus juegos diarios están listos', tr: 'Günlük oyunların hazır' };
+const reminderTitle = { en: 'Your daily games are ready', ka: 'დღის თამაშები გელოდება', es: 'Tus juegos diarios están listos', tr: 'Günlük oyunların hazır', ru: 'Твои ежедневные игры готовы' };
 const reminderBody = { en: 'Take a football quiz break. Play today’s challenges.', ka: 'შეისვენე ფეხბურთის ქვიზით — ითამაშე დღევანდელი გამოწვევები.',
-  es: 'Haz una pausa con fútbol. Juega los retos de hoy.', tr: 'Futbol bilgini test et. Bugünün görevlerini oyna.' };
+  es: 'Haz una pausa con fútbol. Juega los retos de hoy.', tr: 'Futbol bilgini test et. Bugünün görevlerini oyna.', ru: 'Сделай перерыв на футбольную викторину. Играй в сегодняшние испытания.' };
 
 export const mobilePushRepo = {
   async ensureProviderKey() {
@@ -132,8 +132,8 @@ export const mobilePushRepo = {
       const tx = transaction as unknown as typeof sql;
       const [event]=await tx<{id:string}[]>`INSERT INTO mobile_push_events(user_id,category,local_day,source_key,consent_epoch,title,body,route,expires_at)
         SELECT p.user_id,'test',CURRENT_DATE,gen_random_uuid()::text,p.consent_epoch,
-          ${tx.json({en:'Quizball push test',ka:'Quizball შეტყობინების ტესტი',es:'Prueba de Quizball',tr:'Quizball bildirim testi'})},
-          ${tx.json({en:'Tap to open your daily games.',ka:'შეეხე დღის თამაშების გასახსნელად.',es:'Toca para abrir tus juegos diarios.',tr:'Günlük oyunlarını açmak için dokun.'})},
+          ${tx.json({en:'Quizball push test',ka:'Quizball შეტყობინების ტესტი',es:'Prueba de Quizball',tr:'Quizball bildirim testi', ru: 'Тестовое push-уведомление Quizball'})},
+          ${tx.json({en:'Tap to open your daily games.',ka:'შეეხე დღის თამაშების გასახსნელად.',es:'Toca para abrir tus juegos diarios.',tr:'Günlük oyunlarını açmak için dokun.', ru: 'Нажми, чтобы открыть ежедневные игры.'})},
           '/(tabs)',now()+interval '10 minutes' FROM mobile_push_preferences p WHERE p.user_id=${userId} RETURNING id`;
       if (!event) return {queued:0};
       const jobs=await tx`INSERT INTO mobile_push_jobs(event_id,device_id,device_generation)

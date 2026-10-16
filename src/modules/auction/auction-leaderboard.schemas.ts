@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { boardQueryFields } from '../leaderboards/board-filter.js';
+import { nextTargetSchema } from '../leaderboards/board-response.js';
 
 export const auctionLeaderboardQuerySchema = z.object({
-  scope: z.enum(['global', 'country']).optional().default('global'),
+  ...boardQueryFields,
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   offset: z.coerce.number().int().min(0).max(10_000).optional().default(0),
 });
@@ -10,6 +12,8 @@ export type AuctionLeaderboardQuery = z.infer<typeof auctionLeaderboardQuerySche
 
 export const auctionUserRankQuerySchema = auctionLeaderboardQuerySchema.pick({
   scope: true,
+  country: true,
+  club: true,
 });
 
 export type AuctionUserRankQuery = z.infer<typeof auctionUserRankQuerySchema>;
@@ -31,4 +35,5 @@ export const auctionLeaderboardResponseSchema = z.object({
 
 export const auctionUserRankResponseSchema = auctionLeaderboardEntryResponseSchema.extend({
   total: z.number().int().nonnegative(),
+  nextTarget: nextTargetSchema,
 }).nullable();

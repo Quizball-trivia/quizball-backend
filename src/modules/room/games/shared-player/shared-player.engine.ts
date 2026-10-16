@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { judgingUniverse } from '../../../footballers/footballers.russian.js';
 import type { Universe } from '../../../footballers/footballers.universe.js';
-import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
+import type { RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomStartContext } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
 
 /**
@@ -27,7 +28,7 @@ export const PACK_PAIRS = 10;
 const EXAMPLES = 6;
 const MAX_TEXT = 60;
 
-const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60) }).strict();
+const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60), ru: z.string().min(1).max(60).optional() }).strict();
 const clubSchema = z.object({ key: z.string().min(1).max(64), label: localized, crest: z.string().min(1).max(200) }).strict();
 
 /** One private pool pair. `accepted` (footballer ids, the reviewed examples first) never reaches a client before the reveal. */
@@ -46,7 +47,15 @@ export const sharedPlayerPackSchema = z.object({ release: z.string().min(3).max(
 export type SharedPlayerPack = z.infer<typeof sharedPlayerPackSchema>;
 
 /** The stored pack, plus (in memory only) the footballers of its release. */
-export interface SharedPlayerContent { pack: SharedPlayerPack; universe: Universe | null }
+/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian names. */
+export interface SharedPlayerContent { pack: SharedPlayerPack; universe: Universe | null; russian?: Universe | null }
+
+/** What a match judges with: a name typed in Cyrillic is read with the Russian names it froze; names shown follow `alphabet`. */
+export function judgingOf(s: SharedPlayerState, content: SharedPlayerContent, alphabet: 'latin' | 'cyrillic' = 'latin'): Universe {
+  if (!content.universe) throw new Error('shared_player content is not hydrated');
+  if (s.ov && !content.russian) throw new Error('shared_player Russian names are not hydrated');
+  return judgingUniverse(content.universe, s.ov ? content.russian ?? null : null, alphabet);
+}
 
 export const sharedPlayerCommandSchema = z.object({
   type: z.literal('answer'),
@@ -80,6 +89,8 @@ export interface SharedPlayerState extends RoomEngineState {
   results: Round[];
   /** Seats that left while the match was still open: they rank below everyone who stayed. */
   quit: boolean[];
+  /** The Russian names frozen when the gate closed. Absent: Latin text only. */
+  ov?: string;
 }
 
 export type AnswerError = 'stale_round' | 'not_open' | 'withdrawn' | 'already_answered' | 'stale_attempt' | 'locked' | 'invalid';
@@ -90,11 +101,14 @@ const ended = (s: SharedPlayerState) => s.phase === 'over' || s.phase === 'cance
 const partyPoints = (position: number): number => PARTY_POINTS[Math.min(position, PARTY_POINTS.length - 1)];
 export const totalRounds = (s: SharedPlayerState): number => (isDuel(s) ? DUEL_ROUNDS : PARTY_ROUNDS);
 
-export function startMatch(seats: number, now: number): SharedPlayerState {
+/** `context`: the Russian names switched on when the gate closed, frozen for the match (a name typed in Cyrillic is read with them). */
+export function startMatch(seats: number, now: number, context?: RoomStartContext): SharedPlayerState {
   if (seats < 2 || seats > 6) throw new Error('A room match needs 2 to 6 admitted seats');
+  const ov = context?.russianVersion ?? undefined;
   return {
     phase: 'countdown', round: 0, deadline: now + COUNTDOWN_MS, status: fill(seats, 'in'), scores: fill(seats, 0), hits: fill(seats, null), order: [],
     lockedUntil: fill(seats, 0), attempts: fill(seats, 0), last: fill(seats, null), results: [], quit: fill(seats, false),
+    ...(ov ? { ov } : {}),
   };
 }
 
@@ -177,9 +191,9 @@ export function submitAnswer(s: SharedPlayerState, content: SharedPlayerContent,
   if (now < s.lockedUntil[seat]) return { state: s, error: 'locked' };
   const text = command.text.trim();
   if (!text) return { state: s, error: 'invalid' };
-  if (!content.universe) throw new Error('shared_player content is not hydrated');
+  const universe = judgingOf(s, content);
   const pair = content.pack.pairs[s.round];
-  const pid = content.universe.pickAmong(text, pair.accepted);
+  const pid = universe.pickAmong(text, pair.accepted);
   const attempts = s.attempts.map((n, i) => (i === seat ? n + 1 : n));
   const say = (feedback: Feedback) => s.last.map((f, i) => (i === seat ? feedback : f));
   if (pid === null) {
@@ -187,7 +201,7 @@ export function submitAnswer(s: SharedPlayerState, content: SharedPlayerContent,
   }
   const next: SharedPlayerState = {
     ...s, attempts, hits: s.hits.map((hit, i) => (i === seat ? pid : hit)), order: [...s.order, seat],
-    last: say({ attempt: command.attempt, kind: 'ok', text: content.universe.player(pid)?.name ?? text }),
+    last: say({ attempt: command.attempt, kind: 'ok', text: universe.player(pid)?.name ?? text }),
   };
   if (!isDuel(s)) return { state: next };
   // The second right answer inside the tie window: nothing more can happen in this round.
@@ -206,12 +220,12 @@ export function standings(s: SharedPlayerState): RoomEngineStanding[] {
 }
 
 type ClubView = { key: string; name: string; crest: string };
-const clubView = (club: SharedPlayerItem['a'], locale: RoomLocale): ClubView => ({ key: club.key, name: club.label[locale], crest: club.crest });
+const clubView = (club: SharedPlayerItem['a'], locale: RoomLocale): ClubView => ({ key: club.key, name: club.label[locale] ?? club.label.en, crest: club.crest });
 
 /** What `seat` sees. Before a round's reveal: no clubs during the countdown, never an accepted name, never another seat's answer. */
 export function viewOf(s: SharedPlayerState, content: SharedPlayerContent, seat: number, locale: RoomLocale) {
-  const universe = content.universe;
-  if (!universe) throw new Error('shared_player content is not hydrated');
+  // Each seat sees the footballers in its own language.
+  const universe = judgingOf(s, content, locale === 'ru' ? 'cyrillic' : 'latin');
   const nameOf = (pid: string | null) => (pid === null ? null : universe.player(pid)?.name ?? null);
   const pairOf = (round: number) => content.pack.pairs[round];
   const resultView = (r: Round, round: number) => {

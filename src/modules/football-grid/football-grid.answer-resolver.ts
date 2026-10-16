@@ -32,6 +32,7 @@ export interface FootballGridPlayerNameRecord {
   playerId: string;
   nameEn: string;
   nameKa: string | null;
+  nameRu?: string | null;
 }
 
 /** Suffix forms a name is reasonably typed as: the full normalised name plus
@@ -65,7 +66,7 @@ const NAME_FORM_TYPO_MIN_LENGTH = 5;
 export function footballGridNameFormCandidates(players: FootballGridPlayerNameRecord[]): FootballGridAliasRecord[] {
   const forms: FootballGridAliasRecord[] = [];
   for (const player of players) {
-    for (const [name, locale] of [[player.nameEn, 'en'], [player.nameKa, 'ka']] as Array<[string | null, 'en' | 'ka']>) {
+    for (const [name, locale] of [[player.nameEn, 'en'], [player.nameKa, 'ka'], [player.nameRu ?? null, 'ru']] as Array<[string | null, 'en' | 'ka' | 'ru']>) {
       if (!name) continue;
       for (const form of nameSuffixForms(name)) {
         forms.push({ id: '', playerId: player.playerId, alias: form, normalizedAlias: form, locale, acceptancePolicy: 'exact' });

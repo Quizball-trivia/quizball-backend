@@ -152,6 +152,14 @@ describe('football grid name-form matching (surname alias gap)', () => {
       validPlayerNames: [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: 'სანდრო ტონალი' }] }).outcome).toBe('correct');
   });
 
+  it('accepts the Russian full name and surname of a valid answer, and only through its Russian name', () => {
+    const names = [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: null, nameRu: 'Сандро Тонали' }];
+    const extra = { aliases: [alias('a', 'p1', 'sandro tonali')], validPlayerNames: names };
+    expect(resolve('Сандро Тонали', extra)).toMatchObject({ outcome: 'correct', playerId: 'p1', diagnostics: { method: 'name_form' } });
+    expect(resolve('ТОНАЛИ', extra)).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+    expect(resolve('Тонали', { ...extra, validPlayerNames: [{ ...names[0], nameRu: null }] }).outcome).toBe('wrong');
+  });
+
   it('only generates name forms for valid cell players, never for other board players', () => {
     expect(resolve('funes mori', { validPlayerIds: ['p2'], validPlayerNames: [] }).outcome).toBe('wrong');
   });

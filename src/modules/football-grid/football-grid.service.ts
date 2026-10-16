@@ -58,7 +58,7 @@ type FootballGridBoardAnswerContent = {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
-  playerNamesById: Map<string, { nameEn: string; nameKa: string | null }>;
+  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -160,9 +160,9 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     current.push(answer.footballPlayerId);
     validPlayerIdsByCell.set(answer.cellIndex, current);
   }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null }>();
+  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>();
   for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa });
+    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
   }
   const value: FootballGridBoardAnswerContent = {
     boardId: context.boardId,
@@ -347,7 +347,7 @@ async function processInbox(
         usedPlayerIds: [],
         validPlayerNames: cellPlayerIds.flatMap((playerId) => {
           const names = content.playerNamesById.get(playerId);
-          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa }] : [];
+          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
         }),
       });
       // Used-player state cannot affect a wrong or ambiguous answer. Avoid a
@@ -575,7 +575,7 @@ export const footballGridService = {
     expectedStateVersion: number;
     cellIndex: number;
     text: string;
-    locale: 'en' | 'ka' | 'es' | 'tr';
+    locale: 'en' | 'ka' | 'es' | 'tr' | 'ru';
     optionPlayerId?: string;
   }): Promise<FootballGridCommandResult> {
     try {

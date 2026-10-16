@@ -292,15 +292,7 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-  /**
-   * Room games (2–6 players) switched on by name, comma-separated (e.g. "aproximado"). The games listed in
-   * ROOM_GAMES_ON_BY_DEFAULT (room.config.ts) need no entry here.
-   */
-  ROOM_GAMES_ENABLED: z
-    .string()
-    .default('')
-    .transform((val) => val.split(',').map((game) => game.trim()).filter(Boolean)),
-  /** Kill switch: room games switched off by name, comma-separated; wins over everything else. */
+  /** Kill switch: room games switched off by name, comma-separated. Every room game is on otherwise. */
   ROOM_GAMES_DISABLED: z
     .string()
     .default('')

@@ -19,7 +19,8 @@ export const MIN_MINUTE = 1;
 export const MAX_MINUTE = 130;
 
 const text = z.string().trim().min(1).max(80);
-const localized = z.object({ es: text, en: text, ka: text, tr: text });
+/** es/en/ka/tr are required; ru is optional until every goal carries it. */
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional() });
 export type LocalizedName = z.infer<typeof localized>;
 
 /** Paths in our own public bucket, one rule per field: never a URL, never markup, never a descriptive photo name. */
@@ -84,7 +85,9 @@ export function minuteLeaks(goal: MinutoGoal): string[] {
   const standalone = new RegExp(`(^|[^0-9])${value}([^0-9]|$)`);
   const added = goal.minute.added > 0 ? new RegExp(`(^|[^0-9])${goal.minute.base}\\s*\\+\\s*${goal.minute.added}([^0-9]|$)`) : null;
   const texts: Array<[string, string]> = [
-    ...(['es', 'en', 'ka', 'tr'] as const).flatMap((l): Array<[string, string]> => [[`home.name.${l}`, goal.home.name[l]], [`away.name.${l}`, goal.away.name[l]], [`scorer.name.${l}`, goal.scorer.name[l]]]),
+    ...(['es', 'en', 'ka', 'tr', 'ru'] as const).flatMap((l): Array<[string, string]> =>
+      ([[`home.name.${l}`, goal.home.name[l]], [`away.name.${l}`, goal.away.name[l]], [`scorer.name.${l}`, goal.scorer.name[l]]] as Array<[string, string | undefined]>)
+        .filter((entry): entry is [string, string] => entry[1] !== undefined)),
     ...(goal.image ? [['image.credit', goal.image.credit] as [string, string]] : []),
     // Crest names come from club slugs; player and goal photo names are opaque (uuid / hash) and skip this check.
     ...(['home', 'away'] as const).flatMap((side): Array<[string, string]> => {
@@ -120,7 +123,7 @@ export interface PublicGoal {
   image: { src: string; credit: string; license: string } | null;
 }
 
-const copyName = (n: LocalizedName): LocalizedName => ({ es: n.es, en: n.en, ka: n.ka, tr: n.tr });
+const copyName = (n: LocalizedName): LocalizedName => ({ es: n.es, en: n.en, ka: n.ka, tr: n.tr, ...(n.ru ? { ru: n.ru } : {}) });
 const copyTeam = (t: MinutoTeam): MinutoTeam =>
   (t.kind === 'nation' ? { kind: 'nation', flag: t.flag, name: copyName(t.name) } : { kind: 'club', crest: t.crest, name: copyName(t.name) });
 

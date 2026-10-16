@@ -54,6 +54,7 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     if (!BUSCAMINAS_DIFFICULTIES.includes(round.difficulty as BuscaminasDifficulty)) fail(`round ${i}: difficulty must be one of ${BUSCAMINAS_DIFFICULTIES.join('/')}`);
     const prompt = (round.prompt ?? {}) as Record<string, unknown>;
     for (const locale of BUSCAMINAS_LOCALES) if (!nonEmpty(prompt[locale])) fail(`round ${i}: prompt.${locale} missing`);
+    if (prompt.ru !== undefined && !nonEmpty(prompt.ru)) fail(`round ${i}: prompt.ru must be a non-empty string when present`);
     if (!Array.isArray(round.cards) || round.cards.length !== CARDS_PER_ROUND) fail(`round ${i}: expected ${CARDS_PER_ROUND} cards`);
     const ids = new Set<string>();
     const cards = (round.cards as Array<{ id?: unknown; name?: unknown; img?: unknown; ok?: unknown }>).map((card, j) => {
@@ -69,7 +70,7 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     return {
       id: round.id as string,
       difficulty: round.difficulty as BuscaminasDifficulty,
-      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string },
+      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string, ...(prompt.ru !== undefined ? { ru: prompt.ru as string } : {}) },
       cards,
     };
   });
@@ -97,7 +98,7 @@ export function toDayRow(d: SeedDay): BuscaminasDayRow {
       rounds: d.rounds.map((r) => ({
         id: r.id,
         difficulty: r.difficulty,
-        prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr },
+        prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr, ...(r.prompt.ru ? { ru: r.prompt.ru } : {}) },
         cards: r.cards.map((c) => ({ id: c.id, name: c.name, img: c.img })),
       })),
     },
@@ -237,6 +238,10 @@ export function resolveSeedTarget(databaseUrl: string | undefined, target: SeedT
     throw new Error('DATABASE_URL is not a valid URL');
   }
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') throw new Error('DATABASE_URL must be a postgres:// URL');
+  // postgres.js sends unknown query parameters in the startup packet, so `?user=postgres.<other ref>` would reach another
+  // project than the one checked below. Only the SSL mode may ride along.
+  const extra = [...url.searchParams.keys()].filter((key) => key !== 'sslmode');
+  if (extra.length > 0) throw new Error(`DATABASE_URL may not carry connection parameters (${extra.join(', ')}); only sslmode is allowed`);
   if (LOCAL_HOSTS.has(url.hostname)) {
     if (target) throw new Error(`--target ${target} was given but DATABASE_URL is a local database (${url.hostname})`);
     return { kind: 'local', label: `local ${url.hostname}:${url.port || '5432'}${url.pathname}` };

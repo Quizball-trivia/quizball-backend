@@ -32,6 +32,9 @@ describe('Football Horserace in Russian', () => {
     expect(russianText('7–0 vs Bosnia and Herzegovina · 2024')).toBe('7–0 — Босния и Герцеговина · 2024');
     expect(russianText('Kylian Mbappé · 2018')).toBe('Kylian Mbappé · 2018');
     expect(russianText('7–0 vs Atlantis · 2024')).toBe('7–0 vs Atlantis · 2024');
+    expect(russianText('__proto__')).toBe('__proto__');
+    expect(russianText('7–0 vs constructor · 2024')).toBe('7–0 vs constructor · 2024');
+    expect(withRussianKeywords(L('toString'), 'x')).toBe('x');
   });
 
   it('adds Russian search words to a stat it knows, and only then', () => {

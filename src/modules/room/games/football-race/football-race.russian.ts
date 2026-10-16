@@ -7,12 +7,13 @@ import { RACE_RUSSIAN } from './football-race.ru.js';
  * name; anything else not listed (a player's name) stays as written.
  */
 const MATCH_LINE = /^(-?\d+–-?\d+) vs (.+) · (\d{4})$/;
+const own = (table: Readonly<Record<string, string>>, key: string): string | undefined => (Object.hasOwn(table, key) ? table[key] : undefined);
 
 export function russianText(en: string): string {
-  const exact = RACE_RUSSIAN.text[en];
+  const exact = own(RACE_RUSSIAN.text, en);
   if (exact) return exact;
   const line = MATCH_LINE.exec(en);
-  const opponent = line && RACE_RUSSIAN.text[line[2]];
+  const opponent = line && own(RACE_RUSSIAN.text, line[2]);
   return opponent ? `${line[1]} — ${opponent} · ${line[3]}` : en;
 }
 
@@ -25,6 +26,6 @@ export function withRussian<T extends L10n>(text: T): T {
 
 /** The stat's search words with the Russian ones added (Cyrillic never matches a Latin query, so every view can carry them). */
 export function withRussianKeywords(label: L10n, keywords: string): string {
-  const russian = RACE_RUSSIAN.keywords[label.en];
+  const russian = own(RACE_RUSSIAN.keywords, label.en);
   return russian ? `${keywords} ${russian}` : keywords;
 }

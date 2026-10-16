@@ -4,6 +4,7 @@ import { guestJourneyRepo, guestTokenHash } from './guest-journey.repo.js';
 import { detectCountryFromHeaders } from '../../core/geo.js';
 import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import { AuthenticationError } from '../../core/errors.js';
+import { CLIENT_PLATFORM_HEADER, parseClientPlatform } from '../../core/client-platform.js';
 export const journeyActivitySchema = z.object({
   event_id: z.string().uuid(),
   step: z.enum(['play_started', 'play_completed', 'signup_started', 'onboarding_completed']),
@@ -13,7 +14,7 @@ export const guestJourneyController = {
   async activity(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as z.infer<typeof journeyActivitySchema>;
     // Persist play before the optional geo lookup: fast signup must see the actual prior play.
-    await guestJourneyRepo.activity(req.guest!.id, null, body.event_id, body.step, body.mode);
+    await guestJourneyRepo.activity(req.guest!.id, null, body.event_id, body.step, body.mode, parseClientPlatform(req.headers[CLIENT_PLATFORM_HEADER]));
     if (!(await guestJourneyRepo.hasCountry(req.guest!.id))) {
       const country = await detectCountryFromHeaders({}, resolveTrustedClientIp(req)).catch(() => null);
       if (country) await guestJourneyRepo.setCountry(req.guest!.id, country);

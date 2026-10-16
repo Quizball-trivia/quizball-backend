@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from 'postgres';
 import type { Json } from '../../db/types.js';
 import { sql } from '../../db/index.js';
+import { parseClientPlatform, type ClientPlatform } from '../../core/client-platform.js';
 
 export function guestTokenHash(value: unknown): string | null {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
@@ -10,6 +11,7 @@ export function guestTokenHash(value: unknown): string | null {
 export interface Journey {
   guest_id: string; guest_user_id: string | null; created_at: string; country: string | null; locale: string | null;
   first_play_at: string | null; first_mode: string | null;
+  first_play_platform?: ClientPlatform | null;
   linked_user_id: string | null; linked_at: string | null; link_type: 'signup' | 'existing_member' | null;
 }
 async function ensureJourney(tx: TransactionSql, guestId: string, country: string | null = null): Promise<Journey | undefined> {
@@ -25,6 +27,7 @@ export async function enqueueJourneyEvent(tx: TransactionSql, j: Journey, key: s
   [j.guest_id, key, event, {
     guest_id: j.guest_id, guest_country: j.country ?? 'Unknown', guest_locale: j.locale ?? 'Unknown',
     first_mode: j.first_mode, first_play_at: j.first_play_at, link_type: j.link_type,
+    guest_first_play_platform: j.first_play_platform ?? 'unknown',
     tracking_version: 1, ...extra,
   } as Json]);
 }
@@ -64,7 +67,7 @@ export const guestJourneyRepo = {
   async link(tokenHash: string, userId: string): Promise<Journey | null> {
     return sql.begin(tx => linkGuestInTx(tx, tokenHash, userId, false));
   },
-  async activity(guestId: string, country: string | null, eventId: string, step: string, mode: string): Promise<void> {
+  async activity(guestId: string, country: string | null, eventId: string, step: string, mode: string, clientPlatform: ClientPlatform = 'unknown'): Promise<void> {
     await sql.begin(async tx => {
       // Same lock order as signup; first-play and signup are serialized across replicas.
       const [session] = await tx.unsafe(`SELECT id FROM guest_sessions WHERE id = $1 FOR UPDATE`, [guestId]);
@@ -73,9 +76,9 @@ export const guestJourneyRepo = {
       if (!j || j.linked_at) return; // Shared browsers cannot add guest activity to an already claimed journey.
       if (step === 'play_started' && !j.first_play_at) {
         [j] = await tx.unsafe<Journey[]>(`UPDATE guest_journeys SET first_play_at = now(), first_mode = $2,
-          country = coalesce(country, $3) WHERE guest_id = $1 RETURNING *`, [guestId, mode, country]);
+          country = coalesce(country, $3), first_play_platform = $4 WHERE guest_id = $1 RETURNING *`, [guestId, mode, country, parseClientPlatform(clientPlatform)]);
       }
-      await enqueueJourneyEvent(tx, j, eventId, `guest_${step}`, { mode, access_type: 'guest' });
+      await enqueueJourneyEvent(tx, j, eventId, `guest_${step}`, { mode, access_type: 'guest', client_platform: parseClientPlatform(clientPlatform) });
     });
   },
   async memberActivity(userId: string, eventId: string, step: string, mode: string): Promise<void> {

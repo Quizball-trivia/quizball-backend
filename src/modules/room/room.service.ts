@@ -175,7 +175,8 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
   }
   let ready: unknown;
   try {
-    ready = await hydrated(engine, content, row.state, true);
+    // Only a live match is held to "nothing read under the lock" (its pre-load ran); an ended one is never prepared.
+    ready = await hydrated(engine, content, row.state, isLive(row.status));
   } catch (error) {
     // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
     contentCache.delete(row.id);

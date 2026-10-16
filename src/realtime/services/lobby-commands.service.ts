@@ -1056,7 +1056,7 @@ export async function startFriendlyMatch(
       await startAuctionMatchFromLobby(io, socket, {
         lobbyId,
         hostUserId: currentLobby.host_user_id,
-        locale: await auctionContentService.resolveContentLocale(locale ?? 'en').catch((): AuctionContentLocale => 'en'),
+        locale: await auctionContentService.playableContentLocale(locale ?? 'en').catch((): AuctionContentLocale => 'en'),
       });
       return;
     }

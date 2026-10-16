@@ -258,14 +258,21 @@ describe.skipIf(!url)('played for both on the room runtime (real Postgres)', () 
     const RU = [['p-orlen', 'Тарин Орлен'], ['p-kosel', 'Эмир Косель'], ['p-ravin', 'Даго Равин'], ['p-brando', 'Стефано Брандолини'], ['p-out', 'Жоан Марвело']] as const;
     async function version(id: string, names: ReadonlyArray<readonly [string, string]>, active: boolean) {
       if (active) await db.sql`UPDATE wordgame_ru_versions SET active = false WHERE active`;
-      await db.sql`INSERT INTO wordgame_ru_versions (version, fingerprint, players, active) VALUES (${id}, ${`fp-${id}`}, ${names.length}, ${active})`;
-      for (const [pid, name] of names) {
-        await db.sql`INSERT INTO wordgame_ru_names (version, pid, name_ru, game_name_ru, fame) VALUES (${id}, ${pid}, ${name}, ${name.split(' ').pop()!}, 50)`;
-      }
+      // A version and its names are written in one transaction, as the seed does (the names are immutable after it).
+      await db.sql.begin(async (tx) => {
+        await tx`INSERT INTO wordgame_ru_versions (version, fingerprint, players, active) VALUES (${id}, ${`fp-${id}`}, ${names.length}, ${active})`;
+        for (const [pid, name] of names) {
+          await tx`INSERT INTO wordgame_ru_names (version, pid, name_ru, game_name_ru, fame) VALUES (${id}, ${pid}, ${name}, ${name.split(' ').pop()!}, 50)`;
+        }
+      });
     }
     const clear = async () => {
-      await db.sql`DELETE FROM wordgame_ru_names WHERE version LIKE 'it-ru-%'`;
-      await db.sql`DELETE FROM wordgame_ru_versions WHERE version LIKE 'it-ru-%'`;
+      // Test cleanup only: the immutability trigger is skipped on this isolated local database.
+      await db.sql.begin(async (tx) => {
+        await tx`SET LOCAL session_replication_role = replica`;
+        await tx`DELETE FROM wordgame_ru_names WHERE version LIKE 'it-ru-%'`;
+        await tx`DELETE FROM wordgame_ru_versions WHERE version LIKE 'it-ru-%'`;
+      });
       forgetRussian();
     };
     beforeEach(clear);

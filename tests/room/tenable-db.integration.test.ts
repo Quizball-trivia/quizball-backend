@@ -97,11 +97,14 @@ describe.skipIf(!url)('Tenable room on a cold replica (real Postgres)', () => {
 
   it('a release with Russian names: a Cyrillic answer is judged, a Russian seat sees Russian names and titles', { timeout: 30_000 }, async () => {
     await db.sql`DELETE FROM tenable_list_ru WHERE list_id LIKE 'it-tenable-%'`;
-    await db.sql`INSERT INTO tenable_ru_name_sets (version, fingerprint, entities) VALUES ('it-ru-names', 'fp', ${CLUBS.length}) ON CONFLICT DO NOTHING`;
-    await db.sql`DELETE FROM tenable_ru_names WHERE version = 'it-ru-names'`;
-    for (const [i, c] of CLUBS.entries()) {
-      await db.sql`INSERT INTO tenable_ru_names (version, kind, eid, name_ru, known_ru) VALUES ('it-ru-names', 'club', ${c.eid}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`})`;
-    }
+    // A name set is written once, with its names, in one transaction (as the seed does); later runs reuse it.
+    await db.sql.begin(async (tx) => {
+      const created = await tx`INSERT INTO tenable_ru_name_sets (version, fingerprint, entities) VALUES ('it-ru-names', 'fp', ${CLUBS.length}) ON CONFLICT DO NOTHING`;
+      if (created.count === 0) return;
+      for (const [i, c] of CLUBS.entries()) {
+        await tx`INSERT INTO tenable_ru_names (version, kind, eid, name_ru, known_ru) VALUES ('it-ru-names', 'club', ${c.eid}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`}, ${`Нортгейт Роверс ${'АБВГДЕЖЗИКЛМНО'[i]}`})`;
+      }
+    });
     await db.sql`INSERT INTO tenable_ru_releases (kind, release_id, names_version) VALUES ('club', ${RELEASE}, 'it-ru-names') ON CONFLICT DO NOTHING`;
     const { russianTextSource } = await import('../../src/modules/tenable/tenable.text.js');
     for (const tier of ['easy', 'medium', 'hard']) {

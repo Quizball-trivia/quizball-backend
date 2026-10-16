@@ -18,5 +18,21 @@ CREATE TABLE IF NOT EXISTS public.wordgame_ru_names (
   PRIMARY KEY (version, pid)
 );
 
+-- A set of names is written once, with its set row, and never changed: a pinned release or a frozen run keeps exactly
+-- the names it was checked with.
+CREATE OR REPLACE FUNCTION public.wordgame_ru_names_immutable() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- now() is the transaction's start: only the transaction that created the set may add to it.
+    IF (SELECT created_at FROM public.wordgame_ru_versions WHERE version = NEW.version) = now() THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'Word game Russian names are written only with their set';
+  END IF;
+  RAISE EXCEPTION 'Word game Russian names never change';
+END $$;
+DROP TRIGGER IF EXISTS wordgame_ru_names_immutable ON public.wordgame_ru_names;
+CREATE TRIGGER wordgame_ru_names_immutable BEFORE INSERT OR UPDATE OR DELETE ON public.wordgame_ru_names
+  FOR EACH ROW EXECUTE FUNCTION public.wordgame_ru_names_immutable();
+REVOKE ALL ON FUNCTION public.wordgame_ru_names_immutable() FROM PUBLIC, anon, authenticated;
+
 ALTER TABLE public.wordgame_ru_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.wordgame_ru_names ENABLE ROW LEVEL SECURITY;

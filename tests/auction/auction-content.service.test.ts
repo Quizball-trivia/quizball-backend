@@ -69,6 +69,30 @@ describe('auctionContentService', () => {
     (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(DEFAULT_SEASON_ROWS);
   });
 
+  it('deals Russian cards only when the Russian pool is nearly the whole English one', async () => {
+    const counts = (ru: number, en: number) => (auctionContentRepo.getPublishedCardAvailability as Mock)
+      .mockImplementation(async (locale: string) => ({ base_count: 0, missing_price_count: 0, usable_count: locale === 'ru' ? ru : en }));
+    counts(1, 1_400);
+    auctionContentService.forgetContentLocale();
+    expect(await auctionContentService.resolveContentLocale('ru')).toBe('en');
+    counts(1_340, 1_400);
+    auctionContentService.forgetContentLocale();
+    expect(await auctionContentService.resolveContentLocale('ru')).toBe('ru');
+    expect(await auctionContentService.resolveContentLocale('es')).toBe('es');
+  });
+
+  it('a match about to start reads a vanished Russian pool again and deals English', async () => {
+    let russian = 1_400;
+    (auctionContentRepo.getPublishedCardAvailability as Mock).mockImplementation(async (locale: string) => ({
+      base_count: 0, missing_price_count: 0, usable_count: locale === 'ru' ? russian : 1_400,
+    }));
+    auctionContentService.forgetContentLocale();
+    expect(await auctionContentService.playableContentLocale('ru')).toBe('ru');
+    russian = 0;
+    expect(await auctionContentService.playableContentLocale('ru')).toBe('en');
+    expect(await auctionContentService.playableContentLocale('tr')).toBe('tr');
+  });
+
   it('maps published card rows to runtime footballer units and currency fields', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
 

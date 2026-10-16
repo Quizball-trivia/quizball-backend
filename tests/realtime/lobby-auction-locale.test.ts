@@ -23,7 +23,7 @@ vi.mock('../../src/realtime/services/lobby-duel-start.service.js', () => ({
 vi.mock('../../src/realtime/services/lobby-auction-start.service.js', () => ({
   startAuctionMatchFromLobby: (...a: unknown[]) => startAuctionMatchFromLobby(...a),
 }));
-vi.mock('../../src/modules/auction/auction-content.service.js', () => ({ auctionContentService: { resolveContentLocale: (...a: unknown[]) => resolveContentLocale(...a) } }));
+vi.mock('../../src/modules/auction/auction-content.service.js', () => ({ auctionContentService: { playableContentLocale: (...a: unknown[]) => resolveContentLocale(...a) } }));
 vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
   userSessionGuardService: {
     prepareForLobbyEntry: vi.fn().mockResolvedValue({ ok: true }),

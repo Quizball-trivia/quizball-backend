@@ -115,19 +115,42 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
 }
 
 const russianAvailability = { checkedAt: 0, usable: false };
-/** Russian clue cards are optional: a Russian player is dealt English cards until Russian ones are published. */
+/**
+ * Russian deals need almost the whole English pool in Russian: a match keeps its language for every later draw (per
+ * position, without repeats), so a thin Russian pool would end matches early instead of falling back.
+ */
+export const RUSSIAN_POOL_SHARE = 0.95;
+/** Russian clue cards are optional: a Russian player is dealt English cards until the Russian pool is complete. */
 async function resolveContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
   if (locale !== 'ru') return locale;
   if (Date.now() - russianAvailability.checkedAt > 60_000) {
-    const availability = await auctionContentRepo.getPublishedCardAvailability('ru');
+    const [ru, en] = await Promise.all([auctionContentRepo.getPublishedCardAvailability('ru'), auctionContentRepo.getPublishedCardAvailability('en')]);
     russianAvailability.checkedAt = Date.now();
-    russianAvailability.usable = availability.usable_count > 0;
+    russianAvailability.usable = ru.usable_count > 0 && ru.usable_count >= en.usable_count * RUSSIAN_POOL_SHARE;
   }
   return russianAvailability.usable ? 'ru' : 'en';
 }
 
+/**
+ * The language a match about to start deals in: as `resolveContentLocale`, but a Russian pool that went away since it
+ * was cached is read again (English then stands in) instead of failing the start.
+ */
+async function playableContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
+  const resolved = await resolveContentLocale(locale);
+  if (resolved !== 'ru') return resolved;
+  try {
+    await assertPublishedAuctionContentAvailable('ru');
+    return 'ru';
+  } catch (error) {
+    if (!(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
+    russianAvailability.checkedAt = 0;
+    return resolveContentLocale('ru');
+  }
+}
+
 export const auctionContentService = {
   resolveContentLocale,
+  playableContentLocale,
   /** A Russian deal found no content (cards were unpublished): the next resolution reads availability again. */
   forgetContentLocale(): void {
     russianAvailability.checkedAt = 0;

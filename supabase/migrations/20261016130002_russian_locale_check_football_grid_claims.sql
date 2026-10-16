@@ -1,0 +1,9 @@
+-- Russian (ru) becomes a public locale: football_grid_claims's locale check, widened NOT VALID (validated later under a weaker lock).
+-- One table per migration: each runs in its own transaction, so no table's lock waits on another's.
+SET LOCAL lock_timeout = '2s';
+SET LOCAL statement_timeout = '15s';
+
+ALTER TABLE public.football_grid_claims
+  DROP CONSTRAINT IF EXISTS football_grid_claims_submitted_locale_check,
+  ADD CONSTRAINT football_grid_claims_submitted_locale_check
+    CHECK (submitted_locale IN ('en', 'ka', 'es', 'tr', 'ru')) NOT VALID;

@@ -45,6 +45,22 @@ DROP TRIGGER IF EXISTS tenable_ru_releases_immutable ON public.tenable_ru_releas
 CREATE TRIGGER tenable_ru_releases_immutable BEFORE UPDATE OR DELETE ON public.tenable_ru_releases
   FOR EACH ROW EXECUTE FUNCTION public.tenable_ru_releases_immutable();
 
+-- A set of names is written once, with its set row, and never changed: a pinned release or a frozen run keeps exactly
+-- the names it was checked with.
+CREATE OR REPLACE FUNCTION public.tenable_ru_names_immutable() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- now() is the transaction's start: only the transaction that created the set may add to it.
+    IF (SELECT created_at FROM public.tenable_ru_name_sets WHERE version = NEW.version) = now() THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'Tenable Russian names are written only with their set';
+  END IF;
+  RAISE EXCEPTION 'Tenable Russian names never change';
+END $$;
+DROP TRIGGER IF EXISTS tenable_ru_names_immutable ON public.tenable_ru_names;
+CREATE TRIGGER tenable_ru_names_immutable BEFORE INSERT OR UPDATE OR DELETE ON public.tenable_ru_names
+  FOR EACH ROW EXECUTE FUNCTION public.tenable_ru_names_immutable();
+REVOKE ALL ON FUNCTION public.tenable_ru_names_immutable() FROM PUBLIC, anon, authenticated;
+
 -- Russian title and note of a list, display only, outside the list itself (a stored list's hash is its content
 -- version: rewriting it would be a correction). `src` is a hash of the English title and note it was translated from:
 -- a list corrected in English shows English until it is translated again.

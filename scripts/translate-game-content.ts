@@ -200,8 +200,10 @@ async function main() {
   mkdirSync('scripts/.snapshots', { recursive: true });
   for (const { spec, rows } of loaded) {
     const snapshot: Row[] = []; const invalidKeys: string[] = []; let filled = 0, accepted = 0, updated = 0, skipped = 0, invalid = 0;
+    const planned: Array<{ row: Row; changed: number }> = [];
     for (const row of rows) {
-      const before = JSON.stringify(spec.columns.map((c) => row[c]));
+      // The whole row as it was (fill and aliases change nested arrays in place): the snapshot is a true pre-image.
+      const before = structuredClone(row);
       let changed = 0;
       for (const c of spec.columns) for (const n of nodes(row[c])) {
         if (isText(n.ru)) continue;
@@ -214,7 +216,13 @@ async function main() {
       if (!spec.validate(row) && !dropOverlong(row, spec) && !(pistas && repairPistas(row, spec, pistas))) { invalid += 1; invalidKeys.push(spec.key.map((k) => row[k]).join('/')); continue; }
       accepted += added;
       if (mode === 'cache') { updated += 1; filled += changed; continue; }
-      snapshot.push({ ...row, ...Object.fromEntries(spec.columns.map((c, i) => [c, JSON.parse(before)[i]])) });
+      snapshot.push(before);
+      planned.push({ row, changed });
+    }
+    // Written before the first update: a run that stops halfway still has every row it touched.
+    const snap = `scripts/.snapshots/game-content-ru-${spec.table}-${Date.now()}.json`;
+    if (snapshot.length) writeFileSync(snap, JSON.stringify(snapshot));
+    for (const { row, changed } of planned) {
       const sets = [
         ...spec.columns.map((c) => sql`${sql(c)} = ${sql.json(row[c] as never)}`),
         ...(spec.passChainAliases ? [sql`aliases = ${row.aliases as string[]}`, sql`normalized_aliases = ${row.normalized_aliases as string[]}`] : []),
@@ -226,8 +234,6 @@ async function main() {
       const res = await sql`UPDATE ${sql(spec.table)} SET ${setList} WHERE ${keyList} AND ${guard}`;
       if (res.count === 1) { updated += 1; filled += changed; } else skipped += 1;
     }
-    const snap = `scripts/.snapshots/game-content-ru-${spec.table}-${Date.now()}.json`;
-    if (snapshot.length) writeFileSync(snap, JSON.stringify(snapshot));
     console.log(`${spec.table}: ${mode === 'cache' ? 'would fill' : 'filled'} ${filled} slots in ${updated} rows (pistas accepted +${accepted}, skipped as edited meanwhile: ${skipped}, left unchanged as invalid: ${invalid}${invalid ? ` (${invalidKeys.slice(0, 8).join(', ')})` : ''})${snapshot.length ? `; snapshot ${snap}` : ''}`);
   }
 }

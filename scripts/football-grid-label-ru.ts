@@ -18,7 +18,7 @@ import path from 'node:path';
 import process from 'node:process';
 import 'dotenv/config';
 import postgres from 'postgres';
-import { stagingTarget } from './staging-target.js';
+import { POOLER_SAFE, stagingTarget } from './staging-target.js';
 
 type Family = 'club' | 'country' | 'league' | 'manager' | 'teammate' | 'trophy_award' | 'wildcard';
 type Row = { id: string; criterion_key: string; family: Family; label_en: string; release_version: number };
@@ -178,7 +178,7 @@ async function main() {
   const databaseUrl = process.env.GRID_ALIASES_DATABASE_URL ?? process.env.GRID_LABELS_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('Set DATABASE_URL');
   stagingTarget(databaseUrl);
-  const sql = postgres(databaseUrl, { max: 2, prepare: false, idle_timeout: 10 });
+  const sql = postgres(databaseUrl, { ...POOLER_SAFE, ssl: stagingTarget(databaseUrl, { allowLocal: true }) === 'local' ? false : 'require', max: 2, idle_timeout: 10 });
   try {
     if (hasArg('build')) await build(sql);
     else await apply(sql, !hasArg('apply'));

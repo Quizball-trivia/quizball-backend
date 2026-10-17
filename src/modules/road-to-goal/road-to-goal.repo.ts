@@ -506,37 +506,6 @@ export const roadToGoalRepo = {
     `;
   },
 
-  /** Keep the fast UUID-pivot selection query independent of calibration
-   * joins, then validate its bounded candidate set in one indexed bulk read. */
-  async filterCandidatesForCalibration(
-    tx: TransactionSql,
-    calibrationVersionId: string,
-    candidates: readonly RoadToGoalQuestionCandidate[]
-  ): Promise<RoadToGoalQuestionCandidate[]> {
-    if (candidates.length === 0) return [];
-    const candidateIds = candidates.map((candidate) => candidate.id);
-    const rows = await exec(tx)<Array<{ id: string }>>`
-      SELECT q.id
-      FROM questions q
-      JOIN question_payloads payload ON payload.question_id = q.id
-      JOIN road_to_goal_calibration_versions version
-        ON version.id = ${calibrationVersionId}
-      JOIN road_to_goal_zone_question_calibrations calibrated
-        ON calibrated.version_id = version.id
-       AND calibrated.question_id = q.id
-       AND calibrated.zone = CASE q.difficulty
-         WHEN 'easy' THEN 1
-         WHEN 'medium' THEN 5
-         ELSE 9
-       END
-      WHERE q.id = ANY(${candidateIds}::uuid[])
-        AND q.updated_at <= version.created_at
-        AND payload.updated_at <= version.created_at
-    `;
-    const eligibleIds = new Set(rows.map((row) => row.id));
-    return candidates.filter((candidate) => eligibleIds.has(candidate.id));
-  },
-
   async getLatestCalibrationVersion(
     tx: TransactionSql
   ): Promise<RoadToGoalCalibrationVersionRow | null> {
@@ -780,7 +749,17 @@ export const roadToGoalRepo = {
         AS requested(question_id, zone)
         ON requested.question_id = calibration.question_id
        AND requested.zone = calibration.zone
+      JOIN road_to_goal_calibration_versions version
+        ON version.id = calibration.version_id
+      JOIN questions question
+        ON question.id = calibration.question_id
+       AND question.difficulty = calibration.difficulty
+      JOIN question_payloads payload ON payload.question_id = question.id
       WHERE calibration.version_id = ${versionId}
+        -- Never apply measured accuracy to content edited after publication.
+        -- Missing/stale rows use applyQuestionCalibrations' committed zone prior.
+        AND question.updated_at <= version.created_at
+        AND payload.updated_at <= version.created_at
     `;
   },
 

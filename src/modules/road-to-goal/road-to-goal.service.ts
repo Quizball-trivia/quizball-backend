@@ -793,7 +793,7 @@ export async function buildCalibratedQuestionSet(
       ? ROAD_TO_GOAL_FALLBACK_MAX_CANDIDATE_PAGES
       : ROAD_TO_GOAL_UNSEEN_MAX_CANDIDATE_PAGES;
     for (let page = 0; page < maximumPages; page += 1) {
-      queryCount += 2;
+      queryCount += 1;
       const selected = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         userId,
@@ -803,13 +803,11 @@ export async function buildCalibratedQuestionSet(
       );
       if (selected.length === 0) break;
       selected.forEach((candidate) => excludedQuestionIds.add(candidate.id));
-      const calibrated = await roadToGoalRepo.filterCandidatesForCalibration(
-        tx,
-        calibrationVersion.id,
-        selected
-      );
       const priorityOffset = page * candidatesPerDifficulty;
-      candidates.push(...calibrated.map((candidate) => ({
+      // Publication freshness controls which measured odds can be reused, not
+      // whether an otherwise valid published question is playable. New/edited
+      // questions receive the existing zone prior below.
+      candidates.push(...selected.map((candidate) => ({
         ...candidate,
         ...(mode === 'least_exposed' && candidate.selection_priority != null
           ? { selection_priority: candidate.selection_priority + priorityOffset }

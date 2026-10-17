@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newState, pick, positions, publicState, rebase, result, score } from '../../src/modules/football-race/football-race.rules.js';
+import { choose, newState, pick, positions, publicState, rebase, result, score } from '../../src/modules/football-race/football-race.rules.js';
 import { dayRaceSchema, type DayRace } from '../../src/modules/football-race/football-race.types.js';
 
 // INVENTED nations and numbers (public repo). Y is yours; R1 leads the r* stats; tie = Y and R1 level at the top.
@@ -77,5 +77,33 @@ describe('daily race rules', () => {
   it('the day schema refuses a day whose racers lack a value', () => {
     const broken = { racers: ['Y', 'R1', 'R2', 'R3'], data: { ...DAY.data, stats: [{ ...stats[0], values: { Y: 1, R1: 2, R2: 3 } }] } };
     expect(dayRaceSchema.safeParse(broken).success).toBe(false);
+  });
+  it('racing as a chosen rival: its stats move you, the rest keep the day order behind you', () => {
+    const s = ['r1', 'r2', 'r3', 'tie'].reduce((st, id) => pick(st, DAY, `TT.all:${id}`), choose(newState(), DAY, 'R1'));
+    // R1 leads r1..r3 alone; the tie is shared with Y, now seat 1.
+    expect(positions(s)).toEqual([4, 3, 2, 2]);
+    expect(s.res[0]).toMatchObject({ values: [9, 3, 2, 1], leaders: [0] });
+    // Y's stat now moves a rival.
+    expect(positions(pick(s, DAY, 'TT.all:y1'))).toEqual([4, 4, 2, 2]);
+    const view = publicState(s, '2031-01-02', DAY, { ranked: true });
+    expect(view.nation).toBe('R1');
+    expect(view.racers.map((r) => r.id)).toEqual(['R1', 'Y', 'R2', 'R3']);
+    expect(view.rivalTarget).toBe(3);
+  });
+  it('the choice is open until the first pick, and a pick without one races as the day\'s first nation', () => {
+    expect(publicState(newState(), '2031-01-02', DAY, { ranked: true }).nation).toBeNull();
+    const changed = choose(choose(newState(), DAY, 'R2'), DAY, 'R3');
+    expect(changed.nation).toBe('R3');
+    expect(() => choose(newState(), DAY, 'NOPE')).toThrow(/unknown_nation/);
+    const unchosen = pick(newState(), DAY, 'TT.all:y1');
+    expect(unchosen.nation).toBe('Y');
+    expect(unchosen.res[0].leaders).toEqual([0]);
+    expect(() => choose(unchosen, DAY, 'R1')).toThrow(/nation_locked/);
+    expect(() => choose(play('y1', 'y2', 'y3', 'y4', 'y5'), DAY, 'R1')).toThrow(/nation_locked/);
+  });
+  it('a nation a correction took out of the day falls back to the day order; the rebase clears the choice', () => {
+    const view = publicState({ ...newState(), nation: 'GONE' }, '2031-01-02', DAY, { ranked: true });
+    expect(view.racers.map((r) => r.id)).toEqual(['Y', 'R1', 'R2', 'R3']);
+    expect(rebase(choose(newState(), DAY, 'R1'))).toEqual(newState());
   });
 });

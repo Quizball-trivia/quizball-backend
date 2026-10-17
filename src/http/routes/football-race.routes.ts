@@ -1,5 +1,5 @@
 import {
-  dayQuerySchema, footballRaceController, footballRaceGuestSessionRequired, pickSchema, reviewQuerySchema, startSchema,
+  chooseSchema, dayQuerySchema, footballRaceController, footballRaceGuestSessionRequired, pickSchema, reviewQuerySchema, startSchema,
 } from '../../modules/football-race/index.js';
 import { createDailyGameRouter } from './daily-game.router.js';
 
@@ -10,7 +10,10 @@ export const footballRaceRoutes = createDailyGameRouter({
   guestSessionRequired: footballRaceGuestSessionRequired,
   schemas: { start: startSchema, dayQuery: dayQuerySchema, reviewQuery: reviewQuerySchema },
   start: footballRaceController.start,
-  moves: [{ path: 'pick', schema: pickSchema, handler: footballRaceController.pick }],
+  moves: [
+    { path: 'choose', schema: chooseSchema, handler: footballRaceController.choose },
+    { path: 'pick', schema: pickSchema, handler: footballRaceController.pick },
+  ],
   current: footballRaceController.current,
   boards: footballRaceController.boards,
   review: footballRaceController.review,

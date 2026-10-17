@@ -1,7 +1,11 @@
 import { logger } from '../../core/logger.js';
 import { deleteJsonCacheKeys, getOrLoadJson } from '../../core/json-cache.js';
-import { boardCacheScope, GLOBAL_BOARD, type BoardFilter } from '../leaderboards/board-filter.js';
-import { userRankCacheKey as rankCacheKeys } from '../leaderboards/rank-cache.js';
+import { GLOBAL_BOARD, type BoardFilter } from '../leaderboards/board-filter.js';
+import {
+  rankedBoardCacheKey,
+  rankedUserRankKeys,
+  userRankCacheKey as rankCacheKeys,
+} from '../leaderboards/rank-cache.js';
 import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
@@ -74,8 +78,8 @@ async function invalidateUserRankCaches(
   users: Array<{ userId: string; country?: string | null }>
 ): Promise<void> {
   await deleteJsonCacheKeys(users.flatMap(({ userId, country }) => [
-    userRankCacheKey(userId),
-    ...(country ? [userRankCacheKey(userId, { kind: 'country', country })] : []),
+    ...rankedUserRankKeys(userId, GLOBAL_BOARD),
+    ...(country ? rankedUserRankKeys(userId, { kind: 'country', country }) : []),
   ]));
 }
 
@@ -836,8 +840,7 @@ export const rankedService = {
   },
 
   async getLeaderboard(limit: number, offset: number, filter: BoardFilter = GLOBAL_BOARD) {
-    const key = `ranked:leaderboard:v2:${boardCacheScope(filter)}:${limit}:${offset}`;
-    return getOrLoadJson(key, LIVE_LEADERBOARD_CACHE_TTL_SECONDS, () =>
+    return getOrLoadJson(rankedBoardCacheKey.list(filter, limit, offset), LIVE_LEADERBOARD_CACHE_TTL_SECONDS, () =>
       rankedRepo.listLeaderboard(limit, offset, filter)
     );
   },
@@ -864,7 +867,7 @@ export const rankedService = {
       // The board refreshes every few seconds; the player to pass must keep up with it.
       const above = rank.rank > 1
         ? await getOrLoadJson(
-          `ranked:next-above:v1:${boardCacheScope(filter)}:${userId}`,
+          rankedBoardCacheKey.nextAbove(userId, filter),
           LIVE_LEADERBOARD_CACHE_TTL_SECONDS,
           () => rankedRepo.getNextAbove(userId, filter)
         )

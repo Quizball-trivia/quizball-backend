@@ -34,6 +34,8 @@ export interface BoardQuery {
   club?: string;
 }
 
+type SqlFragment = ReturnType<typeof boardFilterSql>;
+
 /** WHERE fragment for a query that aliases users as `u`. */
 export function boardFilterSql(filter: BoardFilter) {
   if (filter.kind === 'country') return sql`AND u.country = ${filter.country}`;
@@ -43,6 +45,26 @@ export function boardFilterSql(filter: BoardFilter) {
     )`;
   }
   return sql``;
+}
+
+/**
+ * Country and club boards list every real player before any bot, so bots only
+ * hold places real players leave empty. The world board ranks everyone together.
+ * Leading ORDER BY key for a query that aliases users as `u`.
+ */
+export function botsLastOrderSql(filter: BoardFilter) {
+  return filter.kind === 'global' ? sql`` : sql`u.is_ai ASC,`;
+}
+
+/**
+ * Rows ranked above a target, for a query that aliases users as `u`.
+ * `beats` compares points and tiebreaks; on country and club boards it only
+ * decides between two real players or two bots, and every real player is ahead
+ * of every bot. `targetIsAi` is the target's `is_ai` (a value or a column).
+ */
+export function aheadOnBoardSql(filter: BoardFilter, targetIsAi: boolean | SqlFragment, beats: SqlFragment) {
+  if (filter.kind === 'global') return sql`(${beats})`;
+  return sql`((u.is_ai = false AND ${targetIsAi} = true) OR (u.is_ai = ${targetIsAi} AND (${beats})))`;
 }
 
 /** Cache-key segment; one per distinct board. */

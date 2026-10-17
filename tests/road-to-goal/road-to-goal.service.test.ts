@@ -34,7 +34,6 @@ vi.mock('../../src/modules/road-to-goal/road-to-goal.repo.js', () => ({
     getProofEvents: vi.fn(),
     recordQuestionExposures: vi.fn(),
     pickRunQuestionCandidates: vi.fn(),
-    filterCandidatesForCalibration: vi.fn(),
     expirePreparedCommitments: vi.fn(),
     getCommitmentByNonceForUpdate: vi.fn(),
     getPreparedCommitmentForUserForUpdate: vi.fn(),
@@ -298,8 +297,6 @@ describe('roadToGoalService', () => {
     (roadToGoalRepo.getEventByRequestNonce as Mock).mockResolvedValue(null);
     (roadToGoalRepo.getProofEvents as Mock).mockResolvedValue([]);
     (roadToGoalRepo.pickRunQuestionCandidates as Mock).mockResolvedValue(candidates);
-    (roadToGoalRepo.filterCandidatesForCalibration as Mock)
-      .mockImplementation(async (_tx, _versionId, selected) => selected);
     (roadToGoalRepo.getCalibrationVersionForDay as Mock).mockResolvedValue(calibrationVersion);
     (roadToGoalRepo.getCalibrationVersionById as Mock).mockResolvedValue(calibrationVersion);
     (roadToGoalRepo.getDatabasePublicationDay as Mock).mockResolvedValue(
@@ -483,14 +480,8 @@ describe('roadToGoalService', () => {
     ))).not.toContain(malformed.id);
   });
 
-  it('pages past candidates rejected by the immutable calibration gate', async () => {
-    const staleCandidate = candidate(98, 'easy');
-    (roadToGoalRepo.pickRunQuestionCandidates as Mock)
-      .mockResolvedValueOnce([staleCandidate])
-      .mockResolvedValueOnce(candidates);
-    (roadToGoalRepo.filterCandidatesForCalibration as Mock)
-      .mockResolvedValueOnce([])
-      .mockImplementation(async (_tx, _versionId, selected) => selected);
+  it('prepares all eleven zones when every question calibration is stale or missing', async () => {
+    (roadToGoalRepo.getQuestionCalibrations as Mock).mockResolvedValue([]);
     (roadToGoalRepo.insertCommitment as Mock).mockImplementation((_tx, data) => ({
       ...commitment({ server_seed: data.serverSeed }),
       round_id: data.roundId,
@@ -514,14 +505,32 @@ describe('roadToGoalService', () => {
       autoCashoutZone: null,
     });
 
-    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenNthCalledWith(
-      2,
-      dbMocks.tx,
-      USER_ID,
-      'unseen',
-      [staleCandidate.id],
-      64
-    );
+    expect(roadToGoalRepo.pickRunQuestionCandidates).toHaveBeenCalledTimes(1);
+    const [, inserted] = (roadToGoalRepo.insertCommitment as Mock).mock.calls[0]!;
+    expect(inserted.runQuestions).toHaveLength(11);
+    expect(inserted.runQuestions.map((q: { expected_accuracy_bp: number }) => q.expected_accuracy_bp))
+      .toEqual(ROAD_TO_GOAL_RULES_MANIFEST.zoneAccuracyPriorsBp);
+    expect(inserted.runQuestions.every((q: { calibration_source: string }) => q.calibration_source === 'difficulty_prior'))
+      .toBe(true);
+    expect(inserted.calibrationVersionId).toBe(CALIBRATION_ID);
+    expect(inserted.questionSetHash).toBe(roadToGoalQuestionSetHash(inserted.runQuestions));
+    expect(storeRepo.adjustWalletMinorInTx).not.toHaveBeenCalled();
+  });
+
+  it('replays an existing prepared commitment without recalibrating or changing its questions', async () => {
+    const saved = commitment();
+    (roadToGoalRepo.getCommitmentByNonceForUpdate as Mock).mockResolvedValue(saved);
+    const result = await roadToGoalService.prepareCommitment(USER_ID, {
+      stakeCoins: saved.stake_coins,
+      requestNonce: saved.request_nonce,
+      autoCashoutZone: saved.auto_cashout_zone,
+    });
+    expect(result.question_set_hash).toBe(saved.question_set_hash);
+    expect(result.commit_hash).toBe(saved.commit_hash);
+    expect(roadToGoalRepo.pickRunQuestionCandidates).not.toHaveBeenCalled();
+    expect(roadToGoalRepo.getQuestionCalibrations).not.toHaveBeenCalled();
+    expect(roadToGoalRepo.insertCommitment).not.toHaveBeenCalled();
+    expect(storeRepo.adjustWalletMinorInTx).not.toHaveBeenCalled();
   });
 
   it('caps unseen retries and pages past 129 malformed fallback candidates', async () => {

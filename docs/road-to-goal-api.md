@@ -70,10 +70,11 @@ rotation.
 Selection exhausts questions the player has never been assigned before. Only
 when a difficulty pool is exhausted are repeats allowed, ordered like ranked
 play: lowest exposure count first, then longest since last exposure, with a
-random tie-break. Newly published or materially edited questions enter after the
-next immutable daily calibration snapshot. Unpublished or archived questions
-leave selection immediately; questions already committed to a paid run remain
-pinned for that run.
+random tie-break. Newly published or edited questions remain selectable. When
+their measured calibration is missing or predates an edit to the question or
+its payload, the run uses the existing cold-start zone prior instead of stale
+question-specific accuracy. Unpublished or archived questions leave selection
+immediately; questions already committed to a run remain pinned for that run.
 
 ## Calibration and RTP
 
@@ -85,6 +86,12 @@ separate in editorial statistics. Difficulty priors are 80% easy, 65% medium,
 and 50% hard; survivor-conditioned cold-start zone priors account for the fact
 that stronger players are more likely to reach later zones. Expected accuracy
 is clamped to 35–95%.
+
+Measured question-and-zone accuracy is reused only when the current difficulty
+matches the calibration and neither the question nor its payload has changed
+since the calibration was published. The fallback zone priors are already part
+of the rules manifest. Each prepared commitment pins the resulting questions,
+accuracy values, and survival odds; later edits never recalibrate that run.
 
 The multiplier ladder implies a target survival probability for each zone.
 Correct and wrong odds are placed around that target with a 10 percentage-point

@@ -5,13 +5,27 @@ import { MAX_PICKS, RIVAL_HEAD_START, SOLO_TARGET } from './football-race.consta
 import type { DayRace, PickResult, PublicRunState, RunState } from './football-race.types.js';
 
 /**
- * The daily race, pure: your nation (racer 0) against three; everyone races to SOLO_TARGET, the rivals start
- * RIVAL_HEAD_START ahead. Each pick moves the nation(s) that lead the stat. You win on reaching the line (a tie that
+ * The daily race, pure: your nation against the day's other three; everyone races to SOLO_TARGET, the rivals start
+ * RIVAL_HEAD_START ahead. You choose your nation among the day's four before the first pick (without a choice it is
+ * the day's first racer); seat 0 is always yours, the rivals keep the day's order. Each pick moves the nation(s) that lead the stat. You win on reaching the line (a tie that
  * takes you there with a rival is yours: it was your pick); you lose when a rival gets there first, or when the day has
  * no stat left. The score orders the board: a win beats any loss, fewer picks first; a loss ranks by how far you got.
  */
 export const newState = (): RunState => ({ v: 1, res: [], done: false });
-const pack = (s: RunState): RunState => ({ v: 1, res: s.res, done: s.done });
+const pack = (s: RunState): RunState => ({ v: 1, res: s.res, done: s.done, ...(s.nation !== undefined ? { nation: s.nation } : {}) });
+
+/** The day's racers by seat: the chosen nation first. A nation a correction took out of the day falls back to the day's order. */
+export function seats(s: RunState, day: DayRace): string[] {
+  const mine = s.nation;
+  return mine && day.racers.includes(mine) ? [mine, ...day.racers.filter((id) => id !== mine)] : day.racers;
+}
+
+/** Racing as one of the day's four; open until the first pick (changing your mind before it is fine). */
+export function choose(s: RunState, day: DayRace, nation: string): RunState {
+  if (s.done || s.res.length > 0) throw rejected('nation_locked');
+  if (!day.racers.includes(nation)) throw rejected('unknown_nation');
+  return pack({ ...s, nation });
+}
 
 export function positions(s: RunState): number[] {
   const p = [0, RIVAL_HEAD_START, RIVAL_HEAD_START, RIVAL_HEAD_START];
@@ -32,12 +46,14 @@ export function pick(s: RunState, day: DayRace, statId: string): RunState {
   if (s.res.some((r) => r.stat === statId)) throw rejected('stat_used');
   const stat = day.data.stats.find((x) => x.id === statId);
   const metric = stat && day.data.metrics.find((m) => m.id === stat.metric);
-  const cmp = stat && metric ? compare(stat, metric, day.racers) : null;
+  const racers = seats(s, day);
+  const cmp = stat && metric ? compare(stat, metric, racers) : null;
   if (!cmp) throw rejected('unknown_stat');
   const res: PickResult[] = [...s.res, { stat: statId, values: cmp.values, leaders: cmp.leaders }];
-  const next: RunState = { v: 1, res, done: false };
+  // A pick without a choice fixes the day's first racer, so a later choice can never re-seat the picks already judged.
+  const next: RunState = { v: 1, res, done: false, nation: racers[0] };
   const metricOf = new Map(day.data.metrics.map((m) => [m.id, m]));
-  const left = day.data.stats.filter((x) => !res.some((r) => r.stat === x.id) && compare(x, metricOf.get(x.metric)!, day.racers)).length;
+  const left = day.data.stats.filter((x) => !res.some((r) => r.stat === x.id) && compare(x, metricOf.get(x.metric)!, racers)).length;
   return pack({ ...next, done: result(next) !== null || left === 0 || res.length >= MAX_PICKS });
 }
 
@@ -59,20 +75,23 @@ export function publicState(s: RunState, dayId: string, day: DayRace | null, ext
   const metricOf = new Map((d?.metrics ?? []).map((m) => [m.id, m]));
   const nationOf = new Map((d?.nations ?? []).map((n) => [n.id, n]));
   const statOf = new Map((d?.stats ?? []).map((x) => [x.id, x]));
+  const racers = day ? seats(s, day) : [];
   return {
     day: dayId,
     release: d?.release ?? '',
     cutoff: d?.cutoff ?? '',
     source: d ? withRussian(d.source) : { en: '', es: '' },
     tournament: d ? { id: d.tournament.id, label: withRussian(d.tournament.label) } : { id: '', label: { en: '', es: '' } },
-    racers: (day?.racers ?? []).map((id) => { const n = nationOf.get(id)!; return { id, code: n.code, flag: n.flag, name: withRussian(n.name) }; }),
+    racers: racers.map((id) => { const n = nationOf.get(id)!; return { id, code: n.code, flag: n.flag, name: withRussian(n.name) }; }),
+    nation: s.nation ?? null,
     target: SOLO_TARGET,
+    rivalTarget: SOLO_TARGET - RIVAL_HEAD_START,
     positions: positions(s),
     eras: (d?.scopes ?? []).map((x) => ({ id: x.id, label: withRussian(x.label) })),
     families: (d?.families ?? []).map((f) => ({ id: f.id, label: withRussian(f.label) })),
     metrics: (d?.metrics ?? []).map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: withRussian(m.label), keywords: withRussianKeywords(m.label, m.keywords) })),
     stats: (d?.stats ?? []).map((x) => ({ id: x.id, scope: x.scope, metric: x.metric, family: metricOf.get(x.metric)?.family ?? '', unwanted: metricOf.get(x.metric)?.unwanted ?? false })),
-    results: s.res.map((r) => ({ ...r, details: (day?.racers ?? []).map((id) => { const line = statOf.get(r.stat)?.details?.[id]; return line ? withRussian(line) : null; }) })),
+    results: s.res.map((r) => ({ ...r, details: racers.map((id) => { const line = statOf.get(r.stat)?.details?.[id]; return line ? withRussian(line) : null; }) })),
     done: s.done,
     result: result(s),
     picks: s.res.length,

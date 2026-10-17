@@ -7,24 +7,21 @@ import type {
   AuctionUserRankQuery,
 } from './auction-leaderboard.schemas.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
-import { AuthenticationError } from '../../core/errors.js';
+import { resolveBoardFilter } from '../leaderboards/board-filter.js';
+import { nextTargetOf } from '../leaderboards/board-response.js';
 
 export const auctionLeaderboardController = {
   async getLeaderboard(req: Request, res: Response): Promise<void> {
-    const { limit, offset, scope } = req.validated.query as AuctionLeaderboardQuery;
+    const query = req.validated.query as AuctionLeaderboardQuery;
+    const { limit, offset } = query;
 
-    let country: string | undefined;
-    if (scope === 'country') {
-      if (!req.user) throw new AuthenticationError('Sign in to see your country board');
-      const user = await usersRepo.getById(req.user.id);
-      country = normalizeSupportedCountryCode(user?.country) ?? undefined;
-      if (!country) {
-        res.json({ entries: [] });
-        return;
-      }
+    const filter = await resolveBoardFilter(req, query);
+    if (!filter) {
+      res.json({ entries: [] });
+      return;
     }
 
-    const entries = await auctionLeaderboardService.getLeaderboard(limit, offset, country);
+    const entries = await auctionLeaderboardService.getLeaderboard(limit, offset, filter);
 
     res.json({
       entries: entries.map((entry, i) => ({
@@ -37,20 +34,18 @@ export const auctionLeaderboardController = {
 
   async getUserRank(req: Request, res: Response): Promise<void> {
     const userId = req.user!.id;
-    const { scope } = req.validated.query as AuctionUserRankQuery;
+    const query = req.validated.query as AuctionUserRankQuery;
 
     const user = await usersRepo.getById(userId);
-    const country = scope === 'country'
-      ? normalizeSupportedCountryCode(user?.country) ?? undefined
-      : undefined;
-    if (scope === 'country' && !country) {
+    const filter = await resolveBoardFilter(req, query);
+    if (!filter) {
       res.json(null);
       return;
     }
 
-    // null = not on the board yet (no AP earned), which the client renders as
-    // "unranked" rather than as a position.
-    const rankInfo = await auctionLeaderboardService.getUserRank(userId, country);
+    // null = not on the board yet (no AP earned, or not in this country/club),
+    // which the client renders as "unranked" rather than as a position.
+    const rankInfo = await auctionLeaderboardService.getUserRank(userId, filter);
     if (!rankInfo) {
       res.json(null);
       return;
@@ -66,6 +61,7 @@ export const auctionLeaderboardController = {
       tier: rankInfo.tier ?? null,
       rank: rankInfo.rank,
       total: rankInfo.total,
+      nextTarget: nextTargetOf(rankInfo.rank, rankInfo.auctionPoints, rankInfo.nextAbove),
     });
   },
 };

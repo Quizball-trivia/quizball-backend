@@ -26,7 +26,7 @@ const isText = (value: unknown): value is string => typeof value === 'string' &&
 function localized(value: unknown): LocalizedText | null {
   const v = (value ?? {}) as Record<string, unknown>;
   if (!PISTAS_LOCALES.every((locale) => isText(v[locale]))) return null;
-  return { es: v.es as string, en: v.en as string, ka: v.ka as string, tr: v.tr as string };
+  return { es: v.es as string, en: v.en as string, ka: v.ka as string, tr: v.tr as string, ...(isText(v.ru) ? { ru: v.ru } : {}) };
 }
 
 function clue(value: unknown): Clue | null {
@@ -57,8 +57,8 @@ export function indexDay(row: PistasDayRow): IndexedDay | null {
 }
 
 /** A fresh copy for a response, field by field. */
-export const copyClue = (c: Clue): Clue => ({ kind: c.kind, icon: c.icon, text: { es: c.text.es, en: c.text.en, ka: c.text.ka, tr: c.text.tr } });
-export const copyText = (t: LocalizedText): LocalizedText => ({ es: t.es, en: t.en, ka: t.ka, tr: t.tr });
+export const copyText = (t: LocalizedText): LocalizedText => ({ es: t.es, en: t.en, ka: t.ka, tr: t.tr, ...(t.ru ? { ru: t.ru } : {}) });
+export const copyClue = (c: Clue): Clue => ({ kind: c.kind, icon: c.icon, text: copyText(c.text) });
 
 export type { ContentLog } from '../daily/daily.content.js';
 

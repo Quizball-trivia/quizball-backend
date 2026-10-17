@@ -17,6 +17,39 @@ const lettersOf = (name: string): string => normalizeName(name).replace(/[^a-z]/
 export const firstLetter = (name: string): string => lettersOf(name).charAt(0).toUpperCase();
 export const lastLetter = (name: string): string => lettersOf(name).slice(-1).toUpperCase();
 
+/**
+ * Russian names (matcher 2): the same idea in Cyrillic. ё is е and й is и, so a keyboard without them still matches; a name is
+ * compared in Cyrillic letters and digits only.
+ */
+export function normalizeNameCyrillic(raw: string): string {
+  return raw.normalize('NFC').toLowerCase().replace(/ё/g, 'е').replace(/й/g, 'и').replace(/[^а-я0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True when the text is written in Cyrillic (any Cyrillic letter): it is then read with the Russian names. */
+export const isCyrillicText = (text: string): boolean => /\p{Script=Cyrillic}/u.test(text);
+
+/** The compared form of a typed name in the alphabet it was typed in (reports keep Russian text too). */
+export const normalizeTyped = (text: string): string => (isCyrillicText(text) ? normalizeNameCyrillic(text) : normalizeName(text));
+
+const cyrillicLettersOf = (name: string): string => normalizeNameCyrillic(name).replace(/[^а-я]/g, '');
+
+export const firstLetterCyrillic = (name: string): string => cyrillicLettersOf(name).charAt(0).toUpperCase();
+/**
+ * The next letter as in the "cities" game: no name starts with й, ь, ъ or ы, so a name ending in them passes on the letter
+ * before ("Белый" → Л). Read before й is folded into и.
+ */
+export function lastLetterCyrillic(name: string): string {
+  const letters = name.normalize('NFC').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яй]/g, '').replace(/[йьъы]+$/, '');
+  return letters.slice(-1).toUpperCase();
+}
+
+export function surnameOfCyrillic(name: string): string {
+  const words = normalizeNameCyrillic(name).split(' ').filter(Boolean);
+  while (words.length > 1 && CYRILLIC_SUFFIXES.has(words[words.length - 1])) words.pop();
+  return words[words.length - 1] ?? '';
+}
+const CYRILLIC_SUFFIXES = new Set(['младшии', 'джуниор', 'жуниор', 'филью', 'нету']);
+
 /** True when the two normalised strings differ by at most one insertion, deletion, substitution or swap of neighbours. */
 export function withinOneEdit(a: string, b: string): boolean {
   if (a === b) return true;

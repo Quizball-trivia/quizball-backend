@@ -73,7 +73,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       email: z.string().email(),
       password: z.string().min(8),
       redirect_to: z.string().url().optional(),
-      locale: z.enum(['en', 'ka', 'es', 'tr']).optional(),
+      locale: z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional(),
     }),
     responses: {
       201: { description: 'User registered', schema: authResponseSchema },

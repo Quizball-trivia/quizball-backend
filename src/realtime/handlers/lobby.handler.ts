@@ -204,7 +204,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await lobbyRealtimeService.startFriendlyMatch(io, socket, parsed.data.lobbyId, parsed.data.seen);
+      await lobbyRealtimeService.startFriendlyMatch(io, socket, parsed.data.lobbyId, parsed.data.seen, parsed.data.locale);
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:start');
       socket.emit('error', { code: 'LOBBY_START_ERROR', message: 'Failed to start match' });

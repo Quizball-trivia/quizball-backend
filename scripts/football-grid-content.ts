@@ -65,7 +65,7 @@ const aliasSchema = z.object({
   playerId: z.string().uuid(),
   alias: z.string().min(1).max(160),
   normalizedAlias: z.string().min(1).max(160),
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'translit']),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'translit']),
   aliasType: z.enum([
     'full_name', 'given_name', 'family_name', 'reordered', 'compound_surname',
     'mononym', 'nickname', 'accentless', 'georgian', 'transliteration', 'reviewed_misspelling',
@@ -713,7 +713,7 @@ async function exportReleaseWithin(sql: Db, version: number): Promise<{ manifest
     };
   });
   const aliasRows = await sql<Array<{
-    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'es' | 'tr' | 'translit';
+    football_player_id: string; alias: string; normalized_alias: string; locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'translit';
     alias_type: Manifest['aliases'][number]['aliasType']; acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     reviewed_by: string; reviewed_at: string;
   }>>`SELECT football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at::text AS reviewed_at

@@ -3,7 +3,8 @@ import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { contentChanged } from '../daily/daily.errors.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
-import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
+import { createDailyService, LoadFirst, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
+import { activeRussianVersion, heldRussianIndex, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { sharedPlayerPackSchema, type SharedPlayerItem } from '../room/games/shared-player/shared-player.engine.js';
 import { ANSWER_GRACE_MS, CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, withUniverses } from '../wordgame-daily/wordgame-daily.shared.js';
@@ -23,6 +24,16 @@ export interface LeaderboardEntry {
 }
 interface IndexedDay { day: string; number: number; contentVersion: number; release: string; pairs: SharedPlayerItem[] }
 type ServedDay = IndexedDay & { universe: Universe };
+
+/** The day as one run sees it: Cyrillic answers read with the Russian names it froze, shown in Russian when it started in Russian. */
+async function dayForRun(day: ServedDay, s: { ov?: string; ru?: true }, outsideTx = false): Promise<ServedDay> {
+  if (!s.ov) return day;
+  // Under a run's transaction only what this process holds; a report or review (no transaction) may load.
+  const index = heldRussianIndex(s.ov) ?? (outsideTx ? await russianIndex(s.ov) : undefined);
+  if (!index) { const version = s.ov; throw new LoadFirst(() => russianIndex(version)); }
+  const russian = russianView(day.universe, index);
+  return { ...day, universe: judgingUniverse(day.universe, russian, s.ru ? 'cyrillic' : 'latin') };
+}
 
 export type RunResponse = DailyRunResponse<rules.PublicRunState>;
 export type LeaderboardResponse = DailyLeaderboardResponse<LeaderboardEntry>;
@@ -67,12 +78,18 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
       completion: (s) => (s.done ? { score: rules.score(s), stat: rules.speed(s) } : null),
       publicState: (s, run, day, now, extra) => rules.publicState(s, run.day, day?.pairs ?? null, day?.universe ?? null, now, extra),
       settledAt: rules.settledAt,
+      dayFor: dayForRun,
     },
     { calendar: sharedPlayerCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS, clock: 'database' },
   );
 
   return {
-    start: (dayId: string, player: DailyPlayer, clientContentVersion?: number): Promise<RunResponse> => core.start(dayId, player, clientContentVersion),
+    async start(dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> {
+      const active = await activeRussianVersion().catch(() => null);
+      // Loaded here, before the run's transaction; a version that cannot be loaded now is not frozen.
+      const russianVersion = active && (await russianIndex(active).then(() => active, () => null));
+      return core.start(dayId, player, clientContentVersion, { locale, russianVersion });
+    },
 
     /** Opens the first pair, or the next one after a settled pair. */
     next(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {
@@ -97,11 +114,13 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
      * oracle); a text the pair accepts, a pair not played yet or a run on older content is simply dropped.
      */
     async report(player: DailyPlayer, dayId: string, pairIndex: number, text: string): Promise<void> {
-      const day = (await deps.content()).get(dayId);
-      const pair = day?.pairs[pairIndex];
-      if (!day || !pair) return;
+      const served = (await deps.content()).get(dayId);
+      const pair = served?.pairs[pairIndex];
+      if (!served || !pair) return;
       const run = await deps.repo.getRun(player, dayId);
-      if (!run || run.content_version !== day.contentVersion || pairIndex >= run.state.res.length) return;
+      if (!run || run.content_version !== served.contentVersion || pairIndex >= run.state.res.length) return;
+      // Judged as the run was: with the names it froze.
+      const day = await dayForRun(served, run.state, true);
       const refusal = refusedForPair(day.universe, pair, text);
       if (!refusal) return;
       await deps.reports.file({
@@ -114,8 +133,13 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
     boards: (): Promise<BoardsResponse> => core.boards(),
 
     /** Every pair of a day the database clock has closed, with a few of its answers; anything else is the same 404 as a missing day. */
-    async review(dayId: string): Promise<ReviewResponse> {
-      const day = await core.closedDay(dayId);
+    async review(dayId: string, locale?: string): Promise<ReviewResponse> {
+      const closed = await core.closedDay(dayId);
+      // The names the day's Russian runs played with (a later version could change the start or a spelling); else today's.
+      const version = locale === 'ru'
+        ? (await deps.repo.commonStateValue(dayId, 'ov', { key: 'ru', value: 'true' }).catch(() => null)) ?? (await activeRussianVersion().catch(() => null))
+        : null;
+      const day = version ? await dayForRun(closed, { ov: version, ru: true }, true) : closed;
       const shown = rules.publicState({ ...rules.newState(), res: day.pairs.map(() => ({ pid: null, left: 0 })), done: true }, dayId, day.pairs, day.universe, 0, { ranked: false, disclose: true });
       return { day: dayId, pairs: shown.results };
     },

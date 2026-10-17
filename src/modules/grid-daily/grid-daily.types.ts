@@ -15,6 +15,8 @@ export interface GridDailyCell {
   playerId: string;
   name: string;
   nameKa: string | null;
+  /** Absent on cells stored before Russian names existed. */
+  nameRu?: string | null;
   imageUrl: string | null;
 }
 

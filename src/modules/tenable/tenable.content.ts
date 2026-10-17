@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ENTITY_KINDS, SUGGEST_LIMIT, SUGGEST_MAX, TENABLE_MATCHER_VERSION, type Directory } from './tenable.identify.js';
 
-export const TENABLE_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
+export const TENABLE_LOCALES = ['es', 'en', 'ka', 'tr', 'ru'] as const;
 export type TenableLocale = (typeof TENABLE_LOCALES)[number];
 export const SLOTS = 10;
 /** Same cap as the answer box and the report endpoint: every slot must be typeable in full. */
@@ -10,10 +11,16 @@ export const TITLE_MAX_LENGTH = 90;
 /** The ranking rule under the title (small print: eligibility, tie-break, what counts). */
 export const NOTE_MAX_LENGTH = 200;
 
+/** Russian is optional: existing lists get theirs from tenable_list_ru (see tenable.text.ts), English stands in for it. */
 const localized = (max: number) => z.object({
   es: z.string().trim().min(1).max(max), en: z.string().trim().min(1).max(max),
   ka: z.string().trim().min(1).max(max), tr: z.string().trim().min(1).max(max),
+  ru: z.string().trim().min(1).max(max).optional(),
 }).strict();
+
+/** What a Russian title was translated from: the English title and note. A list corrected in English no longer matches it. */
+export const russianTextSource = (list: Pick<TenableList, 'title' | 'note'>): string =>
+  createHash('sha256').update(JSON.stringify([list.title.en, list.note?.en ?? null])).digest('hex').slice(0, 16);
 
 /** The figure behind a rank, rendered per locale from its unit ("141 goals", "141 goles"). */
 export const FIGURE_UNITS = ['goals', 'apps', 'caps', 'titles', 'eur_m', 'assists', 'wins', 'points', 'seasons', 'year', 'none'] as const;

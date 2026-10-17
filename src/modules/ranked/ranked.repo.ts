@@ -1,4 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { boardFilterSql, GLOBAL_BOARD, type BoardFilter } from '../leaderboards/board-filter.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { tierFromRp } from './ranked.service.js';
@@ -556,6 +557,7 @@ export const rankedRepo = {
     profilesArchived: number;
     rpChangesArchived: number;
     profilesReset: number;
+    boardTrophies: number;
   }> {
     return sql.begin(async (tx) => {
       const batchRows = await tx.unsafe<{ id: string }[]>(
@@ -616,6 +618,44 @@ export const rankedRepo = {
         [batchId]
       );
 
+      // Season trophies: the top three of every country and club board (No.1-3
+      // fan) keep a profile award, in the live board's order at the moment the
+      // season closes (read before the reset below). Bots can hold a place, but
+      // only real players receive the trophy. Boards under ten players award nothing.
+      const boardTrophies = seasonNumber === null ? { count: 0 } : await tx.unsafe(
+        `INSERT INTO event_awards (event_slug, place, user_id)
+        SELECT 'lb-s' || $1::text || '-' || board_kind || '-' || lower(board_key), pos, user_id
+        FROM (
+          SELECT b.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY board_kind, board_key
+              ORDER BY rp DESC, updated_at ASC, user_id ASC
+            ) AS pos,
+            COUNT(*) OVER (PARTITION BY board_kind, board_key) AS board_size
+          FROM (
+            SELECT p.user_id, p.rp, p.updated_at, u.is_ai, 'country' AS board_kind, u.country AS board_key
+            FROM ranked_profiles p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.placement_status = 'placed' AND u.country IS NOT NULL
+              AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
+              AND u.is_seed = false AND u.is_deleted = false
+              AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+            UNION ALL
+            SELECT p.user_id, p.rp, p.updated_at, u.is_ai, 'club', c.club_id
+            FROM ranked_profiles p
+            JOIN users u ON u.id = p.user_id
+            JOIN leaderboard_club_aliases c ON c.alias = lower(btrim(u.favorite_club))
+            WHERE p.placement_status = 'placed'
+              AND (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
+              AND u.is_seed = false AND u.is_deleted = false
+              AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+          ) b
+        ) ranked
+        WHERE pos <= 3 AND board_size >= 10 AND is_ai = false
+        ON CONFLICT DO NOTHING`,
+        [seasonNumber]
+      );
+
       const resetProfiles = await tx.unsafe(
         `UPDATE ranked_profiles rp
         SET
@@ -652,47 +692,12 @@ export const rankedRepo = {
         profilesArchived: archivedProfiles.count,
         rpChangesArchived: archivedChanges.count,
         profilesReset: resetProfiles.count,
+        boardTrophies: boardTrophies.count,
       };
     });
   },
 
-  async listLeaderboard(limit: number, offset: number, country?: string): Promise<RankedLeaderboardEntry[]> {
-    if (country) {
-      return sql<RankedLeaderboardEntry[]>`
-        SELECT
-          rp.user_id AS "userId",
-          COALESCE(u.nickname, 'Player') AS "username",
-          u.avatar_url AS "avatarUrl",
-          u.avatar_customization AS "avatarCustomization",
-          rp.rp,
-          rp.tier,
-          u.country,
-          COALESCE(trend.wins, 0)::int AS "trendWins",
-          COALESCE(trend.total, 0)::int AS "trendTotal"
-        FROM ranked_profiles rp
-        JOIN users u ON u.id = rp.user_id
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE sub.result = 'win') AS wins,
-            COUNT(*) AS total
-          FROM (
-            SELECT result FROM ranked_rp_changes
-            WHERE user_id = rp.user_id AND is_placement = false
-            ORDER BY created_at DESC LIMIT 3
-          ) sub
-        ) trend ON true
-        WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
-          AND u.is_seed = false
-          AND u.is_deleted = false
-          AND u.deleted_at IS NULL
-          AND u.pending_deletion_at IS NULL
-          AND rp.placement_status = 'placed'
-          AND u.country = ${country}
-        ORDER BY rp.rp DESC, rp.updated_at ASC
-        LIMIT ${limit}
-        OFFSET ${offset}
-      `;
-    }
+  async listLeaderboard(limit: number, offset: number, filter: BoardFilter = GLOBAL_BOARD): Promise<RankedLeaderboardEntry[]> {
     return sql<RankedLeaderboardEntry[]>`
       SELECT
         rp.user_id AS "userId",
@@ -722,7 +727,8 @@ export const rankedRepo = {
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
         AND rp.placement_status = 'placed'
-      ORDER BY rp.rp DESC, rp.updated_at ASC
+        ${boardFilterSql(filter)}
+      ORDER BY rp.rp DESC, rp.updated_at ASC, rp.user_id ASC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -766,9 +772,9 @@ export const rankedRepo = {
     batchId: string,
     limit: number,
     offset: number,
-    country?: string
+    filter: BoardFilter = GLOBAL_BOARD
   ): Promise<RankedLeaderboardEntry[]> {
-    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+    const countryFilter = boardFilterSql(filter);
     return sql<RankedLeaderboardEntry[]>`
       SELECT
         rp.user_id AS "userId",
@@ -799,12 +805,16 @@ export const rankedRepo = {
   async getArchivedUserRank(
     batchId: string,
     userId: string,
-    country?: string
+    filter: BoardFilter = GLOBAL_BOARD
   ): Promise<ArchivedRankedUserRankResult | null> {
-    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+    const countryFilter = boardFilterSql(filter);
     const [result] = await sql<ArchivedRankedUserRankResult[]>`
       WITH eligible AS (
-        SELECT rp.user_id, rp.rp, rp.tier
+        SELECT rp.user_id, rp.rp, rp.tier,
+          -- Same order as listArchivedLeaderboard, so tied players get the rows they occupy.
+          ROW_NUMBER() OVER (
+            ORDER BY rp.rp DESC, rp.last_ranked_match_at ASC NULLS LAST, rp.user_id ASC
+          ) AS pos
         FROM ranked_profiles_archive rp
         JOIN users u ON u.id = rp.user_id
         WHERE rp.reset_batch_id = ${batchId}
@@ -816,10 +826,10 @@ export const rankedRepo = {
           AND rp.placement_status = 'placed'
           ${countryFilter}
       ), target AS (
-        SELECT rp, tier FROM eligible WHERE user_id = ${userId}
+        SELECT rp, tier, pos FROM eligible WHERE user_id = ${userId}
       )
       SELECT
-        (SELECT COUNT(*)::int + 1 FROM eligible WHERE rp > target.rp) AS rank,
+        target.pos::int AS rank,
         (SELECT COUNT(*)::int FROM eligible) AS total,
         0::int AS "trendWins",
         0::int AS "trendTotal",
@@ -830,14 +840,14 @@ export const rankedRepo = {
     return result ?? null;
   },
 
-  async getUserRank(userId: string, country?: string): Promise<RankedUserRankResult | null> {
+  async getUserRank(userId: string, filter: BoardFilter = GLOBAL_BOARD): Promise<RankedUserRankResult | null> {
     const profile = await this.getProfile(userId);
     if (!profile || profile.placement_status !== 'placed') return null;
-    if (country && profile.country !== country) return null;
-
-    const countryFilter = country
-      ? sql`AND u.country = ${country}`
-      : sql``;
+    const countryFilter = boardFilterSql(filter);
+    if (filter.kind !== 'global') {
+      const [member] = await sql<{ id: string }[]>`SELECT u.id FROM users u WHERE u.id = ${userId} ${countryFilter}`;
+      if (!member) return null;
+    }
 
     const [result] = await sql<RankedUserRankResult[]>`
       WITH recent_matches AS (
@@ -855,7 +865,11 @@ export const rankedRepo = {
            AND u.deleted_at IS NULL
            AND u.pending_deletion_at IS NULL
            AND rp2.placement_status = 'placed' ${countryFilter}
-           AND (rp2.rp > ${profile.rp} OR (rp2.rp = ${profile.rp} AND rp2.updated_at < ${profile.updated_at}))
+           AND (
+             rp2.rp > ${profile.rp}
+             OR (rp2.rp = ${profile.rp} AND rp2.updated_at < ${profile.updated_at})
+             OR (rp2.rp = ${profile.rp} AND rp2.updated_at = ${profile.updated_at} AND rp2.user_id < ${userId})
+           )
         ) AS rank,
         (SELECT COUNT(*)::int
          FROM ranked_profiles rp3
@@ -871,6 +885,34 @@ export const rankedRepo = {
         (SELECT COUNT(*) FROM recent_matches)::int AS "trendTotal"
     `;
     return result ?? null;
+  },
+
+  /** The player directly above `userId` on the live board, under the list's ordering. */
+  async getNextAbove(userId: string, filter: BoardFilter = GLOBAL_BOARD): Promise<{ username: string; points: number } | null> {
+    const [row] = await sql<{ username: string; points: number }[]>`
+      WITH target AS (
+        SELECT user_id, rp, updated_at FROM ranked_profiles WHERE user_id = ${userId}
+      )
+      SELECT COALESCE(u.nickname, 'Player') AS username, rp.rp AS points
+      FROM ranked_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      CROSS JOIN target
+      WHERE (u.is_ai = false OR u.ai_kind = 'persistent') AND u.is_guest = false
+        AND u.is_seed = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND rp.placement_status = 'placed'
+        ${boardFilterSql(filter)}
+        AND (
+          rp.rp > target.rp
+          OR (rp.rp = target.rp AND rp.updated_at < target.updated_at)
+          OR (rp.rp = target.rp AND rp.updated_at = target.updated_at AND rp.user_id < target.user_id)
+        )
+      ORDER BY rp.rp ASC, rp.updated_at DESC, rp.user_id DESC
+      LIMIT 1
+    `;
+    return row ?? null;
   },
 
   /**

@@ -1,5 +1,5 @@
 import type { RoomEngine } from '../../room.engine.js';
-import { aproximadoContentSchema, ROOM_PACK_WANTED, roomCommandSchema, type AproximadoContent, type RoomCommand } from '../../room.types.js';
+import { aproximadoContentSchema, ROOM_PACK_WANTED, roomCommandSchema, roomText, type AproximadoContent, type RoomCommand } from '../../room.types.js';
 import { finalStandings, isIdle, seatsChanged, startMatch, submitGuess, tick, type EngineConfig, type EngineState } from './aproximado.engine.js';
 import { ROUND_MS, ROUNDS } from './aproximado.rules.js';
 
@@ -58,7 +58,7 @@ export const aproximadoRoomEngine: RoomEngine<AproximadoContent, EngineState, Ro
       round: state.round,
       totalRounds: ROUNDS,
       scoring: state.status.length === 2 ? 'closest' : 'podium',
-      question: { id: q.id, kind: q.kind, prompt: q.prompt[locale], unit: q.unit[locale], precision: q.precision },
+      question: { id: q.id, kind: q.kind, prompt: roomText(q.prompt, locale), unit: roomText(q.unit, locale), precision: q.precision },
       seats: state.status.map((status, s) => ({
         seat: s, status,
         answered: state.phase === 'guess' ? state.guesses[s] !== null : reveal ? reveal.entries[s]?.guess !== null : false,

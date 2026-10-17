@@ -33,6 +33,8 @@ import {
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
 import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
+import { auctionContentService } from '../../modules/auction/auction-content.service.js';
+import type { AuctionContentLocale } from '../../modules/auction/auction-content.repo.js';
 import { startFootballGridMatchFromLobby } from './lobby-football-grid-start.service.js';
 import { startDuelMatchFromLobby } from './lobby-duel-start.service.js';
 import { isDuelGame } from '../../modules/duel/duel.config.js';
@@ -930,7 +932,8 @@ export async function startFriendlyMatch(
   io: QuizballServer,
   socket: QuizballSocket,
   lobbyIdOverride?: string,
-  seen?: LobbySeenGame
+  seen?: LobbySeenGame,
+  locale?: AuctionContentLocale
 ): Promise<void> {
   const lobbyId = await boundLobbyId(socket, lobbyIdOverride);
   if (!lobbyId) {
@@ -1055,6 +1058,7 @@ export async function startFriendlyMatch(
       await startAuctionMatchFromLobby(io, socket, {
         lobbyId,
         hostUserId: currentLobby.host_user_id,
+        locale: await auctionContentService.playableContentLocale(locale ?? 'en').catch((): AuctionContentLocale => 'en'),
       });
       return;
     }

@@ -53,6 +53,7 @@ import type {
 } from './daily-challenges.types.js';
 import { buildFifaFaceUrl } from './fifa-face-url.js';
 import { guestRepo } from '../guest/guest.repo.js';
+import { normalizeAnswerString } from './answer-normalize.js';
 
 /** Placeholder actor for guest set building: never written anywhere (no served-history, no completion). */
 const GUEST_ACTOR = '00000000-0000-4000-8000-000000000000';
@@ -117,7 +118,7 @@ const dailyChallengeSettingsSchemas = {
   cardDetective: cardDetectiveSettingsSchema,
 } as const;
 
-const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr'] as const;
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru'] as const;
 const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
@@ -153,6 +154,9 @@ function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
   }
   if (normalized === 'tr' || normalized.startsWith('tr-')) {
     return 'tr';
+  }
+  if (normalized === 'ru' || normalized.startsWith('ru-')) {
+    return 'ru';
   }
   return 'en';
 }
@@ -194,18 +198,6 @@ function footballLogicDifficultyQuota(count: number): Record<string, number> {
   const medium = Math.floor(count * 0.2);
   const hard = Math.floor(count * 0.2);
   return { easy: count - medium - hard, medium, hard };
-}
-
-function normalizeAnswerString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-  return normalized || null;
 }
 
 function answerKeysOf(value: Json | null | undefined): string[] {
@@ -404,8 +396,11 @@ async function getOrCreateDailyCardSet(
   return ordered as FifaCardRow[];
 }
 
+const CYRILLIC = /\p{Script=Cyrillic}/u;
+
 function toFifaSessionCard(card: FifaCardRow, locale?: string) {
-  const name = locale === 'ka' && card.name_ka ? card.name_ka : card.name;
+  // Russian names live only in `accepted` (Cyrillic aliases), so the first Cyrillic one is the display name.
+  const name = locale === 'ka' && card.name_ka ? card.name_ka : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name : card.name;
   const acceptedAnswers = Array.from(
     new Set([card.name, card.name_ka ?? '', ...card.accepted].map((value) => value.trim()).filter(Boolean))
   );

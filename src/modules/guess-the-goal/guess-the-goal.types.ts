@@ -3,6 +3,7 @@ export interface I18nText {
   ka?: string | null;
   es?: string | null;
   tr?: string | null;
+  ru?: string | null;
 }
 
 export type ChoreographyStepKind = 'pass' | 'carry' | 'run' | 'shot';

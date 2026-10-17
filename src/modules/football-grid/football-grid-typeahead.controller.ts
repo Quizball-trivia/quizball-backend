@@ -6,6 +6,7 @@ export interface FootballGridTypeaheadPlayer {
   id: string;
   nameEn: string;
   nameKa: string | null;
+  nameRu: string | null;
 }
 
 interface TypeaheadPayload {
@@ -30,7 +31,7 @@ export function resetFootballGridTypeaheadCache(): void {
 // the roster. Read the small canonical-name alias set rather than scanning
 // every answer placement across all releases on each cache refresh.
 async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
-  const rows = await sql<Array<{ release_id: string; release_key: string; id: string; name_en: string; name_ka: string | null }>>`
+  const rows = await sql<Array<{ release_id: string; release_key: string; id: string; name_en: string; name_ka: string | null; name_ru: string | null }>>`
     WITH published AS MATERIALIZED (
       SELECT id, version FROM football_grid_content_releases
       WHERE status = 'published'
@@ -52,15 +53,24 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
       ORDER BY a.football_player_id, r.version DESC, a.reviewed_at DESC, a.alias
     ), names AS (
       SELECT * FROM georgian_names UNION ALL SELECT * FROM fallback_names
+    ), russian_names AS MATERIALIZED (
+      SELECT DISTINCT ON (a.football_player_id)
+        a.football_player_id, a.alias AS name_ru
+      FROM football_grid_player_aliases a
+      JOIN published r ON r.id = a.release_id
+      WHERE a.locale = 'ru' AND a.alias_type = 'transliteration' AND a.acceptance_policy = 'exact'
+      ORDER BY a.football_player_id, r.version DESC, a.reviewed_at DESC, a.alias
     )
     SELECT (SELECT id FROM published ORDER BY version DESC LIMIT 1) AS release_id,
       (SELECT string_agg(id::text, ',' ORDER BY id) FROM published)
         || ':' || coalesce((SELECT max(created_at)::text FROM football_grid_player_name_edits), '0') AS release_key,
       names.football_player_id AS id,
       coalesce(edits.name_en, players.name) AS name_en,
-      coalesce(edits.name_ka, names.name_ka) AS name_ka
+      coalesce(edits.name_ka, names.name_ka) AS name_ka,
+      russian_names.name_ru
     FROM names
     JOIN football_players players ON players.id = names.football_player_id
+    LEFT JOIN russian_names ON russian_names.football_player_id = names.football_player_id
     LEFT JOIN LATERAL (
       SELECT
         (SELECT name_en FROM football_grid_player_name_edits
@@ -72,13 +82,12 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
     ) edits ON true
   `;
   if (rows.length === 0) return null;
-  return {
-    releaseId: rows[0].release_id,
-    releaseKey: rows[0].release_key,
-    players: rows
-      .map((row) => ({ id: row.id, nameEn: row.name_en, nameKa: row.name_ka }))
-      .sort((a, b) => a.nameEn.localeCompare(b.nameEn)),
-  };
+  const players = rows
+    .map((row) => ({ id: row.id, nameEn: row.name_en, nameKa: row.name_ka, nameRu: row.name_ru }))
+    .sort((a, b) => a.nameEn.localeCompare(b.nameEn));
+  // Names can be added to a release in place (Russian aliases), so the key also covers the roster itself.
+  const rosterHash = createHash('sha1').update(JSON.stringify(players)).digest('hex').slice(0, 16);
+  return { releaseId: rows[0].release_id, releaseKey: `${rows[0].release_key}:${rosterHash}`, players };
 }
 
 export const footballGridTypeaheadController = {

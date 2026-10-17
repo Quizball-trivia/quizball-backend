@@ -167,14 +167,14 @@ export const squadSpinRepo = {
   async getCriteriaByIds(ids: string[], tx?: TransactionSql): Promise<SquadSpinCriterionRow[]> {
     if (ids.length === 0) return [];
     return db(tx)<SquadSpinCriterionRow[]>`
-      SELECT id, family, criterion_key, label_en, label_ka, asset_key FROM squad_spin_criteria WHERE id = ANY(${sql.array(ids)}::uuid[])
+      SELECT id, family, criterion_key, label_en, label_ka, label_ru, asset_key FROM squad_spin_criteria WHERE id = ANY(${sql.array(ids)}::uuid[])
     `;
   },
 
   async getPlayersByIds(ids: string[], tx?: TransactionSql): Promise<SquadSpinPlayerRow[]> {
     if (ids.length === 0) return [];
     return db(tx)<SquadSpinPlayerRow[]>`
-      SELECT id, name_en, name_ka, image_url, position_group, nationality_code
+      SELECT id, name_en, name_ka, name_ru, image_url, position_group, nationality_code
       FROM squad_spin_players WHERE id = ANY(${sql.array(ids)}::uuid[])
       ORDER BY peak_value_eur DESC NULLS LAST, name_en
     `;

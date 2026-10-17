@@ -9,7 +9,8 @@ import type {
 } from './ranked.schemas.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import { normalizeSupportedCountryCode } from '../../core/country.js';
-import { AuthenticationError } from '../../core/errors.js';
+import { resolveBoardFilter } from '../leaderboards/board-filter.js';
+import { nextTargetOf } from '../leaderboards/board-response.js';
 
 function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
   if (total === 0) return { trend: 'same', trendValue: 0 };
@@ -36,22 +37,18 @@ export const rankedController = {
   },
 
   async getLeaderboard(req: Request, res: Response): Promise<void> {
-    const { limit, offset, scope, season } = req.validated.query as RankedLeaderboardQuery;
+    const query = req.validated.query as RankedLeaderboardQuery;
+    const { limit, offset, season } = query;
 
-    let country: string | undefined;
-    if (scope === 'country') {
-      if (!req.user) throw new AuthenticationError('Sign in to see your country board');
-      const user = await usersRepo.getById(req.user.id);
-      country = normalizeSupportedCountryCode(user?.country) ?? undefined;
-      if (!country) {
-        res.json({ entries: [] });
-        return;
-      }
+    const filter = await resolveBoardFilter(req, query);
+    if (!filter) {
+      res.json({ entries: [] });
+      return;
     }
 
     const entries = season
-      ? await rankedService.getArchivedLeaderboard(season, limit, offset, country)
-      : await rankedService.getLeaderboard(limit, offset, country);
+      ? await rankedService.getArchivedLeaderboard(season, limit, offset, filter)
+      : await rankedService.getLeaderboard(limit, offset, filter);
 
     const ranked = entries.map((entry, i) => {
       const { trendWins, trendTotal, ...rest } = entry;
@@ -68,19 +65,18 @@ export const rankedController = {
 
   async getUserRank(req: Request, res: Response): Promise<void> {
     const userId = req.user!.id;
-    const { scope, season } = req.validated.query as RankedUserRankQuery;
+    const query = req.validated.query as RankedUserRankQuery;
+    const { season } = query;
 
     const user = await usersRepo.getById(userId);
-    const country = scope === 'country'
-      ? normalizeSupportedCountryCode(user?.country) ?? undefined
-      : undefined;
-    if (scope === 'country' && !country) {
+    const filter = await resolveBoardFilter(req, query);
+    if (!filter) {
       res.json(null);
       return;
     }
 
     if (season) {
-      const rankInfo = await rankedService.getArchivedUserRank(season, userId, country);
+      const rankInfo = await rankedService.getArchivedUserRank(season, userId, filter);
       if (!rankInfo) {
         res.json(null);
         return;
@@ -95,6 +91,7 @@ export const rankedController = {
         tier: rankInfo.tier,
         rank: rankInfo.rank,
         total: rankInfo.total,
+        nextTarget: null,
         ...computeTrend(rankInfo.trendWins, rankInfo.trendTotal),
       });
       return;
@@ -106,7 +103,7 @@ export const rankedController = {
       return;
     }
 
-    const rankInfo = await rankedService.getUserRank(userId, country);
+    const rankInfo = await rankedService.getUserRank(userId, filter);
 
     if (!rankInfo) {
       res.json(null);
@@ -123,6 +120,7 @@ export const rankedController = {
       tier: profile.tier,
       rank: rankInfo.rank,
       total: rankInfo.total,
+      nextTarget: nextTargetOf(rankInfo.rank, profile.rp, rankInfo.nextAbove),
       ...computeTrend(rankInfo.trendWins, rankInfo.trendTotal),
     });
   },

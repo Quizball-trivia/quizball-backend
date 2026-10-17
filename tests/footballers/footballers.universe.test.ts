@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { firstLetter, lastLetter, normalizeName, surnameOf, withinEdits, withinOneEdit } from '../../src/modules/footballers/footballers.text.js';
-import { buildUniverse, type UniversePlayer } from '../../src/modules/footballers/footballers.universe.js';
+import { firstLetter, lastLetter, lastLetterCyrillic, normalizeName, normalizeNameCyrillic, surnameOf, withinEdits, withinOneEdit } from '../../src/modules/footballers/footballers.text.js';
+import { buildRussianIndex, buildUniverse, type UniversePlayer } from '../../src/modules/footballers/footballers.universe.js';
 
 // Invented footballers only: the repository is public.
 const P = (pid: string, name: string, game: string, fame: number, aliases: string[] = []): UniversePlayer => ({ pid, name, game, fame, aliases });
@@ -90,5 +90,50 @@ describe('generous answers among a few footballers', () => {
   it('ignores ids the release does not have', () => {
     expect(u.pickAmong('Orlen', ['gone', 'p-orlen'])).toBe('p-orlen');
     expect(u.pickAmong('Orlen', ['gone'])).toBeNull();
+  });
+});
+
+describe('Russian names (shared overlay index)', () => {
+  // Invented footballers only, with invented Russian forms.
+  const R = (pid: string, name: string, game: string, fame: number): UniversePlayer => ({ pid, name, game, fame, aliases: [] });
+  const ru = buildRussianIndex('ru-test-1', [
+    R('r-orlen', 'Тарин Орлен', 'Орлен', 80), R('r-nesto', 'Несто', 'Несто', 40), R('r-bely', 'Илья Белый', 'Белый', 60),
+    R('r-kai', 'Кай Хаген', 'Хаген', 30), R('r-other', 'Тарин Орлан', 'Орлан', 90),
+  ]);
+  const inRelease = new Set(['r-orlen', 'r-nesto', 'r-bely', 'r-kai']);
+  const cy = ru.scoped('test-release', (pid) => inRelease.has(pid));
+
+  it('reads Russian names with Russian letters and the "cities" rule', () => {
+    expect(cy.resolve('ОРЛЕН')).toEqual(['r-orlen']);
+    expect(cy.resolve('тарин орлен')).toEqual(['r-orlen']);
+    expect(cy.player('r-orlen')?.name).toBe('Тарин Орлен');
+    expect(cy.last('r-orlen')).toBe('Н');
+    expect(cy.last('r-bely')).toBe('Л');
+    expect(cy.starts('r-bely')).toContain('И');
+    expect(cy.starting('Х')).toEqual(['r-kai']);
+    expect(cy.alphabet).not.toContain('Й');
+  });
+
+  it('keeps footballers outside the release out of every matching step', () => {
+    expect(cy.player('r-other')).toBeUndefined();
+    expect(cy.starting('Т')).not.toContain('r-other');
+    // "Тарин Орлан" is an exact name only outside the release: inside it, the typo still finds Орлен.
+    expect(ru.resolve('тарин орлан')).toEqual(['r-other']);
+    expect(cy.resolve('тарин орлан')).toEqual(['r-orlen']);
+    expect(cy.pickAmong('орлан', ['r-orlen'])).toBe('r-orlen');
+    expect(ru.pickAmong('орлан', ['r-orlen'])).toBeNull();
+  });
+
+  it('reads decomposed й and ё like the composed letters, and skips several closing letters', () => {
+    expect(normalizeNameCyrillic('Кеи\u0306н Пе\u0308тр')).toBe(normalizeNameCyrillic('Кейн Пётр'));
+    expect(lastLetterCyrillic('Цой')).toBe('О');
+    expect(lastLetterCyrillic('Пуйоль')).toBe('Л');
+    expect(lastLetterCyrillic('Белы\u0306')).toBe('Л');
+  });
+
+  it('forgives a typo on long Russian names and picks among a pair by Russian name', () => {
+    expect(cy.resolve('тарин орлин')).toEqual(['r-orlen']);
+    expect(cy.pickAmong('несто', ['r-nesto', 'r-orlen'])).toBe('r-nesto');
+    expect(cy.pickAmong('хаген', ['r-orlen'])).toBeNull();
   });
 });

@@ -39,6 +39,11 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
   isUserBanned: (user: { is_banned?: boolean }) => Boolean(user.is_banned),
 }));
 
+// A rename that also moves country/club runs in one transaction; the repo is mocked, so the transaction is a stand-in.
+vi.mock('../../src/db/index.js', () => ({
+  sql: { begin: async (run: (tx: unknown) => Promise<unknown>) => run({}) },
+}));
+
 vi.mock('../../src/modules/users/user-cache.js', () => ({
   getCachedUser: vi.fn(),
   setCachedUser: vi.fn(),

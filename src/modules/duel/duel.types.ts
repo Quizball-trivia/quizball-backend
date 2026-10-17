@@ -3,9 +3,11 @@ import type { z } from 'zod';
 export const DUEL_GAMES = ['buscaminas', 'pistas', 'ultimo', 'minuto'] as const;
 export type DuelGameId = (typeof DUEL_GAMES)[number];
 
-export const DUEL_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
+export const DUEL_LOCALES = ['es', 'en', 'ka', 'tr', 'ru'] as const;
 export type DuelLocale = (typeof DUEL_LOCALES)[number];
-export type LocalizedText = Record<DuelLocale, string>;
+/** Duel content always carries es/en/ka/tr; ru is optional until every pool item has it. */
+export type LocalizedText = Record<Exclude<DuelLocale, 'ru'>, string> & { ru?: string };
+export const textFor = (value: LocalizedText, locale: DuelLocale): string => value[locale] ?? value.en ?? value.es;
 
 /** Seat index inside engines; stored as seat 1 | 2 in duel_participants. */
 export type Seat = 0 | 1;

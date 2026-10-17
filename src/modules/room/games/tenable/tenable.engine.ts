@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { SLOTS, tenableListSchema, type TenableList, type TenableLocale } from '../../../tenable/tenable.content.js';
 import { formatFigure } from '../../../tenable/tenable.figures.js';
-import { judge, type Directory } from '../../../tenable/tenable.identify.js';
+import { displayName, judge, type Directory } from '../../../tenable/tenable.identify.js';
+import { textIn } from '../../../tenable/tenable.text.js';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
 
 /**
@@ -247,7 +248,8 @@ export function viewOf(s: TenableState, content: TenableContent, seat: number, l
   const listIndex = Math.min(s.list, LISTS - 1);
   const list: TenableList = content.pack.lists[listIndex];
   const directory = directoryOf(content, listIndex);
-  const nameOf = (eid: string | null) => (eid === null ? null : directory.entity(eid)?.name ?? null);
+  const nameOf = (eid: string | null) => (eid === null ? null : displayName(directory, eid, locale === 'ru'));
+  const text = textIn(list, locale);
   const open = listRevealed(s, listIndex);
   const started = s.phase !== 'intro';
   const last = s.last && { epoch: s.last.epoch, attempt: s.last.attempt, seat: s.last.seat, kind: s.last.kind, text: s.last.text, name: nameOf(s.last.eid), rank: s.last.slot === null ? null : s.last.slot + 1 };
@@ -258,7 +260,7 @@ export function viewOf(s: TenableState, content: TenableContent, seat: number, l
     format: s.status.length === 2 ? 'duel' : 'party',
     turnMs: TURN_MS,
     // The title is shown with the intro countdown too: it is the question, not an answer.
-    current: { title: list.title[locale], note: list.note?.[locale] ?? null, asOf: list.asOf, kind: list.kind, release: list.release },
+    current: { title: text.title, note: text.note, asOf: list.asOf, kind: list.kind, release: list.release },
     slots: list.slots.map((slot, i) => {
       const by = started ? s.claimed[i] : null;
       const shown = by !== null || open;

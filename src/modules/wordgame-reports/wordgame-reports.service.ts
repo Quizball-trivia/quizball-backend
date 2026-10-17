@@ -1,5 +1,5 @@
 import { logger } from '../../core/logger.js';
-import { normalizeName } from '../footballers/footballers.text.js';
+import { normalizeTyped } from '../footballers/footballers.text.js';
 import type { Refusal } from './wordgame-reports.rules.js';
 import { wordgameReportsRepo, type WordgameReport } from './wordgame-reports.repo.js';
 
@@ -14,7 +14,7 @@ export const wordgameReportsService = {
   /** Never throws: a report is a favour from the player, and losing one must not disturb a game. */
   async file(report: Omit<WordgameReport, 'typed' | 'norm' | 'releaseId' | 'subject' | 'resolvedPid'>, refusal: Refusal, text: string): Promise<void> {
     const typed = cleaned(text);
-    const norm = normalizeName(typed).slice(0, REPORT_MAX_LENGTH);
+    const norm = normalizeTyped(typed).slice(0, REPORT_MAX_LENGTH);
     if (!typed || !norm) return;
     try {
       await wordgameReportsRepo.file({ ...report, typed, norm, releaseId: refusal.release, subject: refusal.subject, resolvedPid: refusal.resolvedPid }, REPORT_DAILY_BUDGET);

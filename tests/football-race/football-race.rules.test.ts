@@ -104,6 +104,9 @@ describe('daily race rules', () => {
   it('a nation a correction took out of the day falls back to the day order; the rebase clears the choice', () => {
     const view = publicState({ ...newState(), nation: 'GONE' }, '2031-01-02', DAY, { ranked: true });
     expect(view.racers.map((r) => r.id)).toEqual(['Y', 'R1', 'R2', 'R3']);
+    expect(view.nation).toBeNull();
+    const played = publicState({ ...play('y1'), nation: 'GONE' }, '2031-01-02', DAY, { ranked: true });
+    expect(played.nation).toBe('Y');
     expect(rebase(choose(newState(), DAY, 'R1'))).toEqual(newState());
   });
 });

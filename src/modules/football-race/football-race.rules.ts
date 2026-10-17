@@ -82,7 +82,8 @@ export function publicState(s: RunState, dayId: string, day: DayRace | null, ext
     source: d?.source ?? { en: '', es: '' },
     tournament: d ? { id: d.tournament.id, label: d.tournament.label } : { id: '', label: { en: '', es: '' } },
     racers: racers.map((id) => { const n = nationOf.get(id)!; return { id, code: n.code, flag: n.flag, name: n.name }; }),
-    nation: s.nation ?? null,
+    // The nation actually in seat 0: a stored one a correction took out of the day no longer is.
+    nation: s.nation !== undefined && racers[0] === s.nation ? s.nation : s.res.length > 0 ? racers[0] ?? null : null,
     target: SOLO_TARGET,
     rivalTarget: SOLO_TARGET - RIVAL_HEAD_START,
     positions: positions(s),

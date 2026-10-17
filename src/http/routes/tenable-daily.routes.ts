@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { suggest } from '../../modules/tenable/tenable.suggest.js';
+import { submitGameFeedback } from '../../modules/game-feedback/game-feedback.controller.js';
+import { gameFeedbackSchema } from '../../modules/game-feedback/game-feedback.schemas.js';
 
 /** Football Tenable, the solo daily. A long run is ~40 calls (ten finds, the misses and free retries); guests play closed days only. */
 export const tenableDailyRoutes = createDailyGameRouter({
@@ -20,6 +22,7 @@ export const tenableDailyRoutes = createDailyGameRouter({
     { path: 'pass', schema: moveSchema, handler: tenableDailyController.giveUp },
   ],
   report: { schema: nameReportSchema, handler: tenableDailyController.report },
+  feedback: { schema: gameFeedbackSchema, handler: submitGameFeedback('tenable') },
   current: tenableDailyController.current,
   boards: tenableDailyController.boards,
   review: tenableDailyController.review,

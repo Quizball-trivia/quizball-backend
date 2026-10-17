@@ -24,6 +24,8 @@ export interface DailyGameRoutes {
   moves: Array<{ path: string; schema: ZodTypeAny; handler: Handler }>;
   /** POST /report: a refused answer the player says was right (rare, so a small budget of its own). */
   report?: { schema: ZodTypeAny; handler: Handler };
+  /** POST /feedback: the after-game rating card. */
+  feedback?: { schema: ZodTypeAny; handler: Handler };
   current: Handler;
   boards: Handler;
   review: Handler;
@@ -106,6 +108,7 @@ export function createDailyGameRouter(game: DailyGameRoutes): Router {
   router.post('/start', identify, startLimiter, validate({ body: game.schemas.start }), game.start);
   for (const move of game.moves) router.post(`/${move.path}`, identify, playLimiter, validate({ body: move.schema }), move.handler);
   if (game.report) router.post('/report', identify, limiter(6), validate({ body: game.report.schema }), game.report.handler);
+  if (game.feedback) router.post('/feedback', identify, limiter(6), validate({ body: game.feedback.schema }), game.feedback.handler);
   router.get('/current', varyOnPlayer, identify, readLimiter, validate({ query: game.schemas.dayQuery }), game.current);
   router.get('/boards', publicRead, boardLimiter, game.boards);
   router.get('/review', publicRead, boardLimiter, validate({ query: game.schemas.reviewQuery }), game.review);

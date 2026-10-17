@@ -30,8 +30,11 @@ export type Player = { kind: 'member'; userId: string } | { kind: 'guest'; guest
 /** One pick, kept whole: what the player saw is never re-read from the day's current content. */
 export interface PickResult { stat: string; values: number[]; leaders: number[] }
 
-/** football_race_runs.state. Positions follow from the results (rivals start ahead). */
-export interface RunState { v: 1; res: PickResult[]; done: boolean }
+/**
+ * football_race_runs.state. Positions follow from the results (rivals start ahead). `nation`: the racer the player
+ * races as (seat 0 of every result); absent until chosen or the first pick.
+ */
+export interface RunState { v: 1; res: PickResult[]; done: boolean; nation?: string }
 
 export interface PublicRunState {
   day: string;
@@ -39,8 +42,13 @@ export interface PublicRunState {
   cutoff: string;
   source: L10n;
   tournament: { id: string; label: L10n };
+  /** By seat: index 0 is the player's nation, then the day's other three. */
   racers: Array<{ id: string; code: string; flag: string; name: L10n }>;
+  /** The nation chosen (or fixed by the first pick); null while the player can still choose. */
+  nation: string | null;
   target: number;
+  /** Spaces a rival must still cover from its head start. */
+  rivalTarget: number;
   positions: number[];
   eras: Array<{ id: string; label: L10n }>;
   families: Array<{ id: string; label: L10n }>;

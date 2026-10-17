@@ -52,6 +52,9 @@ export function createFootballRaceService(deps: FootballRaceDeps) {
     pick(player: Player, runId: string, version: number, stat: string): Promise<RunResponse> {
       return core.mutate(player, runId, version, (s, day) => ({ state: rules.pick(s, day.race, stat) }));
     },
+    choose(player: Player, runId: string, version: number, nation: string): Promise<RunResponse> {
+      return core.mutate(player, runId, version, (s, day) => ({ state: rules.choose(s, day.race, nation) }));
+    },
     current: (player: Player, dayId: string | undefined) => { return core.current(player, dayId); },
     boards: (): Promise<BoardsResponse> => { return core.boards(); },
     /** Who led each stat of a day the database clock has closed; anything else is the same 404 as a missing day. */

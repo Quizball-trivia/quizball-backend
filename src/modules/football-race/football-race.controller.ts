@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { guestSessionRequired } from '../daily/daily.errors.js';
 import { footballRaceService } from './football-race.service.js';
 import type { Player } from './football-race.types.js';
-import type { DayQuery, PickRequest, ReviewQuery, StartRequest } from './football-race.schemas.js';
+import type { ChooseRequest, DayQuery, PickRequest, ReviewQuery, StartRequest } from './football-race.schemas.js';
 
 function playerOf(req: Request): Player {
   if (req.user) return { kind: 'member', userId: req.user.id };
@@ -18,6 +18,10 @@ export const footballRaceController = {
   async pick(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as PickRequest;
     res.json(await footballRaceService.pick(playerOf(req), body.runId, body.version, body.stat));
+  },
+  async choose(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as ChooseRequest;
+    res.json(await footballRaceService.choose(playerOf(req), body.runId, body.version, body.nation));
   },
   async current(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;

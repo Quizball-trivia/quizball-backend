@@ -49,6 +49,17 @@ export interface Directory {
 
 const compact = (key: string) => key.replace(/ /g, '');
 
+/** What a suggestion shows, from the normalised name and known name: whole, compact and word by word. */
+function visibleKeys(own: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const name of own) {
+    if (!name) continue;
+    keys.add(name).add(compact(name));
+    for (const word of name.split(' ')) if (!PARTICLES.has(word)) keys.add(word);
+  }
+  return keys;
+}
+
 export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[]): Directory {
   // Best known first, ties by id: every "best known" decision depends on the release only.
   const all = [...rows].sort((a, b) => b.fame - a.fame || (a.eid < b.eid ? -1 : a.eid > b.eid ? 1 : 0));
@@ -57,37 +68,75 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
 
   const names = new Map<string, number[]>();
   const words = new Map<string, number[]>();
-  // The best known holders of every short prefix: entities arrive best known first, so the first few are the answer.
-  const shortTop = new Map<string, number[]>();
+  // Words of the shown name that identify no one (a first name, a middle word): found by suggestions only.
+  const shownOnly = new Map<string, number[]>();
+  // Entities are added in index order, so a repeat of the same key for one entity is always the last holder.
   const put = (map: Map<string, number[]>, key: string, i: number) => {
     if (!key) return;
     const list = map.get(key);
     if (!list) map.set(key, [i]);
-    else if (!list.includes(i)) list.push(i);
-    for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
-      const prefix = key.slice(0, n);
-      const top = shortTop.get(prefix);
-      if (!top) shortTop.set(prefix, [i]);
-      else if (top.length < SUGGEST_LIMIT && !top.includes(i)) top.push(i);
-    }
+    else if (list[list.length - 1] !== i) list.push(i);
   };
   const typoKeys: Array<[string, number]> = [];
+  // Suggestions matching the shown name come before ones found only through an alias or another spelling ("sp":
+  // Sporting before Tottenham's "Spurs"). The best known holders of every short prefix, the two kinds apart: entities
+  // arrive best known first, so the first few of each are the answer (the same as rank() below, built in one pass).
+  const shortShown = new Map<string, number[]>();
+  const shortOther = new Map<string, number[]>();
+  // The last entity each short prefix was counted for, per kind: no per-entity sets on a 100k-name release.
+  const lastShown = new Map<string, number>();
+  const lastOther = new Map<string, number>();
+  const keepTop = (map: Map<string, number[]>, prefix: string, i: number) => {
+    const top = map.get(prefix);
+    if (!top) map.set(prefix, [i]);
+    else if (top.length < SUGGEST_LIMIT) top.push(i);
+  };
+  const other = new Set<string>();
   all.forEach((e, i) => {
-    const whole = new Set([e.name, e.known, ...e.aliases].map(normalizeName).filter(Boolean));
+    other.clear();
+    const own = [normalizeName(e.name), normalizeName(e.known)];
+    const whole = new Set([...own, ...e.aliases.map(normalizeName)].filter(Boolean));
     for (const key of whole) {
-      typoKeys.push([compact(key), i]);
+      const joined = compact(key);
+      typoKeys.push([joined, i]);
       // A name of several words identifies outright; a single word (a known name like "Vega", an alias, a surname)
       // always goes through the dominance rule, whichever way the release happened to classify it.
       if (key.includes(' ')) {
+        other.add(key).add(joined);
         put(names, key, i);
-        put(names, compact(key), i);
+        put(names, joined, i);
       }
     }
     // One word identifies only as a surname or a one-word name, never as a first name or a particle.
-    for (const word of new Set([surnameOf(e.name), ...[...whole].filter((k) => !k.includes(' '))])) {
-      if (word.length >= MIN_WORD && !PARTICLES.has(word)) put(words, word, i);
+    for (const word of new Set([surnameOf(own[0]), ...[...whole].filter((k) => !k.includes(' '))])) {
+      if (word.length >= MIN_WORD && !PARTICLES.has(word)) {
+        other.add(word);
+        put(words, word, i);
+      }
+    }
+    const visible = visibleKeys(own);
+    for (const key of visible) {
+      if (!other.has(key)) put(shownOnly, key, i);
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i) continue;
+        lastShown.set(prefix, i);
+        keepTop(shortShown, prefix, i);
+      }
+    }
+    for (const key of other) {
+      for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {
+        const prefix = key.slice(0, n);
+        if (lastShown.get(prefix) === i || lastOther.get(prefix) === i) continue;
+        lastOther.set(prefix, i);
+        keepTop(shortOther, prefix, i);
+      }
     }
   });
+  // Build-only state shares the scope the returned functions keep alive.
+  lastShown.clear();
+  lastOther.clear();
+  other.clear();
   // Typo search is bucketed by first letter and length: a typo in the first letter is not forgiven (the suggestions
   // cover it), and one lookup compares a few thousand keys at most instead of the whole release.
   const typoBuckets = new Map<string, Array<[string, number]>>();
@@ -97,6 +146,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (bucket) bucket.push(entry);
     else typoBuckets.set(bucketKey, [entry]);
   }
+  typoKeys.length = 0;
 
   /** One holder, or the dominant one of several, or ambiguous. Indices are best known first. */
   const decide = (holders: readonly number[]): Identity => {
@@ -151,15 +201,10 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return found;
   };
 
-  // Prefix search: every name key (whole names, compact forms and identifying words), sorted once.
-  const prefixKeys = [...new Set([...names.keys(), ...words.keys()])].sort();
-  const holdersOf = (k: string) => [...(names.get(k) ?? []), ...(words.get(k) ?? [])];
-  const suggest = (query: string, limit = SUGGEST_LIMIT): Suggestion[] => {
-    const q = normalizeName(query.slice(0, SUGGEST_MAX));
-    if (q.length < SUGGEST_MIN) return [];
-    const max = Math.max(0, Math.min(limit, SUGGEST_LIMIT));
-    const toSuggestion = (i: number) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier });
-    if (q.length <= SHORT_PREFIX) return (shortTop.get(q) ?? []).slice(0, max).map(toSuggestion);
+  // Prefix search: every key (whole names, compact forms, identifying words, shown-only words), sorted once.
+  const prefixKeys = [...new Set([...names.keys(), ...words.keys(), ...shownOnly.keys()])].sort();
+  const holdersOf = (k: string) => [...(names.get(k) ?? []), ...(words.get(k) ?? []), ...(shownOnly.get(k) ?? [])];
+  const rank = (q: string, max: number): number[] => {
     let lo = 0;
     let hi = prefixKeys.length;
     while (lo < hi) {
@@ -169,7 +214,23 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     }
     const found = new Set<number>();
     for (let i = lo; i < prefixKeys.length && prefixKeys[i].startsWith(q); i += 1) for (const h of holdersOf(prefixKeys[i])) found.add(h);
-    return [...found].sort((a, b) => a - b).slice(0, max).map(toSuggestion);
+    const first: number[] = [];
+    const rest: number[] = [];
+    for (const i of [...found].sort((a, b) => a - b)) {
+      if (first.length >= max) break;
+      const shown = [...visibleKeys([normalizeName(all[i].name), normalizeName(all[i].known)])].some((k) => k.startsWith(q));
+      if (shown) first.push(i);
+      else if (rest.length < max) rest.push(i);
+    }
+    return [...first, ...rest].slice(0, max);
+  };
+  const shortTop = (q: string) => [...(shortShown.get(q) ?? []), ...(shortOther.get(q) ?? [])].slice(0, SUGGEST_LIMIT);
+  const suggest = (query: string, limit = SUGGEST_LIMIT): Suggestion[] => {
+    const q = normalizeName(query.slice(0, SUGGEST_MAX));
+    if (q.length < SUGGEST_MIN) return [];
+    const max = Math.max(0, Math.min(limit, SUGGEST_LIMIT));
+    const top = q.length <= SHORT_PREFIX ? shortTop(q).slice(0, max) : rank(q, max);
+    return top.map((i) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier }));
   };
 
   return {

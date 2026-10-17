@@ -60,8 +60,8 @@ vi.mock('../../src/db/readonly-breaker.js', () => ({ isDbWriteOutage: () => fals
 
 const { createLobby, leaveLobby, startFriendlyMatch, updateSettings } = await import('../../src/realtime/services/lobby-commands.service.js');
 const { config } = await import('../../src/core/config.js');
-const flags = config as unknown as { ROOM_GAMES_ENABLED: string[]; GUEST_LOBBIES_PROVISIONING_ENABLED: boolean };
-const originalRoomGames = [...(flags.ROOM_GAMES_ENABLED ?? [])];
+const flags = config as unknown as { ROOM_GAMES_DISABLED: string[]; GUEST_LOBBIES_PROVISIONING_ENABLED: boolean };
+const originalDisabled = [...(flags.ROOM_GAMES_DISABLED ?? [])];
 
 const socketFor = (id: string, guest = false, lobbyId?: string) => ({ id: `s-${id}`, data: { user: { id, is_guest: guest }, lobbyId }, emit: vi.fn(), join: vi.fn(), leave: vi.fn() });
 const io = { to: vi.fn(() => ({ emit: vi.fn() })), in: vi.fn(() => ({ fetchSockets: async () => [], socketsLeave: vi.fn() })) };
@@ -75,7 +75,7 @@ const errorCodes = (socket: ReturnType<typeof socketFor>) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flags.ROOM_GAMES_ENABLED = ['aproximado'];
+  flags.ROOM_GAMES_DISABLED = [];
   flags.GUEST_LOBBIES_PROVISIONING_ENABLED = true;
   allowGuestOperation.mockResolvedValue(true);
   lobbiesRepo.addMember.mockResolvedValue(undefined);
@@ -88,7 +88,7 @@ beforeEach(() => {
     id: 'L', game_mode: data.gameMode ?? 'friendly_possession', duel_game: null, room_game: data.roomGame ?? null,
   }));
 });
-afterEach(() => { flags.ROOM_GAMES_ENABLED = [...originalRoomGames]; });
+afterEach(() => { flags.ROOM_GAMES_DISABLED = [...originalDisabled]; });
 
 describe('room games — create and settings', () => {
   it('a guest host opens a private room already in the room game', async () => {
@@ -100,7 +100,7 @@ describe('room games — create and settings', () => {
   });
 
   it('a switched-off room game is refused before any room work', async () => {
-    flags.ROOM_GAMES_ENABLED = [];
+    flags.ROOM_GAMES_DISABLED = ['aproximado'];
     const result = await createLobby(io as never, socketFor('m') as never, { mode: 'friendly', gameMode: 'room_game', roomGame: 'aproximado', correlationId: 'c' });
     expect(result).toMatchObject({ ok: false, code: 'ROOM_GAME_UNAVAILABLE' });
     expect(lobbiesRepo.createLobby).not.toHaveBeenCalled();
@@ -145,7 +145,7 @@ describe('room games — start', () => {
     const alone = socketFor('host', false, 'L');
     await startFriendlyMatch(io as never, alone as never);
     expect(errorCodes(alone)).toEqual(['LOBBY_NOT_READY']);
-    flags.ROOM_GAMES_ENABLED = [];
+    flags.ROOM_GAMES_DISABLED = ['aproximado'];
     readyRoom([member('host', false, true), member('m2', false, true)]);
     const off = socketFor('host', false, 'L');
     await startFriendlyMatch(io as never, off as never);

@@ -1,6 +1,5 @@
 import { AppError } from '../../core/errors.js';
-import { sql } from '../../db/index.js';
-import { tenableDailyContent } from '../tenable-daily/tenable-daily.service.js';
+import { tenableDailyContent, tenableRoomPairs } from '../tenable-daily/tenable-daily.service.js';
 import { tenableDirectories } from './tenable.directories.js';
 import { ENTITY_KINDS, SUGGEST_LIMIT, type EntityKind, type Suggestion } from './tenable.identify.js';
 
@@ -19,13 +18,7 @@ async function allowedPairs(key: string): Promise<Set<string>> {
   if (allowed && (age < MISS_REFRESH_MS || (age < ALLOWED_REFRESH_MS && allowed.keys.has(key)))) return allowed.keys;
   const keys = new Set<string>();
   for (const day of (await tenableDailyContent.get()).values()) keys.add(`${day.list.kind}:${day.list.release}`);
-  const rooms = await sql<Array<{ kind: string; release: string }>>`
-    SELECT DISTINCT payload->>'kind' AS kind, payload->>'release' AS release FROM room_pool WHERE game = 'tenable' AND enabled
-    UNION
-    SELECT DISTINCT l->>'kind', l->>'release'
-    FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'lists') l
-    WHERE m.game = 'tenable' AND m.status IN ('ready', 'active')`;
-  for (const row of rooms) keys.add(`${row.kind}:${row.release}`);
+  for (const row of await tenableRoomPairs()) keys.add(`${row.kind}:${row.release}`);
   allowed = { at: Date.now(), keys };
   return keys;
 }

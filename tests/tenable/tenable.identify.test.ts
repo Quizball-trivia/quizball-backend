@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildDirectory, judge, type TenableEntity, type Verdict } from '../../src/modules/tenable/tenable.identify.js';
+import { normalizeName, surnameOf } from '../../src/modules/footballers/footballers.text.js';
 
 // Invented footballers only: the repository is public.
 const E = (eid: string, name: string, known: string, fame: number, aliases: string[] = [], qualifier: string | null = null): TenableEntity =>
@@ -132,6 +133,56 @@ describe('suggest', () => {
     expect(d.suggest('sa')).toHaveLength(8);
     expect(d.suggest('sa').map((s) => s.eid)).toEqual(['p-sarm', 'p-s11', 'p-s10', 'p-s9', 'p-s8', 'p-s7', 'p-s6', 'p-s5']);
     expect(d.suggest('sa', 3)).toHaveLength(3);
+  });
+
+  it('names whose shown words match come before ones matched only by an alias, best known first within each', () => {
+    const d = buildDirectory('club', 'rel-c', [
+      E('c-tot', 'Totten Rovers', 'Totten Rovers', 100, ['Spurtons']),
+      E('c-laz', 'SS Lavio', 'SS Lavio', 95, ['Sportiva Lavio']),
+      E('c-spo', 'Sporta CP', 'Sporta CP', 70),
+      E('c-hay', 'HNK Hayduk Splet', 'HNK Hayduk Splet', 40),
+      E('c-mon', 'Montrel Sport Club', 'Montrel Sport Club', 30),
+    ]);
+    expect(d.suggest('sp').map((s) => s.eid)).toEqual(['c-spo', 'c-hay', 'c-mon', 'c-tot', 'c-laz']);
+    expect(d.suggest('spor').map((s) => s.eid)).toEqual(['c-spo', 'c-mon', 'c-laz']);
+    expect(d.suggest('sp', 2).map((s) => s.eid)).toEqual(['c-spo', 'c-hay']);
+    expect(d.suggest('spurt').map((s) => s.eid)).toEqual(['c-tot']);
+    expect(d.suggest('tot').map((s) => s.eid)).toEqual(['c-tot']);
+    // A particle of the shown name ("Club", "FC") is not a shown word: only the alias puts Beta Club under "cl".
+    const p = buildDirectory('club', 'rel-p', [E('c-beta', 'Beta Club', 'Beta Club', 90, ['Clubbeta']), E('c-cla', 'Clarin FC', 'Clarin FC', 10)]);
+    expect(p.suggest('cl').map((s) => s.eid)).toEqual(['c-cla', 'c-beta']);
+    expect(p.suggest('club').map((s) => s.eid)).toEqual(['c-beta']);
+  });
+
+  it('matches a plain search for every short and longer prefix: shown-name matches first, then alias-only, by fame', () => {
+    const first = ['Saro', 'Sami', 'Tavo', 'Sandro', 'Mirel'];
+    const last = ['Santin', 'Sarvel', 'Tobin', 'Mareno', 'de Savo'];
+    const rows = Array.from({ length: 60 }, (_, i) => E(
+      `p-${String(i).padStart(2, '0')}`,
+      `${first[i % 5]} ${last[(i * 3) % 5]} ${i % 4 === 0 ? 'Sallen' : ''}`.trim(),
+      i % 6 === 0 ? `Sam${i}` : i === 7 || i === 13 ? 'Torres' : last[(i * 3) % 5],
+      (i * 7) % 11,
+      i % 3 === 0 ? [`Sapo${i % 5}`, `Tasar Mel${i}`, `Torno${i % 4}`] : [],
+    ));
+    const d = buildDirectory('player', 'rel-o', rows);
+    const keysOf = (e: TenableEntity) => {
+      const whole = [e.name, e.known, ...e.aliases].map(normalizeName);
+      const keys = whole.filter((k) => k.includes(' ')).flatMap((k) => [k, k.replace(/ /g, '')]);
+      for (const w of [surnameOf(e.name), ...whole.filter((k) => !k.includes(' '))]) if (w.length >= 3 && !['de'].includes(w)) keys.push(w);
+      return keys;
+    };
+    const shownOf = (e: TenableEntity) => [e.name, e.known].map(normalizeName).flatMap((n) => [n, n.replace(/ /g, ''), ...n.split(' ').filter((w) => w !== 'de')]);
+    const byFame = (a: TenableEntity, b: TenableEntity) => b.fame - a.fame || (a.eid < b.eid ? -1 : 1);
+    const prefixes = new Set(rows.flatMap((e) => [...keysOf(e), ...shownOf(e)]).flatMap((k) => [2, 3, 4].map((n) => k.slice(0, n))).filter((q) => q.trim().length >= 2 && q === normalizeName(q)));
+    expect(prefixes.size).toBeGreaterThan(30);
+    let mixed = 0;
+    for (const q of prefixes) {
+      const shown = rows.filter((e) => shownOf(e).some((k) => k.startsWith(q))).sort(byFame);
+      const alias = rows.filter((e) => !shown.includes(e) && keysOf(e).some((k) => k.startsWith(q))).sort(byFame);
+      expect(d.suggest(q).map((s) => s.eid), q).toEqual([...shown, ...alias].slice(0, 8).map((e) => e.eid));
+      if (shown.length && shown.length < 8 && alias.length) mixed += 1;
+    }
+    expect(mixed).toBeGreaterThan(0);
   });
 
   it('refuses a release with a duplicate id', () => {

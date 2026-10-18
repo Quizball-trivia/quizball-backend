@@ -16,7 +16,7 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { dayBoardSchema } from '../src/modules/codenames/codenames.types.js';
-import { CONTENT_START, LAST_DAY } from '../src/modules/codenames/codenames.days.js';
+import { CONTENT_START, dayNumber, LAST_DAY } from '../src/modules/codenames/codenames.days.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 
 const CODENAMES_CONTENT_LOCK = 'codenames_content';
@@ -53,6 +53,7 @@ async function main(): Promise<void> {
     const board = dayBoardSchema.safeParse(d.board);
     if (!board.success) throw new Error(`${d.day}: ${board.error.issues.slice(0, 3).map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
     if (d.day < CONTENT_START || d.day > LAST_DAY) throw new Error(`${d.day} is outside the calendar (${CONTENT_START} → ${LAST_DAY})`);
+    if (d.number !== dayNumber(d.day)) throw new Error(`${d.day}: number ${d.number} is not board #${dayNumber(d.day)}`);
     return { day: d.day, number: d.number, board: board.data, version: versionOf(board.data) };
   });
   if (new Set(days.map((d) => d.day)).size !== days.length) throw new Error('Duplicate day in the file');

@@ -48,17 +48,18 @@ export const rebase = (_s: RunState): RunState => newState();
 export const score = (s: RunState): number => found(s) * 100 + Math.max(0, 99 - misses(s));
 
 /**
- * What the player sees. A card's kind only once it is flipped; the clues up to the current one; the cards each clue
- * meant and their why only when the run is over (before that they would point at cards still hidden). A closed day
- * discloses nothing more while the run is still being played.
+ * What the player sees. A card's kind only once it is flipped; the clues up to the current one. The whole key, every
+ * clue, and the cards each clue meant with their why only for a finished run of a closed day (`disclose`): on a day
+ * still open, a finished run would hand the board to another account before it plays.
  */
-export function publicState(s: RunState, dayId: string, day: DayBoard | null, extra: { ranked: boolean; rank?: number }): PublicRunState {
+export function publicState(s: RunState, dayId: string, day: DayBoard | null, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
   const flipped = new Map(s.flips.map((f) => [f.card, f.kind]));
-  const reached = s.done ? day?.clues.length ?? 0 : s.clue + 1;
+  const disclosed = s.done && extra.disclose;
+  const reached = disclosed ? day?.clues.length ?? 0 : Math.min(s.clue + 1, day?.clues.length ?? 0);
   return {
     day: dayId,
-    cards: (day?.cards ?? []).map((c, i) => ({ id: c.id, kind: s.done ? c.kind : flipped.get(i) ?? null })),
-    clues: (day?.clues ?? []).slice(0, reached).map((c) => (s.done ? { word: c.word, count: c.count, cards: c.cards } : { word: c.word, count: c.count })),
+    cards: (day?.cards ?? []).map((c, i) => ({ id: c.id, kind: disclosed ? c.kind : flipped.get(i) ?? null })),
+    clues: (day?.clues ?? []).slice(0, reached).map((c) => (disclosed ? { word: c.word, count: c.count, cards: c.cards } : { word: c.word, count: c.count })),
     totalClues: day?.clues.length ?? 0,
     clue: s.clue,
     guessesLeft: day ? guessesLeft(s, day) : 0,
@@ -70,6 +71,7 @@ export function publicState(s: RunState, dayId: string, day: DayBoard | null, ex
     misses: misses(s),
     score: score(s),
     ranked: extra.ranked,
+    disclosed,
     ...(extra.rank !== undefined ? { rank: extra.rank } : {}),
   };
 }

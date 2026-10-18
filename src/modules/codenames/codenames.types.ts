@@ -48,9 +48,9 @@ export interface PublicClue { word: TermLabel; count: number; cards?: Array<{ id
 
 export interface PublicRunState {
   day: string;
-  /** Board order; `kind` once flipped, or for every card once the run is over. */
+  /** Board order; `kind` once flipped, or for every card once disclosed. */
   cards: Array<{ id: string; kind: DayKind | null }>;
-  /** Clues up to the current one (word and count); every clue with its cards and their whys once the run is over. */
+  /** Clues up to the current one (word and count); every clue with its cards and their whys once disclosed. */
   clues: PublicClue[];
   totalClues: number;
   clue: number;
@@ -63,6 +63,8 @@ export interface PublicRunState {
   misses: number;
   score: number;
   ranked: boolean;
+  /** The run is over and its day closed: the whole key, every clue, the cards each meant and why. */
+  disclosed: boolean;
   rank?: number;
 }
 

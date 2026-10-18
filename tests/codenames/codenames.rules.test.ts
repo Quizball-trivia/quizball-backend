@@ -56,20 +56,36 @@ describe('codenames daily rules', () => {
   });
 
   it('shows kinds only once flipped, clues up to the current one, and the whys only at the end', () => {
-    const live = publicState(play('m0', 'stop'), '2031-01-01', DAY, { ranked: true });
+    const live = publicState(play('m0', 'stop'), '2031-01-01', DAY, { ranked: true, disclose: false });
     expect(live.cards.filter((c) => c.kind !== null)).toHaveLength(1);
     expect(live.clues).toHaveLength(2);
     expect(live.clues.every((c) => c.cards === undefined)).toBe(true);
     expect(JSON.stringify(live)).not.toContain('why');
     expect(live.guessesLeft).toBe(4);
-    const done = publicState(play('xx'), '2031-01-01', DAY, { ranked: false });
+    const done = publicState(play('xx'), '2031-01-01', DAY, { ranked: false, disclose: true });
+    expect(done.disclosed).toBe(true);
     expect(done.cards.every((c) => c.kind !== null)).toBe(true);
     expect(done.clues).toHaveLength(3);
     expect(done.clues[2].cards).toEqual([{ id: 'card-m6', why: W('gamma m6') }, { id: 'card-m7', why: W('gamma m7') }]);
   });
 
+  it('a finished run of a day still open shows only what it reached: no key, no later clue, no why', () => {
+    const early = publicState(play('m0', 'xx'), '2031-01-01', DAY, { ranked: true, disclose: false });
+    expect(early.done).toBe(true);
+    expect(early.disclosed).toBe(false);
+    expect(early.cards.filter((c) => c.kind !== null)).toHaveLength(2);
+    expect(early.clues).toHaveLength(1);
+    expect(early.clues.every((c) => c.cards === undefined)).toBe(true);
+    expect(JSON.stringify(early)).not.toContain('why');
+    expect(JSON.stringify(early)).not.toContain(JSON.stringify(DAY.clues[1].word));
+    const full = publicState(play('m0', 'stop', 'm2', 'stop', 'm6', 'stop'), '2031-01-01', DAY, { ranked: true, disclose: false });
+    expect(full.done).toBe(true);
+    expect(full.clues).toHaveLength(3);
+    expect(full.cards.filter((c) => c.kind !== null)).toHaveLength(3);
+  });
+
   it('a finished run whose day was corrected since still counts out of eight', () => {
-    const s = publicState(play('m0', 'xx'), '2031-01-01', null, { ranked: false });
+    const s = publicState(play('m0', 'xx'), '2031-01-01', null, { ranked: false, disclose: true });
     expect(s).toMatchObject({ found: 1, total: 8, cards: [], clues: [] });
   });
 

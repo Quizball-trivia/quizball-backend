@@ -159,7 +159,7 @@ export async function startDraft(
         // Ready/host-start validated before THIS lock; a join or settings change
         // may have landed in between. Guests never reach a member-only mode.
         const lockedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-        const guestViolation = validateGuestLobby(lockedMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
+        const guestViolation = validateGuestLobby(lockedMembers, normalizeFriendlyGameMode(lockedLobby.game_mode), lockedLobby.room_game);
         if (guestViolation) {
           logger.warn({ lobbyId, code: guestViolation.code }, 'Draft start refused: guest rules violated at activation');
           return 'guest_rules';

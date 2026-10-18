@@ -389,7 +389,7 @@ export async function joinByCode(
         if (!alreadyMember) {
           const nextMembers = [...members, { user_id: userId, is_guest: socket.data.user.is_guest === true }];
           const nextMode = normalizedModeForMemberCount(normalizeFriendlyGameMode(lobby.game_mode), nextMembers.length);
-          const violation = validateGuestLobby(nextMembers, nextMode);
+          const violation = validateGuestLobby(nextMembers, nextMode, lobby.room_game);
           if (violation) {
             logger.warn({ lobbyId: lobby.id, userId, code: violation.code }, 'Lobby join refused by guest rules');
             socket.emit('error', { code: violation.code, message: violation.message, meta: { ...violation.meta, inviteCode: normalizedCode } });
@@ -620,7 +620,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
 
     if (memberCount === 2 && readyCount === 2) {
       const readyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lockedLobby.game_mode));
+      const readyViolation = validateGuestLobby(readyMembers, normalizeFriendlyGameMode(lockedLobby.game_mode), lockedLobby.room_game);
       if (readyViolation) {
         socket.emit('error', { code: readyViolation.code, message: readyViolation.message, meta: readyViolation.meta });
         return;
@@ -842,7 +842,7 @@ export async function updateSettings(
     }
 
     // Guest rooms: the FINAL normalized mode must stay playable for guests.
-    const guestViolation = validateGuestLobby(lockedMembers, nextSettings.gameMode);
+    const guestViolation = validateGuestLobby(lockedMembers, nextSettings.gameMode, nextSettings.roomGame);
     if (guestViolation) {
       socket.emit('error', { code: guestViolation.code, message: guestViolation.message, meta: guestViolation.meta });
       return;
@@ -1046,7 +1046,7 @@ export async function startFriendlyMatch(
       socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
       return;
     }
-    const startViolation = validateGuestLobby(currentMembers, currentFriendlyMode);
+    const startViolation = validateGuestLobby(currentMembers, currentFriendlyMode, currentLobby.room_game);
     if (startViolation) {
       socket.emit('error', { code: startViolation.code, message: startViolation.message, meta: startViolation.meta });
       return;

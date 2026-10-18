@@ -8,7 +8,7 @@ export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
 export const FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS = 3;
 export const FOOTBALL_GRID_LOBBY_MAX_MEMBERS = 2;
 export const DUEL_LOBBY_MAX_MEMBERS = 2;
-export const ROOM_GAME_LOBBY_MAX_MEMBERS = 6;
+export const ROOM_GAME_LOBBY_MAX_MEMBERS = 8;
 
 export interface LobbyModeCapabilities {
   /** Members a room may HOLD in this mode (possession grows past 2 and then promotes to party quiz). */
@@ -92,7 +92,8 @@ export const LOBBY_MODES: Readonly<Record<LobbyGameMode, LobbyModeCapabilities>>
       ? null
       : { code: 'DUEL_UNAVAILABLE', message: 'This game cannot be played as a friend duel right now' }),
   },
-  // A 2–6 player room game (lobbies.room_game); runs on room_matches. Two players = a 1v1 of the same game.
+  // A 2–8 player room game (lobbies.room_game; each game has its own cap, six unless it says otherwise); runs on
+  // room_matches. Two players = a 1v1 of the same game.
   room_game: {
     capacity: ROOM_GAME_LOBBY_MAX_MEMBERS,
     playable: ROOM_GAME_LOBBY_MAX_MEMBERS,

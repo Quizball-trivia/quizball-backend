@@ -17,7 +17,7 @@ export const ROOM_AWAY_BUDGET_MS = 60_000;
 export const ROOM_OUTAGE_GRACE_MS = 5_000;
 export const ROOM_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const ROOM_RETENTION_DAYS = 30;
-export const ROOM_MAX_SEATS = 6;
+export const ROOM_MAX_SEATS = 8;
 /** A scheduler deadline missed by more than this is an outage (server or database stalled), not a slow timer. */
 const ROOM_OUTAGE_MS = 5_000;
 
@@ -277,7 +277,9 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   // Only a version this process holds (prepare warmed it): nothing is loaded under the match lock.
   const active = knownActiveRussianVersion();
   const russianVersion = active && heldRussianIndex(active) ? active : null;
-  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
+  const host = await roomRepo.lobbyHost(tx, l.row.lobby_id);
+  const hostSeat = admitted.find((a) => a.userId === host)?.seat ?? null;
+  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion, hostSeat });
   // What the match froze (its Russian names) is attached before anything reads it.
   l = { ...l, content: await hydrated(l.engine, l.content, state, tx) };
   markHydrated(l.row.id, l.content);
@@ -286,7 +288,7 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   if (away.length > 0) {
     const seatOf = new Map(admitted.map((a) => [a.userId, a.seat]));
     state = l.engine.seatsChanged(state, away.map((s): RoomSeatChange => ({ seat: seatOf.get(s.user_id)!, change: 'away' })), nowMs);
-    for (const s of away) await roomRepo.setAbsenceDeadline(tx, l.row.id, s.user_id, new Date(nowMs + absenceWindow(s)));
+    for (const s of away) await roomRepo.setAbsenceDeadline(tx, l.row.id, s.user_id, new Date(nowMs + absenceWindow(s, l.engine)));
   }
   return persist(tx, l, state, true);
 }
@@ -330,7 +332,9 @@ async function presentLocked(tx: TransactionSql, l: Loaded, userId: string): Pro
   return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'back' }], nowMs), nowMs));
 }
 
-const absenceWindow = (s: RoomSeatRow) => Math.max(0, Math.min(ROOM_AWAY_MS, ROOM_AWAY_BUDGET_MS - s.absence_used_ms));
+/** How long this absence may last: the game's own allowance (a slow game gives more), else the runtime's. */
+const absenceWindow = (s: RoomSeatRow, engine: AnyRoomEngine) =>
+  Math.max(0, Math.min(engine.absence?.awayMs ?? ROOM_AWAY_MS, (engine.absence?.budgetMs ?? ROOM_AWAY_BUDGET_MS) - s.absence_used_ms));
 
 function seatOf(l: Loaded, userId: string): RoomSeatRow {
   const me = l.seats.find((s) => s.user_id === userId);
@@ -526,7 +530,7 @@ export const roomService = {
       if (advanced.state.status[me.seat!] === 'withdrawn' || l.engine.terminal(advanced.state)) {
         return advanced.changed ? persist(tx, l, advanced.state) : gate.effects;
       }
-      await roomRepo.markAbsent(tx, l.row.id, userId, new Date(l.row.now.getTime() + absenceWindow(me)));
+      await roomRepo.markAbsent(tx, l.row.id, userId, new Date(l.row.now.getTime() + absenceWindow(me, l.engine)));
       return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'away' }], l.row.now.getTime()), l.row.now.getTime()));
     }));
   },

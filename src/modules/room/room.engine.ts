@@ -15,7 +15,12 @@ export interface RoomEngineState {
 export interface RoomEngineStanding { seat: number; points: number; roundWins: number; place: number }
 
 /** What a match may freeze when the gate closes: the admitted seats' languages and the Russian names switched on then. */
-export interface RoomStartContext { locales: readonly RoomLocale[]; russianVersion: string | null }
+export interface RoomStartContext {
+  locales: readonly RoomLocale[];
+  russianVersion: string | null;
+  /** The room host's seat when the gate admitted them (games with a host-only control, e.g. a kick-off); null otherwise. */
+  hostSeat?: number | null;
+}
 
 /**
  * A room game's rules, pure: no I/O, time comes in as `nowMs` (the database clock read under the match lock). The
@@ -64,6 +69,8 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
    * there, or the round's answers are not out yet (a report must never work as a way to test answers).
    */
   refusal?(state: State, content: Content, round: number, text: string): RoomRefusal | null;
+  /** A slow game's own absence allowance (one disconnection, and all of a seat's in a match); the runtime's otherwise. */
+  absence?: { awayMs: number; budgetMs: number };
 }
 
 export interface RoomRefusal { release: string; subject: string | null; resolvedPid: string | null }

@@ -9,8 +9,8 @@ export const GUEST_ALLOWED_LOBBY_MODES: ReadonlySet<LobbyGameMode> = new Set<Lob
 );
 export const MAX_GUESTS_PER_LOBBY = 3;
 /** A room game is built for a group of guests (a party link): every seat may be a guest. */
-export function maxGuestsForMode(mode: LobbyGameMode): number {
-  return mode === 'room_game' ? lobbyCapacityForGameMode(mode) : MAX_GUESTS_PER_LOBBY;
+export function maxGuestsForMode(mode: LobbyGameMode, roomGame?: unknown): number {
+  return mode === 'room_game' ? lobbyCapacityForGameMode(mode, roomGame) : MAX_GUESTS_PER_LOBBY;
 }
 
 export interface GuestLobbyMember {
@@ -46,15 +46,16 @@ export function normalizedModeForMemberCount(mode: LobbyGameMode, memberCount: n
  * AFTER the mutation (joiner included, leaver excluded). Rooms without guests
  * are never constrained here — live behaviour is untouched.
  */
-export function validateGuestLobby(members: readonly GuestLobbyMember[], nextMode: LobbyGameMode): GuestLobbyViolation | null {
+/** `roomGame`: the room game the room holds (its own seat cap). */
+export function validateGuestLobby(members: readonly GuestLobbyMember[], nextMode: LobbyGameMode, roomGame?: unknown): GuestLobbyViolation | null {
   const guests = members.filter((member) => member.is_guest).length;
   if (guests === 0) return null;
   // A full room is the clearer reason (a 7th guest in a 6-seat room game is "full", not "too many guests").
-  const maxMembers = lobbyCapacityForGameMode(nextMode);
+  const maxMembers = lobbyCapacityForGameMode(nextMode, roomGame);
   if (members.length > maxMembers) {
     return { code: 'LOBBY_FULL', message: 'Lobby is already full', meta: { memberCount: members.length, maxMembers, gameMode: nextMode } };
   }
-  const maxGuests = maxGuestsForMode(nextMode);
+  const maxGuests = maxGuestsForMode(nextMode, roomGame);
   if (guests > maxGuests) {
     return { code: 'LOBBY_GUEST_LIMIT', message: `A room can hold at most ${maxGuests} guests`, meta: { maxGuests } };
   }

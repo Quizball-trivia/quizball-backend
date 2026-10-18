@@ -166,6 +166,13 @@ export const roomRepo = {
     return rows.map((r) => ({ ...r, avatar_customization: parseStoredAvatarCustomization(r.avatar_customization) }));
   },
 
+  /** The room's host now (a plain read: the host can change at any time, the start takes it as of the gate). */
+  async lobbyHost(tx: TransactionSql, lobbyId: string | null): Promise<string | null> {
+    if (!lobbyId) return null;
+    const [row] = await exec(tx)<Array<{ host_user_id: string }>>`SELECT host_user_id FROM lobbies WHERE id = ${lobbyId}`;
+    return row?.host_user_id ?? null;
+  },
+
   /** The seats' languages as of now, row-locked: a language change waits for the start, or the start sees it. */
   async lockSeatLocales(tx: TransactionSql, id: string): Promise<Map<string, RoomLocale>> {
     const rows = await exec(tx)<Array<{ user_id: string; locale: RoomLocale }>>`

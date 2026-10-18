@@ -47,19 +47,25 @@ describe('lobby mode capability map', () => {
       ['auction', 3, 3],
       ['ranked_sim', 6, 2],
       ['duel', 2, 2],
+      // A room game's own cap applies (six unless the game says otherwise); the mode itself holds eight.
       ['room_game', 6, 6],
     ]);
+    expect([lobbyCapacityForGameMode('room_game', 'codenames'), playableMembersForGameMode('room_game', 'codenames')]).toEqual([8, 8]);
+    expect(lobbyCapacityForGameMode('room_game', 'football_race')).toBe(4);
     expect([...GUEST_ALLOWED_LOBBY_MODES].sort()).toEqual(['auction', 'duel', 'football_grid', 'ranked_sim', 'room_game']);
     expect(lobbyCapacityByMode()).toEqual({
-      friendly_possession: 6, friendly_party_quiz: 6, football_grid: 2, auction: 3, ranked_sim: 6, duel: 2, room_game: 6,
+      friendly_possession: 6, friendly_party_quiz: 6, football_grid: 2, auction: 3, ranked_sim: 6, duel: 2, room_game: 8,
     });
   });
 
-  it('room games: 2–6 players, guests welcome, behind their own switch', () => {
+  it('room games: 2–6 players (Football Codenames 2–8), guests welcome, behind their own switch', () => {
     expect(isValidHostStartShape('room_game', 1)).toBe(false);
     expect(isValidHostStartShape('room_game', 2)).toBe(true);
     expect(isValidHostStartShape('room_game', 6)).toBe(true);
     expect(isValidHostStartShape('room_game', 7)).toBe(false);
+    expect(isValidHostStartShape('room_game', 7, 'aproximado')).toBe(false);
+    expect(isValidHostStartShape('room_game', 8, 'codenames')).toBe(true);
+    expect(isValidHostStartShape('room_game', 9, 'codenames')).toBe(false);
     expect(GUEST_ALLOWED_LOBBY_MODES.has('room_game')).toBe(true);
     expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'room_game', roomGame: 'aproximado' }).success).toBe(true);
     expect(lobbyUpdateSettingsSchema.safeParse({ gameMode: 'room_game' }).success).toBe(false);

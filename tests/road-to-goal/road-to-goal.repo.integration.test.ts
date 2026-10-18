@@ -107,7 +107,9 @@ describe('Road to Goal question selection SQL', () => {
           version_id uuid NOT NULL,
           question_id uuid NOT NULL,
           zone smallint NOT NULL,
-          difficulty text NOT NULL
+          difficulty text NOT NULL,
+          expected_accuracy_bp integer NOT NULL DEFAULT 7412,
+          source text NOT NULL DEFAULT 'blended'
         ) ON COMMIT DROP
       `;
       await tx`
@@ -166,15 +168,10 @@ describe('Road to Goal question selection SQL', () => {
         ) VALUES (${CALIBRATION_ID}, ${malformedId}, 1, 'easy')
       `;
 
-      const unseenCandidates = await roadToGoalRepo.pickRunQuestionCandidates(
+      const unseen = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         USER_ID,
         'unseen'
-      );
-      const unseen = await roadToGoalRepo.filterCandidatesForCalibration(
-        tx,
-        CALIBRATION_ID,
-        unseenCandidates
       );
       expect(unseen).toHaveLength(15);
       expect(unseen.map((candidate) => candidate.id)).toContain(malformedId);
@@ -192,12 +189,12 @@ describe('Road to Goal question selection SQL', () => {
         SET updated_at = now() + interval '1 day'
         WHERE question_id = ${questionId(1)}
       `;
-      const afterIntradayEdit = await roadToGoalRepo.filterCandidatesForCalibration(
+      const afterIntradayEdit = await roadToGoalRepo.getQuestionCalibrations(
         tx,
         CALIBRATION_ID,
-        unseenCandidates
+        [{ questionId: questionId(1), zone: 1 }, { questionId: questionId(2), zone: 1 }]
       );
-      expect(afterIntradayEdit.map((candidate) => candidate.id)).not.toContain(questionId(1));
+      expect(afterIntradayEdit.map((row) => row.question_id)).toEqual([questionId(2)]);
 
       // Leave the first two hard questions unseen and give every other row a
       // deterministic exposure count. Fallback must rank those unseen rows 1/2.
@@ -213,18 +210,15 @@ describe('Road to Goal question selection SQL', () => {
         `;
       }
 
-      const fallbackCandidates = await roadToGoalRepo.pickRunQuestionCandidates(
+      const fallback = await roadToGoalRepo.pickRunQuestionCandidates(
         tx,
         USER_ID,
         'least_exposed',
         [],
         64
       );
-      const fallback = await roadToGoalRepo.filterCandidatesForCalibration(
-        tx,
-        CALIBRATION_ID,
-        fallbackCandidates
-      );
+      // Editing a payload removes its stale measured odds, not the question.
+      expect(fallback.map((candidate) => candidate.id)).toContain(questionId(1));
       const hard = fallback.filter((candidate) => candidate.difficulty === 'hard');
       expect(hard.slice(0, 2).map((candidate) => candidate.id).sort()).toEqual([
         questionId(11),

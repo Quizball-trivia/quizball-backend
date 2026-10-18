@@ -42,6 +42,7 @@ scripts/*
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
 !scripts/migration-safety.mjs
+!scripts/verify-road-to-goal-calibration-staging.mjs
 !scripts/release/
 !scripts/release/**
 # Auction prod-promotion content tooling — code only, no secrets.

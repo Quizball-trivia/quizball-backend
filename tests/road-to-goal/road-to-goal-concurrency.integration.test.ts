@@ -182,8 +182,7 @@ describe('Road to Goal start concurrency', () => {
     `;
 
     const candidates = await sql.begin(async (tx) => {
-      const selected = await roadToGoalRepo.pickRunQuestionCandidates(tx, userId!, 'unseen');
-      return roadToGoalRepo.filterCandidatesForCalibration(tx, calibration.id, selected);
+      return roadToGoalRepo.pickRunQuestionCandidates(tx, userId!, 'unseen');
     });
     expect(
       candidates

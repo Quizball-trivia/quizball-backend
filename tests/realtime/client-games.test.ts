@@ -19,12 +19,13 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'codenames'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso'] }, join: vi.fn() };
     joinLegacyRooms(old);
     joinLegacyRooms(fresh);
     expect(old.join).toHaveBeenCalledWith(legacyRoom('tenable'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('football_race'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('codenames'));
+    expect(old.join).toHaveBeenCalledWith(legacyRoom('dato_falso'));
     expect(fresh.join).not.toHaveBeenCalled();
   });
 

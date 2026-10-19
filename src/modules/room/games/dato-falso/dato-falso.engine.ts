@@ -72,15 +72,22 @@ export const totals = (s: DatoFalsoState) => s.status.map((_, seat) => s.results
 export const rights = (s: DatoFalsoState) => s.status.map((_, seat) => s.results.filter((r) => r.entries[seat].right).length);
 
 /**
- * Fewer than two seats left → the match ends: the one left wins (leaving is final, even before the first reveal);
- * nobody left cancels it.
+ * Fewer than two seats left → the match ends once it can tell how: the one left wins while they are here (leaving is
+ * final); if they are away too, the match waits for them — coming back wins it, their absence running out cancels it
+ * (everyone gone, nobody to win). Nobody left cancels.
  */
 function settleTerminal(s: DatoFalsoState): DatoFalsoState {
   if (s.phase === 'over' || s.phase === 'cancelled') return s;
-  const live = s.status.filter((st) => st !== 'withdrawn').length;
-  if (live >= 2) return s;
-  return { ...s, phase: live === 0 ? 'cancelled' : 'over' };
+  const live = s.status.flatMap((st, seat) => (st === 'withdrawn' ? [] : [seat]));
+  if (live.length >= 2) return s;
+  if (live.length === 0) return { ...s, phase: 'cancelled' };
+  return s.status[live[0]] === 'in' ? { ...s, phase: 'over' } : s;
 }
+
+const loneAway = (s: DatoFalsoState) => {
+  const live = s.status.filter((st) => st !== 'withdrawn');
+  return live.length === 1 && live[0] === 'away';
+};
 
 /** Seat changes that arrive together, then one terminal check (everyone leaving at once cancels). */
 export function seatsChanged(s: DatoFalsoState, changes: readonly RoomSeatChange[]): DatoFalsoState {
@@ -126,7 +133,9 @@ export function tick(s: DatoFalsoState, content: DatoFalsoContent, nowMs: number
     return nowMs >= s.deadline || allIn ? reveal(s, content, nowMs) : s;
   }
   if (s.phase === 'reveal' && nowMs >= s.deadline) {
-    return s.card + 1 >= content.cards.length ? { ...s, phase: 'over' } : openCard(s, s.card + 1, nowMs);
+    if (s.card + 1 < content.cards.length) return openCard(s, s.card + 1, nowMs);
+    // The last player standing is away: the end waits for them (back wins it, their absence running out cancels it).
+    return loneAway(s) ? { ...s, deadline: nowMs + REVEAL_MS } : { ...s, phase: 'over' };
   }
   return s;
 }

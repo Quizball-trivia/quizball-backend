@@ -52,6 +52,9 @@ describe.skipIf(!url)('Dato falso room on real Postgres', () => {
   });
   beforeEach(async () => {
     await db.sql`TRUNCATE room_commands, room_seats, room_match_content, room_matches`;
+    // Earlier runs' rooms would fill the janitor's oldest-first batch.
+    await db.sql`DELETE FROM lobby_members WHERE lobby_id IN (SELECT id FROM lobbies WHERE room_game = 'dato_falso')`;
+    await db.sql`DELETE FROM lobbies WHERE room_game = 'dato_falso'`;
   });
 
   const user = async () => {

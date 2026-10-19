@@ -94,6 +94,19 @@ export const guessTheGoalRepo = {
     return row ?? null;
   },
 
+  /** Resolve media separately from immutable answers/scoring. Use the caller's
+   * transaction during settlement: never acquire a second pool connection. */
+  async getPublishedClip(goalId: string, tx?: TransactionSql): Promise<
+    Pick<GoalChoreographyRow, 'mirrored_url' | 'video_url' | 'clip_start_s' | 'clip_end_s'> | null
+  > {
+    const q = tx ? exec(tx) : sql;
+    const [row] = await q<Pick<GoalChoreographyRow, 'mirrored_url' | 'video_url' | 'clip_start_s' | 'clip_end_s'>[]>`
+      SELECT mirrored_url, video_url, clip_start_s, clip_end_s
+      FROM goal_choreographies WHERE id = ${goalId} AND status = 'published'
+    `;
+    return row ?? null;
+  },
+
   /**
    * Pick the next goal for a user: published, not yet solved, preferring goals
    * never seen in any prior session, and (when the unsolved pool allows) never
@@ -274,9 +287,8 @@ export const guessTheGoalRepo = {
     return rows.length > 0;
   },
 
-  /** Solved gallery cards, read from the SOLVING SESSION'S immutable snapshot
-   *  (title/video as the user actually saw them — the live row can be edited
-   *  after the fact, and a live read would hand out a new, unplayed answer). */
+  /** Keep the solving session's title. Media and board fixes come from the
+   * published row; frozen source links must never revive a third-party player. */
   async solvedGalleryRows(
     tx: TransactionSql,
     player: GgtPlayer
@@ -309,7 +321,7 @@ export const guessTheGoalRepo = {
     return q`
       SELECT g.difficulty, g.year,
              sess.goal_snapshot->'title' AS title,
-             COALESCE(g.mirrored_url, sess.goal_snapshot->>'mirrored_url', sess.goal_snapshot->>'video_url') AS video_url,
+             COALESCE(g.mirrored_url, g.video_url) AS video_url,
              g.players, g.steps, g.clip_start_s, g.clip_end_s,
              s.solved_at, sess.points, sess.bonus_correct
       FROM (${solves}) s

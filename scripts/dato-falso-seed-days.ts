@@ -90,7 +90,7 @@ async function main(): Promise<void> {
       if (moved.length > 0) throw new Error(`Card ${moved[0].card_id} was already shown on another day; refused`);
       // The whole schedule as it will stand: a card once, a footballer at most once in any window of days.
       const incoming = new Set(days.map((d) => d.day));
-      const stored = (await tx<Array<{ day: string; cards: { cards: Array<{ id: string; player: { id: string } }> } }>>`
+      const stored = (await tx<Array<{ day: string; cards: { cards: Array<{ id: string; player: { id: string; name: { en: string } } }> } }>>`
         SELECT day::text AS day, cards FROM dato_falso_days`).filter((r) => !incoming.has(r.day));
       const schedule = [...stored.map((r) => ({ day: r.day, cards: r.cards.cards })), ...days.map((d) => ({ day: d.day, cards: d.cards.cards }))]
         .sort((a, b) => a.day.localeCompare(b.day));
@@ -100,9 +100,13 @@ async function main(): Promise<void> {
         for (const c of d.cards) {
           if (seenCards.has(c.id)) throw new Error(`Card ${c.id} is on two days (second ${d.day})`);
           seenCards.add(c.id);
-          const before = lastDay.get(c.player.id);
-          if (before && (Date.parse(d.day) - Date.parse(before)) / 86_400_000 < DF_PLAYER_GAP_DAYS) throw new Error(`A footballer is on ${before} and ${d.day} (needs ${DF_PLAYER_GAP_DAYS} days apart)`);
-          lastDay.set(c.player.id, d.day);
+          // By id and by name: one person can come from two sources under two ids.
+          const k = dfPlayerKeys(c as Parameters<typeof dfPlayerKeys>[0]);
+          for (const key of [`id:${k.id}`, `name:${k.name}`]) {
+            const before = lastDay.get(key);
+            if (before && (Date.parse(d.day) - Date.parse(before)) / 86_400_000 < DF_PLAYER_GAP_DAYS) throw new Error(`A footballer is on ${before} and ${d.day} (needs ${DF_PLAYER_GAP_DAYS} days apart)`);
+            lastDay.set(key, d.day);
+          }
         }
       }
       const existing = new Map((await tx<Array<{ day: string; content_version: string }>>`

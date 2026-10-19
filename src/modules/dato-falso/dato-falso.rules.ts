@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { rejected } from '../daily/daily.errors.js';
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
-import { DF_CARDS, DF_OPTIONS, DF_ORDER, cutFor, dfCardSchema, pointsFor, type DfArt, type DfCard, type DfCategory, type DfJoker, type DfLocalized } from '../room/games/dato-falso/dato-falso.rules.js';
+import { DF_CARDS, DF_OPTIONS, DF_ORDER, cutFor, dfPlayerKeys, dfCardSchema, pointsFor, type DfArt, type DfCard, type DfCategory, type DfJoker, type DfLocalized } from '../room/games/dato-falso/dato-falso.rules.js';
 
 /**
  * Dato falso futbolero, solo: the same ten cards for everyone each day, thirty seconds a card. Pure: time comes in as
@@ -13,7 +13,8 @@ export const CARD_MS = 30_000;
 
 export const dayCardsSchema = z.object({ cards: z.array(dfCardSchema).length(DF_CARDS) }).strict().superRefine((d, ctx) => {
   if (new Set(d.cards.map((c) => c.id)).size !== d.cards.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A card appears twice' });
-  if (new Set(d.cards.map((c) => c.player.id)).size !== d.cards.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A footballer appears twice in one day' });
+  const keys = d.cards.map(dfPlayerKeys);
+  if (new Set(keys.map((k) => k.id)).size !== keys.length || new Set(keys.map((k) => k.name)).size !== keys.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A footballer appears twice in one day' });
   if (d.cards.some((c, i) => c.difficulty !== DF_ORDER[i])) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The cards must follow the difficulty curve' });
 });
 export type DayCards = z.infer<typeof dayCardsSchema>;

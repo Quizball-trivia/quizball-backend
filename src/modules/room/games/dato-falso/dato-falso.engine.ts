@@ -71,12 +71,15 @@ const eligible = (s: DatoFalsoState) => s.status.flatMap((st, seat) => (st !== '
 export const totals = (s: DatoFalsoState) => s.status.map((_, seat) => s.results.reduce((sum, r) => sum + r.entries[seat].points, 0));
 export const rights = (s: DatoFalsoState) => s.status.map((_, seat) => s.results.filter((r) => r.entries[seat].right).length);
 
-/** Fewer than two seats left → the match ends: with a result once a card was revealed, else cancelled. */
+/**
+ * Fewer than two seats left → the match ends: the one left wins (leaving is final, even before the first reveal);
+ * nobody left cancels it.
+ */
 function settleTerminal(s: DatoFalsoState): DatoFalsoState {
   if (s.phase === 'over' || s.phase === 'cancelled') return s;
   const live = s.status.filter((st) => st !== 'withdrawn').length;
   if (live >= 2) return s;
-  return { ...s, phase: live === 0 || s.results.length === 0 ? 'cancelled' : 'over' };
+  return { ...s, phase: live === 0 ? 'cancelled' : 'over' };
 }
 
 /** Seat changes that arrive together, then one terminal check (everyone leaving at once cancels). */

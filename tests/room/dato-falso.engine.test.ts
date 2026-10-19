@@ -148,6 +148,12 @@ describe("dato falso room: cards and the clock", () => {
     expect(alone.phase).toBe("over");
     expect(standings(alone).find((x) => x.seat === 1)?.place).toBe(1);
     expect(seatsChanged(live(2), [{ seat: 0, change: "leave" }, { seat: 1, change: "leave" }]).phase).toBe("cancelled");
+    // Both closed every tab: their absence windows end one after the other, the second while it is still away.
+    const bothAway = seatsChanged(live(2), [{ seat: 0, change: "away" }, { seat: 1, change: "away" }]);
+    expect(seatsChanged(bothAway, [{ seat: 0, change: "leave" }]).phase).toBe("cancelled");
+    // After a reveal the one left still gets the result, away or not.
+    const revealed = tick(bothAway, content, T + 3_000 + CARD_MS);
+    expect(seatsChanged(revealed, [{ seat: 0, change: "leave" }]).phase).toBe("over");
     let s = tick(live(2), content, T + 3_000 + CARD_MS);
     expect(s.phase).toBe("reveal");
     s = seatsChanged(s, [{ seat: 1, change: "leave" }]);

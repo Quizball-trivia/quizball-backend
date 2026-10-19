@@ -143,8 +143,11 @@ describe("dato falso room: cards and the clock", () => {
     expect(standings(left).find((x) => x.seat === 0)?.place).toBe(3);
   });
 
-  it("everyone leaving before a reveal cancels; after one, the last seat standing gets a result", () => {
-    expect(seatsChanged(live(2), [{ seat: 0, change: "leave" }]).phase).toBe("cancelled");
+  it("the seat left alone wins, even before the first reveal; everyone leaving cancels", () => {
+    const alone = seatsChanged(live(2), [{ seat: 0, change: "leave" }]);
+    expect(alone.phase).toBe("over");
+    expect(standings(alone).find((x) => x.seat === 1)?.place).toBe(1);
+    expect(seatsChanged(live(2), [{ seat: 0, change: "leave" }, { seat: 1, change: "leave" }]).phase).toBe("cancelled");
     let s = tick(live(2), content, T + 3_000 + CARD_MS);
     expect(s.phase).toBe("reveal");
     s = seatsChanged(s, [{ seat: 1, change: "leave" }]);

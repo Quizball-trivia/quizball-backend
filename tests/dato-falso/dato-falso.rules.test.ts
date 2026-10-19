@@ -72,6 +72,8 @@ describe("dato falso daily: cards and the clock", () => {
     expect(dayCardsSchema.safeParse(day).success).toBe(true);
     const twin = { cards: [...day.cards.slice(0, 9), { ...card(10), player: day.cards[0].player }] };
     expect(dayCardsSchema.safeParse(twin).success).toBe(false);
+    const sameName = { cards: [...day.cards.slice(0, 9), { ...card(10), difficulty: "hard" as const, player: { ...card(10).player, name: day.cards[0].player.name } }] };
+    expect(dayCardsSchema.safeParse(sameName).success).toBe(false);
     const flat = { cards: day.cards.map((c) => ({ ...c, difficulty: "easy" as const })) };
     expect(dayCardsSchema.safeParse(flat).success).toBe(false);
   });

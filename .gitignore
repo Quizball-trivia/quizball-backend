@@ -108,6 +108,7 @@ node_modules
 # Football Horserace seeders (code only; the release and day files stay private and are passed with --dir / --file).
 !scripts/football-race-seed-release.ts
 !scripts/football-race-seed-days.ts
+!scripts/dato-falso-seed-days.ts
 !scripts/duel-seed-pool.ts
 # Word games footballer release seeder (code only; the release file stays private and is passed with --file).
 !scripts/wordgames-seed-release.ts

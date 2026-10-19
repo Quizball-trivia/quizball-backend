@@ -1,4 +1,5 @@
 import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
+import { datoFalsoRoomEngine } from './games/dato-falso/dato-falso.room.js';
 import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
 import { sharedPlayerRoomEngine } from './games/shared-player/shared-player.room.js';
@@ -13,6 +14,7 @@ const CURRENT: Record<RoomGameId, AnyRoomEngine> = {
   name_chain: nameChainRoomEngine as unknown as AnyRoomEngine,
   tenable: tenableRoomEngine as unknown as AnyRoomEngine,
   football_race: footballRaceRoomEngine as unknown as AnyRoomEngine,
+  dato_falso: datoFalsoRoomEngine as unknown as AnyRoomEngine,
 };
 
 const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
@@ -21,6 +23,7 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   name_chain: { [nameChainRoomEngine.version]: nameChainRoomEngine as unknown as AnyRoomEngine },
   tenable: { [tenableRoomEngine.version]: tenableRoomEngine as unknown as AnyRoomEngine },
   football_race: { [footballRaceRoomEngine.version]: footballRaceRoomEngine as unknown as AnyRoomEngine },
+  dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**

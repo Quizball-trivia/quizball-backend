@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'dato_falso'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Room games that seat fewer than the runtime's six (Football Horserace: past four the race stops being fair). */
 export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4 };

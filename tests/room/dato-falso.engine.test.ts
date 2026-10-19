@@ -157,6 +157,15 @@ describe("dato falso room: cards and the clock", () => {
     const revealed = tick(waiting, content, T + 3_000 + CARD_MS);
     expect(revealed.phase).toBe("reveal");
     expect(seatsChanged(revealed, [{ seat: 1, change: "leave" }]).phase).toBe("cancelled");
+    // The last reveal ends while the one left is still away: no winner yet; their absence running out cancels.
+    let last = live(2);
+    while (!(last.phase === "reveal" && last.card === 9)) last = tick(last, content, last.deadline);
+    last = seatsChanged(last, [{ seat: 0, change: "away" }, { seat: 1, change: "away" }]);
+    last = seatsChanged(last, [{ seat: 0, change: "leave" }]);
+    last = tick(last, content, last.deadline);
+    expect(last.phase).toBe("reveal");
+    expect(seatsChanged(last, [{ seat: 1, change: "leave" }]).phase).toBe("cancelled");
+    expect(seatsChanged(last, [{ seat: 1, change: "back" }]).phase).toBe("over");
     // One leaves while the other is briefly away: coming back wins it.
     const back = seatsChanged(waiting, [{ seat: 1, change: "back" }]);
     expect(back.phase).toBe("over");

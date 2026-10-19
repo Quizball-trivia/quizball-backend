@@ -84,6 +84,11 @@ function settleTerminal(s: DatoFalsoState): DatoFalsoState {
   return s.status[live[0]] === 'in' ? { ...s, phase: 'over' } : s;
 }
 
+const loneAway = (s: DatoFalsoState) => {
+  const live = s.status.filter((st) => st !== 'withdrawn');
+  return live.length === 1 && live[0] === 'away';
+};
+
 /** Seat changes that arrive together, then one terminal check (everyone leaving at once cancels). */
 export function seatsChanged(s: DatoFalsoState, changes: readonly RoomSeatChange[]): DatoFalsoState {
   if (s.phase === 'over' || s.phase === 'cancelled') return s;
@@ -128,7 +133,9 @@ export function tick(s: DatoFalsoState, content: DatoFalsoContent, nowMs: number
     return nowMs >= s.deadline || allIn ? reveal(s, content, nowMs) : s;
   }
   if (s.phase === 'reveal' && nowMs >= s.deadline) {
-    return s.card + 1 >= content.cards.length ? { ...s, phase: 'over' } : openCard(s, s.card + 1, nowMs);
+    if (s.card + 1 < content.cards.length) return openCard(s, s.card + 1, nowMs);
+    // The last player standing is away: the end waits for them (back wins it, their absence running out cancels it).
+    return loneAway(s) ? { ...s, deadline: nowMs + REVEAL_MS } : { ...s, phase: 'over' };
   }
   return s;
 }

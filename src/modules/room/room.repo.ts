@@ -87,6 +87,8 @@ export const roomRepo = {
       SELECT r.item_id, r.difficulty, p.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty
       JOIN room_pool p ON p.game = ${game} AND p.item_id = r.item_id
       WHERE r.rn <= w.n
+      -- Unseen first within each difficulty: a game that draws spares takes them in this order.
+      ORDER BY r.difficulty, r.rn
     `;
   },
 

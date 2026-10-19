@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { aproximadoItemSchema, ROOM_GAMES, ROOM_PACK_WANTED, type RoomGameId } from '../src/modules/room/room.types.js';
+import { DATO_FALSO_CONTENT_LOCK, DF_PACK_WANTED, dfCardSchema, dfPlayerKeys } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
 import { sharedPlayerItemSchema } from '../src/modules/room/games/shared-player/shared-player.engine.js';
 import { SHARED_PLAYER_DIFFICULTIES, SHARED_PLAYER_SCOPES } from '../src/modules/room/games/shared-player/shared-player.room.js';
@@ -48,6 +49,8 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   },
   // The name chain has no questions: its one item says which release the matches are played on.
   name_chain: { item: nameChainItemSchema, needs: [{ tag: '', difficulty: 'easy', n: 1 }] },
+  // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
+  dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
 };
 
 function parseArgs(argv: string[]) {
@@ -96,6 +99,7 @@ async function main(): Promise<void> {
     if (new Set(rows.map(pick)).size !== rows.length) throw new Error(`Duplicate ${field} in the pool`);
   }
   if (rows.some((r) => r.payload.id !== r.item_id)) throw new Error('payload.id must equal item_id');
+  if (args.game === 'dato_falso' && rows.some((r) => r.payload.difficulty !== r.difficulty)) throw new Error('payload.difficulty must equal difficulty');
   const counts = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.difficulty]: (acc[r.difficulty] ?? 0) + 1 }), {});
   console.log(`${args.game} room pool: ${rows.length} items ${JSON.stringify(counts)} -> ${target.label}`);
   // A pool short of what a match deals would fail at the first start.
@@ -141,6 +145,20 @@ async function main(): Promise<void> {
           unknown += n;
         }
         if (unknown > 0) throw new Error(`${unknown} accepted footballers are not in release ${releases[0]}; nothing written`);
+      }
+      if (args.game === 'dato_falso') {
+        // The days' seed takes the same lock. A footballer is on one side only, by id and by name, against everything
+        // the dailies ever showed (corrected days included).
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${DATO_FALSO_CONTENT_LOCK}))`;
+        const keys = rows.map((r) => dfPlayerKeys(dfCardSchema.parse(r.payload)));
+        const [{ n: inDaily }] = await tx<Array<{ n: number }>>`
+          SELECT count(*)::int AS n FROM dato_falso_ledger
+          WHERE side = 'daily' AND (player_id = ANY(${tx.array(keys.map((k) => k.id))}::text[]) OR player_name = ANY(${tx.array(keys.map((k) => k.name))}::text[]))`;
+        if (inDaily > 0) throw new Error(`${inDaily} daily card(s) are about footballers of this pool; refused (a room reveal would help with a daily)`);
+        await tx`
+          INSERT INTO dato_falso_ledger (side, card_id, player_id, player_name)
+          SELECT 'room', * FROM unnest(${tx.array(rows.map((r) => r.item_id))}::text[], ${tx.array(keys.map((k) => k.id))}::text[], ${tx.array(keys.map((k) => k.name))}::text[])
+          ON CONFLICT DO NOTHING`;
       }
       // A release that was switched off as a whole (a newer one replaced it) comes back whole when it is seeded again;
       // single items disabled by hand inside a live release stay disabled.

@@ -5,6 +5,7 @@ import { storeRepo } from '../store/store.repo.js';
 import { progressionRepo } from '../progression/progression.repo.js';
 import { guessTheGoalRepo } from './guess-the-goal.repo.js';
 import { buildTimings, revealedMovesAt } from './guess-the-goal.timing.js';
+import { hostedGoalClip, hostedGoalVideoUrl } from './guess-the-goal.video.js';
 import {
   GGT_BONUS_POINTS,
   GGT_COINS_PER_POINT,
@@ -235,7 +236,7 @@ async function toPublicSession(session: GgtSessionRow): Promise<PublicSession> {
   };
   if (session.state === 'guessed') {
     payload.bonus = bonusPayload(session);
-    payload.outcome = replayGuessOutcome(session);
+    payload.outcome = await replayGuessOutcome(session);
     payload.guess_option_id = session.guess_option_id ?? undefined;
   }
   return payload;
@@ -331,8 +332,9 @@ export function correctOptionOf(options: ChoreographyOption[]): ChoreographyOpti
 }
 
 /** Rebuild a guess outcome from the stored row — used for idempotent retries. */
-function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
+async function replayGuessOutcome(session: GgtSessionRow, tx?: TransactionSql): Promise<GuessOutcome> {
   const snapshot = session.goal_snapshot;
+  const clip = hostedGoalClip(await guessTheGoalRepo.getPublishedClip(session.goal_id, tx));
   const outcome: GuessOutcome = {
     correct: session.guess_correct ?? false,
     correct_option_id: correctOptionOf(snapshot.options).id,
@@ -340,9 +342,7 @@ function replayGuessOutcome(session: GgtSessionRow): GuessOutcome {
     revealed_moves: session.revealed_moves ?? 0,
     title: snapshot.title,
     fun_fact: snapshot.fun_fact,
-    video_url: snapshot.mirrored_url ?? snapshot.video_url ?? null,
-    clip_start_s: snapshot.clip_start_s ?? null,
-    clip_end_s: snapshot.clip_end_s ?? null,
+    ...clip,
     awards: mainAwards(session),
     session_state: session.state === 'guessed' ? 'guessed' : 'complete',
   };
@@ -423,12 +423,12 @@ export const guessTheGoalService = {
         // The session may have completed on a previous attempt whose response
         // was lost — replay the stored result instead of stranding the client.
         const finished = await guessTheGoalRepo.getFinishedSession(tx, player, sessionId);
-        if (finished && finished.guess_option_id === optionId) return replayGuessOutcome(finished);
+        if (finished && finished.guess_option_id === optionId) return replayGuessOutcome(finished, tx);
         if (finished) throw new ConflictError('Session already guessed with a different option');
         throw new NotFoundError('No such active session');
       }
       if (session.state !== 'active') {
-        if (session.guess_option_id === optionId) return replayGuessOutcome(session);
+        if (session.guess_option_id === optionId) return replayGuessOutcome(session, tx);
         throw new ConflictError('Session already guessed with a different option');
       }
 
@@ -436,6 +436,7 @@ export const guessTheGoalService = {
       const option = snapshot.options.find((o) => o.id === optionId);
       if (!option) throw new BadRequestError('Unknown option');
       const correctOption = correctOptionOf(snapshot.options);
+      const clip = hostedGoalClip(await guessTheGoalRepo.getPublishedClip(session.goal_id, tx));
 
       const now = new Date();
       const timings = buildTimings(snapshot.steps);
@@ -492,9 +493,7 @@ export const guessTheGoalService = {
         revealed_moves: revealed,
         title: snapshot.title,
         fun_fact: snapshot.fun_fact,
-        video_url: snapshot.mirrored_url ?? snapshot.video_url ?? null,
-        clip_start_s: snapshot.clip_start_s ?? null,
-        clip_end_s: snapshot.clip_end_s ?? null,
+        ...clip,
         awards,
         session_state: nextState,
       };
@@ -611,7 +610,7 @@ export const guessTheGoalService = {
       WHERE status = 'published'
       ORDER BY featured_rank ASC NULLS LAST, difficulty, slug
     `;
-    return { goals: rows };
+    return { goals: rows.map((row) => ({ ...row, video_url: hostedGoalVideoUrl(row.video_url) })) };
   },
 
   async getStats(player: GgtPlayer): Promise<{
@@ -713,12 +712,10 @@ export const guessTheGoalService = {
       difficulty: row.difficulty,
       points: row.points ?? 0,
       bonus_correct: row.bonus_correct,
-      video_url: row.video_url,
       solved_at: new Date(row.solved_at).toISOString(),
       players: row.players,
       steps: row.steps,
-      clip_start_s: row.clip_start_s,
-      clip_end_s: row.clip_end_s,
+      ...hostedGoalClip(row),
     }));
     const lockedTotal = Object.values(locked).reduce((sum, n) => sum + n, 0);
     return {

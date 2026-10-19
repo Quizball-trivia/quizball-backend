@@ -154,6 +154,36 @@ describe.skipIf(!url && !admin)('guess the goal on real Postgres', () => {
   });
 
   describe('a guest plays', () => {
+    it('old snapshot source links resolve to current hosted clips without rewriting settlement or paying retries', async () => {
+      const guest = { kind: 'guest' as const, guestId: await guestSession() };
+      const started = await service.startSession(guest, 'legacy-clip');
+      const [{ goal_id }] = await db.sql`SELECT goal_id FROM guess_the_goal_sessions WHERE id=${started.session_id}`;
+      const hosted = 'https://lfbwhxvwubzeqkztghok.supabase.co/storage/v1/object/public/goal-clips/test-legacy.mp4';
+      try {
+        await db.sql`UPDATE goal_choreographies SET mirrored_url=${hosted}, clip_start_s=NULL, clip_end_s=NULL WHERE id=${goal_id}`;
+        await db.sql`UPDATE guess_the_goal_sessions SET goal_snapshot=goal_snapshot ||
+          ${db.sql.json({ video_url: 'https://youtu.be/old', mirrored_url: null, clip_start_s: 150, clip_end_s: 184 })}
+          WHERE id=${started.session_id}`;
+        const [before] = await db.sql`SELECT goal_snapshot FROM guess_the_goal_sessions WHERE id=${started.session_id}`;
+        const right = await correctId(started.session_id);
+        expect(await service.guess(guest, started.session_id, right)).toMatchObject({ video_url: hosted, clip_start_s: null, points: 100 });
+        const [settled] = await db.sql`SELECT * FROM guess_the_goal_sessions WHERE id=${started.session_id}`;
+        expect((await service.getCurrent(guest)).outcome?.video_url).toBe(hosted);
+        expect((await service.startSession(guest, 'legacy-clip')).outcome?.video_url).toBe(hosted);
+        expect((await service.guess(guest, started.session_id, right)).video_url).toBe(hosted);
+        expect((await service.getGallery(guest)).goals[0].video_url).toBe(hosted);
+        const [after] = await db.sql`SELECT * FROM guess_the_goal_sessions WHERE id=${started.session_id}`;
+        expect(after).toEqual(settled);
+        expect(after.goal_snapshot).toEqual(before.goal_snapshot);
+        await service.answerBonus(guest, started.session_id, await correctBonusId(started.session_id));
+        expect((await service.guess(guest, started.session_id, right)).video_url).toBe(hosted);
+        expect(rewards.coins).not.toHaveBeenCalled();
+        expect(rewards.xp).not.toHaveBeenCalled();
+      } finally {
+        await db.sql`UPDATE goal_choreographies SET mirrored_url=NULL WHERE id=${goal_id}`;
+      }
+    });
+
     it('start → correct guess → bonus: scored, no solves row, no rewards, counted as solved', async () => {
       const guest = { kind: 'guest' as const, guestId: await guestSession() };
       const started = await service.startSession(guest, 'nonce-1');

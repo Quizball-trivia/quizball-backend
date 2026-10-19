@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 const getPublishedGoalMock = vi.fn();
+const getPublishedClipMock = vi.fn();
 const pickNextGoalMock = vi.fn();
 const hasSeenGoalMock = vi.fn();
 const getSessionByNonceMock = vi.fn();
@@ -17,11 +18,15 @@ const coinsGrantedTodayMock = vi.fn();
 const countSolvedMock = vi.fn();
 const countPublishedMock = vi.fn();
 const countSessionsStartedTodayMock = vi.fn();
+const solvedGalleryRowsMock = vi.fn();
+const unsolvedCountsMock = vi.fn();
+const sqlRowsMock = vi.fn();
 
 vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
   guessTheGoalRepo: {
     acquireStartLock: vi.fn(),
     getPublishedGoal: (...a: unknown[]) => getPublishedGoalMock(...a),
+    getPublishedClip: (...a: unknown[]) => getPublishedClipMock(...a),
     pickNextGoal: (...a: unknown[]) => pickNextGoalMock(...a),
     hasSeenGoal: (...a: unknown[]) => hasSeenGoalMock(...a),
     hasSolvedGoal: vi.fn(),
@@ -37,6 +42,8 @@ vi.mock('../../src/modules/guess-the-goal/guess-the-goal.repo.js', () => ({
     countSolved: (...a: unknown[]) => countSolvedMock(...a),
     countPublished: (...a: unknown[]) => countPublishedMock(...a),
     countSessionsStartedToday: (...a: unknown[]) => countSessionsStartedTodayMock(...a),
+    solvedGalleryRows: (...a: unknown[]) => solvedGalleryRowsMock(...a),
+    unsolvedCounts: (...a: unknown[]) => unsolvedCountsMock(...a),
     runInTransaction: (cb: (tx: unknown) => unknown) => cb({}),
   },
 }));
@@ -58,8 +65,8 @@ vi.mock('../../src/modules/progression/progression.repo.js', () => ({
 }));
 
 vi.mock('../../src/db/index.js', () => ({
-  sql: Object.assign(() => Promise.resolve([]), {
-    begin: (cb: (tx: unknown) => unknown) => Promise.resolve(cb({})),
+  sql: Object.assign((...a: unknown[]) => sqlRowsMock(...a), {
+    begin: (...args: unknown[]) => Promise.resolve((args.at(-1) as (tx: unknown) => unknown)({})),
     json: (x: unknown) => x,
   }),
 }));
@@ -164,6 +171,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getPublishedClipMock.mockResolvedValue(null);
+  sqlRowsMock.mockResolvedValue([]);
   countSolvedMock.mockResolvedValue(3);
   countPublishedMock.mockResolvedValue(31);
   coinsGrantedTodayMock.mockResolvedValue(0);
@@ -175,6 +184,92 @@ beforeEach(() => {
   updateSessionMock.mockImplementation((_tx: unknown, _id: string, patch: Record<string, unknown>) =>
     Promise.resolve(makeSession(patch))
   );
+});
+
+describe('legacy session video delivery', () => {
+  const hosted = 'https://lfbwhxvwubzeqkztghok.supabase.co/storage/v1/object/public/goal-clips/bale-copa-final-2014.mp4';
+  const legacySnapshot = () => ({ ...snapshotOf(), video_url: 'https://www.youtube.com/watch?v=old', clip_start_s: 150, clip_end_s: 184 });
+  const completed = (state = 'guessed') => makeSession({ state, goal_snapshot: legacySnapshot(), guess_option_id: 'a', guess_correct: true, points: 40, coins_awarded: 10, xp_awarded: 40, first_solve: true });
+
+  beforeEach(() => {
+    getPublishedClipMock.mockResolvedValue({ mirrored_url: hosted, video_url: 'https://youtu.be/old', clip_start_s: null, clip_end_s: null });
+  });
+
+  it.each([USER, GUEST])('resumes an old result with current hosted media for $kind', async (player) => {
+    const session = completed();
+    const before = structuredClone(session);
+    getOpenSessionMock.mockResolvedValue(session);
+    const result = await guessTheGoalService.getCurrent(player);
+    expect(result.outcome).toMatchObject({ video_url: hosted, clip_start_s: null, clip_end_s: null, points: 40, awards: { coins: 10, xp: 40 } });
+    expect(JSON.stringify(result)).not.toContain('youtu');
+    expect(session).toEqual(before);
+    expect(updateSessionMock).not.toHaveBeenCalled();
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves an old nonce retry without inserting or abandoning anything', async () => {
+    getSessionByNonceMock.mockResolvedValue(completed());
+    const result = await guessTheGoalService.startSession(USER, 'old-nonce');
+    expect(result.outcome?.video_url).toBe(hosted);
+    expect(insertSessionMock).not.toHaveBeenCalled();
+    expect(abandonSessionMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['guessed', 'complete'])('replays %s results in the existing transaction without rewarding twice', async (state) => {
+    const session = completed(state);
+    getOpenSessionForUpdateMock.mockResolvedValue(state === 'guessed' ? session : null);
+    getFinishedSessionMock.mockResolvedValue(session);
+    const result = await guessTheGoalService.guess(USER, session.id, 'a');
+    expect(result).toMatchObject({ video_url: hosted, clip_start_s: null, points: 40, awards: { coins: 10, xp: 40 } });
+    expect(getPublishedClipMock).toHaveBeenCalledWith('goal-1', expect.any(Object));
+    expect(updateSessionMock).not.toHaveBeenCalled();
+    expect(insertSolveMock).not.toHaveBeenCalled();
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
+    expect(grantXpInTxMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['a', 'b'])('uses canonical media when settling an active old guest session with option %s', async (option) => {
+    const session = makeSession({ user_id: null, guest_id: GUEST.guestId, goal_snapshot: legacySnapshot() });
+    const before = structuredClone(session.goal_snapshot);
+    getOpenSessionForUpdateMock.mockResolvedValue(session);
+    const result = await guessTheGoalService.guess(GUEST, session.id, option);
+    expect(result.video_url).toBe(hosted);
+    expect(result.points).toBe(option === 'a' ? 100 : 0);
+    expect(result.clip_start_s).toBeNull();
+    expect(session.goal_snapshot).toEqual(before);
+    expect(updateSessionMock.mock.calls[0][2]).not.toHaveProperty('goal_snapshot');
+    expect(addCoinsInTxMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the canonical row is missing instead of reviving a frozen player', async () => {
+    getPublishedClipMock.mockResolvedValue(null);
+    getOpenSessionMock.mockResolvedValue(completed());
+    const result = await guessTheGoalService.getCurrent(USER);
+    expect(result.outcome).toMatchObject({ video_url: null, clip_start_s: null, clip_end_s: null, points: 40 });
+  });
+
+  it('does not resolve or leak a title/video before a guess', async () => {
+    getOpenSessionMock.mockResolvedValue(makeSession({ goal_snapshot: legacySnapshot() }));
+    const result = await guessTheGoalService.getCurrent(USER);
+    expect(result.outcome).toBeUndefined();
+    expect(getPublishedClipMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('youtube');
+  });
+
+  it('sanitizes catalogue and solved-gallery responses too', async () => {
+    const cards = [hosted, 'https://youtu.be/old'].map((video_url) => ({
+      video_url, title: { en: 'Solved title' }, year: 2014, difficulty: 'easy',
+      players: [], steps: [], clip_start_s: 20, clip_end_s: 40, solved_at: new Date(),
+    }));
+    sqlRowsMock.mockResolvedValue(cards);
+    expect((await guessTheGoalService.getAllGoalsDev()).goals.map((g) => g.video_url)).toEqual([hosted, null]);
+    solvedGalleryRowsMock.mockResolvedValue(cards);
+    unsolvedCountsMock.mockResolvedValue({ easy: 3 });
+    const gallery = await guessTheGoalService.getGallery(GUEST);
+    expect(gallery.goals.map((g) => g.video_url)).toEqual([hosted, null]);
+    expect(gallery.goals[1]).toMatchObject({ clip_start_s: null, clip_end_s: null });
+    expect(JSON.stringify(gallery)).not.toContain('youtu');
+  });
 });
 
 describe('startSession', () => {

@@ -31,6 +31,8 @@ export interface RoomEffects {
   finished: boolean;
   /** A new match only: database time just before its creation committed (fences stale "no live seat" answers). */
   startedAtMs?: number;
+  /** A new match only: its engine version (announced only to tabs that can draw it). */
+  engineVersion?: number;
 }
 
 export type RoomCommandResult = { ok: true } | { ok: false; code: string };
@@ -356,6 +358,8 @@ function projectSnapshot(row: RoomMatchRow, seats: RoomSeatRow[], state: EngineS
     matchId: row.id,
     lobbyId: row.lobby_id,
     game: row.game,
+    /** The match's engine version: a version an older bundle cannot draw is delivered only to tabs that declare it. */
+    engineVersion: row.engine_version,
     stateVersion: row.state_version,
     status: row.status,
     phaseToken: row.phase_token,
@@ -382,17 +386,18 @@ export const roomService = {
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);
+    const engineVersion = engine.versionFor?.(options) ?? engine.version;
     const created = await roomRepo.withTx(async (tx) => {
       // The room must still hold the options this content was dealt for (the host may have changed them meanwhile).
       const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
-        game: input.game, engineVersion: engine.version, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
+        game: input.game, engineVersion, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
         itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
       return {
         matchId: created.id, lobbyId: input.lobbyId, userIds: input.players.map((p) => p.userId), status: 'ready',
-        timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false,
+        timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false, engineVersion,
       } satisfies RoomEffects;
     });
     // After the commit, before anyone is told: a "no live seat" read stamped earlier than this cannot know the match.
@@ -406,7 +411,7 @@ export const roomService = {
       const l = await load(tx, matchId);
       if (!l) return null;
       const me = seatOf(l, userId);
-      if (!clientCanPlay(l.row.game, clientGames)) throw new RoomError('client_outdated', 409);
+      if (!clientCanPlay(l.row.game, clientGames, l.row.engine_version)) throw new RoomError('client_outdated', 409);
       // A ready on a running match (a screen that reconnected) is a presence: an older disconnect check must not win.
       if (l.row.status === 'active') return (await presentLocked(tx, l, userId)) ?? effectsOf(l.row, l.seats, 'active', null);
       if (l.row.status !== 'ready') return effectsOf(l.row, l.seats, l.row.status, null);
@@ -549,7 +554,7 @@ export const roomService = {
       const gate = await settleGate(tx, loaded);
       if (!gate.l) return gate.effects;
       // A socket that cannot draw this game (a tab loaded before it shipped) does not bring the seat back.
-      if (!clientCanPlay(gate.l.row.game, clientGames)) return gate.effects;
+      if (!clientCanPlay(gate.l.row.game, clientGames, gate.l.row.engine_version)) return gate.effects;
       return (await presentLocked(tx, gate.l, userId)) ?? gate.effects;
     }));
   },

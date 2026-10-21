@@ -64,6 +64,8 @@ const seenGameSchema = z.object({
   gameMode: z.enum(LOBBY_GAME_MODES),
   duelGame: duelGameSchema.nullable().optional(),
   roomGame: roomGameSchema.nullable().optional(),
+  /** The room options the screen showed (`roomOptionsKey`): a Ready pressed on a board the host has since changed is refused. */
+  roomOptions: z.string().max(400).nullable().optional(),
 });
 
 export const lobbyReadySchema = z.object({

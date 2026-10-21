@@ -86,7 +86,7 @@ export function practiceClues(cards: ReadonlyArray<PreparedWord & { key: CardKey
 /**
  * A board from a deck, built around clues: the player's 9 words are drawn as groups that share a clue (3 + 2 + 2 + 2),
  * the other 16 at random, then the clues are chosen on the finished board. Tried again (up to MAX_DEALS) until the
- * clues cover all 9 (an Own Goal or rival word on a group's clue can block it); else the best board seen.
+ * clues cover all 9 (an Own Goal or rival word on a group's clue can block it); null when no deal does.
  */
 export function dealPractice(deck: readonly CodenamesWordItem[], lang: RoomLocale, random: () => number): PracticeBoard | null {
   const { words, groups } = groupsOf(deck);
@@ -104,8 +104,9 @@ export function dealPractice(deck: readonly CodenamesWordItem[], lang: RoomLocal
     const covered = clues.reduce((n, c) => n + c.count, 0);
     if (!best || covered > best.covered) best = { cards, clues, covered };
   }
-  // No clue fits any deal (a broken deck): no board rather than one nobody can play.
-  if (!best || best.clues.length === 0) return null;
+  // Every board must be winnable: a deck that cannot cover all 9 words in the clues (a broken or thin deck) deals no
+  // board rather than one whose best run falls short.
+  if (!best || best.covered < WORDS_BOARD.starting) return null;
   const { cards, clues } = best;
   return { lang, cards: cards.map((c) => ({ id: c.id, word: c.word, kind: KIND[c.key], football: c.football, other: c.other })), clues };
 }

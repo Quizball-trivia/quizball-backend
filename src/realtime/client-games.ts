@@ -27,7 +27,9 @@ export const declares = (data: { games?: readonly string[] } | undefined, game: 
 /** On connect, next to the user room: the legacy rooms of every gated game this tab did not declare. */
 export function joinLegacyRooms(socket: { data: { games?: readonly string[] }; join: (room: string) => void }): void {
   for (const game of GATED_ROOM_GAMES) if (!declares(socket.data, game)) socket.join(legacyRoom(game));
-  // The same for a newer version of a game (Codenames word boards): `caps:no-codenames@2`.
+  // The same for a newer version of a game (Codenames word boards): `caps:no-codenames@2`. A socket held by a replica
+  // from before this existed is in no such room; release order covers it: this backend is on every replica before
+  // the web that can pick Words ships, and its old replicas' sockets reconnect through new ones on the way.
   for (const token of CLIENT_VERSION_TOKENS) if (!(socket.data.games ?? []).includes(token)) socket.join(legacyRoom(token));
 }
 

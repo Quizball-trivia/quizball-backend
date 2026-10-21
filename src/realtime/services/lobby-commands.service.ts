@@ -367,7 +367,7 @@ export async function joinByCode(
         }
 
         // A room playing a game this tab cannot draw: refused before anything is sent about it.
-        if (!declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game : null)) {
+        if (!declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game : null) || !declaresRoomOptions(socket.data, lobby)) {
           socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, meta: { inviteCode: normalizedCode } });
           result = { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
           return;

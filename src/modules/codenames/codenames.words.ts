@@ -40,8 +40,11 @@ const prepared = new WeakMap<readonly CodenamesWordItem[], PreparedWord[]>();
 export function prepareDeck(deck: readonly CodenamesWordItem[]): PreparedWord[] {
   const cached = prepared.get(deck);
   if (cached) return cached;
-  const legal = sayable(deck.map((w) => w.word));
-  const ready = deck.map((w) => ({ ...w, clueIds: botTerms(w.clues, legal).map((t) => ({ id: t.id, clue: t.label.en })) }));
+  // One card per spelling: two rows that fold to the same word (a hand edit) would put twins on one board.
+  const seen = new Set<string>();
+  const unique = deck.filter((w) => !seen.has(fold(w.word)) && Boolean(seen.add(fold(w.word))));
+  const legal = sayable(unique.map((w) => w.word));
+  const ready = unique.map((w) => ({ ...w, clueIds: botTerms(w.clues, legal).map((t) => ({ id: t.id, clue: t.label.en })) }));
   prepared.set(deck, ready);
   return ready;
 }
@@ -86,8 +89,8 @@ export function practiceClues(cards: ReadonlyArray<PreparedWord & { key: CardKey
  * clues cover all 9 (an Own Goal or rival word on a group's clue can block it); else the best board seen.
  */
 export function dealPractice(deck: readonly CodenamesWordItem[], lang: RoomLocale, random: () => number): PracticeBoard | null {
-  if (deck.length < WORDS_BOARD.size || new Set(deck.map((w) => fold(w.word))).size < WORDS_BOARD.size) return null;
   const { words, groups } = groupsOf(deck);
+  if (words.length < WORDS_BOARD.size) return null;
   let best: { cards: Array<PreparedWord & { key: CardKey }>; clues: PracticeBoard['clues']; covered: number } | null = null;
   for (let deal = 0; deal < MAX_DEALS && (!best || best.covered < WORDS_BOARD.starting); deal += 1) {
     const mine = pickGroups(groups, random) ?? pickWords(words, WORDS_BOARD.starting, random);

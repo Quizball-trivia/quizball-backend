@@ -16,7 +16,7 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { ROOM_LOCALES } from '../src/modules/room/room.types.js';
-import { boardMatcher, clueProblem, codenamesWordItemSchema, WORDS_BOARD, wordItemId, wordTag } from '../src/modules/room/games/codenames/codenames.rules.js';
+import { boardMatcher, clueProblem, clueTerm, codenamesWordItemSchema, WORDS_BOARD, wordItemId, wordTag } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 
 const deckSchema = z.object({
@@ -73,8 +73,9 @@ async function main(): Promise<void> {
   const overlapping = rows.reduce((n, r) => n + r.payload.clues.filter((clue) => onDeck(clue) !== null).length, 0);
   if (overlapping > 0) throw new Error(`${overlapping} clues overlap a deck word`);
   // Each clue must fit at least two words, or it can never link cards.
+  // Counted by the bot's term identity (case, accents and spacing folded), as dealing will link them.
   const links = new Map<string, number>();
-  for (const r of rows) for (const clue of new Set(r.payload.clues)) links.set(clue, (links.get(clue) ?? 0) + 1);
+  for (const r of rows) for (const id of new Set(r.payload.clues.map((clue) => clueTerm(clue).id))) links.set(id, (links.get(id) ?? 0) + 1);
   const lonely = [...links.values()].filter((n) => n < 2).length;
   if (lonely > 0) throw new Error(`${lonely} clues fit only one word`);
   const tag = wordTag(lang);

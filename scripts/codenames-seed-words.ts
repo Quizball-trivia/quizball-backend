@@ -16,7 +16,7 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { ROOM_LOCALES } from '../src/modules/room/room.types.js';
-import { clueOnBoard, codenamesWordItemSchema, WORDS_BOARD, wordItemId, wordTag } from '../src/modules/room/games/codenames/codenames.rules.js';
+import { boardMatcher, clueProblem, codenamesWordItemSchema, WORDS_BOARD, wordItemId, wordTag } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 
 const deckSchema = z.object({
@@ -64,9 +64,13 @@ async function main(): Promise<void> {
     return { item_id: payload.id, fingerprint: createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 32), payload };
   });
   if (new Set(rows.map((r) => r.item_id)).size !== rows.length) throw new Error('Two words of the deck fold to the same spelling');
+  // A bot clue must be one a Scout could type (length, word count, blocklist).
+  const unsayable = rows.reduce((n, r) => n + r.payload.clues.filter((clue) => clueProblem(clue, new Set()) !== null).length, 0);
+  if (unsayable > 0) throw new Error(`${unsayable} clues break the clue rules (too long, too many words or blocked)`);
   // A clue that is, holds or is part of any deck word could meet that word on a board: refused here, not at play.
   const allWords = rows.map((r) => r.payload.word);
-  const overlapping = rows.reduce((n, r) => n + r.payload.clues.filter((clue) => clueOnBoard(clue, allWords) !== null).length, 0);
+  const onDeck = boardMatcher(allWords);
+  const overlapping = rows.reduce((n, r) => n + r.payload.clues.filter((clue) => onDeck(clue) !== null).length, 0);
   if (overlapping > 0) throw new Error(`${overlapping} clues overlap a deck word`);
   // Each clue must fit at least two words, or it can never link cards.
   const links = new Map<string, number>();

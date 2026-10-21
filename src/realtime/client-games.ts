@@ -1,4 +1,5 @@
 import type { QuizballServer } from './socket-server.js';
+import { CLIENT_VERSION_TOKENS, clientVersionToken } from '../modules/room/room.registry.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
 /**
@@ -26,13 +27,24 @@ export const declares = (data: { games?: readonly string[] } | undefined, game: 
 /** On connect, next to the user room: the legacy rooms of every gated game this tab did not declare. */
 export function joinLegacyRooms(socket: { data: { games?: readonly string[] }; join: (room: string) => void }): void {
   for (const game of GATED_ROOM_GAMES) if (!declares(socket.data, game)) socket.join(legacyRoom(game));
+  // The same for a newer version of a game (Codenames word boards): `caps:no-codenames@2`.
+  for (const token of CLIENT_VERSION_TOKENS) if (!(socket.data.games ?? []).includes(token)) socket.join(legacyRoom(token));
 }
 
-/** The broadcast target for these rooms, minus the tabs that cannot draw `game`. */
-export function toCapable(io: QuizballServer, rooms: string | string[], game: string | null | undefined): ReturnType<QuizballServer['to']> {
-  const target = io.to(rooms);
-  return isGated(game) ? target.except(legacyRoom(game)) : target;
+/** The broadcast target for these rooms, minus the tabs that cannot draw `game` (at `version`, for a match). */
+export function toCapable(io: QuizballServer, rooms: string | string[], game: string | null | undefined, version?: number | null): ReturnType<QuizballServer['to']> {
+  let target = io.to(rooms);
+  if (isGated(game)) target = target.except(legacyRoom(game));
+  const token = clientVersionToken(game, version);
+  return token ? target.except(legacyRoom(token)) : target;
 }
+
+/** The tab can draw this match: its game, and its version when an older bundle of the game cannot. */
+export const declaresMatch = (data: { games?: readonly string[] } | undefined, match: { game: string | null | undefined; engine_version?: number | null } | null | undefined): boolean => {
+  if (!match) return false;
+  const token = clientVersionToken(match.game, match.engine_version);
+  return declares(data, match.game) && (!token || (data?.games ?? []).includes(token));
+};
 
 /**
  * Every member user who is online has at least one tab that declares `game`. Offline members pass (they are checked
@@ -54,7 +66,7 @@ export async function membersCanDraw(io: QuizballServer, userIds: readonly strin
 }
 
 /** A Codenames word board: an older Codenames bundle draws picture cards only (see the room registry's `codenames@2`). */
-export const CODENAMES_WORDS_TOKEN = 'codenames@2';
+export const CODENAMES_WORDS_TOKEN = clientVersionToken('codenames', 2)!;
 export const isCodenamesWords = (lobby: { room_game?: string | null; room_options?: unknown }): boolean =>
   lobby.room_game === 'codenames' && (lobby.room_options as { board?: unknown } | null | undefined)?.board === 'words';
 /** The tab can draw the room's options (only a word board asks more than the game itself). */

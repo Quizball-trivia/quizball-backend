@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { sql } from '../../db/index.js';
 import { ROOM_LOCALES, type RoomLocale } from '../room/room.types.js';
 import {
-  clueOnBoard, clueTerm, codenamesWordItemSchema, fold, shuffled, WORDS_BOARD, wordTag, type CardKey, type CodenamesWordItem,
+  botTerms, codenamesWordItemSchema, fold, sayable, shuffled, WORDS_BOARD, wordTag, type CardKey, type CodenamesWordItem,
 } from '../room/games/codenames/codenames.rules.js';
 
 /**
@@ -40,15 +40,8 @@ const prepared = new WeakMap<readonly CodenamesWordItem[], PreparedWord[]>();
 export function prepareDeck(deck: readonly CodenamesWordItem[]): PreparedWord[] {
   const cached = prepared.get(deck);
   if (cached) return cached;
-  const words = deck.map((w) => w.word);
-  const legal = new Map<string, boolean>();
-  const ready = deck.map((w) => ({
-    ...w,
-    clueIds: w.clues.flatMap((clue) => {
-      if (!legal.has(clue)) legal.set(clue, clueOnBoard(clue, words) === null);
-      return legal.get(clue) ? [{ id: clueTerm(clue).id, clue }] : [];
-    }),
-  }));
+  const legal = sayable(deck.map((w) => w.word));
+  const ready = deck.map((w) => ({ ...w, clueIds: botTerms(w.clues, legal).map((t) => ({ id: t.id, clue: t.label.en })) }));
   prepared.set(deck, ready);
   return ready;
 }
@@ -108,7 +101,9 @@ export function dealPractice(deck: readonly CodenamesWordItem[], lang: RoomLocal
     const covered = clues.reduce((n, c) => n + c.count, 0);
     if (!best || covered > best.covered) best = { cards, clues, covered };
   }
-  const { cards, clues } = best!;
+  // No clue fits any deal (a broken deck): no board rather than one nobody can play.
+  if (!best || best.clues.length === 0) return null;
+  const { cards, clues } = best;
   return { lang, cards: cards.map((c) => ({ id: c.id, word: c.word, kind: KIND[c.key], football: c.football, other: c.other })), clues };
 }
 

@@ -212,9 +212,9 @@ export const roomRepo = {
   },
 
   /** A live match of this user's room in which the user no longer plays (left it, withdrawn, or left out at the gate). */
-  async sittingOutMatchForUser(userId: string): Promise<{ id: string; game: RoomGameId; lobby_id: string | null; left: boolean } | null> {
-    const [row] = await sql<Array<{ id: string; game: RoomGameId; lobby_id: string | null; left: boolean }>>`
-      SELECT m.id, m.game, m.lobby_id, s.left_at IS NOT NULL AS left FROM room_seats s JOIN room_matches m ON m.id = s.match_id
+  async sittingOutMatchForUser(userId: string): Promise<{ id: string; game: RoomGameId; engine_version: number; lobby_id: string | null; left: boolean } | null> {
+    const [row] = await sql<Array<{ id: string; game: RoomGameId; engine_version: number; lobby_id: string | null; left: boolean }>>`
+      SELECT m.id, m.game, m.engine_version, m.lobby_id, s.left_at IS NOT NULL AS left FROM room_seats s JOIN room_matches m ON m.id = s.match_id
       WHERE s.user_id = ${userId} AND NOT s.active AND m.status IN ('ready', 'active')
         AND EXISTS (SELECT 1 FROM lobby_members lm WHERE lm.lobby_id = m.lobby_id AND lm.user_id = ${userId})
       ORDER BY m.created_at DESC LIMIT 1
@@ -343,9 +343,9 @@ export const roomRepo = {
   async connectedLiveSeats(
     limit: number,
     after: { userId: string; matchId: string } | null = null,
-  ): Promise<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId }>> {
-    return sql<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId }>>`
-      SELECT s.user_id, s.match_id, s.presence_gen, m.game FROM room_seats s JOIN room_matches m ON m.id = s.match_id
+  ): Promise<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId; engine_version: number }>> {
+    return sql<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId; engine_version: number }>>`
+      SELECT s.user_id, s.match_id, s.presence_gen, m.game, m.engine_version FROM room_seats s JOIN room_matches m ON m.id = s.match_id
       WHERE m.status IN ('ready', 'active') AND s.active AND s.connected
         ${after ? sql`AND (s.user_id, s.match_id) > (${after.userId}::uuid, ${after.matchId}::uuid)` : sql``}
       ORDER BY s.user_id, s.match_id
@@ -385,17 +385,17 @@ export const roomRepo = {
     return Number(row.ms);
   },
 
-  async livePointerFor(userId: string): Promise<{ asOf: number; live: { id: string; game: RoomGameId; lobby_id: string | null } | null }> {
-    const [row] = await sql<Array<{ as_of: number; id: string | null; game: RoomGameId | null; lobby_id: string | null }>>`
-      SELECT (extract(epoch FROM statement_timestamp()) * 1000)::float8 AS as_of, live.id, live.game, live.lobby_id
+  async livePointerFor(userId: string): Promise<{ asOf: number; live: { id: string; game: RoomGameId; engine_version: number; lobby_id: string | null } | null }> {
+    const [row] = await sql<Array<{ as_of: number; id: string | null; game: RoomGameId | null; engine_version: number | null; lobby_id: string | null }>>`
+      SELECT (extract(epoch FROM statement_timestamp()) * 1000)::float8 AS as_of, live.id, live.game, live.engine_version, live.lobby_id
       FROM (SELECT 1) AS one
       LEFT JOIN LATERAL (
-        SELECT m.id, m.game, m.lobby_id FROM room_seats s JOIN room_matches m ON m.id = s.match_id
+        SELECT m.id, m.game, m.engine_version, m.lobby_id FROM room_seats s JOIN room_matches m ON m.id = s.match_id
         WHERE s.user_id = ${userId} AND s.active AND m.status IN ${sql(LIVE_ROOM_STATUSES as RoomStatus[])}
         LIMIT 1
       ) live ON true
     `;
-    return { asOf: Number(row.as_of), live: row.id ? { id: row.id, game: row.game!, lobby_id: row.lobby_id } : null };
+    return { asOf: Number(row.as_of), live: row.id ? { id: row.id, game: row.game!, engine_version: row.engine_version ?? 1, lobby_id: row.lobby_id } : null };
   },
 
   async dueMatches(limit: number): Promise<Array<{ id: string; phase_token: number }>> {

@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { applyCommand, BOT_CLUE_MS, startMatch, tick, viewOf, type CodenamesCommand, type CodenamesState } from '../../src/modules/room/games/codenames/codenames.engine.js';
 import { codenamesRoomEngine } from '../../src/modules/room/games/codenames/codenames.room.js';
 import {
-  clueOnBoard, clueProblem, clueTerm, codenamesPackSchema, codenamesWordItemSchema, dealWordBoard, rng, wordItemId, type CodenamesWordItem, type WordsPack,
+  botTerms, clueOnBoard, clueProblem, clueTerm, codenamesPackSchema, codenamesWordItemSchema, dealWordBoard, rng, sayable, wordItemId, type CodenamesWordItem, type WordsPack,
 } from '../../src/modules/room/games/codenames/codenames.rules.js';
 import { dealPractice, practiceClues, prepareDeck } from '../../src/modules/codenames/codenames.words.js';
 import type { RoomPoolPick } from '../../src/modules/room/room.engine.js';
 import { clientCanPlay, roomEngineFor } from '../../src/modules/room/room.registry.js';
-import { CODENAMES_WORDS_TOKEN, declaresRoomOptions, roomOptionsKey } from '../../src/realtime/client-games.js';
+import { CODENAMES_WORDS_TOKEN, declaresMatch, declaresRoomOptions, roomOptionsKey } from '../../src/realtime/client-games.js';
 
 // INVENTED words and clues (public repo).
 const word = (w: string, clues: string[], lang: CodenamesWordItem['lang'] = 'en'): CodenamesWordItem =>
@@ -35,7 +35,11 @@ describe('codenames word boards', () => {
     expect(clueTerm('სახლი').id).not.toBe(clueTerm('Кухня').id);
   });
 
-  it('keeps old picture packs valid and refuses a word pack with a wrong split', () => {
+  it('keeps a stored picture pack valid and refuses a word pack with a wrong split', () => {
+    const term = (id: string) => ({ id, label: { en: id, es: id, tr: id, ru: id, ka: id } });
+    const keys = ['t0', 't0', 't0', 't0', 't0', 't0', 't0', 't0', 't1', 't1', 't1', 't1', 't1', 't1', 't1', 'neutral', 'neutral', 'neutral', 'neutral', 'owngoal'];
+    const picture = { starting: 0, seed: 1, cards: keys.map((key, i) => ({ id: `card-${i}`, face: false, key, terms: [term(`t-${i}`)] })) };
+    expect(codenamesPackSchema.safeParse(picture).success).toBe(true);
     const pack = dealWordBoard(deck(25), 'en', rng(4), 5);
     const broken = { ...pack, cards: pack.cards.map((c) => (c.key === 'neutral' ? { ...c, key: 'owngoal' as const } : c)) };
     expect(codenamesPackSchema.safeParse(broken).success).toBe(false);
@@ -51,28 +55,45 @@ describe('codenames word boards', () => {
     expect(clueOnBoard('Red Cross', board)).toBe('CROSS');
     expect(clueOnBoard('Arsenal', board)).toBeNull();
     expect(clueOnBoard('Ba', board)).toBeNull();
+    expect(clueOnBoard('B A R', board)).toBe('BAR');
+    expect(clueOnBoard('S-T-O-N-E-S', board)).toBe('STONES');
     expect(clueProblem('Stone', new Set(), board)).toBe('board');
     expect(clueProblem('Stone', new Set())).toBeNull();
   });
 
-  it('plays a 25-card match: board words refused, a revealed word allowed, index past the board refused', () => {
+  it('plays a 25-card match: board words refused until revealed, every index of 25 usable, none past it', () => {
     const c = dealWordBoard(deck(25), 'en', rng(9), 5);
+    const rival = c.starting === 0 ? 1 : 0;
     let s = startMatch(4, c, NOW, 0);
     expect(s.revealed).toHaveLength(25);
     s = ok(s, c, 0, { type: 'join', team: c.starting, scout: true });
     s = ok(s, c, 1, { type: 'join', team: c.starting, scout: false });
-    s = ok(s, c, 2, { type: 'join', team: c.starting === 0 ? 1 : 0, scout: true });
-    s = ok(s, c, 3, { type: 'join', team: c.starting === 0 ? 1 : 0, scout: false });
+    s = ok(s, c, 2, { type: 'join', team: rival, scout: true });
+    s = ok(s, c, 3, { type: 'join', team: rival, scout: false });
     s = ok(s, c, 0, { type: 'kickoff' });
-    const target = c.cards[0].word;
-    expect(applyCommand(s, c, 0, { type: 'clue', turn: 0, word: target.toLowerCase(), count: 1 }, NOW).error).toBe('board');
+    const own = c.starting === 0 ? 't0' : 't1';
+    const target = c.cards.findIndex((card) => card.key === own);
+    const word = c.cards[target].word;
+    expect(applyCommand(s, c, 0, { type: 'clue', turn: 0, word: word.toLowerCase(), count: 1 }, NOW).error).toBe('board');
     s = ok(s, c, 0, { type: 'clue', turn: 0, word: 'Elsewhere', count: 2 });
-    expect(applyCommand(s, c, 1, { type: 'flip', turn: 0, card: 24 }, NOW).error).toBeUndefined();
+    expect(applyCommand(s, c, 1, { type: 'flip', turn: 0, card: 25 }, NOW).error).toBe('no_card');
+    expect(applyCommand(s, c, 1, { type: 'point', turn: 0, card: 25 }, NOW).error).toBe('no_card');
+    s = ok(s, c, 1, { type: 'flip', turn: 0, card: target });
+    expect(s.revealed[target]).toBe(own);
     const view = viewOf(s, c, 1, 'en') as { board?: string; lang?: string; cards: Array<{ word?: string; key: unknown }> };
     expect(view.board).toBe('words');
     expect(view.lang).toBe('en');
     expect(view.cards).toHaveLength(25);
     expect(view.cards.every((card) => typeof card.word === 'string' && card.key === null)).toBe(true);
+    // The last index is a real card on a word board (a picture board stops at 19).
+    expect(applyCommand(s, c, 1, { type: 'point', turn: s.turnNo, card: 24 }, NOW).error).toBeUndefined();
+    // Once revealed, the word may be said: the rivals take a turn (a neutral flip ends it), then this Scout clues it.
+    s = ok(s, c, 1, { type: 'endTurn', turn: s.turnNo });
+    s = ok(s, c, 2, { type: 'clue', turn: s.turnNo, word: 'Something', count: 1 });
+    const neutral = c.cards.findIndex((card) => card.key === 'neutral');
+    s = ok(s, c, 3, { type: 'flip', turn: s.turnNo, card: neutral });
+    expect(s.turn).toBe(c.starting);
+    expect(applyCommand(s, c, 0, { type: 'clue', turn: s.turnNo, word, count: 1 }, NOW).error).toBeUndefined();
   });
 
   it('lets the bot Scout clue a word board from the deck clues', () => {
@@ -151,6 +172,14 @@ describe('codenames word boards across versions', () => {
     expect(clientCanPlay('codenames', [CODENAMES_WORDS_TOKEN], 2)).toBe(false);
   });
 
+  it('delivers a word match only to tabs that list codenames@2 (a picture match to any Codenames tab)', () => {
+    expect(declaresMatch({ games: ['codenames'] }, { game: 'codenames', engine_version: 2 })).toBe(false);
+    expect(declaresMatch({ games: ['codenames', CODENAMES_WORDS_TOKEN] }, { game: 'codenames', engine_version: 2 })).toBe(true);
+    expect(declaresMatch({ games: ['codenames'] }, { game: 'codenames', engine_version: 1 })).toBe(true);
+    expect(declaresMatch({ games: [] }, { game: 'codenames', engine_version: 1 })).toBe(false);
+    expect(declaresMatch({ games: ['codenames'] }, null)).toBe(false);
+  });
+
   it('asks the lobby for codenames@2 only on a word board', () => {
     const words = { room_game: 'codenames', room_options: { board: 'words', lang: 'en' } };
     expect(declaresRoomOptions({ games: ['codenames'] }, words)).toBe(false);
@@ -171,5 +200,35 @@ describe('codenames word boards across versions', () => {
     const pack = dealWordBoard(items, 'en', rng(2), 1);
     const alpha = pack.cards.find((c) => c.word === 'ALPHA')!;
     expect(alpha.terms.map((t) => t.label.en)).toEqual(['Theme0']);
+  });
+});
+
+describe('codenames word clues and broken decks', () => {
+  it('refuses a deck word that lists the same clue twice', () => {
+    expect(codenamesWordItemSchema.safeParse({ id: wordItemId('en', 'ALPHA'), lang: 'en', word: 'ALPHA', football: 'f', other: 'o', clues: ['Kitchen', ' kitchen'] }).success).toBe(false);
+  });
+
+  it('gives the bot only clues a Scout could say, once each, and never brings a refused one back', () => {
+    const words = ['ALPHA', 'BETA'];
+    const legal = sayable(words);
+    expect(botTerms(['Alphabet', 'One Two Three Four Five', 'Kitchen', 'KITCHEN '], legal).map((t) => t.label.en)).toEqual(['Kitchen']);
+    expect(botTerms(['Alphabet'], legal)).toEqual([]);
+    const items = deck(25);
+    items[0] = word('ALPHA', ['Betamax']);
+    items[1] = word('BETA', ['Theme1', 'Pair1']);
+    const pack = dealWordBoard(items, 'en', rng(2), 1);
+    expect(pack.cards.find((c) => c.word === 'ALPHA')!.terms).toEqual([]);
+    expect(codenamesPackSchema.safeParse(pack).success).toBe(true);
+  });
+
+  it('counts a clue once per card, so the number is the cards it points at', () => {
+    const items = Array.from({ length: 25 }, (_, i) => word(`W${String.fromCharCode(65 + i)}${i}`, i < 5 ? ['Shared', 'Other'] : [`Solo${i}`]));
+    const pack = dealWordBoard(items, 'en', rng(5), 5);
+    expect(pack.cards.every((c) => new Set(c.terms.map((t) => t.id)).size === c.terms.length)).toBe(true);
+  });
+
+  it('has no practice board when no clue can be given on any deal', () => {
+    const one = Array.from({ length: 30 }, (_, i) => word(`W${String.fromCharCode(65 + (i % 26))}${i}`, ['Everything']));
+    expect(dealPractice(one, 'en', rng(1))).toBeNull();
   });
 });

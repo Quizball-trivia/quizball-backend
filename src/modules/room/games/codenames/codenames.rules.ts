@@ -60,12 +60,13 @@ export const codenamesWordItemSchema = z.object({
   football: z.string().trim().min(1).max(200),
   other: z.string().trim().min(1).max(200),
   clues: z.array(label).min(1).max(12),
-}).strict();
+}).strict().refine((item) => new Set(item.clues.map((c) => fold(c))).size === item.clues.length, 'duplicate clue');
 export type CodenamesWordItem = z.infer<typeof codenamesWordItemSchema>;
 export const wordTag = (lang: RoomLocale) => `word-${lang}`;
 
 /** A word card as dealt: its clues become the bot's terms (one room speaks one language, so every label is the clue). */
-const keyedWord = z.object({ id: cardId, word: z.string().min(1).max(MAX_WORD_CHARS), terms: z.array(termSchema).min(1).max(12), key: cardKey }).strict();
+/** `terms` may be empty: a word whose every clue would break the clue rule on its board gets no bot clue. */
+const keyedWord = z.object({ id: cardId, word: z.string().min(1).max(MAX_WORD_CHARS), terms: z.array(termSchema).max(12), key: cardKey }).strict();
 export type KeyedWordCard = z.infer<typeof keyedWord>;
 
 /** A match's board, written once when the room starts: cards in board order with their keys, who starts, and the seed
@@ -131,12 +132,10 @@ export function dealBoard(cards: readonly CodenamesCard[], random: () => number,
 /** Keys 9 / 8 / 7 / 1 over 25 words, the same way (the words' clues become the bot's terms). */
 export function dealWordBoard(items: readonly CodenamesWordItem[], lang: RoomLocale, random: () => number, seed: number): WordsPack {
   if (items.length !== WORDS_BOARD.size) throw new Error(`codenames: a word board needs ${WORDS_BOARD.size} words`);
-  // The bot never says a clue a human could not: none that is, holds or is part of a word on this board.
+  // The bot never says a clue a human could not (the same checks, on this board), and each clue counts once per word.
   const words = items.map((item) => item.word);
-  const cards = items.map((item) => {
-    const legal = item.clues.filter((clue) => clueOnBoard(clue, words) === null);
-    return { id: item.id, word: item.word, terms: (legal.length > 0 ? legal : item.clues).map(clueTerm) };
-  });
+  const legal = sayable(words);
+  const cards = items.map((item) => ({ id: item.id, word: item.word, terms: botTerms(item.clues, legal) }));
   const { starting, keyed: dealt } = keyCards(cards, WORDS_BOARD, random);
   return { kind: 'words', lang, starting, seed, cards: dealt };
 }
@@ -151,6 +150,32 @@ function keyCards<C extends object>(cards: readonly C[], spec: BoardSpec, random
   ];
   const order = shuffled(keys, random);
   return { starting, keyed: shuffled(cards, random).map((c, i) => ({ ...c, key: order[i] })) };
+}
+
+/** Whether a Scout could give a clue with these words on the board (each distinct clue judged once). */
+export function sayable(boardWords: readonly string[]): (clue: string) => boolean {
+  const onBoard = boardMatcher(boardWords);
+  const judged = new Map<string, boolean>();
+  return (clue) => {
+    let ok = judged.get(clue);
+    if (ok === undefined) {
+      ok = clueProblem(clue, new Set()) === null && onBoard(clue) === null;
+      judged.set(clue, ok);
+    }
+    return ok;
+  };
+}
+
+/** A word's clues as bot terms: only the ones a Scout could give on its board (`legal`), once each. */
+export function botTerms(clues: readonly string[], legal: (clue: string) => boolean): Term[] {
+  const seen = new Set<string>();
+  return clues.flatMap((clue) => {
+    if (!legal(clue)) return [];
+    const term = clueTerm(clue);
+    if (seen.has(term.id)) return [];
+    seen.add(term.id);
+    return [term];
+  });
 }
 
 /** Two 32-bit FNV-1a passes in base 36: a stable short id for any script (term and word ids are [a-z0-9-]). */
@@ -199,13 +224,19 @@ export function clueProblem(text: string, used: ReadonlySet<string>, boardWords:
 }
 
 /** The board word a clue gives away: equal to one of its words, or (3+ letters) part of it or containing it. */
-export function clueOnBoard(clue: string, boardWords: readonly string[]): string | null {
-  const parts = tidyClue(clue).split(/[\s\-]+/).map(fold).filter(Boolean);
-  for (const word of boardWords) {
-    const w = fold(word);
-    if (parts.some((p) => p === w || (p.length >= 3 && w.includes(p)) || (w.length >= 3 && p.includes(w)))) return word;
-  }
-  return null;
+export const clueOnBoard = (clue: string, boardWords: readonly string[]): string | null => boardMatcher(boardWords)(clue);
+
+/** `clueOnBoard` for one board, its words folded once. */
+export function boardMatcher(boardWords: readonly string[]): (clue: string) => string | null {
+  const folded = boardWords.map((word) => [word, fold(word)] as const);
+  return (clue) => {
+    // Each word of the clue, and the whole clue run together (so "B A R" is BAR).
+    const parts = [...tidyClue(clue).split(/[\s\-]+/), clue].map(fold).filter(Boolean);
+    for (const [word, w] of folded) {
+      if (parts.some((p) => p === w || (p.length >= 3 && w.includes(p)) || (w.length >= 3 && p.includes(w)))) return word;
+    }
+    return null;
+  };
 }
 
 /** Every spelling of a term: once the bot has said it (in any language), a Scout cannot say it again, and the other way round. */

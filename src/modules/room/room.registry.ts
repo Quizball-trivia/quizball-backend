@@ -43,11 +43,16 @@ const KNOWN_TO_EVERY_CLIENT: ReadonlySet<string> = new Set<RoomGameId>(['aproxim
  */
 const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION]) };
 
-export const clientVersionToken = (game: RoomGameId, version: number) => `${game}@${version}`;
+/** What a client must list besides the game to draw this version of it; null when the game alone is enough. */
+export const clientVersionToken = (game: string | null | undefined, version: number | null | undefined): string | null =>
+  game && version && NEEDS_CLIENT_VERSION[game as RoomGameId]?.has(version) ? `${game}@${version}` : null;
+/** Every such token (a tab that does not list one is kept out of that version's broadcasts). */
+export const CLIENT_VERSION_TOKENS: readonly string[] = Object.entries(NEEDS_CLIENT_VERSION).flatMap(([game, versions]) => [...versions!].map((v) => `${game}@${v}`));
 
-export const clientCanPlay = (game: RoomGameId, listed: readonly string[] | undefined, version = 1): boolean =>
-  (KNOWN_TO_EVERY_CLIENT.has(game) || Boolean(listed?.includes(game)))
-  && (!NEEDS_CLIENT_VERSION[game]?.has(version) || Boolean(listed?.includes(clientVersionToken(game, version))));
+export const clientCanPlay = (game: RoomGameId, listed: readonly string[] | undefined, version = 1): boolean => {
+  const token = clientVersionToken(game, version);
+  return (KNOWN_TO_EVERY_CLIENT.has(game) || Boolean(listed?.includes(game))) && (!token || Boolean(listed?.includes(token)));
+};
 
 export const currentRoomEngine = (game: RoomGameId): AnyRoomEngine => CURRENT[game];
 

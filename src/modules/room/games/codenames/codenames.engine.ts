@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
 import {
-  bestClue, BOARD_SIZE, clueProblem, fold, MAX_CLUE_CHARS, MAX_CLUE_COUNT, other, rng, shuffled, teamKey, termLabel, termSpellings, tidyClue,
+  bestClue, clueProblem, fold, isWordsPack, MAX_BOARD_SIZE, MAX_CLUE_CHARS, MAX_CLUE_COUNT, other, rng, shuffled, teamKey, termLabel, termSpellings, tidyClue,
   type CardKey, type ClueProblem, type CodenamesPack, type Team, type Term,
 } from './codenames.rules.js';
 
@@ -34,7 +34,8 @@ export const ABSENCE = { awayMs: 3 * 60_000, budgetMs: 10 * 60_000 };
 /** The stored pack (the board and its key); nothing else is needed to play. */
 export type CodenamesContent = CodenamesPack;
 
-const cardIndex = z.number().int().min(0).max(BOARD_SIZE - 1);
+/** Bounded by the largest board; `applyCommand` checks it against this match's board. */
+const cardIndex = z.number().int().min(0).max(MAX_BOARD_SIZE - 1);
 const team = z.union([z.literal(0), z.literal(1)]);
 const turnNo = z.number().int().min(0).max(500);
 /** `turn`: the turn the command is for (from the view), so a late or repeated send never lands in the next turn. */
@@ -90,7 +91,7 @@ export interface CodenamesState extends RoomEngineState {
   draws: number;
 }
 
-export type CommandError = ClueProblem | 'not_open' | 'stale' | 'withdrawn' | 'not_host' | 'not_your_turn' | 'not_scout' | 'not_guesser' | 'revealed' | 'need_teams' | 'no_flip';
+export type CommandError = ClueProblem | 'not_open' | 'stale' | 'withdrawn' | 'not_host' | 'not_your_turn' | 'not_scout' | 'not_guesser' | 'revealed' | 'need_teams' | 'no_flip' | 'no_card';
 
 const fill = <T>(n: number, v: T): T[] => Array.from({ length: n }, () => v);
 const ended = (s: CodenamesState) => s.phase === 'over' || s.phase === 'cancelled';
@@ -106,7 +107,7 @@ export function startMatch(seats: number, pack: CodenamesContent, now: number, h
   return {
     phase: 'teams', deadline: now + TEAMS_MS, status: fill(seats, 'in'), host: hostSeat !== null && hostSeat < seats ? hostSeat : 0,
     team: fill<Team | null>(seats, null), scout: fill(seats, false), sawKey: fill(seats, false), botScout: [false, false],
-    starting: pack.starting, turn: pack.starting, turnNo: 0, revealed: fill<CardKey | null>(BOARD_SIZE, null), pointing: fill<number | null>(seats, null),
+    starting: pack.starting, turn: pack.starting, turnNo: 0, revealed: fill<CardKey | null>(pack.cards.length, null), pointing: fill<number | null>(seats, null),
     clue: null, guessesLeft: 0, history: [], used: [], acted: false, idleTurns: 0, winner: null, endedBy: null, draws: 0,
   };
 }
@@ -333,12 +334,14 @@ export function applyCommand(s: CodenamesState, c: CodenamesContent, seat: numbe
   if (command.type === 'clue') {
     if (s.phase !== 'clue') return { state: s, error: 'not_open' };
     if (humanScoutOf(s, s.turn) !== seat) return { state: s, error: 'not_scout' };
-    const problem = clueProblem(command.word, new Set(s.used));
+    const problem = clueProblem(command.word, new Set(s.used), hiddenWords(s, c));
     if (problem) return { state: s, error: problem };
     return { state: giveClue(s, { word: tidyClue(command.word), term: null, count: command.count, bot: false }, now) };
   }
   if (s.phase !== 'guess') return { state: s, error: 'not_open' };
   if (!guessersOf(s, s.turn).includes(seat)) return { state: s, error: 'not_guesser' };
+  const card = command.type === 'endTurn' ? null : command.card;
+  if (card !== null && card >= c.cards.length) return { state: s, error: 'no_card' };
   if (command.type === 'point') {
     if (command.card !== null && s.revealed[command.card] !== null) return { state: s, error: 'revealed' };
     return { state: { ...s, pointing: s.pointing.map((p, i) => (i === seat ? command.card : p)) } };
@@ -359,6 +362,10 @@ export function standings(s: CodenamesState): RoomEngineStanding[] {
     return { seat, points: won ? 1 : 0, roundWins: flips.filter((f) => f.seat === seat && f.key === teamKey(f.team)).length, place: won || s.winner === null ? 1 : 2 };
   });
 }
+
+/** The words still hidden on a word board (none on a picture board). */
+const hiddenWords = (s: CodenamesState, c: CodenamesContent): string[] =>
+  (isWordsPack(c) ? c.cards.flatMap((card, i) => (s.revealed[i] === null ? [card.word] : [])) : []);
 
 const clueView = (clue: GivenClue, locale: RoomLocale) => ({ word: clue.term ? termLabel(clue.term, locale) : clue.word ?? '', count: clue.count, bot: clue.bot });
 
@@ -384,8 +391,11 @@ export function viewOf(s: CodenamesState, c: CodenamesContent, seat: number, loc
     turnNo: s.turnNo,
     /** Team shuffles so far (two draws each). */
     shuffles: s.draws / 2,
+    /** Word boards only (a picture board's view is unchanged): the board kind and its language. */
+    ...(isWordsPack(c) ? { board: 'words' as const, lang: c.lang } : {}),
     cards: c.cards.map((card, i) => ({
       id: card.id,
+      ...('word' in card ? { word: card.word } : {}),
       revealed: s.revealed[i],
       key: showKeys ? card.key : null,
       picks: s.pointing.flatMap((p, pSeat) => (p === i && myTeam !== null && s.team[pSeat] === myTeam ? [pSeat] : [])),

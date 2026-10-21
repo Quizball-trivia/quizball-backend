@@ -1,4 +1,4 @@
-import { declares, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
+import { declares, declaresRoomOptions, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsKey } from '../client-games.js';
 import type { LobbySeenGame, MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
@@ -486,9 +486,11 @@ async function boundLobbyId(socket: QuizballSocket, override?: string): Promise<
 }
 
 /** Whether the room is (still) on the game a Ready or Start was pressed on. Mirrors lobbiesRepo.readyMemberOnGame. */
-function onSeenGame(lobby: { mode: string; game_mode: string | null; duel_game?: string | null; room_game?: string | null }, seen: LobbySeenGame): boolean {
+function onSeenGame(lobby: { mode: string; game_mode: string | null; duel_game?: string | null; room_game?: string | null; room_options?: unknown }, seen: LobbySeenGame): boolean {
   const gameMode = lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
   if (gameMode !== seen.gameMode) return false;
+  // Clients that send the options they showed (older ones do not) are held to them too.
+  if (seen.roomOptions !== undefined && roomOptionsKey(lobby.room_options) !== seen.roomOptions) return false;
   if (gameMode === 'duel') return (lobby.duel_game ?? null) === (seen.duelGame ?? null);
   if (gameMode === 'room_game') return !seen.roomGame || !lobby.room_game || lobby.room_game === seen.roomGame;
   return true;
@@ -550,7 +552,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
         const current = await lobbiesRepo.getById(lobbyId);
         // Only a waiting room has a game to agree on; anything else is handled as before.
         stale = current?.status === 'waiting' && seen !== undefined && !onSeenGame(current, seen);
-        incapable = !!current && !declares(socket.data, current.game_mode === 'room_game' ? current.room_game ?? null : null);
+        incapable = !!current && (!declares(socket.data, current.game_mode === 'room_game' ? current.room_game ?? null : null) || !declaresRoomOptions(socket.data, current));
         // Looked at again after the read: an Un-ready sent meanwhile has been written by now.
         superseded = socket.data.lobbyReadySeq !== readySeq;
         if (!stale && !incapable && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);

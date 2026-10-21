@@ -40,6 +40,11 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   /** Validates a room's options (what the host chose: which clubs, how hard); undefined when they are not this game's. */
   parseOptions(raw: unknown): Options | undefined;
   /**
+   * The version a new match of these options is stored under (default `version`): content an older build cannot read
+   * gets a version that build does not know, so its replicas leave the match to the ones that can run it.
+   */
+  versionFor?(options: Options): number;
+  /**
    * Picks a match's content from the private pool; null when the pool cannot fill a pack. `seats`: the room's members
    * at creation (the ready gate may admit fewer).
    */

@@ -387,7 +387,7 @@ export const roomService = {
       const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
-        game: input.game, engineVersion: engine.version, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
+        game: input.game, engineVersion: engine.versionFor?.(options) ?? engine.version, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
         itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
       return {
@@ -406,7 +406,7 @@ export const roomService = {
       const l = await load(tx, matchId);
       if (!l) return null;
       const me = seatOf(l, userId);
-      if (!clientCanPlay(l.row.game, clientGames)) throw new RoomError('client_outdated', 409);
+      if (!clientCanPlay(l.row.game, clientGames, l.row.engine_version)) throw new RoomError('client_outdated', 409);
       // A ready on a running match (a screen that reconnected) is a presence: an older disconnect check must not win.
       if (l.row.status === 'active') return (await presentLocked(tx, l, userId)) ?? effectsOf(l.row, l.seats, 'active', null);
       if (l.row.status !== 'ready') return effectsOf(l.row, l.seats, l.row.status, null);
@@ -549,7 +549,7 @@ export const roomService = {
       const gate = await settleGate(tx, loaded);
       if (!gate.l) return gate.effects;
       // A socket that cannot draw this game (a tab loaded before it shipped) does not bring the seat back.
-      if (!clientCanPlay(gate.l.row.game, clientGames)) return gate.effects;
+      if (!clientCanPlay(gate.l.row.game, clientGames, gate.l.row.engine_version)) return gate.effects;
       return (await presentLocked(tx, gate.l, userId)) ?? gate.effects;
     }));
   },

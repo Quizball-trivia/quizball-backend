@@ -18,6 +18,8 @@ export interface LobbySeenGame {
   gameMode: LobbyGameMode;
   duelGame?: DuelGameId | null;
   roomGame?: RoomGameId | null;
+  /** The room options the screen showed (`roomOptionsKey`); absent from older clients. */
+  roomOptions?: string | null;
 }
 
 export type LobbyGameMode =

@@ -4,6 +4,7 @@ import { footballGridRoomOptionsSchema } from '../../modules/football-grid/footb
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { currentRoomEngine } from '../../modules/room/room.registry.js';
 import { isRoomGame } from '../../modules/room/room.types.js';
+import { CODENAMES_WORDS_TOKEN, isCodenamesWords, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { releaseLock } from '../locks.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -72,6 +73,18 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
     }
     const next = payload.options === null ? null : (options as Record<string, unknown> | null);
     if (JSON.stringify(next ?? null) === JSON.stringify(lobby.room_options ?? null)) return;
+    // A word board needs every member's screen to draw it (an older tab would show picture art for words).
+    if (isCodenamesWords({ room_game: lobby.room_game, room_options: next })) {
+      if (!(socket.data.games ?? []).includes(CODENAMES_WORDS_TOKEN)) {
+        socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
+        return;
+      }
+      const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+      if (!(await membersCanDraw(io, members.map((m) => m.user_id), lobby.room_game, CODENAMES_WORDS_TOKEN))) {
+        socket.emit('error', { code: NEEDS_RELOAD_CODE, message: MEMBERS_NEED_RELOAD_MESSAGE });
+        return;
+      }
+    }
     if (!(await lobbiesRepo.setRoomOptions(lobbyId, lobby.room_game, next))) {
       socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
       return;

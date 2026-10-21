@@ -39,18 +39,33 @@ export function toCapable(io: QuizballServer, rooms: string | string[], game: st
  * when they come back); a lookup that fails refuses. Relaxed on purpose: one stale tab of a member must not block the
  * room; that tab simply stops receiving the room's updates.
  */
-export async function membersCanDraw(io: QuizballServer, userIds: readonly string[], game: string | null | undefined): Promise<boolean> {
-  if (!isGated(game)) return true;
+export async function membersCanDraw(io: QuizballServer, userIds: readonly string[], game: string | null | undefined, token?: string): Promise<boolean> {
+  if (!isGated(game) && !token) return true;
+  const can = (data: { games?: readonly string[] }) => declares(data, game) && (!token || (data.games ?? []).includes(token));
   try {
     for (const userId of userIds) {
       const sockets = await io.in(`user:${userId}`).fetchSockets();
-      if (sockets.length > 0 && !sockets.some((s) => declares(s.data, game))) return false;
+      if (sockets.length > 0 && !sockets.some((s) => can(s.data))) return false;
     }
     return true;
   } catch {
     return false;
   }
 }
+
+/** A Codenames word board: an older Codenames bundle draws picture cards only (see the room registry's `codenames@2`). */
+export const CODENAMES_WORDS_TOKEN = 'codenames@2';
+export const isCodenamesWords = (lobby: { room_game?: string | null; room_options?: unknown }): boolean =>
+  lobby.room_game === 'codenames' && (lobby.room_options as { board?: unknown } | null | undefined)?.board === 'words';
+/** The tab can draw the room's options (only a word board asks more than the game itself). */
+export const declaresRoomOptions = (data: { games?: readonly string[] } | undefined, lobby: { room_game?: string | null; room_options?: unknown }): boolean =>
+  !isCodenamesWords(lobby) || (data?.games ?? []).includes(CODENAMES_WORDS_TOKEN);
+
+/** Room options as one string (keys sorted; null for none): what a Ready or Start says its screen showed. */
+export const roomOptionsKey = (options: unknown): string | null =>
+  options && typeof options === 'object'
+    ? JSON.stringify(Object.fromEntries(Object.entries(options as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+    : null;
 
 /**
  * The refusal an older tab gets. A code older bundles have no copy for, so they show this message as it is (a mapped code

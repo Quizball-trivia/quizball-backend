@@ -1,4 +1,5 @@
-import { declares, toCapable } from './client-games.js';
+import { declares, isCodenamesWords, toCapable } from './client-games.js';
+import { CODENAMES_WORDS_VERSION } from '../modules/room/games/codenames/codenames.room.js';
 import crypto from 'crypto';
 
 import type { QuizballServer } from './socket-server.js';
@@ -193,8 +194,10 @@ export async function emitLobbyState(
 
   const memberRooms = [...memberUserIds].map((userId) => `user:${userId}`);
   const game = lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null;
+  // A Codenames room on word boards also skips the tabs that cannot draw them (they are told to reload elsewhere).
+  const version = isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : undefined;
   for (const room of memberRooms) {
-    toCapable(io, room, game).emit('lobby:state', state);
+    toCapable(io, room, game, version).emit('lobby:state', state);
   }
   logger.debug(
     {

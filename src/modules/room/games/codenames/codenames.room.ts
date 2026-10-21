@@ -7,7 +7,7 @@ import {
   type CodenamesCommand, type CodenamesContent, type CodenamesState,
 } from './codenames.engine.js';
 import {
-  BOARD_FACES, BOARD_SIZE, codenamesCardSchema, codenamesPackSchema, codenamesWordItemSchema, dealBoard, dealWordBoard, WORDS_BOARD, wordTag,
+  BOARD_FACES, BOARD_SIZE, codenamesCardSchema, codenamesPackSchema, codenamesWordItemSchema, dealBoard, dealWordBoard, fold, WORDS_BOARD, wordTag,
   type CodenamesCard, type CodenamesWordItem,
 } from './codenames.rules.js';
 
@@ -71,12 +71,18 @@ export const codenamesRoomEngine: RoomEngine<CodenamesContent, CodenamesState, C
   absence: ABSENCE,
 };
 
+/** Words drawn beyond the board, so a row that does not parse or repeats a spelling (a hand edit) is skipped, not fatal. */
+const SPARE_WORDS = 5;
+
 /** 25 words of the room's language, preferring words none of the players met lately; null when that deck is short. */
 async function dealWords(pick: Parameters<typeof codenamesRoomEngine.deal>[0], lang: RoomLocale) {
-  const items: CodenamesWordItem[] = (await pick({ easy: WORDS_BOARD.size }, wordTag(lang))).flatMap((item) => {
+  const spellings = new Set<string>();
+  const items: CodenamesWordItem[] = (await pick({ easy: WORDS_BOARD.size + SPARE_WORDS }, wordTag(lang))).flatMap((item) => {
     const word = codenamesWordItemSchema.safeParse(item.payload);
-    return word.success && word.data.lang === lang ? [word.data] : [];
-  });
+    if (!word.success || word.data.lang !== lang || spellings.has(fold(word.data.word))) return [];
+    spellings.add(fold(word.data.word));
+    return [word.data];
+  }).slice(0, WORDS_BOARD.size);
   if (items.length !== WORDS_BOARD.size || new Set(items.map((w) => w.id)).size !== WORDS_BOARD.size) return null;
   const pack = dealWordBoard(items, lang, random, randomInt(0, 0x100000000));
   return { itemIds: items.map((w) => w.id), content: pack };

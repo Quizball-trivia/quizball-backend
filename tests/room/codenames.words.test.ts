@@ -120,9 +120,14 @@ describe('codenames word boards', () => {
       return words.slice(0, wanted.easy).map((payload) => ({ item_id: payload.id, difficulty: 'easy', payload }));
     };
     const dealt = await codenamesRoomEngine.deal(pick, { board: 'words', lang: 'es' }, 4);
-    expect(tags).toEqual(['word-es']);
     expect((dealt?.content as WordsPack).kind).toBe('words');
     expect(dealt?.itemIds).toHaveLength(25);
+    expect(tags).toEqual(['word-es']);
+    // Two rows of one spelling (a hand edit): the spare draws keep the board at 25 distinct words.
+    const twins = [...words.slice(0, 24), { ...words[0], id: wordItemId('es', 'twin-row') }, ...['SPAREA', 'SPAREB', 'SPAREC', 'SPARED', 'SPAREE'].map((w) => word(w, ['Theme1', 'Pair2'], 'es'))];
+    const withTwins: RoomPoolPick = async (wanted) => twins.slice(0, wanted.easy).map((payload) => ({ item_id: payload.id, difficulty: 'easy', payload }));
+    const fair = (await codenamesRoomEngine.deal(withTwins, { board: 'words', lang: 'es' }, 4))?.content as WordsPack;
+    expect(new Set(fair.cards.map((c) => c.word)).size).toBe(25);
     // A short deck (or another language's words) is no board.
     const short: RoomPoolPick = async () => words.slice(0, 24).map((payload) => ({ item_id: payload.id, difficulty: 'easy', payload }));
     expect(await codenamesRoomEngine.deal(short, { board: 'words', lang: 'es' }, 4)).toBeNull();

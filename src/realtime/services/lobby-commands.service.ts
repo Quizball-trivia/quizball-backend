@@ -500,8 +500,8 @@ function onSeenGame(lobby: { mode: string; game_mode: string | null; duel_game?:
  * A tab that cannot draw the room's current game is an old page still bound to it (from before a switch): it is shown
  * an older game, so none of its room controls are taken.
  */
-function refusedOldTab(socket: QuizballSocket, lobby: { game_mode: string | null; room_game?: string | null }): boolean {
-  if (declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null)) return false;
+function refusedOldTab(socket: QuizballSocket, lobby: { game_mode: string | null; room_game?: string | null; room_options?: unknown }): boolean {
+  if (declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null) && declaresRoomOptions(socket.data, lobby)) return false;
   socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
   return true;
 }

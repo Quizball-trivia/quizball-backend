@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { bucketIp } from '../../core/ip-bucket.js';
 import { codenamesWordsController, practiceQuerySchema } from '../../modules/codenames/codenames.words.js';
 import { resolveTrustedClientIp } from '../client-ip.js';
-import { guestHttpBudget } from '../middleware/guest-http-budget.js';
+import { guestHttpBudget, requireGuestHttpEnabled } from '../middleware/guest-http-budget.js';
 import { validate } from '../middleware/validate.js';
 import { createDailyGameRouter } from './daily-game.router.js';
 
@@ -40,5 +40,5 @@ const practiceLimiter = rateLimit({
 export const codenamesRoutes = Router();
 // Hourly per address (shared across replicas, in Redis) on top of the per-process burst limit: a board costs a deal.
 const practiceBudget = guestHttpBudget('codenames-words-address', 600, (req) => bucketIp(resolveTrustedClientIp(req)));
-codenamesRoutes.get('/words/practice', practiceLimiter, practiceBudget, validate({ query: practiceQuerySchema }), codenamesWordsController.practice);
+codenamesRoutes.get('/words/practice', requireGuestHttpEnabled, practiceLimiter, practiceBudget, validate({ query: practiceQuerySchema }), codenamesWordsController.practice);
 codenamesRoutes.use(daily);

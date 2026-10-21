@@ -478,7 +478,7 @@ async function boundLobbyId(socket: QuizballSocket, override?: string): Promise<
   const id = resolveLobbyId(socket, override);
   if (id) return id;
   const open = await lobbiesRepo.findWaitingLobbyForUser(socket.data.user.id);
-  if (!open || !declares(socket.data, open.game_mode === 'room_game' ? open.room_game : null)) return undefined;
+  if (!open || !declares(socket.data, open.game_mode === 'room_game' ? open.room_game : null) || !declaresRoomOptions(socket.data, open)) return undefined;
   socket.data.lobbyId = open.id;
   await socket.join(`lobby:${open.id}`);
   logger.info({ lobbyId: open.id, userId: socket.data.user.id }, 'Lobby binding recovered for a room command');
@@ -537,7 +537,8 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     const guard = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
     // Without the lock the check and the write are best effort (accepted for current pages). A page that cannot draw
     // every game could be readied for one it cannot show if a switch lands in between: it retries instead.
-    if (!guard.acquired && !GATED_ROOM_GAMES.every((game) => declares(socket.data, game))) {
+    // A Ready that names the board it saw (Codenames) is judged only under the lock: a board switch cannot slip between.
+    if (!guard.acquired && (!GATED_ROOM_GAMES.every((game) => declares(socket.data, game)) || seen?.roomOptions !== undefined)) {
       socket.emit('error', { code: 'LOBBY_SETTINGS_LOCKED', message: 'Lobby settings update is busy. Please retry.' });
       return;
     }

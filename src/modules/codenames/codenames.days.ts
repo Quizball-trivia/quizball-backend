@@ -7,8 +7,8 @@ export { addDays, dayEndsAt, releaseDay, RELEASE_TIME_ZONE };
 export const CONTENT_START = '2026-10-20';
 /** The first ranked day: the launch day itself. */
 export const RANKED_START = '2026-10-20';
-/** Days with content, counted from CONTENT_START (to 2026-12-26). */
-export const PUBLISHED_DAYS = 68;
+/** Days with content, counted from CONTENT_START (to 2026-12-24). */
+export const PUBLISHED_DAYS = 66;
 
 export const codenamesCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });
 export const { LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = codenamesCalendar;

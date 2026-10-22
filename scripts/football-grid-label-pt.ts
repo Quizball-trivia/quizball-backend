@@ -402,13 +402,14 @@ async function build(sql: postgres.Sql, dryRun: boolean): Promise<boolean> {
       } catch (error) {
         const message = (error as Error).message;
         console.error(`call failed (attempt ${attempt}): ${message}`);
+        if (error instanceof OutOfBudget) throw error;
         // A burst rate limit (429) passes: wait it out without counting it as a failed attempt.
         if (/\b429\b|Too Many Requests/.test(message) && (rateLimited += 1) <= 40) {
           await new Promise((resolve) => setTimeout(resolve, 90_000));
           attempt -= 1;
           continue;
         }
-        if (error instanceof OutOfBudget || attempt === 3) throw error;
+        if (attempt === 3) throw error;
       }
     }
     for (const item of batch) {

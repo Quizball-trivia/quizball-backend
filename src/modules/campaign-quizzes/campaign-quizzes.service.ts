@@ -558,8 +558,8 @@ function localizedNodes(value: unknown, out: Array<Record<string, unknown>> = []
 
 /**
  * True when every servable question of a set reads fully in `locale`. A text without that key would be served in
- * English (localizedText falls back), so one such text keeps the whole edition off. A question the page skips as
- * invalid is not counted. A bare string prompt (no locale keys) counts as English only.
+ * English (localizedText falls back), so one such text keeps the whole edition off, as does a question that builds in
+ * English but not in `locale`. A question the page skips as invalid in English is not counted. A bare string prompt (no locale keys) counts as English only.
  */
 function questionsHaveLocale(rows: CampaignQuizQuestionRow[], locale: CampaignLocale): boolean {
   const filled = (node: Record<string, unknown>) =>
@@ -572,7 +572,15 @@ function questionsHaveLocale(rows: CampaignQuizQuestionRow[], locale: CampaignLo
       throw error;
     }
     if (localizedNodes(row.prompt).length === 0) return false;
-    return [row.prompt, row.payload, row.explanation].every((value) => localizedNodes(value).every(filled));
+    if (![row.prompt, row.payload, row.explanation].every((value) => localizedNodes(value).every(filled))) return false;
+    // Generated answers can collapse in translation (two English names, one Portuguese): the question must still build.
+    try {
+      toPublicQuestion(row, rows, locale);
+      return true;
+    } catch (error) {
+      if (error instanceof BadRequestError) return false;
+      throw error;
+    }
   });
 }
 

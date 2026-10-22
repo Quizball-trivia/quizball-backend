@@ -199,7 +199,7 @@ async function main() {
         } catch (e) {
           console.error(`call failed (attempt ${attempt}): ${(e as Error).message}`);
           // A burst rate limit (429) passes: wait it out without counting it as the model being down.
-          if (/\b429\b|Too Many Requests/.test((e as Error).message) && (rateLimited += 1) <= 40) {
+          if (!(e instanceof OutOfBudget) && /\b429\b|Too Many Requests/.test((e as Error).message) && (rateLimited += 1) <= 40) {
             await new Promise((resolve) => setTimeout(resolve, 90_000));
             attempt -= 1;
             continue;

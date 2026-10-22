@@ -218,4 +218,25 @@ describe('Brazilian Portuguese campaign quiz edition', () => {
     await expect(campaignQuizzesService.answer('career-path', careerRows[0].id, correct?.id ?? '', undefined, 'pt'))
       .resolves.toMatchObject({ correct: true, explanation: 'Resposta correta: Luis Suárez.' });
   });
+
+  it('has no pt edition when generated answers collapse in Portuguese', async () => {
+    // Four English answers, three Portuguese ones: the Portuguese question cannot get four options.
+    const answers: Array<[string, string]> = [['Netherlands', 'Holanda'], ['Holland', 'Holanda'], ['Spain', 'Espanha'], ['Italy', 'Itália']];
+    const rows = answers.map(([en, pt], index) => ({
+      ...question,
+      id: `6c6b8d10-8b8e-4d12-9a92-00000000010${index + 1}`,
+      display_order: index + 1,
+      prompt: { en: 'Name the team', pt: 'Adivinhe a seleção' },
+      explanation: null,
+      payload: {
+        type: 'career_path' as const,
+        clubs: [{ en: 'Ajax', pt: 'Ajax' }, { en: 'Liverpool', pt: 'Liverpool' }],
+        display_answer: { en, pt },
+        accepted_answers: [en],
+      },
+    }));
+    vi.mocked(campaignQuizzesRepo.getQuestionSet).mockResolvedValue(rows);
+    expect((await campaignQuizzesService.getQuiz('career-path', undefined, 'en')).questions).toHaveLength(4);
+    expect((await campaignQuizzesService.getQuiz('career-path', undefined, 'pt')).editions.pt).toBe(false);
+  });
 });

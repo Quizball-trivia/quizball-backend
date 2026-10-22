@@ -59,6 +59,7 @@ const MODEL = 'gpt-6-luna';
 const LOCALE = opt('locale', 'ru');
 if (LOCALE !== 'ru' && LOCALE !== 'pt') { console.error('ABORT: --locale must be ru or pt'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
+if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';

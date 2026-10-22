@@ -147,13 +147,22 @@ async function main() {
   console.log(`STAGING ${STAGING_REF} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
   // Quiz Page questions are included: their curated English stays untouched, and the write uses the CMS trigger's
   // transaction-local guard, as the audited Spanish import does.
-  const rows = await sql<Array<{ id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string }>>`
-    SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
-    WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
-      ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
-    ORDER BY q.type, q.id`;
+  // Read in pages: one query for the whole pool runs past the role's statement limit and the pooler drops it.
+  type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string };
+  const rows: QuestionRow[] = [];
+  for (let last: { type: string; id: string } | null = null; ;) {
+    const page: QuestionRow[] = await sql<QuestionRow[]>`
+      SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
+        ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
+        ${last ? sql`AND (q.type::text, q.id) > (${last.type}, ${last.id}::uuid)` : sql``}
+      ORDER BY q.type::text, q.id LIMIT 2000`;
+    rows.push(...page);
+    if (page.length < 2000) break;
+    last = { type: page[page.length - 1].type, id: page[page.length - 1].id };
+  }
   // Work items: one per (row, node, locale) with an empty slot.
-  type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };
+  type Item = { key: string; row: QuestionRow; node: Node; locale: string; en: string };
   const items: Item[] = [];
   for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload), ...nodes(r.explanation)].entries()) for (const l of LOCALES) {
     if (empty(n[l])) items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
@@ -232,40 +241,65 @@ async function main() {
   const rowOrder = [...new Set(work.map((w) => w.row.id))];
   for (let c = 0; c < rowOrder.length; c += CHUNK_ROWS) {
     const chunkIds = rowOrder.slice(c, c + CHUNK_ROWS);
-    // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
-    const fresh = new Map((await sql<typeof rows>`
-      SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
-    const chunk: Item[] = [];
-    for (const w of work.filter((x) => fresh.has(x.row.id))) {
-      const row = fresh.get(w.row.id)!;
-      const idx = Number(w.key.split('#')[1]);
-      const node = [...nodes(row.prompt), ...nodes(row.payload), ...nodes(row.explanation)][idx];
-      if (!node || node.en !== w.en || (mode !== 'recheck-copies' && !empty(node[w.locale]))) continue;
-      chunk.push({ ...w, row, node });
-    }
-    const touched = new Map<string, typeof rows[number]>();
-    const snapshot: Array<{ id: string; prompt: Json; payload: Json; explanation: Json }> = [];
-    for (const b of chunk) {
-      const t = cache.get(b.locale)!.get(b.en);
-      if (!t) { failed += 1; continue; }
-      if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
-      if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; filled += 1; }
-    }
-    if (touched.size === 0) continue;
-    // Snapshot before writing: the pre-fill JSON of every row about to change.
-    const snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
-    writeFileSync(snapFile, JSON.stringify(snapshot));
-    await sql.begin(async (tx) => {
-      await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
-      for (const r of touched.values()) {
-        // Optimistic: skip a row someone edited while its chunk was being translated.
-        const done = await tx`UPDATE questions SET prompt = ${tx.json(r.prompt as never)}, explanation = ${r.explanation === null ? null : tx.json(r.explanation as never)}, updated_at = now() WHERE id = ${r.id} AND updated_at::text = ${r.updated_at}`;
-        if (done.count === 0) { skipped += 1; continue; }
-        await tx`UPDATE question_payloads SET payload = ${tx.json(r.payload as never)} WHERE question_id = ${r.id}`;
-        updated += 1;
+    // A dropped pooler connection or a statement timeout rolls the chunk back: read it again and retry (only empty slots are filled).
+    let snapFile = '';
+    for (let attempt = 1; ; attempt += 1) {
+      let chunkFilled = 0, chunkFailed = 0, chunkUpdated = 0, chunkSkipped = 0;
+      try {
+        // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
+        const fresh = new Map((await sql<QuestionRow[]>`
+          SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+          WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
+        const chunk: Item[] = [];
+        for (const w of work.filter((x) => fresh.has(x.row.id))) {
+          const row = fresh.get(w.row.id)!;
+          const idx = Number(w.key.split('#')[1]);
+          const node = [...nodes(row.prompt), ...nodes(row.payload), ...nodes(row.explanation)][idx];
+          if (!node || node.en !== w.en || (mode !== 'recheck-copies' && !empty(node[w.locale]))) continue;
+          chunk.push({ ...w, row, node });
+        }
+        const touched = new Map<string, QuestionRow>();
+        const snapshot: Array<{ id: string; prompt: Json; payload: Json; explanation: Json }> = [];
+        for (const b of chunk) {
+          const t = cache.get(b.locale)!.get(b.en);
+          if (!t) { chunkFailed += 1; continue; }
+          if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
+          if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; chunkFilled += 1; }
+        }
+        if (touched.size === 0) break;
+        // Snapshot before writing: the pre-fill JSON of every row about to change.
+        snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
+        writeFileSync(snapFile, JSON.stringify(snapshot));
+        await sql.begin(async (tx) => {
+          await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
+          await tx`SET LOCAL lock_timeout = '10s'`;
+          await tx`SET LOCAL statement_timeout = '60s'`;
+          // One statement per table for the whole chunk (a round trip per row made a full run take hours).
+          // Optimistic: a row someone edited while its chunk was being prepared keeps its content.
+          const values = [...touched.values()].map((r) => ({ id: r.id, prompt: r.prompt, explanation: r.explanation, payload: r.payload, updated_at: r.updated_at }));
+          const done = await tx<Array<{ id: string }>>`
+            UPDATE questions q SET prompt = v.prompt, explanation = v.explanation, updated_at = now()
+            FROM jsonb_to_recordset(${tx.json(values as never)}) AS v(id uuid, prompt jsonb, explanation jsonb, updated_at text)
+            WHERE q.id = v.id AND q.updated_at::text = v.updated_at RETURNING q.id`;
+          const doneIds = done.map((r) => r.id);
+          if (doneIds.length) {
+            await tx`
+              UPDATE question_payloads p SET payload = v.payload
+              FROM jsonb_to_recordset(${tx.json(values as never)}) AS v(id uuid, payload jsonb)
+              WHERE p.question_id = v.id AND v.id = ANY(${doneIds}::uuid[])`;
+          }
+          chunkUpdated += doneIds.length;
+          chunkSkipped += touched.size - doneIds.length;
+        });
+        filled += chunkFilled; failed += chunkFailed; updated += chunkUpdated; skipped += chunkSkipped;
+        break;
+      } catch (e) {
+        const code = String((e as { code?: string }).code ?? '');
+        if (attempt >= 5 || !['CONNECTION_CLOSED', 'CONNECTION_ENDED', 'CONNECT_TIMEOUT', 'ECONNRESET', '57014', '55P03'].includes(code)) throw e;
+        console.error(`chunk at row ${c}: ${code}, retrying (${attempt}/4)`);
+        await new Promise((resolve) => setTimeout(resolve, 10_000 * attempt));
       }
-    });
+    }
     console.log(`rows ${Math.min(c + CHUNK_ROWS, rowOrder.length)}/${rowOrder.length} · filled ${filled} · failed ${failed} · snapshot ${snapFile}`);
   }
   console.log(`filled ${filled} slots in ${updated} rows (failed: ${failed}, rows skipped as edited meanwhile: ${skipped})`);

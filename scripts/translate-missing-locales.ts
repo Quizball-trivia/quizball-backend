@@ -150,17 +150,20 @@ async function main() {
   // Read in pages: one query for the whole pool runs past the role's statement limit and the pooler drops it.
   type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string };
   const rows: QuestionRow[] = [];
-  for (let last: { type: string; id: string } | null = null; ;) {
+  // Keyset on the id (never changes); one --since cutoff for every page.
+  const since = SINCE_HOURS > 0 ? new Date(Date.now() - SINCE_HOURS * 3_600_000).toISOString() : null;
+  for (let last: string | null = null; ;) {
     const page: QuestionRow[] = await sql<QuestionRow[]>`
       SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
       WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
-        ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
-        ${last ? sql`AND (q.type::text, q.id) > (${last.type}, ${last.id}::uuid)` : sql``}
-      ORDER BY q.type::text, q.id LIMIT 2000`;
+        ${since ? sql`AND q.updated_at > ${since}::timestamptz` : sql``}
+        ${last ? sql`AND q.id > ${last}::uuid` : sql``}
+      ORDER BY q.id LIMIT 2000`;
     rows.push(...page);
     if (page.length < 2000) break;
-    last = { type: page[page.length - 1].type, id: page[page.length - 1].id };
+    last = page[page.length - 1].id;
   }
+  rows.sort((x, y) => (x.type < y.type ? -1 : x.type > y.type ? 1 : 0));
   // Work items: one per (row, node, locale) with an empty slot.
   type Item = { key: string; row: QuestionRow; node: Node; locale: string; en: string };
   const items: Item[] = [];
@@ -243,6 +246,9 @@ async function main() {
     const chunkIds = rowOrder.slice(c, c + CHUNK_ROWS);
     // A dropped pooler connection or a statement timeout rolls the chunk back: read it again and retry (only empty slots are filled).
     let snapFile = '';
+    // After a dropped connection the COMMIT may still have landed: a row whose updated_at moved since the failed
+    // attempt read it is left alone (written by that attempt, or edited by someone else), never written twice.
+    let attempted: Map<string, string> | null = null;
     for (let attempt = 1; ; attempt += 1) {
       let chunkFilled = 0, chunkFailed = 0, chunkUpdated = 0, chunkSkipped = 0;
       try {
@@ -250,6 +256,7 @@ async function main() {
         const fresh = new Map((await sql<QuestionRow[]>`
           SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
           WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
+        if (attempted) for (const [id, seen] of attempted) if (fresh.get(id)?.updated_at !== seen) { fresh.delete(id); chunkSkipped += 1; }
         const chunk: Item[] = [];
         for (const w of work.filter((x) => fresh.has(x.row.id))) {
           const row = fresh.get(w.row.id)!;
@@ -266,8 +273,9 @@ async function main() {
           if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
           if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; chunkFilled += 1; }
         }
-        if (touched.size === 0) break;
+        if (touched.size === 0) { failed += chunkFailed; skipped += chunkSkipped; break; }
         // Snapshot before writing: the pre-fill JSON of every row about to change.
+        attempted = new Map([...touched.values()].map((r) => [r.id, r.updated_at]));
         snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
         writeFileSync(snapFile, JSON.stringify(snapshot));
         await sql.begin(async (tx) => {

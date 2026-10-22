@@ -15,7 +15,12 @@ export interface RoomEngineState {
 export interface RoomEngineStanding { seat: number; points: number; roundWins: number; place: number }
 
 /** What a match may freeze when the gate closes: the admitted seats' languages and the Russian names switched on then. */
-export interface RoomStartContext { locales: readonly RoomLocale[]; russianVersion: string | null }
+export interface RoomStartContext {
+  locales: readonly RoomLocale[];
+  russianVersion: string | null;
+  /** The room host's seat when the gate admitted them (games with a host-only control, e.g. a kick-off); null otherwise. */
+  hostSeat?: number | null;
+}
 
 /**
  * A room game's rules, pure: no I/O, time comes in as `nowMs` (the database clock read under the match lock). The
@@ -34,6 +39,11 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   parseContent(raw: unknown): Content | null;
   /** Validates a room's options (what the host chose: which clubs, how hard); undefined when they are not this game's. */
   parseOptions(raw: unknown): Options | undefined;
+  /**
+   * The version a new match of these options is stored under (default `version`): content an older build cannot read
+   * gets a version that build does not know, so its replicas leave the match to the ones that can run it.
+   */
+  versionFor?(options: Options): number;
   /**
    * Picks a match's content from the private pool; null when the pool cannot fill a pack. `seats`: the room's members
    * at creation (the ready gate may admit fewer).
@@ -64,6 +74,8 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
    * there, or the round's answers are not out yet (a report must never work as a way to test answers).
    */
   refusal?(state: State, content: Content, round: number, text: string): RoomRefusal | null;
+  /** A slow game's own absence allowance (one disconnection, and all of a seat's in a match); the runtime's otherwise. */
+  absence?: { awayMs: number; budgetMs: number };
 }
 
 export interface RoomRefusal { release: string; subject: string | null; resolvedPid: string | null }

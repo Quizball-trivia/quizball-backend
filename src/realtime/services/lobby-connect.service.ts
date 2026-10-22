@@ -1,4 +1,4 @@
-import { declares, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
+import { declares, declaresRoomOptions, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
@@ -37,7 +37,7 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
   if (waitingLobbies.length === 0) return;
 
   const newestLobby = waitingLobbies[0];
-  if (!declares(socket.data, newestLobby.game_mode === 'room_game' ? newestLobby.room_game : null)) {
+  if (!declares(socket.data, newestLobby.game_mode === 'room_game' ? newestLobby.room_game : null) || !declaresRoomOptions(socket.data, newestLobby)) {
     socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
     return;
   }
@@ -80,7 +80,7 @@ export async function rejoinActiveDraftLobbyOnConnect(
   if (activeLobbies.length === 0) return;
 
   const newestLobby = activeLobbies[0];
-  if (!declares(socket.data, newestLobby.game_mode === 'room_game' ? newestLobby.room_game : null)) {
+  if (!declares(socket.data, newestLobby.game_mode === 'room_game' ? newestLobby.room_game : null) || !declaresRoomOptions(socket.data, newestLobby)) {
     socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
     return;
   }

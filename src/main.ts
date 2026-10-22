@@ -24,6 +24,7 @@ import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/na
 import { startTenableDailyReadinessCheck } from './modules/tenable-daily/tenable-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
 import { startFootballRaceReadinessCheck } from './modules/football-race/index.js';
+import { startCodenamesReadinessCheck } from './modules/codenames/index.js';
 import { startDatoFalsoReadinessCheck } from './modules/dato-falso/index.js';
 import { warmRaceTournaments } from './modules/room/games/football-race/football-race.releases.js';
 import { isRoomGameEnabled } from './modules/room/room.config.js';
@@ -119,6 +120,7 @@ startNameChainDailyReadinessCheck();
 startTenableDailyReadinessCheck();
 startMinutoReadinessCheck();
 startFootballRaceReadinessCheck();
+startCodenamesReadinessCheck();
 startDatoFalsoReadinessCheck();
 // A room match must never wait on a cold release load under its lock: load the enabled release at boot.
 if (isRoomGameEnabled('football_race')) {

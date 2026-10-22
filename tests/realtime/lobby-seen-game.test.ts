@@ -159,10 +159,10 @@ describe('Ready names the game it was pressed on', () => {
 
   it('a busy room lock does not lose the Ready of a current page: the game is still checked', async () => {
     acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
-    const socket = socketFor('guest', ['tenable', 'football_race', 'dato_falso']);
+    const socket = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso']);
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
     expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
-    const stale = socketFor('guest', ['tenable', 'football_race', 'dato_falso']);
+    const stale = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso']);
     await setReady(io as never, stale as never, true, { gameMode: 'auction' });
     expect(errorCodes(stale)).toEqual(['LOBBY_SETTINGS_CHANGED']);
     expect(releaseLock).not.toHaveBeenCalledWith('lock:lobby:L', 'guard');

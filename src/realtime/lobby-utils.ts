@@ -1,4 +1,5 @@
-import { declares, toCapable } from './client-games.js';
+import { declares, declaresRoomOptions, isCodenamesWords, toCapable } from './client-games.js';
+import { CODENAMES_WORDS_VERSION } from '../modules/room/games/codenames/codenames.room.js';
 import crypto from 'crypto';
 
 import type { QuizballServer } from './socket-server.js';
@@ -193,8 +194,10 @@ export async function emitLobbyState(
 
   const memberRooms = [...memberUserIds].map((userId) => `user:${userId}`);
   const game = lobby.game_mode === 'room_game' ? lobby.room_game ?? null : null;
+  // A Codenames room on word boards also skips the tabs that cannot draw them (they are told to reload elsewhere).
+  const version = isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : undefined;
   for (const room of memberRooms) {
-    toCapable(io, room, game).emit('lobby:state', state);
+    toCapable(io, room, game, version).emit('lobby:state', state);
   }
   logger.debug(
     {
@@ -220,8 +223,8 @@ export async function attachUserSocketsToLobby(
   const lobby = sockets.length > 0 ? await lobbiesRepo.getById(lobbyId) : null;
   const game = lobby?.game_mode === 'room_game' ? lobby.room_game ?? null : null;
   sockets.forEach((socket) => {
-    // A tab that cannot draw the room's game is not bound to it (the user's other, newer tabs are).
-    if (!declares(socket.data, game)) return;
+    // A tab that cannot draw the room's game (or its word board) is not bound to it (the user's other, newer tabs are).
+    if (!declares(socket.data, game) || (lobby && !declaresRoomOptions(socket.data, lobby))) return;
     if (socket.data.user.id !== userId) {
       socket.leave(`user:${userId}`);
       logger.warn(

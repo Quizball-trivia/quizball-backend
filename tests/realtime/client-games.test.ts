@@ -19,12 +19,18 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'dato_falso'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'codenames@2'] }, join: vi.fn() };
+    const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso'] }, join: vi.fn() };
+    joinLegacyRooms(picturesOnly);
+    // A tab from before Codenames word boards is kept out of version-2 (word) matches only.
+    expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')]]);
     joinLegacyRooms(old);
     joinLegacyRooms(fresh);
     expect(old.join).toHaveBeenCalledWith(legacyRoom('tenable'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('football_race'));
+    expect(old.join).toHaveBeenCalledWith(legacyRoom('codenames'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('dato_falso'));
+    expect(old.join).toHaveBeenCalledWith(legacyRoom('codenames@2'));
     expect(fresh.join).not.toHaveBeenCalled();
   });
 
@@ -35,6 +41,15 @@ describe('client games', () => {
     expect(except).toHaveBeenCalledWith('caps:no-tenable');
     const plain = { marker: true };
     expect(toCapable({ to: () => plain } as never, 'user:1', 'name_chain')).toBe(plain);
+    // A Codenames word match (version 2) also skips the tabs that cannot draw word boards; a picture match does not.
+    const second = vi.fn(() => 'words-only');
+    const chain = { except: vi.fn(() => ({ except: second })) };
+    expect(toCapable({ to: () => chain } as never, 'user:1', 'codenames', 2)).toBe('words-only');
+    expect(chain.except).toHaveBeenCalledWith('caps:no-codenames');
+    expect(second).toHaveBeenCalledWith('caps:no-codenames@2');
+    const one = { except: vi.fn(() => 'pictures') };
+    expect(toCapable({ to: () => one } as never, 'user:1', 'codenames', 1)).toBe('pictures');
+    expect(one.except).toHaveBeenCalledTimes(1);
   });
 
   it('members can draw: each online member needs one capable tab; offline members pass; errors refuse', async () => {

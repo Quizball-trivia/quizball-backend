@@ -14,6 +14,8 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { aproximadoItemSchema, ROOM_GAMES, ROOM_PACK_WANTED, type RoomGameId } from '../src/modules/room/room.types.js';
+import { FACE_TAG, OBJECT_TAG } from '../src/modules/room/games/codenames/codenames.room.js';
+import { BOARD_FACES, BOARD_SIZE, codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { DATO_FALSO_CONTENT_LOCK, DF_PACK_WANTED, dfCardSchema, dfPlayerKeys } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
 import { sharedPlayerItemSchema } from '../src/modules/room/games/shared-player/shared-player.engine.js';
@@ -49,6 +51,8 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   },
   // The name chain has no questions: its one item says which release the matches are played on.
   name_chain: { item: nameChainItemSchema, needs: [{ tag: '', difficulty: 'easy', n: 1 }] },
+  // One item per picture card; a board takes 6 caricatures and 14 other cards, so the pool needs several boards of each.
+  codenames: { item: codenamesCardSchema, needs: [{ tag: FACE_TAG, difficulty: 'easy', n: BOARD_FACES * 4 }, { tag: OBJECT_TAG, difficulty: 'easy', n: (BOARD_SIZE - BOARD_FACES) * 4 }] },
   // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
   dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
 };

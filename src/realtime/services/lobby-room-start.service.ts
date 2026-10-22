@@ -38,6 +38,6 @@ export async function startRoomMatchFromLobby(
 
   await emitLobbyState(io, input.lobbyId).catch((error) => logger.warn({ error, lobbyId: input.lobbyId }, 'Room state delivery failed'));
   await warmupRealtimeService.cleanupLobby(input.lobbyId).catch(() => {});
-  await roomRealtimeService.announce(io, effects, input.roomGame);
+  await roomRealtimeService.announce(io, effects, input.roomGame, effects.engineVersion);
   logger.info({ lobbyId: input.lobbyId, matchId: effects.matchId, game: input.roomGame, players: members.length, by: socket.data.user.id }, 'Room match created');
 }

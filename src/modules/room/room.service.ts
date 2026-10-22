@@ -17,7 +17,7 @@ export const ROOM_AWAY_BUDGET_MS = 60_000;
 export const ROOM_OUTAGE_GRACE_MS = 5_000;
 export const ROOM_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const ROOM_RETENTION_DAYS = 30;
-export const ROOM_MAX_SEATS = 6;
+export const ROOM_MAX_SEATS = 8;
 /** A scheduler deadline missed by more than this is an outage (server or database stalled), not a slow timer. */
 const ROOM_OUTAGE_MS = 5_000;
 
@@ -31,6 +31,8 @@ export interface RoomEffects {
   finished: boolean;
   /** A new match only: database time just before its creation committed (fences stale "no live seat" answers). */
   startedAtMs?: number;
+  /** A new match only: its engine version (announced only to tabs that can draw it). */
+  engineVersion?: number;
 }
 
 export type RoomCommandResult = { ok: true } | { ok: false; code: string };
@@ -277,7 +279,9 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   // Only a version this process holds (prepare warmed it): nothing is loaded under the match lock.
   const active = knownActiveRussianVersion();
   const russianVersion = active && heldRussianIndex(active) ? active : null;
-  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion });
+  const host = await roomRepo.lobbyHost(tx, l.row.lobby_id);
+  const hostSeat = admitted.find((a) => a.userId === host)?.seat ?? null;
+  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion, hostSeat });
   // What the match froze (its Russian names) is attached before anything reads it.
   l = { ...l, content: await hydrated(l.engine, l.content, state, tx) };
   markHydrated(l.row.id, l.content);
@@ -286,7 +290,7 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   if (away.length > 0) {
     const seatOf = new Map(admitted.map((a) => [a.userId, a.seat]));
     state = l.engine.seatsChanged(state, away.map((s): RoomSeatChange => ({ seat: seatOf.get(s.user_id)!, change: 'away' })), nowMs);
-    for (const s of away) await roomRepo.setAbsenceDeadline(tx, l.row.id, s.user_id, new Date(nowMs + absenceWindow(s)));
+    for (const s of away) await roomRepo.setAbsenceDeadline(tx, l.row.id, s.user_id, new Date(nowMs + absenceWindow(s, l.engine)));
   }
   return persist(tx, l, state, true);
 }
@@ -330,7 +334,9 @@ async function presentLocked(tx: TransactionSql, l: Loaded, userId: string): Pro
   return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'back' }], nowMs), nowMs));
 }
 
-const absenceWindow = (s: RoomSeatRow) => Math.max(0, Math.min(ROOM_AWAY_MS, ROOM_AWAY_BUDGET_MS - s.absence_used_ms));
+/** How long this absence may last: the game's own allowance (a slow game gives more), else the runtime's. */
+const absenceWindow = (s: RoomSeatRow, engine: AnyRoomEngine) =>
+  Math.max(0, Math.min(engine.absence?.awayMs ?? ROOM_AWAY_MS, (engine.absence?.budgetMs ?? ROOM_AWAY_BUDGET_MS) - s.absence_used_ms));
 
 function seatOf(l: Loaded, userId: string): RoomSeatRow {
   const me = l.seats.find((s) => s.user_id === userId);
@@ -352,6 +358,8 @@ function projectSnapshot(row: RoomMatchRow, seats: RoomSeatRow[], state: EngineS
     matchId: row.id,
     lobbyId: row.lobby_id,
     game: row.game,
+    /** The match's engine version: a version an older bundle cannot draw is delivered only to tabs that declare it. */
+    engineVersion: row.engine_version,
     stateVersion: row.state_version,
     status: row.status,
     phaseToken: row.phase_token,
@@ -378,17 +386,18 @@ export const roomService = {
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);
+    const engineVersion = engine.versionFor?.(options) ?? engine.version;
     const created = await roomRepo.withTx(async (tx) => {
       // The room must still hold the options this content was dealt for (the host may have changed them meanwhile).
       const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
-        game: input.game, engineVersion: engine.version, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
+        game: input.game, engineVersion, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
         itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
       return {
         matchId: created.id, lobbyId: input.lobbyId, userIds: input.players.map((p) => p.userId), status: 'ready',
-        timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false,
+        timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false, engineVersion,
       } satisfies RoomEffects;
     });
     // After the commit, before anyone is told: a "no live seat" read stamped earlier than this cannot know the match.
@@ -402,7 +411,7 @@ export const roomService = {
       const l = await load(tx, matchId);
       if (!l) return null;
       const me = seatOf(l, userId);
-      if (!clientCanPlay(l.row.game, clientGames)) throw new RoomError('client_outdated', 409);
+      if (!clientCanPlay(l.row.game, clientGames, l.row.engine_version)) throw new RoomError('client_outdated', 409);
       // A ready on a running match (a screen that reconnected) is a presence: an older disconnect check must not win.
       if (l.row.status === 'active') return (await presentLocked(tx, l, userId)) ?? effectsOf(l.row, l.seats, 'active', null);
       if (l.row.status !== 'ready') return effectsOf(l.row, l.seats, l.row.status, null);
@@ -526,7 +535,7 @@ export const roomService = {
       if (advanced.state.status[me.seat!] === 'withdrawn' || l.engine.terminal(advanced.state)) {
         return advanced.changed ? persist(tx, l, advanced.state) : gate.effects;
       }
-      await roomRepo.markAbsent(tx, l.row.id, userId, new Date(l.row.now.getTime() + absenceWindow(me)));
+      await roomRepo.markAbsent(tx, l.row.id, userId, new Date(l.row.now.getTime() + absenceWindow(me, l.engine)));
       return persist(tx, l, runClock(l, l.engine.seatsChanged(advanced.state, [{ seat: me.seat!, change: 'away' }], l.row.now.getTime()), l.row.now.getTime()));
     }));
   },
@@ -545,7 +554,7 @@ export const roomService = {
       const gate = await settleGate(tx, loaded);
       if (!gate.l) return gate.effects;
       // A socket that cannot draw this game (a tab loaded before it shipped) does not bring the seat back.
-      if (!clientCanPlay(gate.l.row.game, clientGames)) return gate.effects;
+      if (!clientCanPlay(gate.l.row.game, clientGames, gate.l.row.engine_version)) return gate.effects;
       return (await presentLocked(tx, gate.l, userId)) ?? gate.effects;
     }));
   },

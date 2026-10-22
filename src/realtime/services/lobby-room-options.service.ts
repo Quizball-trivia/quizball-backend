@@ -4,6 +4,7 @@ import { footballGridRoomOptionsSchema } from '../../modules/football-grid/footb
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { currentRoomEngine } from '../../modules/room/room.registry.js';
 import { isRoomGame } from '../../modules/room/room.types.js';
+import { CODENAMES_WORDS_TOKEN, isCodenamesWords, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE } from '../client-games.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { releaseLock } from '../locks.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -21,6 +22,22 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
   if (!lobbyId) {
     socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });
     return;
+  }
+  // A word board needs every member's screen to draw it (an older tab would show picture art for words). The
+  // cross-replica socket lookup can take seconds, so it runs before the room lock; under the lock the member list it
+  // checked must still be the room's (a join in between refuses the change).
+  let checkedMembers: string | null = null;
+  if (isCodenamesWords({ room_game: 'codenames', room_options: payload.options })) {
+    if (!(socket.data.games ?? []).includes(CODENAMES_WORDS_TOKEN)) {
+      socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
+      return;
+    }
+    const memberIds = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((m) => m.user_id).sort();
+    if (!(await membersCanDraw(io, memberIds, 'codenames', CODENAMES_WORDS_TOKEN))) {
+      socket.emit('error', { code: NEEDS_RELOAD_CODE, message: MEMBERS_NEED_RELOAD_MESSAGE });
+      return;
+    }
+    checkedMembers = memberIds.join(',');
   }
   const lock = await acquireLobbyLockWithRetry(lobbyId, 3000, LOCK_WAIT_MS);
   if (!lock.acquired || !lock.token) {
@@ -72,6 +89,14 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
     }
     const next = payload.options === null ? null : (options as Record<string, unknown> | null);
     if (JSON.stringify(next ?? null) === JSON.stringify(lobby.room_options ?? null)) return;
+    if (isCodenamesWords({ room_game: lobby.room_game, room_options: next })) {
+      const members = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((m) => m.user_id).sort().join(',');
+      if (checkedMembers === null || members !== checkedMembers) {
+        socket.emit('error', { code: 'LOBBY_SETTINGS_CHANGED', message: 'The room changed. Check it and try again.' });
+        await emitLobbyState(io, lobbyId);
+        return;
+      }
+    }
     if (!(await lobbiesRepo.setRoomOptions(lobbyId, lobby.room_game, next))) {
       socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
       return;

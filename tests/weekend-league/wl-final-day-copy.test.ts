@@ -81,7 +81,7 @@ describe('Weekend League notifications in every app language', () => {
     expect(reminder.bodyTr).toContain('Gürcistan saatiyle 21:50 itibarıyla açılıyor');
   });
 
-  it('every wave stores all four languages, so Spanish and Turkish players never fall back to English', async () => {
+  it('every wave stores all five languages, so Spanish, Turkish and Portuguese players never fall back to English', async () => {
     const waves = await import('../../src/modules/weekend-league/wl-notifications.js');
     const contents = [
       waves.ENTRY_OPEN_CONTENT, waves.REMINDER_1H_CONTENT, waves.REMINDER_30M_CONTENT, waves.CHECKIN_OPEN_CONTENT,
@@ -91,9 +91,10 @@ describe('Weekend League notifications in every app language', () => {
     for (const content of contents) {
       const { title, body } = waves.wlLocalized(content);
       for (const field of [title, body]) {
-        expect(Object.keys(field).sort()).toEqual(['en', 'es', 'ka', 'tr']);
+        expect(Object.keys(field).sort()).toEqual(['en', 'es', 'ka', 'pt', 'tr']);
         for (const text of Object.values(field)) expect(text.trim().length).toBeGreaterThan(5);
         expect(field.es).not.toBe(field.en);
+        expect(field.pt).not.toBe(field.en);
         expect(field.tr).not.toBe(field.en);
       }
     }

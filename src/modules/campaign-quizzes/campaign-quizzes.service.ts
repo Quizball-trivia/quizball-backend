@@ -75,18 +75,20 @@ type CampaignPayload = Extract<
   ParsedQuestionPayload,
   { type: 'mcq_single' | 'true_false' | 'clue_chain' | 'career_path' }
 >;
-type CampaignLocale = 'en' | 'ka' | 'es' | 'ru';
+type CampaignLocale = 'en' | 'ka' | 'es' | 'ru' | 'pt';
 
-/** The es_* / ru_* page column for a translated edition; null means "use the English column". */
-function editionText<T>(locale: CampaignLocale, es: T | null, ru: T | null): T | null {
+/** The es_* / ru_* / pt_* page column for a translated edition; null means "use the English column". */
+function editionText<T>(locale: CampaignLocale, es: T | null, ru: T | null, pt: T | null): T | null {
   if (locale === 'es') return es;
   if (locale === 'ru') return ru;
+  if (locale === 'pt') return pt;
   return null;
 }
 
 const CORRECT_ANSWER_PREFIX: Partial<Record<CampaignLocale, string>> = {
   es: 'Respuesta correcta',
   ru: 'Правильный ответ',
+  pt: 'Resposta correta',
 };
 const CAMPAIGN_QUIZ_QUESTION_LIMIT = 10;
 const CAMPAIGN_QUIZ_DIFFICULTY_LIMITS = { easy: 4, medium: 3, hard: 3 } as const;
@@ -273,28 +275,28 @@ function toPageContent(
   locale: CampaignLocale = 'en',
 ): CampaignQuizPageContentResponse | null {
   if (!hasManagedContent(quiz)) return null;
-  const tr = <T>(es: T | null, ru: T | null) => editionText(locale, es, ru);
-  const translatedBlocks = tr(quiz.es_about_blocks, quiz.ru_about_blocks);
+  const tr = <T>(es: T | null, ru: T | null, pt: T | null) => editionText(locale, es, ru, pt);
+  const translatedBlocks = tr(quiz.es_about_blocks, quiz.ru_about_blocks, quiz.pt_about_blocks);
   const aboutBlocks = translatedBlocks?.length ? translatedBlocks : quiz.about_blocks;
   return {
     category: quiz.page_category,
-    h1: tr(quiz.es_h1, quiz.ru_h1) ?? quiz.h1,
-    lede: interpolateCount(tr(quiz.es_lede, quiz.ru_lede) ?? quiz.lede, count),
-    about_heading: tr(quiz.es_about_heading, quiz.ru_about_heading) ?? quiz.about_heading ?? '',
+    h1: tr(quiz.es_h1, quiz.ru_h1, quiz.pt_h1) ?? quiz.h1,
+    lede: interpolateCount(tr(quiz.es_lede, quiz.ru_lede, quiz.pt_lede) ?? quiz.lede, count),
+    about_heading: tr(quiz.es_about_heading, quiz.ru_about_heading, quiz.pt_about_heading) ?? quiz.about_heading ?? '',
     about_blocks: aboutBlocks.map((block) => ({
       ...block,
       text: interpolateCount(block.text, count),
     })),
-    score_cta: interpolateCount(tr(quiz.es_score_cta, quiz.ru_score_cta) ?? quiz.score_cta, count),
-    footer_banner_text: tr(quiz.es_footer_banner_text, quiz.ru_footer_banner_text) ?? quiz.footer_banner_text ?? '',
-    footer_button_label: tr(quiz.es_footer_button_label, quiz.ru_footer_button_label) ?? quiz.footer_button_label,
+    score_cta: interpolateCount(tr(quiz.es_score_cta, quiz.ru_score_cta, quiz.pt_score_cta) ?? quiz.score_cta, count),
+    footer_banner_text: tr(quiz.es_footer_banner_text, quiz.ru_footer_banner_text, quiz.pt_footer_banner_text) ?? quiz.footer_banner_text ?? '',
+    footer_button_label: tr(quiz.es_footer_button_label, quiz.ru_footer_button_label, quiz.pt_footer_button_label) ?? quiz.footer_button_label,
     hero_image_url: publicCampaignQuizImageUrl(quiz.hero_image_url),
-    hero_image_alt: tr(quiz.es_hero_image_alt, quiz.ru_hero_image_alt) ?? quiz.hero_image_alt ?? '',
-    seo_title: tr(quiz.es_seo_title, quiz.ru_seo_title) ?? quiz.seo_title,
-    meta_description: interpolateCount(tr(quiz.es_meta_description, quiz.ru_meta_description) ?? quiz.meta_description, count),
+    hero_image_alt: tr(quiz.es_hero_image_alt, quiz.ru_hero_image_alt, quiz.pt_hero_image_alt) ?? quiz.hero_image_alt ?? '',
+    seo_title: tr(quiz.es_seo_title, quiz.ru_seo_title, quiz.pt_seo_title) ?? quiz.seo_title,
+    meta_description: interpolateCount(tr(quiz.es_meta_description, quiz.ru_meta_description, quiz.pt_meta_description) ?? quiz.meta_description, count),
     og_image_url: publicCampaignQuizImageUrl(quiz.og_image_url),
-    og_image_alt: tr(quiz.es_og_image_alt, quiz.ru_og_image_alt) ?? quiz.og_image_alt,
-    breadcrumb_label: tr(quiz.es_breadcrumb_label, quiz.ru_breadcrumb_label) ?? quiz.breadcrumb_label,
+    og_image_alt: tr(quiz.es_og_image_alt, quiz.ru_og_image_alt, quiz.pt_og_image_alt) ?? quiz.og_image_alt,
+    breadcrumb_label: tr(quiz.es_breadcrumb_label, quiz.ru_breadcrumb_label, quiz.pt_breadcrumb_label) ?? quiz.breadcrumb_label,
     locale_mode: quiz.locale_mode,
     ka_seo_title: quiz.ka_seo_title,
     ka_meta_description: quiz.ka_meta_description
@@ -304,9 +306,9 @@ function toPageContent(
     ka_lede: quiz.ka_lede ? interpolateCount(quiz.ka_lede, count) : null,
     related_pages: related.map((page) => ({
       slug: page.slug,
-      breadcrumb_label: tr(page.es_breadcrumb_label, page.ru_breadcrumb_label) ?? page.breadcrumb_label,
+      breadcrumb_label: tr(page.es_breadcrumb_label, page.ru_breadcrumb_label, page.pt_breadcrumb_label) ?? page.breadcrumb_label,
       hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-      hero_image_alt: tr(page.es_hero_image_alt, page.ru_hero_image_alt) ?? page.hero_image_alt ?? '',
+      hero_image_alt: tr(page.es_hero_image_alt, page.ru_hero_image_alt, page.pt_hero_image_alt) ?? page.hero_image_alt ?? '',
     })),
     updated_at: quiz.updated_at,
   };
@@ -513,27 +515,87 @@ async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaig
   };
 }
 
-type EditionFields = Pick<CampaignQuizRow, 'locale_mode' | 'es_h1' | 'es_seo_title' | 'es_meta_description' | 'ru_h1' | 'ru_seo_title' | 'ru_meta_description'>;
-/** A language edition exists when its page copy does; the hub lists a page and its page offers a language by this rule. */
+type EditionFields = Pick<
+  CampaignQuizRow,
+  'locale_mode' | 'es_h1' | 'es_seo_title' | 'es_meta_description' | 'ru_h1' | 'ru_seo_title' | 'ru_meta_description'
+  | 'pt_h1' | 'pt_seo_title' | 'pt_meta_description'
+>;
+/**
+ * A language edition exists when its page copy does; the hub lists a page and its page offers a language by this rule.
+ * The pt edition also needs its questions in pt (`questionsHaveLocale`), which the callers check with the set in hand.
+ */
 function hasEdition(page: EditionFields, locale: CampaignLocale): boolean {
   if (locale === 'ka') return page.locale_mode === 'en_ka';
   if (locale === 'es') return Boolean(page.es_h1 && page.es_seo_title && page.es_meta_description);
   if (locale === 'ru') return Boolean(page.ru_h1 && page.ru_seo_title && page.ru_meta_description);
+  if (locale === 'pt') return Boolean(page.pt_h1 && page.pt_seo_title && page.pt_meta_description);
   return true;
+}
+
+const TEXT_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt'];
+/** A translations map ({en, es, …}), with or without English: every value a string, at least one a locale key. */
+const isTextMap = (node: Record<string, unknown>): boolean =>
+  TEXT_LOCALES.some((key) => typeof node[key] === 'string') && Object.values(node).every((entry) => typeof entry === 'string');
+
+/** Every translations map under a JSON value: prompts, options, clues, display answers, explanations. */
+function localizedNodes(value: unknown, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+  if (typeof value === 'string') {
+    try {
+      return localizedNodes(JSON.parse(value), out);
+    } catch {
+      return out;
+    }
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => localizedNodes(entry, out));
+  } else if (value && typeof value === 'object') {
+    const node = value as Record<string, unknown>;
+    if (isTextMap(node)) out.push(node);
+    else Object.values(node).forEach((entry) => localizedNodes(entry, out));
+  }
+  return out;
+}
+
+/**
+ * True when every servable question of a set reads fully in `locale`. A text without that key would be served in
+ * English (localizedText falls back), so one such text keeps the whole edition off. A question the page skips as
+ * invalid is not counted. A bare string prompt (no locale keys) counts as English only.
+ */
+function questionsHaveLocale(rows: CampaignQuizQuestionRow[], locale: CampaignLocale): boolean {
+  const filled = (node: Record<string, unknown>) =>
+    typeof node[locale] === 'string' && (node[locale] as string).trim().length > 0;
+  return rows.every((row) => {
+    try {
+      toPublicQuestion(row, rows, 'en');
+    } catch (error) {
+      if (error instanceof BadRequestError) return true;
+      throw error;
+    }
+    if (localizedNodes(row.prompt).length === 0) return false;
+    return [row.prompt, row.payload, row.explanation].every((value) => localizedNodes(value).every(filled));
+  });
 }
 
 export const campaignQuizzesService = {
   async listPublished(locale: CampaignLocale): Promise<CampaignQuizHubPageResponse[]> {
     const pages = await campaignQuizzesRepo.listPublishedPages();
+    let questionsComplete = (_slug: string) => true;
+    if (locale === 'pt') {
+      const bySlug = new Map<string, CampaignQuizQuestionRow[]>();
+      for (const row of await campaignQuizzesRepo.listPublishedPageQuestions()) {
+        bySlug.set(row.page_slug, [...(bySlug.get(row.page_slug) ?? []), row]);
+      }
+      questionsComplete = (slug) => questionsHaveLocale(bySlug.get(slug) ?? [], 'pt');
+    }
     return pages
-      .filter((page) => hasEdition(page, locale))
+      .filter((page) => hasEdition(page, locale) && questionsComplete(page.slug))
       .map((page) => ({
         slug: page.slug,
         category: page.page_category,
-        h1: editionText(locale, page.es_h1, page.ru_h1) ?? page.h1,
-        breadcrumb_label: editionText(locale, page.es_breadcrumb_label, page.ru_breadcrumb_label) ?? page.breadcrumb_label,
+        h1: editionText(locale, page.es_h1, page.ru_h1, page.pt_h1) ?? page.h1,
+        breadcrumb_label: editionText(locale, page.es_breadcrumb_label, page.ru_breadcrumb_label, page.pt_breadcrumb_label) ?? page.breadcrumb_label,
         hero_image_url: publicCampaignQuizImageUrl(page.hero_image_url),
-        hero_image_alt: editionText(locale, page.es_hero_image_alt, page.ru_hero_image_alt) ?? page.hero_image_alt ?? '',
+        hero_image_alt: editionText(locale, page.es_hero_image_alt, page.ru_hero_image_alt, page.pt_hero_image_alt) ?? page.hero_image_alt ?? '',
         locale_mode: page.locale_mode,
         updated_at: page.updated_at,
       }));
@@ -578,7 +640,7 @@ export const campaignQuizzesService = {
 
     return {
       slug: quiz.slug,
-      title: editionText(locale, quiz.es_title, quiz.ru_title) ?? quiz.title,
+      title: editionText(locale, quiz.es_title, quiz.ru_title, quiz.pt_title) ?? quiz.title,
       total_questions: questions.length,
       difficulty_counts: {
         easy: questions.filter((question) => question.difficulty === 'easy').length,
@@ -588,7 +650,12 @@ export const campaignQuizzesService = {
       questions,
       rating: normalizeRating(rating),
       page: toPageContent(quiz, related, questions.length, locale),
-      editions: { ka: hasEdition(quiz, 'ka'), es: hasEdition(quiz, 'es'), ru: hasEdition(quiz, 'ru') },
+      editions: {
+        ka: hasEdition(quiz, 'ka'),
+        es: hasEdition(quiz, 'es'),
+        ru: hasEdition(quiz, 'ru'),
+        pt: hasEdition(quiz, 'pt') && questionsHaveLocale(rows, 'pt'),
+      },
     };
   },
 

@@ -241,11 +241,12 @@ export const auctionMatchmakingService = {
       try {
         await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
       } catch (error) {
-        // Russian cards went away since availability was cached: read it again; English stands in when they are gone.
-        if (input.locale !== 'ru' || !(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
+        // Optional-language cards went away since availability was cached: read it again; English stands in when they are gone.
+        const wanted = input.locale;
+        if (!auctionContentService.isOptionalContentLocale(wanted) || !(error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) throw error;
         auctionContentService.forgetContentLocale();
-        input.locale = await auctionContentService.resolveContentLocale('ru');
-        if (input.locale === 'ru') throw error;
+        input.locale = await auctionContentService.resolveContentLocale(wanted);
+        if (input.locale === wanted) throw error;
         await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
       }
     } catch (error) {
@@ -722,7 +723,7 @@ async function startClaimedGroup(
       : {}),
   }));
 
-  // Resolved again at the start, not when queued: Russian cards unpublished meanwhile mean English cards, retries included.
+  // Resolved again at the start, not when queued: optional-language cards unpublished meanwhile mean English cards, retries included.
   let locale: AuctionContentLocale = oldest.locale;
   try {
     locale = await auctionContentService.playableContentLocale(oldest.locale);
@@ -789,7 +790,7 @@ async function startClaimedGroup(
     // retries exhausted) must NOT eject users from the queue — the searches
     // were already claimed, so REQUEUE them with a fresh fill timer and only
     // give up (with a client-visible error) after repeated failures.
-    if (locale === 'ru' && (error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) {
+    if (auctionContentService.isOptionalContentLocale(locale) && (error instanceof AuctionContentUnavailableError || error instanceof AuctionStartingPriceUnavailableError)) {
       auctionContentService.forgetContentLocale();
     }
     const { requeued, dropped } = await requeueFailedClaim(claim, null);
@@ -1593,7 +1594,7 @@ function searchKey(searchId: string): string {
 }
 
 function isAuctionLocale(value: string | undefined): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt';
 }
 
 function isFormationName(value: string | undefined): value is FormationName {

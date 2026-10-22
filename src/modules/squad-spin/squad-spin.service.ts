@@ -36,6 +36,7 @@ export interface ReelView {
   label_en: string;
   label_ka: string;
   label_ru: string | null;
+  label_pt: string | null;
   asset_key: string | null;
 }
 export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; image_url: string | null }
@@ -73,11 +74,11 @@ export interface SquadSpinAnswerResult {
   state: SquadSpinPublicState;
 }
 
-const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: string }> = {
-  GK: { en: 'Goalkeeper', ka: 'მეკარე', ru: 'Вратарь' },
-  DEF: { en: 'Defender', ka: 'მცველი', ru: 'Защитник' },
-  MID: { en: 'Midfielder', ka: 'ნახევარმცველი', ru: 'Полузащитник' },
-  FWD: { en: 'Forward', ka: 'თავდამსხმელი', ru: 'Нападающий' },
+const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: string; pt: string }> = {
+  GK: { en: 'Goalkeeper', ka: 'მეკარე', ru: 'Вратарь', pt: 'Goleiro' },
+  DEF: { en: 'Defender', ka: 'მცველი', ru: 'Защитник', pt: 'Defensor' },
+  MID: { en: 'Midfielder', ka: 'ნახევარმცველი', ru: 'Полузащитник', pt: 'Meia' },
+  FWD: { en: 'Forward', ka: 'თავდამსხმელი', ru: 'Нападающий', pt: 'Atacante' },
 };
 
 const stepsOf = (row: SquadSpinRoundRow) => row.steps_bp as unknown as StepsSnapshot;
@@ -91,9 +92,9 @@ async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<
   const view = (id: string): ReelView => {
     const c = byId.get(id);
     if (!c) throw new AppError('Squad Spin combo references unknown criterion', 500);
-    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, label_ru: c.label_ru, asset_key: c.asset_key };
+    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, label_ru: c.label_ru, label_pt: c.label_pt, asset_key: c.asset_key };
   };
-  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, label_ru: POSITION_LABELS[combo.position_group].ru, asset_key: null };
+  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, label_ru: POSITION_LABELS[combo.position_group].ru, label_pt: POSITION_LABELS[combo.position_group].pt, asset_key: null };
   return [view(combo.club_id), position, view(combo.nation_id), ...combo.extra_ids.map(view)];
 }
 

@@ -29,17 +29,19 @@ export interface WlWaveContent {
   titleKa: string;
   titleEs: string;
   titleTr: string;
+  titlePt: string;
   bodyEn: string;
   bodyKa: string;
   bodyEs: string;
   bodyTr: string;
+  bodyPt: string;
 }
 
-/** The stored {en, ka, es, tr} fields; clients show field[locale] ?? field.en. */
+/** The stored {en, ka, es, tr, pt} fields; clients show field[locale] ?? field.en. */
 export function wlLocalized(content: WlWaveContent) {
   return {
-    title: { en: content.titleEn, ka: content.titleKa, es: content.titleEs, tr: content.titleTr },
-    body: { en: content.bodyEn, ka: content.bodyKa, es: content.bodyEs, tr: content.bodyTr },
+    title: { en: content.titleEn, ka: content.titleKa, es: content.titleEs, tr: content.titleTr, pt: content.titlePt },
+    body: { en: content.bodyEn, ka: content.bodyKa, es: content.bodyEs, tr: content.bodyTr, pt: content.bodyPt },
   };
 }
 
@@ -50,8 +52,10 @@ export const ENTRY_OPEN_CONTENT: WlWaveContent = {
   bodyKa: 'საკმარისი QP გაქვს — რეგისტრაცია ღიაა. დაიკავე ადგილი შაბათისთვის ახლავე.',
   titleEs: '¡Ya puedes jugar la Weekend League!',
   titleTr: 'Weekend League’e katılmaya hak kazandın!',
+  titlePt: 'Você se classificou para a Weekend League!',
   bodyEs: 'Tienes suficientes QP y la inscripción está abierta. Reserva tu plaza para el sábado.',
   bodyTr: 'Yeterli QP’n var, kayıtlar açık. Cumartesi için yerini şimdi ayır.',
+  bodyPt: 'Você tem QP suficiente — as inscrições estão abertas. Garanta sua vaga para sábado agora.',
 };
 
 export const REMINDER_1H_CONTENT: WlWaveContent = {
@@ -61,8 +65,10 @@ export const REMINDER_1H_CONTENT: WlWaveContent = {
   bodyKa: 'დარეგისტრირებული ხარ — ჩექინი დაწყებამდე ცოტა ხნით ადრე გაიხსნება. მოემზადე! 🏆',
   titleEs: '¡La Weekend League empieza en 1 hora!',
   titleTr: 'Weekend League 1 saat sonra başlıyor!',
+  titlePt: 'A Weekend League começa em 1 hora!',
   bodyEs: 'Estás inscrito: podrás confirmar tu asistencia poco antes del inicio. ¡Prepárate! 🏆',
   bodyTr: 'Kaydın var — giriş başlangıçtan kısa süre önce açılır. Hazır ol! 🏆',
+  bodyPt: 'Você está inscrito — o check-in abre pouco antes do início da partida. Prepare-se! 🏆',
 };
 
 export const REMINDER_30M_CONTENT: WlWaveContent = {
@@ -72,8 +78,10 @@ export const REMINDER_30M_CONTENT: WlWaveContent = {
   bodyKa: 'თითქმის დროა — არ გამოტოვო ჩექინი. წარმატებები! ⚽',
   titleEs: '¡La Weekend League empieza en 30 minutos!',
   titleTr: 'Weekend League 30 dakika sonra başlıyor!',
+  titlePt: 'A Weekend League começa em 30 minutos!',
   bodyEs: 'Ya casi: no te olvides de confirmar tu asistencia. ¡Suerte! ⚽',
   bodyTr: 'Az kaldı — giriş yapmayı unutma. Bol şans! ⚽',
+  bodyPt: 'Quase lá — não perca o check-in. Boa sorte! ⚽',
 };
 
 export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
@@ -83,8 +91,10 @@ export const CHECKIN_OPEN_CONTENT: WlWaveContent = {
   bodyKa: 'დაადასტურე მონაწილეობა — თამაშები მალე იწყება.',
   titleEs: '¡Ya puedes confirmar tu asistencia!',
   titleTr: 'Giriş açıldı!',
+  titlePt: 'Check-in aberto!',
   bodyEs: 'Confirma tu plaza: los partidos empiezan pronto.',
   bodyTr: 'Yerini onayla — maçlar birazdan başlıyor.',
+  bodyPt: 'Confirme sua vaga — as partidas começam em breve.',
 };
 
 const GE_OFFSET_MS = 4 * 60 * 60 * 1000;
@@ -93,6 +103,7 @@ const GE_DAY_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const GE_DAY_KA = ['კვირას', 'ორშაბათს', 'სამშაბათს', 'ოთხშაბათს', 'ხუთშაბათს', 'პარასკევს', 'შაბათს'];
 const GE_DAY_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const GE_DAY_TR = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+const GE_DAY_PT = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
 
 /** The final's start and check-in opening on the Georgia clock (fixed UTC+4).
  *  Seconds appear only when a compressed rehearsal is not on whole minutes,
@@ -111,6 +122,10 @@ function geFinalWindow(finalStartsAtMs: number, checkinWindowMs: number) {
   const window = (days: string[]) => (opensDay === startDay
     ? `${days[startDay]} ${opens}–${start}`
     : `${days[opensDay]} ${opens} – ${days[startDay]} ${start}`);
+  const ptDay = (day: string) => day.endsWith('-feira') ? `na ${day}` : `no ${day}`;
+  const windowPt = opensDay === startDay
+    ? `${ptDay(GE_DAY_PT[startDay])}, das ${opens} às ${start}`
+    : `${ptDay(GE_DAY_PT[opensDay])}, às ${opens} – ${ptDay(GE_DAY_PT[startDay])}, às ${start}`;
   return {
     start,
     opens,
@@ -118,10 +133,12 @@ function geFinalWindow(finalStartsAtMs: number, checkinWindowMs: number) {
     dayKa: GE_DAY_KA[startDay],
     dayEs: GE_DAY_ES[startDay],
     dayTr: GE_DAY_TR[startDay],
+    dayPt: ptDay(GE_DAY_PT[startDay]),
     windowEn: window(GE_DAY_EN),
     windowKa: window(GE_DAY_KA),
     windowEs: window(GE_DAY_ES.map((day) => `el ${day}`)),
     windowTr: window(GE_DAY_TR),
+    windowPt,
   };
 }
 
@@ -145,11 +162,13 @@ export function qualifiedContent(finalStartsAtMs: number, checkinWindowMs: numbe
       bodyKa: 'ფინალის დაწყებამდე ჩექინი ხელახლა არის საჭირო. ზუსტი დრო ნახე აპლიკაციაში. არ დააგვიანო!',
       titleEs: '¡Estás en la final! Tienes que volver a confirmar tu asistencia',
       titleTr: 'Finaldesin! Yeniden giriş yapman gerekiyor',
+      titlePt: 'Você chegou à final! Precisa fazer check-in novamente',
       bodyEs: 'Tienes que volver a confirmar tu asistencia justo antes de que empiece la final. Mira la hora exacta en la app. ¡No llegues tarde!',
       bodyTr: 'Final başlamadan hemen önce YENİDEN giriş yapmalısın. Kesin saati uygulamada gör. Geç kalma!',
+      bodyPt: 'Você precisa fazer check-in DE NOVO pouco antes do início da final. Abra o app para ver o horário exato. Não se atrase!',
     };
   }
-  const { start, opens, dayEn, dayKa, dayEs, dayTr, windowEn, windowKa, windowEs, windowTr } = geFinalWindow(finalStartsAtMs, checkinWindowMs);
+  const { start, opens, dayEn, dayKa, dayEs, dayTr, dayPt, windowEn, windowKa, windowEs, windowTr, windowPt } = geFinalWindow(finalStartsAtMs, checkinWindowMs);
   return {
     titleEn: `You made the final! Check in again ${windowEn} Georgia time`,
     titleKa: `ფინალში გახვედი! ჩექინი ${windowKa}`,
@@ -157,8 +176,10 @@ export function qualifiedContent(finalStartsAtMs: number, checkinWindowMs: numbe
     bodyKa: `ფინალი ${dayKa} ${start}-ზეა და ჩექინი ხელახლა არის საჭირო — ${opens}-დან ${start}-მდე. არ დააგვიანო!`,
     titleEs: `¡Estás en la final! Confirma tu asistencia de nuevo ${windowEs}, hora de Georgia`,
     titleTr: `Finaldesin! Gürcistan saatiyle ${windowTr} arasında yeniden giriş yap`,
+    titlePt: `Você chegou à final! Faça check-in novamente ${windowPt}, no horário da Geórgia`,
     bodyEs: `La final empieza el ${dayEs} a las ${start}, hora de Georgia (GMT+4); en la app la ves en tu hora local. Tienes que volver a confirmar tu asistencia entre las ${opens} y las ${start}. ¡No llegues tarde!`,
     bodyTr: `Final ${dayTr} günü Gürcistan saatiyle ${start} itibarıyla başlıyor (GMT+4); uygulamada kendi yerel saatinle görürsün. ${opens} ile ${start} arasında YENİDEN giriş yapmalısın. Geç kalma!`,
+    bodyPt: `A final começa ${dayPt} às ${start}, no horário da Geórgia (GMT+4) — o app mostra o horário local para você. Você precisa fazer check-in DE NOVO entre ${opens} e ${start}. Não se atrase!`,
   };
 }
 
@@ -174,8 +195,10 @@ export function finalReminder30mContent(finalStartsAtMs: number, checkinWindowMs
     bodyKa: `ჩემპიონი მალე გამოვლინდება. ჩექინი გაიხსნება ${opens}-ზე — შედი აპლიკაციაში ახლავე. წარმატებები! 🍀`,
     titleEs: `¡La final empieza a las ${start}, hora de Georgia!`,
     titleTr: `Final Gürcistan saatiyle ${start} itibarıyla başlıyor!`,
+    titlePt: `A final começa às ${start}, horário da Geórgia!`,
     bodyEs: `Podrás confirmar tu asistencia a partir de las ${opens}, hora de Georgia (GMT+4). Entra ya en la app para no perder tu plaza. ¡Suerte! 🍀`,
     bodyTr: `Giriş Gürcistan saatiyle ${opens} itibarıyla açılıyor (GMT+4). Yerini kaçırmamak için uygulamayı şimdi aç. Bol şans! 🍀`,
+    bodyPt: `O check-in abre às ${opens}, no horário da Geórgia (GMT+4). Abra o app agora para não perder sua vaga. Boa sorte! 🍀`,
   };
 }
 
@@ -186,8 +209,10 @@ export const FINAL_CHECKIN_CONTENT: WlWaveContent = {
   bodyKa: 'დაადასტურე შენი ადგილი ფინალში ახლავე.',
   titleEs: '¡Ya puedes confirmar tu asistencia a la final!',
   titleTr: 'Final girişi açıldı!',
+  titlePt: 'O check-in da final está aberto!',
   bodyEs: 'Confirma ahora tu plaza en la final.',
   bodyTr: 'Finaldeki yerini şimdi onayla.',
+  bodyPt: 'Confirme agora sua vaga na final.',
 };
 
 const STARTED_CONTENT: WlWaveContent = {
@@ -197,8 +222,10 @@ const STARTED_CONTENT: WlWaveContent = {
   bodyKa: 'გაიარე ჩექინი თუ დარეგისტრირებული ხარ — ან უყურე თამაშებს ლაივში.',
   titleEs: '¡La Weekend League está empezando!',
   titleTr: 'Weekend League başlıyor!',
+  titlePt: 'A Weekend League está começando!',
   bodyEs: 'Si estás inscrito, confirma tu asistencia ahora, o mira los partidos en directo.',
   bodyTr: 'Kaydın varsa şimdi giriş yap — ya da maçları canlı izle.',
+  bodyPt: 'Faça check-in agora se você está inscrito — ou assista às partidas ao vivo.',
 };
 
 function sourceKey(tournamentId: string, kind: WlWaveKind): string {

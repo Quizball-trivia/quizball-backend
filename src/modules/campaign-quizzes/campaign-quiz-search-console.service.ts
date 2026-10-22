@@ -49,6 +49,39 @@ const RUSSIAN_SOURCE_SLUGS: Record<string, string> = {
   'viktorina-tottenkhem': 'tottenham',
 };
 
+/** Brazilian Portuguese public slugs (/pt/quiz-de-futebol/<slug>) → CMS slug; mirrors the web's PORTUGUESE_PUBLIC_SLUGS. */
+const PORTUGUESE_SOURCE_SLUGS: Record<string, string> = {
+  'adivinhe-o-jogador': 'guess-the-player',
+  'adivinhe-o-jogador-pela-carreira': 'career-path',
+  'adivinhe-o-time-pelo-escudo': 'club-badges',
+  'quiz-da-premier-league': 'premier-league',
+  'quiz-da-la-liga': 'la-liga',
+  'quiz-do-arsenal': 'arsenal',
+  'quiz-do-aston-villa': 'aston-villa',
+  'quiz-do-barcelona': 'barcelona',
+  'quiz-do-bournemouth': 'bournemouth',
+  'quiz-do-brentford': 'brentford',
+  'quiz-do-brighton': 'brighton',
+  'quiz-do-chelsea': 'chelsea',
+  'quiz-do-coventry-city': 'coventry-city',
+  'quiz-do-crystal-palace': 'crystal-palace',
+  'quiz-do-everton': 'everton',
+  'quiz-do-fulham': 'fulham',
+  'quiz-do-hull-city': 'hull-city',
+  'quiz-do-ipswich-town': 'ipswich-town',
+  'quiz-do-leeds-united': 'leeds-united',
+  'quiz-do-liverpool': 'liverpool',
+  'quiz-do-manchester-city': 'manchester-city',
+  'quiz-do-manchester-united': 'manchester-united',
+  'quiz-do-newcastle': 'newcastle-united',
+  'quiz-do-nottingham-forest': 'nottingham-forest',
+  'quiz-do-real-madrid': 'real-madrid',
+  'quiz-do-sunderland': 'sunderland',
+  'quiz-do-tottenham': 'tottenham',
+  'quiz-da-selecao-argentina': 'argentina',
+  'quiz-da-selecao-espanhola': 'spain',
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 const cachedMetrics = new Map<
   number,
@@ -136,8 +169,11 @@ export function campaignQuizSlugFromPageUrl(
     if (spanish?.[1]) return SPANISH_SOURCE_SLUGS[spanish[1]] ?? spanish[1];
 
     const russian = url.pathname.match(/^\/ru\/futbolnaya-viktorina\/([a-z0-9-]+)\/?$/);
-    if (!russian?.[1]) return null;
-    return RUSSIAN_SOURCE_SLUGS[russian[1]] ?? russian[1];
+    if (russian?.[1]) return RUSSIAN_SOURCE_SLUGS[russian[1]] ?? russian[1];
+
+    const portuguese = url.pathname.match(/^\/pt\/quiz-de-futebol\/([a-z0-9-]+)\/?$/);
+    if (!portuguese?.[1]) return null;
+    return PORTUGUESE_SOURCE_SLUGS[portuguese[1]] ?? portuguese[1];
   } catch {
     return null;
   }

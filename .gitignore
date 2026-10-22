@@ -161,3 +161,13 @@ node_modules
 !scripts/tenable-titles-ru.ts
 !scripts/tenable-ru-seed.ts
 !scripts/wordgame-ru-names-seed.ts
+!scripts/football-grid-label-pt.ts
+!scripts/football-grid-label-pt.json
+!scripts/tenable-titles-pt.ts
+!scripts/categories-pt.ts
+!scripts/squad-spin-pt.ts
+!scripts/clue-cards-pt.ts
+!scripts/tenable-pt-aliases.ts
+
+# Brazilian Portuguese campaign quiz pages (code only; the translation snapshot and caches stay in scripts/.snapshots).
+!scripts/campaign-quizzes-pt.ts

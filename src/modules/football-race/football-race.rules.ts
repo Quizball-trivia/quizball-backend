@@ -90,7 +90,7 @@ export function publicState(s: RunState, dayId: string, day: DayRace | null, ext
     positions: positions(s),
     eras: (d?.scopes ?? []).map((x) => ({ id: x.id, label: withRussian(x.label) })),
     families: (d?.families ?? []).map((f) => ({ id: f.id, label: withRussian(f.label) })),
-    metrics: (d?.metrics ?? []).map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: withRussian(m.label), keywords: withRussianKeywords(m.label, m.keywords) })),
+    metrics: (d?.metrics ?? []).map((m) => ({ id: m.id, family: m.family, unwanted: m.unwanted, dir: m.dir, decimals: m.decimals, kind: m.kind, label: withRussian(m.label), keywords: withRussianKeywords(m.label, withRussianKeywords(m.label, m.keywords), 'pt') })),
     stats: (d?.stats ?? []).map((x) => ({ id: x.id, scope: x.scope, metric: x.metric, family: metricOf.get(x.metric)?.family ?? '', unwanted: metricOf.get(x.metric)?.unwanted ?? false })),
     results: s.res.map((r) => ({ ...r, details: racers.map((id) => { const line = statOf.get(r.stat)?.details?.[id]; return line ? withRussian(line) : null; }) })),
     done: s.done,

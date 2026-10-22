@@ -2,6 +2,7 @@ import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
+import { aliasPinsOf, withAliases } from './tenable.aliases.js';
 
 const PAGE = 20_000;
 
@@ -51,6 +52,8 @@ const failed = new Map<string, { until: number; error: unknown }>();
  * Cyrillic answer the same way until the next restart, even when a Russian pin is written in between.
  */
 const russianPins = new Map<string, Promise<RussianPin | null>>();
+/** The same for the alias pins (Portuguese spellings): read once per (kind, release) for the process lifetime. */
+const aliasPins = new Map<string, Promise<string[]>>();
 
 export const tenableDirectories = {
   /**
@@ -71,8 +74,15 @@ export const tenableDirectories = {
     failed.delete(key);
     const loading = (async () => {
       const started = Date.now();
-      const entities = await rows(kind, releaseId);
-      if (entities.length === 0) throw new Error(`tenable_release_empty:${key}`);
+      const own = await rows(kind, releaseId);
+      if (own.length === 0) throw new Error(`tenable_release_empty:${key}`);
+      let pins = aliasPins.get(key);
+      if (!pins) {
+        const asked = aliasPinsOf(sql, kind, releaseId);
+        aliasPins.set(key, (pins = asked));
+        asked.catch(() => { if (aliasPins.get(key) === asked) aliasPins.delete(key); });
+      }
+      const entities = await withAliases(sql, kind, own, await pins);
       const fetched = Date.now();
       const latin = buildDirectory(kind, releaseId, entities);
       // The lookup itself is kept (two loads in flight share one answer); a failed one is not.

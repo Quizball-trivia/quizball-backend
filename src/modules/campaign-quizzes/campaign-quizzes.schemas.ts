@@ -9,7 +9,7 @@ export const campaignQuizSlugParamsSchema = z.object({
 });
 
 export const campaignQuizLocaleQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru']).optional().default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).optional().default('en'),
 });
 
 export const campaignQuizAnswerBodySchema = z.object({
@@ -24,11 +24,11 @@ export const campaignQuizRatingBodySchema = z.object({
 
 export const campaignQuizPreviewQuerySchema = z.object({
   preview: z.string().uuid().optional(),
-  locale: z.enum(['en', 'ka', 'es', 'ru']).optional().default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).optional().default('en'),
 });
 
 export const campaignQuizListQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru']).default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).default('en'),
 });
 
 const nullableUrlSchema = z
@@ -271,8 +271,11 @@ export interface CampaignQuizResponse {
   questions: CampaignQuizQuestionResponse[];
   rating: CampaignQuizRatingResponse;
   page: CampaignQuizPageContentResponse | null;
-  /** Which language editions the page has (the catalog's rule); a missing edition is served in English. */
-  editions: { ka: boolean; es: boolean; ru: boolean };
+  /**
+   * Which language editions the page has (the catalog's rule); a missing edition is served in English.
+   * pt also needs every question of the set in Brazilian Portuguese.
+   */
+  editions: { ka: boolean; es: boolean; ru: boolean; pt: boolean };
 }
 
 export interface CampaignQuizAnswerResponse {

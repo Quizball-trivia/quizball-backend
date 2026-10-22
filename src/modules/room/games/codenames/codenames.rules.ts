@@ -24,7 +24,7 @@ export const MAX_WORD_CHARS = 16;
 
 // A name the bot says must fit the clue limit a Scout has.
 const label = z.string().trim().min(1).max(30);
-export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label }).strict();
+export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label, pt: label.optional() }).strict();
 export type TermLabel = z.infer<typeof termLabelSchema>;
 
 /** A football name a card points to (from the blind readings): what the bot Scout may say for it. */
@@ -242,7 +242,7 @@ export function boardMatcher(boardWords: readonly string[]): (clue: string) => s
 /** Every spelling of a term: once the bot has said it (in any language), a Scout cannot say it again, and the other way round. */
 export const termSpellings = (term: Term): string[] => [...Object.values(term.label), ...(term.aliases ?? [])].map(fold).filter(Boolean);
 
-export const termLabel = (term: Term, locale: RoomLocale): string => term.label[locale];
+export const termLabel = (term: Term, locale: RoomLocale): string => term.label[locale] ?? term.label.en;
 
 export interface BotClue { term: Term; count: number }
 

@@ -47,6 +47,16 @@ describe('campaignQuizSearchConsoleService', () => {
       .toBeNull();
   });
 
+  it('maps localized Brazilian Portuguese campaign URLs to the CMS slug', () => {
+    const origin = 'https://quizball.io';
+
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/pt/quiz-de-futebol/adivinhe-o-jogador-pela-carreira', origin))
+      .toBe('career-path');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/pt/quiz-de-futebol/quiz-da-selecao-espanhola/', origin))
+      .toBe('spain');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/pt/football-quiz/arsenal', origin)).toBeNull();
+  });
+
   it('ignores unrelated paths and foreign origins', () => {
     const origin = 'https://quizball.io';
 

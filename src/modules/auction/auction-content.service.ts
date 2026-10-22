@@ -114,38 +114,43 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
   });
 }
 
-const russianAvailability = { checkedAt: 0, usable: false };
+/** Languages whose clue cards are optional: their players are dealt English cards until their pool is complete. */
+const OPTIONAL_CONTENT_LOCALES: ReadonlySet<AuctionContentLocale> = new Set(['ru', 'pt']);
+const optionalAvailability = new Map<AuctionContentLocale, { checkedAt: number; usable: boolean }>();
 /**
- * Russian deals need almost the whole English pool in Russian: a match keeps its language for every later draw (per
- * position, without repeats), so a thin Russian pool would end matches early instead of falling back.
+ * An optional language deals only with almost the whole English pool in it: a match keeps its language for every
+ * later draw (per position, without repeats), so a thin pool would end matches early instead of falling back.
  */
 export const RUSSIAN_POOL_SHARE = 0.95;
-/** Russian clue cards are optional: a Russian player is dealt English cards until the Russian pool is complete. */
+const isOptionalContentLocale = (locale: AuctionContentLocale): boolean => OPTIONAL_CONTENT_LOCALES.has(locale);
+
 async function resolveContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
-  if (locale !== 'ru') return locale;
-  if (Date.now() - russianAvailability.checkedAt > 60_000) {
-    const [ru, en] = await Promise.all([auctionContentRepo.getPublishedCardAvailability('ru'), auctionContentRepo.getPublishedCardAvailability('en')]);
-    russianAvailability.checkedAt = Date.now();
-    russianAvailability.usable = ru.usable_count > 0 && ru.usable_count >= en.usable_count * RUSSIAN_POOL_SHARE;
+  if (!isOptionalContentLocale(locale)) return locale;
+  let availability = optionalAvailability.get(locale);
+  if (!availability || Date.now() - availability.checkedAt > 60_000) {
+    const [own, en] = await Promise.all([auctionContentRepo.getPublishedCardAvailability(locale), auctionContentRepo.getPublishedCardAvailability('en')]);
+    availability = { checkedAt: Date.now(), usable: own.usable_count > 0 && own.usable_count >= en.usable_count * RUSSIAN_POOL_SHARE };
+    optionalAvailability.set(locale, availability);
   }
-  return russianAvailability.usable ? 'ru' : 'en';
+  return availability.usable ? locale : 'en';
 }
 
 /**
- * The language a match about to start deals in: as `resolveContentLocale`, with the Russian pool counted afresh (the
- * same 95% rule), so a pool that shrank since it was cached deals English instead of failing or thinning the match.
+ * The language a match about to start deals in: as `resolveContentLocale`, with an optional language's pool counted
+ * afresh (the same 95% rule), so a pool that shrank since it was cached deals English instead of failing or thinning.
  */
 async function playableContentLocale(locale: AuctionContentLocale): Promise<AuctionContentLocale> {
-  if (locale === 'ru') russianAvailability.checkedAt = 0;
+  optionalAvailability.delete(locale);
   return resolveContentLocale(locale);
 }
 
 export const auctionContentService = {
   resolveContentLocale,
   playableContentLocale,
-  /** A Russian deal found no content (cards were unpublished): the next resolution reads availability again. */
+  isOptionalContentLocale,
+  /** An optional-language deal found no content (cards were unpublished): the next resolution reads availability again. */
   forgetContentLocale(): void {
-    russianAvailability.checkedAt = 0;
+    optionalAvailability.clear();
   },
   async getPublishedCardCount(locale: AuctionContentLocale): Promise<number> {
     return auctionContentRepo.getPublishedCardCount(locale);
@@ -322,6 +327,7 @@ const FACET_LABELS: ReadonlySet<string> = new Set([
   'გოლები', 'ასისტები', 'საბაზრო ღირებულება', 'ასაკი', 'ლიგა', 'მშრალი მატჩები', 'გაშვებული გოლები',
   'Goles', 'Asistencias', 'Valor de mercado', 'Edad', 'Liga', 'Porterías a cero', 'Goles encajados',
   'Goller', 'Asistler', 'Piyasa değeri', 'Yaş', 'Lig', 'Gol yemeden bitirilen maçlar', 'Yenilen goller',
+  'Gols', 'Assistências', 'Idade', 'Jogos sem sofrer gols', 'Gols sofridos',
 ].map((label) => label.toLowerCase()));
 
 function isFacetPlaceholder(text: string): boolean {
@@ -471,7 +477,8 @@ async function attachSeasonSnapshots(
  * The same reveal steps in every content locale, so each seat reads the text
  * hints in its own language regardless of which locale the match was dealt in.
  * Sibling rows (same player + variant) supply the same hint slots; a missing or
- * placeholder sibling text falls back to the match-locale hint.
+ * placeholder sibling text falls back to the English sibling, then to the
+ * match-locale hint.
  */
 async function localizedClueSteps(
   card: PublishedAuctionCard,
@@ -486,6 +493,12 @@ async function localizedClueSteps(
     logger.warn({ error, clueCardId: card.clueCardId }, 'Failed to load localized auction clues');
     return undefined;
   }
+  // The slot is known to be an authored hint; a short translation is still a
+  // translation. Only empty or facet-label placeholders fall back.
+  const usable = (text: string | null | undefined): text is string =>
+    typeof text === 'string' && text.trim().length > 0 && !isFacetPlaceholder(text);
+  const english = siblings.find((sibling) => sibling.locale === 'en');
+  const englishTexts = english ? [english.clue_1, english.clue_2, english.clue_3] : [];
   const byLocale: NonNullable<AuctionFootballer['cluesByLocale']> = {};
   for (const sibling of siblings) {
     if (!isAuctionContentLocale(sibling.locale) || byLocale[sibling.locale]) continue;
@@ -493,10 +506,10 @@ async function localizedClueSteps(
     byLocale[sibling.locale] = [
       ...facets,
       ...authoredHints.map((hint) => {
-        // The slot is known to be an authored hint; a short translation is
-        // still a translation. Only empty or facet-label placeholders fall back.
-        const text = texts[hint.index];
-        return typeof text === 'string' && text.trim().length > 0 && !isFacetPlaceholder(text) ? text : hint.text;
+        const own = texts[hint.index];
+        if (usable(own)) return own;
+        const fallback = englishTexts[hint.index];
+        return usable(fallback) ? fallback : hint.text;
       }),
     ];
   }
@@ -504,7 +517,7 @@ async function localizedClueSteps(
 }
 
 function isAuctionContentLocale(value: string): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt';
 }
 
 export type { AuctionContentLocale };

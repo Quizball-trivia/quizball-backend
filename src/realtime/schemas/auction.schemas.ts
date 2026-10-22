@@ -9,7 +9,7 @@ const formationNames = FORMATIONS.map((formation) => formation.name) as [
 export const auctionStartAiMatchSchema = z
   .object({
     formation: z.enum(formationNames).optional(),
-    locale: z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional(),
+    locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']).optional(),
   })
   .optional()
   .transform((payload) => ({

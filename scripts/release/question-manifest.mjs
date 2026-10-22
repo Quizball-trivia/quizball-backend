@@ -67,7 +67,7 @@ function changedPaths(source, target, path = '') {
   return [path];
 }
 
-const LOCALES = new Set(['en', 'ka', 'es', 'tr', 'ru']);
+const LOCALES = new Set(['en', 'ka', 'es', 'tr', 'ru', 'pt']);
 function missingLocalePaths(source, target, path = '') {
   if (!source || !target || typeof source !== 'object' || typeof target !== 'object') return [];
   // Arrays often embed option IDs. Requiring exact positional IDs prevents a

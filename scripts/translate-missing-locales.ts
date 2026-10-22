@@ -7,6 +7,7 @@
  * Usage:
  *   npx tsx scripts/translate-missing-locales.ts count  [--locales=tr,es,ka,ru] [--types=a,b]
  *   npx tsx scripts/translate-missing-locales.ts sample --locales=tr [--types=…] [--limit=8]   # live call, no writes
+ *   npx tsx scripts/translate-missing-locales.ts translate --locales=pt [--types=…]   # fills the translation cache only, no writes
  *   npx tsx scripts/translate-missing-locales.ts apply  --locales=tr [--types=…] [--limit=N]   # writes staging
  * Model: --provider=openrouter (default; --model overrides OPENROUTER_MODEL) or --provider=codex (default model
  * gpt-6-luna, runs on the Codex subscription); --effort=low|medium|high; --batch=N texts per call; --concurrency=N.
@@ -21,7 +22,7 @@ import postgres from 'postgres';
 
 const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
 const PROD_REF = 'lfbwhxvwubzeqkztghok';
-const MODES = ['count', 'sample', 'apply', 'recheck-copies'] as const;
+const MODES = ['count', 'sample', 'translate', 'apply', 'recheck-copies'] as const;
 const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!(MODES as readonly string[]).includes(modeArg)) { console.error(`ABORT: mode must be one of ${MODES.join(' | ')}`); process.exit(1); }
 const mode = modeArg as (typeof MODES)[number];
@@ -57,7 +58,7 @@ const MODEL = opt('model', '') || (PROVIDER === 'codex' ? 'gpt-6-luna' : envVar(
 // Model calls can run for an hour with no queries: drop the idle connection ourselves rather than write to one the pooler closed.
 const sql = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
-const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian' };
+const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
 type Json = unknown;
 type Node = Record<string, unknown>;
@@ -76,7 +77,10 @@ function nodes(v: Json, out: Node[] = []): Node[] {
 const plausible = (en: string, t: string) => t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n');
 
 /** Latin-script locales keep names verbatim; Georgian and Russian transliterate them, so they get no "leave proper nouns" override. */
-const systemPrompts = (locale: string): string[] => locale === 'ru'
+const systemPrompts = (locale: string): string[] => locale === 'pt'
+  ? [`You translate football (soccer) trivia UI strings from English to Brazilian Portuguese (pt-BR) for Brazilian football fans. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha, Brazil → Brasil, USA → Estados Unidos); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Copa América, Champions League stays Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Ballon d'Or → Bola de Ouro, Golden Boot → Chuteira de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga, Sparta Prague → Sparta Praga, Dynamo Kyiv → Dínamo de Kiev, Bayer Leverkusen stays); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol contra, pênalti, prorrogação, acréscimos, assistência, sair sem sofrer gols for a clean sheet, chegou sem custo / de graça for a free transfer); these are quiz questions, clues and true/false statements, so keep every fact exactly as stated — do not add, drop or reinterpret anything; write amounts in Brazilian number format (€250,000 → €250.000, 1.5 million → 1,5 milhão, 45.3% → 45,3%) but keep years, seasons like 18/19 or 2017-18, scores, shirt numbers, arrows (→) and currency symbols as written; neutral written register, address the player as você; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written — return those unchanged, except countries/national teams and competitions, which follow the Portuguese forms above. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'ru'
   ? [`You translate football (soccer) trivia UI strings from English to Russian for Russian-speaking football fans. Rules: write names in Cyrillic the way Russian sports media do (Messi → Месси, Cristiano Ronaldo → Криштиану Роналду, Arsenal → «Арсенал», Manchester United → «Манчестер Юнайтед», Premier League → Премьер-лига, Camp Nou → «Камп Ноу»); keep abbreviations like PSG, MLS, VAR in Latin, but write УЕФА and ФИФА; these are quiz questions, clues and true/false statements, so keep every fact exactly as stated — do not add, drop or reinterpret anything, and translate quoted sayings as short literal quotes, not explanations; football terms keep their meaning (extra time → дополнительное время, stoppage time → добавленное время, free transfer → переход свободным агентом, insurance goal → гол, закрепивший победу, boyhood club → родной клуб, clean sheet → сухой матч); keep numbers, seasons like 18/19 or 2017-18, arrows (→) and currency symbols as written, and write match scores with a colon (2:1); use the terminology a Russian fan would use in a neutral written register, no slang; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`]
   : locale === 'ka'
   ? [`You translate football (soccer) trivia UI strings from English to Georgian for a Georgian football app. Rules: write EVERYTHING in Georgian script — transliterate player, club, stadium, competition and person names into Georgian the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the terminology a Georgian fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`]
@@ -134,7 +138,9 @@ async function translateBatch(locale: string, texts: string[]): Promise<Map<stri
   return out;
 }
 
-const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
+/** pt carries a prompt version: a cache built under one set of naming rules is never mixed with another. */
+const CACHE_TAG: Record<string, string> = { pt: '-v1' };
+const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}${CACHE_TAG[locale] ?? ''}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
 const loadCache = (locale: string) => new Map<string, string>(existsSync(cacheFile(locale)) ? Object.entries(JSON.parse(readFileSync(cacheFile(locale), 'utf8')) as Record<string, string>) : []);
 
 async function main() {
@@ -181,7 +187,7 @@ async function main() {
     console.log(`${locale}: ${wanted.length} distinct texts, ${wanted.length - need.length} already translated, ${need.length} to translate`);
     for (let i = 0; i < need.length; i += BATCH) jobs.push({ locale, texts: need.slice(i, i + BATCH) });
   }
-  let next = 0, finished = 0, misses = 0, stop = false;
+  let next = 0, finished = 0, misses = 0, rateLimited = 0, stop = false;
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (!stop && next < jobs.length) {
       const job = jobs[next++];
@@ -192,6 +198,12 @@ async function main() {
           break;
         } catch (e) {
           console.error(`call failed (attempt ${attempt}): ${(e as Error).message}`);
+          // A burst rate limit (429) passes: wait it out without counting it as the model being down.
+          if (!(e instanceof OutOfBudget) && /\b429\b|Too Many Requests/.test((e as Error).message) && (rateLimited += 1) <= 40) {
+            await new Promise((resolve) => setTimeout(resolve, 90_000));
+            attempt -= 1;
+            continue;
+          }
           // Out of credit, or the model is down: stop asking instead of failing thousands of calls.
           if (e instanceof OutOfBudget || (misses += 1) >= 6) { stop = true; console.error('stopping model calls; what is translated so far is kept'); }
         }
@@ -204,6 +216,14 @@ async function main() {
   if (mode === 'sample') {
     for (const locale of LOCALES) for (const en of new Set(work.filter((w) => w.locale === locale).map((w) => w.en))) console.log(`[${locale}] ${en}\n   → ${cache.get(locale)!.get(en) ?? '(failed)'}`);
     console.log('\nsample only — nothing written');
+    return;
+  }
+  if (mode === 'translate') {
+    for (const locale of LOCALES) {
+      const wanted = new Set(work.filter((w) => w.locale === locale).map((w) => w.en));
+      const done = [...wanted].filter((en) => cache.get(locale)!.has(en)).length;
+      console.log(`${locale}: ${done}/${wanted.size} distinct texts in ${cacheFile(locale)} — nothing written to the database`);
+    }
     return;
   }
 

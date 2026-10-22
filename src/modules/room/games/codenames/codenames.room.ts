@@ -47,7 +47,8 @@ export const codenamesRoomEngine: RoomEngine<CodenamesContent, CodenamesState, C
    * caricatures and fourteen other cards, keyed by a fresh seed. The board is the match's write-once content.
    */
   async deal(pick, options) {
-    if (options?.board === 'words') return dealWords(pick, options.lang);
+    // A language without its own deck yet (pt) deals the English words rather than leaving the room without a board.
+    if (options?.board === 'words') return (await dealWords(pick, options.lang)) ?? (options.lang === 'en' ? null : dealWords(pick, 'en'));
     const valid = (items: Awaited<ReturnType<typeof pick>>) => items.flatMap((item) => {
       const card = codenamesCardSchema.safeParse(item.payload);
       return card.success ? [card.data] : [];

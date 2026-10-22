@@ -44,7 +44,7 @@ export interface AuctionFootballer {
   startingPrice: number;
   clues?: readonly string[];
   /** Same steps as `clues`, per content locale, so every seat reads the text hints in its own language. */
-  cluesByLocale?: Partial<Record<'en' | 'ka' | 'es' | 'tr' | 'ru', readonly string[]>>;
+  cluesByLocale?: Partial<Record<'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt', readonly string[]>>;
   imageUrl?: string | null;
   currentClub?: string | null;
   nationality?: string | null;

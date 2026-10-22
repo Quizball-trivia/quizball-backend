@@ -15,7 +15,7 @@ import type { DailyChallengeType } from '../daily-challenges/daily-challenges.ty
 import type { CompleteDailyChallengeBody, DailyChallengeParam } from '../daily-challenges/daily-challenges.schemas.js';
 
 export const createGuestSessionSchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional(),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']).optional(),
 });
 
 type PublicStatSniperBoard = {

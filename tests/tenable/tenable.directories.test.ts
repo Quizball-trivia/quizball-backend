@@ -7,6 +7,8 @@ vi.mock('../../src/db/index.js', () => ({
 
 // Releases without Russian names here: the counts are of entity reads (tenable.directories-russian.test.ts covers the rest).
 vi.mock('../../src/modules/tenable/tenable.russian.js', () => ({ russianPinOf: async () => null, russianRows: async () => null }));
+// No alias sets here either (tenable.aliases.test.ts covers the merge).
+vi.mock('../../src/modules/tenable/tenable.aliases.js', () => ({ ALIAS_KINDS: new Set(), aliasPinsOf: async () => [], withAliases: async (_db: unknown, _kind: unknown, entities: unknown[]) => [...entities] }));
 
 const { tenableDirectories, FAILED_RETRY_MS, MAX_EXTRA } = await import('../../src/modules/tenable/tenable.directories.js');
 const { withDirectories, oneAtATime } = await import('../../src/modules/tenable-daily/tenable-daily.service.js');

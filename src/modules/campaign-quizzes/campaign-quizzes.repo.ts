@@ -61,6 +61,19 @@ export interface CampaignQuizRow {
   ru_score_cta: string | null;
   ru_footer_banner_text: string | null;
   ru_footer_button_label: string | null;
+  pt_title: string | null;
+  pt_h1: string | null;
+  pt_seo_title: string | null;
+  pt_meta_description: string | null;
+  pt_breadcrumb_label: string | null;
+  pt_lede: string | null;
+  pt_about_heading: string | null;
+  pt_about_blocks: CampaignQuizAboutBlock[] | null;
+  pt_hero_image_alt: string | null;
+  pt_og_image_alt: string | null;
+  pt_score_cta: string | null;
+  pt_footer_banner_text: string | null;
+  pt_footer_button_label: string | null;
   scheduled_publish_at: string | null;
   published_at: string | null;
   unpublished_at: string | null;
@@ -94,6 +107,8 @@ export interface CampaignQuizRelatedRow {
   es_hero_image_alt: string | null;
   ru_breadcrumb_label: string | null;
   ru_hero_image_alt: string | null;
+  pt_breadcrumb_label: string | null;
+  pt_hero_image_alt: string | null;
 }
 
 export interface CampaignQuizHubRow {
@@ -117,6 +132,16 @@ export interface CampaignQuizHubRow {
   ru_hero_image_alt: string | null;
   ru_seo_title: string | null;
   ru_meta_description: string | null;
+  pt_h1: string | null;
+  pt_breadcrumb_label: string | null;
+  pt_hero_image_alt: string | null;
+  pt_seo_title: string | null;
+  pt_meta_description: string | null;
+}
+
+/** A question of a published page's set, with the page it belongs to (the hub checks pt question coverage). */
+export interface CampaignQuizPageQuestionRow extends CampaignQuizQuestionRow {
+  page_slug: string;
 }
 
 export interface AdminCampaignQuizRevisionRow {
@@ -417,7 +442,12 @@ export const campaignQuizzesRepo = {
         ru_breadcrumb_label,
         ru_hero_image_alt,
         ru_seo_title,
-        ru_meta_description
+        ru_meta_description,
+        pt_h1,
+        pt_breadcrumb_label,
+        pt_hero_image_alt,
+        pt_seo_title,
+        pt_meta_description
       FROM campaign_quizzes
       WHERE ${publicWindowSql()}
       ORDER BY page_category, is_hub_pinned DESC, hub_order, published_at, slug
@@ -441,6 +471,30 @@ export const campaignQuizzesRepo = {
         AND q.visibility = 'public'
         AND q.ranked_eligible = false
       ORDER BY cqq.display_order ASC
+    `;
+  },
+
+  /** The question sets of every published page, filtered as getQuestionSet filters one set. */
+  async listPublishedPageQuestions(): Promise<CampaignQuizPageQuestionRow[]> {
+    return sql<CampaignQuizPageQuestionRow[]>`
+      SELECT
+        page.slug AS page_slug,
+        q.id,
+        cqq.display_order,
+        cqq.difficulty,
+        q.prompt,
+        q.explanation,
+        qp.payload
+      FROM campaign_quizzes page
+      JOIN campaign_quiz_questions cqq ON cqq.quiz_slug = page.question_set_slug
+      JOIN questions q ON q.id = cqq.question_id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE page.status = 'published'
+        AND COALESCE(page.scheduled_publish_at, page.published_at, '-infinity'::timestamptz) <= NOW()
+        AND q.status = 'published'
+        AND q.visibility = 'public'
+        AND q.ranked_eligible = false
+      ORDER BY page.slug, cqq.display_order ASC
     `;
   },
 
@@ -468,7 +522,9 @@ export const campaignQuizzesRepo = {
         related.es_breadcrumb_label,
         related.es_hero_image_alt,
         related.ru_breadcrumb_label,
-        related.ru_hero_image_alt
+        related.ru_hero_image_alt,
+        related.pt_breadcrumb_label,
+        related.pt_hero_image_alt
       FROM campaign_quiz_related_pages relation
       JOIN campaign_quizzes related ON related.slug = relation.related_slug
       WHERE relation.quiz_slug = ${slug}

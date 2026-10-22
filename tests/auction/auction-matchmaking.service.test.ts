@@ -267,6 +267,7 @@ const contentServiceMock = vi.hoisted(() => ({
   assertPublishedAuctionContentAvailable: vi.fn(),
   resolveContentLocale: vi.fn(async (locale: string) => locale),
   playableContentLocale: vi.fn(async (locale: string) => locale),
+  isOptionalContentLocale: vi.fn((locale: string) => locale === 'ru' || locale === 'pt'),
   forgetContentLocale: vi.fn(),
 }));
 

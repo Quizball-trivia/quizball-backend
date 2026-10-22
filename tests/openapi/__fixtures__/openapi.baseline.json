@@ -12812,7 +12812,8 @@
                       "ka",
                       "es",
                       "tr",
-                      "ru"
+                      "ru",
+                      "pt"
                     ]
                   }
                 },
@@ -25684,7 +25685,8 @@
                       "ka",
                       "es",
                       "tr",
-                      "ru"
+                      "ru",
+                      "pt"
                     ],
                     "default": "en"
                   },
@@ -26353,6 +26355,16 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 90
+                      },
+                      "ru": {
+                        "maxLength": 90,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "pt": {
+                        "maxLength": 90,
+                        "minLength": 1,
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -26385,6 +26397,16 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 250
+                      },
+                      "ru": {
+                        "maxLength": 250,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "pt": {
+                        "maxLength": 250,
+                        "minLength": 1,
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -27939,7 +27961,8 @@
                           "ka",
                           "es",
                           "tr",
-                          "ru"
+                          "ru",
+                          "pt"
                         ]
                       },
                       "kind": {
@@ -27978,7 +28001,8 @@
                           "ka",
                           "es",
                           "tr",
-                          "ru"
+                          "ru",
+                          "pt"
                         ]
                       },
                       "kind": {
@@ -29044,7 +29068,8 @@
                       "ka",
                       "es",
                       "tr",
-                      "ru"
+                      "ru",
+                      "pt"
                     ]
                   },
                   "promptVersion": {
@@ -29144,7 +29169,8 @@
                       "ka",
                       "es",
                       "tr",
-                      "ru"
+                      "ru",
+                      "pt"
                     ]
                   },
                   "promptVersion": {

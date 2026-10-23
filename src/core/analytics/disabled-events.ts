@@ -1,4 +1,5 @@
-// Events nothing reads (no insight, alert, experiment, report or runbook — audit 2026-10-21).
+// Events nothing reads (audit 2026-10-21: no saved insight, alert, experiment or recurring report;
+// a few appear only in launch funnel specs/checklists that were never queried after August).
 // PostHog bills per event, so these are dropped at the choke point instead of being sent.
 // Remove a name here to start collecting it again.
 export const DISABLED_ANALYTICS_EVENTS: ReadonlySet<string> = new Set([

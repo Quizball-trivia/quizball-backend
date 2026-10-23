@@ -24,7 +24,7 @@ export const footballGridAdminReportProposalSchema = z.object({
   playerId: z.string().uuid(),
   names: proposedNamesSchema,
   aliases: z.array(z.object({
-    locale: z.enum(['en', 'ka', 'es', 'tr', 'ru']),
+    locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']),
     value: z.string().trim().min(2).max(160),
     acceptancePolicy: z.enum(['exact', 'unique_only', 'safe_typo']),
   })).min(4).max(40),

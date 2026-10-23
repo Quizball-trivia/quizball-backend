@@ -167,7 +167,8 @@ describe('codenames word boards across versions', () => {
     expect(codenamesRoomEngine.versionFor?.({ board: 'words', lang: 'en' })).toBe(2);
     expect(codenamesRoomEngine.versionFor?.(null)).toBe(1);
     expect(roomEngineFor('codenames', 1)).toBe(roomEngineFor('codenames', 2));
-    expect(roomEngineFor('codenames', 3)).toBeNull();
+    expect(roomEngineFor('codenames', 3)).toBe(roomEngineFor('codenames', 1));
+    expect(roomEngineFor('codenames', 4)).toBeNull();
   });
 
   it('admits to a word match only a screen that lists codenames@2', () => {

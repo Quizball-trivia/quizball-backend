@@ -127,7 +127,7 @@ function fisherYates<T>(arr: T[]): T[] {
  */
 // Explicit per-locale copy (never a spread) so only known text keys survive.
 function snapshotText(text: I18nText): I18nText {
-  return { en: text.en, ka: text.ka ?? null, es: text.es ?? null, tr: text.tr ?? null, ru: text.ru ?? null };
+  return { en: text.en, ka: text.ka ?? null, es: text.es ?? null, tr: text.tr ?? null, ru: text.ru ?? null, pt: text.pt ?? null };
 }
 
 function anonymizeOptions(options: ChoreographyOption[], prefix: string): ChoreographyOption[] {

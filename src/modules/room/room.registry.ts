@@ -1,5 +1,5 @@
 import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
-import { CODENAMES_WORDS_VERSION, codenamesRoomEngine } from './games/codenames/codenames.room.js';
+import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION, codenamesRoomEngine } from './games/codenames/codenames.room.js';
 import { datoFalsoRoomEngine } from './games/dato-falso/dato-falso.room.js';
 import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
@@ -26,7 +26,7 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   tenable: { [tenableRoomEngine.version]: tenableRoomEngine as unknown as AnyRoomEngine },
   football_race: { [footballRaceRoomEngine.version]: footballRaceRoomEngine as unknown as AnyRoomEngine },
   // Version 2: word boards (an older build reads picture boards only). One engine runs both.
-  codenames: { 1: codenamesRoomEngine as unknown as AnyRoomEngine, [CODENAMES_WORDS_VERSION]: codenamesRoomEngine as unknown as AnyRoomEngine },
+  codenames: { 1: codenamesRoomEngine as unknown as AnyRoomEngine, [CODENAMES_WORDS_VERSION]: codenamesRoomEngine as unknown as AnyRoomEngine, [CODENAMES_TIMER_VERSION]: codenamesRoomEngine as unknown as AnyRoomEngine },
   dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
 };
 
@@ -41,7 +41,7 @@ const KNOWN_TO_EVERY_CLIENT: ReadonlySet<string> = new Set<RoomGameId>(['aproxim
  * Match versions an older bundle of the game cannot draw: a client must also list `<game>@<version>` (a tab loaded
  * before word boards would show picture art for words).
  */
-const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION]) };
+const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION, CODENAMES_TIMER_VERSION]) };
 
 /** What a client must list besides the game to draw this version of it; null when the game alone is enough. */
 export const clientVersionToken = (game: string | null | undefined, version: number | null | undefined): string | null =>

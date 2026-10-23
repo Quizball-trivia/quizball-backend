@@ -16,7 +16,7 @@ const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
 export const ANSWER_MAX_LENGTH = 60;
 // Content versions are content hashes: positive integers up to 2^32.
 /** The interface language decides how a word game is played in Russian; anything else plays as before. */
-const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru']).optional();
+const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']).optional();
 export const startSchema = z.object({ day: daySchema, contentVersion: z.number().int().min(1).max(2 ** 32).optional(), locale: localeSchema });
 export type StartRequest = z.infer<typeof startSchema>;
 /** Every move names the run and the version the client last saw; the server row decides. */

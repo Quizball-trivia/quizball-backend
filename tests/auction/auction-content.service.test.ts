@@ -93,6 +93,17 @@ describe('auctionContentService', () => {
     expect(await auctionContentService.playableContentLocale('tr')).toBe('tr');
   });
 
+  it('judges Portuguese readiness by its own pool, independently of Russian', async () => {
+    (auctionContentRepo.getPublishedCardAvailability as Mock).mockImplementation(async (locale: string) => ({
+      base_count: 0, missing_price_count: 0, usable_count: locale === 'ru' ? 1_400 : locale === 'pt' ? 10 : 1_400,
+    }));
+    auctionContentService.forgetContentLocale();
+    expect(await auctionContentService.resolveContentLocale('ru')).toBe('ru');
+    expect(await auctionContentService.resolveContentLocale('pt')).toBe('en');
+    (auctionContentRepo.getPublishedCardAvailability as Mock).mockImplementation(async () => ({ base_count: 0, missing_price_count: 0, usable_count: 1_400 }));
+    expect(await auctionContentService.playableContentLocale('pt')).toBe('pt');
+  });
+
   it('maps published card rows to runtime footballer units and currency fields', async () => {
     (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
 
@@ -567,6 +578,21 @@ describe('localized clue steps', () => {
       'İlk Premier Lig sezonunda çok sayıda gol attı.',
       basePublishedCard.clue_2,
     ]);
+  });
+
+  it('fills a missing Portuguese hint from the English sibling, not from a Spanish-dealt match', async () => {
+    const spanishCard = { ...basePublishedCard, locale: 'es', clue_1: 'Nací en Leeds y crecí en Noruega.', clue_2: 'Ganó la Champions con un club de Mánchester.' };
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(spanishCard);
+    (auctionContentRepo.getPublishedClueSiblings as Mock).mockResolvedValue([
+      { locale: 'es', clue_1: spanishCard.clue_1, clue_2: spanishCard.clue_2, clue_3: spanishCard.clue_3 },
+      { locale: 'en', clue_1: basePublishedCard.clue_1, clue_2: basePublishedCard.clue_2, clue_3: basePublishedCard.clue_3 },
+      { locale: 'pt', clue_1: 'Nasci em Leeds e cresci na Noruega.', clue_2: 'Gols', clue_3: 'Jogo pela Noruega.' },
+    ]);
+
+    const card = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'es' });
+
+    // Slot 2 of the Portuguese sibling is a facet placeholder: the English hint stands in, never the Spanish one.
+    expect(card.cluesByLocale?.pt?.slice(-2)).toEqual(['Nasci em Leeds e cresci na Noruega.', basePublishedCard.clue_2]);
   });
 
   it('serves the card without localized steps when the sibling lookup fails', async () => {

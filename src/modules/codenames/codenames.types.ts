@@ -5,7 +5,7 @@ import { BOARD_SIZE, MAX_CLUE_CHARS, type TermLabel } from '../room/games/codena
 export type DayKind = 'mine' | 'theirs' | 'neutral' | 'owngoal';
 const cardId = z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/);
 const why = z.string().trim().min(1).max(140);
-const localized = <T extends z.ZodTypeAny>(t: T) => z.object({ en: t, es: t, tr: t, ru: t, ka: t }).strict();
+const localized = <T extends z.ZodTypeAny>(t: T) => z.object({ en: t, es: t, tr: t, ru: t, ka: t, pt: t.optional() }).strict();
 const clueWord = z.string().trim().min(1).max(MAX_CLUE_CHARS);
 
 /**

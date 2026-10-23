@@ -24,7 +24,7 @@ export const MAX_WORD_CHARS = 16;
 
 // A name the bot says must fit the clue limit a Scout has.
 const label = z.string().trim().min(1).max(30);
-export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label }).strict();
+export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label, pt: label.optional() }).strict();
 export type TermLabel = z.infer<typeof termLabelSchema>;
 
 /** A football name a card points to (from the blind readings): what the bot Scout may say for it. */
@@ -84,9 +84,14 @@ function checkSplit(pack: { starting: Team; cards: Array<{ id: string; key: Card
 
 const starting = z.union([z.literal(0), z.literal(1)]);
 const seed = z.number().int().min(0).max(0xffffffff);
-export const picturePackSchema = z.object({ starting, seed, cards: z.array(keyed).length(BOARD_SIZE) }).strict()
+/** Seconds per Scout clue and per team's guessing, when the host set a turn timer (none: no clock). */
+export const TURN_TIMERS = [60, 90, 120] as const;
+export const turnTimerSchema = z.union([z.literal(60), z.literal(90), z.literal(120)]);
+export type TurnTimer = z.infer<typeof turnTimerSchema>;
+const timer = turnTimerSchema.optional();
+export const picturePackSchema = z.object({ starting, seed, timer, cards: z.array(keyed).length(BOARD_SIZE) }).strict()
   .superRefine((pack, ctx) => checkSplit(pack, PICTURES_BOARD, ctx));
-export const wordsPackSchema = z.object({ kind: z.literal('words'), lang: z.enum(ROOM_LOCALES), starting, seed, cards: z.array(keyedWord).length(WORDS_BOARD.size) }).strict()
+export const wordsPackSchema = z.object({ kind: z.literal('words'), lang: z.enum(ROOM_LOCALES), starting, seed, timer, cards: z.array(keyedWord).length(WORDS_BOARD.size) }).strict()
   .superRefine((pack, ctx) => checkSplit(pack, WORDS_BOARD, ctx));
 export type PicturePack = z.infer<typeof picturePackSchema>;
 export type WordsPack = z.infer<typeof wordsPackSchema>;
@@ -242,7 +247,7 @@ export function boardMatcher(boardWords: readonly string[]): (clue: string) => s
 /** Every spelling of a term: once the bot has said it (in any language), a Scout cannot say it again, and the other way round. */
 export const termSpellings = (term: Term): string[] => [...Object.values(term.label), ...(term.aliases ?? [])].map(fold).filter(Boolean);
 
-export const termLabel = (term: Term, locale: RoomLocale): string => term.label[locale];
+export const termLabel = (term: Term, locale: RoomLocale): string => term.label[locale] ?? term.label.en;
 
 export interface BotClue { term: Term; count: number }
 
@@ -271,3 +276,7 @@ export function bestClue(pack: CodenamesPack, revealed: readonly (CardKey | null
     .sort((a, b) => (b.mine * 2 - b.bad) - (a.mine * 2 - a.bad) || b.mine - a.mine || a.term.id.localeCompare(b.term.id))[0];
   return best ? { term: best.term, count: best.mine } : null;
 }
+
+/** The team's hidden cards a bot clue was counted on (what it meant). */
+export const clueTargets = (pack: CodenamesPack, revealed: readonly (CardKey | null)[], team: Team, term: Term): number[] =>
+  pack.cards.flatMap((card, i) => (revealed[i] === null && card.key === teamKey(team) && card.terms.some((t) => t.id === term.id) ? [i] : []));

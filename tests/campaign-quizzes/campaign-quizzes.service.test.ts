@@ -480,9 +480,9 @@ describe('campaignQuizzesService', () => {
   });
 
   it('says which language editions the page has: a missing edition is served in English, never as its own page', async () => {
-    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: true });
+    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: true, pt: false });
     vi.mocked(campaignQuizzesRepo.getVisibleQuiz).mockResolvedValue({ ...quizRow, ru_seo_title: null });
-    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: false });
+    expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'ru')).editions).toEqual({ ka: false, es: true, ru: false, pt: false });
   });
 
   it('lists only campaign pages with publishable Spanish SEO content', async () => {

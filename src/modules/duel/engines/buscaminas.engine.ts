@@ -18,7 +18,7 @@ export const BM_TIMEOUT_FORFEIT = 2;
 type Difficulty = keyof typeof BM_POINTS;
 
 const text = z.string().trim().min(1).max(200);
-const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional() });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional(), pt: text.optional() });
 
 /** One pool item: a category with 16 cards, 12 of which fit (`ok`). */
 export const buscaminasRoundSchema = z.object({

@@ -7,7 +7,7 @@ import { createDailyService, type BoardsResponse, type LeaderboardResponse as Da
 import { tenableListSchema, type TenableList } from '../tenable/tenable.content.js';
 import { tenableDirectories } from '../tenable/tenable.directories.js';
 import { displayName, judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
-import { refreshRussianText, withRussianText } from '../tenable/tenable.text.js';
+import { refreshTranslatedText, withTranslatedText } from '../tenable/tenable.text.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { RANKED_START, tenableCalendar } from './tenable-daily.days.js';
@@ -127,7 +127,7 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
       const day = await core.closedDay(dayId);
       return {
         day: dayId,
-        list: withRussianText(day.list).title,
+        list: withTranslatedText(day.list).title,
         slots: day.list.slots.map((slot, i) => ({ rank: i + 1, name: displayName(day.directory, slot.eid, locale === 'ru') ?? '?', figure: slot.figure })),
       };
     },
@@ -175,7 +175,7 @@ export function oneAtATime<T>(fn: () => Promise<T>): () => Promise<T> | null {
  * lock) waits on a cold load, and nothing in use is ever evicted.
  */
 export function startTenableDailyReadinessCheck(): void {
-  void refreshRussianText();
+  void refreshTranslatedText();
   const keep = async () => {
     const index = await tenableDailyContent.get();
     const rooms = await tenableRoomPairs();

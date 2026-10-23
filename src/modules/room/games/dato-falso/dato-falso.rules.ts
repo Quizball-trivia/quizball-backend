@@ -12,7 +12,7 @@ export type DfCategory = (typeof DF_CATEGORIES)[number];
 export const DF_DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 export type DfDifficulty = (typeof DF_DIFFICULTIES)[number];
 export type DfJoker = 'cut' | 'double';
-export const DF_LOCALES = ['en', 'es', 'ka', 'tr', 'ru'] as const;
+export const DF_LOCALES = ['en', 'es', 'ka', 'tr', 'ru', 'pt'] as const;
 export type DfLocale = (typeof DF_LOCALES)[number];
 
 /** Both seeders (days and room pool) take this lock, so the daily / room overlap check cannot be raced. */
@@ -39,7 +39,8 @@ export const DF_LIMITS = { name: 60, label: 40, explain: 180, id: 64 } as const;
 export const DF_PLAYER_GAP_DAYS = 7;
 
 const text = (max: number) => z.string().trim().min(1).max(max);
-const localized = (max: number) => z.object({ en: text(max), es: text(max), ka: text(max), tr: text(max), ru: text(max) }).strict();
+/** pt is optional until every card carries it; pick() falls back to English. */
+const localized = (max: number) => z.object({ en: text(max), es: text(max), ka: text(max), tr: text(max), ru: text(max), pt: text(max).optional() }).strict();
 export type DfLocalized = z.infer<ReturnType<typeof localized>>;
 
 const assetUrl = z.string().max(400).regex(/^(https:\/\/|\/assets\/)/, 'Expected an https URL or a /assets/ path');
@@ -63,13 +64,14 @@ export const dfCardSchema = z.object({
   explain: localized(DF_LIMITS.explain),
 }).strict().superRefine((card, ctx) => {
   for (const locale of DF_LOCALES) {
-    const labels = card.options.map((o) => o.label[locale].toLocaleLowerCase(locale));
+    // An option still without its pt label is shown in English, so that is the text it must not repeat.
+    const labels = card.options.map((o) => (o.label[locale] ?? o.label.en).toLocaleLowerCase(locale));
     if (new Set(labels).size !== labels.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Two options read the same in ${locale}` });
   }
 });
 export type DfCard = z.infer<typeof dfCardSchema>;
 
-export const pick = (value: DfLocalized, locale: string): string => value[(DF_LOCALES as readonly string[]).includes(locale) ? (locale as DfLocale) : 'en'];
+export const pick = (value: DfLocalized, locale: string): string => value[(DF_LOCALES as readonly string[]).includes(locale) ? (locale as DfLocale) : 'en'] ?? value.en;
 
 /** A card's points: right +1, otherwise 0; doubled, +2 or −1 (a doubled card left unanswered counts as wrong). */
 export const pointsFor = (right: boolean, doubled: boolean): number => (right ? (doubled ? 2 : 1) : doubled ? -1 : 0);

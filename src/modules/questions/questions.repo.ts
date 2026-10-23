@@ -7,7 +7,7 @@ import { logger } from '../../core/logger.js';
  * SECURITY: Only these pre-defined SQL fragments can be used in queries.
  * This prevents SQL injection when using sql.unsafe() with locale-based accessors.
  */
-const ALLOWED_LOCALES = ['en', 'ka', 'es', 'tr', 'ru'] as const;
+const ALLOWED_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt'] as const;
 type AllowedLocale = typeof ALLOWED_LOCALES[number];
 
 const LOCALE_PROMPT_ACCESSORS: Record<AllowedLocale, string> = {
@@ -15,8 +15,9 @@ const LOCALE_PROMPT_ACCESSORS: Record<AllowedLocale, string> = {
   ka: `q.prompt->>'ka'`,
   es: `q.prompt->>'es'`,
   tr: `q.prompt->>'tr'`,
-  // Russian prompts are optional: a question without one is compared by its English prompt.
+  // Russian and Portuguese prompts are optional: a question without one is compared by its English prompt.
   ru: `COALESCE(NULLIF(q.prompt->>'ru', ''), q.prompt->>'en')`,
+  pt: `COALESCE(NULLIF(q.prompt->>'pt', ''), q.prompt->>'en')`,
 };
 
 function getLocaleAccessor(locale: string): string {
@@ -413,7 +414,7 @@ export const questionsRepo = {
     // Normalize prompts for comparison (lowercase, trim)
     const normalizedPrompts = prompts.map(p => {
       const promptObj = p as I18nField;
-      const text = promptObj[locale] || (locale === 'ru' ? promptObj.en : '') || '';
+      const text = promptObj[locale] || (locale === 'ru' || locale === 'pt' ? promptObj.en : '') || '';
       return text.toLowerCase().trim();
     }).filter(Boolean);
 

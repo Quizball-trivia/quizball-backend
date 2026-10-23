@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Fill missing Russian (ru) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
+ * Fill a missing locale (Russian `ru` by default, or `--locale=pt` Brazilian Portuguese) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
  * Pistas / Último / Minuto / Buscaminas / Played-for-both days, the duel and room pools, and store products.
  *
  * This is a localization-only write: content_version is left alone and nothing else in a row changes, so played days
@@ -9,7 +9,7 @@
  * Each distinct English text is translated once; the cache is shared with translate-missing-locales.ts.
  *
  * Usage:
- *   npx tsx scripts/translate-game-content.ts count  [--tables=pistas_days,…] [--env-file=.env]
+ *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt] [--effort=high] [--tables=pistas_days,…] [--env-file=.env]
  *   npx tsx scripts/translate-game-content.ts sample [--tables=…] [--limit=20]          # live model call, no writes
  *   npx tsx scripts/translate-game-content.ts cache  [--tables=…] [--batch=100] [--concurrency=4]  # translate + validate as apply would, no writes
  *   npx tsx scripts/translate-game-content.ts apply  [--tables=…] [--batch=100] [--concurrency=4]
@@ -38,6 +38,10 @@ import { parseDayFile as parseUltimoDay } from '../src/modules/ultimo/ultimo.see
 import { parseDayFile as parseMinutoDay } from '../src/modules/minuto/minuto.seed.js';
 import { parsePoolFile } from '../src/modules/duel/duel.seed.js';
 import type { DuelGameId } from '../src/modules/duel/duel.types.js';
+import { indexDay as indexDatoFalsoDay } from '../src/modules/dato-falso/dato-falso.service.js';
+import { indexDay as indexCodenamesDay } from '../src/modules/codenames/codenames.content.js';
+import { dfCardSchema } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
+import { codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { POOLER_SAFE, requireStagingTarget, STAGING_REF } from './staging-target.js';
 
 const MODES = ['count', 'sample', 'cache', 'apply', 'verify'] as const;
@@ -52,6 +56,10 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
   if (!Number.isInteger(value) || value < 1) { console.error(`ABORT: --${name} must be a positive integer`); process.exit(1); }
 }
 const MODEL = 'gpt-6-luna';
+const LOCALE = opt('locale', 'ru');
+if (LOCALE !== 'ru' && LOCALE !== 'pt') { console.error('ABORT: --locale must be ru or pt'); process.exit(1); }
+const EFFORT = opt('effort', 'high');
+if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
@@ -72,7 +80,8 @@ const dayRow = (r: Row) => ({ day: r.day as string, number: Number(r.number), co
 const DAY = ['number', 'content_version'];
 const POOL: Record<string, Record<string, { safeParse: (v: unknown) => { success: boolean } }>> = {
   duel_pool: { pistas: pistasRoundSchema, ultimo: ultimoCategorySchema, buscaminas: buscaminasRoundSchema, minuto: goalSchema },
-  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema },
+  // Codenames word items are one language each (no text nodes), so only its picture cards are ever filled.
+  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema },
 };
 const accepts = (check: () => unknown): boolean => { try { check(); return true; } catch { return false; } };
 const poolValid = (table: string): Validate => (r) => POOL[table][r.game as string]?.safeParse(r.payload).success ?? false;
@@ -85,6 +94,8 @@ const TABLES: TableSpec[] = [
   { table: 'minuto_days', key: ['day'], columns: ['goals'], extra: DAY, validate: (r) => indexMinutoDay({ ...dayRow(r), goals: r.goals } as never) !== null && accepts(() => parseMinutoDay('stored', { ...seedDay(r), goals: r.goals })) },
   { table: 'buscaminas_days', key: ['day'], columns: ['board'], extra: [...DAY, 'answers'], validate: (r) => indexBuscaminasDay({ ...dayRow(r), board: r.board, answers: r.answers } as never) !== null },
   { table: 'shared_player_days', key: ['day'], columns: ['pairs'], extra: DAY, validate: (r) => indexSharedPlayerDay({ ...dayRow(r), pairs: r.pairs } as never) !== null },
+  { table: 'dato_falso_days', key: ['day'], columns: ['cards'], extra: DAY, validate: (r) => indexDatoFalsoDay({ ...dayRow(r), cards: r.cards }) !== null },
+  { table: 'codenames_days', key: ['day'], columns: ['board'], extra: DAY, validate: (r) => indexCodenamesDay({ ...dayRow(r), board: r.board }) !== null },
   { table: 'duel_pool', key: ['game', 'item_id'], columns: ['payload'], validate: duelValid, pistasAnswers: (r) => r.game === 'pistas' },
   { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
   { table: 'store_products', key: ['id'], columns: ['name', 'description'], validate: () => true },
@@ -106,7 +117,10 @@ function nodes(v: unknown, out: Node[] = []): Node[] {
   return out;
 }
 
-const SYSTEM = `You translate football (soccer) game content from English to Russian for Russian-speaking fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: write player, club, stadium and competition names in Cyrillic the way Russian sports media do (Messi → Месси, Erling Haaland → Эрлинг Холанд, Arsenal → Арсенал, Manchester United → Манчестер Юнайтед, Premier League → Премьер-лига, Champions League → Лига чемпионов, World Cup → чемпионат мира); a value that is only a name stays only a name (no quotes, no extra words); inside sentences put club names in «»; keep abbreviations like PSG, MLS, VAR in Latin but write УЕФА and ФИФА; keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; keep numbers, years and scores as written (scores with a colon, 2:1); neutral written register, no slang; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
+const SYSTEM_PT = `You translate football (soccer) game content from English to Brazilian Portuguese (pt-BR) for Brazilian fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or → Bola de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga); a value that is only a name stays only a name (no quotes, no extra words); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol, pênalti); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; amounts in Brazilian number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; neutral written register, address the player as você; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
+
+const SYSTEM_RU = `You translate football (soccer) game content from English to Russian for Russian-speaking fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: write player, club, stadium and competition names in Cyrillic the way Russian sports media do (Messi → Месси, Erling Haaland → Эрлинг Холанд, Arsenal → Арсенал, Manchester United → Манчестер Юнайтед, Premier League → Премьер-лига, Champions League → Лига чемпионов, World Cup → чемпионат мира); a value that is only a name stays only a name (no quotes, no extra words); inside sentences put club names in «»; keep abbreviations like PSG, MLS, VAR in Latin but write УЕФА and ФИФА; keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; keep numbers, years and scores as written (scores with a colon, 2:1); neutral written register, no slang; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
+const SYSTEM = LOCALE === 'pt' ? SYSTEM_PT : SYSTEM_RU;
 
 class OutOfBudget extends Error {}
 let codexDir = '', codexCalls = 0;
@@ -116,7 +130,7 @@ function askCodex(user: string, count: number): Promise<string> {
   const keys = Array.from({ length: count }, (_, i) => String(i));
   writeFileSync(schema, JSON.stringify({ type: 'object', properties: Object.fromEntries(keys.map((k) => [k, { type: 'string' }])), required: keys, additionalProperties: false }));
   const prompt = `This is a translation job. Do it in one pass from your own knowledge: no web search, no tools, no file reads. Ignore any project memory or earlier tasks; this message is the whole task.\n\n${SYSTEM}\n\n${user}`;
-  const args = ['exec', '-m', MODEL, '-c', 'model_reasoning_effort="high"', '--skip-git-repo-check', '--ephemeral', '-C', codexDir, '--output-schema', schema, '-o', out, prompt];
+  const args = ['exec', '-m', MODEL, '-c', `model_reasoning_effort="${EFFORT}"`, '--skip-git-repo-check', '--ephemeral', '-C', codexDir, '--output-schema', schema, '-o', out, prompt];
   return new Promise((resolve, reject) => {
     const child = execFile(join(homedir(), '.local/bin/codex'), args, { timeout: 20 * 60_000, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (!err && existsSync(out)) return resolve(readFileSync(out, 'utf8'));
@@ -134,33 +148,34 @@ async function translateBatch(texts: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   texts.forEach((en, i) => {
     const t = parsed[String(i)];
-    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n')) out.set(en, t.trim().replace(/^«([^«»]+)»$/, '$1'));
+    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n')) out.set(en, LOCALE === 'ru' ? t.trim().replace(/^«([^«»]+)»$/, '$1') : t.trim());
   });
   return out;
 }
 
-const cacheFile = `scripts/.snapshots/translation-cache-ru-${MODEL}.json`;
+// Russian shares its cache with translate-missing-locales.ts; Portuguese game content keeps its own (a different prompt).
+const cacheFile = LOCALE === 'pt' ? `scripts/.snapshots/translation-cache-pt-v1-game-${MODEL}.json` : `scripts/.snapshots/translation-cache-ru-${MODEL}.json`;
 const readCache = () => new Map<string, string>(existsSync(cacheFile) ? Object.entries(JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<string, string>) : []);
 const cache = readCache();
 /** Other translation scripts share the file: merge with what is on disk before writing. */
 function saveCache(): void {
   const merged = readCache();
-  for (const [en, ru] of cache) merged.set(en, ru);
-  for (const [en, ru] of merged) if (!cache.has(en)) cache.set(en, ru);
+  for (const [en, text] of cache) merged.set(en, text);
+  for (const [en, text] of merged) if (!cache.has(en)) cache.set(en, text);
   mkdirSync('scripts/.snapshots', { recursive: true });
   writeFileSync(cacheFile, JSON.stringify(Object.fromEntries(merged)));
 }
 
 async function main() {
-  console.log(`STAGING ${STAGING_REF} · mode ${mode} · tables ${specs.map((s) => s.table).join(',')} · model ${MODEL}\n`);
+  console.log(`STAGING ${STAGING_REF} · mode ${mode} · locale ${LOCALE} · tables ${specs.map((s) => s.table).join(',')} · model ${MODEL} ${EFFORT}\n`);
   const loaded: Array<{ spec: TableSpec; rows: Row[] }> = [];
   for (const spec of specs) {
     const hasUpdatedAt = spec.table !== 'store_products';
     const cols = [...spec.key.map((k) => `${k}::text AS ${k}`), ...spec.columns, ...(spec.extra ?? [])];
     const rows = await sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table} ORDER BY ${spec.key.join(', ')}`);
     loaded.push({ spec, rows });
-    const empty = rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c]))).filter((n) => !isText(n.ru));
-    console.log(`${spec.table}: ${rows.length} rows · ${empty.length} empty ru slots · ${new Set(empty.map((n) => n.en as string)).size} distinct texts`);
+    const empty = rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c]))).filter((n) => !isText(n[LOCALE]));
+    console.log(`${spec.table}: ${rows.length} rows · ${empty.length} empty ${LOCALE} slots · ${new Set(empty.map((n) => n.en as string)).size} distinct texts`);
   }
   if (mode === 'count') return;
   if (mode === 'verify') {
@@ -171,64 +186,75 @@ async function main() {
     return;
   }
 
-  const need = [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c])))).filter((n) => !isText(n.ru)).map((n) => n.en as string))]
+  const need = [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c])))).filter((n) => !isText(n[LOCALE])).map((n) => n.en as string))]
     .filter((en) => !cache.has(en));
   const todo = mode === 'sample' ? need.slice(0, LIMIT) : need;
   console.log(`\n${todo.length} texts to translate (${need.length - todo.length} more not in this run); ${cache.size} cached`);
   const batches: string[][] = [];
   for (let i = 0; i < todo.length; i += BATCH) batches.push(todo.slice(i, i + BATCH));
-  let next = 0, failures = 0, done = 0;
+  let next = 0, failures = 0, done = 0, rateLimited = 0;
   const sampled = new Map<string, string>();
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (next < batches.length && failures < 6) {
       const batch = batches[next++];
       try {
-        for (const [en, ru] of await translateBatch(batch)) (mode === 'sample' ? sampled : cache).set(en, ru);
+        for (const [en, text] of await translateBatch(batch)) (mode === 'sample' ? sampled : cache).set(en, text);
         failures = 0;
         done += batch.length;
         if (mode !== 'sample') saveCache();
         console.log(`translated ${done}/${todo.length}`);
       } catch (e) {
         if (e instanceof OutOfBudget) { failures = 99; console.error(`STOP: ${(e as Error).message}`); break; }
+        // A burst rate limit (429) passes: wait it out and send the batch again, without counting it as a failure.
+        if (/\b429\b|Too Many Requests/.test((e as Error).message) && (rateLimited += 1) <= 40) {
+          console.error('rate limited; waiting 90 s');
+          await new Promise((resolve) => setTimeout(resolve, 90_000));
+          batches.push(batch);
+          continue;
+        }
         failures += 1; console.error(`batch failed: ${(e as Error).message}`);
       }
     }
   }));
-  if (mode === 'sample') { for (const [en, ru] of sampled) console.log(`${en}\n   → ${ru}`); return; }
+  if (mode === 'sample') { for (const [en, text] of sampled) console.log(`${en}\n   → ${text}`); return; }
   if (failures >= 6) console.error('stopped after repeated failures; re-run to continue (cached texts are not re-sent)');
 
   mkdirSync('scripts/.snapshots', { recursive: true });
   for (const { spec, rows } of loaded) {
     const snapshot: Row[] = []; const invalidKeys: string[] = []; let filled = 0, accepted = 0, updated = 0, skipped = 0, invalid = 0;
-    const planned: Array<{ row: Row; changed: number }> = [];
+    const planned: Array<{ row: Row; before: Row; changed: number }> = [];
     for (const row of rows) {
       // The whole row as it was (fill and aliases change nested arrays in place): the snapshot is a true pre-image.
       const before = structuredClone(row);
       let changed = 0;
+      const filledNow = new Set<Node>();
       for (const c of spec.columns) for (const n of nodes(row[c])) {
-        if (isText(n.ru)) continue;
-        const ru = cache.get(n.en as string);
-        if (ru) { n.ru = ru; changed += 1; }
+        if (isText(n[LOCALE])) continue;
+        const text = cache.get(n.en as string);
+        if (text) { n[LOCALE] = text; changed += 1; filledNow.add(n); }
       }
       const pistas = spec.pistasAnswers?.(row) ? addPistasAccepted(row[spec.columns[0]]) : null;
       const added = (pistas?.added ?? 0) + (spec.passChainAliases ? addPassChainAlias(row) : 0);
       if (!changed && !added) continue;
-      if (!spec.validate(row) && !dropOverlong(row, spec) && !(pistas && repairPistas(row, spec, pistas))) { invalid += 1; invalidKeys.push(spec.key.map((k) => row[k]).join('/')); continue; }
+      if (!spec.validate(row) && !dropOverlong(row, spec, filledNow) && !(pistas && repairPistas(row, spec, pistas))) { invalid += 1; invalidKeys.push(spec.key.map((k) => row[k]).join('/')); continue; }
       accepted += added;
       if (mode === 'cache') { updated += 1; filled += changed; continue; }
       snapshot.push(before);
-      planned.push({ row, changed });
+      planned.push({ row, before, changed });
     }
     // Written before the first update: a run that stops halfway still has every row it touched.
-    const snap = `scripts/.snapshots/game-content-ru-${spec.table}-${Date.now()}.json`;
+    const snap = `scripts/.snapshots/game-content-${LOCALE}-${spec.table}-${Date.now()}.json`;
     if (snapshot.length) writeFileSync(snap, JSON.stringify(snapshot));
-    for (const { row, changed } of planned) {
+    for (const { row, before, changed } of planned) {
       const sets = [
         ...spec.columns.map((c) => sql`${sql(c)} = ${sql.json(row[c] as never)}`),
         ...(spec.passChainAliases ? [sql`aliases = ${row.aliases as string[]}`, sql`normalized_aliases = ${row.normalized_aliases as string[]}`] : []),
       ];
       const keyMatch = spec.key.map((k) => sql`${sql(k)} = ${row[k] as string}`);
-      const guard = row.updated_text === null ? sql`TRUE` : sql`updated_at::text = ${row.updated_text}`;
+      // No updated_at (store_products): the row must still hold exactly what was read, or an edit made meanwhile is kept.
+      const guard = row.updated_text === null
+        ? spec.columns.map((c) => sql`${sql(c)} IS NOT DISTINCT FROM ${before[c] === null ? null : sql.json(before[c] as never)}::jsonb`).reduce((a, b) => sql`${a} AND ${b}`)
+        : sql`updated_at::text = ${row.updated_text}`;
       const setList = sets.reduce((a, b) => sql`${a}, ${b}`);
       const keyList = keyMatch.reduce((a, b) => sql`${a} AND ${b}`);
       const res = await sql`UPDATE ${sql(spec.table)} SET ${setList} WHERE ${keyList} AND ${guard}`;
@@ -238,26 +264,28 @@ async function main() {
   }
 }
 
-/** A row the schema refused because of a long translation: drop ru from over-long nodes (sentence limit 200, name limit 60 when the
- *  English fits a name field) and validate again. Returns whether the row is valid now. */
-function dropOverlong(row: Row, spec: TableSpec): boolean {
-  for (const limit of [200, 60]) {
+/** A row the schema refused because of a long translation: drop this run's over-long fills (text already stored is never touched), from the
+ *  widest field limit down to the tightest (Dato falso explain 180 / name 60 / label 40, Codenames terms 30), only where the English fits that
+ *  limit; validate after each. */
+function dropOverlong(row: Row, spec: TableSpec, filledNow: ReadonlySet<Node>): boolean {
+  for (const limit of [200, 180, 60, 40, 30]) {
     for (const c of spec.columns) for (const n of nodes(row[c])) {
-      if (isText(n.ru) && n.ru.length > limit && (limit === 200 || (n.en as string).length <= 60)) delete n.ru;
+      const text = n[LOCALE];
+      if (filledNow.has(n) && isText(text) && text.length > limit && (limit === 200 || (n.en as string).length <= limit)) delete n[LOCALE];
     }
     if (spec.validate(row)) return true;
   }
   return false;
 }
 
-/** Pass Chain: add the Russian name to `aliases` and its key (the service's own normaliser) to `normalized_aliases`. */
+/** Pass Chain: add the localized name to `aliases` and its key (the service's own normaliser) to `normalized_aliases`. */
 function addPassChainAlias(row: Row): number {
-  const ru = (row.name as Node | null)?.ru;
+  const name = (row.name as Node | null)?.[LOCALE];
   const aliases = row.aliases as string[] | null;
   const keys = row.normalized_aliases as string[] | null;
-  const key = normalizeAnswerString(ru);
-  if (!isText(ru) || !key || !Array.isArray(aliases) || !Array.isArray(keys) || keys.includes(key)) return 0;
-  aliases.push(ru);
+  const key = normalizeAnswerString(name);
+  if (!isText(name) || !key || !Array.isArray(aliases) || !Array.isArray(keys) || keys.includes(key)) return 0;
+  aliases.push(name);
   keys.push(key);
   return 1;
 }
@@ -275,10 +303,10 @@ function addPistasAccepted(value: unknown): { added: number; surnames: Array<{ l
   let added = 0;
   const surnames: Array<{ list: string[]; form: string }> = [];
   for (const round of pistasRounds(value)) {
-    const ru = round?.answer?.display?.ru;
+    const shown = round?.answer?.display?.[LOCALE];
     const list = round?.answer?.accepted as string[] | undefined;
-    if (!isText(ru) || !Array.isArray(list)) continue;
-    const full = normalizeAnswer(ru);
+    if (!isText(shown) || !Array.isArray(list)) continue;
+    const full = normalizeAnswer(shown);
     const words = full.split(' ').filter(Boolean);
     const forms = [full, ...(words.length >= 2 && words[words.length - 1].length >= 3 ? [words[words.length - 1]] : []), ...(words.length >= 3 ? [words.slice(1).join(' ')] : [])];
     const have = new Set(list.filter(isText).map(normalizeAnswer));
@@ -291,7 +319,7 @@ function addPistasAccepted(value: unknown): { added: number; surnames: Array<{ l
   return { added, surnames };
 }
 
-/** A Pistas row the seed refused after the fill: take the surname forms back out, then drop Russian clues that name the answer. */
+/** A Pistas row the seed refused after the fill: take the surname forms back out, then drop localized clues that name the answer. */
 function repairPistas(row: Row, spec: TableSpec, added: { surnames: Array<{ list: string[]; form: string }> }): boolean {
   for (const { list, form } of added.surnames) { const i = list.indexOf(form); if (i >= 0) list.splice(i, 1); }
   if (spec.validate(row)) return true;
@@ -299,7 +327,8 @@ function repairPistas(row: Row, spec: TableSpec, added: { surnames: Array<{ list
     const names = new Set(((round.answer?.accepted as string[] | undefined) ?? []).map(normalizeAnswer).filter((n) => n.length > 2));
     for (const clue of round.clues ?? []) {
       const text = clue.text;
-      if (text && isText(text.ru) && [...names].some((name) => ` ${normalizeAnswer(text.ru as string)} `.includes(` ${name} `))) delete text.ru;
+      const localized = text?.[LOCALE];
+      if (text && isText(localized) && [...names].some((name) => ` ${normalizeAnswer(localized)} `.includes(` ${name} `))) delete text[LOCALE];
     }
   }
   return spec.validate(row);

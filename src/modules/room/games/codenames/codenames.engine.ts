@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
 import {
-  bestClue, clueProblem, fold, isWordsPack, MAX_BOARD_SIZE, MAX_CLUE_CHARS, MAX_CLUE_COUNT, other, rng, shuffled, teamKey, termLabel, termSpellings, tidyClue,
+  bestClue, clueProblem, clueTargets, fold, isWordsPack, MAX_BOARD_SIZE, MAX_CLUE_CHARS, MAX_CLUE_COUNT, other, rng, shuffled, teamKey, termLabel, termSpellings, tidyClue,
   type CardKey, type ClueProblem, type CodenamesPack, type Team, type Term,
 } from './codenames.rules.js';
 
@@ -17,8 +17,10 @@ import {
  *    them go on; a neutral or rival card ends the turn; the Own Goal loses the game. A team wins when all its cards
  *    are revealed (whoever flipped the last one) or when the rivals have nobody left.
  *
- * The game shows no clock. Every phase still has a deadline, so a room never stalls: the bot gives the clue for a
- * Scout who is gone or idle, an idle turn ends, and the teams screen kicks off by itself.
+ * Without a turn timer the game shows no clock. Every phase still has a deadline, so a room never stalls: the bot gives
+ * the clue for a Scout who is gone or idle, an idle turn ends, and the teams screen kicks off by itself. With a timer
+ * (the host's pick, stored with the board) the Scout has that long for the clue and the team as long for its guesses:
+ * a Scout who runs out passes the turn, a team that runs out ends it.
  */
 export const MAX_SEATS = 8;
 export const TEAMS_MS = 4 * 60_000;
@@ -44,7 +46,8 @@ export const codenamesCommandSchema = z.discriminatedUnion('type', [
   /** `seen`: the shuffles the sender's screen showed (the client knows its shuffle was judged once the count passes it). */
   z.object({ type: z.literal('shuffle'), seen: z.number().int().min(0).max(1_000).optional() }).strict(),
   z.object({ type: z.literal('kickoff') }).strict(),
-  z.object({ type: z.literal('clue'), turn: turnNo, word: z.string().max(MAX_CLUE_CHARS * 4), count: z.number().int().min(1).max(MAX_CLUE_COUNT) }).strict(),
+  /** `cards`: the Scout's own cards the clue is meant for (optional; when given, as many as `count`), shown when the game ends. */
+  z.object({ type: z.literal('clue'), turn: turnNo, word: z.string().max(MAX_CLUE_CHARS * 4), count: z.number().int().min(1).max(MAX_CLUE_COUNT), cards: z.array(cardIndex).min(1).max(MAX_CLUE_COUNT).optional() }).strict(),
   /** `n`: the sender's own counter, so pointing back at a card is a new command, not a repeat of the first. */
   z.object({ type: z.literal('point'), turn: turnNo, card: cardIndex.nullable(), n: z.number().int().min(0).max(100_000).optional() }).strict(),
   z.object({ type: z.literal('flip'), turn: turnNo, card: cardIndex }).strict(),
@@ -58,8 +61,11 @@ export type EndReason = 'cleared' | 'owngoal' | 'left' | 'idle';
 /** A clue as said: a Scout's own words, or the bot's name from the cards (shown in each reader's language). */
 export interface GivenClue { word: string | null; term: Term | null; count: number; bot: boolean }
 export interface Flip { card: number; key: CardKey; seat: number }
-/** `clue` null: the bot had no safe clue left and passed. */
-export interface Turn { team: Team; clue: GivenClue | null; flips: Flip[] }
+/**
+ * `clue` null: the bot had no safe clue left and passed, or (`timeout`) the Scout ran out of time. `meant`: the cards the
+ * clue was given for (the bot's, or the ones a Scout marked), private until the game is over.
+ */
+export interface Turn { team: Team; clue: GivenClue | null; flips: Flip[]; meant?: number[]; timeout?: true }
 
 export interface CodenamesState extends RoomEngineState {
   phase: Phase;
@@ -89,9 +95,13 @@ export interface CodenamesState extends RoomEngineState {
   winner: Team | null;
   endedBy: EndReason | null;
   draws: number;
+  /** Turn timer in ms (the Scout's clue, then the team's guesses); null or absent (a match from before timers): none. */
+  timer?: number | null;
+  /** With a timer: when the human Scout's time for this clue runs out, however often they leave and come back. */
+  clueEndsAt?: number | null;
 }
 
-export type CommandError = ClueProblem | 'not_open' | 'stale' | 'withdrawn' | 'not_host' | 'not_your_turn' | 'not_scout' | 'not_guesser' | 'revealed' | 'need_teams' | 'no_flip' | 'no_card';
+export type CommandError = ClueProblem | 'not_open' | 'stale' | 'withdrawn' | 'not_host' | 'not_your_turn' | 'not_scout' | 'not_guesser' | 'revealed' | 'need_teams' | 'no_flip' | 'no_card' | 'bad_cards';
 
 const fill = <T>(n: number, v: T): T[] => Array.from({ length: n }, () => v);
 const ended = (s: CodenamesState) => s.phase === 'over' || s.phase === 'cancelled';
@@ -109,6 +119,7 @@ export function startMatch(seats: number, pack: CodenamesContent, now: number, h
     team: fill<Team | null>(seats, null), scout: fill(seats, false), sawKey: fill(seats, false), botScout: [false, false],
     starting: pack.starting, turn: pack.starting, turnNo: 0, revealed: fill<CardKey | null>(pack.cards.length, null), pointing: fill<number | null>(seats, null),
     clue: null, guessesLeft: 0, history: [], used: [], acted: false, idleTurns: 0, winner: null, endedBy: null, draws: 0,
+    timer: pack.timer ? pack.timer * 1_000 : null,
   };
 }
 
@@ -172,17 +183,21 @@ function kickoff(s: CodenamesState, c: CodenamesContent, now: number): Codenames
 
 // ---------------------------------------------------------------- turns
 
+const clueMs = (s: CodenamesState) => s.timer || CLUE_IDLE_MS;
+const guessMs = (s: CodenamesState) => s.timer || GUESS_IDLE_MS;
+
 function openClue(s: CodenamesState, now: number): CodenamesState {
   const human = humanScoutOf(s, s.turn);
-  const wait = human === null ? BOT_CLUE_MS : s.status[human] === 'in' ? CLUE_IDLE_MS : AWAY_SCOUT_MS;
-  return { ...s, phase: 'clue', clue: null, guessesLeft: 0, acted: false, pointing: s.pointing.map(() => null), deadline: now + wait };
+  const wait = human === null ? BOT_CLUE_MS : s.status[human] === 'in' ? clueMs(s) : AWAY_SCOUT_MS;
+  const clueEndsAt = s.timer && human !== null ? now + s.timer : null;
+  return { ...s, clueEndsAt, phase: 'clue', clue: null, guessesLeft: 0, acted: false, pointing: s.pointing.map(() => null), deadline: now + wait };
 }
 
-function giveClue(s: CodenamesState, clue: GivenClue, now: number): CodenamesState {
+function giveClue(s: CodenamesState, clue: GivenClue, meant: number[] | undefined, now: number): CodenamesState {
   const spellings = clue.term ? termSpellings(clue.term) : [fold(clue.word ?? '')];
   return {
     ...s, phase: 'guess', clue, guessesLeft: clue.count + 1, acted: s.acted || !clue.bot, used: [...new Set([...s.used, ...spellings])],
-    history: [...s.history, { team: s.turn, clue, flips: [] }], deadline: now + GUESS_IDLE_MS,
+    history: [...s.history, { team: s.turn, clue, flips: [], ...(meant?.length ? { meant } : {}) }], deadline: now + guessMs(s),
   };
 }
 
@@ -192,7 +207,7 @@ function giveClue(s: CodenamesState, clue: GivenClue, now: number): CodenamesSta
  */
 function botClue(s: CodenamesState, c: CodenamesContent, now: number): CodenamesState {
   const pick = bestClue(c, s.revealed, s.turn, new Set(s.used));
-  if (pick) return giveClue(s, { word: null, term: pick.term, count: pick.count, bot: true }, now);
+  if (pick) return giveClue(s, { word: null, term: pick.term, count: pick.count, bot: true }, clueTargets(c, s.revealed, s.turn, pick.term), now);
   return endTurn({ ...s, history: [...s.history, { team: s.turn, clue: null, flips: [] }] }, now);
 }
 
@@ -220,13 +235,19 @@ function flip(s: CodenamesState, c: CodenamesContent, seat: number, card: number
   if (key === 'owngoal') return finish(next, other(s.turn), 'owngoal', now);
   for (const t of [s.turn, other(s.turn)] as const) if (cleared(next, c, t)) return finish(next, t, 'cleared', now);
   if (key !== teamKey(s.turn) || s.guessesLeft <= 1) return endTurn(next, now);
-  return { ...next, guessesLeft: s.guessesLeft - 1, deadline: now + GUESS_IDLE_MS };
+  // A turn timer runs for the whole guessing; without one each flip starts the idle wait again.
+  return { ...next, guessesLeft: s.guessesLeft - 1, deadline: s.timer ? s.deadline : now + GUESS_IDLE_MS };
 }
 
 export function tick(s: CodenamesState, c: CodenamesContent, now: number): CodenamesState {
   if (ended(s) || now < s.deadline) return s;
   if (s.phase === 'teams') return kickoff(s, c, now) ?? cancel(s, now);
-  if (s.phase === 'clue') return botClue(s, c, now);
+  if (s.phase === 'clue') {
+    // Out of time with the Scout here: the turn passes (a Scout who is away gets the bot's clue instead).
+    const human = humanScoutOf(s, s.turn);
+    if (s.timer && human !== null && s.status[human] === 'in') return endTurn({ ...s, history: [...s.history, { team: s.turn, clue: null, flips: [], timeout: true }] }, now);
+    return botClue(s, c, now);
+  }
   return endTurn(s, now);
 }
 
@@ -234,7 +255,7 @@ export function tick(s: CodenamesState, c: CodenamesContent, now: number): Coden
 export function afterOutage(s: CodenamesState, _c: CodenamesContent, now: number): CodenamesState {
   if (s.phase === 'teams') return { ...s, deadline: now + TEAMS_MS };
   if (s.phase === 'clue') return openClue({ ...s, acted: s.acted }, now);
-  if (s.phase === 'guess') return { ...s, deadline: now + GUESS_IDLE_MS };
+  if (s.phase === 'guess') return { ...s, deadline: now + guessMs(s) };
   return s;
 }
 
@@ -303,8 +324,11 @@ export function seatsChanged(s: CodenamesState, changes: readonly RoomSeatChange
   if (next.phase === 'clue') {
     const human = humanScoutOf(next, next.turn);
     if (human !== null && status[human] === 'away') next = { ...next, deadline: Math.min(next.deadline, now + AWAY_SCOUT_MS) };
-    // Back before the bot spoke: the Scout gets the whole wait again (the away one was shortened).
-    if (human !== null && status[human] === 'in' && s.status[human] === 'away') next = { ...next, deadline: Math.max(next.deadline, now + CLUE_IDLE_MS) };
+    // Back before the bot spoke: the Scout gets the whole wait again (the away one was shortened); with a timer, only
+    // what is left of their time (coming back never adds to it).
+    if (human !== null && status[human] === 'in' && s.status[human] === 'away') {
+      next = { ...next, deadline: Math.max(next.deadline, next.timer && next.clueEndsAt ? next.clueEndsAt : now + CLUE_IDLE_MS) };
+    }
   }
   return next;
 }
@@ -336,7 +360,10 @@ export function applyCommand(s: CodenamesState, c: CodenamesContent, seat: numbe
     if (humanScoutOf(s, s.turn) !== seat) return { state: s, error: 'not_scout' };
     const problem = clueProblem(command.word, new Set(s.used), hiddenWords(s, c));
     if (problem) return { state: s, error: problem };
-    return { state: giveClue(s, { word: tidyClue(command.word), term: null, count: command.count, bot: false }, now) };
+    const meant = command.cards;
+    if (meant && (meant.length !== command.count || new Set(meant).size !== meant.length
+      || meant.some((i) => i >= c.cards.length || s.revealed[i] !== null || c.cards[i].key !== teamKey(s.turn)))) return { state: s, error: 'bad_cards' };
+    return { state: giveClue(s, { word: tidyClue(command.word), term: null, count: command.count, bot: false }, meant, now) };
   }
   if (s.phase !== 'guess') return { state: s, error: 'not_open' };
   if (!guessersOf(s, s.turn).includes(seat)) return { state: s, error: 'not_guesser' };
@@ -367,6 +394,12 @@ export function standings(s: CodenamesState): RoomEngineStanding[] {
 const hiddenWords = (s: CodenamesState, c: CodenamesContent): string[] =>
   (isWordsPack(c) ? c.cards.flatMap((card, i) => (s.revealed[i] === null ? [card.word] : [])) : []);
 
+/** The clue phase counts down the turn timer only while the team's human Scout is here to give it. */
+const clueClock = (s: CodenamesState) => {
+  const human = humanScoutOf(s, s.turn);
+  return human !== null && s.status[human] === 'in';
+};
+
 const clueView = (clue: GivenClue, locale: RoomLocale) => ({ word: clue.term ? termLabel(clue.term, locale) : clue.word ?? '', count: clue.count, bot: clue.bot });
 
 /**
@@ -376,7 +409,8 @@ const clueView = (clue: GivenClue, locale: RoomLocale) => ({ word: clue.term ? t
 export function viewOf(s: CodenamesState, c: CodenamesContent, seat: number, locale: RoomLocale) {
   const myTeam = s.team[seat];
   const iAmScout = inPlay(s) && myTeam !== null && humanScoutOf(s, myTeam) === seat;
-  const showKeys = iAmScout || s.phase === 'over' || (s.phase === 'cancelled' && s.history.length > 0);
+  const revealMeant = s.phase === 'over' || (s.phase === 'cancelled' && s.history.length > 0);
+  const showKeys = iAmScout || revealMeant;
   return {
     phase: s.phase === 'cancelled' ? 'over' : s.phase,
     cancelled: s.phase === 'cancelled',
@@ -402,7 +436,11 @@ export function viewOf(s: CodenamesState, c: CodenamesContent, seat: number, loc
     })),
     clue: s.phase === 'guess' && s.clue ? clueView(s.clue, locale) : null,
     guessesLeft: s.phase === 'guess' ? s.guessesLeft : null,
-    history: s.history.map((t) => ({ team: t.team, clue: t.clue ? clueView(t.clue, locale) : null, flips: t.flips })),
+    /** The turn timer in seconds (null: none), and when the running one ends (epoch ms on the server clock; null: no clock now). */
+    timer: s.timer ? s.timer / 1_000 : null,
+    clockEndsAt: s.timer && (s.phase === 'guess' || (s.phase === 'clue' && clueClock(s))) ? s.deadline : null,
+    // What each clue was meant for stays on the server until the game is over (a rival Scout's marks tell about the key).
+    history: s.history.map((t) => ({ team: t.team, clue: t.clue ? clueView(t.clue, locale) : null, flips: t.flips, ...(t.timeout ? { timeout: true } : {}), ...(revealMeant ? { meant: t.meant ?? null } : {}) })),
     /** Every spelling said so far, folded, so the clue form can strike a name before it is sent. */
     used: s.used,
     result: s.phase === 'over' && s.winner !== null && s.endedBy ? { winner: s.winner, reason: s.endedBy } : null,

@@ -174,7 +174,8 @@ const random = () => randomInt(0, 0x100000000) / 0x100000000;
 export const codenamesWordsController = {
   async practice(req: Request, res: Response): Promise<void> {
     const { lang } = req.validated.query as z.infer<typeof practiceQuerySchema>;
-    const board = dealPractice(await deckOf(lang), lang, random);
+    // A language without its own deck yet (pt) practises on the English words rather than finding no board.
+    const board = dealPractice(await deckOf(lang), lang, random) ?? (lang === 'en' ? null : dealPractice(await deckOf('en'), 'en', random));
     res.setHeader('Cache-Control', 'no-store');
     if (!board) {
       res.status(503).json({ code: 'CODENAMES_WORDS_UNAVAILABLE', message: 'No word deck for this language yet', details: null, request_id: null });

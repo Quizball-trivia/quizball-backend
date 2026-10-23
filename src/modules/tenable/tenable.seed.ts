@@ -6,6 +6,7 @@ import { canonical } from '../pistas/pistas.seed.js';
 import { CONTENT_START } from '../tenable-daily/tenable-daily.days.js';
 import { listProblems, tenableListSchema, type TenableList } from './tenable.content.js';
 import { russianPinOf, russianRows } from './tenable.russian.js';
+import { aliasPinsOf, withAliases } from './tenable.aliases.js';
 import { buildDirectory, TENABLE_MATCHER_VERSION, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 
 /**
@@ -70,7 +71,7 @@ async function loadDirectory(tx: Sql, kind: EntityKind, release: string): Promis
         WHERE p.release_id = ${release}`
     : await tx<TenableEntity[]>`SELECT eid, name, known, fame, aliases, qualifier FROM tenable_entities WHERE release_id = ${release} AND kind = ${kind}`;
   if (rows.length === 0) throw new Error(`Release ${release} has no ${kind} entities here; seed the release first`);
-  const latin = buildDirectory(kind, release, rows);
+  const latin = buildDirectory(kind, release, await withAliases(tx, kind, rows, await aliasPinsOf(tx, kind, release)));
   const pin = await russianPinOf(tx, kind, release);
   const russian = pin ? await russianRows(tx, kind, release, rows, pin) : null;
   return russian ? withRussian(latin, buildDirectory(kind, release, russian, 'cyrillic')) : latin;

@@ -118,7 +118,7 @@ const dailyChallengeSettingsSchemas = {
   cardDetective: cardDetectiveSettingsSchema,
 } as const;
 
-const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru'] as const;
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt'] as const;
 const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
@@ -157,6 +157,9 @@ function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
   }
   if (normalized === 'ru' || normalized.startsWith('ru-')) {
     return 'ru';
+  }
+  if (normalized === 'pt' || normalized.startsWith('pt-')) {
+    return 'pt';
   }
   return 'en';
 }

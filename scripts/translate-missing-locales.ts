@@ -7,6 +7,7 @@
  * Usage:
  *   npx tsx scripts/translate-missing-locales.ts count  [--locales=tr,es,ka,ru] [--types=a,b]
  *   npx tsx scripts/translate-missing-locales.ts sample --locales=tr [--types=…] [--limit=8]   # live call, no writes
+ *   npx tsx scripts/translate-missing-locales.ts translate --locales=pt [--types=…]   # fills the translation cache only, no writes
  *   npx tsx scripts/translate-missing-locales.ts apply  --locales=tr [--types=…] [--limit=N]   # writes staging
  * Model: --provider=openrouter (default; --model overrides OPENROUTER_MODEL) or --provider=codex (default model
  * gpt-6-luna, runs on the Codex subscription); --effort=low|medium|high; --batch=N texts per call; --concurrency=N.
@@ -21,7 +22,7 @@ import postgres from 'postgres';
 
 const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
 const PROD_REF = 'lfbwhxvwubzeqkztghok';
-const MODES = ['count', 'sample', 'apply', 'recheck-copies'] as const;
+const MODES = ['count', 'sample', 'translate', 'apply', 'recheck-copies'] as const;
 const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!(MODES as readonly string[]).includes(modeArg)) { console.error(`ABORT: mode must be one of ${MODES.join(' | ')}`); process.exit(1); }
 const mode = modeArg as (typeof MODES)[number];
@@ -57,7 +58,7 @@ const MODEL = opt('model', '') || (PROVIDER === 'codex' ? 'gpt-6-luna' : envVar(
 // Model calls can run for an hour with no queries: drop the idle connection ourselves rather than write to one the pooler closed.
 const sql = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
-const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian' };
+const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
 type Json = unknown;
 type Node = Record<string, unknown>;
@@ -76,7 +77,10 @@ function nodes(v: Json, out: Node[] = []): Node[] {
 const plausible = (en: string, t: string) => t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n');
 
 /** Latin-script locales keep names verbatim; Georgian and Russian transliterate them, so they get no "leave proper nouns" override. */
-const systemPrompts = (locale: string): string[] => locale === 'ru'
+const systemPrompts = (locale: string): string[] => locale === 'pt'
+  ? [`You translate football (soccer) trivia UI strings from English to Brazilian Portuguese (pt-BR) for Brazilian football fans. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha, Brazil → Brasil, USA → Estados Unidos); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Copa América, Champions League stays Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Ballon d'Or → Bola de Ouro, Golden Boot → Chuteira de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga, Sparta Prague → Sparta Praga, Dynamo Kyiv → Dínamo de Kiev, Bayer Leverkusen stays); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol contra, pênalti, prorrogação, acréscimos, assistência, sair sem sofrer gols for a clean sheet, chegou sem custo / de graça for a free transfer); these are quiz questions, clues and true/false statements, so keep every fact exactly as stated — do not add, drop or reinterpret anything; write amounts in Brazilian number format (€250,000 → €250.000, 1.5 million → 1,5 milhão, 45.3% → 45,3%) but keep years, seasons like 18/19 or 2017-18, scores, shirt numbers, arrows (→) and currency symbols as written; neutral written register, address the player as você; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written — return those unchanged, except countries/national teams and competitions, which follow the Portuguese forms above. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'ru'
   ? [`You translate football (soccer) trivia UI strings from English to Russian for Russian-speaking football fans. Rules: write names in Cyrillic the way Russian sports media do (Messi → Месси, Cristiano Ronaldo → Криштиану Роналду, Arsenal → «Арсенал», Manchester United → «Манчестер Юнайтед», Premier League → Премьер-лига, Camp Nou → «Камп Ноу»); keep abbreviations like PSG, MLS, VAR in Latin, but write УЕФА and ФИФА; these are quiz questions, clues and true/false statements, so keep every fact exactly as stated — do not add, drop or reinterpret anything, and translate quoted sayings as short literal quotes, not explanations; football terms keep their meaning (extra time → дополнительное время, stoppage time → добавленное время, free transfer → переход свободным агентом, insurance goal → гол, закрепивший победу, boyhood club → родной клуб, clean sheet → сухой матч); keep numbers, seasons like 18/19 or 2017-18, arrows (→) and currency symbols as written, and write match scores with a colon (2:1); use the terminology a Russian fan would use in a neutral written register, no slang; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`]
   : locale === 'ka'
   ? [`You translate football (soccer) trivia UI strings from English to Georgian for a Georgian football app. Rules: write EVERYTHING in Georgian script — transliterate player, club, stadium, competition and person names into Georgian the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the terminology a Georgian fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`]
@@ -134,20 +138,34 @@ async function translateBatch(locale: string, texts: string[]): Promise<Map<stri
   return out;
 }
 
-const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
+/** pt carries a prompt version: a cache built under one set of naming rules is never mixed with another. */
+const CACHE_TAG: Record<string, string> = { pt: '-v1' };
+const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}${CACHE_TAG[locale] ?? ''}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
 const loadCache = (locale: string) => new Map<string, string>(existsSync(cacheFile(locale)) ? Object.entries(JSON.parse(readFileSync(cacheFile(locale), 'utf8')) as Record<string, string>) : []);
 
 async function main() {
   console.log(`STAGING ${STAGING_REF} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
   // Quiz Page questions are included: their curated English stays untouched, and the write uses the CMS trigger's
   // transaction-local guard, as the audited Spanish import does.
-  const rows = await sql<Array<{ id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string }>>`
-    SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
-    WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
-      ${SINCE_HOURS > 0 ? sql`AND q.updated_at > now() - (${SINCE_HOURS} * interval '1 hour')` : sql``}
-    ORDER BY q.type, q.id`;
+  // Read in pages: one query for the whole pool runs past the role's statement limit and the pooler drops it.
+  type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string };
+  const rows: QuestionRow[] = [];
+  // Keyset on the id (never changes); one --since cutoff for every page.
+  const since = SINCE_HOURS > 0 ? new Date(Date.now() - SINCE_HOURS * 3_600_000).toISOString() : null;
+  for (let last: string | null = null; ;) {
+    const page: QuestionRow[] = await sql<QuestionRow[]>`
+      SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
+        ${since ? sql`AND q.updated_at > ${since}::timestamptz` : sql``}
+        ${last ? sql`AND q.id > ${last}::uuid` : sql``}
+      ORDER BY q.id LIMIT 2000`;
+    rows.push(...page);
+    if (page.length < 2000) break;
+    last = page[page.length - 1].id;
+  }
+  rows.sort((x, y) => (x.type < y.type ? -1 : x.type > y.type ? 1 : 0));
   // Work items: one per (row, node, locale) with an empty slot.
-  type Item = { key: string; row: typeof rows[number]; node: Node; locale: string; en: string };
+  type Item = { key: string; row: QuestionRow; node: Node; locale: string; en: string };
   const items: Item[] = [];
   for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload), ...nodes(r.explanation)].entries()) for (const l of LOCALES) {
     if (empty(n[l])) items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
@@ -181,7 +199,7 @@ async function main() {
     console.log(`${locale}: ${wanted.length} distinct texts, ${wanted.length - need.length} already translated, ${need.length} to translate`);
     for (let i = 0; i < need.length; i += BATCH) jobs.push({ locale, texts: need.slice(i, i + BATCH) });
   }
-  let next = 0, finished = 0, misses = 0, stop = false;
+  let next = 0, finished = 0, misses = 0, rateLimited = 0, stop = false;
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (!stop && next < jobs.length) {
       const job = jobs[next++];
@@ -192,6 +210,12 @@ async function main() {
           break;
         } catch (e) {
           console.error(`call failed (attempt ${attempt}): ${(e as Error).message}`);
+          // A burst rate limit (429) passes: wait it out without counting it as the model being down.
+          if (!(e instanceof OutOfBudget) && /\b429\b|Too Many Requests/.test((e as Error).message) && (rateLimited += 1) <= 40) {
+            await new Promise((resolve) => setTimeout(resolve, 90_000));
+            attempt -= 1;
+            continue;
+          }
           // Out of credit, or the model is down: stop asking instead of failing thousands of calls.
           if (e instanceof OutOfBudget || (misses += 1) >= 6) { stop = true; console.error('stopping model calls; what is translated so far is kept'); }
         }
@@ -206,46 +230,84 @@ async function main() {
     console.log('\nsample only — nothing written');
     return;
   }
+  if (mode === 'translate') {
+    for (const locale of LOCALES) {
+      const wanted = new Set(work.filter((w) => w.locale === locale).map((w) => w.en));
+      const done = [...wanted].filter((en) => cache.get(locale)!.has(en)).length;
+      console.log(`${locale}: ${done}/${wanted.size} distinct texts in ${cacheFile(locale)} — nothing written to the database`);
+    }
+    return;
+  }
 
   // Rows are written in chunks, each snapshotted + committed on its own, so a dropped connection loses at most
   // one chunk of writes (re-runs only fill empties, from the cache).
   const rowOrder = [...new Set(work.map((w) => w.row.id))];
   for (let c = 0; c < rowOrder.length; c += CHUNK_ROWS) {
     const chunkIds = rowOrder.slice(c, c + CHUNK_ROWS);
-    // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
-    const fresh = new Map((await sql<typeof rows>`
-      SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
-    const chunk: Item[] = [];
-    for (const w of work.filter((x) => fresh.has(x.row.id))) {
-      const row = fresh.get(w.row.id)!;
-      const idx = Number(w.key.split('#')[1]);
-      const node = [...nodes(row.prompt), ...nodes(row.payload), ...nodes(row.explanation)][idx];
-      if (!node || node.en !== w.en || (mode !== 'recheck-copies' && !empty(node[w.locale]))) continue;
-      chunk.push({ ...w, row, node });
-    }
-    const touched = new Map<string, typeof rows[number]>();
-    const snapshot: Array<{ id: string; prompt: Json; payload: Json; explanation: Json }> = [];
-    for (const b of chunk) {
-      const t = cache.get(b.locale)!.get(b.en);
-      if (!t) { failed += 1; continue; }
-      if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
-      if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; filled += 1; }
-    }
-    if (touched.size === 0) continue;
-    // Snapshot before writing: the pre-fill JSON of every row about to change.
-    const snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
-    writeFileSync(snapFile, JSON.stringify(snapshot));
-    await sql.begin(async (tx) => {
-      await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
-      for (const r of touched.values()) {
-        // Optimistic: skip a row someone edited while its chunk was being translated.
-        const done = await tx`UPDATE questions SET prompt = ${tx.json(r.prompt as never)}, explanation = ${r.explanation === null ? null : tx.json(r.explanation as never)}, updated_at = now() WHERE id = ${r.id} AND updated_at::text = ${r.updated_at}`;
-        if (done.count === 0) { skipped += 1; continue; }
-        await tx`UPDATE question_payloads SET payload = ${tx.json(r.payload as never)} WHERE question_id = ${r.id}`;
-        updated += 1;
+    // A dropped pooler connection or a statement timeout rolls the chunk back: read it again and retry (only empty slots are filled).
+    let snapFile = '';
+    // After a dropped connection the COMMIT may still have landed: a row whose updated_at moved since the failed
+    // attempt read it is left alone (written by that attempt, or edited by someone else), never written twice.
+    let attempted: Map<string, string> | null = null;
+    for (let attempt = 1; ; attempt += 1) {
+      let chunkFilled = 0, chunkFailed = 0, chunkUpdated = 0, chunkSkipped = 0;
+      try {
+        // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
+        const fresh = new Map((await sql<QuestionRow[]>`
+          SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+          WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
+        if (attempted) for (const [id, seen] of attempted) if (fresh.get(id)?.updated_at !== seen) { fresh.delete(id); chunkSkipped += 1; }
+        const chunk: Item[] = [];
+        for (const w of work.filter((x) => fresh.has(x.row.id))) {
+          const row = fresh.get(w.row.id)!;
+          const idx = Number(w.key.split('#')[1]);
+          const node = [...nodes(row.prompt), ...nodes(row.payload), ...nodes(row.explanation)][idx];
+          if (!node || node.en !== w.en || (mode !== 'recheck-copies' && !empty(node[w.locale]))) continue;
+          chunk.push({ ...w, row, node });
+        }
+        const touched = new Map<string, QuestionRow>();
+        const snapshot: Array<{ id: string; prompt: Json; payload: Json; explanation: Json }> = [];
+        for (const b of chunk) {
+          const t = cache.get(b.locale)!.get(b.en);
+          if (!t) { chunkFailed += 1; continue; }
+          if (!touched.has(b.row.id)) { touched.set(b.row.id, b.row); snapshot.push({ id: b.row.id, prompt: JSON.parse(JSON.stringify(b.row.prompt)), payload: JSON.parse(JSON.stringify(b.row.payload)), explanation: JSON.parse(JSON.stringify(b.row.explanation ?? null)) }); }
+          if (mode === 'recheck-copies' ? b.node[b.locale] === b.en : empty(b.node[b.locale])) { b.node[b.locale] = t; chunkFilled += 1; }
+        }
+        if (touched.size === 0) { failed += chunkFailed; skipped += chunkSkipped; break; }
+        // Snapshot before writing: the pre-fill JSON of every row about to change.
+        attempted = new Map([...touched.values()].map((r) => [r.id, r.updated_at]));
+        snapFile = `scripts/.snapshots/translate-${LOCALES.join('-')}-${Date.now()}.json`;
+        writeFileSync(snapFile, JSON.stringify(snapshot));
+        await sql.begin(async (tx) => {
+          await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
+          await tx`SET LOCAL lock_timeout = '10s'`;
+          await tx`SET LOCAL statement_timeout = '60s'`;
+          // One statement per table for the whole chunk (a round trip per row made a full run take hours).
+          // Optimistic: a row someone edited while its chunk was being prepared keeps its content.
+          const values = [...touched.values()].map((r) => ({ id: r.id, prompt: r.prompt, explanation: r.explanation, payload: r.payload, updated_at: r.updated_at }));
+          const done = await tx<Array<{ id: string }>>`
+            UPDATE questions q SET prompt = v.prompt, explanation = v.explanation, updated_at = now()
+            FROM jsonb_to_recordset(${tx.json(values as never)}) AS v(id uuid, prompt jsonb, explanation jsonb, updated_at text)
+            WHERE q.id = v.id AND q.updated_at::text = v.updated_at RETURNING q.id`;
+          const doneIds = done.map((r) => r.id);
+          if (doneIds.length) {
+            await tx`
+              UPDATE question_payloads p SET payload = v.payload
+              FROM jsonb_to_recordset(${tx.json(values as never)}) AS v(id uuid, payload jsonb)
+              WHERE p.question_id = v.id AND v.id = ANY(${doneIds}::uuid[])`;
+          }
+          chunkUpdated += doneIds.length;
+          chunkSkipped += touched.size - doneIds.length;
+        });
+        filled += chunkFilled; failed += chunkFailed; updated += chunkUpdated; skipped += chunkSkipped;
+        break;
+      } catch (e) {
+        const code = String((e as { code?: string }).code ?? '');
+        if (attempt >= 5 || !['CONNECTION_CLOSED', 'CONNECTION_ENDED', 'CONNECT_TIMEOUT', 'ECONNRESET', '57014', '55P03'].includes(code)) throw e;
+        console.error(`chunk at row ${c}: ${code}, retrying (${attempt}/4)`);
+        await new Promise((resolve) => setTimeout(resolve, 10_000 * attempt));
       }
-    });
+    }
     console.log(`rows ${Math.min(c + CHUNK_ROWS, rowOrder.length)}/${rowOrder.length} · filled ${filled} · failed ${failed} · snapshot ${snapFile}`);
   }
   console.log(`filled ${filled} slots in ${updated} rows (failed: ${failed}, rows skipped as edited meanwhile: ${skipped})`);

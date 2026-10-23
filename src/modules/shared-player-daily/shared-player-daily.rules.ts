@@ -97,7 +97,7 @@ export const score = (s: RunState): number => s.res.filter((r) => r.pid !== null
 /** Tenths of a second left over the pairs found: the board's tie-break (faster ranks higher). */
 export const speed = (s: RunState): number => s.res.reduce((sum, r) => sum + (r.pid !== null ? r.left : 0), 0);
 
-type ClubView = { key: string; name: Record<'es' | 'en' | 'ka' | 'tr', string> & { ru?: string }; crest: string };
+type ClubView = { key: string; name: Record<'es' | 'en' | 'ka' | 'tr', string> & { ru?: string; pt?: string }; crest: string };
 const clubView = (club: SharedPlayerItem['a']): ClubView => ({ key: club.key, name: club.label, crest: club.crest });
 
 export interface PublicPairResult {

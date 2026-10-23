@@ -14,6 +14,7 @@ import { emitLobbyState } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
+import { isAnalyticsEventEnabled } from '../../core/analytics/disabled-events.js';
 import { trackDraftStarted } from '../../core/analytics/game-events.js';
 import {
   detachAllSocketsFromLobby,
@@ -279,14 +280,16 @@ export async function startDraft(
         recentFilterApplied,
       });
 
-      // Analytics: per-member draft_started event.
-      try {
-        const draftMembers = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
-        for (const member of draftMembers) {
-          trackDraftStarted({ userId: member.user_id, lobbyId, mode: lobby.mode });
+      // Analytics: per-member draft_started event (skips the member lookup while the event is disabled).
+      if (isAnalyticsEventEnabled('draft_started')) {
+        try {
+          const draftMembers = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+          for (const member of draftMembers) {
+            trackDraftStarted({ userId: member.user_id, lobbyId, mode: lobby.mode });
+          }
+        } catch (err) {
+          logger.warn({ err, lobbyId }, 'draft_started analytics failed');
         }
-      } catch (err) {
-        logger.warn({ err, lobbyId }, 'draft_started analytics failed');
       }
       void import('./draft-realtime.service.js')
         .then(({ scheduleDraftAutoBanForCurrentTurn }) => scheduleDraftAutoBanForCurrentTurn(io, lobbyId))

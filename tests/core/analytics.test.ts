@@ -82,6 +82,26 @@ afterEach(() => {
 // trackEvent/identifyUser are fire-and-forget; let the internal async guard settle.
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+describe('disabled analytics events', () => {
+  it('never captures a disabled event and skips the AI lookup for it', async () => {
+    trackEvent('draft_ui_ready', REAL_USER);
+    trackEvent('ranked_match_found', REAL_USER);
+    await flush();
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(sqlCallSpy).not.toHaveBeenCalled();
+  });
+
+  it('still captures events that have readers', async () => {
+    trackEvent('match_completed', REAL_USER);
+    trackEvent('guest_play_completed', REAL_USER);
+    trackEvent('ranked_queue_left', REAL_USER, { source: 'server_abort' });
+    await flush();
+    expect(captureMock.mock.calls.map(([event]) => event.event)).toEqual([
+      'match_completed', 'guest_play_completed', 'ranked_queue_left',
+    ]);
+  });
+});
+
 describe('analytics AI-user suppression', () => {
   it('classifies human guest and member events using the existing cached lookup', async () => {
     const guest = '33333333-3333-4333-8333-333333333333';

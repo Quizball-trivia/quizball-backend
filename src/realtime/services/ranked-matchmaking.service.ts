@@ -1699,13 +1699,14 @@ export const rankedMatchmakingService = {
           });
           const result = toStringArray(resultRaw);
           span.setAttribute('quizball.queue_search_found', result.length > 0);
-          trackRankedQueueLeft({
-            userId,
-            source: 'disconnect_cleanup',
-            searchFound: result.length > 0,
-            searchId: result[0] ?? null,
-          });
           if (result.length > 0) {
+            // Every socket disconnect runs this cleanup; only an actual queue removal is a queue leave.
+            trackRankedQueueLeft({
+              userId,
+              source: 'disconnect_cleanup',
+              searchFound: true,
+              searchId: result[0],
+            });
             logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
             if (socket.data.partner) await releasePartnerSearch(userId, 'disconnect_during_search');
             rankedDebug('disconnect_removed_queue_search', {

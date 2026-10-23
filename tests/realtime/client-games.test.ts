@@ -19,11 +19,15 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'codenames@2'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'codenames@2', 'codenames@3'] }, join: vi.fn() };
     const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso'] }, join: vi.fn() };
+    const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'codenames@2'] }, join: vi.fn() };
     joinLegacyRooms(picturesOnly);
-    // A tab from before Codenames word boards is kept out of version-2 (word) matches only.
-    expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')]]);
+    // A tab from before Codenames word boards is kept out of version-2 (word) and version-3 (timer) matches only.
+    expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')], [legacyRoom('codenames@3')]]);
+    // A tab from before turn timers, out of version-3 matches only.
+    joinLegacyRooms(noTimer);
+    expect(noTimer.join.mock.calls).toEqual([[legacyRoom('codenames@3')]]);
     joinLegacyRooms(old);
     joinLegacyRooms(fresh);
     expect(old.join).toHaveBeenCalledWith(legacyRoom('tenable'));

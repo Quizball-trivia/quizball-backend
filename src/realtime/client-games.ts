@@ -1,4 +1,5 @@
 import type { QuizballServer } from './socket-server.js';
+import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION } from '../modules/room/games/codenames/codenames.room.js';
 import { CLIENT_VERSION_TOKENS, clientVersionToken } from '../modules/room/room.registry.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
@@ -27,9 +28,10 @@ export const declares = (data: { games?: readonly string[] } | undefined, game: 
 /** On connect, next to the user room: the legacy rooms of every gated game this tab did not declare. */
 export function joinLegacyRooms(socket: { data: { games?: readonly string[] }; join: (room: string) => void }): void {
   for (const game of GATED_ROOM_GAMES) if (!declares(socket.data, game)) socket.join(legacyRoom(game));
-  // The same for a newer version of a game (Codenames word boards): `caps:no-codenames@2`. A socket held by a replica
-  // from before this existed is in no such room; release order covers it: this backend is on every replica before
-  // the web that can pick Words ships, and its old replicas' sockets reconnect through new ones on the way.
+  // The same for a newer version of a game (Codenames word boards `@2`, turn timers `@3`): `caps:no-codenames@<v>`. A
+  // socket held by a replica from before that version is in no such room; release order covers it: this backend is on
+  // every replica before the web that can pick Words or a timer (or send a Scout's marks) ships, and its old replicas'
+  // sockets reconnect through new ones on the way.
   for (const token of CLIENT_VERSION_TOKENS) if (!(socket.data.games ?? []).includes(token)) socket.join(legacyRoom(token));
 }
 
@@ -67,13 +69,25 @@ export async function membersCanDraw(io: QuizballServer, userIds: readonly strin
   }
 }
 
-/** A Codenames word board: an older Codenames bundle draws picture cards only (see the room registry's `codenames@2`). */
-export const CODENAMES_WORDS_TOKEN = clientVersionToken('codenames', 2)!;
-export const isCodenamesWords = (lobby: { room_game?: string | null; room_options?: unknown }): boolean =>
+/**
+ * Codenames options an older bundle cannot draw (see the room registry): a word board (`codenames@2`, picture cards
+ * only before it) and a turn timer (`codenames@3`, no clock before it; every bundle with timers draws word boards too).
+ */
+export const CODENAMES_WORDS_TOKEN = clientVersionToken('codenames', CODENAMES_WORDS_VERSION)!;
+export const CODENAMES_TIMER_TOKEN = clientVersionToken('codenames', CODENAMES_TIMER_VERSION)!;
+type LobbyOptions = { room_game?: string | null; room_options?: unknown };
+export const isCodenamesWords = (lobby: LobbyOptions): boolean =>
   lobby.room_game === 'codenames' && (lobby.room_options as { board?: unknown } | null | undefined)?.board === 'words';
-/** The tab can draw the room's options (only a word board asks more than the game itself). */
-export const declaresRoomOptions = (data: { games?: readonly string[] } | undefined, lobby: { room_game?: string | null; room_options?: unknown }): boolean =>
-  !isCodenamesWords(lobby) || (data?.games ?? []).includes(CODENAMES_WORDS_TOKEN);
+const isCodenamesTimed = (lobby: LobbyOptions): boolean =>
+  lobby.room_game === 'codenames' && !!(lobby.room_options as { timer?: unknown } | null | undefined)?.timer;
+/** The match version these room options start (null: the game's own), and what a tab must list to draw it. */
+export const roomOptionsVersion = (lobby: LobbyOptions): number | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_VERSION : isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : null);
+export const roomOptionsToken = (lobby: LobbyOptions): string | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_TOKEN : isCodenamesWords(lobby) ? CODENAMES_WORDS_TOKEN : null);
+/** The tab can draw the room's options (only a word board or a timer asks more than the game itself). */
+export const declaresRoomOptions = (data: { games?: readonly string[] } | undefined, lobby: LobbyOptions): boolean => {
+  const token = roomOptionsToken(lobby);
+  return !token || (data?.games ?? []).includes(token);
+};
 
 /** Room options as one string (keys sorted; null for none): what a Ready or Start says its screen showed. */
 export const roomOptionsKey = (options: unknown): string | null =>

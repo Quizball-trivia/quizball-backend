@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import { logger } from './logger.js';
 import { sql } from '../db/index.js';
+import { DISABLED_ANALYTICS_EVENTS } from './analytics/disabled-events.js';
 import { parseClientPlatform, type ClientPlatform } from './client-platform.js';
 import {
   campaignAttributionProperties,
@@ -154,6 +155,7 @@ export function trackEvent(
     occurredAt?: string | Date;
   },
 ): void {
+  if (DISABLED_ANALYTICS_EVENTS.has(eventName)) return;
   const client = getPostHogClient();
   if (!client) return;
 

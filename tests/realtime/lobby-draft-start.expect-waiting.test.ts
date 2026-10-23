@@ -52,7 +52,8 @@ vi.mock('../../src/db/readonly-breaker.js', () => ({
   isDbWriteOutage: () => false,
   DbWriteOutageDeferral: class extends Error {},
 }));
-vi.mock('../../src/core/analytics/game-events.js', () => ({ trackDraftStarted: vi.fn() }));
+const trackDraftStartedMock = vi.fn();
+vi.mock('../../src/core/analytics/game-events.js', () => ({ trackDraftStarted: (...args: unknown[]) => trackDraftStartedMock(...args) }));
 
 const emit = vi.fn();
 const io = { to: () => ({ emit }) } as never;
@@ -145,6 +146,15 @@ describe('startDraft expectWaiting enforcement', () => {
       expect(emit).not.toHaveBeenCalledWith('draft:start', expect.anything());
       expect(releaseLockMock).toHaveBeenCalled();
     });
+  });
+
+  it('skips the draft_started member lookup while the event is disabled', async () => {
+    const result = await startDraft(io, 'lobby-1', { expectWaiting: true });
+
+    expect(result).toBe('started');
+    const emitOrder = emit.mock.invocationCallOrder[0];
+    expect(lobbiesRepo.listMembersWithUser.mock.invocationCallOrder.filter((order) => order > emitOrder)).toEqual([]);
+    expect(trackDraftStartedMock).not.toHaveBeenCalled();
   });
 
   it("returns 'started' with the option when the lobby is still waiting under the lock", async () => {

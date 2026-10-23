@@ -43,9 +43,14 @@ const startRankedAiForUserMock = vi.fn();
 const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getWalletMock = vi.fn();
+const trackRankedQueueLeftMock = vi.fn();
 
 let redisMock: FakeRedis;
 
+vi.mock('../../src/core/analytics/game-events.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/analytics/game-events.js')>()),
+  trackRankedQueueLeft: (...args: unknown[]) => trackRankedQueueLeftMock(...args),
+}));
 vi.mock('../../src/core/config.js', () => ({
   config: {
     RANKED_HUMAN_QUEUE_ENABLED: true,
@@ -1382,5 +1387,24 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
     expect(cancelSetCall).toBeTruthy();
     expect(redisMock.eval).not.toHaveBeenCalled();
+  });
+
+  it('disconnect cleanup tracks a queue leave only when it removed a search', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval.mockResolvedValueOnce([]);
+    await service.handleSocketDisconnect(io, createSocketMock('u1') as never);
+    expect(trackRankedQueueLeftMock).not.toHaveBeenCalled();
+
+    redisMock.eval.mockResolvedValueOnce(['search-abc12345']);
+    await service.handleSocketDisconnect(io, createSocketMock('u2') as never);
+    expect(trackRankedQueueLeftMock).toHaveBeenCalledTimes(1);
+    expect(trackRankedQueueLeftMock).toHaveBeenCalledWith({
+      userId: 'u2',
+      source: 'disconnect_cleanup',
+      searchFound: true,
+      searchId: 'search-abc12345',
+    });
   });
 });

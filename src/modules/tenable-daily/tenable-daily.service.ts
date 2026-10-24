@@ -6,7 +6,8 @@ import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { tenableListSchema, type TenableList } from '../tenable/tenable.content.js';
 import { tenableDirectories } from '../tenable/tenable.directories.js';
-import { displayName, judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
+import { judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
+import { DISPLAY_NAMES_REFRESH_MS, displayNamesReady, refreshDisplayNames, shownName } from '../tenable/tenable.names.js';
 import { refreshTranslatedText, withTranslatedText } from '../tenable/tenable.text.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
@@ -122,13 +123,15 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
     current: (player: DailyPlayer, dayId: string | undefined) => core.current(player, dayId),
     boards: (): Promise<BoardsResponse> => core.boards(),
 
-    /** A closed day's whole list (names in Russian for a Russian page); anything else is the same 404 as a missing day. */
+    /** A closed day's whole list (names in the page's language when there are any); anything else is the same 404 as a missing day. */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const day = await core.closedDay(dayId);
+      // Cached for an hour: never answered from names not read yet.
+      await displayNamesReady();
       return {
         day: dayId,
         list: withTranslatedText(day.list).title,
-        slots: day.list.slots.map((slot, i) => ({ rank: i + 1, name: displayName(day.directory, slot.eid, locale === 'ru') ?? '?', figure: slot.figure })),
+        slots: day.list.slots.map((slot, i) => ({ rank: i + 1, name: shownName(day.directory, slot.eid, locale) ?? '?', figure: slot.figure })),
       };
     },
 
@@ -176,6 +179,9 @@ export function oneAtATime<T>(fn: () => Promise<T>): () => Promise<T> | null {
  */
 export function startTenableDailyReadinessCheck(): void {
   void refreshTranslatedText();
+  // Views read the names from memory only: they are read here, at boot and then on a timer.
+  void refreshDisplayNames();
+  setInterval(() => { void refreshDisplayNames(); }, DISPLAY_NAMES_REFRESH_MS).unref();
   const keep = async () => {
     const index = await tenableDailyContent.get();
     const rooms = await tenableRoomPairs();

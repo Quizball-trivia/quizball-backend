@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { SLOTS, tenableListSchema, type TenableList, type TenableLocale } from '../../../tenable/tenable.content.js';
 import { formatFigure } from '../../../tenable/tenable.figures.js';
-import { displayName, judge, type Directory } from '../../../tenable/tenable.identify.js';
+import { judge, type Directory } from '../../../tenable/tenable.identify.js';
+import { shownName } from '../../../tenable/tenable.names.js';
 import { textIn } from '../../../tenable/tenable.text.js';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../room.engine.js';
 
@@ -248,7 +249,7 @@ export function viewOf(s: TenableState, content: TenableContent, seat: number, l
   const listIndex = Math.min(s.list, LISTS - 1);
   const list: TenableList = content.pack.lists[listIndex];
   const directory = directoryOf(content, listIndex);
-  const nameOf = (eid: string | null) => (eid === null ? null : displayName(directory, eid, locale === 'ru'));
+  const nameOf = (eid: string | null) => (eid === null ? null : shownName(directory, eid, locale));
   const text = textIn(list, locale);
   const open = listRevealed(s, listIndex);
   const started = s.phase !== 'intro';

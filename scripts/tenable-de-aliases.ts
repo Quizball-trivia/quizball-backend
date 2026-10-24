@@ -130,8 +130,9 @@ async function pin(): Promise<void> {
       // Judge the directory the server will build: the release's own names, every set already pinned to it (pt), and this one.
       const pins = await aliasPinsOf(sql, kind, release);
       const pinnedSets = pins.length ? await sql<Array<{ kind: string; eid: string; aliases: string[] }>>`
-        SELECT kind, eid, aliases FROM tenable_aliases WHERE version = ANY(${pins}) AND kind = ${kind}` : [];
-      const spellings = [...pinnedSets, ...set.filter((r) => r.kind === kind)];
+        SELECT kind, eid, aliases FROM tenable_aliases WHERE version = ANY(${pins})` : [];
+      // By entity id, whatever kind the set filed it under (as the server merges them).
+      const spellings = [...pinnedSets, ...set];
       const directory = buildDirectory(kind, release, mergeAliases(own, spellings));
       const problems = lists.filter((l) => l.kind === kind && l.release === release).flatMap((l) => listProblems(l, directory).map((p) => `${l.id}: ${p}`));
       // Every spelling, old and new, must still mean its own entity: one that is ambiguous or names another entity would mislead.

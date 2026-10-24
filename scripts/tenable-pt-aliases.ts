@@ -125,10 +125,10 @@ async function pin(): Promise<void> {
       const [pinned] = await sql`SELECT 1 FROM tenable_alias_releases WHERE kind = ${kind} AND release_id = ${release} AND locale = 'pt'`;
       if (pinned) { console.log(`${kind}/${release}: already pinned`); continue; }
       const own = await entitiesOf(sql, kind, release);
-      const directory = buildDirectory(kind, release, mergeAliases(own, set.filter((r) => r.kind === kind)));
+      const directory = buildDirectory(kind, release, mergeAliases(own, set));
       const problems = lists.filter((l) => l.kind === kind && l.release === release).flatMap((l) => listProblems(l, directory).map((p) => `${l.id}: ${p}`));
       // Every spelling must mean its own entity: one that is ambiguous or names another entity would mislead.
-      const misleading = set.filter((r) => r.kind === kind && own.some((e) => e.eid === r.eid)).flatMap((r) => r.aliases.flatMap((a) => {
+      const misleading = set.filter((r) => own.some((e) => e.eid === r.eid)).flatMap((r) => r.aliases.flatMap((a) => {
         const id = directory.identify(a);
         return id.kind === 'entity' && id.eid === r.eid ? [] : [`"${a}" (${r.eid}) reads as ${id.kind === 'entity' ? id.eid : id.kind}`];
       }));

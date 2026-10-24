@@ -321,19 +321,14 @@ async function releaseProblems(db: Sql, kind: Kind, release: string, lists: read
     if (id.kind === 'ambiguous' || (id.kind === 'entity' && carries(id.eid, a))) { shared.push(`"${a}" (${r.eid}) → ${id.kind === 'entity' ? id.eid : 'ambiguous'}`); return []; }
     return [`"${a}" (${r.eid}) reads as ${id.kind === 'entity' ? id.eid : id.kind}`];
   }));
-  // A name that meant an entity must still mean it (an answer that scored must never cost a life).
+  // A name that meant an entity must still mean it (an answer that scored must never cost a life): the production copy
+  // (tenable-locale-from-staging.ts) refuses the same.
   const meaning = [...new Set(own.flatMap((e) => [e.name, e.known, ...e.aliases]).filter(Boolean))];
-  const changed: string[] = [];
   const takenOver = meaning.flatMap((spelling) => {
     const was = before.identify(spelling);
     const now = directory.identify(spelling);
-    if (was.kind !== 'entity' || (now.kind === 'entity' && now.eid === was.eid)) return [];
-    const slot = mine.some((l) => l.slots.some((x) => x.eid === was.eid));
-    const line = `"${spelling}" meant ${was.eid}, now ${now.kind === 'entity' ? now.eid : now.kind}`;
-    if (!slot) { changed.push(line); return []; }
-    return [`${line} — and ${was.eid} is on a list`];
+    return was.kind === 'entity' && (now.kind !== 'entity' || now.eid !== was.eid) ? [`"${spelling}" meant ${was.eid}, now ${now.kind === 'entity' ? now.eid : now.kind}`] : [];
   });
-  if (changed.length) shared.push(...changed.map((c) => `${c} (on no list)`));
   return { pins, lists: mine.length, problems: [...problems, ...misleading, ...takenOver], shared, holds: (eid: string) => ids.has(eid) };
 }
 

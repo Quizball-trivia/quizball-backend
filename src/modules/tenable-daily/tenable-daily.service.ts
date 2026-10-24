@@ -7,7 +7,8 @@ import { createDailyService, type BoardsResponse, type LeaderboardResponse as Da
 import { tenableListSchema, type TenableList } from '../tenable/tenable.content.js';
 import { tenableDirectories } from '../tenable/tenable.directories.js';
 import { judge, type Directory, type EntityKind } from '../tenable/tenable.identify.js';
-import { DISPLAY_NAMES_REFRESH_MS, displayNamesReady, refreshDisplayNames, shownName } from '../tenable/tenable.names.js';
+import { ALIAS_KINDS } from '../tenable/tenable.aliases.js';
+import { DISPLAY_NAMES_REFRESH_MS, displayNamesReady, isNameLocale, refreshDisplayNames, shownName } from '../tenable/tenable.names.js';
 import { refreshTranslatedText, withTranslatedText } from '../tenable/tenable.text.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
@@ -126,8 +127,8 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
     /** A closed day's whole list (names in the page's language when there are any); anything else is the same 404 as a missing day. */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const day = await core.closedDay(dayId);
-      // Cached for an hour: never answered from names not read yet.
-      await displayNamesReady();
+      // Cached for an hour: a pt/de club or nation list is never answered from names not read yet.
+      if (isNameLocale(locale) && ALIAS_KINDS.has(day.list.kind)) await displayNamesReady();
       return {
         day: dayId,
         list: withTranslatedText(day.list).title,

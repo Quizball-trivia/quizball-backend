@@ -162,26 +162,35 @@ function parseArgs(argv: string[]): WlFleetConfig {
   };
   const opsToken = process.env.WL_OPS_TOKEN;
   if (!opsToken) throw new Error('WL_OPS_TOKEN env is required (staging Railway variable)');
+  // One game is 21 questions over 30 answer windows (put-in-order runs two
+  // windows, who-am-I five) plus about 10 s per question of lock, reveal and
+  // dispatch lead — measured on staging: 63 questions took 25.5 min at 10 s.
+  const questionSec = num('question-ms', 10_000) / 1000;
+  const gameSec = 30 * questionSec + 21 * 10;
+  const entrySeconds = num('entry-sec', 90);
+  const checkinSeconds = num('checkin-sec', 45);
+  const toFinalSeconds = num('final-sec', Math.ceil(3 * gameSec + 2 * 20 + 180));
   return {
     apiBase: get('api', 'https://api-staging.quizball.io')!,
     players: num('players', 100),
     spectators: num('spectators', 10),
     flapRate: num('flap-rate', 0),
-    entrySeconds: num('entry-sec', 90),
-    checkinSeconds: num('checkin-sec', 45),
+    entrySeconds,
+    checkinSeconds,
     // Measured from the QUALIFIER start, so it must exceed Saturday's real
     // duration: 3 games x 21 questions x (question + gap) + 2 breaks. A value
     // shorter than that puts final_starts_at in the past, and the final
     // check-in window is already closed when qualifying ends — every finalist
     // becomes a no-show and no champion is crowned.
-    toFinalSeconds: num('final-sec', 1_500),
+    toFinalSeconds,
     questionTimeMs: num('question-ms', 10_000),
     spectatorDelayMs: num('spec-delay-ms', 30_000),
     accuracy: num('accuracy', 0.7),
     answerDelayMinMs: num('answer-min-ms', 400),
     answerDelayMaxMs: num('answer-max-ms', 6_000),
     opsToken,
-    runTimeoutSec: num('timeout-sec', 2_400),
+    // Covers the whole schedule (entry, check-in, qualifiers, the final) with slack.
+    runTimeoutSec: num('timeout-sec', Math.ceil(entrySeconds + checkinSeconds + toFinalSeconds + gameSec + 600)),
     rewardPayout: get('reward-payout') === 'true',
   };
 }
@@ -741,13 +750,39 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   // once a real weekly tournament owns /current — the API has no by-id
   // status read for clients), else /current filtered by id.
   const dbUrl = process.env.WL_FLEET_DB_URL;
-  const dbSql = dbUrl ? (await import('postgres')).default(dbUrl, { max: 1 }) : null;
+  const postgres = dbUrl ? (await import('postgres')).default : null;
+  // No pipelining: behind the transaction pooler a pipelined reply can be lost,
+  // and the query then waits forever (the server shows it `active`).
+  const openDb = () => (postgres && dbUrl ? postgres(dbUrl, { max: 1, prepare: false, max_pipeline: 0 }) : null);
+  let dbSql = openDb();
+  type FleetDb = NonNullable<typeof dbSql>;
+  const DB_READ_TIMEOUT_MS = 8_000;
+  /** Run a read with a deadline. A lost reply would otherwise stall the whole
+      run; on a timeout that connection is dropped and the next read reconnects. */
+  let dbClosed = false;
+  const dbRead = async <T>(run: (db: FleetDb) => Promise<T>): Promise<T | null> => {
+    const db = dbSql;
+    if (!db || dbClosed) return null;
+    let timer: NodeJS.Timeout | undefined;
+    const lost = Symbol('lost');
+    const result = await Promise.race([
+      run(db).catch(() => null),
+      new Promise<typeof lost>((done) => { timer = setTimeout(() => done(lost), DB_READ_TIMEOUT_MS); }),
+    ]);
+    clearTimeout(timer);
+    if (result !== lost) return result;
+    console.warn('[wl-fleet] DB read got no reply; reconnecting');
+    void db.end({ timeout: 0 }).catch(() => {});
+    // Not during shutdown: a background poller's late timeout must not open a client nobody closes.
+    if (dbSql === db) dbSql = dbClosed ? null : openDb();
+    return null;
+  };
   const readStatus = async (): Promise<string | null> => {
     // Ladder truth from the DB: a client only sees games it played, so the
   // socket view of gameResults stops at the game that eliminated it.
   if (dbSql) {
     try {
-      const dbGames = await dbSql<Array<{ game_index: number; field: number; advanced: number }>>`
+      const dbGames = (await dbRead((db) => db<Array<{ game_index: number; field: number; advanced: number }>>`
         SELECT game_index,
                COUNT(*)::int AS field,
                COUNT(*) FILTER (WHERE advanced)::int AS advanced
@@ -755,7 +790,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
         WHERE tournament_id = ${tournamentId}
         GROUP BY game_index
         ORDER BY game_index
-      `;
+      `)) ?? [];
       if (dbGames.length > 0) {
         ladderBreaks.length = 0;
         for (let i = 1; i < dbGames.length; i += 1) {
@@ -775,9 +810,9 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   }
 
   if (dbSql) {
-      const rows = await dbSql`
+      const rows = (await dbRead((db) => db<Array<{ status: string }>>`
         SELECT status FROM wl_tournaments WHERE id = ${tournamentId}
-      `.catch(() => []) as Array<{ status: string }>;
+      `)) ?? [];
       return rows[0]?.status ?? null;
     }
     const res = await api<{ tournament?: { id: string; status: string } | null }>(
@@ -981,7 +1016,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
   let serverAudit: { rowsChecked: number; mismatches: number } | null = null;
   if (dbSql) {
     try {
-      const [row] = await dbSql<Array<{ rows_checked: number; mismatches: number }>>`
+      const [row] = (await dbRead((db) => db<Array<{ rows_checked: number; mismatches: number }>>`
         SELECT count(*)::int AS rows_checked,
                count(*) FILTER (
                  WHERE r.score IS DISTINCT FROM COALESCE(a.total, 0)
@@ -994,7 +1029,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
           GROUP BY 1, 2, 3
         ) a USING (tournament_id, game_index, user_id)
         WHERE r.tournament_id = ${tournamentId}
-      `;
+      `)) ?? [];
       serverAudit = row
         ? { rowsChecked: Number(row.rows_checked), mismatches: Number(row.mismatches) }
         : null;
@@ -1002,6 +1037,7 @@ export async function runWlFleet(cfg: WlFleetConfig): Promise<WlFleetSummary> {
       console.error('[wl-fleet] server score audit failed:', err);
     }
   }
+  dbClosed = true;
   await dbSql?.end({ timeout: 5 }).catch(() => {});
   // Give trailing spectator (delayed) events time to drain before judging.
   await sleep(Math.min(cfg.spectatorDelayMs + 10_000, 60_000));

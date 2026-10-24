@@ -276,7 +276,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       es: 'Cartas FIFA',
       ru: 'Карточки FIFA',
       pt: 'Cartas FIFA',
-      de: 'Spielerkarte erraten',
+      de: 'Goldkarte erraten',
     },
     description: {
       en: 'A gold card, stats only — name the player before the clues run out.',

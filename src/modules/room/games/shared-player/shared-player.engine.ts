@@ -28,7 +28,7 @@ export const PACK_PAIRS = 10;
 const EXAMPLES = 6;
 const MAX_TEXT = 60;
 
-const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60), ru: z.string().min(1).max(60).optional(), pt: z.string().min(1).max(60).optional() }).strict();
+const localized = z.object({ es: z.string().min(1).max(60), en: z.string().min(1).max(60), ka: z.string().min(1).max(60), tr: z.string().min(1).max(60), ru: z.string().min(1).max(60).optional(), pt: z.string().min(1).max(60).optional(), de: z.string().min(1).max(60).optional() }).strict();
 const clubSchema = z.object({ key: z.string().min(1).max(64), label: localized, crest: z.string().min(1).max(200) }).strict();
 
 /** One private pool pair. `accepted` (footballer ids, the reviewed examples first) never reaches a client before the reveal. */

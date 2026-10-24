@@ -57,6 +57,20 @@ describe('campaignQuizSearchConsoleService', () => {
     expect(campaignQuizSlugFromPageUrl('https://quizball.io/pt/football-quiz/arsenal', origin)).toBeNull();
   });
 
+  it('maps localized German campaign URLs to the CMS slug', () => {
+    const origin = 'https://quizball.io';
+
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/de/fussball-quiz/karrierestationen-erraten', origin))
+      .toBe('career-path');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/de/fussball-quiz/fc-barcelona-quiz/', origin))
+      .toBe('barcelona');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/de/fussball-quiz/spanien-quiz', origin))
+      .toBe('spain');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/de/football-quiz/arsenal', origin)).toBeNull();
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/de/fussballspiele/karrierestationen-erraten', origin))
+      .toBeNull();
+  });
+
   it('ignores unrelated paths and foreign origins', () => {
     const origin = 'https://quizball.io';
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Fill a missing locale (Russian `ru` by default, or `--locale=pt` Brazilian Portuguese) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
+ * Fill a missing locale (Russian `ru` by default, `--locale=pt` Brazilian Portuguese or `--locale=de` German) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
  * Pistas / Último / Minuto / Buscaminas / Played-for-both days, the duel and room pools, and store products.
  *
  * This is a localization-only write: content_version is left alone and nothing else in a row changes, so played days
@@ -9,7 +9,7 @@
  * Each distinct English text is translated once; the cache is shared with translate-missing-locales.ts.
  *
  * Usage:
- *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt] [--effort=high] [--tables=pistas_days,…] [--env-file=.env]
+ *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt|de] [--effort=high] [--tables=pistas_days,…] [--env-file=.env]
  *   npx tsx scripts/translate-game-content.ts sample [--tables=…] [--limit=20]          # live model call, no writes
  *   npx tsx scripts/translate-game-content.ts cache  [--tables=…] [--batch=100] [--concurrency=4]  # translate + validate as apply would, no writes
  *   npx tsx scripts/translate-game-content.ts apply  [--tables=…] [--batch=100] [--concurrency=4]
@@ -57,7 +57,7 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
 }
 const MODEL = 'gpt-6-luna';
 const LOCALE = opt('locale', 'ru');
-if (LOCALE !== 'ru' && LOCALE !== 'pt') { console.error('ABORT: --locale must be ru or pt'); process.exit(1); }
+if (LOCALE !== 'ru' && LOCALE !== 'pt' && LOCALE !== 'de') { console.error('ABORT: --locale must be ru, pt or de'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
 if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
@@ -120,7 +120,10 @@ function nodes(v: unknown, out: Node[] = []): Node[] {
 const SYSTEM_PT = `You translate football (soccer) game content from English to Brazilian Portuguese (pt-BR) for Brazilian fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or → Bola de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga); a value that is only a name stays only a name (no quotes, no extra words); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol, pênalti); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; amounts in Brazilian number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; neutral written register, address the player as você; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
 
 const SYSTEM_RU = `You translate football (soccer) game content from English to Russian for Russian-speaking fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: write player, club, stadium and competition names in Cyrillic the way Russian sports media do (Messi → Месси, Erling Haaland → Эрлинг Холанд, Arsenal → Арсенал, Manchester United → Манчестер Юнайтед, Premier League → Премьер-лига, Champions League → Лига чемпионов, World Cup → чемпионат мира); a value that is only a name stays only a name (no quotes, no extra words); inside sentences put club names in «»; keep abbreviations like PSG, MLS, VAR in Latin but write УЕФА and ФИФА; keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; keep numbers, years and scores as written (scores with a colon, 2:1); neutral written register, no slang; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
-const SYSTEM = LOCALE === 'pt' ? SYSTEM_PT : SYSTEM_RU;
+const SYSTEM_DE = `You translate football (soccer) game content from English to German for football fans in Germany, Austria and Switzerland: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: standard German as written in Germany (with ß); keep player, coach and stadium names exactly as written; write countries and national teams in German (Germany → Deutschland, England → England, Netherlands → Niederlande, Spain → Spanien, Brazil → Brasilien); write competitions and awards the way German media do (World Cup → WM, Euro → EM, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or stays, Golden Boot → Goldener Schuh); keep club names as written except the forms German media always use (Bayern Munich → Bayern München, Inter Milan → Inter Mailand, AC Milan → AC Mailand, Red Star Belgrade → Roter Stern Belgrad, Dynamo Kyiv → Dynamo Kiew, Sporting Lisbon → Sporting Lissabon, Slavia Prague → Slavia Prag); a value that is only a name stays only a name (no quotes, no extra words); use German football terms (Torwart, Innenverteidiger, Außenverteidiger, Mittelfeldspieler, Stürmer, Trainer, Tor, Elfmeter, Verlängerung, Nachspielzeit, Vorlage, ohne Gegentor, ablösefrei); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person ("Ich bin Stürmer."); never add the answer or any name that is not in the English; coins → Münzen, tickets → Tickets, hint or clue → Hinweis (never "Tipp"); amounts in German number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; German quotation marks „…“ inside sentences; neutral written register, address the player as du; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
+const SYSTEM = LOCALE === 'de' ? SYSTEM_DE : LOCALE === 'pt' ? SYSTEM_PT : SYSTEM_RU;
+/** A bare name comes back without the quotes a model sometimes puts around it: «…» for Russian, „…“ for German. */
+const unquote = (t: string) => (LOCALE === 'ru' ? t.replace(/^«([^«»]+)»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
 
 class OutOfBudget extends Error {}
 let codexDir = '', codexCalls = 0;
@@ -148,13 +151,13 @@ async function translateBatch(texts: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   texts.forEach((en, i) => {
     const t = parsed[String(i)];
-    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n')) out.set(en, LOCALE === 'ru' ? t.trim().replace(/^«([^«»]+)»$/, '$1') : t.trim());
+    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n')) out.set(en, unquote(t.trim()));
   });
   return out;
 }
 
-// Russian shares its cache with translate-missing-locales.ts; Portuguese game content keeps its own (a different prompt).
-const cacheFile = LOCALE === 'pt' ? `scripts/.snapshots/translation-cache-pt-v1-game-${MODEL}.json` : `scripts/.snapshots/translation-cache-ru-${MODEL}.json`;
+// Russian shares its cache with translate-missing-locales.ts; Portuguese and German game content keep their own (a different prompt).
+const cacheFile = LOCALE === 'pt' || LOCALE === 'de' ? `scripts/.snapshots/translation-cache-${LOCALE}-v1-game-${MODEL}.json` : `scripts/.snapshots/translation-cache-ru-${MODEL}.json`;
 const readCache = () => new Map<string, string>(existsSync(cacheFile) ? Object.entries(JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<string, string>) : []);
 const cache = readCache();
 /** Other translation scripts share the file: merge with what is on disk before writing. */

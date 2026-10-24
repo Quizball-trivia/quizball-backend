@@ -6,6 +6,6 @@ export const gameFeedbackSchema = z.object({
   wantsOnline: z.boolean().nullable(),
   // An empty comment is no comment.
   comment: z.string().trim().max(500).optional().transform((text) => text || undefined),
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de']),
 }).strict();
 export type GameFeedbackBody = z.infer<typeof gameFeedbackSchema>;

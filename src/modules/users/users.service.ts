@@ -353,12 +353,13 @@ async function notifyProgressionChange(
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your rewards were updated', ka: 'შენი ჯილდოები განახლდა', ru: 'Твои награды обновлены', pt: 'Suas recompensas foram atualizadas' },
+      title: { en: 'Your rewards were updated', ka: 'შენი ჯილდოები განახლდა', ru: 'Твои награды обновлены', pt: 'Suas recompensas foram atualizadas', de: 'Deine Belohnungen wurden aktualisiert' },
       body: {
         en: `You received ${summary}.`,
         ka: `მიიღე ${partsKa.join(' და ')}.`,
         ru: `Изменение прогресса: ${parts.join(' и ')}.`,
         pt: `Você recebeu ${parts.join(' e ')}.`,
+        de: `Du hast ${parts.join(' und ')} erhalten.`,
       },
       data: { xpDelta: change.xpDelta, rpDelta: change.rpDelta, reason: change.reason },
     });

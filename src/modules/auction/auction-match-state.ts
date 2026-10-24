@@ -76,7 +76,7 @@ export type AuctionMatchOrigin = 'queue' | 'lobby' | 'practice';
 export interface AuctionMatchState {
   matchId: string;
   version: number;
-  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
   origin?: AuctionMatchOrigin;
   sourceLobbyId?: string;
   phase: AuctionMatchPhase;

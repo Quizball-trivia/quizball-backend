@@ -41,7 +41,7 @@ export function indexDay(row: BuscaminasDayRow): IndexedDay | null {
     board.push({
       id: raw.id,
       difficulty: raw.difficulty as BuscaminasDifficulty,
-      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string, ...(isText(prompt.ru) ? { ru: prompt.ru } : {}), ...(isText(prompt.pt) ? { pt: prompt.pt } : {}) },
+      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string, ...(isText(prompt.ru) ? { ru: prompt.ru } : {}), ...(isText(prompt.pt) ? { pt: prompt.pt } : {}), ...(isText(prompt.de) ? { de: prompt.de } : {}) },
       cards: cards as PublicRound['cards'],
     });
     indexed.push({

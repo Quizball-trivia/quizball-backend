@@ -12813,7 +12813,8 @@
                       "es",
                       "tr",
                       "ru",
-                      "pt"
+                      "pt",
+                      "de"
                     ]
                   }
                 },
@@ -25686,7 +25687,8 @@
                       "es",
                       "tr",
                       "ru",
-                      "pt"
+                      "pt",
+                      "de"
                     ],
                     "default": "en"
                   },
@@ -26365,6 +26367,11 @@
                         "maxLength": 90,
                         "minLength": 1,
                         "type": "string"
+                      },
+                      "de": {
+                        "maxLength": 90,
+                        "minLength": 1,
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -26404,6 +26411,11 @@
                         "type": "string"
                       },
                       "pt": {
+                        "maxLength": 250,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "de": {
                         "maxLength": 250,
                         "minLength": 1,
                         "type": "string"
@@ -27962,7 +27974,8 @@
                           "es",
                           "tr",
                           "ru",
-                          "pt"
+                          "pt",
+                          "de"
                         ]
                       },
                       "kind": {
@@ -28002,7 +28015,8 @@
                           "es",
                           "tr",
                           "ru",
-                          "pt"
+                          "pt",
+                          "de"
                         ]
                       },
                       "kind": {
@@ -29069,7 +29083,8 @@
                       "es",
                       "tr",
                       "ru",
-                      "pt"
+                      "pt",
+                      "de"
                     ]
                   },
                   "promptVersion": {
@@ -29170,7 +29185,8 @@
                       "es",
                       "tr",
                       "ru",
-                      "pt"
+                      "pt",
+                      "de"
                     ]
                   },
                   "promptVersion": {

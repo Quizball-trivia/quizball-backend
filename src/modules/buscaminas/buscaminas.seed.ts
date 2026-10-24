@@ -56,6 +56,7 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     for (const locale of BUSCAMINAS_LOCALES) if (!nonEmpty(prompt[locale])) fail(`round ${i}: prompt.${locale} missing`);
     if (prompt.ru !== undefined && !nonEmpty(prompt.ru)) fail(`round ${i}: prompt.ru must be a non-empty string when present`);
     if (prompt.pt !== undefined && !nonEmpty(prompt.pt)) fail(`round ${i}: prompt.pt must be a non-empty string when present`);
+    if (prompt.de !== undefined && !nonEmpty(prompt.de)) fail(`round ${i}: prompt.de must be a non-empty string when present`);
     if (!Array.isArray(round.cards) || round.cards.length !== CARDS_PER_ROUND) fail(`round ${i}: expected ${CARDS_PER_ROUND} cards`);
     const ids = new Set<string>();
     const cards = (round.cards as Array<{ id?: unknown; name?: unknown; img?: unknown; ok?: unknown }>).map((card, j) => {
@@ -71,7 +72,7 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     return {
       id: round.id as string,
       difficulty: round.difficulty as BuscaminasDifficulty,
-      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string, ...(prompt.ru !== undefined ? { ru: prompt.ru as string } : {}), ...(prompt.pt !== undefined ? { pt: prompt.pt as string } : {}) },
+      prompt: { es: prompt.es as string, en: prompt.en as string, ka: prompt.ka as string, tr: prompt.tr as string, ...(prompt.ru !== undefined ? { ru: prompt.ru as string } : {}), ...(prompt.pt !== undefined ? { pt: prompt.pt as string } : {}), ...(prompt.de !== undefined ? { de: prompt.de as string } : {}) },
       cards,
     };
   });
@@ -99,7 +100,7 @@ export function toDayRow(d: SeedDay): BuscaminasDayRow {
       rounds: d.rounds.map((r) => ({
         id: r.id,
         difficulty: r.difficulty,
-        prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr, ...(r.prompt.ru ? { ru: r.prompt.ru } : {}), ...(r.prompt.pt ? { pt: r.prompt.pt } : {}) },
+        prompt: { es: r.prompt.es, en: r.prompt.en, ka: r.prompt.ka, tr: r.prompt.tr, ...(r.prompt.ru ? { ru: r.prompt.ru } : {}), ...(r.prompt.pt ? { pt: r.prompt.pt } : {}), ...(r.prompt.de ? { de: r.prompt.de } : {}) },
         cards: r.cards.map((c) => ({ id: c.id, name: c.name, img: c.img })),
       })),
     },

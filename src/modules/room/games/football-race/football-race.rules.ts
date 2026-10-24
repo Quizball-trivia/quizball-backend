@@ -12,15 +12,15 @@ import { dictionaryText } from './football-race.russian.js';
  */
 const label = z.string().min(1).max(120);
 /** Every label a player reads: four languages, always (Russian comes from football-race.russian.ts when absent). */
-const labelsSchema = z.object({ en: label, es: label, ka: label, tr: label, ru: label.optional(), pt: label.optional() }).strict();
+const labelsSchema = z.object({ en: label, es: label, ka: label, tr: label, ru: label.optional(), pt: label.optional(), de: label.optional() }).strict();
 /** A detail line ("7–3 vs Paraguay · 1958"): Georgian and Turkish fall back to English when absent. */
-export const l10nSchema = z.object({ en: label, es: label, ka: label.optional(), tr: label.optional(), ru: label.optional(), pt: label.optional() }).strict();
+export const l10nSchema = z.object({ en: label, es: label, ka: label.optional(), tr: label.optional(), ru: label.optional(), pt: label.optional(), de: label.optional() }).strict();
 /** The source and attribution line (a CC BY-SA credit needs the author, the copyright notice and the licence). */
 const credit = z.string().min(1).max(400);
-const creditSchema = z.object({ en: credit, es: credit, ka: credit, tr: credit, ru: credit.optional(), pt: credit.optional() }).strict();
+const creditSchema = z.object({ en: credit, es: credit, ka: credit, tr: credit, ru: credit.optional(), pt: credit.optional(), de: credit.optional() }).strict();
 export type L10n = z.infer<typeof l10nSchema>;
-export type RaceLocale = 'en' | 'es' | 'ka' | 'tr' | 'ru' | 'pt';
-export const l10n = (text: L10n, locale: RaceLocale): string => (locale === 'ru' || locale === 'pt' ? text[locale] ?? dictionaryText(locale, text.en) : text[locale] ?? text.en);
+export type RaceLocale = 'en' | 'es' | 'ka' | 'tr' | 'ru' | 'pt' | 'de';
+export const l10n = (text: L10n, locale: RaceLocale): string => (locale === 'ru' || locale === 'pt' || locale === 'de' ? text[locale] ?? dictionaryText(locale, text.en) : text[locale] ?? text.en);
 
 export const raceNationSchema = z.object({
   id: z.string().min(1).max(60),

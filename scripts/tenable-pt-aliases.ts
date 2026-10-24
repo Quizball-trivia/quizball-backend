@@ -16,7 +16,7 @@ import path from 'node:path';
 import postgres, { type Sql } from 'postgres';
 import { listProblems, tenableListSchema, type TenableList } from '../src/modules/tenable/tenable.content.js';
 import { buildDirectory, type EntityKind, type TenableEntity } from '../src/modules/tenable/tenable.identify.js';
-import { mergeAliases } from '../src/modules/tenable/tenable.aliases.js';
+import { aliasPinsOf, mergeAliases } from '../src/modules/tenable/tenable.aliases.js';
 import { normalizeName } from '../src/modules/footballers/footballers.text.js';
 import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
@@ -119,16 +119,21 @@ async function pin(): Promise<void> {
   const set = await sql<Array<{ kind: string; eid: string; aliases: string[] }>>`SELECT kind, eid, aliases FROM tenable_aliases WHERE version = ${version}`;
   if (set.length === 0) throw new Error(`Set ${version} is empty or missing`);
   const lists = await allLists(sql);
-  const ready: Array<{ kind: string; release: string }> = [];
+  const ready: Array<{ kind: string; release: string; pins: string[] }> = [];
   for (const kind of KINDS) {
     for (const release of new Set(lists.filter((l) => l.kind === kind).map((l) => l.release))) {
       const [pinned] = await sql`SELECT 1 FROM tenable_alias_releases WHERE kind = ${kind} AND release_id = ${release} AND locale = 'pt'`;
       if (pinned) { console.log(`${kind}/${release}: already pinned`); continue; }
       const own = await entitiesOf(sql, kind, release);
-      const directory = buildDirectory(kind, release, mergeAliases(own, set.filter((r) => r.kind === kind)));
+      // Judge the directory the server will build: the release's own names, every set already pinned to it, and this one.
+      const pins = await aliasPinsOf(sql, kind, release);
+      const pinnedSets = pins.length ? await sql<Array<{ kind: string; eid: string; aliases: string[] }>>`
+        SELECT kind, eid, aliases FROM tenable_aliases WHERE version = ANY(${pins})` : [];
+      const spellings = [...pinnedSets, ...set];
+      const directory = buildDirectory(kind, release, mergeAliases(own, spellings));
       const problems = lists.filter((l) => l.kind === kind && l.release === release).flatMap((l) => listProblems(l, directory).map((p) => `${l.id}: ${p}`));
       // Every spelling must mean its own entity: one that is ambiguous or names another entity would mislead.
-      const misleading = set.filter((r) => r.kind === kind && own.some((e) => e.eid === r.eid)).flatMap((r) => r.aliases.flatMap((a) => {
+      const misleading = spellings.filter((r) => own.some((e) => e.eid === r.eid)).flatMap((r) => r.aliases.flatMap((a) => {
         const id = directory.identify(a);
         return id.kind === 'entity' && id.eid === r.eid ? [] : [`"${a}" (${r.eid}) reads as ${id.kind === 'entity' ? id.eid : id.kind}`];
       }));
@@ -136,13 +141,20 @@ async function pin(): Promise<void> {
         console.log(`${kind}/${release}: NOT pinned\n  ${[...problems, ...misleading].slice(0, 20).join('\n  ')}`);
         continue;
       }
-      ready.push({ kind, release });
+      ready.push({ kind, release, pins });
       console.log(`${kind}/${release}: every list still playable, every spelling unambiguous`);
     }
   }
   if (!write) { console.log(`Dry run: ${ready.length} pins would be written (add --write).`); return; }
   await sql.begin(async (tx) => {
-    for (const r of ready) await tx`INSERT INTO tenable_alias_releases (kind, release_id, locale, version) VALUES (${r.kind}, ${r.release}, 'pt', ${version})`;
+    await tx`SET LOCAL lock_timeout = '5s'`;
+    // No other pin may land between the check above and these rows: block pin writes, then confirm nothing moved.
+    await tx`LOCK TABLE tenable_alias_releases IN SHARE ROW EXCLUSIVE MODE`;
+    for (const r of ready) {
+      const now = await aliasPinsOf(tx as unknown as Sql, r.kind as EntityKind, r.release);
+      if (now.join() !== r.pins.join()) throw new Error(`${r.kind}/${r.release}: pins changed during the check (${r.pins.join() || 'none'} → ${now.join()}); run pin again`);
+      await tx`INSERT INTO tenable_alias_releases (kind, release_id, locale, version) VALUES (${r.kind}, ${r.release}, 'pt', ${version})`;
+    }
   });
   console.log(`Pinned ${ready.length}. Restart the backend so every replica loads them.`);
 }

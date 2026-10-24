@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ENTITY_KINDS, SUGGEST_LIMIT, SUGGEST_MAX, TENABLE_MATCHER_VERSION, type Directory } from './tenable.identify.js';
 
-export const TENABLE_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt'] as const;
+export const TENABLE_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de'] as const;
 export type TenableLocale = (typeof TENABLE_LOCALES)[number];
 export const SLOTS = 10;
 /** Same cap as the answer box and the report endpoint: every slot must be typeable in full. */
@@ -15,7 +15,7 @@ export const NOTE_MAX_LENGTH = 200;
 const localized = (max: number) => z.object({
   es: z.string().trim().min(1).max(max), en: z.string().trim().min(1).max(max),
   ka: z.string().trim().min(1).max(max), tr: z.string().trim().min(1).max(max),
-  ru: z.string().trim().min(1).max(max).optional(), pt: z.string().trim().min(1).max(max).optional(),
+  ru: z.string().trim().min(1).max(max).optional(), pt: z.string().trim().min(1).max(max).optional(), de: z.string().trim().min(1).max(max).optional(),
 }).strict();
 
 /** What a Russian title was translated from: the English title and note. A list corrected in English no longer matches it. */

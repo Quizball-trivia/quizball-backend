@@ -51,6 +51,7 @@ export interface SquadSpinCriterionRow {
   label_ka: string;
   label_ru: string | null;
   label_pt: string | null;
+  label_de: string | null;
   asset_key: string | null;
 }
 

@@ -33,11 +33,12 @@ const suggestQuerySchema = z.object({
   kind: z.string().min(1).max(16),
   release: z.string().min(3).max(40),
   q: z.string().min(2).max(40),
+  locale: z.string().max(8).optional(),
 });
 
 /**
  * GET /api/v1/tenable/suggest: names for the answer box, for members and guests alike (rooms are open to guests). The
- * answer depends only on (kind, release, q), so it is cached publicly; a per-address burst limit bounds the work.
+ * answer depends only on (kind, release, q, locale), so it is cached publicly; a per-address burst limit bounds the work.
  */
 tenableDailyRoutes.get(
   '/suggest',
@@ -45,8 +46,8 @@ tenableDailyRoutes.get(
   validate({ query: suggestQuerySchema }),
   async (req, res, next) => {
     try {
-      const { kind, release, q } = req.validated.query as z.infer<typeof suggestQuerySchema>;
-      const items = await suggest(kind, release, q);
+      const { kind, release, q, locale } = req.validated.query as z.infer<typeof suggestQuerySchema>;
+      const items = await suggest(kind, release, q, locale);
       // An empty answer may only mean "not seeded here yet": it is kept briefly.
       res.setHeader('Cache-Control', `public, max-age=${items.length > 0 ? 3600 : 60}`);
       res.json({ items });

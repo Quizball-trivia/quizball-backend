@@ -3,7 +3,7 @@ import type { AvatarCustomization } from '../users/avatar-customization.js';
 export const PISTAS_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
 export type PistasLocale = (typeof PISTAS_LOCALES)[number];
 /** es/en/ka/tr are required; ru is optional until every day carries it (a missing ru never refuses a day). */
-export type LocalizedText = Record<PistasLocale, string> & { ru?: string; pt?: string };
+export type LocalizedText = Record<PistasLocale, string> & { ru?: string; pt?: string; de?: string };
 
 export const CLUE_KINDS = ['confed', 'position', 'foot', 'decade', 'fact'] as const;
 export type ClueKind = (typeof CLUE_KINDS)[number];

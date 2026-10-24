@@ -171,3 +171,14 @@ node_modules
 
 # Brazilian Portuguese campaign quiz pages (code only; the translation snapshot and caches stay in scripts/.snapshots).
 !scripts/campaign-quizzes-pt.ts
+
+# German (de) content scripts (code + the grid label fixture; caches and snapshots stay in scripts/.snapshots).
+!scripts/german-content-rules.ts
+!scripts/categories-de.ts
+!scripts/squad-spin-de.ts
+!scripts/clue-cards-de.ts
+!scripts/football-grid-label-de.ts
+!scripts/football-grid-label-de.json
+!scripts/tenable-titles-de.ts
+!scripts/tenable-de-aliases.ts
+!scripts/campaign-quizzes-de.ts

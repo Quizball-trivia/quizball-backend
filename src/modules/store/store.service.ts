@@ -429,25 +429,28 @@ async function notifyWalletChange(
   const partsKa: string[] = [];
   const partsRu: string[] = [];
   const partsPt: string[] = [];
+  const partsDe: string[] = [];
   if (change.coinsDelta !== 0) {
     parts.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} coins`);
     partsKa.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} მონეტა`);
     partsRu.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${russianPlural(change.coinsDelta, 'монета', 'монеты', 'монет')}`);
     partsPt.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'moeda' : 'moedas'}`);
+    partsDe.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'Münze' : 'Münzen'}`);
   }
   if (change.ticketsDelta !== 0) {
     parts.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} tickets`);
     partsKa.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ბილეთი`);
     partsRu.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${russianPlural(change.ticketsDelta, 'билет', 'билета', 'билетов')}`);
     partsPt.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ingresso' : 'ingressos'}`);
+    partsDe.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'Ticket' : 'Tickets'}`);
   }
   if (parts.length === 0) return;
 
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada' },
-      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.` },
+      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada', de: 'Dein Guthaben wurde aktualisiert' },
+      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.`, de: `Du hast ${partsDe.join(' und ')} erhalten.` },
       data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
     });
   } catch (err) {

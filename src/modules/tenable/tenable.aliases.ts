@@ -15,12 +15,13 @@ export async function aliasPinsOf(db: Sql, kind: EntityKind, releaseId: string):
 /**
  * The release's entities with the pinned sets' spellings added to their aliases (Latin script, so the same directory
  * reads them: a Portuguese "Alemanha" is judged like a Spanish "Alemania"). `versions`: the release's pins, or the set a
- * pinning script is about to check.
+ * pinning script is about to check. A spelling belongs to the entity id whatever kind its set filed it under: the first
+ * sets filed national teams that also appear in a club release as clubs.
  */
 export async function withAliases(db: Sql, kind: EntityKind, entities: readonly TenableEntity[], versions: readonly string[]): Promise<TenableEntity[]> {
   if (!ALIAS_KINDS.has(kind) || versions.length === 0) return [...entities];
   const rows = await db<Array<{ eid: string; aliases: string[] }>>`
-    SELECT eid, aliases FROM tenable_aliases WHERE version = ANY(${versions as string[]}) AND kind = ${kind}`;
+    SELECT eid, aliases FROM tenable_aliases WHERE version = ANY(${versions as string[]}) AND kind IN ('club', 'nation')`;
   return mergeAliases(entities, rows);
 }
 

@@ -10,13 +10,13 @@ describe('pistas day content', () => {
   it('builds clues field by field and keeps the normalised accepted answers server-side', () => {
     const stored = row();
     (stored.rounds[0].clues[0] as unknown as Record<string, unknown>).source = 'question 123';
-    (stored.rounds[0].clues[0].text as unknown as Record<string, unknown>).de = 'hinweis';
+    (stored.rounds[0].clues[0].text as unknown as Record<string, unknown>).it = 'indizio';
     const day = indexDay(stored)!;
     expect(day).toMatchObject({ day: '2026-09-27', number: 1, contentVersion: stored.contentVersion });
     expect(day.rounds[0].clues[0]).toEqual({ kind: 'confed', icon: 'confed:uefa', text: { es: 'pista 0.0', en: 'clue 0.0', ka: 'მინიშნება 0.0', tr: 'ipucu 0.0' } });
     expect(day.rounds[0].display).toEqual({ es: 'Número 0', en: 'Numero 0', ka: 'ნომერი 0', tr: 'Numara 0' });
     expect([...day.rounds[0].accepted]).toEqual(['numero 0', 'ნომერი 0', 'numara 0', 'n 0']);
-    expect(JSON.stringify(day.rounds[0].clues)).not.toMatch(/source|hinweis/);
+    expect(JSON.stringify(day.rounds[0].clues)).not.toMatch(/source|indizio/);
   });
 
   it('refuses a malformed row instead of serving it', () => {

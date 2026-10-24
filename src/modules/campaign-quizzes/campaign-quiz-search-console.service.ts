@@ -82,6 +82,39 @@ const PORTUGUESE_SOURCE_SLUGS: Record<string, string> = {
   'quiz-da-selecao-espanhola': 'spain',
 };
 
+/** German public slugs (/de/fussball-quiz/<slug>) → CMS slug; mirrors the web's GERMAN_PUBLIC_SLUGS. */
+const GERMAN_SOURCE_SLUGS: Record<string, string> = {
+  'fussballer-erraten': 'guess-the-player',
+  'karrierestationen-erraten': 'career-path',
+  'fussball-wappen-quiz': 'club-badges',
+  'premier-league-quiz': 'premier-league',
+  'la-liga-quiz': 'la-liga',
+  'arsenal-quiz': 'arsenal',
+  'aston-villa-quiz': 'aston-villa',
+  'fc-barcelona-quiz': 'barcelona',
+  'bournemouth-quiz': 'bournemouth',
+  'brentford-quiz': 'brentford',
+  'brighton-quiz': 'brighton',
+  'chelsea-quiz': 'chelsea',
+  'coventry-city-quiz': 'coventry-city',
+  'crystal-palace-quiz': 'crystal-palace',
+  'everton-quiz': 'everton',
+  'fulham-quiz': 'fulham',
+  'hull-city-quiz': 'hull-city',
+  'ipswich-town-quiz': 'ipswich-town',
+  'leeds-united-quiz': 'leeds-united',
+  'liverpool-quiz': 'liverpool',
+  'manchester-city-quiz': 'manchester-city',
+  'manchester-united-quiz': 'manchester-united',
+  'newcastle-united-quiz': 'newcastle-united',
+  'nottingham-forest-quiz': 'nottingham-forest',
+  'real-madrid-quiz': 'real-madrid',
+  'sunderland-quiz': 'sunderland',
+  'tottenham-quiz': 'tottenham',
+  'argentinien-quiz': 'argentina',
+  'spanien-quiz': 'spain',
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 const cachedMetrics = new Map<
   number,
@@ -172,8 +205,11 @@ export function campaignQuizSlugFromPageUrl(
     if (russian?.[1]) return RUSSIAN_SOURCE_SLUGS[russian[1]] ?? russian[1];
 
     const portuguese = url.pathname.match(/^\/pt\/quiz-de-futebol\/([a-z0-9-]+)\/?$/);
-    if (!portuguese?.[1]) return null;
-    return PORTUGUESE_SOURCE_SLUGS[portuguese[1]] ?? portuguese[1];
+    if (portuguese?.[1]) return PORTUGUESE_SOURCE_SLUGS[portuguese[1]] ?? portuguese[1];
+
+    const german = url.pathname.match(/^\/de\/fussball-quiz\/([a-z0-9-]+)\/?$/);
+    if (!german?.[1]) return null;
+    return GERMAN_SOURCE_SLUGS[german[1]] ?? german[1];
   } catch {
     return null;
   }
@@ -213,7 +249,7 @@ export const campaignQuizSearchConsoleService = {
             filters: [{
               dimension: 'page',
               operator: 'includingRegex',
-              expression: '/(football-quiz|quiz-de-futbol)/',
+              expression: '/(football-quiz|quiz-de-futbol|futbolnaya-viktorina|quiz-de-futebol|fussball-quiz)/',
             }],
           }],
           rowLimit: 25_000,

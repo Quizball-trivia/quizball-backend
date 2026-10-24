@@ -134,7 +134,7 @@ describe('Brazilian Portuguese campaign quiz edition', () => {
 
   it('has a pt edition only when the page copy and every question text are in Portuguese', async () => {
     expect((await campaignQuizzesService.getQuiz('liverpool', undefined, 'pt')).editions)
-      .toEqual({ ka: false, es: false, ru: false, pt: true });
+      .toEqual({ ka: false, es: false, ru: false, pt: true, de: false });
 
     // One option without pt would be served in English on the Portuguese page.
     const englishOption = {

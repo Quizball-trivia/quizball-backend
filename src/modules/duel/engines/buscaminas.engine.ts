@@ -18,7 +18,7 @@ export const BM_TIMEOUT_FORFEIT = 2;
 type Difficulty = keyof typeof BM_POINTS;
 
 const text = z.string().trim().min(1).max(200);
-const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional(), pt: text.optional() });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional(), pt: text.optional(), de: text.optional() });
 
 /** One pool item: a category with 16 cards, 12 of which fit (`ok`). */
 export const buscaminasRoundSchema = z.object({
@@ -166,4 +166,3 @@ export const buscaminasDuelEngine: DuelEngine<BuscaminasDuelContent, BuscaminasD
   outcome: (s): EngineOutcome | null => (s.phase === 'over' ? { scores: s.scores, idle: s.idle } : null),
   scores: (s) => s.scores,
 };
-

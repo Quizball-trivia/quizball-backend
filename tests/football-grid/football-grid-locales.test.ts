@@ -17,6 +17,6 @@ describe('Football Grid four-locale protocol', () => {
 
   it('rejects unsupported locales while retaining the old search default', () => {
     expect(footballGridSearchStartSchema.parse(undefined).locale).toBe('en');
-    expect(footballGridSubmitAnswerSchema.safeParse({ ...command, locale: 'de' }).success).toBe(false);
+    expect(footballGridSubmitAnswerSchema.safeParse({ ...command, locale: 'fr' }).success).toBe(false);
   });
 });

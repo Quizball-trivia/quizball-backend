@@ -1,0 +1,3916 @@
+{
+  "version": 1,
+  "model": "gpt-6-luna",
+  "labels": {
+    "club-1-fc-heidenheim": {
+      "en": "1. FC Heidenheim",
+      "family": "club",
+      "de": "1. FC Heidenheim"
+    },
+    "club:1-fc-koln": {
+      "en": "1. FC Köln",
+      "family": "club",
+      "de": "1. FC Köln"
+    },
+    "club-1-fc-koln": {
+      "en": "1. FC Köln",
+      "family": "club",
+      "de": "1. FC Köln"
+    },
+    "club-1899-hoffenheim": {
+      "en": "1899 Hoffenheim",
+      "family": "club",
+      "de": "1899 Hoffenheim"
+    },
+    "club:ac-milan": {
+      "en": "AC Milan",
+      "family": "club",
+      "de": "AC Mailand"
+    },
+    "club:acf-fiorentina": {
+      "en": "ACF Fiorentina",
+      "family": "club",
+      "de": "ACF Fiorentina"
+    },
+    "club:wl-adana-demirspor": {
+      "en": "Adana Demirspor",
+      "family": "club",
+      "de": "Adana Demirspor"
+    },
+    "club-aek-athens": {
+      "en": "AEK Athens",
+      "family": "club",
+      "de": "AEK Athen"
+    },
+    "club:afc-ajax": {
+      "en": "AFC Ajax",
+      "family": "club",
+      "de": "AFC Ajax"
+    },
+    "club-afc-ajax": {
+      "en": "AFC Ajax",
+      "family": "club",
+      "de": "AFC Ajax"
+    },
+    "club-afc-bournemouth": {
+      "en": "AFC Bournemouth",
+      "family": "club",
+      "de": "AFC Bournemouth"
+    },
+    "club-agf-aarhus": {
+      "en": "AGF Aarhus",
+      "family": "club",
+      "de": "AGF Aarhus"
+    },
+    "club-al-jazira": {
+      "en": "Al-Jazira",
+      "family": "club",
+      "de": "Al-Jazira"
+    },
+    "club-al-nassr": {
+      "en": "Al-Nassr",
+      "family": "club",
+      "de": "Al-Nassr"
+    },
+    "club-al-qadsiah": {
+      "en": "Al-Qadsiah",
+      "family": "club",
+      "de": "Al-Qadsiah"
+    },
+    "club-alania-vladikavkaz": {
+      "en": "Alania Vladikavkaz",
+      "family": "club",
+      "de": "Alania Vladikavkaz"
+    },
+    "club-america-de-cali": {
+      "en": "América de Cali",
+      "family": "club",
+      "de": "América de Cali"
+    },
+    "club-anorthosis-famagusta": {
+      "en": "Anorthosis Famagusta",
+      "family": "club",
+      "de": "Anorthosis Famagusta"
+    },
+    "club-anzhi-makhachkala": {
+      "en": "Anzhi Makhachkala",
+      "family": "club",
+      "de": "Anzhi Makhachkala"
+    },
+    "club-apoel": {
+      "en": "APOEL",
+      "family": "club",
+      "de": "APOEL"
+    },
+    "club-argentinos-juniors": {
+      "en": "Argentinos Juniors",
+      "family": "club",
+      "de": "Argentinos Juniors"
+    },
+    "club:arsenal": {
+      "en": "Arsenal",
+      "family": "club",
+      "de": "Arsenal"
+    },
+    "arsenal": {
+      "en": "Arsenal",
+      "family": "club",
+      "de": "Arsenal"
+    },
+    "club:as-monaco": {
+      "en": "AS Monaco",
+      "family": "club",
+      "de": "AS Monaco"
+    },
+    "club:as-roma": {
+      "en": "AS Roma",
+      "family": "club",
+      "de": "AS Roma"
+    },
+    "club-as-saint-etienne": {
+      "en": "AS Saint-Étienne",
+      "family": "club",
+      "de": "AS Saint-Étienne"
+    },
+    "club:as-saint-etienne": {
+      "en": "AS Saint-Étienne",
+      "family": "club",
+      "de": "AS Saint-Étienne"
+    },
+    "club:aston-villa": {
+      "en": "Aston Villa",
+      "family": "club",
+      "de": "Aston Villa"
+    },
+    "club-atalanta": {
+      "en": "Atalanta",
+      "family": "club",
+      "de": "Atalanta"
+    },
+    "club:atalanta-bc": {
+      "en": "Atalanta BC",
+      "family": "club",
+      "de": "Atalanta BC"
+    },
+    "club-atlanta-united": {
+      "en": "Atlanta United",
+      "family": "club",
+      "de": "Atlanta United"
+    },
+    "club:atletico-de-madrid": {
+      "en": "Atlético de Madrid",
+      "family": "club",
+      "de": "Atlético de Madrid"
+    },
+    "club-atletico-mineiro": {
+      "en": "Atlético Mineiro",
+      "family": "club",
+      "de": "Atlético Mineiro"
+    },
+    "club-atletico-nacional": {
+      "en": "Atlético Nacional",
+      "family": "club",
+      "de": "Atlético Nacional"
+    },
+    "club-atletico-paranaense": {
+      "en": "Atlético Paranaense",
+      "family": "club",
+      "de": "Atlético Paranaense"
+    },
+    "club-az": {
+      "en": "AZ",
+      "family": "club",
+      "de": "AZ"
+    },
+    "club-az-alkmaar": {
+      "en": "AZ Alkmaar",
+      "family": "club",
+      "de": "AZ Alkmaar"
+    },
+    "club-banfield": {
+      "en": "Banfield",
+      "family": "club",
+      "de": "Banfield"
+    },
+    "club:wl-basaksehir": {
+      "en": "Başakşehir",
+      "family": "club",
+      "de": "Başakşehir"
+    },
+    "club-basel": {
+      "en": "Basel",
+      "family": "club",
+      "de": "Basel"
+    },
+    "club:bayer-04-leverkusen": {
+      "en": "Bayer 04 Leverkusen",
+      "family": "club",
+      "de": "Bayer 04 Leverkusen"
+    },
+    "club-benfica": {
+      "en": "Benfica",
+      "family": "club",
+      "de": "Benfica"
+    },
+    "club-besiktas": {
+      "en": "Beşiktaş",
+      "family": "club",
+      "de": "Beşiktaş"
+    },
+    "club:wl-besiktas": {
+      "en": "Beşiktaş",
+      "family": "club",
+      "de": "Beşiktaş"
+    },
+    "club-blackburn-rovers": {
+      "en": "Blackburn Rovers",
+      "family": "club",
+      "de": "Blackburn Rovers"
+    },
+    "club-boca-juniors": {
+      "en": "Boca Juniors",
+      "family": "club",
+      "de": "Boca Juniors"
+    },
+    "club-bologna": {
+      "en": "Bologna",
+      "family": "club",
+      "de": "Bologna"
+    },
+    "club-bolton-wanderers": {
+      "en": "Bolton Wanderers",
+      "family": "club",
+      "de": "Bolton Wanderers"
+    },
+    "club-bordeaux": {
+      "en": "Bordeaux",
+      "family": "club",
+      "de": "Bordeaux"
+    },
+    "club:borussia-dortmund": {
+      "en": "Borussia Dortmund",
+      "family": "club",
+      "de": "Borussia Dortmund"
+    },
+    "club:borussia-monchengladbach": {
+      "en": "Borussia Mönchengladbach",
+      "family": "club",
+      "de": "Borussia Mönchengladbach"
+    },
+    "club-borussia-monchengladbach": {
+      "en": "Borussia Mönchengladbach",
+      "family": "club",
+      "de": "Borussia Mönchengladbach"
+    },
+    "club-botafogo": {
+      "en": "Botafogo",
+      "family": "club",
+      "de": "Botafogo"
+    },
+    "club:wl-bournemouth": {
+      "en": "Bournemouth",
+      "family": "club",
+      "de": "Bournemouth"
+    },
+    "club-braga": {
+      "en": "Braga",
+      "family": "club",
+      "de": "Braga"
+    },
+    "club:wl-brentford": {
+      "en": "Brentford",
+      "family": "club",
+      "de": "Brentford"
+    },
+    "club-brighton-hove-albion": {
+      "en": "Brighton & Hove Albion",
+      "family": "club",
+      "de": "Brighton & Hove Albion"
+    },
+    "club-bursaspor": {
+      "en": "Bursaspor",
+      "family": "club",
+      "de": "Bursaspor"
+    },
+    "club:ca-osasuna": {
+      "en": "CA Osasuna",
+      "family": "club",
+      "de": "CA Osasuna"
+    },
+    "club-cagliari": {
+      "en": "Cagliari",
+      "family": "club",
+      "de": "Cagliari"
+    },
+    "club:celta-de-vigo": {
+      "en": "Celta de Vigo",
+      "family": "club",
+      "de": "Celta de Vigo"
+    },
+    "club:celtic": {
+      "en": "Celtic",
+      "family": "club",
+      "de": "Celtic"
+    },
+    "club-celtic": {
+      "en": "Celtic",
+      "family": "club",
+      "de": "Celtic"
+    },
+    "club:chelsea": {
+      "en": "Chelsea",
+      "family": "club",
+      "de": "Chelsea"
+    },
+    "club-chornomorets-odesa": {
+      "en": "Chornomorets Odesa",
+      "family": "club",
+      "de": "Chornomorets Odesa"
+    },
+    "club-club-america": {
+      "en": "Club América",
+      "family": "club",
+      "de": "Club América"
+    },
+    "club-club-brugge": {
+      "en": "Club Brugge",
+      "family": "club",
+      "de": "Club Brugge"
+    },
+    "club-colo-colo": {
+      "en": "Colo-Colo",
+      "family": "club",
+      "de": "Colo-Colo"
+    },
+    "club-columbus-crew": {
+      "en": "Columbus Crew",
+      "family": "club",
+      "de": "Columbus Crew"
+    },
+    "club-copenhagen": {
+      "en": "Copenhagen",
+      "family": "club",
+      "de": "FC Kopenhagen"
+    },
+    "club-corinthians": {
+      "en": "Corinthians",
+      "family": "club",
+      "de": "Corinthians"
+    },
+    "club-coritiba": {
+      "en": "Coritiba",
+      "family": "club",
+      "de": "Coritiba"
+    },
+    "club-cracovia": {
+      "en": "Cracovia",
+      "family": "club",
+      "de": "Cracovia"
+    },
+    "club-cremonese": {
+      "en": "Cremonese",
+      "family": "club",
+      "de": "Cremonese"
+    },
+    "club-cruz-azul": {
+      "en": "Cruz Azul",
+      "family": "club",
+      "de": "Cruz Azul"
+    },
+    "club-cruzeiro": {
+      "en": "Cruzeiro",
+      "family": "club",
+      "de": "Cruzeiro"
+    },
+    "club-crystal-palace": {
+      "en": "Crystal Palace",
+      "family": "club",
+      "de": "Crystal Palace"
+    },
+    "club:wl-crystal-palace": {
+      "en": "Crystal Palace",
+      "family": "club",
+      "de": "Crystal Palace"
+    },
+    "club-cska-moscow": {
+      "en": "CSKA Moscow",
+      "family": "club",
+      "de": "ZSKA Moskau"
+    },
+    "club-defensa-y-justicia": {
+      "en": "Defensa y Justicia",
+      "family": "club",
+      "de": "Defensa y Justicia"
+    },
+    "club-defensor-sporting": {
+      "en": "Defensor Sporting",
+      "family": "club",
+      "de": "Defensor Sporting"
+    },
+    "club-deportes-tolima": {
+      "en": "Deportes Tolima",
+      "family": "club",
+      "de": "Deportes Tolima"
+    },
+    "club-deportivo-cali": {
+      "en": "Deportivo Cali",
+      "family": "club",
+      "de": "Deportivo Cali"
+    },
+    "club-deportivo-la-coruna": {
+      "en": "Deportivo La Coruña",
+      "family": "club",
+      "de": "Deportivo La Coruña"
+    },
+    "club-derby-county": {
+      "en": "Derby County",
+      "family": "club",
+      "de": "Derby County"
+    },
+    "club-dijon": {
+      "en": "Dijon",
+      "family": "club",
+      "de": "Dijon"
+    },
+    "club-dila-gori": {
+      "en": "Dila Gori",
+      "family": "club",
+      "de": "Dila Gori"
+    },
+    "club-dinamo-batumi": {
+      "en": "Dinamo Batumi",
+      "family": "club",
+      "de": "Dinamo Batumi"
+    },
+    "club-dinamo-tbilisi": {
+      "en": "Dinamo Tbilisi",
+      "family": "club",
+      "de": "Dinamo Tbilisi"
+    },
+    "club-dnipro": {
+      "en": "Dnipro",
+      "family": "club",
+      "de": "Dnipro"
+    },
+    "club-dnipro-dnipropetrovsk": {
+      "en": "Dnipro Dnipropetrovsk",
+      "family": "club",
+      "de": "Dnipro Dnipropetrovsk"
+    },
+    "club-dundee": {
+      "en": "Dundee",
+      "family": "club",
+      "de": "Dundee"
+    },
+    "club-dynamo-kyiv": {
+      "en": "Dynamo Kyiv",
+      "family": "club",
+      "de": "Dynamo Kiew"
+    },
+    "club-dynamo-moscow": {
+      "en": "Dynamo Moscow",
+      "family": "club",
+      "de": "Dynamo Moskau"
+    },
+    "club:eintracht-frankfurt": {
+      "en": "Eintracht Frankfurt",
+      "family": "club",
+      "de": "Eintracht Frankfurt"
+    },
+    "club-eintracht-frankfurt": {
+      "en": "Eintracht Frankfurt",
+      "family": "club",
+      "de": "Eintracht Frankfurt"
+    },
+    "club-empoli": {
+      "en": "Empoli",
+      "family": "club",
+      "de": "Empoli"
+    },
+    "club-esbjerg-fb": {
+      "en": "Esbjerg fB",
+      "family": "club",
+      "de": "Esbjerg fB"
+    },
+    "club-espanyol": {
+      "en": "Espanyol",
+      "family": "club",
+      "de": "Espanyol"
+    },
+    "club-estoril": {
+      "en": "Estoril",
+      "family": "club",
+      "de": "Estoril"
+    },
+    "club-estudiantes": {
+      "en": "Estudiantes",
+      "family": "club",
+      "de": "Estudiantes"
+    },
+    "club:everton": {
+      "en": "Everton",
+      "family": "club",
+      "de": "Everton"
+    },
+    "club-fc-augsburg": {
+      "en": "FC Augsburg",
+      "family": "club",
+      "de": "FC Augsburg"
+    },
+    "club:fc-barcelona": {
+      "en": "FC Barcelona",
+      "family": "club",
+      "de": "FC Barcelona"
+    },
+    "fc-barcelona": {
+      "en": "FC Barcelona",
+      "family": "club",
+      "de": "FC Barcelona"
+    },
+    "club-fc-basel": {
+      "en": "FC Basel",
+      "family": "club",
+      "de": "FC Basel"
+    },
+    "club:fc-bayern-munich": {
+      "en": "FC Bayern Munich",
+      "family": "club",
+      "de": "FC Bayern München"
+    },
+    "club-fc-copenhagen": {
+      "en": "FC Copenhagen",
+      "family": "club",
+      "de": "FC Kopenhagen"
+    },
+    "club-fc-famalicao": {
+      "en": "FC Famalicão",
+      "family": "club",
+      "de": "FC Famalicão"
+    },
+    "club-fc-groningen": {
+      "en": "FC Groningen",
+      "family": "club",
+      "de": "FC Groningen"
+    },
+    "club-fc-krasnodar": {
+      "en": "FC Krasnodar",
+      "family": "club",
+      "de": "FC Krasnodar"
+    },
+    "club-fc-luzern": {
+      "en": "FC Luzern",
+      "family": "club",
+      "de": "FC Luzern"
+    },
+    "club:fc-porto": {
+      "en": "FC Porto",
+      "family": "club",
+      "de": "FC Porto"
+    },
+    "club:fc-schalke-04": {
+      "en": "FC Schalke 04",
+      "family": "club",
+      "de": "FC Schalke 04"
+    },
+    "club-fc-schalke-04": {
+      "en": "FC Schalke 04",
+      "family": "club",
+      "de": "FC Schalke 04"
+    },
+    "club-fc-twente": {
+      "en": "FC Twente",
+      "family": "club",
+      "de": "FC Twente"
+    },
+    "club-fc-zurich": {
+      "en": "FC Zürich",
+      "family": "club",
+      "de": "FC Zürich"
+    },
+    "club:wl-fenerbahce": {
+      "en": "Fenerbahçe",
+      "family": "club",
+      "de": "Fenerbahçe"
+    },
+    "club-ferencvaros": {
+      "en": "Ferencváros",
+      "family": "club",
+      "de": "Ferencváros"
+    },
+    "club-feyenoord": {
+      "en": "Feyenoord",
+      "family": "club",
+      "de": "Feyenoord"
+    },
+    "club-flamengo": {
+      "en": "Flamengo",
+      "family": "club",
+      "de": "Flamengo"
+    },
+    "club-fluminense": {
+      "en": "Fluminense",
+      "family": "club",
+      "de": "Fluminense"
+    },
+    "club-frosinone": {
+      "en": "Frosinone",
+      "family": "club",
+      "de": "Frosinone"
+    },
+    "club:wl-fulham": {
+      "en": "Fulham",
+      "family": "club",
+      "de": "Fulham"
+    },
+    "club:wl-galatasaray": {
+      "en": "Galatasaray",
+      "family": "club",
+      "de": "Galatasaray"
+    },
+    "club-genclerbirligi": {
+      "en": "Gençlerbirliği",
+      "family": "club",
+      "de": "Gençlerbirliği"
+    },
+    "club-genoa": {
+      "en": "Genoa",
+      "family": "club",
+      "de": "Genoa"
+    },
+    "club:genoa-cfc": {
+      "en": "Genoa CFC",
+      "family": "club",
+      "de": "Genoa CFC"
+    },
+    "club-gent": {
+      "en": "Gent",
+      "family": "club",
+      "de": "Gent"
+    },
+    "club-getafe": {
+      "en": "Getafe",
+      "family": "club",
+      "de": "Getafe"
+    },
+    "club-gil-vicente": {
+      "en": "Gil Vicente",
+      "family": "club",
+      "de": "Gil Vicente"
+    },
+    "club-gimnasia-la-plata": {
+      "en": "Gimnasia La Plata",
+      "family": "club",
+      "de": "Gimnasia La Plata"
+    },
+    "club-gimnastic": {
+      "en": "Gimnàstic",
+      "family": "club",
+      "de": "Gimnàstic"
+    },
+    "club-goias": {
+      "en": "Goiás",
+      "family": "club",
+      "de": "Goiás"
+    },
+    "club-grasshoppers": {
+      "en": "Grasshoppers",
+      "family": "club",
+      "de": "Grasshoppers"
+    },
+    "club-gremio": {
+      "en": "Grêmio",
+      "family": "club",
+      "de": "Grêmio"
+    },
+    "club:wl-groningen": {
+      "en": "Groningen",
+      "family": "club",
+      "de": "Groningen"
+    },
+    "club-guarani": {
+      "en": "Guaraní",
+      "family": "club",
+      "de": "Guaraní"
+    },
+    "club-gyori-eto": {
+      "en": "Győri ETO",
+      "family": "club",
+      "de": "Győri ETO"
+    },
+    "club-hamburger-sv": {
+      "en": "Hamburger SV",
+      "family": "club",
+      "de": "Hamburger SV"
+    },
+    "club:hamburger-sv": {
+      "en": "Hamburger SV",
+      "family": "club",
+      "de": "Hamburger SV"
+    },
+    "club-hatayspor": {
+      "en": "Hatayspor",
+      "family": "club",
+      "de": "Hatayspor"
+    },
+    "club:wl-heerenveen": {
+      "en": "Heerenveen",
+      "family": "club",
+      "de": "Heerenveen"
+    },
+    "club-hellas-verona": {
+      "en": "Hellas Verona",
+      "family": "club",
+      "de": "Hellas Verona"
+    },
+    "club-heracles-almelo": {
+      "en": "Heracles Almelo",
+      "family": "club",
+      "de": "Heracles Almelo"
+    },
+    "club:hertha-bsc": {
+      "en": "Hertha BSC",
+      "family": "club",
+      "de": "Hertha BSC"
+    },
+    "club-hertha-bsc": {
+      "en": "Hertha BSC",
+      "family": "club",
+      "de": "Hertha BSC"
+    },
+    "club-hull-city": {
+      "en": "Hull City",
+      "family": "club",
+      "de": "Hull City"
+    },
+    "club-huracan": {
+      "en": "Huracán",
+      "family": "club",
+      "de": "Huracán"
+    },
+    "club-ifk-goteborg": {
+      "en": "IFK Göteborg",
+      "family": "club",
+      "de": "IFK Göteborg"
+    },
+    "club-independiente": {
+      "en": "Independiente",
+      "family": "club",
+      "de": "Independiente"
+    },
+    "club-independiente-medellin": {
+      "en": "Independiente Medellín",
+      "family": "club",
+      "de": "Independiente Medellín"
+    },
+    "club-independiente-santa-fe": {
+      "en": "Independiente Santa Fe",
+      "family": "club",
+      "de": "Independiente Santa Fe"
+    },
+    "club-inter-baku": {
+      "en": "Inter Baku",
+      "family": "club",
+      "de": "Inter Baku"
+    },
+    "club-inter-miami": {
+      "en": "Inter Miami",
+      "family": "club",
+      "de": "Inter Miami"
+    },
+    "club:inter-milan": {
+      "en": "Inter Milan",
+      "family": "club",
+      "de": "Inter Mailand"
+    },
+    "club-internacional": {
+      "en": "Internacional",
+      "family": "club",
+      "de": "Internacional"
+    },
+    "club-istanbul-basaksehir": {
+      "en": "İstanbul Başakşehir",
+      "family": "club",
+      "de": "İstanbul Başakşehir"
+    },
+    "club-junior": {
+      "en": "Junior",
+      "family": "club",
+      "de": "Junior"
+    },
+    "club:juventus": {
+      "en": "Juventus",
+      "family": "club",
+      "de": "Juventus"
+    },
+    "club-kaiserslautern": {
+      "en": "Kaiserslautern",
+      "family": "club",
+      "de": "Kaiserslautern"
+    },
+    "club-karlsruher-sc": {
+      "en": "Karlsruher SC",
+      "family": "club",
+      "de": "Karlsruher SC"
+    },
+    "club-karpaty-lviv": {
+      "en": "Karpaty Lviv",
+      "family": "club",
+      "de": "Karpaty Lviv"
+    },
+    "club-kartalspor": {
+      "en": "Kartalspor",
+      "family": "club",
+      "de": "Kartalspor"
+    },
+    "club-kashima-antlers": {
+      "en": "Kashima Antlers",
+      "family": "club",
+      "de": "Kashima Antlers"
+    },
+    "club-kayserispor": {
+      "en": "Kayserispor",
+      "family": "club",
+      "de": "Kayserispor"
+    },
+    "club-kocaelispor": {
+      "en": "Kocaelispor",
+      "family": "club",
+      "de": "Kocaelispor"
+    },
+    "club-konyaspor": {
+      "en": "Konyaspor",
+      "family": "club",
+      "de": "Konyaspor"
+    },
+    "club-lazio": {
+      "en": "Lazio",
+      "family": "club",
+      "de": "Lazio"
+    },
+    "club-lech-poznan": {
+      "en": "Lech Poznań",
+      "family": "club",
+      "de": "Lech Poznań"
+    },
+    "club-leeds-united": {
+      "en": "Leeds United",
+      "family": "club",
+      "de": "Leeds United"
+    },
+    "club:leeds-united": {
+      "en": "Leeds United",
+      "family": "club",
+      "de": "Leeds United"
+    },
+    "club-legia-warsaw": {
+      "en": "Legia Warsaw",
+      "family": "club",
+      "de": "Legia Warschau"
+    },
+    "club:leicester-city": {
+      "en": "Leicester City",
+      "family": "club",
+      "de": "Leicester City"
+    },
+    "club-levante": {
+      "en": "Levante",
+      "family": "club",
+      "de": "Levante"
+    },
+    "club-libertad": {
+      "en": "Libertad",
+      "family": "club",
+      "de": "Libertad"
+    },
+    "club:liverpool": {
+      "en": "Liverpool",
+      "family": "club",
+      "de": "Liverpool"
+    },
+    "club-liverpool-montevideo": {
+      "en": "Liverpool Montevideo",
+      "family": "club",
+      "de": "Liverpool Montevideo"
+    },
+    "club-locomotive-tbilisi": {
+      "en": "Locomotive Tbilisi",
+      "family": "club",
+      "de": "Locomotive Tbilisi"
+    },
+    "club-lokomotiv-moscow": {
+      "en": "Lokomotiv Moscow",
+      "family": "club",
+      "de": "Lokomotive Moskau"
+    },
+    "club:losc-lille": {
+      "en": "LOSC Lille",
+      "family": "club",
+      "de": "LOSC Lille"
+    },
+    "club-maccabi-haifa": {
+      "en": "Maccabi Haifa",
+      "family": "club",
+      "de": "Maccabi Haifa"
+    },
+    "club:wl-malaga": {
+      "en": "Málaga",
+      "family": "club",
+      "de": "Málaga"
+    },
+    "club:manchester-city": {
+      "en": "Manchester City",
+      "family": "club",
+      "de": "Manchester City"
+    },
+    "club:manchester-united": {
+      "en": "Manchester United",
+      "family": "club",
+      "de": "Manchester United"
+    },
+    "club-metalurh-donetsk": {
+      "en": "Metalurh Donetsk",
+      "family": "club",
+      "de": "Metalurh Donetsk"
+    },
+    "club:wl-metz": {
+      "en": "Metz",
+      "family": "club",
+      "de": "Metz"
+    },
+    "club-middlesbrough": {
+      "en": "Middlesbrough",
+      "family": "club",
+      "de": "Middlesbrough"
+    },
+    "club-millonarios": {
+      "en": "Millonarios",
+      "family": "club",
+      "de": "Millonarios"
+    },
+    "club-monterrey": {
+      "en": "Monterrey",
+      "family": "club",
+      "de": "Monterrey"
+    },
+    "club:montpellier-hsc": {
+      "en": "Montpellier HSC",
+      "family": "club",
+      "de": "Montpellier HSC"
+    },
+    "club:wl-monza": {
+      "en": "Monza",
+      "family": "club",
+      "de": "Monza"
+    },
+    "club-msv-duisburg": {
+      "en": "MSV Duisburg",
+      "family": "club",
+      "de": "MSV Duisburg"
+    },
+    "club-nac-breda": {
+      "en": "NAC Breda",
+      "family": "club",
+      "de": "NAC Breda"
+    },
+    "club-nacional": {
+      "en": "Nacional",
+      "family": "club",
+      "de": "Nacional"
+    },
+    "club-nantes": {
+      "en": "Nantes",
+      "family": "club",
+      "de": "Nantes"
+    },
+    "club-nec-nijmegen": {
+      "en": "NEC Nijmegen",
+      "family": "club",
+      "de": "NEC Nijmegen"
+    },
+    "club-new-york-cosmos": {
+      "en": "New York Cosmos",
+      "family": "club",
+      "de": "New York Cosmos"
+    },
+    "club-new-york-red-bulls": {
+      "en": "New York Red Bulls",
+      "family": "club",
+      "de": "New York Red Bulls"
+    },
+    "club-newcastle-jets": {
+      "en": "Newcastle Jets",
+      "family": "club",
+      "de": "Newcastle Jets"
+    },
+    "club-newcastle-united": {
+      "en": "Newcastle United",
+      "family": "club",
+      "de": "Newcastle United"
+    },
+    "club:newcastle-united": {
+      "en": "Newcastle United",
+      "family": "club",
+      "de": "Newcastle United"
+    },
+    "club:wl-norwich-city": {
+      "en": "Norwich City",
+      "family": "club",
+      "de": "Norwich City"
+    },
+    "club:nottingham-forest": {
+      "en": "Nottingham Forest",
+      "family": "club",
+      "de": "Nottingham Forest"
+    },
+    "club-nottingham-forest": {
+      "en": "Nottingham Forest",
+      "family": "club",
+      "de": "Nottingham Forest"
+    },
+    "club-ogc-nice": {
+      "en": "OGC Nice",
+      "family": "club",
+      "de": "OGC Nice"
+    },
+    "club:ogc-nice": {
+      "en": "OGC Nice",
+      "family": "club",
+      "de": "OGC Nice"
+    },
+    "club-olimpia": {
+      "en": "Olimpia",
+      "family": "club",
+      "de": "Olimpia"
+    },
+    "club-olympiacos": {
+      "en": "Olympiacos",
+      "family": "club",
+      "de": "Olympiacos"
+    },
+    "club:wl-olympiacos": {
+      "en": "Olympiacos",
+      "family": "club",
+      "de": "Olympiacos"
+    },
+    "club-olympique-de-marseille": {
+      "en": "Olympique de Marseille",
+      "family": "club",
+      "de": "Olympique de Marseille"
+    },
+    "club:olympique-de-marseille": {
+      "en": "Olympique de Marseille",
+      "family": "club",
+      "de": "Olympique de Marseille"
+    },
+    "club-olympique-lyon": {
+      "en": "Olympique Lyon",
+      "family": "club",
+      "de": "Olympique Lyon"
+    },
+    "club:olympique-lyonnais": {
+      "en": "Olympique Lyonnais",
+      "family": "club",
+      "de": "Olympique Lyonnais"
+    },
+    "club-olympique-lyonnais": {
+      "en": "Olympique Lyonnais",
+      "family": "club",
+      "de": "Olympique Lyonnais"
+    },
+    "club-pafos-fc": {
+      "en": "Pafos FC",
+      "family": "club",
+      "de": "Pafos FC"
+    },
+    "club:palermo-fc": {
+      "en": "Palermo FC",
+      "family": "club",
+      "de": "Palermo FC"
+    },
+    "club-palmeiras": {
+      "en": "Palmeiras",
+      "family": "club",
+      "de": "Palmeiras"
+    },
+    "club:paris-saint-germain": {
+      "en": "Paris Saint-Germain",
+      "family": "club",
+      "de": "Paris Saint-Germain"
+    },
+    "club-parma": {
+      "en": "Parma",
+      "family": "club",
+      "de": "Parma"
+    },
+    "club:parma-calcio-1913": {
+      "en": "Parma Calcio 1913",
+      "family": "club",
+      "de": "Parma Calcio 1913"
+    },
+    "club-partizan": {
+      "en": "Partizan",
+      "family": "club",
+      "de": "Partizan"
+    },
+    "club-penarol": {
+      "en": "Peñarol",
+      "family": "club",
+      "de": "Peñarol"
+    },
+    "club-persepolis": {
+      "en": "Persepolis",
+      "family": "club",
+      "de": "Persepolis"
+    },
+    "club-philadelphia-union": {
+      "en": "Philadelphia Union",
+      "family": "club",
+      "de": "Philadelphia Union"
+    },
+    "club-pogon-szczecin": {
+      "en": "Pogoń Szczecin",
+      "family": "club",
+      "de": "Pogoń Szczecin"
+    },
+    "club-portsmouth": {
+      "en": "Portsmouth",
+      "family": "club",
+      "de": "Portsmouth"
+    },
+    "club-portuguesa": {
+      "en": "Portuguesa",
+      "family": "club",
+      "de": "Portuguesa"
+    },
+    "club-psv-eindhoven": {
+      "en": "PSV Eindhoven",
+      "family": "club",
+      "de": "PSV Eindhoven"
+    },
+    "club:psv-eindhoven": {
+      "en": "PSV Eindhoven",
+      "family": "club",
+      "de": "PSV Eindhoven"
+    },
+    "club-qarabag": {
+      "en": "Qarabağ",
+      "family": "club",
+      "de": "Qarabağ"
+    },
+    "club:wl-queens-park-rangers": {
+      "en": "Queens Park Rangers",
+      "family": "club",
+      "de": "Queens Park Rangers"
+    },
+    "club-racing-club": {
+      "en": "Racing Club",
+      "family": "club",
+      "de": "Racing Club"
+    },
+    "club-randers-fc": {
+      "en": "Randers FC",
+      "family": "club",
+      "de": "Randers FC"
+    },
+    "club-rangers": {
+      "en": "Rangers",
+      "family": "club",
+      "de": "Rangers"
+    },
+    "club:rangers": {
+      "en": "Rangers",
+      "family": "club",
+      "de": "Rangers"
+    },
+    "club-rapid-vienna": {
+      "en": "Rapid Vienna",
+      "family": "club",
+      "de": "Rapid Wien"
+    },
+    "club-rayo-vallecano": {
+      "en": "Rayo Vallecano",
+      "family": "club",
+      "de": "Rayo Vallecano"
+    },
+    "club:wl-rayo-vallecano": {
+      "en": "Rayo Vallecano",
+      "family": "club",
+      "de": "Rayo Vallecano"
+    },
+    "club:wl-rb-leipzig": {
+      "en": "RB Leipzig",
+      "family": "club",
+      "de": "RB Leipzig"
+    },
+    "club:rc-lens": {
+      "en": "RC Lens",
+      "family": "club",
+      "de": "RC Lens"
+    },
+    "club:rc-strasbourg-alsace": {
+      "en": "RC Strasbourg Alsace",
+      "family": "club",
+      "de": "RC Strasbourg Alsace"
+    },
+    "club-reading": {
+      "en": "Reading",
+      "family": "club",
+      "de": "Reading"
+    },
+    "club-real-betis": {
+      "en": "Real Betis",
+      "family": "club",
+      "de": "Real Betis"
+    },
+    "real-madrid-cf": {
+      "en": "Real Madrid",
+      "family": "club",
+      "de": "Real Madrid"
+    },
+    "club:real-madrid-cf": {
+      "en": "Real Madrid CF",
+      "family": "club",
+      "de": "Real Madrid CF"
+    },
+    "club:real-sociedad": {
+      "en": "Real Sociedad",
+      "family": "club",
+      "de": "Real Sociedad"
+    },
+    "club-real-sociedad": {
+      "en": "Real Sociedad",
+      "family": "club",
+      "de": "Real Sociedad"
+    },
+    "club-real-zaragoza": {
+      "en": "Real Zaragoza",
+      "family": "club",
+      "de": "Real Zaragoza"
+    },
+    "club-red-star-belgrade": {
+      "en": "Red Star Belgrade",
+      "family": "club",
+      "de": "Roter Stern Belgrad"
+    },
+    "club-river-plate": {
+      "en": "River Plate",
+      "family": "club",
+      "de": "River Plate"
+    },
+    "club-rostov": {
+      "en": "Rostov",
+      "family": "club",
+      "de": "Rostov"
+    },
+    "club-royal-antwerp": {
+      "en": "Royal Antwerp",
+      "family": "club",
+      "de": "Royal Antwerp"
+    },
+    "club-rubin-kazan": {
+      "en": "Rubin Kazan",
+      "family": "club",
+      "de": "Rubin Kazan"
+    },
+    "club:wl-rubin-kazan": {
+      "en": "Rubin Kazan",
+      "family": "club",
+      "de": "Rubin Kazan"
+    },
+    "club-saburtalo-tbilisi": {
+      "en": "Saburtalo Tbilisi",
+      "family": "club",
+      "de": "Saburtalo Tbilisi"
+    },
+    "club-sampdoria": {
+      "en": "Sampdoria",
+      "family": "club",
+      "de": "Sampdoria"
+    },
+    "club-samtredia": {
+      "en": "Samtredia",
+      "family": "club",
+      "de": "Samtredia"
+    },
+    "club-san-jose-earthquakes": {
+      "en": "San Jose Earthquakes",
+      "family": "club",
+      "de": "San Jose Earthquakes"
+    },
+    "club-san-lorenzo": {
+      "en": "San Lorenzo",
+      "family": "club",
+      "de": "San Lorenzo"
+    },
+    "club-santos": {
+      "en": "Santos",
+      "family": "club",
+      "de": "Santos"
+    },
+    "club-sao-paulo": {
+      "en": "São Paulo",
+      "family": "club",
+      "de": "São Paulo"
+    },
+    "club-sao-paulo-fc": {
+      "en": "São Paulo FC",
+      "family": "club",
+      "de": "São Paulo FC"
+    },
+    "club:sc-braga": {
+      "en": "SC Braga",
+      "family": "club",
+      "de": "SC Braga"
+    },
+    "club-sc-freiburg": {
+      "en": "SC Freiburg",
+      "family": "club",
+      "de": "SC Freiburg"
+    },
+    "club:sc-freiburg": {
+      "en": "SC Freiburg",
+      "family": "club",
+      "de": "SC Freiburg"
+    },
+    "club-schalke-04": {
+      "en": "Schalke 04",
+      "family": "club",
+      "de": "Schalke 04"
+    },
+    "club-seattle-sounders": {
+      "en": "Seattle Sounders",
+      "family": "club",
+      "de": "Seattle Sounders"
+    },
+    "club-sepahan": {
+      "en": "Sepahan",
+      "family": "club",
+      "de": "Sepahan"
+    },
+    "club-sevilla-atletico": {
+      "en": "Sevilla Atlético",
+      "family": "club",
+      "de": "Sevilla Atlético"
+    },
+    "club:sevilla-fc": {
+      "en": "Sevilla FC",
+      "family": "club",
+      "de": "Sevilla FC"
+    },
+    "club-shakhtar-donetsk": {
+      "en": "Shakhtar Donetsk",
+      "family": "club",
+      "de": "Schachtar Donezk"
+    },
+    "club:wl-sheffield-united": {
+      "en": "Sheffield United",
+      "family": "club",
+      "de": "Sheffield United"
+    },
+    "club-sinop": {
+      "en": "Sinop",
+      "family": "club",
+      "de": "Sinop"
+    },
+    "club-ska-khabarovsk": {
+      "en": "SKA-Khabarovsk",
+      "family": "club",
+      "de": "SKA-Khabarovsk"
+    },
+    "club-skonto-fc": {
+      "en": "Skonto FC",
+      "family": "club",
+      "de": "Skonto FC"
+    },
+    "club:sl-benfica": {
+      "en": "SL Benfica",
+      "family": "club",
+      "de": "SL Benfica"
+    },
+    "club-slavia-prague": {
+      "en": "Slavia Prague",
+      "family": "club",
+      "de": "Slavia Prag"
+    },
+    "club-slovan-bratislava": {
+      "en": "Slovan Bratislava",
+      "family": "club",
+      "de": "Slovan Bratislava"
+    },
+    "club-sochaux": {
+      "en": "Sochaux",
+      "family": "club",
+      "de": "Sochaux"
+    },
+    "club-southampton": {
+      "en": "Southampton",
+      "family": "club",
+      "de": "Southampton"
+    },
+    "club:wl-southampton": {
+      "en": "Southampton",
+      "family": "club",
+      "de": "Southampton"
+    },
+    "club-sparta-rotterdam": {
+      "en": "Sparta Rotterdam",
+      "family": "club",
+      "de": "Sparta Rotterdam"
+    },
+    "club-spartak-moscow": {
+      "en": "Spartak Moscow",
+      "family": "club",
+      "de": "Spartak Moskau"
+    },
+    "club-spartak-nalchik": {
+      "en": "Spartak Nalchik",
+      "family": "club",
+      "de": "Spartak Nalchik"
+    },
+    "club:sporting-cp": {
+      "en": "Sporting CP",
+      "family": "club",
+      "de": "Sporting CP"
+    },
+    "club-sporting-gijon": {
+      "en": "Sporting Gijón",
+      "family": "club",
+      "de": "Sporting Gijón"
+    },
+    "club:ssc-napoli": {
+      "en": "SSC Napoli",
+      "family": "club",
+      "de": "SSC Napoli"
+    },
+    "club-stab-k": {
+      "en": "Stabæk",
+      "family": "club",
+      "de": "Stabæk"
+    },
+    "club-stade-de-reims": {
+      "en": "Stade de Reims",
+      "family": "club",
+      "de": "Stade de Reims"
+    },
+    "club-stade-rennais": {
+      "en": "Stade Rennais",
+      "family": "club",
+      "de": "Stade Rennais"
+    },
+    "club:stade-rennais-fc": {
+      "en": "Stade Rennais FC",
+      "family": "club",
+      "de": "Stade Rennais FC"
+    },
+    "club-standard-liege": {
+      "en": "Standard Liège",
+      "family": "club",
+      "de": "Standard Lüttich"
+    },
+    "club:wl-stoke-city": {
+      "en": "Stoke City",
+      "family": "club",
+      "de": "Stoke City"
+    },
+    "club-stoke-city": {
+      "en": "Stoke City",
+      "family": "club",
+      "de": "Stoke City"
+    },
+    "club-strasbourg": {
+      "en": "Strasbourg",
+      "family": "club",
+      "de": "Strasbourg"
+    },
+    "club-sturm-graz": {
+      "en": "Sturm Graz",
+      "family": "club",
+      "de": "Sturm Graz"
+    },
+    "club-sunderland": {
+      "en": "Sunderland",
+      "family": "club",
+      "de": "Sunderland"
+    },
+    "club:sunderland": {
+      "en": "Sunderland",
+      "family": "club",
+      "de": "Sunderland"
+    },
+    "club-swansea-city": {
+      "en": "Swansea City",
+      "family": "club",
+      "de": "Swansea City"
+    },
+    "club-tobol-kostanay": {
+      "en": "Tobol Kostanay",
+      "family": "club",
+      "de": "Tobol Kostanay"
+    },
+    "club-torino": {
+      "en": "Torino",
+      "family": "club",
+      "de": "Torino"
+    },
+    "club:torino-fc": {
+      "en": "Torino FC",
+      "family": "club",
+      "de": "Torino FC"
+    },
+    "club-torpedo-kutaisi": {
+      "en": "Torpedo Kutaisi",
+      "family": "club",
+      "de": "Torpedo Kutaisi"
+    },
+    "club-torpedo-moscow": {
+      "en": "Torpedo Moscow",
+      "family": "club",
+      "de": "Torpedo Moskau"
+    },
+    "club:tottenham-hotspur": {
+      "en": "Tottenham Hotspur",
+      "family": "club",
+      "de": "Tottenham Hotspur"
+    },
+    "club:wl-toulouse": {
+      "en": "Toulouse",
+      "family": "club",
+      "de": "Toulouse"
+    },
+    "club:wl-trabzonspor": {
+      "en": "Trabzonspor",
+      "family": "club",
+      "de": "Trabzonspor"
+    },
+    "club-trabzonspor": {
+      "en": "Trabzonspor",
+      "family": "club",
+      "de": "Trabzonspor"
+    },
+    "club-udinese": {
+      "en": "Udinese",
+      "family": "club",
+      "de": "Udinese"
+    },
+    "club-ulsan-hyundai": {
+      "en": "Ulsan Hyundai",
+      "family": "club",
+      "de": "Ulsan Hyundai"
+    },
+    "club-union-berlin": {
+      "en": "Union Berlin",
+      "family": "club",
+      "de": "Union Berlin"
+    },
+    "club-universidad-catolica": {
+      "en": "Universidad Católica",
+      "family": "club",
+      "de": "Universidad Católica"
+    },
+    "club-universidad-de-chile": {
+      "en": "Universidad de Chile",
+      "family": "club",
+      "de": "Universidad de Chile"
+    },
+    "club-universitatea-craiova": {
+      "en": "Universitatea Craiova",
+      "family": "club",
+      "de": "Universitatea Craiova"
+    },
+    "club-ural-yekaterinburg": {
+      "en": "Ural Yekaterinburg",
+      "family": "club",
+      "de": "Ural Yekaterinburg"
+    },
+    "club:valencia-cf": {
+      "en": "Valencia CF",
+      "family": "club",
+      "de": "Valencia CF"
+    },
+    "club-valenciennes": {
+      "en": "Valenciennes",
+      "family": "club",
+      "de": "Valenciennes"
+    },
+    "club-vasco-da-gama": {
+      "en": "Vasco da Gama",
+      "family": "club",
+      "de": "Vasco da Gama"
+    },
+    "club-velez-sarsfield": {
+      "en": "Vélez Sarsfield",
+      "family": "club",
+      "de": "Vélez Sarsfield"
+    },
+    "club:vfb-stuttgart": {
+      "en": "VfB Stuttgart",
+      "family": "club",
+      "de": "VfB Stuttgart"
+    },
+    "club-vfb-stuttgart": {
+      "en": "VfB Stuttgart",
+      "family": "club",
+      "de": "VfB Stuttgart"
+    },
+    "club-vfl-bochum": {
+      "en": "VfL Bochum",
+      "family": "club",
+      "de": "VfL Bochum"
+    },
+    "club-vfl-wolfsburg": {
+      "en": "VfL Wolfsburg",
+      "family": "club",
+      "de": "VfL Wolfsburg"
+    },
+    "club:wl-vfl-wolfsburg": {
+      "en": "VfL Wolfsburg",
+      "family": "club",
+      "de": "VfL Wolfsburg"
+    },
+    "club-villarreal": {
+      "en": "Villarreal",
+      "family": "club",
+      "de": "Villarreal"
+    },
+    "club:villarreal-cf": {
+      "en": "Villarreal CF",
+      "family": "club",
+      "de": "Villarreal CF"
+    },
+    "club-vitesse": {
+      "en": "Vitesse",
+      "family": "club",
+      "de": "Vitesse"
+    },
+    "club-watford": {
+      "en": "Watford",
+      "family": "club",
+      "de": "Watford"
+    },
+    "club-werder-bremen": {
+      "en": "Werder Bremen",
+      "family": "club",
+      "de": "Werder Bremen"
+    },
+    "club:wl-west-bromwich-albion": {
+      "en": "West Bromwich Albion",
+      "family": "club",
+      "de": "West Bromwich Albion"
+    },
+    "club:west-ham-united": {
+      "en": "West Ham United",
+      "family": "club",
+      "de": "West Ham United"
+    },
+    "club-willem-ii": {
+      "en": "Willem II",
+      "family": "club",
+      "de": "Willem II"
+    },
+    "club-wolfsberger-ac": {
+      "en": "Wolfsberger AC",
+      "family": "club",
+      "de": "Wolfsberger AC"
+    },
+    "club-wolfsburg": {
+      "en": "Wolfsburg",
+      "family": "club",
+      "de": "Wolfsburg"
+    },
+    "club-wolverhampton-wanderers": {
+      "en": "Wolverhampton Wanderers",
+      "family": "club",
+      "de": "Wolverhampton Wanderers"
+    },
+    "club-zenit-saint-petersburg": {
+      "en": "Zenit Saint Petersburg",
+      "family": "club",
+      "de": "Zenit St. Petersburg"
+    },
+    "club-zestaponi": {
+      "en": "Zestaponi",
+      "family": "club",
+      "de": "Zestaponi"
+    },
+    "manager:andoni-iraola": {
+      "en": "Andoni Iraola",
+      "family": "manager",
+      "de": "Andoni Iraola"
+    },
+    "manager:antonio-conte": {
+      "en": "Antonio Conte",
+      "family": "manager",
+      "de": "Antonio Conte"
+    },
+    "manager:arsene-wenger": {
+      "en": "Arsène Wenger",
+      "family": "manager",
+      "de": "Arsène Wenger"
+    },
+    "manager:brendan-rodgers": {
+      "en": "Brendan Rodgers",
+      "family": "manager",
+      "de": "Brendan Rodgers"
+    },
+    "manager:carlo-ancelotti": {
+      "en": "Carlo Ancelotti",
+      "family": "manager",
+      "de": "Carlo Ancelotti"
+    },
+    "manager:claudio-ranieri": {
+      "en": "Claudio Ranieri",
+      "family": "manager",
+      "de": "Claudio Ranieri"
+    },
+    "manager:david-moyes": {
+      "en": "David Moyes",
+      "family": "manager",
+      "de": "David Moyes"
+    },
+    "manager:didier-deschamps": {
+      "en": "Didier Deschamps",
+      "family": "manager",
+      "de": "Didier Deschamps"
+    },
+    "manager:diego-simeone": {
+      "en": "Diego Simeone",
+      "family": "manager",
+      "de": "Diego Simeone"
+    },
+    "manager:eddie-howe": {
+      "en": "Eddie Howe",
+      "family": "manager",
+      "de": "Eddie Howe"
+    },
+    "manager:erik-ten-hag": {
+      "en": "Erik ten Hag",
+      "family": "manager",
+      "de": "Erik ten Hag"
+    },
+    "manager:fatih-terim": {
+      "en": "Fatih Terim",
+      "family": "manager",
+      "de": "Fatih Terim"
+    },
+    "manager:gian-piero-gasperini": {
+      "en": "Gian Piero Gasperini",
+      "family": "manager",
+      "de": "Gian Piero Gasperini"
+    },
+    "manager:graham-potter": {
+      "en": "Graham Potter",
+      "family": "manager",
+      "de": "Graham Potter"
+    },
+    "manager:guus-hiddink": {
+      "en": "Guus Hiddink",
+      "family": "manager",
+      "de": "Guus Hiddink"
+    },
+    "manager:hansi-flick": {
+      "en": "Hansi Flick",
+      "family": "manager",
+      "de": "Hansi Flick"
+    },
+    "manager:jorge-sampaoli": {
+      "en": "Jorge Sampaoli",
+      "family": "manager",
+      "de": "Jorge Sampaoli"
+    },
+    "manager:jose-mourinho": {
+      "en": "José Mourinho",
+      "family": "manager",
+      "de": "José Mourinho"
+    },
+    "manager:jupp-heynckes": {
+      "en": "Jupp Heynckes",
+      "family": "manager",
+      "de": "Jupp Heynckes"
+    },
+    "manager:jurgen-klopp": {
+      "en": "Jürgen Klopp",
+      "family": "manager",
+      "de": "Jürgen Klopp"
+    },
+    "manager:lionel-scaloni": {
+      "en": "Lionel Scaloni",
+      "family": "manager",
+      "de": "Lionel Scaloni"
+    },
+    "manager:louis-van-gaal": {
+      "en": "Louis van Gaal",
+      "family": "manager",
+      "de": "Louis van Gaal"
+    },
+    "manager:luciano-spalletti": {
+      "en": "Luciano Spalletti",
+      "family": "manager",
+      "de": "Luciano Spalletti"
+    },
+    "manager:luis-enrique": {
+      "en": "Luis Enrique",
+      "family": "manager",
+      "de": "Luis Enrique"
+    },
+    "manager:marcelo-bielsa": {
+      "en": "Marcelo Bielsa",
+      "family": "manager",
+      "de": "Marcelo Bielsa"
+    },
+    "manager:massimiliano-allegri": {
+      "en": "Massimiliano Allegri",
+      "family": "manager",
+      "de": "Massimiliano Allegri"
+    },
+    "manager:mauricio-pochettino": {
+      "en": "Mauricio Pochettino",
+      "family": "manager",
+      "de": "Mauricio Pochettino"
+    },
+    "manager:maurizio-sarri": {
+      "en": "Maurizio Sarri",
+      "family": "manager",
+      "de": "Maurizio Sarri"
+    },
+    "manager:mikel-arteta": {
+      "en": "Mikel Arteta",
+      "family": "manager",
+      "de": "Mikel Arteta"
+    },
+    "manager:mircea-lucescu": {
+      "en": "Mircea Lucescu",
+      "family": "manager",
+      "de": "Mircea Lucescu"
+    },
+    "manager:nuno-espirito-santo": {
+      "en": "Nuno Espírito Santo",
+      "family": "manager",
+      "de": "Nuno Espírito Santo"
+    },
+    "manager:pep-guardiola": {
+      "en": "Pep Guardiola",
+      "family": "manager",
+      "de": "Pep Guardiola"
+    },
+    "manager:rafael-benitez": {
+      "en": "Rafael Benítez",
+      "family": "manager",
+      "de": "Rafael Benítez"
+    },
+    "manager:roberto-de-zerbi": {
+      "en": "Roberto De Zerbi",
+      "family": "manager",
+      "de": "Roberto De Zerbi"
+    },
+    "manager:roberto-mancini": {
+      "en": "Roberto Mancini",
+      "family": "manager",
+      "de": "Roberto Mancini"
+    },
+    "manager:ronald-koeman": {
+      "en": "Ronald Koeman",
+      "family": "manager",
+      "de": "Ronald Koeman"
+    },
+    "manager:ruben-amorim": {
+      "en": "Rúben Amorim",
+      "family": "manager",
+      "de": "Rúben Amorim"
+    },
+    "manager:simone-inzaghi": {
+      "en": "Simone Inzaghi",
+      "family": "manager",
+      "de": "Simone Inzaghi"
+    },
+    "manager:thomas-tuchel": {
+      "en": "Thomas Tuchel",
+      "family": "manager",
+      "de": "Thomas Tuchel"
+    },
+    "manager:unai-emery": {
+      "en": "Unai Emery",
+      "family": "manager",
+      "de": "Unai Emery"
+    },
+    "manager:vincent-kompany": {
+      "en": "Vincent Kompany",
+      "family": "manager",
+      "de": "Vincent Kompany"
+    },
+    "manager:xabi-alonso": {
+      "en": "Xabi Alonso",
+      "family": "manager",
+      "de": "Xabi Alonso"
+    },
+    "manager:zinedine-zidane": {
+      "en": "Zinedine Zidane",
+      "family": "manager",
+      "de": "Zinedine Zidane"
+    },
+    "teammate:ffe0f4ba-9681-4373-bf8b-672f5b3ccc00|Club teammate of Alberto Gilardino": {
+      "en": "Club teammate of Alberto Gilardino",
+      "family": "teammate",
+      "de": "Vereinskollege von Alberto Gilardino"
+    },
+    "teammate:56740d17-5ee9-4ef2-8ad4-766dbea01ec3|Club teammate of Alessandro Del Piero": {
+      "en": "Club teammate of Alessandro Del Piero",
+      "family": "teammate",
+      "de": "Vereinskollege von Alessandro Del Piero"
+    },
+    "teammate:9448e69e-02d9-4325-927b-d019623053b3|Club teammate of Alessandro Nesta": {
+      "en": "Club teammate of Alessandro Nesta",
+      "family": "teammate",
+      "de": "Vereinskollege von Alessandro Nesta"
+    },
+    "teammate:874dcca0-cd6f-42ba-a156-899674c407f3|Club teammate of Alexis Sánchez": {
+      "en": "Club teammate of Alexis Sánchez",
+      "family": "teammate",
+      "de": "Vereinskollege von Alexis Sánchez"
+    },
+    "teammate:8943778d-0ed2-4928-8bdf-33d17130897a|Club teammate of Alisson": {
+      "en": "Club teammate of Alisson",
+      "family": "teammate",
+      "de": "Vereinskollege von Alisson"
+    },
+    "teammate:a98dad31-b705-412b-997c-d8d64b97e1ce|Club teammate of Álvaro Morata": {
+      "en": "Club teammate of Álvaro Morata",
+      "family": "teammate",
+      "de": "Vereinskollege von Álvaro Morata"
+    },
+    "teammate:a7a8ac8d-3636-473f-8dd4-ff9604581b7a|Club teammate of Andrea Pirlo": {
+      "en": "Club teammate of Andrea Pirlo",
+      "family": "teammate",
+      "de": "Vereinskollege von Andrea Pirlo"
+    },
+    "teammate:a2d0edec-b0f0-4753-82fc-2063465443be|Club teammate of Andrés Iniesta": {
+      "en": "Club teammate of Andrés Iniesta",
+      "family": "teammate",
+      "de": "Vereinskollege von Andrés Iniesta"
+    },
+    "teammate:4e8e1d4f-c0eb-4c5d-b435-4d34ea7add8e|Club teammate of Andriy Shevchenko": {
+      "en": "Club teammate of Andriy Shevchenko",
+      "family": "teammate",
+      "de": "Vereinskollege von Andriy Shevchenko"
+    },
+    "teammate:87560b0d-f5b9-4181-ac9b-040a207c3e9a|Club teammate of Ángel Di María": {
+      "en": "Club teammate of Ángel Di María",
+      "family": "teammate",
+      "de": "Vereinskollege von Ángel Di María"
+    },
+    "teammate:76b4b848-d3e6-4b2c-b06a-459481cc238d|Club teammate of Antoine Griezmann": {
+      "en": "Club teammate of Antoine Griezmann",
+      "family": "teammate",
+      "de": "Vereinskollege von Antoine Griezmann"
+    },
+    "teammate:b581974b-b344-4837-838c-617537fd0102|Club teammate of Arjen Robben": {
+      "en": "Club teammate of Arjen Robben",
+      "family": "teammate",
+      "de": "Vereinskollege von Arjen Robben"
+    },
+    "teammate:b9628126-b65b-4e12-af8c-66ca0fdcb8f8|Club teammate of Ashley Cole": {
+      "en": "Club teammate of Ashley Cole",
+      "family": "teammate",
+      "de": "Vereinskollege von Ashley Cole"
+    },
+    "teammate:069e3451-910d-47aa-a4d2-fd3681bf1be6|Club teammate of Bastian Schweinsteiger": {
+      "en": "Club teammate of Bastian Schweinsteiger",
+      "family": "teammate",
+      "de": "Vereinskollege von Bastian Schweinsteiger"
+    },
+    "teammate:36eb6f42-b8ec-46d6-97d7-b60079e9a574|Club teammate of Bernardo Silva": {
+      "en": "Club teammate of Bernardo Silva",
+      "family": "teammate",
+      "de": "Vereinskollege von Bernardo Silva"
+    },
+    "teammate:f79f5e64-6b60-46b5-b604-d1f79e4794f0|Club teammate of Bixente Lizarazu": {
+      "en": "Club teammate of Bixente Lizarazu",
+      "family": "teammate",
+      "de": "Vereinskollege von Bixente Lizarazu"
+    },
+    "teammate:393ab52a-2257-471c-aab9-0c39944e1517|Club teammate of Cafu": {
+      "en": "Club teammate of Cafu",
+      "family": "teammate",
+      "de": "Vereinskollege von Cafu"
+    },
+    "teammate:710290b5-7649-4e45-b333-ef87e2afad8b|Club teammate of Cafú": {
+      "en": "Club teammate of Cafú",
+      "family": "teammate",
+      "de": "Vereinskollege von Cafú"
+    },
+    "teammate:83322574-6256-45cf-bd03-b0c3c10a2930|Club teammate of Carles Puyol": {
+      "en": "Club teammate of Carles Puyol",
+      "family": "teammate",
+      "de": "Vereinskollege von Carles Puyol"
+    },
+    "teammate:70b63468-1914-4c8e-ad35-199485821756|Club teammate of Carlos Tevez": {
+      "en": "Club teammate of Carlos Tevez",
+      "family": "teammate",
+      "de": "Vereinskollege von Carlos Tevez"
+    },
+    "teammate:5ecd7d07-810b-4bc2-bcc7-36b5eee2c8c8|Club teammate of Casemiro": {
+      "en": "Club teammate of Casemiro",
+      "family": "teammate",
+      "de": "Vereinskollege von Casemiro"
+    },
+    "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe|Club teammate of Cesc Fàbregas": {
+      "en": "Club teammate of Cesc Fàbregas",
+      "family": "teammate",
+      "de": "Vereinskollege von Cesc Fàbregas"
+    },
+    "teammate:a2eacacd-5578-49a7-a904-87797ea05a27|Club teammate of Christian Panucci": {
+      "en": "Club teammate of Christian Panucci",
+      "family": "teammate",
+      "de": "Vereinskollege von Christian Panucci"
+    },
+    "teammate:f5e93e41-8aec-43f4-98cf-84d7eead31da|Club teammate of Christian Vieri": {
+      "en": "Club teammate of Christian Vieri",
+      "family": "teammate",
+      "de": "Vereinskollege von Christian Vieri"
+    },
+    "teammate:11d05aba-2ecc-4161-91b8-ac594ad47d6e|Club teammate of Christian Ziege": {
+      "en": "Club teammate of Christian Ziege",
+      "family": "teammate",
+      "de": "Vereinskollege von Christian Ziege"
+    },
+    "teammate:8d922b88-81cb-433e-a5fe-51a72dddab07|Club teammate of Clarence Seedorf": {
+      "en": "Club teammate of Clarence Seedorf",
+      "family": "teammate",
+      "de": "Vereinskollege von Clarence Seedorf"
+    },
+    "teammate:ed20a005-af82-417c-9a6a-678bdca47f0f|Club teammate of Claude Makélélé": {
+      "en": "Club teammate of Claude Makélélé",
+      "family": "teammate",
+      "de": "Vereinskollege von Claude Makélélé"
+    },
+    "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf|Club teammate of Cristiano Ronaldo": {
+      "en": "Club teammate of Cristiano Ronaldo",
+      "family": "teammate",
+      "de": "Vereinskollege von Cristiano Ronaldo"
+    },
+    "teammate:c665d6ed-84df-4dab-ab6c-5fc3832a84a5|Club teammate of David Beckham": {
+      "en": "Club teammate of David Beckham",
+      "family": "teammate",
+      "de": "Vereinskollege von David Beckham"
+    },
+    "teammate:6348cd86-93bb-4cfa-b0af-7325eeed9074|Club teammate of David Silva": {
+      "en": "Club teammate of David Silva",
+      "family": "teammate",
+      "de": "Vereinskollege von David Silva"
+    },
+    "teammate:3946442e-9177-48d2-8481-374f9532c08c|Club teammate of David Trezeguet": {
+      "en": "Club teammate of David Trezeguet",
+      "family": "teammate",
+      "de": "Vereinskollege von David Trezeguet"
+    },
+    "teammate:bc6c5770-8a05-41a0-b9e7-2c3ce02b0b11|Club teammate of David Villa": {
+      "en": "Club teammate of David Villa",
+      "family": "teammate",
+      "de": "Vereinskollege von David Villa"
+    },
+    "teammate:fb5d0137-39c7-4f0c-bfd4-6214bddf3dd4|Club teammate of Deco": {
+      "en": "Club teammate of Deco",
+      "family": "teammate",
+      "de": "Vereinskollege von Deco"
+    },
+    "teammate:3c704932-c880-4891-bc4a-d4749efd0ed9|Club teammate of Dida": {
+      "en": "Club teammate of Dida",
+      "family": "teammate",
+      "de": "Vereinskollege von Dida"
+    },
+    "teammate:4ef80d07-1167-4628-b028-351f0a6a20e4|Club teammate of Didier Deschamps": {
+      "en": "Club teammate of Didier Deschamps",
+      "family": "teammate",
+      "de": "Vereinskollege von Didier Deschamps"
+    },
+    "teammate:79164c34-4051-436f-9cfd-ef7c051b0aec|Club teammate of Didier Drogba": {
+      "en": "Club teammate of Didier Drogba",
+      "family": "teammate",
+      "de": "Vereinskollege von Didier Drogba"
+    },
+    "teammate:9d538d4a-ec62-4e2b-b74d-38388cab76b6|Club teammate of Diego Forlán": {
+      "en": "Club teammate of Diego Forlán",
+      "family": "teammate",
+      "de": "Vereinskollege von Diego Forlán"
+    },
+    "teammate:cff06e7f-acc0-4266-aa96-f098a6f0ee80|Club teammate of Eden Hazard": {
+      "en": "Club teammate of Eden Hazard",
+      "family": "teammate",
+      "de": "Vereinskollege von Eden Hazard"
+    },
+    "teammate:dc2a6a10-3024-4cf0-9fe2-54aa6d2aa7f2|Club teammate of Edinson Cavani": {
+      "en": "Club teammate of Edinson Cavani",
+      "family": "teammate",
+      "de": "Vereinskollege von Edinson Cavani"
+    },
+    "teammate:ecb10845-29ae-4fcd-9f8d-7dcf27c138e9|Club teammate of Edwin van der Sar": {
+      "en": "Club teammate of Edwin van der Sar",
+      "family": "teammate",
+      "de": "Vereinskollege von Edwin van der Sar"
+    },
+    "teammate:32df1564-6c30-419e-95b3-865d02967233|Club teammate of Emerson Ferreira": {
+      "en": "Club teammate of Emerson Ferreira",
+      "family": "teammate",
+      "de": "Vereinskollege von Emerson Ferreira"
+    },
+    "teammate:b14d1033-723f-4776-ae31-1084179f159c|Club teammate of Emiliano Martínez": {
+      "en": "Club teammate of Emiliano Martínez",
+      "family": "teammate",
+      "de": "Vereinskollege von Emiliano Martínez"
+    },
+    "teammate:b7c75af7-95c4-48ce-89eb-375bd0420d96|Club teammate of Emmanuel Petit": {
+      "en": "Club teammate of Emmanuel Petit",
+      "family": "teammate",
+      "de": "Vereinskollege von Emmanuel Petit"
+    },
+    "teammate:ce85c5c4-3316-47c7-880c-0c17df3189f2|Club teammate of Erling Haaland": {
+      "en": "Club teammate of Erling Haaland",
+      "family": "teammate",
+      "de": "Vereinskollege von Erling Haaland"
+    },
+    "teammate:1c9bb3c5-1348-4337-8ce1-8358ad5f87fd|Club teammate of Fabio Cannavaro": {
+      "en": "Club teammate of Fabio Cannavaro",
+      "family": "teammate",
+      "de": "Vereinskollege von Fabio Cannavaro"
+    },
+    "teammate:c9692588-f93b-4035-8737-8f625d1ec829|Club teammate of Fernando Torres": {
+      "en": "Club teammate of Fernando Torres",
+      "family": "teammate",
+      "de": "Vereinskollege von Fernando Torres"
+    },
+    "teammate:0da7ce6e-ad1a-4e3e-b896-d6e2a10e681d|Club teammate of Filippo Inzaghi": {
+      "en": "Club teammate of Filippo Inzaghi",
+      "family": "teammate",
+      "de": "Vereinskollege von Filippo Inzaghi"
+    },
+    "teammate:ee700bd6-f14a-4b1f-aefe-ccc7f90c3c1e|Club teammate of Francesco Toldo": {
+      "en": "Club teammate of Francesco Toldo",
+      "family": "teammate",
+      "de": "Vereinskollege von Francesco Toldo"
+    },
+    "teammate:4b6d87c2-9df7-4947-92d2-40e682a5a758|Club teammate of Francesco Totti": {
+      "en": "Club teammate of Francesco Totti",
+      "family": "teammate",
+      "de": "Vereinskollege von Francesco Totti"
+    },
+    "teammate:f3bbdb8e-b31e-46f5-b600-ef48ef5f1ea7|Club teammate of Franck Ribéry": {
+      "en": "Club teammate of Franck Ribéry",
+      "family": "teammate",
+      "de": "Vereinskollege von Franck Ribéry"
+    },
+    "teammate:ba41ef23-6f93-4269-ab41-aacdc4759e90|Club teammate of Frank Lampard": {
+      "en": "Club teammate of Frank Lampard",
+      "family": "teammate",
+      "de": "Vereinskollege von Frank Lampard"
+    },
+    "teammate:2d9a65ee-0acd-429c-831d-43bb445feae3|Club teammate of Frank Rijkaard": {
+      "en": "Club teammate of Frank Rijkaard",
+      "family": "teammate",
+      "de": "Vereinskollege von Frank Rijkaard"
+    },
+    "teammate:b500a5c9-3250-41d4-b8c5-6c5f9690a71c|Club teammate of Gareth Bale": {
+      "en": "Club teammate of Gareth Bale",
+      "family": "teammate",
+      "de": "Vereinskollege von Gareth Bale"
+    },
+    "teammate:a49b3b81-b933-4ee9-b97f-93bbe86f23e7|Club teammate of Gennaro Gattuso": {
+      "en": "Club teammate of Gennaro Gattuso",
+      "family": "teammate",
+      "de": "Vereinskollege von Gennaro Gattuso"
+    },
+    "teammate:a0a8c8fe-113a-43e1-aba1-6a7de652540a|Club teammate of George Weah": {
+      "en": "Club teammate of George Weah",
+      "family": "teammate",
+      "de": "Vereinskollege von George Weah"
+    },
+    "teammate:769e1327-0c83-4245-bd8b-1362c8dce939|Club teammate of Gerard Piqué": {
+      "en": "Club teammate of Gerard Piqué",
+      "family": "teammate",
+      "de": "Vereinskollege von Gerard Piqué"
+    },
+    "teammate:d560f9f0-ac2c-4161-957a-88a95660208c|Club teammate of Gianluca Zambrotta": {
+      "en": "Club teammate of Gianluca Zambrotta",
+      "family": "teammate",
+      "de": "Vereinskollege von Gianluca Zambrotta"
+    },
+    "teammate:8eae3bf5-471d-4d89-aebb-34bbddb0a0f1|Club teammate of Gianluigi Buffon": {
+      "en": "Club teammate of Gianluigi Buffon",
+      "family": "teammate",
+      "de": "Vereinskollege von Gianluigi Buffon"
+    },
+    "teammate:57cc1914-cd2c-42d4-bcd5-e32923c8f72f|Club teammate of Giorgio Chiellini": {
+      "en": "Club teammate of Giorgio Chiellini",
+      "family": "teammate",
+      "de": "Vereinskollege von Giorgio Chiellini"
+    },
+    "teammate:2f6e8c2b-8a4d-4d2b-ab99-15c84ffb15bb|Club teammate of Giovane Élber": {
+      "en": "Club teammate of Giovane Élber",
+      "family": "teammate",
+      "de": "Vereinskollege von Giovane Élber"
+    },
+    "teammate:bf8492a7-7d36-4731-b093-218a7564472b|Club teammate of Gonzalo Higuaín": {
+      "en": "Club teammate of Gonzalo Higuaín",
+      "family": "teammate",
+      "de": "Vereinskollege von Gonzalo Higuaín"
+    },
+    "teammate:413f894b-7f2c-425b-9183-9b17f46d71c8|Club teammate of Harry Kane": {
+      "en": "Club teammate of Harry Kane",
+      "family": "teammate",
+      "de": "Vereinskollege von Harry Kane"
+    },
+    "teammate:3b2cb5df-5e85-488f-91d6-d4997bd892fc|Club teammate of Hernán Crespo": {
+      "en": "Club teammate of Hernán Crespo",
+      "family": "teammate",
+      "de": "Vereinskollege von Hernán Crespo"
+    },
+    "teammate:1f1ec8e8-adc0-4570-aaf3-97389ef696cb|Club teammate of Hugo Lloris": {
+      "en": "Club teammate of Hugo Lloris",
+      "family": "teammate",
+      "de": "Vereinskollege von Hugo Lloris"
+    },
+    "teammate:46f4f931-c4da-4904-a559-eddd40d3aa87|Club teammate of Iker Casillas": {
+      "en": "Club teammate of Iker Casillas",
+      "family": "teammate",
+      "de": "Vereinskollege von Iker Casillas"
+    },
+    "teammate:fcb1d942-af7e-47f3-a74c-f937b04a0638|Club teammate of İlkay Gündoğan": {
+      "en": "Club teammate of İlkay Gündoğan",
+      "family": "teammate",
+      "de": "Vereinskollege von İlkay Gündoğan"
+    },
+    "teammate:7290bf29-993b-4110-a14d-ad041a698f0f|Club teammate of Jaap Stam": {
+      "en": "Club teammate of Jaap Stam",
+      "family": "teammate",
+      "de": "Vereinskollege von Jaap Stam"
+    },
+    "teammate:7626cd0c-987a-4049-89c8-e074a153d060|Club teammate of Javier Mascherano": {
+      "en": "Club teammate of Javier Mascherano",
+      "family": "teammate",
+      "de": "Vereinskollege von Javier Mascherano"
+    },
+    "teammate:395d5f3d-5361-4175-8048-b3b5369f3614|Club teammate of Javier Zanetti": {
+      "en": "Club teammate of Javier Zanetti",
+      "family": "teammate",
+      "de": "Vereinskollege von Javier Zanetti"
+    },
+    "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4|Club teammate of John Terry": {
+      "en": "Club teammate of John Terry",
+      "family": "teammate",
+      "de": "Vereinskollege von John Terry"
+    },
+    "teammate:d0a233f5-36ae-4187-ba49-73fe1da1e23e|Club teammate of Juan Sebastián Verón": {
+      "en": "Club teammate of Juan Sebastián Verón",
+      "family": "teammate",
+      "de": "Vereinskollege von Juan Sebastián Verón"
+    },
+    "teammate:916237e7-b5be-4aad-a811-700a1a1fb1dd|Club teammate of Jude Bellingham": {
+      "en": "Club teammate of Jude Bellingham",
+      "family": "teammate",
+      "de": "Vereinskollege von Jude Bellingham"
+    },
+    "teammate:9c64c119-952e-43cd-aff0-75d54146d069|Club teammate of Julián Alvarez": {
+      "en": "Club teammate of Julián Alvarez",
+      "family": "teammate",
+      "de": "Vereinskollege von Julián Alvarez"
+    },
+    "teammate:a6119f25-7985-4c2a-b13c-49990efcc75f|Club teammate of Kaká": {
+      "en": "Club teammate of Kaká",
+      "family": "teammate",
+      "de": "Vereinskollege von Kaká"
+    },
+    "teammate:79a18ff7-b3e4-42cd-b497-600e86dbd631|Club teammate of Karim Benzema": {
+      "en": "Club teammate of Karim Benzema",
+      "family": "teammate",
+      "de": "Vereinskollege von Karim Benzema"
+    },
+    "teammate:513de7ba-249f-4f2e-9877-d1ab4121cd1e|Club teammate of Kevin De Bruyne": {
+      "en": "Club teammate of Kevin De Bruyne",
+      "family": "teammate",
+      "de": "Vereinskollege von Kevin De Bruyne"
+    },
+    "teammate:7e969cc5-120d-4af9-9fdd-f6d2db3170a8|Club teammate of Kylian Mbappé": {
+      "en": "Club teammate of Kylian Mbappé",
+      "family": "teammate",
+      "de": "Vereinskollege von Kylian Mbappé"
+    },
+    "teammate:6407948c-511a-4932-93f3-5fd72227abc8|Club teammate of Laurent Blanc": {
+      "en": "Club teammate of Laurent Blanc",
+      "family": "teammate",
+      "de": "Vereinskollege von Laurent Blanc"
+    },
+    "teammate:f683502a-15b9-4276-9886-0977f5d6bc2e|Club teammate of Lautaro Martínez": {
+      "en": "Club teammate of Lautaro Martínez",
+      "family": "teammate",
+      "de": "Vereinskollege von Lautaro Martínez"
+    },
+    "teammate:a1c506f1-8f65-4333-b320-8caf3e587708|Club teammate of Lilian Thuram": {
+      "en": "Club teammate of Lilian Thuram",
+      "family": "teammate",
+      "de": "Vereinskollege von Lilian Thuram"
+    },
+    "teammate:55989ce0-0b52-4553-a11d-42c03f5b9da1|Club teammate of Lionel Messi": {
+      "en": "Club teammate of Lionel Messi",
+      "family": "teammate",
+      "de": "Vereinskollege von Lionel Messi"
+    },
+    "teammate:fa9680f8-85b9-4997-834e-a7530a75ca96|Club teammate of Luca Toni": {
+      "en": "Club teammate of Luca Toni",
+      "family": "teammate",
+      "de": "Vereinskollege von Luca Toni"
+    },
+    "teammate:6396e575-92e5-42be-a193-d8cf85f40aec|Club teammate of Lúcio": {
+      "en": "Club teammate of Lúcio",
+      "family": "teammate",
+      "de": "Vereinskollege von Lúcio"
+    },
+    "teammate:87233e88-4d99-421b-96bb-77aad81c02b1|Club teammate of Luís Figo": {
+      "en": "Club teammate of Luís Figo",
+      "family": "teammate",
+      "de": "Vereinskollege von Luís Figo"
+    },
+    "teammate:05e1b3df-4194-4aef-a256-eec199cef42b|Club teammate of Luis Suárez": {
+      "en": "Club teammate of Luis Suárez",
+      "family": "teammate",
+      "de": "Vereinskollege von Luis Suárez"
+    },
+    "teammate:428e1f3c-fe81-4f10-9f00-9ff6ec0573d6|Club teammate of Luis Suárez": {
+      "en": "Club teammate of Luis Suárez",
+      "family": "teammate",
+      "de": "Vereinskollege von Luis Suárez"
+    },
+    "teammate:6e0542a2-0bbb-45ae-a7ff-2526230b870a|Club teammate of Luka Modrić": {
+      "en": "Club teammate of Luka Modrić",
+      "family": "teammate",
+      "de": "Vereinskollege von Luka Modrić"
+    },
+    "teammate:753e6bd5-2f36-4d7c-9f5a-d14d956928bd|Club teammate of Manuel Neuer": {
+      "en": "Club teammate of Manuel Neuer",
+      "family": "teammate",
+      "de": "Vereinskollege von Manuel Neuer"
+    },
+    "teammate:f0dcf96e-9b08-4087-ab03-bf1a13f4e245|Club teammate of Marc Overmars": {
+      "en": "Club teammate of Marc Overmars",
+      "family": "teammate",
+      "de": "Vereinskollege von Marc Overmars"
+    },
+    "teammate:78ef4772-426c-4c50-916e-23d2e664f605|Club teammate of Marcel Desailly": {
+      "en": "Club teammate of Marcel Desailly",
+      "family": "teammate",
+      "de": "Vereinskollege von Marcel Desailly"
+    },
+    "teammate:a795bb2e-32ee-4c95-a77a-5fa9f272d7b3|Club teammate of Marcelo": {
+      "en": "Club teammate of Marcelo",
+      "family": "teammate",
+      "de": "Vereinskollege von Marcelo"
+    },
+    "teammate:7d9d3daf-12fa-4224-9f3d-428d9611814f|Club teammate of Marco Reus": {
+      "en": "Club teammate of Marco Reus",
+      "family": "teammate",
+      "de": "Vereinskollege von Marco Reus"
+    },
+    "teammate:de7df9c2-c81f-464d-a8ac-a4e01d2492dd|Club teammate of Mario Balotelli": {
+      "en": "Club teammate of Mario Balotelli",
+      "family": "teammate",
+      "de": "Vereinskollege von Mario Balotelli"
+    },
+    "teammate:095087b4-20b3-4f73-91dd-8bce1598729f|Club teammate of Mario Götze": {
+      "en": "Club teammate of Mario Götze",
+      "family": "teammate",
+      "de": "Vereinskollege von Mario Götze"
+    },
+    "teammate:afacf855-4426-4fca-b2fe-33afe829a562|Club teammate of Mario Mandzukic": {
+      "en": "Club teammate of Mario Mandzukic",
+      "family": "teammate",
+      "de": "Vereinskollege von Mario Mandzukic"
+    },
+    "teammate:5cc5f245-49fc-4c0a-9583-aeb622e99535|Club teammate of Mats Hummels": {
+      "en": "Club teammate of Mats Hummels",
+      "family": "teammate",
+      "de": "Vereinskollege von Mats Hummels"
+    },
+    "teammate:151dfbb9-27f3-4276-b45d-cb2a35432285|Club teammate of Mesut Özil": {
+      "en": "Club teammate of Mesut Özil",
+      "family": "teammate",
+      "de": "Vereinskollege von Mesut Özil"
+    },
+    "teammate:ddeb8efc-a7d6-40a6-a20f-82df76421c3d|Club teammate of Michael Owen": {
+      "en": "Club teammate of Michael Owen",
+      "family": "teammate",
+      "de": "Vereinskollege von Michael Owen"
+    },
+    "teammate:d7e32780-afb5-4863-927c-8a14a929fc73|Club teammate of Míchel Salgado": {
+      "en": "Club teammate of Míchel Salgado",
+      "family": "teammate",
+      "de": "Vereinskollege von Míchel Salgado"
+    },
+    "teammate:51522f00-03bc-4b79-ab38-5214f4bac740|Club teammate of Miroslav Klose": {
+      "en": "Club teammate of Miroslav Klose",
+      "family": "teammate",
+      "de": "Vereinskollege von Miroslav Klose"
+    },
+    "teammate:e71ad820-cc78-4c32-8fb5-806eac3c1214|Club teammate of Mohamed Salah": {
+      "en": "Club teammate of Mohamed Salah",
+      "family": "teammate",
+      "de": "Vereinskollege von Mohamed Salah"
+    },
+    "teammate:a09872bb-bd33-4cce-9613-7cf86a1010ee|Club teammate of N'Golo Kanté": {
+      "en": "Club teammate of N'Golo Kanté",
+      "family": "teammate",
+      "de": "Vereinskollege von N'Golo Kanté"
+    },
+    "teammate:10aa4f1f-9fc1-4c3b-93b5-217bdba110dd|Club teammate of Neymar": {
+      "en": "Club teammate of Neymar",
+      "family": "teammate",
+      "de": "Vereinskollege von Neymar"
+    },
+    "teammate:54f941a2-12df-4694-b7ff-305922645866|Club teammate of Nicolas Anelka": {
+      "en": "Club teammate of Nicolas Anelka",
+      "family": "teammate",
+      "de": "Vereinskollege von Nicolas Anelka"
+    },
+    "teammate:936e1b41-8681-4fc6-8f72-dd7f4c58fd2f|Club teammate of Nwankwo Kanu": {
+      "en": "Club teammate of Nwankwo Kanu",
+      "family": "teammate",
+      "de": "Vereinskollege von Nwankwo Kanu"
+    },
+    "teammate:eee827b7-634e-46aa-b76a-65f9ee55943d|Club teammate of Oliver Kahn": {
+      "en": "Club teammate of Oliver Kahn",
+      "family": "teammate",
+      "de": "Vereinskollege von Oliver Kahn"
+    },
+    "teammate:2ee9513d-f64a-47f0-b43b-dc934bfacf6e|Club teammate of Olivier Giroud": {
+      "en": "Club teammate of Olivier Giroud",
+      "family": "teammate",
+      "de": "Vereinskollege von Olivier Giroud"
+    },
+    "teammate:34c46dcc-7ca8-49a3-947f-393558edb1c0|Club teammate of Ousmane Dembélé": {
+      "en": "Club teammate of Ousmane Dembélé",
+      "family": "teammate",
+      "de": "Vereinskollege von Ousmane Dembélé"
+    },
+    "teammate:492f244f-1fc1-4c2b-b2df-57c2c29d4f03|Club teammate of Paolo Maldini": {
+      "en": "Club teammate of Paolo Maldini",
+      "family": "teammate",
+      "de": "Vereinskollege von Paolo Maldini"
+    },
+    "teammate:252ed9f2-8daa-4c7a-b3f2-5c24eece525f|Club teammate of Patrice Evra": {
+      "en": "Club teammate of Patrice Evra",
+      "family": "teammate",
+      "de": "Vereinskollege von Patrice Evra"
+    },
+    "teammate:62499ade-0175-4188-aef6-d1b33f82f209|Club teammate of Patrick Vieira": {
+      "en": "Club teammate of Patrick Vieira",
+      "family": "teammate",
+      "de": "Vereinskollege von Patrick Vieira"
+    },
+    "teammate:94ae19d5-de36-4e4e-8a9f-3d0db0904707|Club teammate of Paul Pogba": {
+      "en": "Club teammate of Paul Pogba",
+      "family": "teammate",
+      "de": "Vereinskollege von Paul Pogba"
+    },
+    "teammate:7e228da6-46f8-4a0c-9acc-0f1bf27ab50c|Club teammate of Paul Scholes": {
+      "en": "Club teammate of Paul Scholes",
+      "family": "teammate",
+      "de": "Vereinskollege von Paul Scholes"
+    },
+    "teammate:a9dc8fb6-3e2c-4bc9-98cc-49d4231ff392|Club teammate of Pelé": {
+      "en": "Club teammate of Pelé",
+      "family": "teammate",
+      "de": "Vereinskollege von Pelé"
+    },
+    "teammate:1da98c87-dc4e-41f2-99db-cc8443a00e3d|Club teammate of Petr Cech": {
+      "en": "Club teammate of Petr Cech",
+      "family": "teammate",
+      "de": "Vereinskollege von Petr Cech"
+    },
+    "teammate:42fa50a7-a8ca-4fdd-855d-e41b88c17a6a|Club teammate of Philipp Lahm": {
+      "en": "Club teammate of Philipp Lahm",
+      "family": "teammate",
+      "de": "Vereinskollege von Philipp Lahm"
+    },
+    "teammate:3be1aed0-97a2-48cb-b6b1-42da5a17cd5e|Club teammate of Philippe Coutinho": {
+      "en": "Club teammate of Philippe Coutinho",
+      "family": "teammate",
+      "de": "Vereinskollege von Philippe Coutinho"
+    },
+    "teammate:7a8f230c-cadf-45a7-820e-d12948a1479c|Club teammate of Raphaël Varane": {
+      "en": "Club teammate of Raphaël Varane",
+      "family": "teammate",
+      "de": "Vereinskollege von Raphaël Varane"
+    },
+    "teammate:952874aa-43d3-4cb1-9f87-9eb340029f15|Club teammate of Raúl": {
+      "en": "Club teammate of Raúl",
+      "family": "teammate",
+      "de": "Vereinskollege von Raúl"
+    },
+    "teammate:33316d7f-7ef0-4e59-b112-2af62492a0af|Club teammate of Ricardo Carvalho": {
+      "en": "Club teammate of Ricardo Carvalho",
+      "family": "teammate",
+      "de": "Vereinskollege von Ricardo Carvalho"
+    },
+    "teammate:b841bcc9-7df4-438e-8e72-2f1b3a3c4a92|Club teammate of Rio Ferdinand": {
+      "en": "Club teammate of Rio Ferdinand",
+      "family": "teammate",
+      "de": "Vereinskollege von Rio Ferdinand"
+    },
+    "teammate:8eb86174-29f3-4034-99d5-7f9d39b5bdbb|Club teammate of Rivaldo": {
+      "en": "Club teammate of Rivaldo",
+      "family": "teammate",
+      "de": "Vereinskollege von Rivaldo"
+    },
+    "teammate:05ddf5ed-a20f-4b8a-9e27-dae9eb957981|Club teammate of Robert Lewandowski": {
+      "en": "Club teammate of Robert Lewandowski",
+      "family": "teammate",
+      "de": "Vereinskollege von Robert Lewandowski"
+    },
+    "teammate:b0fc2fee-8b88-42d3-be5d-87a592e225c8|Club teammate of Roberto Ayala": {
+      "en": "Club teammate of Roberto Ayala",
+      "family": "teammate",
+      "de": "Vereinskollege von Roberto Ayala"
+    },
+    "teammate:e2d22f1d-ca6d-4d89-b839-05dfdd310f6b|Club teammate of Robin van Persie": {
+      "en": "Club teammate of Robin van Persie",
+      "family": "teammate",
+      "de": "Vereinskollege von Robin van Persie"
+    },
+    "teammate:65532349-06d9-44bf-baee-159b35bb1688|Club teammate of Robinho": {
+      "en": "Club teammate of Robinho",
+      "family": "teammate",
+      "de": "Vereinskollege von Robinho"
+    },
+    "teammate:81d69d4d-1c11-4f75-824d-e267a8e04926|Club teammate of Romelu Lukaku": {
+      "en": "Club teammate of Romelu Lukaku",
+      "family": "teammate",
+      "de": "Vereinskollege von Romelu Lukaku"
+    },
+    "teammate:381bcc4e-e3ea-4416-9d13-5ffefd86efde|Club teammate of Ronaldinho": {
+      "en": "Club teammate of Ronaldinho",
+      "family": "teammate",
+      "de": "Vereinskollege von Ronaldinho"
+    },
+    "teammate:95faf5b6-9e1c-4879-854d-6a8746bbc3b8|Club teammate of Ronaldo Nazario": {
+      "en": "Club teammate of Ronaldo Nazario",
+      "family": "teammate",
+      "de": "Vereinskollege von Ronaldo Nazario"
+    },
+    "teammate:b218bed6-3707-4c89-8f9c-90bd27866f5f|Club teammate of Ryan Giggs": {
+      "en": "Club teammate of Ryan Giggs",
+      "family": "teammate",
+      "de": "Vereinskollege von Ryan Giggs"
+    },
+    "teammate:74f7efb0-092c-485f-a8c9-a741fd840309|Club teammate of Sadio Mané": {
+      "en": "Club teammate of Sadio Mané",
+      "family": "teammate",
+      "de": "Vereinskollege von Sadio Mané"
+    },
+    "teammate:75fecc05-1515-4b6d-add7-0eedeb86fe60|Club teammate of Samuel Eto'o": {
+      "en": "Club teammate of Samuel Eto'o",
+      "family": "teammate",
+      "de": "Vereinskollege von Samuel Eto'o"
+    },
+    "teammate:e247be38-7dac-4d06-a238-1ce8e286d061|Club teammate of Sergio Agüero": {
+      "en": "Club teammate of Sergio Agüero",
+      "family": "teammate",
+      "de": "Vereinskollege von Sergio Agüero"
+    },
+    "teammate:87193ffc-9280-4676-8421-f65753ec1b9f|Club teammate of Sergio Busquets": {
+      "en": "Club teammate of Sergio Busquets",
+      "family": "teammate",
+      "de": "Vereinskollege von Sergio Busquets"
+    },
+    "teammate:ff2328a1-79ce-4368-9633-a8cb4b02256f|Club teammate of Sergio Ramos": {
+      "en": "Club teammate of Sergio Ramos",
+      "family": "teammate",
+      "de": "Vereinskollege von Sergio Ramos"
+    },
+    "teammate:d5b268f7-07d1-463d-a0b2-03f380aaf6e1|Club teammate of Steven Gerrard": {
+      "en": "Club teammate of Steven Gerrard",
+      "family": "teammate",
+      "de": "Vereinskollege von Steven Gerrard"
+    },
+    "teammate:cdbea2ca-e4a4-409f-aa38-38e162190082|Club teammate of Teddy Sheringham": {
+      "en": "Club teammate of Teddy Sheringham",
+      "family": "teammate",
+      "de": "Vereinskollege von Teddy Sheringham"
+    },
+    "teammate:0bd15fe1-fdbc-49ca-9b50-e5c70c39e7cf|Club teammate of Thiago Silva": {
+      "en": "Club teammate of Thiago Silva",
+      "family": "teammate",
+      "de": "Vereinskollege von Thiago Silva"
+    },
+    "teammate:662e7c41-0436-4be0-a5dc-8b3fabe93ecf|Club teammate of Thierry Henry": {
+      "en": "Club teammate of Thierry Henry",
+      "family": "teammate",
+      "de": "Vereinskollege von Thierry Henry"
+    },
+    "teammate:f8d86381-21c2-4bd2-bdc4-6914e832dda7|Club teammate of Thomas Müller": {
+      "en": "Club teammate of Thomas Müller",
+      "family": "teammate",
+      "de": "Vereinskollege von Thomas Müller"
+    },
+    "teammate:960f7a60-bc19-48e6-a2be-0d5c77a72954|Club teammate of Toni Kroos": {
+      "en": "Club teammate of Toni Kroos",
+      "family": "teammate",
+      "de": "Vereinskollege von Toni Kroos"
+    },
+    "teammate:67218b50-63a8-4fc8-a92f-f9970672e758|Club teammate of Vincent Kompany": {
+      "en": "Club teammate of Vincent Kompany",
+      "family": "teammate",
+      "de": "Vereinskollege von Vincent Kompany"
+    },
+    "teammate:de965f63-5812-4ab3-b35b-e914867dc6e7|Club teammate of Vinicius Junior": {
+      "en": "Club teammate of Vinicius Junior",
+      "family": "teammate",
+      "de": "Vereinskollege von Vinicius Junior"
+    },
+    "teammate:c0e27384-922f-47f5-b673-3e27754f5b9b|Club teammate of Virgil van Dijk": {
+      "en": "Club teammate of Virgil van Dijk",
+      "family": "teammate",
+      "de": "Vereinskollege von Virgil van Dijk"
+    },
+    "teammate:f7679688-9eaa-41c2-a899-28f771250dc7|Club teammate of Wayne Rooney": {
+      "en": "Club teammate of Wayne Rooney",
+      "family": "teammate",
+      "de": "Vereinskollege von Wayne Rooney"
+    },
+    "teammate:bd6afa46-ac3f-400e-9a68-3432b31057f5|Club teammate of Wesley Sneijder": {
+      "en": "Club teammate of Wesley Sneijder",
+      "family": "teammate",
+      "de": "Vereinskollege von Wesley Sneijder"
+    },
+    "teammate:72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c|Club teammate of Xabi Alonso": {
+      "en": "Club teammate of Xabi Alonso",
+      "family": "teammate",
+      "de": "Vereinskollege von Xabi Alonso"
+    },
+    "teammate:e6077d23-501c-4d47-9999-c4ebd2c1841b|Club teammate of Xavi": {
+      "en": "Club teammate of Xavi",
+      "family": "teammate",
+      "de": "Vereinskollege von Xavi"
+    },
+    "teammate:243cf966-fc20-4dbe-8411-2dc4c460e133|Club teammate of Yaya Touré": {
+      "en": "Club teammate of Yaya Touré",
+      "family": "teammate",
+      "de": "Vereinskollege von Yaya Touré"
+    },
+    "teammate:e91f676c-c2aa-44eb-8221-baaae4b9ee1a|Club teammate of Youri Djorkaeff": {
+      "en": "Club teammate of Youri Djorkaeff",
+      "family": "teammate",
+      "de": "Vereinskollege von Youri Djorkaeff"
+    },
+    "teammate:33b40e9a-f1f7-4277-94fb-4cd5f3da5634|Club teammate of Zé Roberto": {
+      "en": "Club teammate of Zé Roberto",
+      "family": "teammate",
+      "de": "Vereinskollege von Zé Roberto"
+    },
+    "teammate:e4da368d-83e5-42c1-b1b2-4309d0299309|Club teammate of Zinedine Zidane": {
+      "en": "Club teammate of Zinedine Zidane",
+      "family": "teammate",
+      "de": "Vereinskollege von Zinedine Zidane"
+    },
+    "teammate:a83cf106-cda8-4634-8fe6-3d8eda733f64|Club teammate of Zlatan Ibrahimović": {
+      "en": "Club teammate of Zlatan Ibrahimović",
+      "family": "teammate",
+      "de": "Vereinskollege von Zlatan Ibrahimović"
+    },
+    "teammate:12590944-66f7-4b8b-b558-5ba71ae50ce5|Club teammate of Zvonimir Boban": {
+      "en": "Club teammate of Zvonimir Boban",
+      "family": "teammate",
+      "de": "Vereinskollege von Zvonimir Boban"
+    },
+    "teammate:ffe0f4ba-9681-4373-bf8b-672f5b3ccc00": {
+      "en": "Played with Alberto Gilardino",
+      "family": "teammate",
+      "de": "Spielte mit Alberto Gilardino"
+    },
+    "teammate:56740d17-5ee9-4ef2-8ad4-766dbea01ec3": {
+      "en": "Played with Alessandro Del Piero",
+      "family": "teammate",
+      "de": "Spielte mit Alessandro Del Piero"
+    },
+    "teammate:9448e69e-02d9-4325-927b-d019623053b3": {
+      "en": "Played with Alessandro Nesta",
+      "family": "teammate",
+      "de": "Spielte mit Alessandro Nesta"
+    },
+    "teammate:874dcca0-cd6f-42ba-a156-899674c407f3": {
+      "en": "Played with Alexis Sánchez",
+      "family": "teammate",
+      "de": "Spielte mit Alexis Sánchez"
+    },
+    "teammate:8943778d-0ed2-4928-8bdf-33d17130897a": {
+      "en": "Played with Alisson",
+      "family": "teammate",
+      "de": "Spielte mit Alisson"
+    },
+    "teammate:a6efbb7a-2d73-432d-962d-710d9bb58ca6": {
+      "en": "Played with Alisson",
+      "family": "teammate",
+      "de": "Spielte mit Alisson"
+    },
+    "teammate:a98dad31-b705-412b-997c-d8d64b97e1ce": {
+      "en": "Played with Álvaro Morata",
+      "family": "teammate",
+      "de": "Spielte mit Álvaro Morata"
+    },
+    "teammate:a7a8ac8d-3636-473f-8dd4-ff9604581b7a": {
+      "en": "Played with Andrea Pirlo",
+      "family": "teammate",
+      "de": "Spielte mit Andrea Pirlo"
+    },
+    "teammate:a2d0edec-b0f0-4753-82fc-2063465443be": {
+      "en": "Played with Andrés Iniesta",
+      "family": "teammate",
+      "de": "Spielte mit Andrés Iniesta"
+    },
+    "teammate:4e8e1d4f-c0eb-4c5d-b435-4d34ea7add8e": {
+      "en": "Played with Andriy Shevchenko",
+      "family": "teammate",
+      "de": "Spielte mit Andriy Shevchenko"
+    },
+    "teammate:87560b0d-f5b9-4181-ac9b-040a207c3e9a": {
+      "en": "Played with Ángel Di María",
+      "family": "teammate",
+      "de": "Spielte mit Ángel Di María"
+    },
+    "teammate:76b4b848-d3e6-4b2c-b06a-459481cc238d": {
+      "en": "Played with Antoine Griezmann",
+      "family": "teammate",
+      "de": "Spielte mit Antoine Griezmann"
+    },
+    "teammate:b581974b-b344-4837-838c-617537fd0102": {
+      "en": "Played with Arjen Robben",
+      "family": "teammate",
+      "de": "Spielte mit Arjen Robben"
+    },
+    "teammate:b9628126-b65b-4e12-af8c-66ca0fdcb8f8": {
+      "en": "Played with Ashley Cole",
+      "family": "teammate",
+      "de": "Spielte mit Ashley Cole"
+    },
+    "teammate:069e3451-910d-47aa-a4d2-fd3681bf1be6": {
+      "en": "Played with Bastian Schweinsteiger",
+      "family": "teammate",
+      "de": "Spielte mit Bastian Schweinsteiger"
+    },
+    "teammate:36eb6f42-b8ec-46d6-97d7-b60079e9a574": {
+      "en": "Played with Bernardo Silva",
+      "family": "teammate",
+      "de": "Spielte mit Bernardo Silva"
+    },
+    "teammate:f79f5e64-6b60-46b5-b604-d1f79e4794f0": {
+      "en": "Played with Bixente Lizarazu",
+      "family": "teammate",
+      "de": "Spielte mit Bixente Lizarazu"
+    },
+    "teammate:393ab52a-2257-471c-aab9-0c39944e1517": {
+      "en": "Played with Cafu",
+      "family": "teammate",
+      "de": "Spielte mit Cafu"
+    },
+    "teammate:710290b5-7649-4e45-b333-ef87e2afad8b": {
+      "en": "Played with Cafú",
+      "family": "teammate",
+      "de": "Spielte mit Cafú"
+    },
+    "teammate:83322574-6256-45cf-bd03-b0c3c10a2930": {
+      "en": "Played with Carles Puyol",
+      "family": "teammate",
+      "de": "Spielte mit Carles Puyol"
+    },
+    "teammate:70b63468-1914-4c8e-ad35-199485821756": {
+      "en": "Played with Carlos Tevez",
+      "family": "teammate",
+      "de": "Spielte mit Carlos Tevez"
+    },
+    "teammate:5ecd7d07-810b-4bc2-bcc7-36b5eee2c8c8": {
+      "en": "Played with Casemiro",
+      "family": "teammate",
+      "de": "Spielte mit Casemiro"
+    },
+    "teammate:9c90e944-d94b-4c0c-99bc-40401f3cb3fe": {
+      "en": "Played with Cesc Fàbregas",
+      "family": "teammate",
+      "de": "Spielte mit Cesc Fàbregas"
+    },
+    "teammate:a2eacacd-5578-49a7-a904-87797ea05a27": {
+      "en": "Played with Christian Panucci",
+      "family": "teammate",
+      "de": "Spielte mit Christian Panucci"
+    },
+    "teammate:f5e93e41-8aec-43f4-98cf-84d7eead31da": {
+      "en": "Played with Christian Vieri",
+      "family": "teammate",
+      "de": "Spielte mit Christian Vieri"
+    },
+    "teammate:11d05aba-2ecc-4161-91b8-ac594ad47d6e": {
+      "en": "Played with Christian Ziege",
+      "family": "teammate",
+      "de": "Spielte mit Christian Ziege"
+    },
+    "teammate:8d922b88-81cb-433e-a5fe-51a72dddab07": {
+      "en": "Played with Clarence Seedorf",
+      "family": "teammate",
+      "de": "Spielte mit Clarence Seedorf"
+    },
+    "teammate:ed20a005-af82-417c-9a6a-678bdca47f0f": {
+      "en": "Played with Claude Makélélé",
+      "family": "teammate",
+      "de": "Spielte mit Claude Makélélé"
+    },
+    "teammate:ee3905e1-3134-4026-b1c6-f6fc0e63d5cf": {
+      "en": "Played with Cristiano Ronaldo",
+      "family": "teammate",
+      "de": "Spielte mit Cristiano Ronaldo"
+    },
+    "teammate:c665d6ed-84df-4dab-ab6c-5fc3832a84a5": {
+      "en": "Played with David Beckham",
+      "family": "teammate",
+      "de": "Spielte mit David Beckham"
+    },
+    "teammate:6348cd86-93bb-4cfa-b0af-7325eeed9074": {
+      "en": "Played with David Silva",
+      "family": "teammate",
+      "de": "Spielte mit David Silva"
+    },
+    "teammate:3946442e-9177-48d2-8481-374f9532c08c": {
+      "en": "Played with David Trezeguet",
+      "family": "teammate",
+      "de": "Spielte mit David Trezeguet"
+    },
+    "teammate:bc6c5770-8a05-41a0-b9e7-2c3ce02b0b11": {
+      "en": "Played with David Villa",
+      "family": "teammate",
+      "de": "Spielte mit David Villa"
+    },
+    "teammate:fb5d0137-39c7-4f0c-bfd4-6214bddf3dd4": {
+      "en": "Played with Deco",
+      "family": "teammate",
+      "de": "Spielte mit Deco"
+    },
+    "teammate:3c704932-c880-4891-bc4a-d4749efd0ed9": {
+      "en": "Played with Dida",
+      "family": "teammate",
+      "de": "Spielte mit Dida"
+    },
+    "teammate:4ef80d07-1167-4628-b028-351f0a6a20e4": {
+      "en": "Played with Didier Deschamps",
+      "family": "teammate",
+      "de": "Spielte mit Didier Deschamps"
+    },
+    "teammate:79164c34-4051-436f-9cfd-ef7c051b0aec": {
+      "en": "Played with Didier Drogba",
+      "family": "teammate",
+      "de": "Spielte mit Didier Drogba"
+    },
+    "teammate:9d538d4a-ec62-4e2b-b74d-38388cab76b6": {
+      "en": "Played with Diego Forlán",
+      "family": "teammate",
+      "de": "Spielte mit Diego Forlán"
+    },
+    "teammate:cff06e7f-acc0-4266-aa96-f098a6f0ee80": {
+      "en": "Played with Eden Hazard",
+      "family": "teammate",
+      "de": "Spielte mit Eden Hazard"
+    },
+    "teammate:dc2a6a10-3024-4cf0-9fe2-54aa6d2aa7f2": {
+      "en": "Played with Edinson Cavani",
+      "family": "teammate",
+      "de": "Spielte mit Edinson Cavani"
+    },
+    "teammate:ecb10845-29ae-4fcd-9f8d-7dcf27c138e9": {
+      "en": "Played with Edwin van der Sar",
+      "family": "teammate",
+      "de": "Spielte mit Edwin van der Sar"
+    },
+    "teammate:32df1564-6c30-419e-95b3-865d02967233": {
+      "en": "Played with Emerson Ferreira",
+      "family": "teammate",
+      "de": "Spielte mit Emerson Ferreira"
+    },
+    "teammate:b14d1033-723f-4776-ae31-1084179f159c": {
+      "en": "Played with Emiliano Martínez",
+      "family": "teammate",
+      "de": "Spielte mit Emiliano Martínez"
+    },
+    "teammate:b7c75af7-95c4-48ce-89eb-375bd0420d96": {
+      "en": "Played with Emmanuel Petit",
+      "family": "teammate",
+      "de": "Spielte mit Emmanuel Petit"
+    },
+    "teammate:ce85c5c4-3316-47c7-880c-0c17df3189f2": {
+      "en": "Played with Erling Haaland",
+      "family": "teammate",
+      "de": "Spielte mit Erling Haaland"
+    },
+    "teammate:1c9bb3c5-1348-4337-8ce1-8358ad5f87fd": {
+      "en": "Played with Fabio Cannavaro",
+      "family": "teammate",
+      "de": "Spielte mit Fabio Cannavaro"
+    },
+    "teammate:c9692588-f93b-4035-8737-8f625d1ec829": {
+      "en": "Played with Fernando Torres",
+      "family": "teammate",
+      "de": "Spielte mit Fernando Torres"
+    },
+    "teammate:0da7ce6e-ad1a-4e3e-b896-d6e2a10e681d": {
+      "en": "Played with Filippo Inzaghi",
+      "family": "teammate",
+      "de": "Spielte mit Filippo Inzaghi"
+    },
+    "teammate:ee700bd6-f14a-4b1f-aefe-ccc7f90c3c1e": {
+      "en": "Played with Francesco Toldo",
+      "family": "teammate",
+      "de": "Spielte mit Francesco Toldo"
+    },
+    "teammate:4b6d87c2-9df7-4947-92d2-40e682a5a758": {
+      "en": "Played with Francesco Totti",
+      "family": "teammate",
+      "de": "Spielte mit Francesco Totti"
+    },
+    "teammate:f3bbdb8e-b31e-46f5-b600-ef48ef5f1ea7": {
+      "en": "Played with Franck Ribéry",
+      "family": "teammate",
+      "de": "Spielte mit Franck Ribéry"
+    },
+    "teammate:ba41ef23-6f93-4269-ab41-aacdc4759e90": {
+      "en": "Played with Frank Lampard",
+      "family": "teammate",
+      "de": "Spielte mit Frank Lampard"
+    },
+    "teammate:2d9a65ee-0acd-429c-831d-43bb445feae3": {
+      "en": "Played with Frank Rijkaard",
+      "family": "teammate",
+      "de": "Spielte mit Frank Rijkaard"
+    },
+    "teammate:b500a5c9-3250-41d4-b8c5-6c5f9690a71c": {
+      "en": "Played with Gareth Bale",
+      "family": "teammate",
+      "de": "Spielte mit Gareth Bale"
+    },
+    "teammate:a49b3b81-b933-4ee9-b97f-93bbe86f23e7": {
+      "en": "Played with Gennaro Gattuso",
+      "family": "teammate",
+      "de": "Spielte mit Gennaro Gattuso"
+    },
+    "teammate:a0a8c8fe-113a-43e1-aba1-6a7de652540a": {
+      "en": "Played with George Weah",
+      "family": "teammate",
+      "de": "Spielte mit George Weah"
+    },
+    "teammate:769e1327-0c83-4245-bd8b-1362c8dce939": {
+      "en": "Played with Gerard Piqué",
+      "family": "teammate",
+      "de": "Spielte mit Gerard Piqué"
+    },
+    "teammate:d560f9f0-ac2c-4161-957a-88a95660208c": {
+      "en": "Played with Gianluca Zambrotta",
+      "family": "teammate",
+      "de": "Spielte mit Gianluca Zambrotta"
+    },
+    "teammate:8eae3bf5-471d-4d89-aebb-34bbddb0a0f1": {
+      "en": "Played with Gianluigi Buffon",
+      "family": "teammate",
+      "de": "Spielte mit Gianluigi Buffon"
+    },
+    "teammate:57cc1914-cd2c-42d4-bcd5-e32923c8f72f": {
+      "en": "Played with Giorgio Chiellini",
+      "family": "teammate",
+      "de": "Spielte mit Giorgio Chiellini"
+    },
+    "teammate:2f6e8c2b-8a4d-4d2b-ab99-15c84ffb15bb": {
+      "en": "Played with Giovane Élber",
+      "family": "teammate",
+      "de": "Spielte mit Giovane Élber"
+    },
+    "teammate:bf8492a7-7d36-4731-b093-218a7564472b": {
+      "en": "Played with Gonzalo Higuaín",
+      "family": "teammate",
+      "de": "Spielte mit Gonzalo Higuaín"
+    },
+    "teammate:413f894b-7f2c-425b-9183-9b17f46d71c8": {
+      "en": "Played with Harry Kane",
+      "family": "teammate",
+      "de": "Spielte mit Harry Kane"
+    },
+    "teammate:3b2cb5df-5e85-488f-91d6-d4997bd892fc": {
+      "en": "Played with Hernán Crespo",
+      "family": "teammate",
+      "de": "Spielte mit Hernán Crespo"
+    },
+    "teammate:1f1ec8e8-adc0-4570-aaf3-97389ef696cb": {
+      "en": "Played with Hugo Lloris",
+      "family": "teammate",
+      "de": "Spielte mit Hugo Lloris"
+    },
+    "teammate:46f4f931-c4da-4904-a559-eddd40d3aa87": {
+      "en": "Played with Iker Casillas",
+      "family": "teammate",
+      "de": "Spielte mit Iker Casillas"
+    },
+    "teammate:fcb1d942-af7e-47f3-a74c-f937b04a0638": {
+      "en": "Played with İlkay Gündoğan",
+      "family": "teammate",
+      "de": "Spielte mit İlkay Gündoğan"
+    },
+    "teammate:7290bf29-993b-4110-a14d-ad041a698f0f": {
+      "en": "Played with Jaap Stam",
+      "family": "teammate",
+      "de": "Spielte mit Jaap Stam"
+    },
+    "teammate:7626cd0c-987a-4049-89c8-e074a153d060": {
+      "en": "Played with Javier Mascherano",
+      "family": "teammate",
+      "de": "Spielte mit Javier Mascherano"
+    },
+    "teammate:395d5f3d-5361-4175-8048-b3b5369f3614": {
+      "en": "Played with Javier Zanetti",
+      "family": "teammate",
+      "de": "Spielte mit Javier Zanetti"
+    },
+    "teammate:3f7b4083-c08f-469c-bc5d-ca61231cadb4": {
+      "en": "Played with John Terry",
+      "family": "teammate",
+      "de": "Spielte mit John Terry"
+    },
+    "teammate:d0a233f5-36ae-4187-ba49-73fe1da1e23e": {
+      "en": "Played with Juan Sebastián Verón",
+      "family": "teammate",
+      "de": "Spielte mit Juan Sebastián Verón"
+    },
+    "teammate:916237e7-b5be-4aad-a811-700a1a1fb1dd": {
+      "en": "Played with Jude Bellingham",
+      "family": "teammate",
+      "de": "Spielte mit Jude Bellingham"
+    },
+    "teammate:9c64c119-952e-43cd-aff0-75d54146d069": {
+      "en": "Played with Julián Alvarez",
+      "family": "teammate",
+      "de": "Spielte mit Julián Alvarez"
+    },
+    "teammate:a6119f25-7985-4c2a-b13c-49990efcc75f": {
+      "en": "Played with Kaká",
+      "family": "teammate",
+      "de": "Spielte mit Kaká"
+    },
+    "teammate:79a18ff7-b3e4-42cd-b497-600e86dbd631": {
+      "en": "Played with Karim Benzema",
+      "family": "teammate",
+      "de": "Spielte mit Karim Benzema"
+    },
+    "teammate:513de7ba-249f-4f2e-9877-d1ab4121cd1e": {
+      "en": "Played with Kevin De Bruyne",
+      "family": "teammate",
+      "de": "Spielte mit Kevin De Bruyne"
+    },
+    "teammate:7e969cc5-120d-4af9-9fdd-f6d2db3170a8": {
+      "en": "Played with Kylian Mbappé",
+      "family": "teammate",
+      "de": "Spielte mit Kylian Mbappé"
+    },
+    "teammate:6407948c-511a-4932-93f3-5fd72227abc8": {
+      "en": "Played with Laurent Blanc",
+      "family": "teammate",
+      "de": "Spielte mit Laurent Blanc"
+    },
+    "teammate:f683502a-15b9-4276-9886-0977f5d6bc2e": {
+      "en": "Played with Lautaro Martínez",
+      "family": "teammate",
+      "de": "Spielte mit Lautaro Martínez"
+    },
+    "teammate:a1c506f1-8f65-4333-b320-8caf3e587708": {
+      "en": "Played with Lilian Thuram",
+      "family": "teammate",
+      "de": "Spielte mit Lilian Thuram"
+    },
+    "teammate:55989ce0-0b52-4553-a11d-42c03f5b9da1": {
+      "en": "Played with Lionel Messi",
+      "family": "teammate",
+      "de": "Spielte mit Lionel Messi"
+    },
+    "teammate:fa9680f8-85b9-4997-834e-a7530a75ca96": {
+      "en": "Played with Luca Toni",
+      "family": "teammate",
+      "de": "Spielte mit Luca Toni"
+    },
+    "teammate:6396e575-92e5-42be-a193-d8cf85f40aec": {
+      "en": "Played with Lúcio",
+      "family": "teammate",
+      "de": "Spielte mit Lúcio"
+    },
+    "teammate:87233e88-4d99-421b-96bb-77aad81c02b1": {
+      "en": "Played with Luís Figo",
+      "family": "teammate",
+      "de": "Spielte mit Luís Figo"
+    },
+    "teammate:428e1f3c-fe81-4f10-9f00-9ff6ec0573d6": {
+      "en": "Played with Luis Suárez",
+      "family": "teammate",
+      "de": "Spielte mit Luis Suárez"
+    },
+    "teammate:05e1b3df-4194-4aef-a256-eec199cef42b": {
+      "en": "Played with Luis Suárez",
+      "family": "teammate",
+      "de": "Spielte mit Luis Suárez"
+    },
+    "teammate:6e0542a2-0bbb-45ae-a7ff-2526230b870a": {
+      "en": "Played with Luka Modrić",
+      "family": "teammate",
+      "de": "Spielte mit Luka Modrić"
+    },
+    "teammate:753e6bd5-2f36-4d7c-9f5a-d14d956928bd": {
+      "en": "Played with Manuel Neuer",
+      "family": "teammate",
+      "de": "Spielte mit Manuel Neuer"
+    },
+    "teammate:f0dcf96e-9b08-4087-ab03-bf1a13f4e245": {
+      "en": "Played with Marc Overmars",
+      "family": "teammate",
+      "de": "Spielte mit Marc Overmars"
+    },
+    "teammate:78ef4772-426c-4c50-916e-23d2e664f605": {
+      "en": "Played with Marcel Desailly",
+      "family": "teammate",
+      "de": "Spielte mit Marcel Desailly"
+    },
+    "teammate:a795bb2e-32ee-4c95-a77a-5fa9f272d7b3": {
+      "en": "Played with Marcelo",
+      "family": "teammate",
+      "de": "Spielte mit Marcelo"
+    },
+    "teammate:3003d159-6fdc-47a3-a00b-a63232e4cb28": {
+      "en": "Played with Marcelo",
+      "family": "teammate",
+      "de": "Spielte mit Marcelo"
+    },
+    "teammate:7d9d3daf-12fa-4224-9f3d-428d9611814f": {
+      "en": "Played with Marco Reus",
+      "family": "teammate",
+      "de": "Spielte mit Marco Reus"
+    },
+    "teammate:de7df9c2-c81f-464d-a8ac-a4e01d2492dd": {
+      "en": "Played with Mario Balotelli",
+      "family": "teammate",
+      "de": "Spielte mit Mario Balotelli"
+    },
+    "teammate:095087b4-20b3-4f73-91dd-8bce1598729f": {
+      "en": "Played with Mario Götze",
+      "family": "teammate",
+      "de": "Spielte mit Mario Götze"
+    },
+    "teammate:afacf855-4426-4fca-b2fe-33afe829a562": {
+      "en": "Played with Mario Mandzukic",
+      "family": "teammate",
+      "de": "Spielte mit Mario Mandzukic"
+    },
+    "teammate:5cc5f245-49fc-4c0a-9583-aeb622e99535": {
+      "en": "Played with Mats Hummels",
+      "family": "teammate",
+      "de": "Spielte mit Mats Hummels"
+    },
+    "teammate:151dfbb9-27f3-4276-b45d-cb2a35432285": {
+      "en": "Played with Mesut Özil",
+      "family": "teammate",
+      "de": "Spielte mit Mesut Özil"
+    },
+    "teammate:ddeb8efc-a7d6-40a6-a20f-82df76421c3d": {
+      "en": "Played with Michael Owen",
+      "family": "teammate",
+      "de": "Spielte mit Michael Owen"
+    },
+    "teammate:d7e32780-afb5-4863-927c-8a14a929fc73": {
+      "en": "Played with Míchel Salgado",
+      "family": "teammate",
+      "de": "Spielte mit Míchel Salgado"
+    },
+    "teammate:51522f00-03bc-4b79-ab38-5214f4bac740": {
+      "en": "Played with Miroslav Klose",
+      "family": "teammate",
+      "de": "Spielte mit Miroslav Klose"
+    },
+    "teammate:e71ad820-cc78-4c32-8fb5-806eac3c1214": {
+      "en": "Played with Mohamed Salah",
+      "family": "teammate",
+      "de": "Spielte mit Mohamed Salah"
+    },
+    "teammate:a09872bb-bd33-4cce-9613-7cf86a1010ee": {
+      "en": "Played with N'Golo Kanté",
+      "family": "teammate",
+      "de": "Spielte mit N'Golo Kanté"
+    },
+    "teammate:10aa4f1f-9fc1-4c3b-93b5-217bdba110dd": {
+      "en": "Played with Neymar",
+      "family": "teammate",
+      "de": "Spielte mit Neymar"
+    },
+    "teammate:54f941a2-12df-4694-b7ff-305922645866": {
+      "en": "Played with Nicolas Anelka",
+      "family": "teammate",
+      "de": "Spielte mit Nicolas Anelka"
+    },
+    "teammate:936e1b41-8681-4fc6-8f72-dd7f4c58fd2f": {
+      "en": "Played with Nwankwo Kanu",
+      "family": "teammate",
+      "de": "Spielte mit Nwankwo Kanu"
+    },
+    "teammate:eee827b7-634e-46aa-b76a-65f9ee55943d": {
+      "en": "Played with Oliver Kahn",
+      "family": "teammate",
+      "de": "Spielte mit Oliver Kahn"
+    },
+    "teammate:2ee9513d-f64a-47f0-b43b-dc934bfacf6e": {
+      "en": "Played with Olivier Giroud",
+      "family": "teammate",
+      "de": "Spielte mit Olivier Giroud"
+    },
+    "teammate:34c46dcc-7ca8-49a3-947f-393558edb1c0": {
+      "en": "Played with Ousmane Dembélé",
+      "family": "teammate",
+      "de": "Spielte mit Ousmane Dembélé"
+    },
+    "teammate:492f244f-1fc1-4c2b-b2df-57c2c29d4f03": {
+      "en": "Played with Paolo Maldini",
+      "family": "teammate",
+      "de": "Spielte mit Paolo Maldini"
+    },
+    "teammate:252ed9f2-8daa-4c7a-b3f2-5c24eece525f": {
+      "en": "Played with Patrice Evra",
+      "family": "teammate",
+      "de": "Spielte mit Patrice Evra"
+    },
+    "teammate:62499ade-0175-4188-aef6-d1b33f82f209": {
+      "en": "Played with Patrick Vieira",
+      "family": "teammate",
+      "de": "Spielte mit Patrick Vieira"
+    },
+    "teammate:94ae19d5-de36-4e4e-8a9f-3d0db0904707": {
+      "en": "Played with Paul Pogba",
+      "family": "teammate",
+      "de": "Spielte mit Paul Pogba"
+    },
+    "teammate:7e228da6-46f8-4a0c-9acc-0f1bf27ab50c": {
+      "en": "Played with Paul Scholes",
+      "family": "teammate",
+      "de": "Spielte mit Paul Scholes"
+    },
+    "teammate:a9dc8fb6-3e2c-4bc9-98cc-49d4231ff392": {
+      "en": "Played with Pelé",
+      "family": "teammate",
+      "de": "Spielte mit Pelé"
+    },
+    "teammate:1da98c87-dc4e-41f2-99db-cc8443a00e3d": {
+      "en": "Played with Petr Cech",
+      "family": "teammate",
+      "de": "Spielte mit Petr Cech"
+    },
+    "teammate:42fa50a7-a8ca-4fdd-855d-e41b88c17a6a": {
+      "en": "Played with Philipp Lahm",
+      "family": "teammate",
+      "de": "Spielte mit Philipp Lahm"
+    },
+    "teammate:3be1aed0-97a2-48cb-b6b1-42da5a17cd5e": {
+      "en": "Played with Philippe Coutinho",
+      "family": "teammate",
+      "de": "Spielte mit Philippe Coutinho"
+    },
+    "teammate:7a8f230c-cadf-45a7-820e-d12948a1479c": {
+      "en": "Played with Raphaël Varane",
+      "family": "teammate",
+      "de": "Spielte mit Raphaël Varane"
+    },
+    "teammate:952874aa-43d3-4cb1-9f87-9eb340029f15": {
+      "en": "Played with Raúl",
+      "family": "teammate",
+      "de": "Spielte mit Raúl"
+    },
+    "teammate:33316d7f-7ef0-4e59-b112-2af62492a0af": {
+      "en": "Played with Ricardo Carvalho",
+      "family": "teammate",
+      "de": "Spielte mit Ricardo Carvalho"
+    },
+    "teammate:b841bcc9-7df4-438e-8e72-2f1b3a3c4a92": {
+      "en": "Played with Rio Ferdinand",
+      "family": "teammate",
+      "de": "Spielte mit Rio Ferdinand"
+    },
+    "teammate:8eb86174-29f3-4034-99d5-7f9d39b5bdbb": {
+      "en": "Played with Rivaldo",
+      "family": "teammate",
+      "de": "Spielte mit Rivaldo"
+    },
+    "teammate:05ddf5ed-a20f-4b8a-9e27-dae9eb957981": {
+      "en": "Played with Robert Lewandowski",
+      "family": "teammate",
+      "de": "Spielte mit Robert Lewandowski"
+    },
+    "teammate:b0fc2fee-8b88-42d3-be5d-87a592e225c8": {
+      "en": "Played with Roberto Ayala",
+      "family": "teammate",
+      "de": "Spielte mit Roberto Ayala"
+    },
+    "teammate:e2d22f1d-ca6d-4d89-b839-05dfdd310f6b": {
+      "en": "Played with Robin van Persie",
+      "family": "teammate",
+      "de": "Spielte mit Robin van Persie"
+    },
+    "teammate:65532349-06d9-44bf-baee-159b35bb1688": {
+      "en": "Played with Robinho",
+      "family": "teammate",
+      "de": "Spielte mit Robinho"
+    },
+    "teammate:81d69d4d-1c11-4f75-824d-e267a8e04926": {
+      "en": "Played with Romelu Lukaku",
+      "family": "teammate",
+      "de": "Spielte mit Romelu Lukaku"
+    },
+    "teammate:381bcc4e-e3ea-4416-9d13-5ffefd86efde": {
+      "en": "Played with Ronaldinho",
+      "family": "teammate",
+      "de": "Spielte mit Ronaldinho"
+    },
+    "teammate:95faf5b6-9e1c-4879-854d-6a8746bbc3b8": {
+      "en": "Played with Ronaldo Nazario",
+      "family": "teammate",
+      "de": "Spielte mit Ronaldo Nazario"
+    },
+    "teammate:b218bed6-3707-4c89-8f9c-90bd27866f5f": {
+      "en": "Played with Ryan Giggs",
+      "family": "teammate",
+      "de": "Spielte mit Ryan Giggs"
+    },
+    "teammate:74f7efb0-092c-485f-a8c9-a741fd840309": {
+      "en": "Played with Sadio Mané",
+      "family": "teammate",
+      "de": "Spielte mit Sadio Mané"
+    },
+    "teammate:75fecc05-1515-4b6d-add7-0eedeb86fe60": {
+      "en": "Played with Samuel Eto'o",
+      "family": "teammate",
+      "de": "Spielte mit Samuel Eto'o"
+    },
+    "teammate:e247be38-7dac-4d06-a238-1ce8e286d061": {
+      "en": "Played with Sergio Agüero",
+      "family": "teammate",
+      "de": "Spielte mit Sergio Agüero"
+    },
+    "teammate:87193ffc-9280-4676-8421-f65753ec1b9f": {
+      "en": "Played with Sergio Busquets",
+      "family": "teammate",
+      "de": "Spielte mit Sergio Busquets"
+    },
+    "teammate:ff2328a1-79ce-4368-9633-a8cb4b02256f": {
+      "en": "Played with Sergio Ramos",
+      "family": "teammate",
+      "de": "Spielte mit Sergio Ramos"
+    },
+    "teammate:9c5cf1e6-fc4c-479d-9f2e-4b49d825c551": {
+      "en": "Played with Son",
+      "family": "teammate",
+      "de": "Spielte mit Son"
+    },
+    "teammate:d5b268f7-07d1-463d-a0b2-03f380aaf6e1": {
+      "en": "Played with Steven Gerrard",
+      "family": "teammate",
+      "de": "Spielte mit Steven Gerrard"
+    },
+    "teammate:cdbea2ca-e4a4-409f-aa38-38e162190082": {
+      "en": "Played with Teddy Sheringham",
+      "family": "teammate",
+      "de": "Spielte mit Teddy Sheringham"
+    },
+    "teammate:0bd15fe1-fdbc-49ca-9b50-e5c70c39e7cf": {
+      "en": "Played with Thiago Silva",
+      "family": "teammate",
+      "de": "Spielte mit Thiago Silva"
+    },
+    "teammate:662e7c41-0436-4be0-a5dc-8b3fabe93ecf": {
+      "en": "Played with Thierry Henry",
+      "family": "teammate",
+      "de": "Spielte mit Thierry Henry"
+    },
+    "teammate:f8d86381-21c2-4bd2-bdc4-6914e832dda7": {
+      "en": "Played with Thomas Müller",
+      "family": "teammate",
+      "de": "Spielte mit Thomas Müller"
+    },
+    "teammate:960f7a60-bc19-48e6-a2be-0d5c77a72954": {
+      "en": "Played with Toni Kroos",
+      "family": "teammate",
+      "de": "Spielte mit Toni Kroos"
+    },
+    "teammate:67218b50-63a8-4fc8-a92f-f9970672e758": {
+      "en": "Played with Vincent Kompany",
+      "family": "teammate",
+      "de": "Spielte mit Vincent Kompany"
+    },
+    "teammate:de965f63-5812-4ab3-b35b-e914867dc6e7": {
+      "en": "Played with Vinicius Junior",
+      "family": "teammate",
+      "de": "Spielte mit Vinicius Junior"
+    },
+    "teammate:c0e27384-922f-47f5-b673-3e27754f5b9b": {
+      "en": "Played with Virgil van Dijk",
+      "family": "teammate",
+      "de": "Spielte mit Virgil van Dijk"
+    },
+    "teammate:f7679688-9eaa-41c2-a899-28f771250dc7": {
+      "en": "Played with Wayne Rooney",
+      "family": "teammate",
+      "de": "Spielte mit Wayne Rooney"
+    },
+    "teammate:bd6afa46-ac3f-400e-9a68-3432b31057f5": {
+      "en": "Played with Wesley Sneijder",
+      "family": "teammate",
+      "de": "Spielte mit Wesley Sneijder"
+    },
+    "teammate:72bfbab2-75bd-4a86-8e0e-f84cfe3d0b5c": {
+      "en": "Played with Xabi Alonso",
+      "family": "teammate",
+      "de": "Spielte mit Xabi Alonso"
+    },
+    "teammate:e6077d23-501c-4d47-9999-c4ebd2c1841b": {
+      "en": "Played with Xavi",
+      "family": "teammate",
+      "de": "Spielte mit Xavi"
+    },
+    "teammate:243cf966-fc20-4dbe-8411-2dc4c460e133": {
+      "en": "Played with Yaya Touré",
+      "family": "teammate",
+      "de": "Spielte mit Yaya Touré"
+    },
+    "teammate:e91f676c-c2aa-44eb-8221-baaae4b9ee1a": {
+      "en": "Played with Youri Djorkaeff",
+      "family": "teammate",
+      "de": "Spielte mit Youri Djorkaeff"
+    },
+    "teammate:33b40e9a-f1f7-4277-94fb-4cd5f3da5634": {
+      "en": "Played with Zé Roberto",
+      "family": "teammate",
+      "de": "Spielte mit Zé Roberto"
+    },
+    "teammate:e4da368d-83e5-42c1-b1b2-4309d0299309": {
+      "en": "Played with Zinedine Zidane",
+      "family": "teammate",
+      "de": "Spielte mit Zinedine Zidane"
+    },
+    "teammate:a83cf106-cda8-4634-8fe6-3d8eda733f64": {
+      "en": "Played with Zlatan Ibrahimović",
+      "family": "teammate",
+      "de": "Spielte mit Zlatan Ibrahimović"
+    },
+    "teammate:12590944-66f7-4b8b-b558-5ba71ae50ce5": {
+      "en": "Played with Zvonimir Boban",
+      "family": "teammate",
+      "de": "Spielte mit Zvonimir Boban"
+    },
+    "country:dz": {
+      "en": "Algeria",
+      "family": "country",
+      "de": "Algerien"
+    },
+    "country:ar": {
+      "en": "Argentina",
+      "family": "country",
+      "de": "Argentinien"
+    },
+    "country:at": {
+      "en": "Austria",
+      "family": "country",
+      "de": "Österreich"
+    },
+    "country:be": {
+      "en": "Belgium",
+      "family": "country",
+      "de": "Belgien"
+    },
+    "country-belgium": {
+      "en": "Belgium",
+      "family": "country",
+      "de": "Belgien"
+    },
+    "brazil": {
+      "en": "Brazil",
+      "family": "country",
+      "de": "Brasilien"
+    },
+    "country:br": {
+      "en": "Brazil",
+      "family": "country",
+      "de": "Brasilien"
+    },
+    "country:cm": {
+      "en": "Cameroon",
+      "family": "country",
+      "de": "Kamerun"
+    },
+    "country-chile": {
+      "en": "Chile",
+      "family": "country",
+      "de": "Chile"
+    },
+    "country-colombia": {
+      "en": "Colombia",
+      "family": "country",
+      "de": "Kolumbien"
+    },
+    "country:co": {
+      "en": "Colombia",
+      "family": "country",
+      "de": "Kolumbien"
+    },
+    "country-cote-d-ivoire": {
+      "en": "Cote d'Ivoire",
+      "family": "country",
+      "de": "Elfenbeinküste"
+    },
+    "country:ci": {
+      "en": "Côte d’Ivoire",
+      "family": "country",
+      "de": "Elfenbeinküste"
+    },
+    "country-croatia": {
+      "en": "Croatia",
+      "family": "country",
+      "de": "Kroatien"
+    },
+    "country:hr": {
+      "en": "Croatia",
+      "family": "country",
+      "de": "Kroatien"
+    },
+    "country:dk": {
+      "en": "Denmark",
+      "family": "country",
+      "de": "Dänemark"
+    },
+    "country:gb-eng": {
+      "en": "England",
+      "family": "country",
+      "de": "England"
+    },
+    "country:fr": {
+      "en": "France",
+      "family": "country",
+      "de": "Frankreich"
+    },
+    "france": {
+      "en": "France",
+      "family": "country",
+      "de": "Frankreich"
+    },
+    "country-georgia": {
+      "en": "Georgia",
+      "family": "country",
+      "de": "Georgien"
+    },
+    "country:de": {
+      "en": "Germany",
+      "family": "country",
+      "de": "Deutschland"
+    },
+    "country:gh": {
+      "en": "Ghana",
+      "family": "country",
+      "de": "Ghana"
+    },
+    "country:gr": {
+      "en": "Greece",
+      "family": "country",
+      "de": "Griechenland"
+    },
+    "country:ie": {
+      "en": "Ireland",
+      "family": "country",
+      "de": "Irland"
+    },
+    "country:it": {
+      "en": "Italy",
+      "family": "country",
+      "de": "Italien"
+    },
+    "country:jp": {
+      "en": "Japan",
+      "family": "country",
+      "de": "Japan"
+    },
+    "country:ml": {
+      "en": "Mali",
+      "family": "country",
+      "de": "Mali"
+    },
+    "country:mx": {
+      "en": "Mexico",
+      "family": "country",
+      "de": "Mexiko"
+    },
+    "country-morocco": {
+      "en": "Morocco",
+      "family": "country",
+      "de": "Marokko"
+    },
+    "country:ma": {
+      "en": "Morocco",
+      "family": "country",
+      "de": "Marokko"
+    },
+    "country:nl": {
+      "en": "Netherlands",
+      "family": "country",
+      "de": "Niederlande"
+    },
+    "country:ng": {
+      "en": "Nigeria",
+      "family": "country",
+      "de": "Nigeria"
+    },
+    "country-nigeria": {
+      "en": "Nigeria",
+      "family": "country",
+      "de": "Nigeria"
+    },
+    "country:no": {
+      "en": "Norway",
+      "family": "country",
+      "de": "Norwegen"
+    },
+    "country:pl": {
+      "en": "Poland",
+      "family": "country",
+      "de": "Polen"
+    },
+    "country:pt": {
+      "en": "Portugal",
+      "family": "country",
+      "de": "Portugal"
+    },
+    "country:ru": {
+      "en": "Russia",
+      "family": "country",
+      "de": "Russland"
+    },
+    "country:gb-sct": {
+      "en": "Scotland",
+      "family": "country",
+      "de": "Schottland"
+    },
+    "country:sn": {
+      "en": "Senegal",
+      "family": "country",
+      "de": "Senegal"
+    },
+    "country-serbia": {
+      "en": "Serbia",
+      "family": "country",
+      "de": "Serbien"
+    },
+    "country:rs": {
+      "en": "Serbia",
+      "family": "country",
+      "de": "Serbien"
+    },
+    "country:es": {
+      "en": "Spain",
+      "family": "country",
+      "de": "Spanien"
+    },
+    "spain": {
+      "en": "Spain",
+      "family": "country",
+      "de": "Spanien"
+    },
+    "country:se": {
+      "en": "Sweden",
+      "family": "country",
+      "de": "Schweden"
+    },
+    "country:ch": {
+      "en": "Switzerland",
+      "family": "country",
+      "de": "Schweiz"
+    },
+    "country-turkey": {
+      "en": "Turkey",
+      "family": "country",
+      "de": "Türkei"
+    },
+    "country:tr": {
+      "en": "Türkiye",
+      "family": "country",
+      "de": "Türkei"
+    },
+    "country-t-rkiye": {
+      "en": "Türkiye",
+      "family": "country",
+      "de": "Türkei"
+    },
+    "country:ua": {
+      "en": "Ukraine",
+      "family": "country",
+      "de": "Ukraine"
+    },
+    "country:us": {
+      "en": "United States",
+      "family": "country",
+      "de": "USA"
+    },
+    "country-united-states": {
+      "en": "United States",
+      "family": "country",
+      "de": "USA"
+    },
+    "country:uy": {
+      "en": "Uruguay",
+      "family": "country",
+      "de": "Uruguay"
+    },
+    "country-uruguay": {
+      "en": "Uruguay",
+      "family": "country",
+      "de": "Uruguay"
+    },
+    "country:gb-wls": {
+      "en": "Wales",
+      "family": "country",
+      "de": "Wales"
+    },
+    "league:belgian-pro-league": {
+      "en": "Belgian Pro League",
+      "family": "league",
+      "de": "Belgische Pro League"
+    },
+    "league:bundesliga": {
+      "en": "Bundesliga",
+      "family": "league",
+      "de": "Bundesliga"
+    },
+    "league:eredivisie": {
+      "en": "Eredivisie",
+      "family": "league",
+      "de": "Eredivisie"
+    },
+    "league:la-liga": {
+      "en": "La Liga",
+      "family": "league",
+      "de": "La Liga"
+    },
+    "league:ligue-1": {
+      "en": "Ligue 1",
+      "family": "league",
+      "de": "Ligue 1"
+    },
+    "league:premier-league": {
+      "en": "Premier League",
+      "family": "league",
+      "de": "Premier League"
+    },
+    "league:primeira-liga": {
+      "en": "Primeira Liga",
+      "family": "league",
+      "de": "Primeira Liga"
+    },
+    "league:scottish-premiership": {
+      "en": "Scottish Premiership",
+      "family": "league",
+      "de": "Scottish Premiership"
+    },
+    "league:serie-a": {
+      "en": "Serie A",
+      "family": "league",
+      "de": "Serie A"
+    },
+    "league:super-lig": {
+      "en": "Süper Lig",
+      "family": "league",
+      "de": "Süper Lig"
+    },
+    "trophy:bundesliga-title": {
+      "en": "Bundesliga winner",
+      "family": "trophy_award",
+      "de": "Bundesliga-Sieger"
+    },
+    "trophy:copa-del-rey": {
+      "en": "Copa del Rey winner",
+      "family": "trophy_award",
+      "de": "Copa-del-Rey-Sieger"
+    },
+    "trophy:coppa-italia": {
+      "en": "Coppa Italia winner",
+      "family": "trophy_award",
+      "de": "Coppa-Italia-Sieger"
+    },
+    "trophy:dfb-pokal": {
+      "en": "DFB-Pokal winner",
+      "family": "trophy_award",
+      "de": "DFB-Pokal-Sieger"
+    },
+    "trophy:fa-cup": {
+      "en": "FA Cup winner",
+      "family": "trophy_award",
+      "de": "FA-Cup-Sieger"
+    },
+    "trophy:knvb-cup": {
+      "en": "KNVB Cup winner",
+      "family": "trophy_award",
+      "de": "KNVB-Pokal-Sieger"
+    },
+    "trophy:la-liga-title": {
+      "en": "La Liga winner",
+      "family": "trophy_award",
+      "de": "La-Liga-Sieger"
+    },
+    "trophy:ligue-1-title": {
+      "en": "Ligue 1 winner",
+      "family": "trophy_award",
+      "de": "Ligue-1-Sieger"
+    },
+    "trophy:premier-league-title": {
+      "en": "Premier League winner",
+      "family": "trophy_award",
+      "de": "Premier-League-Sieger"
+    },
+    "trophy:serie-a-title": {
+      "en": "Serie A winner",
+      "family": "trophy_award",
+      "de": "Serie-A-Sieger"
+    },
+    "trophy:uefa-champions-league": {
+      "en": "UEFA Champions League winner",
+      "family": "trophy_award",
+      "de": "Champions-League-Sieger"
+    },
+    "trophy:uefa-europa-league": {
+      "en": "UEFA Europa League winner",
+      "family": "trophy_award",
+      "de": "Europa-League-Sieger"
+    },
+    "wildcard:international-caps-100": {
+      "en": "100+ international caps",
+      "family": "wildcard",
+      "de": "100+ Länderspiele"
+    },
+    "wildcard:champions-league-2plus": {
+      "en": "2+ Champions League titles",
+      "family": "wildcard",
+      "de": "2+ Champions-League-Titel"
+    },
+    "wildcard:born-1970s": {
+      "en": "Born in the 1970s",
+      "family": "wildcard",
+      "de": "Geboren in den 1970ern"
+    },
+    "wildcard:born-1980s": {
+      "en": "Born in the 1980s",
+      "family": "wildcard",
+      "de": "Geboren in den 1980ern"
+    },
+    "wildcard:born-1990s": {
+      "en": "Born in the 1990s",
+      "family": "wildcard",
+      "de": "Geboren in den 1990ern"
+    },
+    "wildcard:born-2000s": {
+      "en": "Born in the 2000s",
+      "family": "wildcard",
+      "de": "Geboren in den 2000ern"
+    },
+    "wildcard:position-def": {
+      "en": "Defender",
+      "family": "wildcard",
+      "de": "Verteidiger"
+    },
+    "wildcard:position-fwd": {
+      "en": "Forward",
+      "family": "wildcard",
+      "de": "Stürmer"
+    },
+    "wildcard:position-gk": {
+      "en": "Goalkeeper",
+      "family": "wildcard",
+      "de": "Torwart"
+    },
+    "wildcard:titles-multiple-countries": {
+      "en": "League champion in multiple countries",
+      "family": "wildcard",
+      "de": "Meister in mehreren Ländern"
+    },
+    "wildcard:position-mid": {
+      "en": "Midfielder",
+      "family": "wildcard",
+      "de": "Mittelfeldspieler"
+    },
+    "wildcard:played-for-rivals": {
+      "en": "Played for both sides of a derby",
+      "family": "wildcard",
+      "de": "Auf beiden Seiten eines Derbys gespielt"
+    },
+    "wildcard:major-leagues-3": {
+      "en": "Played in 3+ major leagues",
+      "family": "wildcard",
+      "de": "In 3+ großen Ligen gespielt"
+    },
+    "wildcard:treble-winner": {
+      "en": "Treble winner",
+      "family": "wildcard",
+      "de": "Triple-Sieger"
+    }
+  }
+}

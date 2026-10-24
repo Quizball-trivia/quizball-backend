@@ -24,7 +24,7 @@ export const MAX_WORD_CHARS = 16;
 
 // A name the bot says must fit the clue limit a Scout has.
 const label = z.string().trim().min(1).max(30);
-export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label, pt: label.optional() }).strict();
+export const termLabelSchema = z.object({ en: label, es: label, tr: label, ru: label, ka: label, pt: label.optional(), de: label.optional() }).strict();
 export type TermLabel = z.infer<typeof termLabelSchema>;
 
 /** A football name a card points to (from the blind readings): what the bot Scout may say for it. */
@@ -198,7 +198,7 @@ function hash64(folded: string): string {
 /** The same clue on two cards is one term (so one clue can link them). */
 export const clueTerm = (clue: string): Term => {
   const text = tidyClue(clue);
-  return { id: `c-${hash64(fold(text))}`, label: { en: text, es: text, tr: text, ru: text, ka: text } };
+  return { id: `c-${hash64(fold(text))}`, label: { en: text, es: text, de: text, tr: text, ru: text, ka: text } };
 };
 
 /** A word's pool id: one per language and folded spelling. */

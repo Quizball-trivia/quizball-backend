@@ -21,7 +21,7 @@ export const PD_GUESS_MAX = 60;
 const pointsAt = (clue: number): number => PD_CLUES + 1 - clue;
 
 const text = z.string().trim().min(1).max(400);
-const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional(), pt: text.optional() });
+const localized = z.object({ es: text, en: text, ka: text, tr: text, ru: text.optional(), pt: text.optional(), de: text.optional() });
 
 /** One pool item: a hidden player with 10 clues; `accepted` is normalised when parsed. */
 export const pistasRoundSchema = z.object({

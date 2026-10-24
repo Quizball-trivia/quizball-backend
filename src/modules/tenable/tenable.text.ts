@@ -55,7 +55,7 @@ export function forgetRussianText(): void {
 }
 
 /** Languages whose list titles live in tenable_list_text (Russian keeps its own table, above). */
-export const OVERLAY_LOCALES = ['pt'] as const;
+export const OVERLAY_LOCALES = ['pt', 'de'] as const;
 type OverlayLocale = (typeof OVERLAY_LOCALES)[number];
 let overlay: { at: number; byKey: Map<string, RussianText> } | null = null;
 let overlayLoading: Promise<void> | null = null;

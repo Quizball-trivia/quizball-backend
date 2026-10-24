@@ -115,7 +115,7 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
 }
 
 /** Languages whose clue cards are optional: their players are dealt English cards until their pool is complete. */
-const OPTIONAL_CONTENT_LOCALES: ReadonlySet<AuctionContentLocale> = new Set(['ru', 'pt']);
+const OPTIONAL_CONTENT_LOCALES: ReadonlySet<AuctionContentLocale> = new Set(['ru', 'pt', 'de']);
 const optionalAvailability = new Map<AuctionContentLocale, { checkedAt: number; usable: boolean }>();
 /**
  * An optional language deals only with almost the whole English pool in it: a match keeps its language for every
@@ -328,6 +328,7 @@ const FACET_LABELS: ReadonlySet<string> = new Set([
   'Goles', 'Asistencias', 'Valor de mercado', 'Edad', 'Liga', 'Porterías a cero', 'Goles encajados',
   'Goller', 'Asistler', 'Piyasa değeri', 'Yaş', 'Lig', 'Gol yemeden bitirilen maçlar', 'Yenilen goller',
   'Gols', 'Assistências', 'Idade', 'Jogos sem sofrer gols', 'Gols sofridos',
+  'Tore', 'Vorlagen', 'Marktwert', 'Alter', 'Liga', 'Zu-Null-Spiele', 'Gegentore',
 ].map((label) => label.toLowerCase()));
 
 function isFacetPlaceholder(text: string): boolean {
@@ -517,7 +518,7 @@ async function localizedClueSteps(
 }
 
 function isAuctionContentLocale(value: string): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt' || value === 'de';
 }
 
 export type { AuctionContentLocale };

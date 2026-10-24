@@ -74,6 +74,19 @@ export interface CampaignQuizRow {
   pt_score_cta: string | null;
   pt_footer_banner_text: string | null;
   pt_footer_button_label: string | null;
+  de_title: string | null;
+  de_h1: string | null;
+  de_seo_title: string | null;
+  de_meta_description: string | null;
+  de_breadcrumb_label: string | null;
+  de_lede: string | null;
+  de_about_heading: string | null;
+  de_about_blocks: CampaignQuizAboutBlock[] | null;
+  de_hero_image_alt: string | null;
+  de_og_image_alt: string | null;
+  de_score_cta: string | null;
+  de_footer_banner_text: string | null;
+  de_footer_button_label: string | null;
   scheduled_publish_at: string | null;
   published_at: string | null;
   unpublished_at: string | null;
@@ -109,6 +122,8 @@ export interface CampaignQuizRelatedRow {
   ru_hero_image_alt: string | null;
   pt_breadcrumb_label: string | null;
   pt_hero_image_alt: string | null;
+  de_breadcrumb_label: string | null;
+  de_hero_image_alt: string | null;
 }
 
 export interface CampaignQuizHubRow {
@@ -137,6 +152,11 @@ export interface CampaignQuizHubRow {
   pt_hero_image_alt: string | null;
   pt_seo_title: string | null;
   pt_meta_description: string | null;
+  de_h1: string | null;
+  de_breadcrumb_label: string | null;
+  de_hero_image_alt: string | null;
+  de_seo_title: string | null;
+  de_meta_description: string | null;
 }
 
 /** A question of a published page's set, with the page it belongs to (the hub checks pt question coverage). */
@@ -447,7 +467,12 @@ export const campaignQuizzesRepo = {
         pt_breadcrumb_label,
         pt_hero_image_alt,
         pt_seo_title,
-        pt_meta_description
+        pt_meta_description,
+        de_h1,
+        de_breadcrumb_label,
+        de_hero_image_alt,
+        de_seo_title,
+        de_meta_description
       FROM campaign_quizzes
       WHERE ${publicWindowSql()}
       ORDER BY page_category, is_hub_pinned DESC, hub_order, published_at, slug
@@ -524,7 +549,9 @@ export const campaignQuizzesRepo = {
         related.ru_breadcrumb_label,
         related.ru_hero_image_alt,
         related.pt_breadcrumb_label,
-        related.pt_hero_image_alt
+        related.pt_hero_image_alt,
+        related.de_breadcrumb_label,
+        related.de_hero_image_alt
       FROM campaign_quiz_related_pages relation
       JOIN campaign_quizzes related ON related.slug = relation.related_slug
       WHERE relation.quiz_slug = ${slug}

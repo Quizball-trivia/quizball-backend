@@ -126,6 +126,8 @@ export function parseGuess(raw: string, precision: number): number | null {
     const sep = dots ? "." : ",";
     const [before, after] = text.split(sep);
     if (precision === 0 && after.length === 3 && /^\d{1,3}$/.test(before)) whole = before + after;
+    // "1.000" is a thousand in German or Spanish and 1.0 in English: refused when a round takes one or two decimals.
+    else if (precision < 3 && after.length === 3 && /^[1-9]\d{0,2}$/.test(before)) return null;
     else { whole = before; frac = after; }
   }
   if (!/^\d+$/.test(whole) || (frac && !/^\d+$/.test(frac))) return null;

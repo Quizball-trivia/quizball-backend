@@ -1594,7 +1594,7 @@ function searchKey(searchId: string): string {
 }
 
 function isAuctionLocale(value: string | undefined): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt' || value === 'de';
 }
 
 function isFormationName(value: string | undefined): value is FormationName {

@@ -9,7 +9,7 @@ export const campaignQuizSlugParamsSchema = z.object({
 });
 
 export const campaignQuizLocaleQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).optional().default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).optional().default('en'),
 });
 
 export const campaignQuizAnswerBodySchema = z.object({
@@ -24,11 +24,11 @@ export const campaignQuizRatingBodySchema = z.object({
 
 export const campaignQuizPreviewQuerySchema = z.object({
   preview: z.string().uuid().optional(),
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).optional().default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).optional().default('en'),
 });
 
 export const campaignQuizListQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt']).default('en'),
+  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).default('en'),
 });
 
 const nullableUrlSchema = z
@@ -274,8 +274,9 @@ export interface CampaignQuizResponse {
   /**
    * Which language editions the page has (the catalog's rule); a missing edition is served in English.
    * pt also needs every question of the set in Brazilian Portuguese.
+   * de also needs every question of the set in German.
    */
-  editions: { ka: boolean; es: boolean; ru: boolean; pt: boolean };
+  editions: { ka: boolean; es: boolean; ru: boolean; pt: boolean; de: boolean };
 }
 
 export interface CampaignQuizAnswerResponse {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const pushLocaleSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt']);
+export const pushLocaleSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de']);
 export const pushTimezoneSchema = z.string().max(100).refine(value => {
   try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
 }, 'A valid IANA timezone is required');
@@ -23,7 +23,7 @@ export const pushRouteSchema = z.enum(['/(tabs)', '/(tabs)/events', '/(tabs)/lea
 const translations = (max: number) => z.object({ en: z.string().min(1).max(max), ka: z.string().min(1).max(max),
   es: z.string().min(1).max(max), tr: z.string().min(1).max(max),
   // Later languages are optional: a device in one without its text gets the English (mobile-push.worker.ts).
-  ru: z.string().min(1).max(max).optional(), pt: z.string().min(1).max(max).optional() }).strict();
+  ru: z.string().min(1).max(max).optional(), pt: z.string().min(1).max(max).optional(), de: z.string().min(1).max(max).optional() }).strict();
 export const pushCampaignSchema = z.object({
   campaignId: z.string().uuid(), title: translations(90), body: translations(250),
   route: pushRouteSchema, confirmSend: z.literal(true),

@@ -1,4 +1,4 @@
-export type FootballGridLocale = 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt';
+export type FootballGridLocale = 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
 export type FootballGridDifficulty = 'easy' | 'normal' | 'hard';
 export type FootballGridOrigin = 'random' | 'challenge' | 'private' | 'public' | 'code';
 
@@ -102,6 +102,7 @@ export interface FootballGridCriterionView {
   labelTr?: string | null;
   labelRu?: string | null;
   labelPt?: string | null;
+  labelDe?: string | null;
   assetKey: string | null;
   difficulty: FootballGridDifficulty;
 }
@@ -171,7 +172,7 @@ export interface FootballGridAliasRecord {
   playerId: string;
   alias: string;
   normalizedAlias: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'translit';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'translit';
   acceptancePolicy: 'exact' | 'unique_only' | 'safe_typo';
 }
 
